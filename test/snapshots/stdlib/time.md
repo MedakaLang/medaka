@@ -1,5 +1,5 @@
 # META
-source_lines=407
+source_lines=437
 stages=DESUGAR,MARK
 # SOURCE
 {- | Durations, a UTC calendar, and the clock.
@@ -133,15 +133,14 @@ subDuration (Duration a) (Duration b) = Duration (a - b)
 
    `month` runs from 1 to 12 and `day` from 1 to 31. Values compare in
    field order, which is chronological order for valid dates. -}
-public export data DateTime =
-  | DateTime {
-      year : Int,
-      month : Int,
-      day : Int,
-      hour : Int,
-      minute : Int,
-      second : Int,
-    }
+public export data DateTime = DateTime {
+  year : Int,
+  month : Int,
+  day : Int,
+  hour : Int,
+  minute : Int,
+  second : Int,
+}
   deriving (Eq, Ord, Debug)
 
 -- Days since 1970-01-01 for a civil (y, m, d).  Hinnant's days_from_civil.
@@ -208,8 +207,10 @@ fromEpochSeconds secs =
 export
 toEpochSeconds : DateTime -> Int
 toEpochSeconds dt =
-  daysFromCivil dt.year dt.month dt.day * 86400 + dt.hour * 3600 + dt.minute * 60 +
-    dt.second
+  daysFromCivil dt.year dt.month dt.day * 86400
+    + dt.hour * 3600
+    + dt.minute * 60
+    + dt.second
 
 -- Zero-pad a non-negative Int to two digits.
 pad2 : Int -> String
@@ -233,14 +234,28 @@ pad4 n =
    "2024-03-05T07:08:09Z" -}
 export
 formatIso : DateTime -> String
-formatIso dt = "\{pad4 dt.year}-\{pad2 dt.month}-\{pad2 dt.day}T\{pad2 dt.hour}:\{pad2 dt.minute}:\{pad2 dt.second}Z"
+formatIso dt =
+  "\{pad4 dt.year}-\{pad2 dt.month}-\{pad2 dt.day}T\{pad2 dt.hour}:\{pad2 dt.minute}:\{pad2 dt.second}Z"
 
 {- Assemble a `DateTime` from six already-parsed fields, rejecting any that is
    out of civil range.  Split out of `parseIso` so the six `Option`s are
    destructured by ONE pattern match rather than nested `match`es. -}
-isoFields : Option Int -> Option Int -> Option Int -> Option Int -> Option Int -> Option Int -> Option DateTime
+isoFields : Option Int ->
+  Option Int ->
+  Option Int ->
+  Option Int ->
+  Option Int ->
+  Option Int ->
+  Option DateTime
 isoFields (Some y) (Some mo) (Some d) (Some h) (Some mi) (Some sec) =
-  if y >= 0 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h <= 23 && mi <= 59 && sec <= 59 then
+  if y >= 0
+    && mo >= 1
+    && mo <= 12
+    && d >= 1
+    && d <= 31
+    && h <= 23
+    && mi <= 59
+    && sec <= 59 then
     Some DateTime {
       year = y,
       month = mo,
@@ -266,10 +281,24 @@ isoFields _ _ _ _ _ _ = None
 export
 parseIso : String -> Option DateTime
 parseIso s =
-  if stringLength s == 20 && sliceClamped 4 5 s == "-" && sliceClamped 7 8 s == "-" && sliceClamped 10 11 s == "T" && sliceClamped 13 14 s == ":" && sliceClamped 16 17 s == ":" && sliceClamped 19 20 s == "Z" then match isoFields (toInt (sliceClamped 0 4 s)) (toInt (sliceClamped 5 7 s)) (toInt (sliceClamped 8 10 s)) (toInt (sliceClamped 11 13 s)) (toInt (sliceClamped 14 16 s)) (toInt (sliceClamped 17 19 s))
+  if stringLength s == 20
+    && sliceClamped 4 5 s == "-"
+    && sliceClamped 7 8 s == "-"
+    && sliceClamped 10 11 s == "T"
+    && sliceClamped 13 14 s == ":"
+    && sliceClamped 16 17 s == ":"
+    && sliceClamped 19 20 s
+      == "Z" then match (isoFields
+    (toInt (sliceClamped 0 4 s))
+    (toInt (sliceClamped 5 7 s))
+    (toInt (sliceClamped 8 10 s))
+    (toInt (sliceClamped 11 13 s))
+    (toInt (sliceClamped 14 16 s))
+    (toInt (sliceClamped 17 19 s)))
     Some dt => if formatIso dt == s then Some dt else None
     None => None
-  else None
+  else
+    None
 
 -- > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
 -- True
@@ -379,8 +408,9 @@ prop "Duration projections are the coarser unit's floor" (n : Int) =
 
 -- LAW: derived `Ord Duration` must agree with `toMillis` ordering, and must
 -- be consistent with `Eq`.
-prop "Ord Duration agrees with toMillis" (a : Int) (b : Int) = compare (millis a) (millis b) == compare a b
-  && millis a == millis b == (a == b)
+prop "Ord Duration agrees with toMillis" (a : Int) (b : Int) =
+  compare (millis a) (millis b) == compare a b
+    && millis a == millis b == (a == b)
 
 -- LAW: derived `Ord DateTime` must agree with `toEpochSeconds` ordering on
 -- civil-range values, and must be consistent with `Eq`.

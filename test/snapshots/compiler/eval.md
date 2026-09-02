@@ -1,5 +1,5 @@
 # META
-source_lines=4574
+source_lines=4846
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -195,7 +195,7 @@ ppField (k, v) = "\{k} = \{ppValue v}"
 
 -- parenthesize compound atoms (VCon with args / tuples) when nested
 ppValueAtom : Value e -> String
-ppValueAtom (VCon name (x::xs)) = "(" ++ ppValue (VCon name (x::xs)) ++ ")"
+ppValueAtom (VCon name (x :: xs)) = "(" ++ ppValue (VCon name (x :: xs)) ++ ")"
 ppValueAtom (VTuple vs) = "(" ++ ppValue (VTuple vs) ++ ")"
 ppValueAtom v = ppValue v
 
@@ -260,7 +260,7 @@ intSeq lo end
 listNthAt : List (Value e) -> Int -> Int -> Value e
 listNthAt [] orig _ =
   runtimePanic "E-INDEX-OOB" ("index " ++ intToString orig ++ " out of bounds")
-listNthAt (x::xs) orig i
+listNthAt (x :: xs) orig i
   | i <= 0 = x
   | otherwise = listNthAt xs orig (i - 1)
 
@@ -269,7 +269,7 @@ listSliceV xs lo hi = listSliceGo xs 0 lo hi
 
 listSliceGo : List (Value e) -> Int -> Int -> Int -> List (Value e)
 listSliceGo [] _ _ _ = []
-listSliceGo (x::xs) i lo hi
+listSliceGo (x :: xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: listSliceGo xs (i + 1) lo hi
   | otherwise = listSliceGo xs (i + 1) lo hi
@@ -282,7 +282,7 @@ startsWithAt s =
 
 containsInt : Int -> List Int -> Bool
 containsInt _ [] = False
-containsInt x (y::ys) = x == y || containsInt x ys
+containsInt x (y :: ys) = x == y || containsInt x ys
 
 -- ── typeclass dispatch: ctor→type table + runtime tag ─────────────────────
 -- A process-global ctor→type map;
@@ -319,11 +319,11 @@ ffiExternNamesRef = Ref []
 export
 externDeclNamesOfDecls : List Decl -> List String
 externDeclNamesOfDecls [] = []
-externDeclNamesOfDecls ((DExtern _ n _)::rest) =
+externDeclNamesOfDecls ((DExtern _ n _) :: rest) =
   n :: externDeclNamesOfDecls rest
-externDeclNamesOfDecls ((DAttrib _ inner)::rest) = externDeclNamesOfDecls [inner]
-  ++ externDeclNamesOfDecls rest
-externDeclNamesOfDecls (_::rest) = externDeclNamesOfDecls rest
+externDeclNamesOfDecls ((DAttrib _ inner) :: rest) =
+  externDeclNamesOfDecls [inner] ++ externDeclNamesOfDecls rest
+externDeclNamesOfDecls (_ :: rest) = externDeclNamesOfDecls rest
 
 variantName : Variant -> String
 variantName (Variant n _) = n
@@ -369,13 +369,13 @@ export
 installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
-  methodReqCountRef := (buildMethodReqCounts allDecls)
+  methodReqCountRef := buildMethodReqCounts allDecls
   ifaceDispatchRef := disp
   -- #1047: installed HERE for the same reason `lowerImpls` installs
   -- `installIfaceImplHeads` — this is the ONE call every module driver (eval's
   -- two + core_ir_eval's `cevalModules`) already makes with the WHOLE program's
   -- decls, so a driver cannot acquire the dispatch tables and forget this one.
-  declImplIfaceIdsRef := (declImplIfaceIdTable allDecls)
+  declImplIfaceIdsRef := declImplIfaceIdTable allDecls
   disp
 
 -- ── #1047: declared impl → the INTERFACE IDENTITY it implements ─────────────
@@ -395,7 +395,13 @@ declImplIfaceIdRow : Decl -> List (String, String, String)
 -- #1037: an attribute wraps the decl it annotates; matched arm-for-arm with
 -- `declImplEntries`, which unwraps `DAttrib` for the same reason.
 declImplIfaceIdRow (DAttrib _ d) = declImplIfaceIdRow d
-declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, optionOr noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
+declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [
+  (
+    ifaceIdentity o ifaceName,
+    optionOr noneHeadTag (headTyconHead typeArgs),
+    implRouteKeyWord o ifaceName typeArgs None,
+  ),
+]
 declImplIfaceIdRow _ = []
 
 -- the interface IDENTITIES of every declared impl at [tag] (head tag OR canonical
@@ -406,7 +412,7 @@ ifaceIdsAtTagE tag = ifaceIdsAtTagEGo tag !declImplIfaceIdsRef
 
 ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
 ifaceIdsAtTagEGo _ [] = []
-ifaceIdsAtTagEGo tag ((ifaceId, t, k)::rest)
+ifaceIdsAtTagEGo tag ((ifaceId, t, k) :: rest)
   | t == tag || k == tag = ifaceId :: ifaceIdsAtTagEGo tag rest
   | otherwise = ifaceIdsAtTagEGo tag rest
 
@@ -484,7 +490,7 @@ ifaceOfMethod mname = ifaceOfMethodIn mname !ifaceDispatchRef
 
 ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
 ifaceOfMethodIn _ [] = ""
-ifaceOfMethodIn mname (((_, i, m), _)::rest)
+ifaceOfMethodIn mname (((_, i, m), _) :: rest)
   | m == mname = i
   | otherwise = ifaceOfMethodIn mname rest
 
@@ -492,9 +498,11 @@ ifaceOfMethodIn mname (((_, i, m), _)::rest)
 methodsOfIface : String -> List String
 methodsOfIface iface = methodsOfIfaceIn iface !ifaceDispatchRef
 
-methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
+methodsOfIfaceIn : String ->
+  List ((String, String, String), List Int) ->
+  List String
 methodsOfIfaceIn _ [] = []
-methodsOfIfaceIn iface (((_, i, m), _)::rest)
+methodsOfIfaceIn iface (((_, i, m), _) :: rest)
   | i == iface = m :: methodsOfIfaceIn iface rest
   | otherwise = methodsOfIfaceIn iface rest
 
@@ -516,12 +524,16 @@ ifaceMethodArity (IfaceMethod mname mty _ _) = (mname, listLen (argsOfTy mty))
 -- one ((method, tag), reqCount) per impl method; reqCount = impl pats - declared arity.
 implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
 implMethodReqCounts arities (DAttrib _ d) = implMethodReqCounts arities d
-implMethodReqCounts arities (DImpl { tys = typeArgs, methods, ... }) = match headTyconHead typeArgs
-  Some tag => flatMap (implMethodReqCountEntry arities tag) methods
-  None => []
+implMethodReqCounts arities (DImpl { tys = typeArgs, methods, ... }) =
+  match headTyconHead typeArgs
+    Some tag => flatMap (implMethodReqCountEntry arities tag) methods
+    None => []
 implMethodReqCounts _ _ = []
 
-implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
+implMethodReqCountEntry : List (String, Int) ->
+  String ->
+  ImplMethod ->
+  List ((String, String), Int)
 implMethodReqCountEntry arities tag (ImplMethod mname pats _) =
   let declArity = optionOr (listLen pats) (lookupAssoc mname arities)
   let reqCount = subClampZero (listLen pats) declArity
@@ -534,7 +546,7 @@ takeN : Int -> List a -> List a
 takeN n _
   | n <= 0 = []
 takeN _ [] = []
-takeN n (x::rest) = x :: takeN (n - 1) rest
+takeN n (x :: rest) = x :: takeN (n - 1) rest
 
 -- #413: Option-returning.  A MISSING entry (no ImplMethod for this (method, tag) —
 -- an interface DEFAULT method, or a tag the route never narrowed) must stay
@@ -562,7 +574,7 @@ lookupMethodReqCountOpt mname tag = lookupReqCount mname tag !methodReqCountRef
 
 lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
 lookupReqCount _ _ [] = None
-lookupReqCount mname tag (((m, t), c)::rest)
+lookupReqCount mname tag (((m, t), c) :: rest)
   | m == mname && t == tag = Some c
   | otherwise = lookupReqCount mname tag rest
 
@@ -616,7 +628,7 @@ countTyvars (TyRow _ _ _) = 0
 
 sumInts : List Int -> Int
 sumInts [] = 0
-sumInts (x::xs) = x + sumInts xs
+sumInts (x :: xs) = x + sumInts xs
 
 export
 tyvarsInArgs : List Ty -> Int
@@ -726,7 +738,7 @@ argsOfTy _ = []
 
 filterMentions : Int -> List Ty -> List String -> List Int
 filterMentions _ [] _ = []
-filterMentions i (t::ts) params
+filterMentions i (t :: ts) params
   | tyMentions t params = i :: filterMentions (i + 1) ts params
   | otherwise = filterMentions (i + 1) ts params
 
@@ -760,19 +772,24 @@ lookupEnv (EvalEnv frames) name = lookupFrames frames name
 lookupEnvOpt : EvalEnv (Value e) -> String -> <e> Option (Value e)
 lookupEnvOpt (EvalEnv frames) name = lookupFramesOpt frames name
 
-lookupFramesOpt : List (List (String, Ref (Value e))) -> String -> <e> Option (Value e)
+lookupFramesOpt : List (List (String, Ref (Value e))) ->
+  String ->
+  <e> Option (Value e)
 lookupFramesOpt [] _ = None
-lookupFramesOpt (frame::rest) name = match lookupFrameCell frame name
+lookupFramesOpt (frame :: rest) name = match lookupFrameCell frame name
   Some cell => Some (forceCell cell name)
   None => lookupFramesOpt rest name
 
 lookupFrames : List (List (String, Ref (Value e))) -> String -> <e> Value e
 lookupFrames [] name =
   if contains name !ffiExternNamesRef then
-    panic ("capability error: '" ++ name ++ "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")
+    panic
+      ("capability error: '"
+        ++ name
+        ++ "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")
   else
     panic ("unbound identifier: " ++ name)
-lookupFrames (frame::rest) name = match lookupFrameCell frame name
+lookupFrames (frame :: rest) name = match lookupFrameCell frame name
   Some cell => forceCell cell name
   None => lookupFrames rest name
 
@@ -794,9 +811,12 @@ export
 lookupMethod : EvalEnv (Value e) -> String -> <e> Value e
 lookupMethod (EvalEnv frames) name = lookupMethodFrames frames frames name
 
-lookupMethodFrames : List (List (String, Ref (Value e))) -> List (List (String, Ref (Value e))) -> String -> <e> Value e
+lookupMethodFrames : List (List (String, Ref (Value e))) ->
+  List (List (String, Ref (Value e))) ->
+  String ->
+  <e> Value e
 lookupMethodFrames all [] name = lookupFrames all name
-lookupMethodFrames all (frame::rest) name = match lookupFrameCell frame name
+lookupMethodFrames all (frame :: rest) name = match lookupFrameCell frame name
   Some cell =>
     if isMethodBinding (forceCell cell name) then
       forceCell cell name
@@ -813,8 +833,8 @@ isMethodBinding _ = False
 
 anyTypedImpl : List (Value e) -> Bool
 anyTypedImpl [] = False
-anyTypedImpl ((VTypedImpl _ _ _ _ _)::_) = True
-anyTypedImpl (_::rest) = anyTypedImpl rest
+anyTypedImpl ((VTypedImpl _ _ _ _ _) :: _) = True
+anyTypedImpl (_ :: rest) = anyTypedImpl rest
 
 -- read a cell, forcing + memoising a deferred thunk on first access
 -- P0-2(b): black-hole a lazy cell while it is being forced so a non-productive
@@ -850,9 +870,11 @@ force v = v
 
 -- #1033: opBump makes the by-name scan's O(depth) cost visible to the perf
 -- gate's deterministic op-count arm (it never counted this scan before).
-lookupFrameCell : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
+lookupFrameCell : List (String, Ref (Value e)) ->
+  String ->
+  Option (Ref (Value e))
 lookupFrameCell [] _ = None
-lookupFrameCell ((n, cell)::rest) name =
+lookupFrameCell ((n, cell) :: rest) name =
   let _ = opBump ()
   if n == name then Some cell else lookupFrameCell rest name
 
@@ -870,15 +892,18 @@ lookupAtAddr env name AGlobal = lookupEnv env name
 lookupAtAddr (EvalEnv frames) name (ALocal depth slot) =
   forceCell (addrCell (frameAtDepth frames depth name) slot name) name
 
-frameAtDepth : List (List (String, Ref (Value e))) -> Int -> String -> List (String, Ref (Value e))
+frameAtDepth : List (List (String, Ref (Value e))) ->
+  Int ->
+  String ->
+  List (String, Ref (Value e))
 frameAtDepth [] _ name = panic ("EVarAt: frame depth out of range for " ++ name)
-frameAtDepth (frame::rest) depth name
+frameAtDepth (frame :: rest) depth name
   | depth <= 0 = frame
   | otherwise = frameAtDepth rest (depth - 1) name
 
 addrCell : List (String, Ref (Value e)) -> Int -> String -> Ref (Value e)
 addrCell [] _ name = panic ("EVarAt: slot out of range for " ++ name)
-addrCell ((n, cell)::rest) slot name
+addrCell ((n, cell) :: rest) slot name
   | slot > 0 = addrCell rest (slot - 1) name
   | n == name = cell
   | otherwise = panic "EVarAt: slot/name mismatch; want \{name}, found \{n}"
@@ -891,13 +916,15 @@ cellOf : (String, Value e) -> (String, Ref (Value e))
 cellOf (n, v) = (n, Ref v)
 
 export
-pushFrame : EvalEnv (Value e) -> List (String, Ref (Value e)) -> EvalEnv (Value e)
-pushFrame (EvalEnv frames) frame = EvalEnv (frame::frames)
+pushFrame : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  EvalEnv (Value e)
+pushFrame (EvalEnv frames) frame = EvalEnv (frame :: frames)
 
 export
 findCell : List (String, Ref (Value e)) -> String -> Ref (Value e)
 findCell [] name = panic ("findCell: missing " ++ name)
-findCell ((n, cell)::rest) name
+findCell ((n, cell) :: rest) name
   | n == name = cell
   | otherwise = findCell rest name
 
@@ -919,14 +946,13 @@ valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
 valueListEq [] [] = True
-valueListEq (x::xs) (y::ys) = valueEq x y && valueListEq xs ys
+valueListEq (x :: xs) (y :: ys) = valueEq x y && valueListEq xs ys
 valueListEq _ _ = False
 
 fieldListEq : List (String, Value e) -> List (String, Value e) -> Bool
 fieldListEq [] [] = True
-fieldListEq ((k1, v1)::r1) ((k2, v2)::r2) = k1 == k2
-  && valueEq v1 v2
-  && fieldListEq r1 r2
+fieldListEq ((k1, v1) :: r1) ((k2, v2) :: r2) =
+  k1 == k2 && valueEq v1 v2 && fieldListEq r1 r2
 fieldListEq _ _ = False
 
 boolEq : Bool -> Bool -> Bool
@@ -971,9 +997,9 @@ valueCompare a b = compare (valueTag a) (valueTag b)
 
 compareValueLists : List (Value e) -> List (Value e) -> Ordering
 compareValueLists [] [] = Eq
-compareValueLists [] (_::_) = Lt
-compareValueLists (_::_) [] = Gt
-compareValueLists (x::xs) (y::ys) = match valueCompare x y
+compareValueLists [] (_ :: _) = Lt
+compareValueLists (_ :: _) [] = Gt
+compareValueLists (x :: xs) (y :: ys) = match valueCompare x y
   Eq => compareValueLists xs ys
   o => o
 
@@ -1001,7 +1027,7 @@ matchPat (PCon "False" []) (VBool False) = Some []
 matchPat (PCon name pats) (VCon name2 vals)
   | name == name2 && listLen pats == listLen vals = matchPats pats vals
   | otherwise = None
-matchPat (PCons h t) (VList (x::xs)) = matchCons h t x xs
+matchPat (PCons h t) (VList (x :: xs)) = matchCons h t x xs
 matchPat (PCons _ _) (VList []) = None
 matchPat (PTuple pats) (VTuple vals)
   | listLen pats == listLen vals = matchPats pats vals
@@ -1033,18 +1059,21 @@ inIntRange : Int -> Int -> Int -> Bool -> Bool
 inIntRange v lo hi incl = v >= lo && v <= (if incl then hi else hi - 1)
 
 inCharRange : String -> String -> String -> Bool -> Bool
-inCharRange c lo hi incl = not (ordLt (stringCompare c lo))
-  && charUpper c hi incl
+inCharRange c lo hi incl =
+  not (ordLt (stringCompare c lo)) && charUpper c hi incl
 
 charUpper : String -> String -> Bool -> Bool
 charUpper c hi True = not (ordGt (stringCompare c hi))
 charUpper c hi False = ordLt (stringCompare c hi)
 
-matchRecFields : List RecPatField -> List (String, Value e) -> Option (List (String, Value e))
+matchRecFields : List RecPatField ->
+  List (String, Value e) ->
+  Option (List (String, Value e))
 matchRecFields [] _ = Some []
-matchRecFields ((RecPatField fname _ mp)::rest) recFields = match lookupAssoc fname recFields
-  None => None
-  Some v => matchRecField fname mp v rest recFields
+matchRecFields ((RecPatField fname _ mp) :: rest) recFields =
+  match lookupAssoc fname recFields
+    None => None
+    Some v => matchRecField fname mp v rest recFields
 
 -- Zip a registered ctor's field order with its positional VCon vals into a
 -- name->value assoc, so a record pattern can match a named-field data variant
@@ -1052,16 +1081,25 @@ matchRecFields ((RecPatField fname _ mp)::rest) recFields = match lookupAssoc fn
 zipFieldOrder : List String -> List (Value e) -> List (String, Value e)
 zipFieldOrder [] _ = []
 zipFieldOrder _ [] = []
-zipFieldOrder (f::fs) (v::vs) = (f, v) :: zipFieldOrder fs vs
+zipFieldOrder (f :: fs) (v :: vs) = (f, v) :: zipFieldOrder fs vs
 
-matchRecField : String -> Option Pat -> Value e -> List RecPatField -> List (String, Value e) -> Option (List (String, Value e))
+matchRecField : String ->
+  Option Pat ->
+  Value e ->
+  List RecPatField ->
+  List (String, Value e) ->
+  Option (List (String, Value e))
 matchRecField fname None v rest recFields =
   map ((fname, v) :: _) (matchRecFields rest recFields)
 matchRecField _ (Some q) v rest recFields = match matchPat q v
   None => None
   Some b => map (b ++ _) (matchRecFields rest recFields)
 
-matchCons : Pat -> Pat -> Value e -> List (Value e) -> Option (List (String, Value e))
+matchCons : Pat ->
+  Pat ->
+  Value e ->
+  List (Value e) ->
+  Option (List (String, Value e))
 matchCons h t x xs = match matchPat h x
   None => None
   Some b1 => map (b1 ++ _) (matchPat t (VList xs))
@@ -1071,7 +1109,7 @@ matchAs x p v = map ((x, v) :: _) (matchPat p v)
 
 matchPats : List Pat -> List (Value e) -> Option (List (String, Value e))
 matchPats [] [] = Some []
-matchPats (p::ps) (v::vs) = match matchPat p v
+matchPats (p :: ps) (v :: vs) = match matchPat p v
   None => None
   Some b => map (b ++ _) (matchPats ps vs)
 matchPats _ _ = None
@@ -1084,7 +1122,7 @@ makeCtor name arity = makeCtorGo name arity []
 makeCtorGo : String -> Int -> List (Value e) -> Value e
 makeCtorGo name arity acc
   | arity <= 0 = VCon name (reverseL acc)
-  | otherwise = VPrim (v => makeCtorGo name (arity - 1) (v::acc))
+  | otherwise = VPrim (v => makeCtorGo name (arity - 1) (v :: acc))
 
 -- ── application ───────────────────────────────────────────────────────────
 -- non-colliding alias of `apply` for importers: the prelude (core.mdk) also
@@ -1104,10 +1142,11 @@ apply : Value e -> Value e -> <e> Value e
 apply f x =
   let d = !evalDepthRef + 1
   evalDepthRef := d
-  let _ = if d > evalDepthLimit then
-    runtimePanic "E-STACK-OVERFLOW" "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
-  else
-    ()
+  let _ =
+    if d > evalDepthLimit then
+      runtimePanic
+        "E-STACK-OVERFLOW"
+        "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
   let r = applyDispatch f x
   evalDepthRef := d - 1
   r
@@ -1123,13 +1162,21 @@ applyOpt (VClosureF env pats f) arg = applyClosureF env pats f arg
 applyOpt (VPrim f) arg = Some (f arg)
 applyOpt (VTypedImpl t key pos seen inner) arg =
   applyTyped t key pos seen inner arg
-applyOpt (VMulti vs) arg = let _ = checkArgTagDecidable vs arg in collectPartials [] (filterByTag vs arg) arg
+applyOpt (VMulti vs) arg =
+  let _ = checkArgTagDecidable vs arg in
+    collectPartials [] (filterByTag vs arg) arg
 applyOpt other _ =
   runtimePanic "E-NOT-A-FUNCTION" ("applied non-function: " ++ ppValue other)
 
 -- pass the arg to the impl's inner value, preserving the dispatch tag across
 -- partial applications (so later args still route to the same impl)
-applyTyped : String -> String -> List Int -> Int -> Value e -> Value e -> <e> Option (Value e)
+applyTyped : String ->
+  String ->
+  List Int ->
+  Int ->
+  Value e ->
+  Value e ->
+  <e> Option (Value e)
 applyTyped t key pos seen inner arg =
   map (reTag t key pos (seen + 1)) (applyOpt inner arg)
 
@@ -1201,9 +1248,8 @@ checkArgTagDecidable vs arg
     Some tag => reportIfUndecidable tag (filterList (undecidableCand tag) vs)
 
 undecidableCand : String -> Value e -> Bool
-undecidableCand tag v = isDispatching v
-  && matchesTag tag v
-  && not (hasLaterSlot v)
+undecidableCand tag v =
+  isDispatching v && matchesTag tag v && not (hasLaterSlot v)
 
 -- is there a dispatching slot AFTER the argument being applied right now?  [seen] is
 -- the count of arguments already consumed, so the slot now being filled is [seen] and
@@ -1214,7 +1260,10 @@ hasLaterSlot _ = False
 
 reportIfUndecidable : String -> List (Value e) -> Unit
 reportIfUndecidable tag cands
-  | twoDistinctKeys cands [] = runtimePanic "E-AMBIGUOUS-DISPATCH" "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+  | twoDistinctKeys cands [] =
+    runtimePanic
+      "E-AMBIGUOUS-DISPATCH"
+      "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
@@ -1236,7 +1285,7 @@ reportIfUndecidable tag cands
 -- `test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/`.
 twoDistinctKeys : List (Value e) -> List (String, String) -> Bool
 twoDistinctKeys [] _ = False
-twoDistinctKeys (v::rest) seen
+twoDistinctKeys (v :: rest) seen
   | ifaceRivalSeen (candIfaceKey v) seen = True
   | otherwise = twoDistinctKeys rest (candIfaceKey v :: seen)
 
@@ -1244,7 +1293,7 @@ twoDistinctKeys (v::rest) seen
 -- key — the only pair the runtime tag was asked to tell apart and could not.
 ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 ifaceRivalSeen _ [] = False
-ifaceRivalSeen (i, k) ((i2, k2)::rest)
+ifaceRivalSeen (i, k) ((i2, k2) :: rest)
   | i == i2 && k /= k2 = True
   | otherwise = ifaceRivalSeen (i, k) rest
 
@@ -1263,7 +1312,7 @@ candKey _ = ""
 candIface : Value e -> String
 candIface v = match splitOnChar '|' (candKey v)
   [] => ""
-  w::_ => w
+  w :: _ => w
 
 -- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
 -- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
@@ -1345,7 +1394,11 @@ defaultBodyKeyCell = "#defaultBodyImplKey"
 -- apply every sibling impl's specialized default to the wrong receiver and hard-
 -- panic.  Mirrors the LLVM `emitDefaultRKey` default-fallback path.  Only when
 -- there is ALSO no default do we leave the whole VMulti for arg-tag fallback.
-pickByTag : EvalEnv (Value e) -> String -> List (Value e) -> String -> <e> Value e
+pickByTag : EvalEnv (Value e) ->
+  String ->
+  List (Value e) ->
+  String ->
+  <e> Value e
 pickByTag env method vs tag = match filterList (hasTag tag) vs
   [] => pickTagFallback env method vs tag
   matched => oneOrMultiV matched vs
@@ -1387,12 +1440,20 @@ pickByTag env method vs tag = match filterList (hasTag tag) vs
 -- cell and the emitters' `mdk_default_<method>_<tag>` symbol are both keyed
 -- (method, tag), so two interfaces' default bodies have one name between them.
 -- Pinned at test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
-pickTagFallback : EvalEnv (Value e) -> String -> List (Value e) -> String -> <e> Value e
+pickTagFallback : EvalEnv (Value e) ->
+  String ->
+  List (Value e) ->
+  String ->
+  <e> Value e
 pickTagFallback env method vs tag = match filterList (hasTag noneHeadTag) vs
   [] => pickDefaultCand env method vs tag
   gens => oneOrMultiV gens vs
 
-pickDefaultCand : EvalEnv (Value e) -> String -> List (Value e) -> String -> <e> Value e
+pickDefaultCand : EvalEnv (Value e) ->
+  String ->
+  List (Value e) ->
+  String ->
+  <e> Value e
 pickDefaultCand env method vs tag = match filterList isDefaultCand vs
   [] => VMulti vs
   [only] => only
@@ -1411,9 +1472,10 @@ ownDefault env method tag =
 
 defaultCellOf : EvalEnv (Value e) -> String -> String -> <e> List (Value e)
 defaultCellOf _ _ "" = []
-defaultCellOf env method ifaceId = match lookupEnvOpt env (defaultCellName ifaceId method)
-  Some v => [v]
-  None => []
+defaultCellOf env method ifaceId =
+  match lookupEnvOpt env (defaultCellName ifaceId method)
+    Some v => [v]
+    None => []
 
 oneOnly : List a -> Option a
 oneOnly [x] = Some x
@@ -1472,14 +1534,14 @@ routeTag _ (RScalar _) =
 export
 applyDicts : EvalEnv (Value e) -> Value e -> List Route -> <e> Value e
 applyDicts _ v [] = v
-applyDicts env v (r::rest) = applyDicts env (apply v (dictOfRoute env r)) rest
+applyDicts env v (r :: rest) = applyDicts env (apply v (dictOfRoute env r)) rest
 
 -- apply an already-built list of VDict values directly (used to forward an impl's
 -- own requires into its body at a return-position RDictFwd site, Phase 83/84 #5).
 export
 applyValues : Value e -> List (Value e) -> <e> Value e
 applyValues v [] = v
-applyValues v (x::rest) = applyValues (apply v x) rest
+applyValues v (x :: rest) = applyValues (apply v x) rest
 
 -- build the runtime dictionary for one route: RKey builds a structured VDict
 -- carrying the impl's own requires dicts recursively (Phase 83/84 #5); RDict/
@@ -1507,7 +1569,11 @@ dictOfRoute _ (RScalar _) =
 -- forwarded requires (non-empty only for RDictFwd return-position sites where the
 -- enclosing dict carries nested element dicts for the selected impl, Phase 83/84 #5).
 export
-methodAtNarrow : EvalEnv (Value e) -> String -> Value e -> Route -> <e> (Value e, List (Value e))
+methodAtNarrow : EvalEnv (Value e) ->
+  String ->
+  Value e ->
+  Route ->
+  <e> (Value e, List (Value e))
 -- #1062: RNone is "typecheck could not key this occurrence", and the sibling calls
 -- inside an interface DEFAULT body are all RNone by construction — the body belongs
 -- to the interface, so there is no impl to key them to.  That is exactly where the
@@ -1581,25 +1647,34 @@ withCallFile env thunk = match lookupEnvOpt env evalFileTagName
     r
   _ => thunk ()
 
-applyClosure : EvalEnv (Value e) -> List Pat -> Expr -> Value e -> <e> Option (Value e)
+applyClosure : EvalEnv (Value e) ->
+  List Pat ->
+  Expr ->
+  Value e ->
+  <e> Option (Value e)
 applyClosure _ [] _ _ = panic "applied closure with no parameters"
 applyClosure env [p] body arg = match matchPat p arg
   None => None
-  Some binds => fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
-applyClosure env (p::ps) body arg =
+  Some binds =>
+    fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
+applyClosure env (p :: ps) body arg =
   map (binds => VClosure (extendEnv env binds) ps body) (matchPat p arg)
 
 -- VClosureF analog of applyClosure: the body is a host fn run on the fully-
 -- extended env once the last param binds; partial application keeps the same
 -- body fn and grows env (mirrors VClosure exactly).
 export
-applyClosureF : EvalEnv (Value e) -> List Pat -> (EvalEnv (Value e) -> <e> Value e) -> Value e -> <e> Option (Value e)
+applyClosureF : EvalEnv (Value e) ->
+  List Pat ->
+  (EvalEnv (Value e) -> <e> Value e) ->
+  Value e ->
+  <e> Option (Value e)
 applyClosureF _ [] _ _ = panic "applied closure with no parameters"
 applyClosureF env [p] f arg = match matchPat p arg
   None => None
   Some binds =>
     fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
-applyClosureF env (p::ps) f arg =
+applyClosureF env (p :: ps) f arg =
   map (binds => VClosureF (extendEnv env binds) ps f) (matchPat p arg)
 
 -- a guard chain that fell through (VFallthrough) means this clause didn't match
@@ -1607,13 +1682,16 @@ fallthroughToNone : Value e -> Option (Value e)
 fallthroughToNone VFallthrough = None
 fallthroughToNone v = Some v
 
-collectPartials : List (Value e) -> List (Value e) -> Value e -> <e> Option (Value e)
+collectPartials : List (Value e) ->
+  List (Value e) ->
+  Value e ->
+  <e> Option (Value e)
 collectPartials [] [] _ = panic "no matching impl for dispatch"
 collectPartials [v] [] _ = Some v
 collectPartials many [] _ = Some (VMulti (reverseL many))
-collectPartials acc (v::rest) arg = match applyOpt v arg
+collectPartials acc (v :: rest) arg = match applyOpt v arg
   None => collectPartials acc rest arg
-  Some r => if isPartial r then collectPartials (r::acc) rest arg else Some r
+  Some r => if isPartial r then collectPartials (r :: acc) rest arg else Some r
 
 isPartial : Value e -> Bool
 isPartial (VClosure _ _ _) = True
@@ -1652,10 +1730,7 @@ eval env (EVarId x _) = if startsWithAt x then VUnit else lookupEnv env x
 -- in a bytecode VM, where consuming them pays off.  Activate by running
 -- annotateProgram in evalProgram/evalModules.
 eval env (EVarAt x addr) =
-  if startsWithAt x then
-    VUnit
-  else
-    lookupAtAddr env x addr
+  if startsWithAt x then VUnit else lookupAtAddr env x addr
 eval env (EMethodAt name routeRef implRef methodRef) =
   evalMethodAt env name !routeRef !implRef !methodRef
 
@@ -1714,7 +1789,12 @@ eval _ _ = panic "eval: unsupported node"
 -- with no dict folding.  Every other
 -- route is a genuine method dispatch: resolve the VMulti past any nearer same-
 -- named standalone shadow with lookupMethod (C5), then narrow.
-evalMethodAt : EvalEnv (Value e) -> String -> Route -> List Route -> List Route -> <e> Value e
+evalMethodAt : EvalEnv (Value e) ->
+  String ->
+  Route ->
+  List Route ->
+  List Route ->
+  <e> Value e
 -- P0-18: the carried String is the MANGLED standalone symbol on the emit path;
 -- "" (the un-mangled run/check path) falls back to the bare method name.
 -- S-1: apply the standalone's OWN constraint dicts as leading args (`dicts` is empty
@@ -1754,7 +1834,14 @@ evalMethodAt env name route implRoutes methodRoutes =
 -- that still takes VALUE params awaits args and slips through it; that is #413, which
 -- implDictRoutes (below) closes properly by consulting the declared count.
 export
-applyMethodDicts : EvalEnv (Value e) -> String -> Route -> Value e -> List (Value e) -> List Route -> List Route -> <e> Value e
+applyMethodDicts : EvalEnv (Value e) ->
+  String ->
+  Route ->
+  Value e ->
+  List (Value e) ->
+  List Route ->
+  List Route ->
+  <e> Value e
 applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   let tag = routeTag env route
   -- ONE scan of methodReqCountRef per dispatch.  Both consumers below derive from
@@ -1763,14 +1850,22 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   -- linear-in-impl-count scan on a runtime dispatch hot path for nothing.
   let reqCount = lookupMethodReqCountOpt name tag
   let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
-  if awaitsArgs narrowed then
-    match specializeDefault env name tag reqCount implRoutes narrowed
-      Some specialized => applyDicts env specialized methodRoutes
-      None =>
-        let v1 = applyDicts env narrowed methodRoutes
-        let v2 = applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
-        applyValues v2 fwdReqs
-  else narrowed
+  if awaitsArgs
+    narrowed then match (specializeDefault
+    env
+    name
+    tag
+    reqCount
+    implRoutes
+    narrowed)
+    Some specialized => applyDicts env specialized methodRoutes
+    None =>
+      let v1 = applyDicts env narrowed methodRoutes
+      let v2 =
+        applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
+      applyValues v2 fwdReqs
+  else
+    narrowed
 
 -- ── #315: the eval twin of llvm_emit's emitDefaultDefine/restampIfaceDicts ──
 -- A user impl of a PRELUDE interface, in another module, that inherits a DEFAULT
@@ -1852,17 +1947,31 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
 -- none (a different interface's method) or several leaves the `VMulti` exactly as
 -- it found it, so the arg-tag fallback — and the undecidability guard behind it —
 -- still get their turn.
-specializeDefault : EvalEnv (Value e) -> String -> String -> Option Int -> List Route -> Value e -> <e> Option (Value e)
+specializeDefault : EvalEnv (Value e) ->
+  String ->
+  String ->
+  Option Int ->
+  List Route ->
+  Value e ->
+  <e> Option (Value e)
 specializeDefault _ _ _ (Some _) _ _ = None
 specializeDefault env name tag None implRoutes narrowed
   | tag == "" = None
-  | otherwise = withEnvFrame ((defaultBodyKeyCell, Ref (VString tag)) :: dictShadows env name tag implRoutes) narrowed
+  | otherwise =
+    withEnvFrame
+      ((defaultBodyKeyCell, Ref (VString tag))
+        :: dictShadows env name tag implRoutes)
+      narrowed
 
 -- The dict half stays EXACTLY as scoped as it was: an impl with no `requires` has
 -- no dicts to route, and binding its siblings here would PIN them (the hazard
 -- `siblingShadows`' own note names).  The key cell above carries the impl identity
 -- instead, and narrows only where nothing else decided.
-dictShadows : EvalEnv (Value e) -> String -> String -> List Route -> <e> List (String, Ref (Value e))
+dictShadows : EvalEnv (Value e) ->
+  String ->
+  String ->
+  List Route ->
+  <e> List (String, Ref (Value e))
 dictShadows env name tag implRoutes
   | isEmptyL implRoutes = []
   | otherwise = siblingShadows env name tag implRoutes
@@ -1874,28 +1983,54 @@ dictShadows env name tag implRoutes
 -- would only risk pinning: skip.  [name] itself is excluded — the body being
 -- specialised IS [name]'s default, and binding it would make a self-recursive default
 -- resolve to a non-existent tagged impl.
-siblingShadows : EvalEnv (Value e) -> String -> String -> List Route -> <e> List (String, Ref (Value e))
+siblingShadows : EvalEnv (Value e) ->
+  String ->
+  String ->
+  List Route ->
+  <e> List (String, Ref (Value e))
 siblingShadows env name tag implRoutes =
   flatMap
     (shadowBind env tag implRoutes)
     (filter (/= name) (methodsOfIface (ifaceOfMethod name)))
 
-shadowBind : EvalEnv (Value e) -> String -> List Route -> String -> <e> List (String, Ref (Value e))
+shadowBind : EvalEnv (Value e) ->
+  String ->
+  List Route ->
+  String ->
+  <e> List (String, Ref (Value e))
 shadowBind env tag implRoutes m = match lookupMethodReqCountOpt m tag
   Some r => shadowBindAt env tag implRoutes m r
   None => []
 
-shadowBindAt : EvalEnv (Value e) -> String -> List Route -> String -> Int -> <e> List (String, Ref (Value e))
+shadowBindAt : EvalEnv (Value e) ->
+  String ->
+  List Route ->
+  String ->
+  Int ->
+  <e> List (String, Ref (Value e))
 shadowBindAt env tag implRoutes m r
   | r <= 0 = []
-  | otherwise = shadowOf env tag implRoutes m r (narrowMethod env m (lookupMethod env m) tag)
+  | otherwise =
+    shadowOf
+      env
+      tag
+      implRoutes
+      m
+      r
+      (narrowMethod env m (lookupMethod env m) tag)
 
 -- Only a still-dispatching candidate is worth shadowing: narrowMethod returning a
 -- non-VTypedImpl means the tag matched nothing tagged (the sibling is itself an
 -- inherited default), so there is no impl body to dict-apply.  Keeping the binding a
 -- VTypedImpl also keeps it a METHOD binding, so the body's lookupMethod finds it
 -- rather than walking past it to the global VMulti (isMethodBinding).
-shadowOf : EvalEnv (Value e) -> String -> List Route -> String -> Int -> Value e -> <e> List (String, Ref (Value e))
+shadowOf : EvalEnv (Value e) ->
+  String ->
+  List Route ->
+  String ->
+  Int ->
+  Value e ->
+  <e> List (String, Ref (Value e))
 shadowOf env _ implRoutes m r (v@(VTypedImpl _ _ _ _ _)) =
   [(m, Ref (applyDicts env v (takeN r implRoutes)))]
 shadowOf _ _ _ _ _ _ = []
@@ -1906,9 +2041,9 @@ shadowOf _ _ _ _ _ _ = []
 -- through to the normal path rather than silently drop its dicts.
 withEnvFrame : List (String, Ref (Value e)) -> Value e -> Option (Value e)
 withEnvFrame binds (VClosure (EvalEnv fs) ps b) =
-  Some (VClosure (EvalEnv (binds::fs)) ps b)
+  Some (VClosure (EvalEnv (binds :: fs)) ps b)
 withEnvFrame binds (VClosureF (EvalEnv fs) ps f) =
-  Some (VClosureF (EvalEnv (binds::fs)) ps f)
+  Some (VClosureF (EvalEnv (binds :: fs)) ps f)
 withEnvFrame _ _ = None
 
 -- #413: a call site stamps the impl-`requires` dict routes UNCONDITIONALLY, but
@@ -1970,7 +2105,10 @@ evalSliceInt _ _ _ _ = panic "slice on non-array/list/string"
 
 sliceArray : Array (Value e) -> Int -> Int -> Value e
 sliceArray a lo hiX
-  | lo < 0 || hiX > arrayLength a || hiX - lo < 0 = runtimePanic "E-SLICE-OOB" "slice [\{intToString lo}..\{intToString (hiX - 1)}] out of bounds"
+  | lo < 0 || hiX > arrayLength a || hiX - lo < 0 =
+    runtimePanic
+      "E-SLICE-OOB"
+      "slice [\{intToString lo}..\{intToString (hiX - 1)}] out of bounds"
   | otherwise =
     VArray (arrayMakeWith (hiX - lo) (i => arrayGetUnsafe (lo + i) a))
 
@@ -1995,9 +2133,12 @@ evalFieldAssign env (FieldAssign k e) = (k, eval env e)
 -- positional VCon, reordering the field assignments into declaration order
 -- (via the ctor_field_order path). Plain record
 -- declarations are not registered and fall through to VRecord.
-recordCreateVals : String -> List String -> List (String, Value e) -> List (Value e)
+recordCreateVals : String ->
+  List String ->
+  List (String, Value e) ->
+  List (Value e)
 recordCreateVals _ [] _ = []
-recordCreateVals con (f::fs) assigns = match lookupAssoc f assigns
+recordCreateVals con (f :: fs) assigns = match lookupAssoc f assigns
   Some v => v :: recordCreateVals con fs assigns
   None => panic ("missing field: " ++ f)
 
@@ -2036,10 +2177,13 @@ ctorFieldOrderFor con = match lookupAssoc con !ctorFieldOrdersRef
   Some fs => fs
   None => panic ("evalVariantUpdate: unknown constructor " ++ con)
 
-applyVariantUpdates : List (String, Value e) -> List String -> List (Value e) -> List (Value e)
+applyVariantUpdates : List (String, Value e) ->
+  List String ->
+  List (Value e) ->
+  List (Value e)
 applyVariantUpdates _ [] _ = []
 applyVariantUpdates _ _ [] = []
-applyVariantUpdates updates (f::fs) (v::vs) =
+applyVariantUpdates updates (f :: fs) (v :: vs) =
   applyFieldUpdate updates f v :: applyVariantUpdates updates fs vs
 
 applyFieldUpdate : List (String, Value e) -> String -> Value e -> Value e
@@ -2070,17 +2214,17 @@ evalBlock : EvalEnv (Value e) -> List DoStmt -> <e> Value e
 evalBlock _ [] = VUnit
 evalBlock env [DoExpr e] = eval env e
 evalBlock env [DoLet _ _ pat e] = blockLetLast env pat e
-evalBlock env ((DoExpr e)::rest) =
+evalBlock env ((DoExpr e) :: rest) =
   let _ = eval env e
   evalBlock env rest
-evalBlock env ((DoLet _ True (PVar f _) e)::rest) = blockRecLet env f e rest
-evalBlock env ((DoLet _ _ pat e)::rest) = blockLet env pat e rest
+evalBlock env ((DoLet _ True (PVar f _) e) :: rest) = blockRecLet env f e rest
+evalBlock env ((DoLet _ _ pat e) :: rest) = blockLet env pat e rest
 evalBlock env [DoAssign _ e] =
   let _ = eval env e
   VUnit
-evalBlock env ((DoAssign x e)::rest) =
+evalBlock env ((DoAssign x e) :: rest) =
   evalBlock (extendEnv env [(x, eval env e)]) rest
-evalBlock _ (_::_) = panic "eval: unsupported block statement"
+evalBlock _ (_ :: _) = panic "eval: unsupported block statement"
 
 blockLetLast : EvalEnv (Value e) -> Pat -> Expr -> <e> Value e
 blockLetLast env pat e = match matchPat pat (eval env e)
@@ -2123,9 +2267,12 @@ evalLetGroup env binds body =
 letBindCell : LetBind -> (String, Ref (Value e))
 letBindCell (LetBind name _) = (name, Ref VUnit)
 
-installGroup : EvalEnv (Value e) -> List (String, Ref (Value e)) -> List LetBind -> <e> Unit
+installGroup : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  List LetBind ->
+  <e> Unit
 installGroup _ _ [] = ()
-installGroup env cells ((LetBind name clauses)::rest) =
+installGroup env cells ((LetBind name clauses) :: rest) =
   findCell cells name := groupValue env (map funClauseToClause clauses)
   installGroup env cells rest
 
@@ -2156,7 +2303,7 @@ isNullary _ = False
 
 evalMatch : EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
 evalMatch _ _ [] = runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
-evalMatch env sv ((Arm pat guards body)::rest) = match matchPat pat sv
+evalMatch env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
   None => evalMatch env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
     Some env2 => eval env2 body
@@ -2164,11 +2311,11 @@ evalMatch env sv ((Arm pat guards body)::rest) = match matchPat pat sv
 
 runGuards : EvalEnv (Value e) -> List Guard -> <e> Option (EvalEnv (Value e))
 runGuards env [] = Some env
-runGuards env ((GBool g)::qs) = match eval env g
+runGuards env ((GBool g) :: qs) = match eval env g
   VBool True => runGuards env qs
   VCon "True" [] => runGuards env qs
   _ => None
-runGuards env ((GBind p e)::qs) = match matchPat p (eval env e)
+runGuards env ((GBind p e) :: qs) = match matchPat p (eval env e)
   Some b => runGuards (extendEnv env b) qs
   None => None
 
@@ -2234,7 +2381,7 @@ evalOr _ _ _ = panic "'||' on non-Bool"
 
 export
 consVal : Value e -> Value e -> Value e
-consVal hv (VList xs) = VList (hv::xs)
+consVal hv (VList xs) = VList (hv :: xs)
 consVal _ _ = panic "cons (::) rhs is not a list"
 
 export
@@ -2299,31 +2446,33 @@ payloadArity (ConNamed fs _) = listLen fs
 
 funDefs : List Decl -> List (String, (List Pat, Expr))
 funDefs [] = []
-funDefs ((DFunDef _ n pats body)::rest) = (n, (pats, body)) :: funDefs rest
+funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): each binding behaves exactly like a
 -- multi-clause DFunDef — flatten to (name, (pats, body)) entries so installGroups
 -- coalesces its clauses into a VMulti and the names enter the eval frame.
-funDefs ((DLetGroup _ binds)::rest) = letGroupDefs binds ++ funDefs rest
-funDefs ((DAttrib _ d)::rest) = funDefs (d::rest)
-funDefs (_::rest) = funDefs rest
+funDefs ((DLetGroup _ binds) :: rest) = letGroupDefs binds ++ funDefs rest
+funDefs ((DAttrib _ d) :: rest) = funDefs (d :: rest)
+funDefs (_ :: rest) = funDefs rest
 
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letGroupDefs [] = []
-letGroupDefs ((LetBind n clauses)::rest) = map (clauseDef n) clauses
-  ++ letGroupDefs rest
+letGroupDefs ((LetBind n clauses) :: rest) =
+  map (clauseDef n) clauses ++ letGroupDefs rest
 
 clauseDef : String -> FunClause -> (String, (List Pat, Expr))
 clauseDef n (FunClause pats body) = (n, (pats, body))
 
 funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
 funGroupNames [] _ = []
-funGroupNames ((n, _)::rest) seen
+funGroupNames ((n, _) :: rest) seen
   | contains n seen = funGroupNames rest seen
-  | otherwise = n :: funGroupNames rest (n::seen)
+  | otherwise = n :: funGroupNames rest (n :: seen)
 
-clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Expr)
+clausesForName : String ->
+  List (String, (List Pat, Expr)) ->
+  List (List Pat, Expr)
 clausesForName _ [] = []
-clausesForName name ((n, c)::rest)
+clausesForName name ((n, c) :: rest)
   | n == name = c :: clausesForName name rest
   | otherwise = clausesForName name rest
 
@@ -2347,10 +2496,17 @@ ifaceDispatchEntries (DAttrib _ d) = ifaceDispatchEntries d
 -- spelling, read straight off `ifaceOrigin` — the same field `declImplEntries`'
 -- `DInterface` arm already reads for the per-interface default cell (#1047), so
 -- the producer pays nothing for it.
-ifaceDispatchEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = map (ifaceMethodEntry (ifaceIdentity o ifaceName) ifaceName typeParams) methods
+ifaceDispatchEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
+  map
+    (ifaceMethodEntry (ifaceIdentity o ifaceName) ifaceName typeParams)
+    methods
 ifaceDispatchEntries _ = []
 
-ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
+ifaceMethodEntry : String ->
+  String ->
+  List String ->
+  IfaceMethod ->
+  ((String, String, String), List Int)
 ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _ _) = (
   (ifaceId, ifaceName, mname),
   dispatchPositionsOf mty (receiverParam typeParams),
@@ -2362,7 +2518,7 @@ ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _ _) = (
 -- position (mirror typecheck.mdk's dispatchTyparams).  Single-param: identity.
 receiverParam : List String -> List String
 receiverParam [] = []
-receiverParam (p::_) = [p]
+receiverParam (p :: _) = [p]
 
 -- ── #1113 Phase 4: the ADMISSIBILITY lookup, keyed by interface IDENTITY ─────
 -- DICT-SEMANTICS §5 makes arg-tag dispatch a refinement of `(method)` that is
@@ -2442,20 +2598,30 @@ receiverParam (p::_) = [p]
 -- argument, not a removal.  Retiring either default moves behaviour and is its
 -- own unit.
 export
-lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
+lookupPositions : String ->
+  String ->
+  String ->
+  List ((String, String, String), List Int) ->
+  List Int
 lookupPositions ifaceId iface mname tbl = match positionsById ifaceId mname tbl
   Some p => p
   None => positionsByName iface mname tbl
 
-positionsById : String -> String -> List ((String, String, String), List Int) -> Option (List Int)
+positionsById : String ->
+  String ->
+  List ((String, String, String), List Int) ->
+  Option (List Int)
 positionsById _ _ [] = None
-positionsById ifaceId mname (((i, _, m), p)::rest)
+positionsById ifaceId mname (((i, _, m), p) :: rest)
   | ifaceIdMatches ifaceId i && mname == m = Some p
   | otherwise = positionsById ifaceId mname rest
 
-positionsByName : String -> String -> List ((String, String, String), List Int) -> List Int
+positionsByName : String ->
+  String ->
+  List ((String, String, String), List Int) ->
+  List Int
 positionsByName _ _ [] = [0]
-positionsByName iface mname (((_, i, m), p)::rest)
+positionsByName iface mname (((_, i, m), p) :: rest)
   | iface == i && mname == m = p
   | otherwise = positionsByName iface mname rest
 
@@ -2490,7 +2656,10 @@ memoThunk env body = memoThunkOf (Ref None) env body
 memoThunkOf : Ref (Option (Value e)) -> EvalEnv (Value e) -> Expr -> Value e
 memoThunkOf cell env body = VThunk (_ => forceMemoCell cell env body)
 
-forceMemoCell : Ref (Option (Value e)) -> EvalEnv (Value e) -> Expr -> <e> Value e
+forceMemoCell : Ref (Option (Value e)) ->
+  EvalEnv (Value e) ->
+  Expr ->
+  <e> Value e
 forceMemoCell cell env body = match !cell
   Some v => v
   None => storeMemo cell (eval env body)
@@ -2502,7 +2671,10 @@ seqV : Unit -> Value e -> Value e
 seqV _ v = v
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default
-declImplEntries : EvalEnv (Value e) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value e))
+declImplEntries : EvalEnv (Value e) ->
+  List ((String, String, String), List Int) ->
+  Decl ->
+  List (String, (Int, Value e))
 -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
 -- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
 -- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
@@ -2515,14 +2687,22 @@ declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
 -- word — the DEFINITION side's half of the identity-bearing key the typechecker
 -- stamps at the call site (`keyForSite`).  Matched arm-for-arm by
 -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
-declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implMethodEntry env disp o ifaceName typeArgs) methods
+declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+  map (implMethodEntry env disp o ifaceName typeArgs) methods
 -- #1047: the DECLARING interface's identity comes straight off `ifaceOrigin`
 -- (resolve stamps it in `elaborateModules`' preamble, the seam `run` and the
 -- separate `medaka_emitter` BUILD process share).
-declImplEntries env _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (defaultEntry env (ifaceIdentity o ifaceName) typeParams) methods
+declImplEntries env _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
+  flatMap (defaultEntry env (ifaceIdentity o ifaceName) typeParams) methods
 declImplEntries _ _ _ = []
 
-implMethodEntry : EvalEnv (Value e) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
+implMethodEntry : EvalEnv (Value e) ->
+  List ((String, String, String), List Int) ->
+  TyConOrigin ->
+  String ->
+  List Ty ->
+  ImplMethod ->
+  (String, (Int, Value e))
 implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
@@ -2531,14 +2711,15 @@ implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
   -- word the DInterface arm mints — the identity was already in hand for `key`,
   -- so the identity-keyed lookup costs nothing here.  Matched line-for-line by
   -- `core_ir_lower.lowerImplMethod` (the evalModules/cevalModules lockstep pair).
-  let positions = lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let positions =
+    lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
   let inner = implMethodValue env positions pats body
   (mname, (tyvarsInArgs typeArgs, VTypedImpl tag key positions 0 inner))
 
 export
 headTyconHead : List Ty -> Option String
 headTyconHead [] = None
-headTyconHead (t::_) = headTycon t
+headTyconHead (t :: _) = headTycon t
 
 -- interface defaults install untagged (a VClosure) so they act as a fallback.
 --
@@ -2547,13 +2728,20 @@ headTyconHead (t::_) = headTycon t
 -- interfaces' own names are irrelevant and may differ).  The bare-name entry is
 -- unchanged and still the one every collision-free program dispatches through; the
 -- qualified one is a SECOND binding of the SAME value, never a replacement.
-defaultEntry : EvalEnv (Value e) -> String -> List String -> IfaceMethod -> List (String, (Int, Value e))
+defaultEntry : EvalEnv (Value e) ->
+  String ->
+  List String ->
+  IfaceMethod ->
+  List (String, (Int, Value e))
 defaultEntry _ _ _ (IfaceMethod _ _ None _) = []
 defaultEntry env ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let scored = (listLen typeParams, implMethodValue env [] pats body)
   (mname, scored) :: qualifiedDefaultEntry ifaceId mname scored
 
-qualifiedDefaultEntry : String -> String -> (Int, Value e) -> List (String, (Int, Value e))
+qualifiedDefaultEntry : String ->
+  String ->
+  (Int, Value e) ->
+  List (String, (Int, Value e))
 qualifiedDefaultEntry "" _ _ = []
 qualifiedDefaultEntry ifaceId mname scored =
   [(defaultCellName ifaceId mname, scored)]
@@ -2581,13 +2769,13 @@ sortByScore xs = sortGo xs []
 
 sortGo : List (Int, Value e) -> List (Int, Value e) -> List (Int, Value e)
 sortGo [] acc = acc
-sortGo (x::xs) acc = sortGo xs (insertScore x acc)
+sortGo (x :: xs) acc = sortGo xs (insertScore x acc)
 
 insertScore : (Int, Value e) -> List (Int, Value e) -> List (Int, Value e)
 insertScore x [] = [x]
-insertScore x (y::ys)
+insertScore x (y :: ys)
   | fst y <= fst x = y :: insertScore x ys
-  | otherwise = x :: y::ys
+  | otherwise = x :: y :: ys
 
 export
 implMethodNames : List Decl -> List String
@@ -2601,7 +2789,8 @@ implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- function is what allocates them (`evalModules`/`cevalModules` both build
 -- `globalCells` from it), and `installConsts`' `findCell` PANICS on a name with no
 -- cell, so the two halves cannot be split.
-implDeclNames (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) = flatMap (defaultNamesOf (ifaceIdentity o ifaceName)) methods
+implDeclNames (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (defaultNamesOf (ifaceIdentity o ifaceName)) methods
 implDeclNames _ = []
 
 implMethodName : ImplMethod -> String
@@ -2661,7 +2850,8 @@ prim2M f = VPrim (a => VPrim (b => f a b))
 prim3M : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
 prim3M f = prim3 f
 
-prim5M : (Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e) -> Value e
+prim5M : (Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e) ->
+  Value e
 prim5M f =
   VPrim (a => VPrim (b => VPrim (c => VPrim (d => VPrim (x => f a b c d x)))))
 
@@ -2828,8 +3018,11 @@ runtimePanic code msg = match !currentEvalLoc
       -- error ride ONE envelope (see that Ref's note).  Empty on every path that did
       -- not stage anything, which makes this byte-identical to the old single-triple
       -- call for every fixture that has no warning.
-      panic "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
-    else panic "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
+      panic
+        "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
+    else
+      panic
+        "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
@@ -2843,7 +3036,7 @@ fmtSentinel = "\u{01}"
 
 appendOutput : String -> <e> Value e
 appendOutput s =
-  outputRef := (!outputRef ++ s)
+  outputRef := !outputRef ++ s
   -- Snapshot the buffer's raw bytes into the native runtime (O(1)
   -- pointer+length store; no allocation, no observable effect on its own —
   -- see stdlib/runtime.mdk's stashRunStdout doc comment) so a subsequent
@@ -3020,7 +3213,8 @@ pRandomInt : Value e -> Value e -> <e> Value e
 pRandomInt (VInt lo) (VInt hi) =
   let loU = fromIntBits lo
   let rangeU = add (sub (fromIntBits hi) loU) (fromIntBits 1)
-  if isZero rangeU || u64Bit63 rangeU == 1 then VInt lo
+  if isZero rangeU || u64Bit63 rangeU == 1 then
+    VInt lo
   else
     let rem = mod (rngDraw ()) rangeU
     VInt (u64ToSignedInt (add loU rem))
@@ -3038,8 +3232,9 @@ pRandomFloat _ =
 
 pRandomChar : Value e -> <e> Value e
 pRandomChar _ =
-  VChar (charToStr (charFromCodeUnsafe
-    (32 + u64ToInt (mod (rngDraw ()) (fromIntBits 95)))))
+  VChar
+    (charToStr
+      (charFromCodeUnsafe (32 + u64ToInt (mod (rngDraw ()) (fromIntBits 95)))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -3260,7 +3455,8 @@ getByte64 off arr i = match arrayGetUnsafe (off + i) arr
 
 pBytesToFloat64 : Value e -> Value e -> <e> Value e
 pBytesToFloat64 (VArray arr) (VInt off)
-  | off < 0 || off + 8 > arrayLength arr = runtimePanic "E-INDEX-OOB" ("index " ++ intToString off ++ " out of bounds")
+  | off < 0 || off + 8 > arrayLength arr =
+    runtimePanic "E-INDEX-OOB" ("index " ++ intToString off ++ " out of bounds")
 pBytesToFloat64 (VArray arr) (VInt off) =
   -- Build a host Array Int of 8 bytes, then delegate to the C bytesToFloat64.
   -- Avoids the 63-bit integer overflow that plagues assembleBits+intBitsToFloat
@@ -3291,7 +3487,7 @@ fnvStep64 (U64 h0 h1 h2 h3) byte =
 
 fnvFold64 : List Int -> U64 -> U64
 fnvFold64 [] h = h
-fnvFold64 (x::xs) h = fnvFold64 xs (fnvStep64 h x)
+fnvFold64 (x :: xs) h = fnvFold64 xs (fnvStep64 h x)
 
 -- 8 big-endian bytes (bs[0] = MSB, as floatToBytes64 emits) -> uint64 limbs.
 bytesBEToU64 : Array Int -> U64
@@ -3308,9 +3504,9 @@ pHashInt _ = panic "hashInt: not an Int"
 
 pHashChar : Value e -> <e> Value e
 pHashChar (VChar s) =
-  VInt (u64Low30 (u64Mix (fromIntBits (charCode (arrayGetUnsafe
-    0
-    (stringToChars s))))))
+  VInt
+    (u64Low30
+      (u64Mix (fromIntBits (charCode (arrayGetUnsafe 0 (stringToChars s))))))
 pHashChar _ = panic "hashChar: not a Char"
 
 pHashBool : Value e -> <e> Value e
@@ -3581,31 +3777,35 @@ pArrayBlit _ _ _ _ _ = panic "arrayBlit: bad operands"
 
 buildWith : Value e -> Int -> Int -> <e> List (Value e)
 buildWith f i n =
-  if i >= n then
-    []
-  else
-    apply f (VInt i) :: buildWith f (i + 1) n
+  if i >= n then [] else apply f (VInt i) :: buildWith f (i + 1) n
 
-mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))
+mkGroup : List (String, (List Pat, Expr)) ->
+  String ->
+  (String, List (List Pat, Expr))
 mkGroup defs name = (name, clausesForName name defs)
 
 export
-installConsts : List (String, Ref (Value e)) -> List (String, Value e) -> <e> Unit
+installConsts : List (String, Ref (Value e)) ->
+  List (String, Value e) ->
+  <e> Unit
 installConsts _ [] = ()
-installConsts cells ((n, v)::rest) =
+installConsts cells ((n, v) :: rest) =
   findCell cells n := v
   installConsts cells rest
 
-installGroups : EvalEnv (Value e) -> List (String, Ref (Value e)) -> List (String, List (List Pat, Expr)) -> <e> Unit
+installGroups : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  List (String, List (List Pat, Expr)) ->
+  <e> Unit
 installGroups _ _ [] = ()
-installGroups env cells ((n, clauses)::rest) =
+installGroups env cells ((n, clauses) :: rest) =
   findCell cells n := topGroupValue env clauses
   installGroups env cells rest
 
 export
 lookupBinding : String -> List (String, Value e) -> Option (Value e)
 lookupBinding _ [] = None
-lookupBinding name ((n, v)::rest)
+lookupBinding name ((n, v) :: rest)
   | n == name = Some v
   | otherwise = lookupBinding name rest
 
@@ -3636,9 +3836,10 @@ evalMain prog = match lookupBinding "main" (evalOne [] ("__main__", prog))
 -- coalesce with the prelude's point-free `sum` into a mixed-arity VMulti.
 export
 evalOutputWith : List Decl -> List Decl -> String
-evalOutputWith preludeDecls userDecls = evalOneOutput
-  []
-  ("__main__", dropShadowed (funNamesOf userDecls) preludeDecls ++ userDecls)
+evalOutputWith preludeDecls userDecls = evalOneOutput [] (
+  "__main__",
+  dropShadowed (funNamesOf userDecls) preludeDecls ++ userDecls,
+)
 
 export
 funNamesOf : List Decl -> List String
@@ -3650,7 +3851,7 @@ dropShadowedExp names decls = dropShadowed names decls
 
 dropShadowed : List String -> List Decl -> List Decl
 dropShadowed _ [] = []
-dropShadowed names (d::rest)
+dropShadowed names (d :: rest)
   | shadowedFun names d = dropShadowed names rest
   | otherwise = d :: dropShadowed names rest
 
@@ -3687,7 +3888,9 @@ data ModInfo v =
   | ModInfo String (List Decl) (List (String, List (List Pat, Expr))) (List (String, Ref v)) (EvalEnv v)
 
 export
-evalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+evalModules : List Decl ->
+  List (String, List Decl) ->
+  <e> List (String, Value e)
 evalModules preludeDecls modules = evalModulesWith [] preludeDecls modules
 
 -- ── S1-PRELUDE (a): a prelude standalone never shadows a user interface method ──
@@ -3745,16 +3948,22 @@ export
 preludeShadowNames : List Decl -> List String
 preludeShadowNames moduleDecls = implMethodNames moduleDecls
 
-groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
+groupsNamedIn : List String ->
+  List (String, List (List Pat, Expr)) ->
+  List (String, List (List Pat, Expr))
 groupsNamedIn names gs = filterList (g => contains (fst g) names) gs
 
-groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
+groupsNotNamedIn : List String ->
+  List (String, List (List Pat, Expr)) ->
+  List (String, List (List Pat, Expr))
 groupsNotNamedIn names gs = filterList (g => not (contains (fst g) names)) gs
 
 -- the frame list `globalEnv` is built from: the private prelude frame first when it is
 -- non-empty, and NOTHING extra when it is empty (see the lexical-address note above).
 export
-globalFramesWith : List (String, Ref (Value e)) -> List (String, Ref (Value e)) -> List (List (String, Ref (Value e)))
+globalFramesWith : List (String, Ref (Value e)) ->
+  List (String, Ref (Value e)) ->
+  List (List (String, Ref (Value e)))
 globalFramesWith [] globalCells = [globalCells]
 globalFramesWith privateCells globalCells = [privateCells, globalCells]
 
@@ -3763,7 +3972,10 @@ globalFramesWith privateCells globalCells = [privateCells, globalCells]
 -- (ioExternBindings) without them ever reaching the differential-oracle
 -- drivers, so the oracle stays free of I/O regardless of what `e` is otherwise instantiated at.
 export
-evalModulesWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+evalModulesWith : List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> List (String, Value e)
 evalModulesWith extraExterns preludeDecls0 modules0 =
   -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
   -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
@@ -3787,12 +3999,23 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
   let shadowNames = preludeShadowNames moduleDecls
   let preludeShared = groupsNotNamedIn shadowNames preludeGroups
   let preludePrivate = groupsNamedIn shadowNames preludeGroups
-  let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeShared
+  let globalNames =
+    map fst boolSeeds
+      ++ map fst externs
+      ++ map fst ctors
+      ++ implMethodNames allDecls
+      ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
   let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
   let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
-  let mods = buildModInfos (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
-  let implEntries = flatMap (declImplEntries globalEnv disp) preludeDecls ++ flatMap (modImplEntries disp) mods
+  let mods =
+    buildModInfos
+      (ModExports globalCells (ctorsByTypeOf preludeDecls))
+      []
+      modules
+  let implEntries =
+    flatMap (declImplEntries globalEnv disp) preludeDecls
+      ++ flatMap (modImplEntries disp) mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells externs
   let _ = installConsts globalCells ctors
@@ -3804,9 +4027,12 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
 -- against already-processed modules, since loader order is dependency-first)
-buildModInfos : ModExports (Value e) -> List (String, ModExports (Value e)) -> List (String, List Decl) -> List (ModInfo (Value e))
+buildModInfos : ModExports (Value e) ->
+  List (String, ModExports (Value e)) ->
+  List (String, List Decl) ->
+  List (ModInfo (Value e))
 buildModInfos _ _ [] = []
-buildModInfos coreExports exportsMap ((mid, decls)::rest) =
+buildModInfos coreExports exportsMap ((mid, decls) :: rest) =
   let globalCells = modExportCells coreExports
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
@@ -3825,8 +4051,14 @@ buildModInfos coreExports exportsMap ((mid, decls)::rest) =
   -- applyClosure/applyClosureF (below) ever searches this far.
   let fileTagFrame = [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
   let menv = EvalEnv [localCells, imports, globalCells, fileTagFrame]
-  let exports = ModExports (localCells ++ methodCellsOf globalCells decls ++ pubReexports coreExports exportsMap decls) (ctorsByTypeOf decls)
-  ModInfo mid decls grps localCells menv :: buildModInfos coreExports ((mid, exports)::exportsMap) rest
+  let exports =
+    ModExports
+      (localCells
+        ++ methodCellsOf globalCells decls
+        ++ pubReexports coreExports exportsMap decls)
+      (ctorsByTypeOf decls)
+  ModInfo mid decls grps localCells menv
+    :: buildModInfos coreExports ((mid, exports) :: exportsMap) rest
 
 -- IMPORT ALIASING: a module must ALSO export the interface/impl METHODS it declares.
 --
@@ -3842,11 +4074,15 @@ buildModInfos coreExports exportsMap ((mid, decls)::rest) =
 -- coalesced dispatcher, so an alias is a second name for one dispatcher and impl
 -- coalescing is untouched.
 export
-methodCellsOf : List (String, Ref (Value e)) -> List Decl -> List (String, Ref (Value e))
+methodCellsOf : List (String, Ref (Value e)) ->
+  List Decl ->
+  List (String, Ref (Value e))
 methodCellsOf globalCells decls =
   flatMap (methodCell globalCells) (moduleMethodNames decls)
 
-methodCell : List (String, Ref (Value e)) -> String -> List (String, Ref (Value e))
+methodCell : List (String, Ref (Value e)) ->
+  String ->
+  List (String, Ref (Value e))
 methodCell globalCells n = match lookupAssoc n globalCells
   Some cell => [(n, cell)]
   None => []
@@ -3869,7 +4105,7 @@ ifaceMethodNmE (IfaceMethod n _ _ _) = n
 -- pass 2: install each module's funDef groups into its own cells (its env)
 installModGroups : List (ModInfo (Value e)) -> <e> Unit
 installModGroups [] = ()
-installModGroups ((ModInfo _ decls grps cells menv)::rest) =
+installModGroups ((ModInfo _ decls grps cells menv) :: rest) =
   let _ = installGroups menv cells grps
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in buildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
@@ -3878,7 +4114,9 @@ installModGroups ((ModInfo _ decls grps cells menv)::rest) =
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
 -- into the shared global VMulti
-modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value e) -> List (String, (Int, Value e))
+modImplEntries : List ((String, String, String), List Int) ->
+  ModInfo (Value e) ->
+  List (String, (Int, Value e))
 modImplEntries disp (ModInfo _ decls _ _ menv) =
   flatMap (declImplEntries menv disp) decls
 
@@ -3886,7 +4124,7 @@ modImplEntries disp (ModInfo _ decls _ _ menv) =
 rootLocals : List (ModInfo (Value e)) -> <e> List (String, Value e)
 rootLocals [] = []
 rootLocals [ModInfo _ _ _ cells _] = map cellResult cells
-rootLocals (_::rest) = rootLocals rest
+rootLocals (_ :: rest) = rootLocals rest
 
 -- Like evalModules but returns the root module's FULL eval frame — local ∪
 -- imports ∪ globals — flattened to (name, value).  The prop runner evaluates a
@@ -3894,7 +4132,9 @@ rootLocals (_::rest) = rootLocals rest
 -- file's own helpers (locals) and imported names but also prelude methods like
 -- `eq`/`compare` (globals), which rootLocals alone omits.
 export
-evalModulesRootEnv : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+evalModulesRootEnv : List Decl ->
+  List (String, List Decl) ->
+  <e> List (String, Value e)
 evalModulesRootEnv preludeDecls modules =
   evalModulesRootEnvWith [] preludeDecls modules
 
@@ -3905,7 +4145,10 @@ evalModulesRootEnv preludeDecls modules =
 -- prims reaching the differential-oracle probes.  Kept in LOCKSTEP with
 -- evalModulesWith — the two module drivers are deliberate parallel copies.
 export
-evalModulesRootEnvWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+evalModulesRootEnvWith : List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> List (String, Value e)
 evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
   -- [T-EVAL-LOCKSTEP] third driver: same rename, same reason as evalModulesWith.
   let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
@@ -3921,12 +4164,23 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
   let shadowNames = preludeShadowNames moduleDecls
   let preludeShared = groupsNotNamedIn shadowNames preludeGroups
   let preludePrivate = groupsNamedIn shadowNames preludeGroups
-  let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeShared
+  let globalNames =
+    map fst boolSeeds
+      ++ map fst externs
+      ++ map fst ctors
+      ++ implMethodNames allDecls
+      ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
   let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
   let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
-  let mods = buildModInfos (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
-  let implEntries = flatMap (declImplEntries globalEnv disp) preludeDecls ++ flatMap (modImplEntries disp) mods
+  let mods =
+    buildModInfos
+      (ModExports globalCells (ctorsByTypeOf preludeDecls))
+      []
+      modules
+  let implEntries =
+    flatMap (declImplEntries globalEnv disp) preludeDecls
+      ++ flatMap (modImplEntries disp) mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells externs
   let _ = installConsts globalCells ctors
@@ -3939,17 +4193,19 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
 -- Flatten the root module's frame stack (locals first, then imports, then
 -- globals) to an assoc list — local names shadow imports shadow globals, which
 -- is the lookup order in its EvalEnv.
-rootFullEnv : List (ModInfo (Value e)) -> List (String, Ref (Value e)) -> <e> List (String, Value e)
+rootFullEnv : List (ModInfo (Value e)) ->
+  List (String, Ref (Value e)) ->
+  <e> List (String, Value e)
 rootFullEnv [] globalCells = map cellResult globalCells
 rootFullEnv [ModInfo _ _ _ cells menv] globalCells = flattenEnv menv
-rootFullEnv (_::rest) globalCells = rootFullEnv rest globalCells
+rootFullEnv (_ :: rest) globalCells = rootFullEnv rest globalCells
 
 flattenEnv : EvalEnv (Value e) -> <e> List (String, Value e)
 flattenEnv (EvalEnv frames) = map cellResult (concatList frames)
 
 concatList : List (List a) -> List a
 concatList [] = []
-concatList (x::xs) = x ++ concatList xs
+concatList (x :: xs) = x ++ concatList xs
 
 groupsOf : List Decl -> List (String, List (List Pat, Expr))
 groupsOf decls =
@@ -4093,20 +4349,26 @@ ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
 
 ctorNamesOfDecl : Decl -> List (String, List String)
-ctorNamesOfDecl (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) = [(tyname, map variantName variants)]
+ctorNamesOfDecl (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) =
+  [(tyname, map variantName variants)]
 ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells
 -- names resolving to a ctor/global are
 -- omitted (reached via the global frame instead).
 export
-importFrameOf : List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
+importFrameOf : List (String, ModExports (Value e)) ->
+  List Decl ->
+  List (String, Ref (Value e))
 importFrameOf exportsMap decls = flatMap (useImports exportsMap) decls
 
-useImports : List (String, ModExports (Value e)) -> Decl -> List (String, Ref (Value e))
-useImports exportsMap (DUse _ path _) = match lookupAssoc (useModuleId path) exportsMap
-  None => []
-  Some exports => resolveMembers path exports
+useImports : List (String, ModExports (Value e)) ->
+  Decl ->
+  List (String, Ref (Value e))
+useImports exportsMap (DUse _ path _) =
+  match lookupAssoc (useModuleId path) exportsMap
+    None => []
+    Some exports => resolveMembers path exports
 useImports _ _ = []
 
 -- cells re-exported by a `pub import`.
@@ -4123,16 +4385,23 @@ useImports _ _ = []
 -- exportsMap that lookup missed, `keep` bound nothing, and only an unaliased reference
 -- survived — by falling through to the global frame, which is not binding, just luck.
 export
-pubReexports : ModExports (Value e) -> List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
+pubReexports : ModExports (Value e) ->
+  List (String, ModExports (Value e)) ->
+  List Decl ->
+  List (String, Ref (Value e))
 pubReexports coreExports exportsMap decls =
   flatMap (reexport coreExports exportsMap) decls
 
-reexport : ModExports (Value e) -> List (String, ModExports (Value e)) -> Decl -> List (String, Ref (Value e))
+reexport : ModExports (Value e) ->
+  List (String, ModExports (Value e)) ->
+  Decl ->
+  List (String, Ref (Value e))
 reexport coreExports exportsMap (DUse True path _) =
-  let src = if useModuleId path == "core" then
-    Some coreExports
-  else
-    lookupAssoc (useModuleId path) exportsMap
+  let src =
+    if useModuleId path == "core" then
+      Some coreExports
+    else
+      lookupAssoc (useModuleId path) exportsMap
   match src
     None => []
     Some exports => resolveMembers path exports
@@ -4143,10 +4412,7 @@ reexport _ _ _ = []
 -- very same cell — never a copy.
 resolveMembers : UsePath -> ModExports (Value e) -> List (String, Ref (Value e))
 resolveMembers (UseName ns) (ModExports exports _) =
-  if listLen ns > 1 then
-    bindNames [selfBind (lastOfList ns)] exports
-  else
-    []
+  if listLen ns > 1 then bindNames [selfBind (lastOfList ns)] exports else []
 resolveMembers (UseGroup _ ms) me = flatMap (memberCells me) ms
 resolveMembers (UseWild _) (ModExports exports _) = exports
 -- `import m as A` → every export of m, under `A.name`.  This is what makes two modules
@@ -4178,18 +4444,21 @@ resolveMembers (UseAlias _ a) (ModExports exports _) =
 -- index already carries under that spelling, so the plain bind would be a duplicate
 -- naming the same cell.
 memberCells : ModExports (Value e) -> UseMember -> List (String, Ref (Value e))
-memberCells (ModExports exports ctorsByType) (m@(UseMember n True _ _)) = match lookupAssoc n ctorsByType
-  Some cs => bindNames (map selfBind cs) exports
-  None => bindNames [memberBind m] exports
+memberCells (ModExports exports ctorsByType) (m@(UseMember n True _ _)) =
+  match lookupAssoc n ctorsByType
+    Some cs => bindNames (map selfBind cs) exports
+    None => bindNames [memberBind m] exports
 memberCells (ModExports exports _) m = bindNames [memberBind m] exports
 
 qualifyCell : String -> (String, Ref (Value e)) -> (String, Ref (Value e))
 qualifyCell a (n, cell) = (qualifiedLocal a n, cell)
 
 -- bind (origin, local) pairs: look the cell up by ORIGIN, enter it under LOCAL.
-bindNames : List (String, String) -> List (String, Ref (Value e)) -> List (String, Ref (Value e))
+bindNames : List (String, String) ->
+  List (String, Ref (Value e)) ->
+  List (String, Ref (Value e))
 bindNames [] _ = []
-bindNames ((origin, local)::rest) exports = match lookupAssoc origin exports
+bindNames ((origin, local) :: rest) exports = match lookupAssoc origin exports
   Some cell => (local, cell) :: bindNames rest exports
   None => bindNames rest exports
 
@@ -4201,10 +4470,7 @@ selfBind n = (n, n)
 
 useModuleId : UsePath -> String
 useModuleId (UseName ns) =
-  if listLen ns > 1 then
-    joinDot (initList ns)
-  else
-    firstOrEmpty ns
+  if listLen ns > 1 then joinDot (initList ns) else firstOrEmpty ns
 useModuleId (UseGroup ns _) = joinDot ns
 useModuleId (UseWild ns) = joinDot ns
 useModuleId (UseAlias ns _) = joinDot ns
@@ -4212,11 +4478,11 @@ useModuleId (UseAlias ns _) = joinDot ns
 lastOfList : List String -> String
 lastOfList [] = ""
 lastOfList [x] = x
-lastOfList (_::rest) = lastOfList rest
+lastOfList (_ :: rest) = lastOfList rest
 
 firstOrEmpty : List String -> String
 firstOrEmpty [] = ""
-firstOrEmpty (x::_) = x
+firstOrEmpty (x :: _) = x
 
 -- Run a multi-module program for its OUTPUT (the loader-driven analog of
 -- evalOutput): evaluate every module in dependency order, force the root
@@ -4336,7 +4602,7 @@ pExit (VInt n) =
   -- a `run --json` staleness/perf notice is RELOCATED into the envelope rather
   -- than dropped ([W-QUIETER]).  No-op unless `--json` armed it, and no-op when
   -- there is nothing staged, so every other caller is byte-identical.
-  let _ = if !runJsonMode then flushRunEnvelope (!pendingRunDiags) else ()
+  let _ = if !runJsonMode then flushRunEnvelope !pendingRunDiags
   let _ = exit n
   VUnit
 pExit _ = panic "exit: not an Int"
@@ -4552,7 +4818,10 @@ evalOne preludeDecls (rootId, prog) = evalModules preludeDecls [(rootId, prog)]
 -- capability list (testCapableExterns) so a prelude-only doctest sees the same
 -- real clock/stderr as `medaka run`.
 export
-evalOneWith : List (String, Value e) -> List Decl -> (String, List Decl) -> <e> List (String, Value e)
+evalOneWith : List (String, Value e) ->
+  List Decl ->
+  (String, List Decl) ->
+  <e> List (String, Value e)
 evalOneWith extraExterns preludeDecls (rootId, prog) =
   evalModulesWith extraExterns preludeDecls [(rootId, prog)]
 
@@ -4573,7 +4842,10 @@ evalOneRootEnv preludeDecls (rootId, prog) =
 -- 1-module wrapper over evalModulesRootEnvWith: repl installs a capability list
 -- (testCapableExterns) so an interactive session sees the real clock/stderr.
 export
-evalOneRootEnvWith : List (String, Value e) -> List Decl -> (String, List Decl) -> <e> List (String, Value e)
+evalOneRootEnvWith : List (String, Value e) ->
+  List Decl ->
+  (String, List Decl) ->
+  <e> List (String, Value e)
 evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR

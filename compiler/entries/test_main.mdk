@@ -11,7 +11,17 @@ import tools.test_cmd.{runTest, rootsOrDefault}
 import tools.doctest.{Engine(..)}
 
 main = match args ()
-  runtimeP::coreP::target::roots =>
-    let ok = runTest [EngInterp] runtimeP coreP target (rootsOrDefault target roots) 100 None
+  runtimeP :: coreP :: target :: roots =>
+    let ok =
+      runTest
+        [EngInterp]
+        runtimeP
+        coreP
+        target
+        (rootsOrDefault target roots)
+        100
+        None
     if ok then () else exit 1
-  _ => ePutStrLn "usage: medaka run compiler/entries/test_main.mdk <runtime.mdk> <core.mdk> <file.mdk> [root ...]"
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/test_main.mdk <runtime.mdk> <core.mdk> <file.mdk> [root ...]"

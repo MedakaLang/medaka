@@ -7,8 +7,10 @@ main =
   let bytes = arrayMake 32 0
   let fe = feFromBytesReduce bytes
   let sc = scFromBytesReduce bytes
-  let fieldOk = feEqual (feAdd fe feOne) feOne && feEqual (feAdd fe feZero) feZero
-  let scalarOk = scEqual (scAdd sc scOne) scOne && scEqual (scAdd sc scZero) scZero
+  let fieldOk =
+    feEqual (feAdd fe feOne) feOne && feEqual (feAdd fe feZero) feZero
+  let scalarOk =
+    scEqual (scAdd sc scOne) scOne && scEqual (scAdd sc scZero) scZero
   if fieldOk && scalarOk then
     println "opaque public API OK"
   else

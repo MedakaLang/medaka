@@ -177,13 +177,12 @@ extKey : String -> String -> String
 extKey ns name = "?ext\{sep}\{ns}\{sep}\{name}"
 
 -- ── the index + the build context ───────────────────────────────────────────
-export data RefIndex =
-  | RefIndex {
-      defs : HashMap String (Ref (List (String, Loc))),
-      refs : HashMap String (Ref (List (String, Loc))),
-      occ : HashMap String (Ref (List (Loc, String))),
-      ops : Int,
-    }
+export data RefIndex = RefIndex {
+  defs : HashMap String (Ref (List (String, Loc))),
+  refs : HashMap String (Ref (List (String, Loc))),
+  occ : HashMap String (Ref (List (Loc, String))),
+  ops : Int,
+}
 
 -- Mutable build state threaded through the whole walk.
 --   originOf : "<mid>\t<ns>\t<name>" -> originKey   (EXPORTED names, for imports)
@@ -191,17 +190,16 @@ export data RefIndex =
 --   defSeen  : the def sites already recorded (see `pushDef`) — the O(1) dedup set
 --   opCnt    : total hash/push op count (the perf-gate signal)
 --   fresh    : monotonic local-binder id source
-data Ctx =
-  | Ctx {
-      defs : HashMap String (Ref (List (String, Loc))),
-      refs : HashMap String (Ref (List (String, Loc))),
-      occ : HashMap String (Ref (List (Loc, String))),
-      originOf : HashMap String String,
-      modExp : HashMap String (List (String, String, String)),
-      defSeen : HashMap String Unit,
-      opCnt : Ref Int,
-      fresh : Ref Int,
-    }
+data Ctx = Ctx {
+  defs : HashMap String (Ref (List (String, Loc))),
+  refs : HashMap String (Ref (List (String, Loc))),
+  occ : HashMap String (Ref (List (Loc, String))),
+  originOf : HashMap String String,
+  modExp : HashMap String (List (String, String, String)),
+  defSeen : HashMap String Unit,
+  opCnt : Ref Int,
+  fresh : Ref Int,
+}
 
 -- Per-module walk bundle: the shared Ctx plus this module's identity and env.
 --   useEnv : "<ns>\t<localName>" -> BinderKey  (names in scope: own + imports + prelude)
@@ -273,7 +271,7 @@ namesAtLoc loc ns = map (n => (n, loc)) ns
 -- chain that pushed one frame per binder shows up in the scaling ratio.
 lookupScope : Ctx -> String -> List (List (String, String)) -> Option String
 lookupScope _ _ [] = None
-lookupScope ctx n (frame::rest) =
+lookupScope ctx n (frame :: rest) =
   let _ = bump ctx
   match assocFind ctx n frame
     Some k => Some k
@@ -281,7 +279,7 @@ lookupScope ctx n (frame::rest) =
 
 assocFind : Ctx -> String -> List (String, String) -> Option String
 assocFind _ _ [] = None
-assocFind ctx n ((k, v)::rest) =
+assocFind ctx n ((k, v) :: rest) =
   let _ = bump ctx
   if k == n then Some v else assocFind ctx n rest
 
@@ -347,7 +345,8 @@ pushDefFresh ctx key uri loc = match hmGetC ctx ctx.defs key
 -- def sites whose TAB-containing paths re-split identically.  Pre-existing parity,
 -- not a new assumption; if `mkKey` ever gains a stricter separator, this follows.
 defSiteId : String -> String -> Loc -> String
-defSiteId key uri (Loc _ sl sc el ec) = "\{key}\{sep}\{uri}\{sep}\{intToString sl}\{sep}\{intToString sc}\{sep}\{intToString el}\{sep}\{intToString ec}"
+defSiteId key uri (Loc _ sl sc el ec) =
+  "\{key}\{sep}\{uri}\{sep}\{intToString sl}\{sep}\{intToString sc}\{sep}\{intToString el}\{sep}\{intToString ec}"
 
 pushRef : Ctx -> String -> String -> Loc -> Unit
 pushRef ctx key uri loc = match hmGetC ctx ctx.refs key
@@ -382,26 +381,30 @@ resolveVal (W ctx _ _ useEnv _) scope name = match lookupScope ctx name scope
       None => extKey nsVal name
 
 resolveCtor : W -> String -> String
-resolveCtor (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsCtor ++ sep ++ name)
-  Some k => k
-  None => extKey nsCtor name
+resolveCtor (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsCtor ++ sep ++ name)
+    Some k => k
+    None => extKey nsCtor name
 
 resolveTy : W -> String -> String
-resolveTy (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsTy ++ sep ++ name)
-  Some k => k
-  None => extKey nsTy name
+resolveTy (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsTy ++ sep ++ name)
+    Some k => k
+    None => extKey nsTy name
 
 resolveField : W -> String -> String
-resolveField (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsField ++ sep ++ name)
-  Some k => k
-  None => extKey nsField name
+resolveField (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsField ++ sep ++ name)
+    Some k => k
+    None => extKey nsField name
 
 -- An impl header's interface name → its ORIGIN key, resolved in the INTERFACE
 -- namespace (#1044).  See `nsIface` for why this namespace and not `nsTy`.
 resolveIface : W -> String -> String
-resolveIface (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsIface ++ sep ++ name)
-  Some k => k
-  None => extKey nsIface name
+resolveIface (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsIface ++ sep ++ name)
+    Some k => k
+    None => extKey nsIface name
 
 -- The defining-module id of an impl's INTERFACE, for keying its method heads
 -- (#1002).  Derived from the interface NAME the impl header itself spells —
@@ -475,7 +478,7 @@ ifaceModId w ifaceName = keyModId (resolveIface w ifaceName)
 -- First component of a BinderKey (`<mid>\t<ns>\t<name>`).  `sep` is that TAB.
 keyModId : String -> String
 keyModId k = match splitOnChar '\t' k
-  mid::_ => mid
+  mid :: _ => mid
   [] => k
 
 -- ── the expression walk (mirrors resolve.mdk stampExpr's frame-stack shape) ──
@@ -493,15 +496,15 @@ walkExpr w scope curLoc (EApp f x) =
   walkExpr w scope curLoc x
 walkExpr w scope curLoc (ELam pats body) =
   let frame = mkNamedFrame w (flatMap (patBinders curLoc) pats)
-  walkExpr w (frame::scope) curLoc body
+  walkExpr w (frame :: scope) curLoc body
 walkExpr w scope curLoc (ELet _ isRec pat e1 e2) =
   let frame = mkNamedFrame w (patBinders curLoc pat)
-  let scope1 = if isRec then frame::scope else scope
+  let scope1 = if isRec then frame :: scope else scope
   let _ = walkExpr w scope1 curLoc e1
-  walkExpr w (frame::scope) curLoc e2
+  walkExpr w (frame :: scope) curLoc e2
 walkExpr w scope curLoc (ELetGroup binds body) =
   let frame = mkNamedFrame w (namesAtLoc curLoc (map letBindName binds))
-  let scope1 = frame::scope
+  let scope1 = frame :: scope
   let _ = walkBinds w scope1 curLoc binds
   walkExpr w scope1 curLoc body
 walkExpr w scope curLoc (EMatch e0 arms) =
@@ -563,7 +566,12 @@ walkExpr w scope curLoc (ESection s) = walkSection w scope curLoc s
 walkExpr _ _ _ _ = ()
 
 -- alias-qualified `A.f` vs a genuine record field access `record.field`.
-walkFieldAccess : W -> List (List (String, String)) -> Loc -> Expr -> String -> Unit
+walkFieldAccess : W ->
+  List (List (String, String)) ->
+  Loc ->
+  Expr ->
+  String ->
+  Unit
 walkFieldAccess w scope curLoc e0 f = match aliasHeadOf w (peelLoc e0)
   Some srcMod =>
     -- `A.f` where `A` is an import alias for module `srcMod`: resolve to the
@@ -578,9 +586,10 @@ aliasHeadOf (W ctx _ _ _ aliasM) (EVar a) = hmGetC ctx aliasM a
 aliasHeadOf _ _ = None
 
 aliasOriginKey : W -> String -> String -> String
-aliasOriginKey (W ctx _ _ _ _) srcMod f = match hmGetC ctx ctx.originOf (mkKey srcMod nsVal f)
-  Some k => k
-  None => extKey nsVal f
+aliasOriginKey (W ctx _ _ _ _) srcMod f =
+  match hmGetC ctx ctx.originOf (mkKey srcMod nsVal f)
+    Some k => k
+    None => extKey nsVal f
 
 peelLoc : Expr -> Expr
 peelLoc (ELoc _ e) = peelLoc e
@@ -589,20 +598,24 @@ peelLoc e = e
 
 walkEach : W -> List (List (String, String)) -> Loc -> List Expr -> Unit
 walkEach _ _ _ [] = ()
-walkEach w scope curLoc (e::rest) =
+walkEach w scope curLoc (e :: rest) =
   let _ = walkExpr w scope curLoc e
   walkEach w scope curLoc rest
 
 walkKvs : W -> List (List (String, String)) -> Loc -> List (Expr, Expr) -> Unit
 walkKvs _ _ _ [] = ()
-walkKvs w scope curLoc ((k, v)::rest) =
+walkKvs w scope curLoc ((k, v) :: rest) =
   let _ = walkExpr w scope curLoc k
   let _ = walkExpr w scope curLoc v
   walkKvs w scope curLoc rest
 
-walkFields : W -> List (List (String, String)) -> Loc -> List FieldAssign -> Unit
+walkFields : W ->
+  List (List (String, String)) ->
+  Loc ->
+  List FieldAssign ->
+  Unit
 walkFields _ _ _ [] = ()
-walkFields w scope curLoc ((FieldAssign _ e)::rest) =
+walkFields w scope curLoc ((FieldAssign _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
   walkFields w scope curLoc rest
 
@@ -613,69 +626,78 @@ walkSection w scope curLoc (SecLeft e _) = walkExpr w scope curLoc e
 
 walkInterp : W -> List (List (String, String)) -> Loc -> List InterpPart -> Unit
 walkInterp _ _ _ [] = ()
-walkInterp w scope curLoc ((InterpStr _)::rest) = walkInterp w scope curLoc rest
-walkInterp w scope curLoc ((InterpExpr e)::rest) =
+walkInterp w scope curLoc ((InterpStr _) :: rest) =
+  walkInterp w scope curLoc rest
+walkInterp w scope curLoc ((InterpExpr e) :: rest) =
   let _ = walkExpr w scope curLoc e
   walkInterp w scope curLoc rest
 
 walkStmts : W -> List (List (String, String)) -> Loc -> List DoStmt -> Unit
 walkStmts _ _ _ [] = ()
-walkStmts w scope curLoc ((DoExpr e)::rest) =
+walkStmts w scope curLoc ((DoExpr e) :: rest) =
   let _ = walkExpr w scope curLoc e
   walkStmts w scope curLoc rest
-walkStmts w scope curLoc ((DoBind p e)::rest) =
+walkStmts w scope curLoc ((DoBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
-  walkStmts w (frame::scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ _ p e)::rest) =
+  walkStmts w (frame :: scope) curLoc rest
+walkStmts w scope curLoc ((DoLet _ _ p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
-  walkStmts w (frame::scope) curLoc rest
-walkStmts w scope curLoc ((DoAssign _ e)::rest) =
+  walkStmts w (frame :: scope) curLoc rest
+walkStmts w scope curLoc ((DoAssign _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
   walkStmts w scope curLoc rest
-walkStmts w scope curLoc ((DoFieldAssign _ _ e)::rest) =
+walkStmts w scope curLoc ((DoFieldAssign _ _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
   walkStmts w scope curLoc rest
 
 walkArms : W -> List (List (String, String)) -> Loc -> List Arm -> Unit
 walkArms _ _ _ [] = ()
-walkArms w scope curLoc ((Arm pat gs body)::rest) =
+walkArms w scope curLoc ((Arm pat gs body) :: rest) =
   let frame = mkNamedFrame w (patBinders curLoc pat)
-  let scope1 = frame::scope
+  let scope1 = frame :: scope
   let scope2 = walkGuards w scope1 curLoc gs
   let _ = walkExpr w scope2 curLoc body
   walkArms w scope curLoc rest
 
-walkGuardArms : W -> List (List (String, String)) -> Loc -> List GuardArm -> Unit
+walkGuardArms : W ->
+  List (List (String, String)) ->
+  Loc ->
+  List GuardArm ->
+  Unit
 walkGuardArms _ _ _ [] = ()
-walkGuardArms w scope curLoc ((GuardArm gs body)::rest) =
+walkGuardArms w scope curLoc ((GuardArm gs body) :: rest) =
   let scope2 = walkGuards w scope curLoc gs
   let _ = walkExpr w scope2 curLoc body
   walkGuardArms w scope curLoc rest
 
 -- a guard list threads scope (a `Pat <- e` bind adds binders for later guards).
-walkGuards : W -> List (List (String, String)) -> Loc -> List Guard -> List (List (String, String))
+walkGuards : W ->
+  List (List (String, String)) ->
+  Loc ->
+  List Guard ->
+  List (List (String, String))
 walkGuards _ scope _ [] = scope
-walkGuards w scope curLoc ((GBool e)::rest) =
+walkGuards w scope curLoc ((GBool e) :: rest) =
   let _ = walkExpr w scope curLoc e
   walkGuards w scope curLoc rest
-walkGuards w scope curLoc ((GBind p e)::rest) =
+walkGuards w scope curLoc ((GBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
-  walkGuards w (frame::scope) curLoc rest
+  walkGuards w (frame :: scope) curLoc rest
 
 walkBinds : W -> List (List (String, String)) -> Loc -> List LetBind -> Unit
 walkBinds _ _ _ [] = ()
-walkBinds w scope curLoc ((LetBind _ clauses)::rest) =
+walkBinds w scope curLoc ((LetBind _ clauses) :: rest) =
   let _ = walkClauses w scope curLoc clauses
   walkBinds w scope curLoc rest
 
 walkClauses : W -> List (List (String, String)) -> Loc -> List FunClause -> Unit
 walkClauses _ _ _ [] = ()
-walkClauses w scope curLoc ((FunClause pats body)::rest) =
+walkClauses w scope curLoc ((FunClause pats body) :: rest) =
   let frame = mkNamedFrame w (flatMap (patBinders curLoc) pats)
-  let _ = walkExpr w (frame::scope) curLoc body
+  let _ = walkExpr w (frame :: scope) curLoc body
   walkClauses w scope curLoc rest
 
 -- ── type walk (TyCon carries its OWN Option Loc — no curLoc threading needed) ─
@@ -699,7 +721,7 @@ walkTy _ _ (TyRow _ _ _) = ()
 
 walkTys : W -> Loc -> List Ty -> Unit
 walkTys _ _ [] = ()
-walkTys w curLoc (t::rest) =
+walkTys w curLoc (t :: rest) =
   let _ = walkTy w curLoc t
   walkTys w curLoc rest
 
@@ -708,7 +730,7 @@ walkTys w curLoc (t::rest) =
 -- a fn-name / decl-name click no longer `locContains`-matches a param/local (§9.4).
 mkNamedFrame : W -> List (String, Loc) -> List (String, String)
 mkNamedFrame _ [] = []
-mkNamedFrame w ((n, l)::rest) = mkOneLocal w n l :: mkNamedFrame w rest
+mkNamedFrame w ((n, l) :: rest) = mkOneLocal w n l :: mkNamedFrame w rest
 
 mkOneLocal : W -> String -> Loc -> (String, String)
 mkOneLocal (W ctx mid uri _ _) name loc =
@@ -742,10 +764,16 @@ ifName (IfaceMethod n _ _ _) = n
 -- a def entry: (namespace, name, key, defLoc, isPub).
 data DefEntry = DefEntry String String String Loc Bool
 
-collectDefs : Ctx -> HashMap String Unit -> String -> String -> List (Decl, DeclPos) -> List DefEntry
+collectDefs : Ctx ->
+  HashMap String Unit ->
+  String ->
+  String ->
+  List (Decl, DeclPos) ->
+  List DefEntry
 collectDefs _ _ _ _ [] = []
-collectDefs ctx expSet mid uri ((d, p)::rest) = defsOfDecl ctx expSet mid uri d (nameLocOf uri p) p
-  ++ collectDefs ctx expSet mid uri rest
+collectDefs ctx expSet mid uri ((d, p) :: rest) =
+  defsOfDecl ctx expSet mid uri d (nameLocOf uri p) p
+    ++ collectDefs ctx expSet mid uri rest
 
 -- A VALUE's export flag lives on its `export foo : T` SIGNATURE, not on the bare
 -- `foo = …` definition (idiomatic Medaka), so a def's pub is `declPub OR the name
@@ -766,25 +794,25 @@ collectExportedValues ctx decls =
 
 collectExpValGo : Ctx -> HashMap String Unit -> List Decl -> Unit
 collectExpValGo _ _ [] = ()
-collectExpValGo ctx s ((DTypeSig True n _)::rest) =
+collectExpValGo ctx s ((DTypeSig True n _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DFunDef True n _ _)::rest) =
+collectExpValGo ctx s ((DFunDef True n _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DExtern True n _)::rest) =
+collectExpValGo ctx s ((DExtern True n _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DLetGroup True binds)::rest) =
+collectExpValGo ctx s ((DLetGroup True binds) :: rest) =
   let _ = collectLetNames ctx s binds
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DAttrib _ inner)::rest) =
-  collectExpValGo ctx s (inner::rest)
-collectExpValGo ctx s (_::rest) = collectExpValGo ctx s rest
+collectExpValGo ctx s ((DAttrib _ inner) :: rest) =
+  collectExpValGo ctx s (inner :: rest)
+collectExpValGo ctx s (_ :: rest) = collectExpValGo ctx s rest
 
 collectLetNames : Ctx -> HashMap String Unit -> List LetBind -> Unit
 collectLetNames _ _ [] = ()
-collectLetNames ctx s ((LetBind n _)::rest) =
+collectLetNames ctx s ((LetBind n _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectLetNames ctx s rest
 
@@ -804,35 +832,60 @@ nameLocOf uri p = match declPosNameLoc p
 -- Medaka is strict, so `childLocsOf` is called INSIDE that one arm and every other
 -- decl in the project pays nothing (the same discipline `childLocsOf`'s own header
 -- states for the `DImpl` call site).
-defsOfDecl : Ctx -> HashMap String Unit -> String -> String -> Decl -> Loc -> DeclPos -> List DefEntry
+defsOfDecl : Ctx ->
+  HashMap String Unit ->
+  String ->
+  String ->
+  Decl ->
+  Loc ->
+  DeclPos ->
+  List DefEntry
 defsOfDecl ctx expSet mid uri (DFunDef pub n _ _) loc _ = [
-  emitDef ctx uri (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n))
+  emitDef
+    ctx
+    uri
+    (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
 ]
 defsOfDecl ctx expSet mid uri (DExtern pub n _) loc _ = [
-  emitDef ctx uri (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n))
+  emitDef
+    ctx
+    uri
+    (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
 ]
 defsOfDecl _ _ _ _ (DTypeSig _ _ _) _ _ = []
 defsOfDecl ctx expSet mid uri (DLetGroup pub binds) loc _ =
   map (letGroupDef ctx expSet mid uri loc pub) binds
 defsOfDecl ctx _ mid uri (DData { dataVis = vis, dataName = n, dataCtors = variants }) loc _ =
-  let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc (dataIsPub vis))
+  let tyDef =
+    emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc (dataIsPub vis))
   tyDef :: flatMap (variantDefs ctx mid uri loc (ctorsPub vis)) variants
 defsOfDecl ctx _ mid uri (DNewtype { newtypePub = pub, newtypeName = n, newtypeCtor = con }) loc _ =
   let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)
-  let conDef = emitDef ctx uri (DefEntry nsCtor con (mkKey mid nsCtor con) loc pub)
+  let conDef =
+    emitDef ctx uri (DefEntry nsCtor con (mkKey mid nsCtor con) loc pub)
   [tyDef, conDef]
-defsOfDecl ctx _ mid uri (DTypeAlias { tyAliasPub = pub, tyAliasName = n }) loc _ = [emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)]
+defsOfDecl ctx _ mid uri (DTypeAlias { tyAliasPub = pub, tyAliasName = n }) loc _ =
+  [emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)]
 defsOfDecl ctx _ mid uri (DInterface { pub, name, methods, ... }) loc p =
   let tyDef = emitDef ctx uri (DefEntry nsTy name (mkKey mid nsTy name) loc pub)
   -- env/export-only: NOT `emitDef`, so no second binder lands on `name`'s span.
   let ifaceDef = DefEntry nsIface name (mkKey mid nsIface name) loc pub
-  tyDef :: ifaceDef :: methodDefs ctx mid uri loc pub methods (childLocsOf uri p)
+  tyDef
+    :: ifaceDef
+    :: methodDefs ctx mid uri loc pub methods (childLocsOf uri p)
 defsOfDecl _ _ _ _ (DImpl { ... }) _ _ = []
 defsOfDecl ctx expSet mid uri (DAttrib _ inner) loc p =
   defsOfDecl ctx expSet mid uri inner loc p
 defsOfDecl _ _ _ _ _ _ _ = []
 
-letGroupDef : Ctx -> HashMap String Unit -> String -> String -> Loc -> Bool -> LetBind -> DefEntry
+letGroupDef : Ctx ->
+  HashMap String Unit ->
+  String ->
+  String ->
+  Loc ->
+  Bool ->
+  LetBind ->
+  DefEntry
 letGroupDef ctx expSet mid uri loc pub (LetBind n _) =
   emitDef
     ctx
@@ -841,10 +894,16 @@ letGroupDef ctx expSet mid uri loc pub (LetBind n _) =
 
 variantDefs : Ctx -> String -> String -> Loc -> Bool -> Variant -> List DefEntry
 variantDefs ctx mid uri loc pub (Variant cn payload) =
-  emitDef ctx uri (DefEntry nsCtor cn (mkKey mid nsCtor cn) loc pub) ::
-    fieldDefs ctx mid uri loc pub payload
+  emitDef ctx uri (DefEntry nsCtor cn (mkKey mid nsCtor cn) loc pub)
+    :: fieldDefs ctx mid uri loc pub payload
 
-fieldDefs : Ctx -> String -> String -> Loc -> Bool -> ConPayload -> List DefEntry
+fieldDefs : Ctx ->
+  String ->
+  String ->
+  Loc ->
+  Bool ->
+  ConPayload ->
+  List DefEntry
 fieldDefs _ _ _ _ _ (ConPos _) = []
 fieldDefs ctx mid uri loc pub (ConNamed fields _) =
   map (fieldDef ctx mid uri loc pub) fields
@@ -874,13 +933,20 @@ fieldDef ctx mid uri loc pub (Field fn _) =
 -- Defensive on a short/absent child list — fall back to the decl's own `Loc`
 -- rather than dropping the entry, so a parser gap costs precision, never the
 -- binder (the posture `implHeadsGo`/`zipFieldIdxs` already take).
-methodDefs : Ctx -> String -> String -> Loc -> Bool -> List IfaceMethod -> List (Option Loc) -> List DefEntry
+methodDefs : Ctx ->
+  String ->
+  String ->
+  Loc ->
+  Bool ->
+  List IfaceMethod ->
+  List (Option Loc) ->
+  List DefEntry
 methodDefs _ _ _ _ _ [] _ = []
-methodDefs ctx mid uri loc pub (m::ms) [] =
+methodDefs ctx mid uri loc pub (m :: ms) [] =
   methodDef ctx mid uri loc pub m :: methodDefs ctx mid uri loc pub ms []
-methodDefs ctx mid uri loc pub (m::ms) (c::cs) =
-  methodDef ctx mid uri (childLocOr loc c) pub m ::
-    methodDefs ctx mid uri loc pub ms cs
+methodDefs ctx mid uri loc pub (m :: ms) (c :: cs) =
+  methodDef ctx mid uri (childLocOr loc c) pub m
+    :: methodDefs ctx mid uri loc pub ms cs
 
 methodDef : Ctx -> String -> String -> Loc -> Bool -> IfaceMethod -> DefEntry
 methodDef ctx mid uri loc pub m =
@@ -907,7 +973,7 @@ ctorsPub _ = False
 -- CHILD name `Loc`s, which `walkDeclBody` is not handed.  See `recordImplHeads`.
 walkDecls : W -> List (Decl, DeclPos) -> Unit
 walkDecls _ [] = ()
-walkDecls w ((d, p)::rest) =
+walkDecls w ((d, p) :: rest) =
   let loc = nameLocOf (uriOf w) p
   let _ = recordImplHeads w d loc p
   let _ = walkDeclBody w d loc
@@ -971,10 +1037,10 @@ recordImplHeads _ _ _ _ = ()
 -- the whole entry (the same posture `zipFieldIdxs` takes).
 implHeadsGo : W -> String -> Loc -> List ImplMethod -> List (Option Loc) -> Unit
 implHeadsGo _ _ _ [] _ = ()
-implHeadsGo w ifaceMid loc ((ImplMethod n _ _)::rest) [] =
+implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) [] =
   let _ = recordImplHead w ifaceMid n loc
   implHeadsGo w ifaceMid loc rest []
-implHeadsGo w ifaceMid loc ((ImplMethod n _ _)::rest) (c::cs) =
+implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) (c :: cs) =
   let _ = recordImplHead w ifaceMid n (childLocOr loc c)
   implHeadsGo w ifaceMid loc rest cs
 
@@ -1015,7 +1081,7 @@ walkDeclBody _ _ _ = ()
 
 walkVariants : W -> Loc -> List Variant -> Unit
 walkVariants _ _ [] = ()
-walkVariants w loc ((Variant _ payload)::rest) =
+walkVariants w loc ((Variant _ payload) :: rest) =
   let _ = walkPayload w loc payload
   walkVariants w loc rest
 
@@ -1025,13 +1091,13 @@ walkPayload w loc (ConNamed fields _) = walkFieldTys w loc fields
 
 walkFieldTys : W -> Loc -> List Field -> Unit
 walkFieldTys _ _ [] = ()
-walkFieldTys w loc ((Field _ ty)::rest) =
+walkFieldTys w loc ((Field _ ty) :: rest) =
   let _ = walkTy w loc ty
   walkFieldTys w loc rest
 
 walkIfaceMethods : W -> Loc -> List IfaceMethod -> Unit
 walkIfaceMethods _ _ [] = ()
-walkIfaceMethods w loc ((IfaceMethod _ ty mdef _)::rest) =
+walkIfaceMethods w loc ((IfaceMethod _ ty mdef _) :: rest) =
   let _ = walkTy w loc ty
   let _ = walkMethodDefault w loc mdef
   walkIfaceMethods w loc rest
@@ -1044,7 +1110,7 @@ walkMethodDefault w loc (Some (MethodDefault pats body)) =
 
 walkImplMethods : W -> Loc -> List ImplMethod -> Unit
 walkImplMethods _ _ [] = ()
-walkImplMethods w loc ((ImplMethod _ pats body)::rest) =
+walkImplMethods w loc ((ImplMethod _ pats body) :: rest) =
   let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
   let _ = walkExpr w [frame] loc body
   walkImplMethods w loc rest
@@ -1055,7 +1121,7 @@ walkImplMethods w loc ((ImplMethod _ pats body)::rest) =
 -- processed dependency; `pub import` re-exports thread the true origin forward.
 addOwnToEnv : Ctx -> HashMap String String -> List DefEntry -> Unit
 addOwnToEnv _ _ [] = ()
-addOwnToEnv ctx useEnv ((DefEntry ns name key _ _)::rest) =
+addOwnToEnv ctx useEnv ((DefEntry ns name key _ _) :: rest) =
   let _ = hmSetC ctx useEnv (ns ++ sep ++ name) key
   addOwnToEnv ctx useEnv rest
 
@@ -1066,7 +1132,7 @@ registerExports ctx mid ownDefs decls =
 
 registerOwnExports : Ctx -> String -> List DefEntry -> Unit
 registerOwnExports _ _ [] = ()
-registerOwnExports ctx mid ((DefEntry ns name key _ pub)::rest) =
+registerOwnExports ctx mid ((DefEntry ns name key _ pub) :: rest) =
   let _ = whenPub ctx mid ns name key pub
   registerOwnExports ctx mid rest
 
@@ -1082,16 +1148,16 @@ addExport ctx mid ns name originKey =
   let cur = match hmGetC ctx ctx.modExp mid
     Some l => l
     None => []
-  hmSetC ctx ctx.modExp mid ((ns, name, originKey)::cur)
+  hmSetC ctx ctx.modExp mid ((ns, name, originKey) :: cur)
 
 registerReExports : Ctx -> String -> List Decl -> Unit
 registerReExports _ _ [] = ()
-registerReExports ctx mid ((DUse True path _)::rest) =
+registerReExports ctx mid ((DUse True path _) :: rest) =
   let _ = reExportPath ctx mid path
   registerReExports ctx mid rest
-registerReExports ctx mid ((DAttrib _ inner)::rest) =
-  registerReExports ctx mid (inner::rest)
-registerReExports ctx mid (_::rest) = registerReExports ctx mid rest
+registerReExports ctx mid ((DAttrib _ inner) :: rest) =
+  registerReExports ctx mid (inner :: rest)
+registerReExports ctx mid (_ :: rest) = registerReExports ctx mid rest
 
 reExportPath : Ctx -> String -> UsePath -> Unit
 reExportPath ctx mid (UseName ns) = reExportName ctx mid ns
@@ -1107,7 +1173,7 @@ reExportName ctx mid ns = match splitLastL ns
 
 reExportMembers : Ctx -> String -> String -> List UseMember -> Unit
 reExportMembers _ _ _ [] = ()
-reExportMembers ctx mid srcMod (m::rest) =
+reExportMembers ctx mid srcMod (m :: rest) =
   let _ = reExportOne ctx mid srcMod (useMemberOrigin m) (useMemberLocal m)
   reExportMembers ctx mid srcMod rest
 
@@ -1122,9 +1188,10 @@ reExportOne ctx mid srcMod o l =
   reExportNs ctx mid srcMod o l nsMethod
 
 reExportNs : Ctx -> String -> String -> String -> String -> String -> Unit
-reExportNs ctx mid srcMod o l ns = match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
-  Some originKey => addExport ctx mid ns l originKey
-  None => ()
+reExportNs ctx mid srcMod o l ns =
+  match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
+    Some originKey => addExport ctx mid ns l originKey
+    None => ()
 
 reExportWild : Ctx -> String -> String -> Unit
 reExportWild ctx mid srcMod = match hmGetC ctx ctx.modExp srcMod
@@ -1133,22 +1200,30 @@ reExportWild ctx mid srcMod = match hmGetC ctx ctx.modExp srcMod
 
 reExportWildGo : Ctx -> String -> List (String, String, String) -> Unit
 reExportWildGo _ _ [] = ()
-reExportWildGo ctx mid ((ns, name, originKey)::rest) =
+reExportWildGo ctx mid ((ns, name, originKey) :: rest) =
   let _ = addExport ctx mid ns name originKey
   reExportWildGo ctx mid rest
 
 -- ── imports → this module's useEnv (all DUse, pub or not) ────────────────────
-processImports : Ctx -> HashMap String String -> HashMap String String -> List Decl -> Unit
+processImports : Ctx ->
+  HashMap String String ->
+  HashMap String String ->
+  List Decl ->
+  Unit
 processImports _ _ _ [] = ()
-processImports ctx useEnv aliasM ((DUse _ path _)::rest) =
+processImports ctx useEnv aliasM ((DUse _ path _) :: rest) =
   let _ = importPath ctx useEnv aliasM path
   processImports ctx useEnv aliasM rest
-processImports ctx useEnv aliasM ((DAttrib _ inner)::rest) =
-  processImports ctx useEnv aliasM (inner::rest)
-processImports ctx useEnv aliasM (_::rest) =
+processImports ctx useEnv aliasM ((DAttrib _ inner) :: rest) =
+  processImports ctx useEnv aliasM (inner :: rest)
+processImports ctx useEnv aliasM (_ :: rest) =
   processImports ctx useEnv aliasM rest
 
-importPath : Ctx -> HashMap String String -> HashMap String String -> UsePath -> Unit
+importPath : Ctx ->
+  HashMap String String ->
+  HashMap String String ->
+  UsePath ->
+  Unit
 importPath ctx useEnv _ (UseName ns) = match splitLastL ns
   Some (pre, nm) => importOne ctx useEnv (joinDotL pre) nm nm
   None => ()
@@ -1161,7 +1236,7 @@ importPath ctx _ aliasM (UseAlias srcPath alias) =
 
 importMembers : Ctx -> HashMap String String -> String -> List UseMember -> Unit
 importMembers _ _ _ [] = ()
-importMembers ctx useEnv srcMod (m::rest) =
+importMembers ctx useEnv srcMod (m :: rest) =
   let _ = importOne ctx useEnv srcMod (useMemberOrigin m) (useMemberLocal m)
   importMembers ctx useEnv srcMod rest
 
@@ -1173,19 +1248,29 @@ importOne ctx useEnv srcMod o l =
   let _ = importNs ctx useEnv srcMod o l nsIface
   importNs ctx useEnv srcMod o l nsMethod
 
-importNs : Ctx -> HashMap String String -> String -> String -> String -> String -> Unit
-importNs ctx useEnv srcMod o l ns = match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
-  Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
-  None => ()
+importNs : Ctx ->
+  HashMap String String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Unit
+importNs ctx useEnv srcMod o l ns =
+  match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
+    Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
+    None => ()
 
 importWild : Ctx -> HashMap String String -> String -> Unit
 importWild ctx useEnv srcMod = match hmGetC ctx ctx.modExp srcMod
   Some entries => importWildGo ctx useEnv entries
   None => ()
 
-importWildGo : Ctx -> HashMap String String -> List (String, String, String) -> Unit
+importWildGo : Ctx ->
+  HashMap String String ->
+  List (String, String, String) ->
+  Unit
 importWildGo _ _ [] = ()
-importWildGo ctx useEnv ((ns, name, originKey)::rest) =
+importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
   let _ = hmSetC ctx useEnv (ns ++ sep ++ name) originKey
   importWildGo ctx useEnv rest
 
@@ -1205,38 +1290,51 @@ seedPrelude ctx mid src = match parseWithPositionsOpt src
 
 -- prelude def entries WITHOUT recording (no defs/occ), keyed like real exports.
 -- `expSet` supplies sig-exported value names (same `export foo : T` idiom).
-preludeDefEntries : HashMap String Unit -> String -> List Decl -> List (String, String, String)
+preludeDefEntries : HashMap String Unit ->
+  String ->
+  List Decl ->
+  List (String, String, String)
 preludeDefEntries _ _ [] = []
-preludeDefEntries expSet mid (d::rest) = preludeDefsOfDecl expSet mid d
-  ++ preludeDefEntries expSet mid rest
+preludeDefEntries expSet mid (d :: rest) =
+  preludeDefsOfDecl expSet mid d ++ preludeDefEntries expSet mid rest
 
-preludeDefsOfDecl : HashMap String Unit -> String -> Decl -> List (String, String, String)
+preludeDefsOfDecl : HashMap String Unit ->
+  String ->
+  Decl ->
+  List (String, String, String)
 preludeDefsOfDecl expSet mid (DFunDef pub n _ _) = valEntry expSet mid pub n
 preludeDefsOfDecl expSet mid (DExtern pub n _) = valEntry expSet mid pub n
-preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) = consIf (dataIsPub vis) (nsTy, n, mkKey mid nsTy n) (flatMap (preludeVariant mid) variants)
-preludeDefsOfDecl _ mid (DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) = [(nsTy, n, mkKey mid nsTy n), (nsCtor, con, mkKey mid nsCtor con)]
+preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
+  consIf
+    (dataIsPub vis)
+    (nsTy, n, mkKey mid nsTy n)
+    (flatMap (preludeVariant mid) variants)
+preludeDefsOfDecl _ mid (DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) =
+  [(nsTy, n, mkKey mid nsTy n), (nsCtor, con, mkKey mid nsCtor con)]
 preludeDefsOfDecl _ mid (DTypeAlias { tyAliasPub = True, tyAliasName = n }) =
   [(nsTy, n, mkKey mid nsTy n)]
 -- A PRELUDE interface must seed `nsIface` too, or a project-local `impl Eq MyType`
 -- would find no origin for `Eq` and file its heads on `?ext` instead of joining
 -- `core<TAB>method<TAB>eq` (#1044).
-preludeDefsOfDecl _ mid (DInterface { pub, name, methods, ... }) = consIf
-  pub
-  (nsTy, name, mkKey mid nsTy name)
-  (consIf
+preludeDefsOfDecl _ mid (DInterface { pub, name, methods, ... }) =
+  consIf
     pub
-    (nsIface, name, mkKey mid nsIface name)
-    (map (preludeMethod mid) methods))
+    (nsTy, name, mkKey mid nsTy name)
+    (consIf
+      pub
+      (nsIface, name, mkKey mid nsIface name)
+      (map (preludeMethod mid) methods))
 preludeDefsOfDecl expSet mid (DAttrib _ inner) =
   preludeDefsOfDecl expSet mid inner
 preludeDefsOfDecl _ _ _ = []
 
-valEntry : HashMap String Unit -> String -> Bool -> String -> List (String, String, String)
+valEntry : HashMap String Unit ->
+  String ->
+  Bool ->
+  String ->
+  List (String, String, String)
 valEntry expSet mid pub n =
-  if pub || memberOfRaw expSet n then
-    [(nsVal, n, mkKey mid nsVal n)]
-  else
-    []
+  if pub || memberOfRaw expSet n then [(nsVal, n, mkKey mid nsVal n)] else []
 
 memberOfRaw : HashMap String Unit -> String -> Bool
 memberOfRaw s k = match hmGet k s
@@ -1253,11 +1351,11 @@ preludeMethod mid m =
 
 consIf : Bool -> a -> List a -> List a
 consIf False _ xs = xs
-consIf True x xs = x::xs
+consIf True x xs = x :: xs
 
 seedPreludeGo : Ctx -> String -> List (String, String, String) -> Unit
 seedPreludeGo _ _ [] = ()
-seedPreludeGo ctx mid ((ns, name, originKey)::rest) =
+seedPreludeGo ctx mid ((ns, name, originKey) :: rest) =
   let _ = addExport ctx mid ns name originKey
   seedPreludeGo ctx mid rest
 
@@ -1283,9 +1381,12 @@ indexModule ctx mid uri src = match parseWithPositionsOpt src
     let _ = registerExports ctx mid ownDefs decls
     walkDecls (W ctx mid uri useEnv aliasM) paired
 
-processModules : Ctx -> (String -> Option String) -> List (String, String, List Decl) -> <IO> Unit
+processModules : Ctx ->
+  (String -> Option String) ->
+  List (String, String, List Decl) ->
+  <IO> Unit
 processModules _ _ [] = ()
-processModules ctx read ((mid, path, _)::rest) =
+processModules ctx read ((mid, path, _) :: rest) =
   let _ = match getSrc read path
     None => ()
     Some src => indexModule ctx mid path src
@@ -1321,7 +1422,12 @@ emptyIndex _ =
 -- as `analyzeProject`/`projectEntrySchemes` take it.  Best-effort on load error
 -- (returns an empty index — Stage 1 decides how to surface a partial project).
 export
-buildRefIndex : (String -> Option String) -> String -> List String -> String -> String -> <IO> RefIndex
+buildRefIndex : (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
   let parseCache = Ref []
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
@@ -1339,11 +1445,11 @@ buildRefIndex read entry roots runtimeSrc coreSrc =
       let _ = ctx.opCnt := 0
       let _ = processModules ctx read mods
       RefIndex {
-          defs = ctx.defs,
-          refs = ctx.refs,
-          occ = ctx.occ,
-          ops = !ctx.opCnt,
-        }
+        defs = ctx.defs,
+        refs = ctx.refs,
+        occ = ctx.occ,
+        ops = !ctx.opCnt,
+      }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
 export
@@ -1415,7 +1521,7 @@ enumerateDir acc dir = match listDir dir
 
 enumerateEntries : Ref (List String) -> String -> List String -> <IO> Unit
 enumerateEntries _ _ [] = ()
-enumerateEntries acc dir (name::rest) =
+enumerateEntries acc dir (name :: rest) =
   let _ = enumerateOne acc dir name
   enumerateEntries acc dir rest
 
@@ -1424,11 +1530,11 @@ enumerateOne acc dir name =
   let full = joinPath dir name
   match listDir full
     Ok _ => enumerateDir acc full
-    Err _ => if endsWith ".mdk" name then acc := full :: !acc else ()
+    Err _ => if endsWith ".mdk" name then acc := full :: !acc
 
 dropDotEntries : List String -> List String
 dropDotEntries [] = []
-dropDotEntries (n::rest)
+dropDotEntries (n :: rest)
   | startsWith "." n = dropDotEntries rest
   | otherwise = n :: dropDotEntries rest
 
@@ -1467,25 +1573,31 @@ midPathsOf root =
 -- cost is NOT invisible to `riOps` / the scaling gate.
 directImportIds : List Decl -> List String
 directImportIds [] = []
-directImportIds ((DUse _ path _)::rest) =
+directImportIds ((DUse _ path _) :: rest) =
   let m = importModId path
   if m == "core" then directImportIds rest else m :: directImportIds rest
-directImportIds ((DAttrib _ inner)::rest) = directImportIds (inner::rest)
-directImportIds (_::rest) = directImportIds rest
+directImportIds ((DAttrib _ inner) :: rest) = directImportIds (inner :: rest)
+directImportIds (_ :: rest) = directImportIds rest
 
 registerMidPaths : Ctx -> HashMap String String -> List (String, String) -> Unit
 registerMidPaths _ _ [] = ()
-registerMidPaths ctx byMid ((mid, path)::rest) =
+registerMidPaths ctx byMid ((mid, path) :: rest) =
   let _ = hmSetC ctx byMid mid path
   registerMidPaths ctx byMid rest
 
 midsOf : List (String, String) -> List String
 midsOf [] = []
-midsOf ((mid, _)::rest) = mid :: midsOf rest
+midsOf ((mid, _) :: rest) = mid :: midsOf rest
 
-topoVisitAll : Ctx -> (String -> Option String) -> HashMap String String -> HashMap String Unit -> Ref (List (String, String, List Decl)) -> List String -> <IO> Unit
+topoVisitAll : Ctx ->
+  (String -> Option String) ->
+  HashMap String String ->
+  HashMap String Unit ->
+  Ref (List (String, String, List Decl)) ->
+  List String ->
+  <IO> Unit
 topoVisitAll _ _ _ _ _ [] = ()
-topoVisitAll ctx read byMid visited acc (mid::rest) =
+topoVisitAll ctx read byMid visited acc (mid :: rest) =
   let _ = topoVisit ctx read byMid visited acc mid
   topoVisitAll ctx read byMid visited acc rest
 
@@ -1494,7 +1606,13 @@ topoVisitAll ctx read byMid visited acc (mid::rest) =
 -- appending it — a post-order DFS emit, so a dependency always lands earlier
 -- in `acc` than its dependent. `mid`s outside the enumerated set (`byMid`
 -- miss) or a file that fails to parse both no-op (F2: best-effort).
-topoVisit : Ctx -> (String -> Option String) -> HashMap String String -> HashMap String Unit -> Ref (List (String, String, List Decl)) -> String -> <IO> Unit
+topoVisit : Ctx ->
+  (String -> Option String) ->
+  HashMap String String ->
+  HashMap String Unit ->
+  Ref (List (String, String, List Decl)) ->
+  String ->
+  <IO> Unit
 topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
   Some _ => ()
   None => match hmGetC ctx byMid mid
@@ -1506,13 +1624,17 @@ topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
         Some src => match parseWithPositionsOpt src
           None => ()
           Some (decls, _) =>
-            let _ = topoVisitAll ctx read byMid visited acc (directImportIds decls)
+            let _ =
+              topoVisitAll ctx read byMid visited acc (directImportIds decls)
             acc := (mid, path, decls) :: !acc
 
 -- Order the whole-project file set dependency-first (see block comment
 -- above). O(N) — each enumerated file is visited (parsed once, hashed twice)
 -- exactly once, regardless of how many OTHER files import it.
-topoOrderModules : Ctx -> (String -> Option String) -> List (String, String) -> <IO> List (String, String, List Decl)
+topoOrderModules : Ctx ->
+  (String -> Option String) ->
+  List (String, String) ->
+  <IO> List (String, String, List Decl)
 topoOrderModules ctx read midPaths =
   let byMid = hmNew ()
   let _ = registerMidPaths ctx byMid midPaths
@@ -1526,7 +1648,11 @@ topoOrderModules ctx read midPaths =
 -- from `buildRefIndex`). `read` is the same editor-buffer override callback
 -- (unsaved buffers win over disk).
 export
-buildRefIndexProject : (String -> Option String) -> String -> String -> String -> <IO> RefIndex
+buildRefIndexProject : (String -> Option String) ->
+  String ->
+  String ->
+  String ->
+  <IO> RefIndex
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 buildRefIndexProject read projectRoot runtimeSrc coreSrc =
@@ -1539,12 +1665,7 @@ buildRefIndexProject read projectRoot runtimeSrc coreSrc =
   let midPaths = midPathsOf projectRoot
   let mods = topoOrderModules ctx read midPaths
   let _ = processModules ctx read mods
-  RefIndex {
-      defs = ctx.defs,
-      refs = ctx.refs,
-      occ = ctx.occ,
-      ops = !ctx.opCnt,
-    }
+  RefIndex { defs = ctx.defs, refs = ctx.refs, occ = ctx.occ, ops = !ctx.opCnt }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
 export
@@ -1594,7 +1715,7 @@ binderAt idx uri line col = match hmGet uri idx.occ
 
 scanOcc : Int -> Int -> List (Loc, String) -> Option String
 scanOcc _ _ [] = None
-scanOcc line col ((loc, key)::rest)
+scanOcc line col ((loc, key) :: rest)
   | locContains loc line col = Some key
   | otherwise = scanOcc line col rest
 
@@ -1640,21 +1761,21 @@ reverseList xs = reverseGo xs []
 
 reverseGo : List a -> List a -> List a
 reverseGo [] acc = acc
-reverseGo (x::xs) acc = reverseGo xs (x::acc)
+reverseGo (x :: xs) acc = reverseGo xs (x :: acc)
 
 listLength : List a -> Int
 listLength xs = lengthGo xs 0
 
 lengthGo : List a -> Int -> Int
 lengthGo [] n = n
-lengthGo (_::xs) n = lengthGo xs (n + 1)
+lengthGo (_ :: xs) n = lengthGo xs (n + 1)
 
 joinDotL : List String -> String
 joinDotL [] = ""
 joinDotL [x] = x
-joinDotL (x::rest) = "\{x}.\{joinDotL rest}"
+joinDotL (x :: rest) = "\{x}.\{joinDotL rest}"
 
 splitLastL : List a -> Option (List a, a)
 splitLastL [] = None
 splitLastL [x] = Some ([], x)
-splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
+splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)

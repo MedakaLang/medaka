@@ -42,4 +42,7 @@ emitTail _ coreD modules2 =
   -- core_ir_sexp/snapshot corpus stays byte-identical.
   -- #1970: a debug probe with no backend of its own -- neither emitter reads this
   -- output, so it cannot positively rule out either.
-  putStr (cprogramToSexpWith faithfulSexpMode (lowerProgramEmit TargetBothUnknown allDecls))
+  putStr
+    (cprogramToSexpWith
+      faithfulSexpMode
+      (lowerProgramEmit TargetBothUnknown allDecls))

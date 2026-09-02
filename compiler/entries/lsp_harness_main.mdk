@@ -70,7 +70,10 @@ fixtureFrameIntegrity medaka fixDir =
       match runSession medaka msgs
         Err _ => check "frame-integrity (multibyte)" False
         Ok out => match parseFrames out
-          (frames, clean) => check "frame-integrity (multibyte)" (clean && allByteValid frames && nonEmpty frames)
+          (frames, clean) =>
+            check
+              "frame-integrity (multibyte)"
+              (clean && allByteValid frames && nonEmpty frames)
 
 -- Fixture 2: opening proj/main.mdk drives the multi-module path, which checks the
 -- sibling helper.mdk's exhaustive Option match.  helper.mdk must be published AND
@@ -87,7 +90,11 @@ fixtureMultiModuleClean medaka fixDir =
       match runSession medaka msgs
         Err _ => check "multi-module clean (0 diagnostics)" False
         Ok out => match parseFrames out
-          (frames, _) => check "multi-module clean (0 diagnostics)" (diagPublishedFor helperUri frames && diagCountFor helperUri frames == 0)
+          (frames, _) =>
+            check
+              "multi-module clean (0 diagnostics)"
+              (diagPublishedFor helperUri frames
+                && diagCountFor helperUri frames == 0)
 
 -- Fixture 3: a genuine type error must surface ≥1 diagnostic.
 fixtureTypeError : String -> String -> <IO> Unit
@@ -101,7 +108,10 @@ fixtureTypeError medaka fixDir =
       match runSession medaka msgs
         Err _ => check "type-error surfaces (>=1 diagnostic)" False
         Ok out => match parseFrames out
-          (frames, _) => check "type-error surfaces (>=1 diagnostic)" (diagCountFor uri frames >= 1)
+          (frames, _) =>
+            check
+              "type-error surfaces (>=1 diagnostic)"
+              (diagCountFor uri frames >= 1)
 
 -- Fixture 4: documentSymbol on an UNPARSEABLE file must not crash the server.
 -- parseWithPositions used to panic on a parse failure (files are unparseable
@@ -155,7 +165,10 @@ fixtureSemanticTokens medaka fixDir =
         Ok out => match parseFrames out
           (frames, _) => match semanticData 2 frames
             None => check "semantic tokens: Expr names share one type" False
-            Some ints => check "semantic tokens: Expr names share one type" (lenTokensShareType 4 3 (decodeSemToks ints))
+            Some ints =>
+              check
+                "semantic tokens: Expr names share one type"
+                (lenTokensShareType 4 3 (decodeSemToks ints))
 
 {- Fixture 6: semanticTokens/full over roles.mdk — type (`Color`→legend 1),
    constructor (`Red`→2), and typeclass (`Show`→7) must ALL be emitted, i.e. the
@@ -184,7 +197,9 @@ fixtureSemanticRoles medaka fixDir =
               let toks = decodeSemToks ints
               check
                 "semantic tokens: type/ctor/typeclass distinct"
-                (hasTokenType 1 toks && hasTokenType 2 toks && hasTokenType 7 toks)
+                (hasTokenType 1 toks
+                  && hasTokenType 2 toks
+                  && hasTokenType 7 toks)
 
 -- Fixture 7: hover type resolution over hover_local.mdk's `let input = readLine
 -- ()` / `putStrLn input` buffer.  Regression for the top-level-only hover env:
@@ -216,10 +231,22 @@ fixtureHoverLocal medaka fixDir =
         Err _ => hoverFail ()
         Ok out => match parseFrames out
           (frames, _) =>
-            let _ = check "hover local: use site → input : String" (hoverContains 2 frames "input : String")
-            let _ = check "hover local: binder site → input : String" (hoverContains 3 frames "input : String")
-            let _ = check "hover extern: putStrLn full signature" (hoverContains 4 frames "putStrLn : String -> <Stdout> Unit")
-            let _ = check "hover extern: readLine full signature" (hoverContains 5 frames "readLine : Unit -> <Stdin> String")
+            let _ =
+              check
+                "hover local: use site → input : String"
+                (hoverContains 2 frames "input : String")
+            let _ =
+              check
+                "hover local: binder site → input : String"
+                (hoverContains 3 frames "input : String")
+            let _ =
+              check
+                "hover extern: putStrLn full signature"
+                (hoverContains 4 frames "putStrLn : String -> <Stdout> Unit")
+            let _ =
+              check
+                "hover extern: readLine full signature"
+                (hoverContains 5 frames "readLine : Unit -> <Stdin> String")
             check
               "hover leading-effect: main : <IO> Unit"
               (hoverContains 6 frames "main : <IO> Unit")
@@ -262,7 +289,10 @@ fixtureHoverImport medaka fixDir =
       match runSession medaka msgs
         Err _ => check "hover import: reverse : List a -> List a" False
         Ok out => match parseFrames out
-          (frames, _) => check "hover import: reverse : List a -> List a" (hoverContains 2 frames "reverse : List a -> List a")
+          (frames, _) =>
+            check
+              "hover import: reverse : List a -> List a"
+              (hoverContains 2 frames "reverse : List a -> List a")
 
 -- Fixture 9: completion over a project buffer suggests IMPORTED names (and core/
 -- runtime), not just the buffer's own.  completion_import.mdk imports
@@ -285,7 +315,10 @@ fixtureCompletionImport medaka fixDir =
       match runSession medaka msgs
         Err _ => check "completion import: reverse suggested" False
         Ok out => match parseFrames out
-          (frames, _) => check "completion import: reverse suggested" (completionHasLabel 2 frames "reverse")
+          (frames, _) =>
+            check
+              "completion import: reverse suggested"
+              (completionHasLabel 2 frames "reverse")
 
 -- Fixture 10: parse-cache correctness across a didChange burst (LSP latency win).
 -- The per-keystroke parse-cache must NOT serve stale diagnostics: a buffer's
@@ -307,7 +340,8 @@ fixtureDidChangeConverges medaka fixDir =
     Err _ => didChangeFail ()
     Ok good =>
       let uri = fileUri mainPath
-      let bad = "import helper.{describe}\n\ng : Int -> Int\ng x = describe x\n\nmain = println (describe (Some \"x\"))\n"
+      let bad =
+        "import helper.{describe}\n\ng : Int -> Int\ng x = describe x\n\nmain = println (describe (Some \"x\"))\n"
       let msgs = [
         initializeMsg 1,
         initializedMsg,
@@ -326,12 +360,16 @@ fixtureDidChangeConverges medaka fixDir =
             let converged = match lastDiagCountFor uri frames
               Some n => n == 0
               None => False
-            let _ = check "didChange burst: BAD edit surfaces error (no stale cache hit)" sawError
+            let _ =
+              check
+                "didChange burst: BAD edit surfaces error (no stale cache hit)"
+                sawError
             check "didChange burst: converges to clean on final edit" converged
 
 didChangeFail : Unit -> <IO> Unit
 didChangeFail _ =
-  let _ = check "didChange burst: BAD edit surfaces error (no stale cache hit)" False
+  let _ =
+    check "didChange burst: BAD edit surfaces error (no stale cache hit)" False
   check "didChange burst: converges to clean on final edit" False
 
 -- Fixture 11: expected-type propagation for a do-bind/higher-order lambda
@@ -364,8 +402,14 @@ fixtureHoverDoBind medaka fixDir =
         Err _ => hoverDoBindFail ()
         Ok out => match parseFrames out
           (frames, _) =>
-            let _ = check "hover do-bind: binder site -> stream : List Json" (hoverContains 2 frames "stream : List Json")
-            let _ = check "hover do-bind: use site -> stream : List Json" (hoverContains 3 frames "stream : List Json")
+            let _ =
+              check
+                "hover do-bind: binder site -> stream : List Json"
+                (hoverContains 2 frames "stream : List Json")
+            let _ =
+              check
+                "hover do-bind: use site -> stream : List Json"
+                (hoverContains 3 frames "stream : List Json")
             check
               "hover do-bind: one diagnostic (mismatch at the use)"
               (diagPublishedFor uri frames && diagCountFor uri frames == 1)

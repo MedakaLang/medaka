@@ -1,5 +1,5 @@
 # META
-source_lines=773
+source_lines=790
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -228,29 +228,33 @@ parseDigits a n i acc seen negative
   | i >= n = finishInt seen acc negative
   | otherwise = parseDigitStep a n i acc seen negative (arrayGetUnsafe i a)
 
-parseDigitStep : Array Char -> Int -> Int -> Int -> Bool -> Bool -> Char -> Option Int
+parseDigitStep : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  Char ->
+  Option Int
 parseDigitStep a n i acc seen negative c =
   if isDigit c then
     let d = charCode c - 48
     let limit = if negative then intMinBound else 0 - intMaxBound
     let multMin = limit / 10
-    if acc < multMin then None
+    if acc < multMin then
+      None
     else
       let acc2 = acc * 10
       if acc2 < limit + d then
         None
       else
         parseDigits a n (i + 1) (acc2 - d) True negative
-  else None
+  else
+    None
 
 finishInt : Bool -> Int -> Bool -> Option Int
 finishInt seen acc negative =
-  if not seen then
-    None
-  else if negative then
-    Some acc
-  else
-    Some (0 - acc)
+  if not seen then None else if negative then Some acc else Some (0 - acc)
 
 {- | The floating-point number written in `s`, or `None` when `s` is not
    one.
@@ -282,8 +286,8 @@ startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
 export
 endsWith : String -> String -> Bool
 endsWith suffix s =
-  stringSlice (stringLength s - stringLength suffix) (stringLength s) s ==
-    suffix
+  stringSlice (stringLength s - stringLength suffix) (stringLength s) s
+    == suffix
 
 {- | `s` without its leading `prefix`, or `None` when `s` does not begin
    with it.
@@ -367,9 +371,10 @@ lastIndexOf needle haystack
 -- Walks forward from each hit, advancing one codepoint so overlapping
 -- matches still count, and keeps the latest.
 lastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
-lastIndexOfGo needle haystack from acc = match indexOf needle (stringSlice from (stringLength haystack) haystack)
-  None => acc
-  Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
+lastIndexOfGo needle haystack from acc =
+  match indexOf needle (stringSlice from (stringLength haystack) haystack)
+    None => acc
+    Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 
@@ -388,7 +393,12 @@ countOccurrences needle haystack
 countGo : String -> Int -> String -> Int -> Int
 countGo needle nlen haystack acc = match indexOf needle haystack
   None => acc
-  Some i => countGo needle nlen (stringSlice (i + nlen) (stringLength haystack) haystack) (acc + 1)
+  Some i =>
+    countGo
+      needle
+      nlen
+      (stringSlice (i + nlen) (stringLength haystack) haystack)
+      (acc + 1)
 
 -- # Building
 
@@ -418,8 +428,8 @@ join sep parts = stringConcat (intersperse sep parts)
 
 intersperse : a -> List a -> List a
 intersperse _ [] = []
-intersperse _ (x::[]) = [x]
-intersperse sep (x::xs) = x :: sep :: intersperse sep xs
+intersperse _ (x :: []) = [x]
+intersperse sep (x :: xs) = x :: sep :: intersperse sep xs
 
 {- | `s` repeated `n` times.
 
@@ -445,7 +455,8 @@ repeat n s = repeatDbl n s
 -- version hit the evaluator's call-depth cap around n ≈ 25000.
 repeatDbl : Int -> String -> String
 repeatDbl k s =
-  if k <= 0 then ""
+  if k <= 0 then
+    ""
   else
     let h = repeatDbl (k / 2) s
     if isEven k then h ++ h else h ++ h ++ s
@@ -551,7 +562,8 @@ capitalize s =
   if arrayLength a == 0 then
     ""
   else
-    charToStr (charToUpper (arrayGetUnsafe 0 a)) ++ stringSlice 1 (stringLength s) s
+    charToStr (charToUpper (arrayGetUnsafe 0 a))
+      ++ stringSlice 1 (stringLength s) s
 
 {- | The string with the first occurrence of `old` replaced by `new`.
 
@@ -569,9 +581,8 @@ replaceFirst old new s = match indexOf old s
   Some i => spliceAt i (stringLength old) new s
 
 spliceAt : Int -> Int -> String -> String -> String
-spliceAt i oldLen new s = stringSlice 0 i s
-  ++ new
-  ++ stringSlice (i + oldLen) (stringLength s) s
+spliceAt i oldLen new s =
+  stringSlice 0 i s ++ new ++ stringSlice (i + oldLen) (stringLength s) s
 
 {- | The string with every non-overlapping occurrence of `old` replaced by
    `new`.
@@ -583,17 +594,19 @@ spliceAt i oldLen new s = stringSlice 0 i s
 export
 replaceAll : String -> String -> String -> String
 replaceAll old new s =
-  if old == "" then
-    s
-  else
-    replaceAllGo (stringLength old) old new s
+  if old == "" then s else replaceAllGo (stringLength old) old new s
 
 replaceAllGo : Int -> String -> String -> String -> String
 replaceAllGo oldLen old new s = match indexOf old s
   None => s
-  Some i => stringSlice 0 i s
-    ++ new
-    ++ replaceAllGo oldLen old new (stringSlice (i + oldLen) (stringLength s) s)
+  Some i =>
+    stringSlice 0 i s
+      ++ new
+      ++ replaceAllGo
+        oldLen
+        old
+        new
+        (stringSlice (i + oldLen) (stringLength s) s)
 
 -- # Slicing and splitting
 
@@ -648,7 +661,9 @@ split sep s = if sep == "" then [s] else splitGo (stringLength sep) sep s
 splitGo : Int -> String -> String -> List String
 splitGo sepLen sep s = match indexOf sep s
   None => [s]
-  Some i => stringSlice 0 i s :: splitGo sepLen sep (stringSlice (i + sepLen) (stringLength s) s)
+  Some i =>
+    stringSlice 0 i s
+      :: splitGo sepLen sep (stringSlice (i + sepLen) (stringLength s) s)
 
 {- | The lines of `s`, split on `\n`.
 
@@ -691,10 +706,7 @@ words s =
 
 wordsFrom : Array Char -> Int -> String -> Int -> List String
 wordsFrom a n s start =
-  if start >= n then
-    []
-  else
-    wordsEmit a n s start (firstSpace a start n)
+  if start >= n then [] else wordsEmit a n s start (firstSpace a start n)
 
 wordsEmit : Array Char -> Int -> String -> Int -> Int -> List String
 wordsEmit a n s start e =
@@ -766,12 +778,17 @@ center n c s =
   if stringLength s >= n then
     s
   else
-    centerPad (half (n - stringLength s)) (n - stringLength s - half (n - stringLength s)) c s
+    centerPad
+      (half (n - stringLength s))
+      (n - stringLength s - half (n - stringLength s))
+      c
+      s
 
 centerPad : Int -> Int -> Char -> String -> String
-centerPad l r c s = stringConcat (replic l (charToStr c))
-  ++ s
-  ++ stringConcat (replic r (charToStr c))
+centerPad l r c s =
+  stringConcat (replic l (charToStr c))
+    ++ s
+    ++ stringConcat (replic r (charToStr c))
 
 half : Int -> Int
 half k = if k <= 1 then 0 else 1 + half (k - 2)

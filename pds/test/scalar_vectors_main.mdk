@@ -106,12 +106,7 @@ loadSc s = scFromBytesReduce (mustHex s)
 
 applyUnary : String -> Sc -> Sc
 applyUnary op x =
-  if op == "red" then
-    x
-  else if op == "neg" then
-    scNegate x
-  else
-    scInverse x
+  if op == "red" then x else if op == "neg" then scNegate x else scInverse x
 
 applyBinary : String -> Sc -> Sc -> Sc
 applyBinary op x y =
@@ -127,7 +122,8 @@ applyBinary op x y =
 -- module header's precondition note).
 applyBit : String -> String -> Bool
 applyBit op a =
-  if op == "high" then scIsHigh (loadSc a)
+  if op == "high" then
+    scIsHigh (loadSc a)
   else match scFromBytes (mustHex a)
     Ok _ => False
     Err _ => True
@@ -146,20 +142,25 @@ grade counts totals label op actual expected =
     println "FAIL\t\{label}\texpected \{expected}\tgot \{got}"
 
 -- Same, for a boolean-result row whose expected column is "0" or "1".
-gradeBit : Array Int -> Array Int -> String -> String -> Bool -> String -> <IO> Unit
+gradeBit : Array Int ->
+  Array Int ->
+  String ->
+  String ->
+  Bool ->
+  String ->
+  <IO> Unit
 gradeBit counts totals label op actual expected =
   let got = if actual then "1" else "0"
   let () = bump totals 0
   if expected /= "0" && expected /= "1" then
     let () = bump totals 1
     println "FAIL\t\{label}\texpected column must be 0 or 1, got '\{expected}'"
+  else if got == expected then
+    let () = bump counts (opIndex op)
+    println "PASS\t\{label}"
   else
-    if got == expected then
-      let () = bump counts (opIndex op)
-      println "PASS\t\{label}"
-    else
-      let () = bump totals 1
-      println "FAIL\t\{label}\texpected \{expected}\tgot \{got}"
+    let () = bump totals 1
+    println "FAIL\t\{label}\texpected \{expected}\tgot \{got}"
 
 -- ── Line dispatch ────────────────────────────────────────────────────
 
@@ -176,7 +177,8 @@ processLine : Array Int -> Array Int -> String -> Int -> String -> <IO> Unit
 processLine counts totals path lineNo line =
   let t = trim line
   let loc = "\{path}:\{intToString lineNo}"
-  if t == "" || isComment t then ()
+  if t == "" || isComment t then
+    ()
   else match split " " t
     [op, a, r] =>
       let i = opIndex op
@@ -190,21 +192,34 @@ processLine counts totals path lineNo line =
       if opIndex op < 5 then
         failRow totals loc "unknown or misplaced op '\{op}' in: \{t}"
       else
-        grade counts totals "\{loc}:\{op}" op (applyBinary op (loadSc a) (loadSc b)) r
+        grade
+          counts
+          totals
+          "\{loc}:\{op}"
+          op
+          (applyBinary op (loadSc a) (loadSc b))
+          r
     _ => failRow totals loc "malformed row: \{t}"
 
-processAll : Array Int -> Array Int -> Int -> String -> List String -> Int -> Int -> <IO> Unit
+processAll : Array Int ->
+  Array Int ->
+  Int ->
+  String ->
+  List String ->
+  Int ->
+  Int ->
+  <IO> Unit
 processAll counts totals stride path [] lineNo rowNo = ()
-processAll counts totals stride path (l::rest) lineNo rowNo =
+processAll counts totals stride path (l :: rest) lineNo rowNo =
   let t = trim l
-  if t == "" || isComment t then processAll counts totals stride path rest (lineNo + 1) rowNo
+  if t == "" || isComment t then
+    processAll counts totals stride path rest (lineNo + 1) rowNo
+  else if rowNo % stride /= 0 then
+    let () = bump totals 2
+    processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
   else
-    if rowNo % stride /= 0 then
-      let () = bump totals 2
-      processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
-    else
-      let () = processLine counts totals path lineNo l
-      processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
+    let () = processLine counts totals path lineNo l
+    processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
 
 runFile : Array Int -> Array Int -> Int -> String -> <IO, FileRead "_"> Unit
 runFile counts totals stride path = match readLines path
@@ -215,7 +230,7 @@ runFile counts totals stride path = match readLines path
 
 runAll : Array Int -> Array Int -> Int -> List String -> <IO, FileRead "_"> Unit
 runAll counts totals stride [] = ()
-runAll counts totals stride (f::rest) =
+runAll counts totals stride (f :: rest) =
   let () = runFile counts totals stride f
   runAll counts totals stride rest
 
@@ -223,13 +238,14 @@ runAll counts totals stride (f::rest) =
 
 printOpCounts : Array Int -> Int -> <IO> Unit
 printOpCounts counts i =
-  if i >= nOps then ()
+  if i >= nOps then
+    ()
   else
     let () = println "op \{opNames[i]}: \{intToString counts[i]} ok"
     printOpCounts counts (i + 1)
 
 parseArgs : List String -> (Int, List String)
-parseArgs ("--stride"::nStr::rest) = match toInt nStr
+parseArgs ("--stride" :: nStr :: rest) = match toInt nStr
   Some n =>
     if n < 1 then
       panic "scalar_vectors: --stride needs a positive integer"
@@ -242,7 +258,9 @@ main : <IO, Env, FileRead "_"> Unit
 main =
   let (stride, files) = parseArgs (args ())
   if files == [] then
-    let () = println "usage: scalar_vectors_main [--stride N] <corpus-file> [<corpus-file> ...]"
+    let () =
+      println
+        "usage: scalar_vectors_main [--stride N] <corpus-file> [<corpus-file> ...]"
     exit 2
   else
     let counts = arrayMake nOps 0
@@ -252,7 +270,9 @@ main =
     let checked = totals[0]
     let failed = totals[1]
     let skipped = totals[2]
-    let () = println "counted: \{intToString (checked - failed)}/\{intToString checked} rows ok, \{intToString skipped} skipped (stride \{intToString stride})"
+    let () =
+      println
+        "counted: \{intToString (checked - failed)}/\{intToString checked} rows ok, \{intToString skipped} skipped (stride \{intToString stride})"
     if failed > 0 || checked == 0 then
       let () = println "TOTAL: FAIL"
       exit 1

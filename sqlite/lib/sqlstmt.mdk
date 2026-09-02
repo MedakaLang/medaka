@@ -338,10 +338,8 @@ orderLimitOffset = defer
 -- plain single SELECT and to fold a single-arm compound's trailing clauses back
 -- onto its one `Select`.
 applyTail : Select -> List (SqlExpr, Bool) -> Option Int -> Option Int -> Select
-applyTail sel ob lm off = sel
-  |> addOrderKeys ob
-  |> applyOpt withLimit lm
-  |> applyOpt withOffset off
+applyTail sel ob lm off =
+  sel |> addOrderKeys ob |> applyOpt withLimit lm |> applyOpt withOffset off
 
 -- ---------------------------------------------------------------------------
 -- Compound queries: `selectCore ( (UNION [ALL] | INTERSECT | EXCEPT) selectCore )*`
@@ -420,7 +418,7 @@ setOpArmsStep None = deferPure []
 setOpArmsStep (Some op) = defer
   sel <- selectCore
   rest <- setOpArms
-  deferPure ((op, sel)::rest)
+  deferPure ((op, sel) :: rest)
 
 -- `UNION [ALL] | INTERSECT | EXCEPT`.  `keyword` is `attempt`-wrapped (fails
 -- without consuming), so `choice` and the enclosing `optional` decline cleanly
@@ -496,12 +494,13 @@ aliasAfterAs None = optional aliasWord
 -- A bare, unqualified, non-reserved identifier used as an alias.  `attempt` keeps
 -- a reserved-word failure non-consuming so `optional aliasWord` can decline it.
 aliasWord : Parser String
-aliasWord = label
-  "expected an alias name"
-  (attempt (lexeme
-    (defer
-      w <- word
-      aliasCheck w)))
+aliasWord =
+  label
+    "expected an alias name"
+    (attempt
+      (lexeme (defer
+        w <- word
+        aliasCheck w)))
 
 aliasCheck : String -> Parser String
 aliasCheck w =
@@ -521,19 +520,17 @@ aliasCheck w =
 -- the expression grammar's reserved set) so a column literally named `union` in
 -- an expression is unaffected.
 isNonAliasKeyword : String -> Bool
-isNonAliasKeyword w = elem
-  (toUpper w)
-  [
-    "UNION",
-    "INTERSECT",
-    "EXCEPT",
-    "USING",
-    "NATURAL",
-    "CROSS",
-    "FULL",
-    "RIGHT",
-    "WITH",
-  ]
+isNonAliasKeyword w = elem (toUpper w) [
+  "UNION",
+  "INTERSECT",
+  "EXCEPT",
+  "USING",
+  "NATURAL",
+  "CROSS",
+  "FULL",
+  "RIGHT",
+  "WITH",
+]
 
 -- A table reference: a table name with an optional alias (`users`, `users u`,
 -- `users AS u`).
@@ -582,13 +579,14 @@ joinClauses = defer
   k <- optional joinHead
   joinClausesStep k
 
-joinClausesStep : Option JoinKind -> Parser (List (JoinKind, String, Option String, SqlExpr))
+joinClausesStep : Option JoinKind ->
+  Parser (List (JoinKind, String, Option String, SqlExpr))
 joinClausesStep None = deferPure []
 joinClausesStep (Some k) = defer
   (tbl, alias) <- tableRef
   e <- joinCondition k
   rest <- joinClauses
-  deferPure ((k, tbl, alias, e)::rest)
+  deferPure ((k, tbl, alias, e) :: rest)
 
 -- A join's condition.  Every kind but CROSS requires an `ON` predicate; a CROSS
 -- join takes NONE (SQL's unconditional cartesian product), so it parses no `ON`
@@ -620,8 +618,9 @@ usingReject = defer
 -- rewinds the reported position so that "no join here" does not out-rank a real
 -- failure further along.
 joinHead : Parser JoinKind
-joinHead = attempt (choice
-  [innerHead, leftHead, rightHead, fullHead, crossHead, plainHead])
+joinHead =
+  attempt
+    (choice [innerHead, leftHead, rightHead, fullHead, crossHead, plainHead])
 
 innerHead : Parser JoinKind
 innerHead = defer
@@ -671,10 +670,9 @@ groupByClause = defer
   groupByStep k
 
 groupByHead : Parser Unit
-groupByHead = attempt
-  (defer
-    _ <- keyword "GROUP"
-    keyword "BY")
+groupByHead = attempt (defer
+  _ <- keyword "GROUP"
+  keyword "BY")
 
 groupByStep : Option Unit -> Parser (List SqlExpr)
 groupByStep None = deferPure []
@@ -686,10 +684,9 @@ orderByClause = defer
   orderByStep k
 
 orderByHead : Parser Unit
-orderByHead = attempt
-  (defer
-    _ <- keyword "ORDER"
-    keyword "BY")
+orderByHead = attempt (defer
+  _ <- keyword "ORDER"
+  keyword "BY")
 
 orderByStep : Option Unit -> Parser (List (SqlExpr, Bool))
 orderByStep None = deferPure []
@@ -744,14 +741,23 @@ intOf s = match toInt s
 -- single owner of the record's shape (a new field gets a default from
 -- `selectFrom` instead of a type error here), and it keeps this module clear of
 -- the cross-module record-field hazards the earlier stages logged.
-assemble : String -> Option String -> List (JoinKind, String, Option String, SqlExpr) -> Bool -> List (SqlExpr, Option String) -> Option SqlExpr -> List SqlExpr -> Option SqlExpr -> Select
-assemble tbl tblAlias js dist cols w gb h = selectFromAs tbl tblAlias
-  |> addJoins js
-  |> withColumnsAliased cols
-  |> applyDistinct dist
-  |> applyOpt (e sel => withWhere (mkE e) sel) w
-  |> withGroupExprs gb
-  |> applyOpt (e sel => withHavingPred (mkE e) sel) h
+assemble : String ->
+  Option String ->
+  List (JoinKind, String, Option String, SqlExpr) ->
+  Bool ->
+  List (SqlExpr, Option String) ->
+  Option SqlExpr ->
+  List SqlExpr ->
+  Option SqlExpr ->
+  Select
+assemble tbl tblAlias js dist cols w gb h =
+  selectFromAs tbl tblAlias
+    |> addJoins js
+    |> withColumnsAliased cols
+    |> applyDistinct dist
+    |> applyOpt (e sel => withWhere (mkE e) sel) w
+    |> withGroupExprs gb
+    |> applyOpt (e sel => withHavingPred (mkE e) sel) h
 
 addJoins : List (JoinKind, String, Option String, SqlExpr) -> Select -> Select
 addJoins js sel = fold (acc j => addJoin j acc) sel js
@@ -843,8 +849,8 @@ renderColItem (e, a) = "\{renderSqlExpr e}\{renderAliasText a}"
 
 zipCols : List SqlExpr -> List (Option String) -> List (SqlExpr, Option String)
 zipCols [] _ = []
-zipCols (e::es) [] = (e, None) :: zipCols es []
-zipCols (e::es) (a::arest) = (e, a) :: zipCols es arest
+zipCols (e :: es) [] = (e, None) :: zipCols es []
+zipCols (e :: es) (a :: arest) = (e, a) :: zipCols es arest
 
 -- An alias as a canonical ` AS <name>` suffix (round-trips: the parser accepts
 -- the optional `AS`, this always emits it).
@@ -955,7 +961,8 @@ runCompoundNonDistinct db (Compound first rest ob lm off) rt = match rest
 runNonDistinct : Db -> Select -> RowType a -> Result String (List a)
 runNonDistinct db sel rt =
   if sel.distinct then
-    Err "SELECT DISTINCT needs queryStringDistinct (dedup runs on the DECODED rows, which requires Eq a)"
+    Err
+      "SELECT DISTINCT needs queryStringDistinct (dedup runs on the DECODED rows, which requires Eq a)"
   else
     query db sel rt
 
@@ -967,7 +974,11 @@ runNonDistinct db sel rt =
 --   (Note it is strictly better-behaved than the raw `lib.select.queryDistinct`,
 --   which dedups UNCONDITIONALLY and leaves honouring the flag to its caller.)
 export
-queryStringDistinct : Eq a => Db -> String -> RowType a -> Result String (List a)
+queryStringDistinct : Eq a =>
+  Db ->
+  String ->
+  RowType a ->
+  Result String (List a)
 queryStringDistinct db sql rt = do
   q <- parseQuery sql
   runCompoundQ db q rt
@@ -989,10 +1000,7 @@ runCompoundQ db (Compound first rest ob lm off) rt = match rest
 export
 runSelect : Eq a => Db -> Select -> RowType a -> Result String (List a)
 runSelect db sel rt =
-  if sel.distinct then
-    queryDistinct db sel rt
-  else
-    query db sel rt
+  if sel.distinct then queryDistinct db sel rt else query db sel rt
 
 -- ---------------------------------------------------------------------------
 -- The whole-statement ADT
@@ -1070,10 +1078,12 @@ statementAny = defer
 -- statement that picked its branch and then failed deeper (a broken VALUES list,
 -- say) keeps its own, more specific message.
 stmtBody : Parser Stmt
-stmtBody = label
-  "expected SELECT, INSERT, UPDATE, DELETE or CREATE TABLE"
-  (choice
-    [selectBranch, insertBranch, updateBranch, deleteBranch, createBranch])
+stmtBody =
+  label
+    "expected SELECT, INSERT, UPDATE, DELETE or CREATE TABLE"
+    (choice [
+      selectBranch, insertBranch, updateBranch, deleteBranch, createBranch
+    ])
 
 selectBranch : Parser Stmt
 selectBranch = defer
@@ -1164,8 +1174,10 @@ renderStmt st =
 renderStmtGo : Stmt -> String
 renderStmtGo (SSelect sel) = renderSelect sel
 renderStmtGo (SCreate ct) = renderCreate ct
-renderStmtGo (SInsert tbl cols rows) = "INSERT INTO \{tbl}\{renderInsertCols cols} VALUES \{join ", " (map renderValuesRow rows)}"
-renderStmtGo (SUpdate tbl asgs w) = "UPDATE \{tbl} SET \{join ", " (map renderAssign asgs)}\{renderOpt " WHERE " w}"
+renderStmtGo (SInsert tbl cols rows) =
+  "INSERT INTO \{tbl}\{renderInsertCols cols} VALUES \{join ", " (map renderValuesRow rows)}"
+renderStmtGo (SUpdate tbl asgs w) =
+  "UPDATE \{tbl} SET \{join ", " (map renderAssign asgs)}\{renderOpt " WHERE " w}"
 renderStmtGo (SDelete tbl w) = "DELETE FROM \{tbl}\{renderOpt " WHERE " w}"
 
 renderInsertCols : Option (List String) -> String

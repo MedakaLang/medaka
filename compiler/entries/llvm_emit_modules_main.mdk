@@ -57,7 +57,7 @@ import driver.main_autoprint.{autoPrintPinName}
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
 srcNameFromArgs : List String -> String
-srcNameFromArgs (_::_::entry::_) = entry
+srcNameFromArgs (_ :: _ :: entry :: _) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
@@ -101,7 +101,9 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 preludeSymsOf : List Decl -> (List String, List (String, String))
 preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
   CProgram groups _ _ impls => (
-    filterList (n => not (endsWith autoPrintPinName n)) (map cbindNameOf groups),
+    filterList
+      (n => not (endsWith autoPrintPinName n))
+      (map cbindNameOf groups),
     implKeysOf impls,
   )
 
@@ -113,9 +115,9 @@ cbindNameOf (CBind n _) = n
 -- `@mdk_default_<m>_<tag>` define lives in the program half regardless.
 implKeysOf : List CImplEntry -> List (String, String)
 implKeysOf [] = []
-implKeysOf ((CImplEntry m _ (CImplTagged tag _ _ _ _ _))::rest) =
+implKeysOf ((CImplEntry m _ (CImplTagged tag _ _ _ _ _)) :: rest) =
   (m, tag) :: implKeysOf rest
-implKeysOf (_::rest) = implKeysOf rest
+implKeysOf (_ :: rest) = implKeysOf rest
 
 -- Install the emitter side-tables + emit, from an already-elaborated program.
 emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
@@ -130,18 +132,33 @@ emitTail runtimeDecls coreD modules2 =
   -- real relocation graph instead (issue #120), which is strictly more precise
   -- than source reachability anyway.
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
-  let (preludeBinds, preludeImpls) = if half == 2 then preludeSymsOf coreD else ([], [])
-  let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeEmitInput
-    (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls)
-    (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls)
-    (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-    (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ())) (declaredRecordFieldOrders allDecls)
-    (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-    (ifaceImplHeadTable allDecls)
+  let (preludeBinds, preludeImpls) =
+    if half == 2 then preludeSymsOf coreD else ([], [])
+  let _ =
+    preludeReturnPosDictNames coreD allDecls
+      ++ preludeArgPosDictNames coreD allDecls
+      ++ constrainedSigNames allDecls
+  let input =
+    makeEmitInput
+      (returnsSelfTable allDecls)
+      (selfFnParamTable allDecls)
+      (methodIfaceTable allDecls)
+      (methodConstraintIfaces allDecls)
+      (ctorFieldTypeNames allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (mainTypeIsUnit ())
+      (mainTypeIsFloat ())
+      half
+      preludeBinds
+      preludeImpls
+      (srcNameFromArgs (args ()))
+      (declaredRecordFieldOrders allDecls)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+      (ifaceImplHeadTable allDecls)
   let statsOn = statsEnabled ()
   if statsOn then
-    let (text, stats) = emitProgramWithStats input (lowerProgramEmit TargetNative allDecls)
+    let (text, stats) =
+      emitProgramWithStats input (lowerProgramEmit TargetNative allDecls)
     let _ = emitStats statsOn stats
     putStr text
   else

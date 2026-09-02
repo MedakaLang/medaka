@@ -76,9 +76,8 @@ alphaNumericByte : Int -> Bool
 alphaNumericByte byte = alphaByte byte || digitByte byte
 
 hexByte : Int -> Bool
-hexByte byte = digitByte byte
-  || byte >= 65 && byte <= 70
-  || byte >= 97 && byte <= 102
+hexByte byte =
+  digitByte byte || byte >= 65 && byte <= 70 || byte >= 97 && byte <= 102
 
 didMethodEnd : Array Int -> Int -> Option Int
 didMethodEnd bytes i =
@@ -92,48 +91,60 @@ didMethodEnd bytes i =
     None
 
 didIdentifierByte : Int -> Bool
-didIdentifierByte byte = alphaNumericByte byte
-  || byte == 46
-  || byte == 95
-  || byte == 58
-  || byte == 37
-  || byte == 45
+didIdentifierByte byte =
+  alphaNumericByte byte
+    || byte == 46
+    || byte == 95
+    || byte == 58
+    || byte == 37
+    || byte == 45
 
 validDidIdentifier : Array Int -> Int -> Bool
 validDidIdentifier bytes i =
   if i >= arrayLength bytes then
     True
   else if bytes[i] == 37 then
-    i + 2 < arrayLength bytes && hexByte bytes[i + 1] && hexByte bytes[i + 2] && validDidIdentifier bytes (i + 3)
+    i + 2 < arrayLength bytes
+      && hexByte bytes[i + 1]
+      && hexByte bytes[i + 2]
+      && validDidIdentifier bytes (i + 3)
   else
     didIdentifierByte bytes[i] && validDidIdentifier bytes (i + 1)
 
 validDidLastByte : Int -> Bool
-validDidLastByte byte = alphaNumericByte byte
-  || byte == 46
-  || byte == 95
-  || byte == 45
+validDidLastByte byte =
+  alphaNumericByte byte || byte == 46 || byte == 95 || byte == 45
 
 validateDid : String -> Result String Unit
 validateDid did =
   let bytes = toUtf8 did
-  if not (startsWith "did:" did) then Err "repo: invalid DID; expected did:<method>:<identifier>"
-  else
-    if arrayLength bytes > 2048 then Err "repo: invalid DID; maximum length is 2048 characters"
-    else match didMethodEnd bytes 4
-      None => Err "repo: invalid DID method"
-      Some end =>
-        if end == 4 || end + 1 >= arrayLength bytes || not (validDidIdentifier bytes (end + 1)) || not (validDidLastByte bytes[arrayLength bytes - 1]) then
-          Err "repo: invalid DID identifier"
-        else
-          Ok ()
+  if not (startsWith "did:" did) then
+    Err "repo: invalid DID; expected did:<method>:<identifier>"
+  else if arrayLength bytes > 2048 then
+    Err "repo: invalid DID; maximum length is 2048 characters"
+  else match didMethodEnd bytes 4
+    None => Err "repo: invalid DID method"
+    Some end =>
+      if end == 4
+        || end + 1 >= arrayLength bytes
+        || not (validDidIdentifier bytes (end + 1))
+        || not (validDidLastByte bytes[arrayLength bytes - 1]) then
+        Err "repo: invalid DID identifier"
+      else
+        Ok ()
 
 findPathSlash : Array Int -> Int -> Int -> Result String Int
 findPathSlash path i slash =
   if i >= arrayLength path then
-    if slash < 0 then Err "repo: path must contain exactly one slash" else Ok slash
+    if slash < 0 then
+      Err "repo: path must contain exactly one slash"
+    else
+      Ok slash
   else if path[i] == 47 then
-    if slash >= 0 then Err "repo: path must contain exactly one slash" else findPathSlash path (i + 1) i
+    if slash >= 0 then
+      Err "repo: path must contain exactly one slash"
+    else
+      findPathSlash path (i + 1) i
   else
     findPathSlash path (i + 1) slash
 
@@ -172,12 +183,13 @@ validateCollection path end = match validateNsidPrefix path end
   Err cause => Err "repo: \{nsidErrorMessage cause}"
 
 rkeyByte : Int -> Bool
-rkeyByte byte = alphaNumericByte byte
-  || byte == 46
-  || byte == 45
-  || byte == 95
-  || byte == 58
-  || byte == 126
+rkeyByte byte =
+  alphaNumericByte byte
+    || byte == 46
+    || byte == 45
+    || byte == 95
+    || byte == 58
+    || byte == 126
 
 validRkeyBytes : Array Int -> Int -> Bool
 validRkeyBytes path i =
@@ -206,53 +218,60 @@ validateRkey path start =
 
 validatePath : Array Int -> Result String Unit
 validatePath path =
-  if arrayLength path == 0 then Err "repo: path must be non-empty"
-  else
-    if not (validBytes path 0) then Err "repo: path element outside byte range 0..255"
+  if arrayLength path == 0 then
+    Err "repo: path must be non-empty"
+  else if not (validBytes path 0) then
+    Err "repo: path element outside byte range 0..255"
+  else do
+    slash <- findPathSlash path 0 (-1)
+    if slash <= 0 || slash >= arrayLength path - 1 then
+      Err "repo: path must be collection/rkey"
     else do
-      slash <- findPathSlash path 0 (-1)
-      if slash <= 0 || slash >= arrayLength path - 1 then Err "repo: path must be collection/rkey"
-      else do
-        () <- validateCollection path slash
-        validateRkey path (slash + 1)
+      () <- validateCollection path slash
+      validateRkey path (slash + 1)
 
 validateRecord : DagCbor -> Result String Unit
 validateRecord (DcMap _) = Ok ()
 validateRecord _ = Err "repo: record must be a DAG-CBOR map"
 
 unsignedValue : String -> Cid -> Tid -> DagCbor
-unsignedValue did dataCid rev = DcMap
-  [
-    ("did", DcString did),
-    ("version", DcInt 3),
-    ("data", DcLink dataCid),
-    ("rev", DcString (tidToString rev)),
-    ("prev", DcNull),
-  ]
+unsignedValue did dataCid rev = DcMap [
+  ("did", DcString did),
+  ("version", DcInt 3),
+  ("data", DcLink dataCid),
+  ("rev", DcString (tidToString rev)),
+  ("prev", DcNull),
+]
 
 signedValue : String -> Cid -> Tid -> Signature -> DagCbor
-signedValue did dataCid rev signature = DcMap
-  [
-    ("did", DcString did),
-    ("version", DcInt 3),
-    ("data", DcLink dataCid),
-    ("rev", DcString (tidToString rev)),
-    ("prev", DcNull),
-    ("sig", DcBytes (signatureCompact signature)),
-  ]
+signedValue did dataCid rev signature = DcMap [
+  ("did", DcString did),
+  ("version", DcInt 3),
+  ("data", DcLink dataCid),
+  ("rev", DcString (tidToString rev)),
+  ("prev", DcNull),
+  ("sig", DcBytes (signatureCompact signature)),
+]
 
 encodeCommit : String -> DagCbor -> Result String (Array Int)
 encodeCommit label value = match dagCborEncode value
   Err message => Err "repo: {label} commit encoding failed: {message}"
   Ok bytes => Ok bytes
 
-buildCommit : String -> SecretKey -> Tid -> Mst -> BlockStore -> Result String (RepoCommit, BlockStore)
+buildCommit : String ->
+  SecretKey ->
+  Tid ->
+  Mst ->
+  BlockStore ->
+  Result String (RepoCommit, BlockStore)
 buildCommit did secret rev tree store = do
   unsigned <- encodeCommit "unsigned" (unsignedValue did (mstRootCid tree) rev)
   signature <- match signDigest secret (sha256 unsigned)
     Err message => Err "repo: signing failed: {message}"
     Ok value => Ok value
-  signed <- encodeCommit "signed" (signedValue did (mstRootCid tree) rev signature)
+  signed <- encodeCommit
+    "signed"
+    (signedValue did (mstRootCid tree) rev signature)
   let commitCid = cidForDagCbor signed
   withTree <- match blockStoreAddMany (mstNodeBlocks tree) store
     Err message => Err "repo: storing MST failed: {message}"
@@ -260,11 +279,10 @@ buildCommit did secret rev tree store = do
   complete <- match blockStorePut commitCid signed withTree
     Err message => Err "repo: storing commit failed: {message}"
     Ok value => Ok value
-  Ok
-    (
-      RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
-      complete,
-    )
+  Ok (
+    RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
+    complete,
+  )
 
 -- | Initialize an empty repository at an explicit deterministic revision.
 export
@@ -341,7 +359,13 @@ ensureNewer next prior =
   else
     Err "repo: revision must be strictly monotonic"
 
-finishMutation : String -> SecretKey -> PublicKey -> Tid -> Mst -> BlockStore -> Result String RepoMutation
+finishMutation : String ->
+  SecretKey ->
+  PublicKey ->
+  Tid ->
+  Mst ->
+  BlockStore ->
+  Result String RepoMutation
 finishMutation did secret publicKey rev tree store = do
   (commit, complete) <- buildCommit did secret rev tree store
   let repo = Repo did secret publicKey tree complete commit
@@ -424,24 +448,30 @@ export
 repoList : Repo -> Result String (List (Array Int, Cid, DagCbor))
 repoList (Repo _ _ _ tree store _) = listRecords (mstEntries tree) store []
 
-listRecords : List (Array Int, Cid) -> BlockStore -> List (Array Int, Cid, DagCbor) -> Result String (List (Array Int, Cid, DagCbor))
+listRecords : List (Array Int, Cid) ->
+  BlockStore ->
+  List (Array Int, Cid, DagCbor) ->
+  Result String (List (Array Int, Cid, DagCbor))
 listRecords [] _ acc = Ok (reverse acc)
-listRecords ((path, cid)::rest) store acc = match blockStoreGet cid store
+listRecords ((path, cid) :: rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
   Some bytes => match dagCborDecode bytes
     Err message => Err "repo: invalid stored record: {message}"
-    Ok value => listRecords rest store ((path, cid, value)::acc)
+    Ok value => listRecords rest store ((path, cid, value) :: acc)
 
 cidMember : Cid -> List Cid -> Bool
 cidMember _ [] = False
-cidMember wanted (cid::rest) = cidEqual wanted cid || cidMember wanted rest
+cidMember wanted (cid :: rest) = cidEqual wanted cid || cidMember wanted rest
 
 addUnique : Cid -> List Cid -> List Cid
 addUnique cid values = if cidMember cid values then values else values ++ [cid]
 
-entryLinks : List DagCbor -> List Cid -> List Cid -> Result String (List Cid, List Cid)
+entryLinks : List DagCbor ->
+  List Cid ->
+  List Cid ->
+  Result String (List Cid, List Cid)
 entryLinks [] trees leaves = Ok (trees, leaves)
-entryLinks ((DcMap [("k", DcBytes _), ("p", DcInt _), ("t", child), ("v", DcLink leaf)])::rest) trees leaves =
+entryLinks ((DcMap [("k", DcBytes _), ("p", DcInt _), ("t", child), ("v", DcLink leaf)]) :: rest) trees leaves =
   let nextTrees = match child
     DcNull => trees
     DcLink cid => addUnique cid trees
@@ -465,7 +495,12 @@ nodeLinks bytes = match dagCborDecode bytes
       Ok trees => entryLinks entries trees []
   Ok _ => Err "repo: tampered graph node form"
 
-walkNodes : List Cid -> BlockStore -> List (Cid, Array Int) -> List Cid -> Int -> Result String (List (Cid, Array Int), List Cid)
+walkNodes : List Cid ->
+  BlockStore ->
+  List (Cid, Array Int) ->
+  List Cid ->
+  Int ->
+  Result String (List (Cid, Array Int), List Cid)
 walkNodes [] _ blocks leaves _ = Ok (blocks, leaves)
 walkNodes frontier store blocks leaves traversal = do
   _ <- checkMstTraversalDepth traversal
@@ -475,15 +510,21 @@ walkNodes frontier store blocks leaves traversal = do
     Ok (next, nextLeaves, nextBlocks) =>
       walkNodes next store nextBlocks nextLeaves (traversal + 1)
 
-walkLayer : List Cid -> BlockStore -> List Cid -> List Cid -> List (Cid, Array Int) -> Result String (List Cid, List Cid, List (Cid, Array Int))
+walkLayer : List Cid ->
+  BlockStore ->
+  List Cid ->
+  List Cid ->
+  List (Cid, Array Int) ->
+  Result String (List Cid, List Cid, List (Cid, Array Int))
 walkLayer [] _ next leaves blocks = Ok (next, leaves, blocks)
-walkLayer (cid::rest) store next leaves blocks = match blockStoreGet cid store
+walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
   None => Err "repo: missing graph MST block"
   Some bytes => match nodeLinks bytes
     Err message => Err message
     Ok (children, foundLeaves) =>
       let mergedChildren = fold (acc child => addUnique child acc) next children
-      let mergedLeaves = fold (acc leaf => addUnique leaf acc) leaves foundLeaves
+      let mergedLeaves =
+        fold (acc leaf => addUnique leaf acc) leaves foundLeaves
       walkLayer
         rest
         store
@@ -491,33 +532,47 @@ walkLayer (cid::rest) store next leaves blocks = match blockStoreGet cid store
         mergedLeaves
         (blocks ++ [(cid, bytes)])
 
-recordBlocks : List Cid -> BlockStore -> List (Cid, Array Int) -> Result String (List (Cid, Array Int))
+recordBlocks : List Cid ->
+  BlockStore ->
+  List (Cid, Array Int) ->
+  Result String (List (Cid, Array Int))
 recordBlocks [] _ acc = Ok acc
-recordBlocks (cid::rest) store acc = match blockStoreGet cid store
+recordBlocks (cid :: rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
   Some bytes => recordBlocks rest store (acc ++ [(cid, bytes)])
 
 {- | Validate a commit root and export this implementation's deterministic order:
    commit, breadth-first MST nodes, then reachable record leaves. -}
 export
-repoExportGraph : Cid -> Array Int -> Cid -> BlockStore -> Result String (List (Cid, Array Int), Array Int)
-repoExportGraph commitCid commitBytes dataRoot store = match blockStoreGet commitCid store
-  None => Err "repo: missing graph commit block"
-  Some storedCommit => if storedCommit /= commitBytes || not (cidEqual commitCid (cidForDagCbor commitBytes)) then Err "repo: tampered graph commit block"
-  else match decodeSignedCommit commitBytes
-    Err message => Err "repo: invalid graph commit: {message}"
-    Ok (_, commitData, _, _) => if not (cidEqual commitData dataRoot) then Err "repo: commit data mismatch"
-    else match walkNodes [dataRoot] store [] [] 0
-      Err message => Err message
-      Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
-        Err message => Err "repo: invalid graph MST: \{message}"
-        Ok () => match recordBlocks leaves store []
-          Err message => Err message
-          Ok records =>
-            let blocks = (commitCid, arrayCopy commitBytes) :: nodes ++ records
-            match carEncode [commitCid] blocks
-              Err message => Err "repo: CAR export failed: {message}"
-              Ok bytes => Ok (blocks, bytes)
+repoExportGraph : Cid ->
+  Array Int ->
+  Cid ->
+  BlockStore ->
+  Result String (List (Cid, Array Int), Array Int)
+repoExportGraph commitCid commitBytes dataRoot store =
+  match blockStoreGet commitCid store
+    None => Err "repo: missing graph commit block"
+    Some storedCommit =>
+      if storedCommit /= commitBytes
+        || not (cidEqual commitCid (cidForDagCbor commitBytes)) then
+        Err "repo: tampered graph commit block"
+      else match decodeSignedCommit commitBytes
+        Err message => Err "repo: invalid graph commit: {message}"
+        Ok (_, commitData, _, _) =>
+          if not (cidEqual commitData dataRoot) then
+            Err "repo: commit data mismatch"
+          else match walkNodes [dataRoot] store [] [] 0
+            Err message => Err message
+            Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
+              Err message => Err "repo: invalid graph MST: \{message}"
+              Ok () => match recordBlocks leaves store []
+                Err message => Err message
+                Ok records =>
+                  let blocks =
+                    (commitCid, arrayCopy commitBytes) :: nodes ++ records
+                  match carEncode [commitCid] blocks
+                    Err message => Err "repo: CAR export failed: {message}"
+                    Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
 export
@@ -528,34 +583,45 @@ repoExportCar (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
 -- | Deterministic full repository CAR block order.
 export
 repoExportBlocks : Repo -> Result String (List (Cid, Array Int))
-repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) = map fst (repoExportGraph commitCid signed (mstRootCid tree) store)
+repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
+  map fst (repoExportGraph commitCid signed (mstRootCid tree) store)
 
 hasField : String -> List (String, DagCbor) -> Bool
 hasField _ [] = False
-hasField name ((key, _)::rest) = name == key || hasField name rest
+hasField name ((key, _) :: rest) = name == key || hasField name rest
 
 decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
 decodeSignedCommit bytes = match dagCborDecode bytes
   Err message => Err "repo: invalid commit CBOR: {message}"
-  Ok (DcMap fields) => if not (hasField "prev" fields) then Err "repo: required prev field is missing"
-  else match fields
-    [("did", DcString did), ("rev", DcString revText), ("sig", DcBytes compact), ("data", DcLink dataCid), ("prev", DcNull), ("version", DcInt version)] => if version /= 3 then Err "repo: commit version mismatch"
-    else do
-      () <- validateDid did
-      rev <- match tidParse revText
-        Err message => Err "repo: invalid commit TID: {message}"
-        Ok value => Ok value
-      signature <- match signatureFromCompact compact
-        Err message => Err "repo: invalid compact signature: {message}"
-        Ok value => Ok value
-      Ok (did, dataCid, rev, signature)
-    _ => Err "repo: commit must contain exactly did, rev, sig, data, prev, version"
+  Ok (DcMap fields) =>
+    if not (hasField "prev" fields) then
+      Err "repo: required prev field is missing"
+    else match fields
+      [("did", DcString did), ("rev", DcString revText), ("sig", DcBytes compact), ("data", DcLink dataCid), ("prev", DcNull), ("version", DcInt version)] =>
+        if version /= 3 then
+          Err "repo: commit version mismatch"
+        else do
+          () <- validateDid did
+          rev <- match tidParse revText
+            Err message => Err "repo: invalid commit TID: {message}"
+            Ok value => Ok value
+          signature <- match signatureFromCompact compact
+            Err message => Err "repo: invalid compact signature: {message}"
+            Ok value => Ok value
+          Ok (did, dataCid, rev, signature)
+      _ =>
+        Err
+          "repo: commit must contain exactly did, rev, sig, data, prev, version"
   Ok _ => Err "repo: commit must be a map"
 
 {- | Strictly validate signed v3 commit bytes against expected state and
    return the admitted compact signature. -}
 export
-repoValidateCommit : String -> Cid -> Tid -> Array Int -> Result String Signature
+repoValidateCommit : String ->
+  Cid ->
+  Tid ->
+  Array Int ->
+  Result String Signature
 repoValidateCommit expectedDid expectedData expectedRev bytes = do
   () <- validateDid expectedDid
   (did, dataCid, rev, signature) <- decodeSignedCommit bytes
@@ -571,7 +637,9 @@ repoValidateCommit expectedDid expectedData expectedRev bytes = do
 -- | Verify the canonical unsigned bytes and compact signature of metadata.
 export
 repoVerifyCommit : String -> PublicKey -> RepoCommit -> Bool
-repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signature) = match repoValidateCommit did dataCid rev signed
-  Err _ => False
-  Ok parsed => signatureCompact parsed == signatureCompact signature
-    && verifyDigest publicKey (sha256 unsigned) signature
+repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signature) =
+  match repoValidateCommit did dataCid rev signed
+    Err _ => False
+    Ok parsed =>
+      signatureCompact parsed == signatureCompact signature
+        && verifyDigest publicKey (sha256 unsigned) signature

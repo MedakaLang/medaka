@@ -41,21 +41,36 @@ mustCarBytes (Err message) =
 
 parseFixture : List String -> Option FixtureState -> Fixture
 parseFixture [] _ = panic "car_vectors: missing or unterminated fixture"
-parseFixture (line::rest) current =
-  if line == "" || startsWith "#" line then parseFixture rest current
+parseFixture (line :: rest) current =
+  if line == "" || startsWith "#" line then
+    parseFixture rest current
   else match split "\t" line
     ["CASE", name] => match current
       Some _ => panic "car_vectors: nested CASE"
       None => parseFixture rest (Some (FixtureState name [] [] None))
     ["ROOT", cidText] => match current
       None => panic "car_vectors: ROOT outside CASE"
-      Some (FixtureState name roots blocks bytes) => parseFixture rest (Some (FixtureState name (roots ++ [mustCid cidText]) blocks bytes))
+      Some (FixtureState name roots blocks bytes) =>
+        parseFixture
+          rest
+          (Some (FixtureState name (roots ++ [mustCid cidText]) blocks bytes))
     ["BLOCK", cidText, bytesHex] => match current
       None => panic "car_vectors: BLOCK outside CASE"
-      Some (FixtureState name roots blocks bytes) => parseFixture rest (Some (FixtureState name roots (blocks ++ [(mustCid cidText, mustHex bytesHex)]) bytes))
+      Some (FixtureState name roots blocks bytes) =>
+        parseFixture
+          rest
+          (Some
+            (FixtureState
+              name
+              roots
+              (blocks ++ [(mustCid cidText, mustHex bytesHex)])
+              bytes))
     ["CAR", bytesHex] => match current
       None => panic "car_vectors: CAR outside CASE"
-      Some (FixtureState name roots blocks _) => parseFixture rest (Some (FixtureState name roots blocks (Some (mustHex bytesHex))))
+      Some (FixtureState name roots blocks _) =>
+        parseFixture
+          rest
+          (Some (FixtureState name roots blocks (Some (mustHex bytesHex))))
     ["END"] => match current
       None => panic "car_vectors: END outside CASE"
       Some (FixtureState name roots blocks (Some bytes)) =>
@@ -65,14 +80,13 @@ parseFixture (line::rest) current =
 
 sameRoots : List Cid -> List Cid -> Bool
 sameRoots [] [] = True
-sameRoots (left::ls) (right::rs) = cidEqual left right && sameRoots ls rs
+sameRoots (left :: ls) (right :: rs) = cidEqual left right && sameRoots ls rs
 sameRoots _ _ = False
 
 sameBlocks : List (Cid, Array Int) -> List (Cid, Array Int) -> Bool
 sameBlocks [] [] = True
-sameBlocks ((left, leftBytes)::ls) ((right, rightBytes)::rs) = cidEqual left right
-  && leftBytes == rightBytes
-  && sameBlocks ls rs
+sameBlocks ((left, leftBytes) :: ls) ((right, rightBytes) :: rs) =
+  cidEqual left right && leftBytes == rightBytes && sameBlocks ls rs
 sameBlocks _ _ = False
 
 frameHeader : DagCbor -> Array Int
@@ -86,13 +100,13 @@ headerValue roots version =
 
 encodeSections : List (Cid, Array Int) -> Array Int
 encodeSections [] = [||]
-encodeSections ((cid, bytes)::rest) =
+encodeSections ((cid, bytes) :: rest) =
   let payload = cidToBytes cid ++ bytes
   uvarintEncode (arrayLength payload) ++ payload ++ encodeSections rest
 
 wireCar : List Cid -> Int -> List (Cid, Array Int) -> Array Int
-wireCar roots version blocks = frameHeader (headerValue roots version)
-  ++ encodeSections blocks
+wireCar roots version blocks =
+  frameHeader (headerValue roots version) ++ encodeSections blocks
 
 gradeExternal : Fixture -> <IO> Int
 gradeExternal (Fixture name roots blocks expected) = match carDecode expected
@@ -101,9 +115,15 @@ gradeExternal (Fixture name roots blocks expected) = match carDecode expected
     0
   Ok car =>
     let reencoded = carEncode roots blocks
-    let ok = sameRoots roots (carRoots car) && sameBlocks blocks (carBlocks car) && reencoded == Ok expected && blockStoreSize (carStore car) == length blocks
+    let ok =
+      sameRoots roots (carRoots car)
+        && sameBlocks blocks (carBlocks car)
+        && reencoded == Ok expected
+        && blockStoreSize (carStore car) == length blocks
     if ok then
-      let () = println "CASE \{name} PASS roots=\{intToString (length roots)} blocks=\{intToString (length blocks)}"
+      let () =
+        println
+          "CASE \{name} PASS roots=\{intToString (length roots)} blocks=\{intToString (length blocks)}"
       1
     else
       let () = println "CASE \{name} FAIL decoded-or-reencoded-mismatch"
@@ -121,21 +141,27 @@ runSuccess : Fixture -> <IO> Int
 runSuccess (Fixture _ roots blocks expected) =
   let decoded = mustCar (carDecode expected)
   let first = match blocks
-    block::_ => block
+    block :: _ => block
     [] => panic "car_vectors: fixture must contain blocks"
-  let duplicateCar = mustCar (carDecode (mustCarBytes (carEncode roots (blocks ++ [first]))))
+  let duplicateCar =
+    mustCar (carDecode (mustCarBytes (carEncode roots (blocks ++ [first]))))
   let reordered = reverse blocks
-  let reorderedCar = mustCar (carDecode (mustCarBytes (carEncode roots reordered)))
+  let reorderedCar =
+    mustCar (carDecode (mustCarBytes (carEncode roots reordered)))
   let root = match roots
-    item::_ => item
+    item :: _ => item
     [] => panic "car_vectors: fixture must contain a root"
-  sum
-    [
-      success "canonical-reencode" (carEncode roots blocks == Ok expected),
-      success "identical-duplicate" (length (carBlocks duplicateCar) == length blocks + 1 && blockStoreSize (carStore duplicateCar) == length blocks),
-      success "arbitrary-order" (sameBlocks reordered (carBlocks reorderedCar)),
-      success "unrelated-block" (length blocks > length roots && blockStoreHas root (carStore decoded)),
-    ]
+  sum [
+    success "canonical-reencode" (carEncode roots blocks == Ok expected),
+    success
+      "identical-duplicate"
+      (length (carBlocks duplicateCar) == length blocks + 1
+        && blockStoreSize (carStore duplicateCar) == length blocks),
+    success "arbitrary-order" (sameBlocks reordered (carBlocks reorderedCar)),
+    success
+      "unrelated-block"
+      (length blocks > length roots && blockStoreHas root (carStore decoded)),
+  ]
 
 rejectContains : String -> String -> Result String a -> <IO> Int
 rejectContains label witness (Err message) =
@@ -154,30 +180,65 @@ runHostile (Fixture _ roots blocks expected) =
   let header = mustHeader (headerValue roots 1)
   let framed = uvarintEncode (arrayLength header) ++ header
   let root = match roots
-    item::_ => item
+    item :: _ => item
     [] => panic "car_vectors: fixture must contain a root"
   let malformedCid = [|0|]
   let nonBlessedCid = [|1, 0x70, 0x12, 0x20|] ++ arrayMake 32 0
-  let malformedSection = uvarintEncode (arrayLength malformedCid) ++ malformedCid
-  let nonBlessedSection = uvarintEncode (arrayLength nonBlessedCid) ++ nonBlessedCid
+  let malformedSection =
+    uvarintEncode (arrayLength malformedCid) ++ malformedCid
+  let nonBlessedSection =
+    uvarintEncode (arrayLength nonBlessedCid) ++ nonBlessedCid
   let mismatchPayload = cidToBytes root ++ [|0|]
-  let mismatchSection = uvarintEncode (arrayLength mismatchPayload) ++ mismatchPayload
+  let mismatchSection =
+    uvarintEncode (arrayLength mismatchPayload) ++ mismatchPayload
   let truncated = take (arrayLength expected - 1) expected
-  sum
-    [
-      rejectContains "nonminimal-varint" "uvarint: non-minimal" (carDecode ([|bitOr (arrayLength header) 0x80, 0|] ++ header ++ encodeSections blocks)),
-      rejectContains "overflow-varint" "representable Int range" (carDecode [|128, 128, 128, 128, 128, 128, 128, 128, 64|]),
-      rejectContains "zero-section" "zero-length section" (carDecode (framed ++ [|0|])),
-      rejectContains "overlong-section" "overlong section" (carDecode (framed ++ [|100|])),
-      rejectContains "truncation" "truncated" (carDecode truncated),
-      rejectContains "trailing-corruption" "trailing corruption" (carDecode (expected ++ [|0x80|])),
-      rejectContains "wrong-version" "version must be 1" (carDecode (wireCar roots 2 blocks)),
-      rejectContains "wrong-header" "header must be exactly" (carDecode (frameHeader (DcMap [("version", DcInt 1)]))),
-      rejectContains "malformed-cid" "CID codec" (carDecode (framed ++ malformedSection)),
-      rejectContains "nonblessed-cid" "non-blessed CID" (carDecode (framed ++ nonBlessedSection)),
-      rejectContains "missing-root" "root block is missing" (carDecode framed),
-      rejectContains "cid-mismatch" "content does not match CID" (carDecode (framed ++ mismatchSection)),
-    ]
+  sum [
+    rejectContains
+      "nonminimal-varint"
+      "uvarint: non-minimal"
+      (carDecode
+        ([|bitOr (arrayLength header) 0x80, 0|]
+          ++ header
+          ++ encodeSections blocks)),
+    rejectContains
+      "overflow-varint"
+      "representable Int range"
+      (carDecode [|128, 128, 128, 128, 128, 128, 128, 128, 64|]),
+    rejectContains
+      "zero-section"
+      "zero-length section"
+      (carDecode (framed ++ [|0|])),
+    rejectContains
+      "overlong-section"
+      "overlong section"
+      (carDecode (framed ++ [|100|])),
+    rejectContains "truncation" "truncated" (carDecode truncated),
+    rejectContains
+      "trailing-corruption"
+      "trailing corruption"
+      (carDecode (expected ++ [|0x80|])),
+    rejectContains
+      "wrong-version"
+      "version must be 1"
+      (carDecode (wireCar roots 2 blocks)),
+    rejectContains
+      "wrong-header"
+      "header must be exactly"
+      (carDecode (frameHeader (DcMap [("version", DcInt 1)]))),
+    rejectContains
+      "malformed-cid"
+      "CID codec"
+      (carDecode (framed ++ malformedSection)),
+    rejectContains
+      "nonblessed-cid"
+      "non-blessed CID"
+      (carDecode (framed ++ nonBlessedSection)),
+    rejectContains "missing-root" "root block is missing" (carDecode framed),
+    rejectContains
+      "cid-mismatch"
+      "content does not match CID"
+      (carDecode (framed ++ mismatchSection)),
+  ]
 
 main : <IO, Env, FileRead "_"> Unit
 main = match args ()
@@ -188,10 +249,14 @@ main = match args ()
       let external = gradeExternal fixture
       let successes = runSuccess fixture
       let hostile = runHostile fixture
-      let () = println "external: \{intToString external}/1 official-atproto CAR cases"
-      let () = println "success: \{intToString successes}/4 interoperability routes"
-      let () = println "hostile: \{intToString hostile}/12 rejected on named routes"
-      if external == 1 && successes == 4 && hostile == 12 then println "TOTAL: PASS"
+      let () =
+        println "external: \{intToString external}/1 official-atproto CAR cases"
+      let () =
+        println "success: \{intToString successes}/4 interoperability routes"
+      let () =
+        println "hostile: \{intToString hostile}/12 rejected on named routes"
+      if external == 1 && successes == 4 && hostile == 12 then
+        println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1

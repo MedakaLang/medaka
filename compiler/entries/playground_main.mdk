@@ -177,15 +177,17 @@ import backend.wasm_reach.{wasmReachFilter}
 -- what diagnostics they report.
 main : <IO> Unit
 main = match args ()
-  "compile"::runtimeP::coreP::entry::roots =>
+  "compile" :: runtimeP :: coreP :: entry :: roots =>
     run True runtimeP coreP entry (rootsOrDefault entry roots)
-  "analyze"::runtimeP::coreP::entry::roots =>
+  "analyze" :: runtimeP :: coreP :: entry :: roots =>
     run False runtimeP coreP entry (rootsOrDefault entry roots)
-  "hover"::runtimeP::coreP::entry::rest =>
+  "hover" :: runtimeP :: coreP :: entry :: rest =>
     runQuery True runtimeP coreP entry rest
-  "complete"::runtimeP::coreP::entry::rest =>
+  "complete" :: runtimeP :: coreP :: entry :: rest =>
     runQuery False runtimeP coreP entry rest
-  _ => ePutStrLn "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
+  _ =>
+    ePutStrLn
+      "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
 
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault entry [] = [dirOf entry]
@@ -212,24 +214,47 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
       Err e => emitLoadFail entry e
       Ok tsrc => match parseResult tsrc
         Err pe => emitParseError entry pe
-        Ok _ => match loadProgramFilesLocatedCachedE playgroundParseCache (_ => None) entry roots
-          -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
-          -- exactly as an entry-file parse error squiggles the entry.
-          Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
-          Err (LoadMsg lmsg) =>
-            -- Recover the failing import's own span so the squiggle lands on the
-            -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
-            -- entry-scan). Available-modules help is CLI-only (needs a stdlib dir
-            -- listing, unavailable over the browser vfs).
-            let mloc = match unknownModuleIdOf lmsg
-              None => None
-              Some mid => findImportLoc mid (parseLocated tsrc)
-            emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "R-MODULE-LOAD" lmsg mloc None None])])
-          Ok triples =>
-            let mods = map dropPath triples
-            match mods
-              [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
-              _ => analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods
+        Ok _ =>
+          match (loadProgramFilesLocatedCachedE
+            playgroundParseCache
+            (_ => None)
+            entry
+            roots)
+            -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
+            -- exactly as an entry-file parse error squiggles the entry.
+            Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
+            Err (LoadMsg lmsg) =>
+              -- Recover the failing import's own span so the squiggle lands on the
+              -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
+              -- entry-scan). Available-modules help is CLI-only (needs a stdlib dir
+              -- listing, unavailable over the browser vfs).
+              let mloc = match unknownModuleIdOf lmsg
+                None => None
+                Some mid => findImportLoc mid (parseLocated tsrc)
+              emitDiagnostics
+                (cjAllToJson [
+                  (
+                    entry,
+                    tsrc,
+                    [Diag SevError "R-MODULE-LOAD" lmsg mloc None None],
+                  ),
+                ])
+            Ok triples =>
+              let mods = map dropPath triples
+              match mods
+                [_] =>
+                  analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
+                _ =>
+                  analyzeMulti
+                    emit
+                    rsrc
+                    csrc
+                    tsrc
+                    entry
+                    runtimeP
+                    coreP
+                    roots
+                    mods
 
 dropPath : (String, String, List Decl) -> (String, List Decl)
 dropPath (mid, _, decls) = (mid, decls)
@@ -247,21 +272,50 @@ playgroundParseCache = Ref []
 -- `mods` is `run`'s ALREADY-LOADED module list, threaded through rather than
 -- re-derived downstream (S2/#2442): the uncached `loadProgramE` had no memo of its own, so
 -- `doEmit`'s second call re-read and re-parsed every user module.
-analyzeSingle : Bool -> String -> String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> Unit
+analyzeSingle : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  <IO> Unit
 analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods =
   let diags = analyzeLocated rsrc csrc tsrc
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
-    False => guardedEmit emit rsrc csrc tsrc entry mods [(entry, tsrc, filterWarnings diags)]
+    False => guardedEmit emit rsrc csrc tsrc entry mods [
+      (entry, tsrc, filterWarnings diags),
+    ]
 
 -- Multi-module: analyzeProject (loader path).  Clean ⇒ emit.
 -- #1362: `analyzeSingle` above uses the UNGUARDED `analyzeLocated` (the
 -- playground has no `--allow-internal` flag or trusted-root concept); kept
 -- unguarded here too (`allowInternal = True`, `trustedMods = []`) for parity.
-analyzeMulti : Bool -> String -> String -> String -> String -> String -> String -> List String -> List (String, List Decl) -> <IO> Unit
+analyzeMulti : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  List (String, List Decl) ->
+  <IO> Unit
 analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
   let cacheRef = Ref []
-  let results = analyzeProject True [] cacheRef playgroundParseCache (_ => None) entry roots rsrc csrc
+  let results =
+    analyzeProject
+      True
+      []
+      cacheRef
+      playgroundParseCache
+      (_ => None)
+      entry
+      roots
+      rsrc
+      csrc
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
@@ -270,7 +324,7 @@ analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
 -- Keep only non-error (i.e. warning) diagnostics for a single file's list.
 filterWarnings : List Diag -> List Diag
 filterWarnings [] = []
-filterWarnings (d::rest)
+filterWarnings (d :: rest)
   | isDiagError d = filterWarnings rest
   | otherwise = d :: filterWarnings rest
 
@@ -293,7 +347,14 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- on an ERROR — it never consults warnTriples.
 -- Runs in BOTH modes: W-MAIN-SHAPE / W-MAIN-MISSING are diagnostics the editor
 -- shows today, so `analyze` must report them exactly as `compile` does.
-guardedEmit : Bool -> String -> String -> String -> String -> List (String, List Decl) -> List (String, String, List Diag) -> <IO> Unit
+guardedEmit : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  List (String, String, List Diag) ->
+  <IO> Unit
 guardedEmit emit rsrc csrc tsrc entry mods warnTriples = match parseResult tsrc
   Err pe => emitParseError entry pe
   Ok decls => match mainShapeError decls
@@ -305,9 +366,9 @@ guardedEmit emit rsrc csrc tsrc entry mods warnTriples = match parseResult tsrc
 -- locate the body's first ELoc span.
 findMainFunDef : List Decl -> Option (List Pat, Expr)
 findMainFunDef [] = None
-findMainFunDef ((DAttrib _ d)::rest) = findMainFunDef (d::rest)
-findMainFunDef ((DFunDef _ "main" ps body)::_) = Some (ps, body)
-findMainFunDef (_::rest) = findMainFunDef rest
+findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
+findMainFunDef ((DFunDef _ "main" ps body) :: _) = Some (ps, body)
+findMainFunDef (_ :: rest) = findMainFunDef rest
 
 -- Best-effort location: the first ELoc span walking the outermost EApp spine.
 mainBodyLoc : Expr -> Option Loc
@@ -324,7 +385,8 @@ mainHeadLoc body =
   map ((Loc f sl sc _ _) => Loc f sl 0 sl sc) (mainBodyLoc body)
 
 mainArityMsg : String
-mainArityMsg = "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
+mainArityMsg =
+  "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
 
 mainMissingMsg : String
 mainMissingMsg =
@@ -334,7 +396,9 @@ mainMissingMsg =
 -- any other shape typecheck already accepts), safe to fall through to emit.
 mainShapeError : List Decl -> Option Diag
 mainShapeError decls = match findMainFunDef decls
-  Some (_::_, body) => Some (Diag SevError "W-MAIN-SHAPE" mainArityMsg (mainHeadLoc body) None None)
+  Some (_ :: _, body) =>
+    Some
+      (Diag SevError "W-MAIN-SHAPE" mainArityMsg (mainHeadLoc body) None None)
   Some ([], _) => None
   None => Some (Diag SevError "W-MAIN-MISSING" mainMissingMsg None None None)
 
@@ -382,7 +446,14 @@ mainShapeError decls = match findMainFunDef decls
 -- marker).  A Unit/Async main is unchanged.
 -- `underivedMainDiags` below is a DIAGNOSTIC, not part of emit, so it runs in
 -- `analyze` mode too; only the `finishClean` tail is mode-dependent.
-doEmit : Bool -> String -> String -> String -> String -> List (String, List Decl) -> List (String, String, List Diag) -> <IO> Unit
+doEmit : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  List (String, String, List Diag) ->
+  <IO> Unit
 doEmit emit rsrc csrc tsrc entry mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
@@ -393,18 +464,30 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags rt coreW modulesW
       [] => finishClean emit warnTriples rt coreW modulesW
-      errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
-  -- An `Async` main is driven by the sequential `runAsync`: the browser build
-  -- has no clock host-imports (see wasm_emit_modules_main).
+      errs =>
+        emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
   else match asyncMainShapeError modules
-    Some msg => emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "E-MAIN-ASYNC-PAYLOAD" msg None None None])])
+    -- An `Async` main is driven by the sequential `runAsync`: the browser build
+    -- has no clock host-imports (see wasm_emit_modules_main).
+
+    Some msg =>
+      emitDiagnostics
+        (cjAllToJson [
+          (
+            entry,
+            tsrc,
+            [Diag SevError "E-MAIN-ASYNC-PAYLOAD" msg None None None],
+          ),
+        ])
     None =>
       if shouldAsyncWrapMain "runAsyncMain" modules then
         -- Re-check the rewritten program, as the auto-print branch does.
         let modulesW = asyncWrapModules "runAsyncMain" modules
         match underivedMainDiags rt core modulesW
           [] => finishClean emit warnTriples rt core modulesW
-          errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
+          errs =>
+            emitDiagnostics
+              (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
       else
         finishClean emit warnTriples rt core modules
 
@@ -431,12 +514,18 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
 -- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
 -- on either path — see doEmit's obituary for the discarded one that used to precede
 -- it, which is why `analyze` reaches here having elaborated the user's program once).
-finishClean : Bool -> List (String, String, List Diag) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+finishClean : Bool ->
+  List (String, String, List Diag) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
 finishClean emit warnTriples runtimeDecls coreDecls modules =
   if emit then
     let _ = emitWatMarker warnTriples
     runEmit runtimeDecls coreDecls modules
-  else emitAnalyzeMarker warnTriples
+  else
+    emitAnalyzeMarker warnTriples
 
 -- `analyze`'s terminal marker: ALWAYS a marker line plus a one-line JSON payload.
 -- The payload is byte-identical to the warnings JSON `emitWatMarker` writes when
@@ -473,11 +562,23 @@ desugarPair (mid, p) = (mid, desugar p)
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreD, modules2) =
+    elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
-  let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) [] (ifaceImplHeadTable allDecls)
+  let _ =
+    preludeReturnPosDictNames coreD allDecls
+      ++ preludeArgPosDictNames coreD allDecls
+      ++ constrainedSigNames allDecls
+  let input =
+    makeWasmEmitInputFull
+      (methodIfaceTable allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (ctorFieldTypeNames allDecls)
+      (mainTypeIsFloat ())
+      (declaredRecordFieldOrders allDecls)
+      []
+      (ifaceImplHeadTable allDecls)
   -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
@@ -510,14 +611,20 @@ emitParseError entry pe =
     ("severity", JInt 1),
     ("source", JString "medaka"),
   ]
-  let filesJson = jObject [("file", JString entry), ("diagnostics", JArray (arrayFromList [diagJson]))]
-  emitDiagnostics (stringify (jObject
-    [("files", JArray (arrayFromList [filesJson]))]))
+  let filesJson = jObject [
+    ("file", JString entry),
+    ("diagnostics", JArray (arrayFromList [diagJson])),
+  ]
+  emitDiagnostics
+    (stringify (jObject [("files", JArray (arrayFromList [filesJson]))]))
 
 -- A failed stdlib read becomes a single diagnostic too (never a trap).
 emitLoadFail : String -> String -> <IO> Unit
-emitLoadFail entry msg = emitDiagnostics (cjAllToJson
-  [(entry, "", [Diag SevError "R-MODULE-LOAD" msg None None None])])
+emitLoadFail entry msg =
+  emitDiagnostics
+    (cjAllToJson [
+      (entry, "", [Diag SevError "R-MODULE-LOAD" msg None None None]),
+    ])
 
 cjHasErr : (String, List Diag) -> Bool
 cjHasErr (_, diags) = any isDiagError diags
@@ -538,18 +645,29 @@ isDiagError _ = False
 -- + a CompletionItem[] (or null).  Reads the three sources; a read/parse failure
 -- degrades to a null result (never a trap), keeping the browser seam happy.
 runQuery : Bool -> String -> String -> String -> List String -> <IO> Unit
-runQuery isHover runtimeP coreP entry (lineS::colS::_) = match readFile runtimeP
-  Err _ => emitQuery isHover JNull
-  Ok rsrc => match readFile coreP
+runQuery isHover runtimeP coreP entry (lineS :: colS :: _) =
+  match readFile runtimeP
     Err _ => emitQuery isHover JNull
-    Ok csrc => match readFile entry
+    Ok rsrc => match readFile coreP
       Err _ => emitQuery isHover JNull
-      Ok tsrc => emitQuery isHover (queryResult isHover rsrc csrc tsrc (parseNat lineS) (parseNat colS))
+      Ok csrc => match readFile entry
+        Err _ => emitQuery isHover JNull
+        Ok tsrc =>
+          emitQuery
+            isHover
+            (queryResult
+              isHover
+              rsrc
+              csrc
+              tsrc
+              (parseNat lineS)
+              (parseNat colS))
 runQuery isHover _ _ _ _ = emitQuery isHover JNull
 
 emitQuery : Bool -> Json -> <IO> Unit
 emitQuery isHover j =
-  let _ = putStr (if isHover then "__MEDAKA_HOVER__\n" else "__MEDAKA_COMPLETE__\n")
+  let _ =
+    putStr (if isHover then "__MEDAKA_HOVER__\n" else "__MEDAKA_COMPLETE__\n")
   putStr (stringify j ++ "\n")
 
 -- Build the buffer's typecheck env (core + runtime + this file), then either look
@@ -568,7 +686,11 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
     -- S-full-env-scheme-entry (#1116): Module arm, own schemes FIRST — kept in
     -- lockstep with `docSchemes` in tools/lsp.mdk, whose comment carries the
     -- shadowing rationale (`lookupSchemeL`/`hoverResult` are first-match scans).
-    let (preludeSchemes, ownSchemes) = checkOneSchemeFullK preludeKey runtimeDecls coreDecls ("__user__", desugar userRaw)
+    let (preludeSchemes, ownSchemes) = checkOneSchemeFullK
+      preludeKey
+      runtimeDecls
+      coreDecls
+      ("__user__", desugar userRaw)
     let env = ownSchemes ++ preludeSchemes
     if isHover then
       hoverResult tsrc line col env
@@ -669,31 +791,35 @@ prefixStart arr lineStart i
 -- ── env lookup + JSON shaping (ported from lsp.mdk) ───────────────────────────
 lookupSchemeL : String -> List (String, Scheme) -> Option Scheme
 lookupSchemeL _ [] = None
-lookupSchemeL name ((n, s)::rest)
+lookupSchemeL name ((n, s) :: rest)
   | name == n = Some s
   | otherwise = lookupSchemeL name rest
 
 anyName : List String -> String -> Bool
 anyName [] _ = False
-anyName (x::xs) name = x == name || anyName xs name
+anyName (x :: xs) name = x == name || anyName xs name
 
 filterCompletions : String -> List String -> List (String, Scheme) -> List Json
 filterCompletions _ _ [] = []
-filterCompletions prefix seen ((n, s)::rest)
-  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppSchemeNamedFull n s) :: filterCompletions prefix (n::seen) rest
+filterCompletions prefix seen ((n, s) :: rest)
+  | startsWith prefix n && not (anyName seen n) =
+    jCompletionItem n (ppSchemeNamedFull n s)
+      :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 jCompletionItem : String -> String -> Json
-jCompletionItem label detail = jObject
-  [("label", JString label), ("kind", JInt 3), ("detail", JString detail)]
+jCompletionItem label detail = jObject [
+  ("label", JString label),
+  ("kind", JInt 3),
+  ("detail", JString detail),
+]
 
 jHover : String -> String -> Json
 jHover name ty =
   let value = stringConcat ["```medaka\n", name, " : ", ty, "\n```"]
-  jObject
-    [
-      (
-        "contents",
-        jObject [("kind", JString "markdown"), ("value", JString value)],
-      )
-    ]
+  jObject [
+    (
+      "contents",
+      jObject [("kind", JString "markdown"), ("value", JString value)],
+    ),
+  ]

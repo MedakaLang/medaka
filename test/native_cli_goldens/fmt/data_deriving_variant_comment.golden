@@ -18,6 +18,4 @@ data Named =
 -- reflow flat on pass 1 (the generic decl-trailing-comment path, not
 -- `vcommentsFor`) and re-block on pass 2, once the comment lands on the same
 -- source line as a variant again.
-data Flat =
-  | { z : Int }  -- collapsed spelling
-  deriving (Debug)
+data Flat = { z : Int } deriving (Debug)  -- collapsed spelling

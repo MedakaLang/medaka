@@ -19,10 +19,7 @@ alphabetAt i = alphabetChars[i]
 
 byteList : Array Int -> Int -> List Int
 byteList bytes i =
-  if i >= arrayLength bytes then
-    []
-  else
-    bytes[i] :: byteList bytes (i + 1)
+  if i >= arrayLength bytes then [] else bytes[i] :: byteList bytes (i + 1)
 
 encodeGo : List Int -> Int -> Int -> List Char
 encodeGo [] bits buffer =
@@ -30,16 +27,18 @@ encodeGo [] bits buffer =
     []
   else
     [alphabetAt (bitAnd (shiftLeft buffer (5 - bits)) 31)]
-encodeGo (b::rest) bits buffer =
+encodeGo (b :: rest) bits buffer =
   let next = bitOr (shiftLeft buffer 8) b
   emitGroups rest (bits + 8) next
 
 emitGroups : List Int -> Int -> Int -> List Char
 emitGroups rest bits buffer =
-  if bits < 5 then encodeGo rest bits buffer
+  if bits < 5 then
+    encodeGo rest bits buffer
   else
     let remaining = bits - 5
-    alphabetAt (bitAnd (shiftRight buffer remaining) 31) :: emitGroups rest remaining (bitAnd buffer (shiftLeft 1 remaining - 1))
+    alphabetAt (bitAnd (shiftRight buffer remaining) 31)
+      :: emitGroups rest remaining (bitAnd buffer (shiftLeft 1 remaining - 1))
 
 validBytes : Array Int -> Int -> Bool
 validBytes bytes i =
@@ -61,20 +60,30 @@ base32Encode bytes =
 digit : Char -> Result String Int
 digit c =
   let n = charCode c
-  if c == '=' then Err "base32: padding is not allowed"
-  else
-    if n >= 65 && n <= 90 then Err "base32: uppercase is not canonical"
+  if c == '=' then
+    Err "base32: padding is not allowed"
+  else if n >= 65 && n <= 90 then
+    Err "base32: uppercase is not canonical"
+  else if n >= 97 && n <= 122 then
+    if n <= 122 then
+      let d = n - 97
+      if d < 26 then Ok d else Err "base32: invalid alphabet character"
     else
-      if n >= 97 && n <= 122 then
-        if n <= 122 then
-          let d = n - 97
-          if d < 26 then Ok d else Err "base32: invalid alphabet character"
-        else Err "base32: invalid alphabet character"
-      else if n >= 50 && n <= 55 then Ok (n - 24) else Err "base32: invalid alphabet character"
+      Err "base32: invalid alphabet character"
+  else if n >= 50 && n <= 55 then
+    Ok (n - 24)
+  else
+    Err "base32: invalid alphabet character"
 
-decodeChars : Array Char -> Int -> Int -> Int -> List Int -> Result String (List Int, Int, Int)
+decodeChars : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  List Int ->
+  Result String (List Int, Int, Int)
 decodeChars chars i bits buffer acc =
-  if i >= arrayLength chars then Ok (reverse acc, bits, buffer)
+  if i >= arrayLength chars then
+    Ok (reverse acc, bits, buffer)
   else match digit chars[i]
     Err message => Err message
     Ok d =>
@@ -88,21 +97,24 @@ decodeChars chars i bits buffer acc =
           (i + 1)
           remaining
           (bitAnd next (shiftLeft 1 remaining - 1))
-          (b::acc)
-      else decodeChars chars (i + 1) nextBits next acc
+          (b :: acc)
+      else
+        decodeChars chars (i + 1) nextBits next acc
 
 {- | Decode only canonical unpadded lowercase base32. -}
 export
 base32Decode : String -> Result String (Array Int)
 base32Decode text = match decodeChars (toChars text) 0 0 0 []
   Err message => Err message
-  Ok (decoded, bits, residual) => if residual /= 0 then Err "base32: non-zero trailing bits"
-  else
-    let bytes = arrayFromList decoded
-    if base32Encode bytes /= text then
-      Err "base32: non-canonical length"
+  Ok (decoded, bits, residual) =>
+    if residual /= 0 then
+      Err "base32: non-zero trailing bits"
     else
-      Ok bytes
+      let bytes = arrayFromList decoded
+      if base32Encode bytes /= text then
+        Err "base32: non-canonical length"
+      else
+        Ok bytes
 
 -- | Multibase `b` (lowercase base32) encoding used by atproto CIDs.
 export

@@ -26,7 +26,7 @@ number = deferMap (digits => foldDigits digits 0) (some digit)
 
 foldDigits : List Char -> Int -> Int
 foldDigits [] acc = acc
-foldDigits (c::rest) acc = foldDigits rest (acc * 10 + (charCode c - 48))
+foldDigits (c :: rest) acc = foldDigits rest (acc * 10 + (charCode c - 48))
 
 -- '+' and '-' as operator parsers yielding the binary function.
 addOp : Parser (Int -> Int -> Int)

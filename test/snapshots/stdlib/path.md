@@ -1,5 +1,5 @@
 # META
-source_lines=312
+source_lines=314
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -41,7 +41,8 @@ dirnameGo path i =
   if stringSlice (i - 1) i path == "/" then
     let head = stringSlice 0 (i - 1) path
     if head == "" then "/" else head
-  else dirnameGo path (i - 1)
+  else
+    dirnameGo path (i - 1)
 
 {- | The last component of a path: everything after the last `/`.
 
@@ -135,7 +136,12 @@ withExtension : String -> String -> String
 withExtension ext path =
   let base = basename path
   let e = extname path
-  let newBase = (if e == "" then base else stringSlice 0 (stringLength base - stringLength e) base) ++ normalizeExt ext
+  let newBase =
+    (if e == "" then
+        base
+      else
+        stringSlice 0 (stringLength base - stringLength e) base)
+      ++ normalizeExt ext
   if contains "/" path then joinPath (dirname path) newBase else newBase
 
 -- # Joining and splitting
@@ -164,17 +170,11 @@ joinPath a b =
 
 stripTrailingSlash : String -> String
 stripTrailingSlash s =
-  if endsWith "/" s then
-    stringSlice 0 (stringLength s - 1) s
-  else
-    s
+  if endsWith "/" s then stringSlice 0 (stringLength s - 1) s else s
 
 stripLeadingSlash : String -> String
 stripLeadingSlash s =
-  if startsWith "/" s then
-    stringSlice 1 (stringLength s) s
-  else
-    s
+  if startsWith "/" s then stringSlice 1 (stringLength s) s else s
 
 {- | The segments joined in order with `joinPath`.
 
@@ -185,14 +185,14 @@ stripLeadingSlash s =
 export
 joinAll : List String -> String
 joinAll [] = ""
-joinAll (s::rest) = joinAllGo s rest
+joinAll (s :: rest) = joinAllGo s rest
 
 -- > joinAll []
 -- ""
 
 joinAllGo : String -> List String -> String
 joinAllGo acc [] = acc
-joinAllGo acc (s::rest) = joinAllGo (joinPath acc s) rest
+joinAllGo acc (s :: rest) = joinAllGo (joinPath acc s) rest
 
 {- | The non-empty components of a path, split on `/`.
 
@@ -208,11 +208,8 @@ segments path = filterEmpty (split "/" path)
 
 filterEmpty : List String -> List String
 filterEmpty [] = []
-filterEmpty (s::rest) =
-  if s == "" then
-    filterEmpty rest
-  else
-    s :: filterEmpty rest
+filterEmpty (s :: rest) =
+  if s == "" then filterEmpty rest else s :: filterEmpty rest
 
 -- # Predicates
 
@@ -286,34 +283,39 @@ normalize path =
 -- against, so it is kept (e.g. `../../b`).
 normGo : Bool -> List String -> List String -> List String
 normGo _ [] acc = acc
-normGo abs ("."::rest) acc = normGo abs rest acc
-normGo abs (".."::rest) [] =
-  if abs then
-    normGo abs rest []
-  else
-    normGo abs rest [".."]
-normGo abs (".."::rest) (top::acc2) =
+normGo abs ("." :: rest) acc = normGo abs rest acc
+normGo abs (".." :: rest) [] =
+  if abs then normGo abs rest [] else normGo abs rest [".."]
+normGo abs (".." :: rest) (top :: acc2) =
   if top == ".." then
-    normGo abs rest (".." :: ".."::acc2)
+    normGo abs rest (".." :: ".." :: acc2)
   else
     normGo abs rest acc2
-normGo abs (s::rest) acc = normGo abs rest (s::acc)
+normGo abs (s :: rest) acc = normGo abs rest (s :: acc)
 
 reverse : List a -> List a
 reverse xs = reverseGo xs []
 
 reverseGo : List a -> List a -> List a
 reverseGo [] acc = acc
-reverseGo (x::rest) acc = reverseGo rest (x::acc)
+reverseGo (x :: rest) acc = reverseGo rest (x :: acc)
 
 -- ── Properties ───────────────────────────────────────────────────────────
 
 prop "normalize is idempotent" (p : String) =
   normalize (normalize p) == normalize p
 
-prop "joinPath then split recovers both non-empty segments" (a : String) (b : String) = if a == "" || b == "" || contains "/" a || contains "/" b then True else segments (joinPath a b) == [a, b]
+prop "joinPath then split recovers both non-empty segments" (a : String) (b : String) =
+  if a == "" || b == "" || contains "/" a || contains "/" b then
+    True
+  else
+    segments (joinPath a b) == [a, b]
 
-prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p : String) = if p == "" || not (isAbsolute p) then True else normalize (joinPath (dirname p) (basename p)) == normalize p
+prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p : String) =
+  if p == "" || not (isAbsolute p) then
+    True
+  else
+    normalize (joinPath (dirname p) (basename p)) == normalize p
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))

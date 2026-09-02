@@ -45,7 +45,7 @@ emitU8 b (Builder a) = push (bitAnd b 255) a
 export
 emitBytes : List Int -> Builder -> Unit
 emitBytes [] _ = ()
-emitBytes (b::rest) buf =
+emitBytes (b :: rest) buf =
   emitU8 b buf
   emitBytes rest buf
 

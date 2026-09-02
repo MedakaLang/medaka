@@ -48,7 +48,8 @@ extraCid = cidForRaw extraBytes
 
 test "empty blockstore has no entries" =
   expectTrue
-    (blockStoreSize blockStoreEmpty == 0 && not (blockStoreHas rootCid blockStoreEmpty))
+    (blockStoreSize blockStoreEmpty == 0
+      && not (blockStoreHas rootCid blockStoreEmpty))
 
 test "verified put stores and retrieves a block" =
   let store = mustStore (blockStorePut rootCid rootBytes blockStoreEmpty)
@@ -67,8 +68,14 @@ test "identical duplicate put is idempotent" =
   expectEqual (blockStoreSize twice) 1
 
 test "from-blocks and add-many are input-order independent" =
-  let left = mustStore (blockStoreFromBlocks [(rootCid, rootBytes), (extraCid, extraBytes)])
-  let right = mustStore (blockStoreAddMany [(extraCid, extraBytes), (rootCid, rootBytes)] blockStoreEmpty)
+  let left =
+    mustStore
+      (blockStoreFromBlocks [(rootCid, rootBytes), (extraCid, extraBytes)])
+  let right =
+    mustStore
+      (blockStoreAddMany
+        [(extraCid, extraBytes), (rootCid, rootBytes)]
+        blockStoreEmpty)
   expectEqual
     (map ((cid, _) => cidToString cid) (blockStoreEntries left))
     (map ((cid, _) => cidToString cid) (blockStoreEntries right))
@@ -78,7 +85,9 @@ test "merge preserves both immutable inputs" =
   let right = mustStore (blockStorePut extraCid extraBytes blockStoreEmpty)
   let merged = mustStore (blockStoreMerge left right)
   expectTrue
-    (blockStoreSize left == 1 && blockStoreSize right == 1 && blockStoreSize merged == 2)
+    (blockStoreSize left == 1
+      && blockStoreSize right == 1
+      && blockStoreSize merged == 2)
 
 test "input and lookup arrays cannot alias store contents" =
   let source = arrayCopy extraBytes
@@ -93,7 +102,9 @@ test "CAR encodes and strictly round-trips explicit block order" =
   let bytes = mustBytes (carEncode [rootCid] blocks)
   let car = mustCar (carDecode bytes)
   expectTrue
-    (length (carRoots car) == 1 && length (carBlocks car) == 2 && blockStoreSize (carStore car) == 2)
+    (length (carRoots car) == 1
+      && length (carBlocks car) == 2
+      && blockStoreSize (carStore car) == 2)
 
 test "CAR preserves identical duplicate sections but deduplicates storage" =
   let blocks = [(rootCid, rootBytes), (rootCid, rootBytes)]
@@ -104,7 +115,9 @@ test "CAR accepts arbitrary order and unrelated verified blocks" =
   let blocks = [(extraCid, extraBytes), (rootCid, rootBytes)]
   let car = mustCar (carDecode (mustBytes (carEncode [rootCid] blocks)))
   expectTrue
-    (length (carBlocks car) == 2 && blockStoreHas extraCid (carStore car) && blockStoreHas rootCid (carStore car))
+    (length (carBlocks car) == 2
+      && blockStoreHas extraCid (carStore car)
+      && blockStoreHas rootCid (carStore car))
 
 test "CAR rejects a missing atproto root block" =
   expectTrue (isErr (carEncode [rootCid] [(extraCid, extraBytes)]))
@@ -113,7 +126,8 @@ test "CAR rejects empty roots" =
   expectTrue (isErr (carEncode [] [(rootCid, rootBytes)]))
 
 test "decoded root identity is preserved" =
-  let car = mustCar (carDecode (mustBytes (carEncode [rootCid] [(rootCid, rootBytes)])))
+  let car =
+    mustCar (carDecode (mustBytes (carEncode [rootCid] [(rootCid, rootBytes)])))
   match carRoots car
     [decoded] => expectTrue (cidEqual rootCid decoded)
     _ => expectTrue False

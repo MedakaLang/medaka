@@ -49,14 +49,22 @@ charOrFallback None = '?'
 b64Val : Char -> Bool -> Option Int
 b64Val c urlSafe =
   let n = charCode c
-  if n >= 65 && n <= 90 then Some (n - 65)          -- 'A'..'Z'
-  else if n >= 97 && n <= 122 then Some (n - 97 + 26) -- 'a'..'z'
-  else if n >= 48 && n <= 57 then Some (n - 48 + 52)  -- '0'..'9'
-  else if urlSafe && c == '-' then Some 62
-  else if urlSafe && c == '_' then Some 63
-  else if not urlSafe && c == '+' then Some 62
-  else if not urlSafe && c == '/' then Some 63
-  else None
+  if n >= 65 && n <= 90 then
+    Some (n - 65)  -- 'A'..'Z'
+  else if n >= 97 && n <= 122 then
+    Some (n - 97 + 26)  -- 'a'..'z'
+  else if n >= 48 && n <= 57 then
+    Some (n - 48 + 52)  -- '0'..'9'
+  else if urlSafe && c == '-' then
+    Some 62
+  else if urlSafe && c == '_' then
+    Some 63
+  else if not urlSafe && c == '+' then
+    Some 62
+  else if not urlSafe && c == '/' then
+    Some 63
+  else
+    None
 
 -- # Encoding
 
@@ -87,12 +95,8 @@ encodeGo bytes i n urlSafe acc
 export
 encode : Array Int -> String
 encode bytes =
-  stringFromChars (arrayFromList (encodeGo
-    bytes
-    0
-    (arrayLength bytes)
-    False
-    []))
+  stringFromChars
+    (arrayFromList (encodeGo bytes 0 (arrayLength bytes) False []))
 
 -- RFC 4648 test vectors.
 -- > encode (toUtf8 "")
@@ -133,15 +137,27 @@ data Tok = TokVal Int | TokPad | TokBad
 
 tok : Char -> Bool -> Tok
 tok c urlSafe =
-  if c == '=' then TokPad
+  if c == '=' then
+    TokPad
   else match b64Val c urlSafe
     Some v => TokVal v
     None => TokBad
 
 -- Decode one 4-char group.  `isLast` gates whether `=` padding is legal here
 -- (only the final group of a well-formed input may be padded).
-decodeQuad : Char -> Char -> Char -> Char -> Bool -> Bool -> Result String (List Int)
-decodeQuad c0 c1 c2 c3 urlSafe isLast = match (b64Val c0 urlSafe, b64Val c1 urlSafe, tok c2 urlSafe, tok c3 urlSafe)
+decodeQuad : Char ->
+  Char ->
+  Char ->
+  Char ->
+  Bool ->
+  Bool ->
+  Result String (List Int)
+decodeQuad c0 c1 c2 c3 urlSafe isLast = match (
+  b64Val c0 urlSafe,
+  b64Val c1 urlSafe,
+  tok c2 urlSafe,
+  tok c3 urlSafe,
+)
   (Some a, Some b, TokVal c, TokVal d) => Ok [
     bitOr (shiftLeft a 2) (shiftRight b 4),
     bitOr (shiftLeft (bitAnd b 15) 4) (shiftRight c 2),
@@ -162,12 +178,23 @@ decodeQuad c0 c1 c2 c3 urlSafe isLast = match (b64Val c0 urlSafe, b64Val c1 urlS
       Err "base64.decode: misplaced padding"
   _ => Err "base64.decode: invalid character or padding"
 
-decodeGo : Array Char -> Int -> Int -> Bool -> List Int -> Result String (List Int)
+decodeGo : Array Char ->
+  Int ->
+  Int ->
+  Bool ->
+  List Int ->
+  Result String (List Int)
 decodeGo chars i n urlSafe acc
   | i >= n = Ok acc
   | otherwise =
     let isLast = i + 4 == n
-    match decodeQuad (charAt i chars) (charAt (i + 1) chars) (charAt (i + 2) chars) (charAt (i + 3) chars) urlSafe isLast
+    match (decodeQuad
+      (charAt i chars)
+      (charAt (i + 1) chars)
+      (charAt (i + 2) chars)
+      (charAt (i + 3) chars)
+      urlSafe
+      isLast)
       Err e => Err e
       Ok bytes => decodeGo chars (i + 4) n urlSafe (acc ++ bytes)
 

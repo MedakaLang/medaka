@@ -11,7 +11,8 @@ import lib.toml.{parseToml, showTomlDoc, TomlDoc}
 -- A sample TOML document with multiple sections, mixed value types,
 -- a comment, and an array.
 sampleToml : String
-sampleToml = "# medaka example project\nname = \"my-project\"\nversion = \"0.2.0\"\ndebug = false\nworkers = 4\n\n[build]\noptimize = true\npasses = 3\ntargets = [\"native\", \"wasm\"]\n\n[profile]\nauthor = \"Val\"\ntags = [\"functional\", \"self-hosted\"]\n"
+sampleToml =
+  "# medaka example project\nname = \"my-project\"\nversion = \"0.2.0\"\ndebug = false\nworkers = 4\n\n[build]\noptimize = true\npasses = 3\ntargets = [\"native\", \"wasm\"]\n\n[profile]\nauthor = \"Val\"\ntags = [\"functional\", \"self-hosted\"]\n"
 
 -- A malformed TOML: missing closing quote.
 badToml : String

@@ -162,7 +162,7 @@ nWide = 32
 nLimbs : Array Int
 nLimbs = [|
   0x4141, 0xd036, 0x5e8c, 0xbfd2, 0xa03b, 0xaf48, 0xdce6, 0xbaae, 0xfffe,
-  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
 |]
 
 -- floor(n/2) + 1 = (n + 1) / 2, least-significant limb first. `scHighBit`
@@ -171,7 +171,7 @@ nLimbs = [|
 nHalfPlusOneLimbs : Array Int
 nHalfPlusOneLimbs = [|
   0x20a1, 0x681b, 0x2f46, 0xdfe9, 0x501d, 0x57a4, 0x6e73, 0x5d57, 0xffff,
-  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0x7fff,
+  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0x7fff
 |]
 
 -- c = 2^256 - n = 0x14551231950b75fc4402da1732fc9bebf, NINE limbs (129 bits).
@@ -191,7 +191,7 @@ expNMinus2 : Array Int
 expNMinus2 = [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
-  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x3f,
+  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x3f
 |]
 
 -- | A scalar mod `n`: exactly 16 limbs, base 2^16, least-significant first.
@@ -225,7 +225,9 @@ carryAll w = carryGo w 0 0
 
 carryGo : Array Int -> Int -> Int -> Unit
 carryGo w i carry =
-  if i >= nWide then if carry /= 0 then panic "scalar.carryAll: carry out of the top limb — input was >= 2^512" else ()
+  if i >= nWide then
+    if carry /= 0 then
+      panic "scalar.carryAll: carry out of the top limb — input was >= 2^512"
   else
     let v = w[i] + carry
     let () = A.setInPlace i (bitAnd v limbMask) w
@@ -247,7 +249,8 @@ foldOnce w =
 
 takeHigh : Array Int -> Array Int -> Int -> Unit
 takeHigh w h i =
-  if i >= nWide then ()
+  if i >= nWide then
+    ()
   else
     let () = A.setInPlace (i - 16) w[i] h
     let () = A.setInPlace i 0 w
@@ -255,14 +258,16 @@ takeHigh w h i =
 
 foldAccum : Array Int -> Array Int -> Int -> Unit
 foldAccum w h i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = foldAccumRow w h i 0
     foldAccum w h (i + 1)
 
 foldAccumRow : Array Int -> Array Int -> Int -> Int -> Unit
 foldAccumRow w h i j =
-  if j >= 9 then ()
+  if j >= 9 then
+    ()
   else
     let k = i + j
     let () = A.setInPlace k (w[k] + h[i] * cLimbs[j]) w
@@ -292,7 +297,8 @@ gteNLimbs w = gteNGo w 15
 -- limb 16 separately: it reads limbs 0..15 only.
 gteNGo : Array Int -> Int -> Bool
 gteNGo w i =
-  if i < 0 then True
+  if i < 0 then
+    True
   else
     let a = w[i]
     let b = nLimbs[i]
@@ -301,7 +307,8 @@ gteNGo w i =
 -- Compute w - n into `diff` with a fixed-width, branchless borrow chain.
 subNCandidate : Array Int -> Array Int -> Int -> Int -> Int
 subNCandidate w diff i borrow =
-  if i >= 16 then borrow
+  if i >= 16 then
+    borrow
   else
     let t = w[i] + limbMask + 1 - nLimbs[i] - borrow
     let () = A.setInPlace i (bitAnd t limbMask) diff
@@ -311,7 +318,8 @@ subNCandidate w diff i borrow =
 -- the public limb index; `keepDiff` is used only arithmetically.
 selectNCandidate : Array Int -> Array Int -> Int -> Int -> Unit
 selectNCandidate w diff keepDiff i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let original = w[i]
     let () = A.setInPlace i (original + keepDiff * (diff[i] - original)) w
@@ -342,7 +350,8 @@ reduceWide w =
 
 copyLow : Array Int -> Array Int -> Int -> Unit
 copyLow w out i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = A.setInPlace i w[i] out
     copyLow w out (i + 1)
@@ -360,7 +369,8 @@ limbsOfBytes bs =
 
 limbsOfBytesGo : Array Int -> Array Int -> Int -> Unit
 limbsOfBytesGo bs out i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = A.setInPlace i (bs[31 - 2 * i] + bs[30 - 2 * i] * 256) out
     limbsOfBytesGo bs out (i + 1)
@@ -371,7 +381,8 @@ byteArrayOk bs = arrayLength bs == 32 && byteRangeGo bs 0
 
 byteRangeGo : Array Int -> Int -> Bool
 byteRangeGo bs i =
-  if i >= 32 then True
+  if i >= 32 then
+    True
   else
     let b = bs[i]
     if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
@@ -385,10 +396,7 @@ byteRangeGo bs i =
 export
 scSecretCandidate : Array Int -> (Int, Sc)
 scSecretCandidate bs =
-  if arrayLength bs /= 32 then
-    (0, scZero)
-  else
-    scSecretCandidate32 bs
+  if arrayLength bs /= 32 then (0, scZero) else scSecretCandidate32 bs
 
 scSecretCandidate32 : Array Int -> (Int, Sc)
 scSecretCandidate32 bs =
@@ -409,7 +417,8 @@ secretByteBit b = (1 + shiftRight b 62) * bitAnd (shiftRight (b - 256) 62) 1
 
 scanSecretBytes : Array Int -> Array Int -> Int -> Int -> Int
 scanSecretBytes bs safeBytes i validBit =
-  if i >= 32 then validBit
+  if i >= 32 then
+    validBit
   else
     let b = bs[i]
     let byteBit = secretByteBit b
@@ -422,7 +431,8 @@ secretBelowNBit limbs = secretBelowNBorrow limbs 0 0
 
 secretBelowNBorrow : Array Int -> Int -> Int -> Int
 secretBelowNBorrow limbs i borrow =
-  if i >= 16 then borrow
+  if i >= 16 then
+    borrow
   else
     let t = limbs[i] + limbMask + 1 - nLimbs[i] - borrow
     secretBelowNBorrow limbs (i + 1) (1 - shiftRight t 16)
@@ -433,7 +443,8 @@ secretNonzeroBit limbs = 1 - secretNonzeroBorrow limbs 0 1
 
 secretNonzeroBorrow : Array Int -> Int -> Int -> Int
 secretNonzeroBorrow limbs i borrow =
-  if i >= 16 then borrow
+  if i >= 16 then
+    borrow
   else
     let t = limbs[i] + limbMask + 1 - borrow
     secretNonzeroBorrow limbs (i + 1) (1 - shiftRight t 16)
@@ -456,15 +467,17 @@ wideOfRaw limbs =
 export
 scFromBytes : Array Int -> Result String Sc
 scFromBytes bs =
-  if arrayLength bs /= 32 then Err "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  if arrayLength bs /= 32 then
+    Err
+      "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  else if not (byteArrayOk bs) then
+    Err "scalar.scFromBytes: every element must be a byte in 0..255"
   else
-    if not (byteArrayOk bs) then Err "scalar.scFromBytes: every element must be a byte in 0..255"
+    let w = wideOfRaw (limbsOfBytes bs)
+    if gteNLimbs w then
+      Err "scalar.scFromBytes: value is not canonical (>= n)"
     else
-      let w = wideOfRaw (limbsOfBytes bs)
-      if gteNLimbs w then
-        Err "scalar.scFromBytes: value is not canonical (>= n)"
-      else
-        Ok (reduceWide w)
+      Ok (reduceWide w)
 
 -- | Parse ANY 32 big-endian bytes, reducing mod `n`. This mirrors
 --   `secp256k1_scalar_set_b32` and is what the reference corpus's `red` rows
@@ -478,7 +491,8 @@ export
 scFromBytesReduce : Array Int -> Sc
 scFromBytesReduce bs =
   if arrayLength bs /= 32 then
-    panic "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
+    panic
+      "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else if not (byteArrayOk bs) then
     panic "scalar.scFromBytesReduce: every element must be a byte in 0..255"
   else
@@ -503,7 +517,8 @@ scToBytes a =
 
 toBytesGo : Array Int -> Array Int -> Int -> Unit
 toBytesGo v out i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = A.setInPlace (31 - 2 * i) (bitAnd v[i] 255) out
     let () = A.setInPlace (30 - 2 * i) (shiftRight v[i] 8) out
@@ -519,12 +534,7 @@ scEqual a b = equalGo (rawSc a) (rawSc b) 0
 
 equalGo : Array Int -> Array Int -> Int -> Bool
 equalGo a b i =
-  if i >= 16 then
-    True
-  else if a[i] /= b[i] then
-    False
-  else
-    equalGo a b (i + 1)
+  if i >= 16 then True else if a[i] /= b[i] then False else equalGo a b (i + 1)
 
 -- | Is this scalar zero?
 export
@@ -533,12 +543,7 @@ scIsZero a = isZeroGo (rawSc a) 0
 
 isZeroGo : Array Int -> Int -> Bool
 isZeroGo a i =
-  if i >= 16 then
-    True
-  else if a[i] /= 0 then
-    False
-  else
-    isZeroGo a (i + 1)
+  if i >= 16 then True else if a[i] /= 0 then False else isZeroGo a (i + 1)
 
 -- | Fixed-control zero predicate for secret-bearing arithmetic. Returns the
 --   arithmetic bit 1 exactly for zero and 0 otherwise.
@@ -548,7 +553,8 @@ scZeroBit a = scZeroBorrow (rawSc a) 0 1
 
 scZeroBorrow : Array Int -> Int -> Int -> Int
 scZeroBorrow a i borrow =
-  if i >= 16 then borrow
+  if i >= 16 then
+    borrow
   else
     let t = a[i] + limbMask + 1 - borrow
     scZeroBorrow a (i + 1) (1 - shiftRight t 16)
@@ -561,7 +567,8 @@ scEqualBit a b = scEqualBorrow (rawSc a) (rawSc b) 0 1
 
 scEqualBorrow : Array Int -> Array Int -> Int -> Int -> Int
 scEqualBorrow a b i borrow =
-  if i >= 16 then borrow
+  if i >= 16 then
+    borrow
   else
     let t = bitXor a[i] b[i] + limbMask + 1 - borrow
     scEqualBorrow a b (i + 1) (1 - shiftRight t 16)
@@ -577,7 +584,8 @@ scSelect bit a b =
 
 scSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
 scSelectGo bit a b out i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = A.setInPlace i (a[i] + bit * (b[i] - a[i])) out
     scSelectGo bit a b out (i + 1)
@@ -623,14 +631,16 @@ scHighBit s = 1 - scHighBorrow (rawSc s) 0 0
 
 scHighBorrow : Array Int -> Int -> Int -> Int
 scHighBorrow s i borrow =
-  if i >= 16 then borrow
+  if i >= 16 then
+    borrow
   else
     let t = s[i] + limbMask + 1 - nHalfPlusOneLimbs[i] - borrow
     scHighBorrow s (i + 1) (1 - shiftRight t 16)
 
 dblGo : Array Int -> Array Int -> Int -> Int -> Unit
 dblGo s d i carry =
-  if i >= 16 then A.setInPlace 16 carry d
+  if i >= 16 then
+    A.setInPlace 16 carry d
   else
     let v = 2 * s[i] + carry
     let () = A.setInPlace i (bitAnd v limbMask) d
@@ -649,7 +659,8 @@ scAdd a b =
 
 addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
 addGo a b w i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = A.setInPlace i (a[i] + b[i]) w
     addGo a b w (i + 1)
@@ -666,7 +677,8 @@ scNegate a =
 
 negateGo : Array Int -> Array Int -> Int -> Int -> Unit
 negateGo a w i borrow =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let d = nLimbs[i] - a[i] - borrow
     if d < 0 then
@@ -689,7 +701,8 @@ scNegateCt a =
 
 scNegateCtGo : Array Int -> Array Int -> Int -> Int -> Unit
 scNegateCtGo a out i borrow =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let t = nLimbs[i] + limbMask + 1 - a[i] - borrow
     let () = A.setInPlace i (bitAnd t limbMask) out
@@ -716,14 +729,16 @@ scMul a b =
 
 mulAccum : Array Int -> Array Int -> Array Int -> Int -> Unit
 mulAccum a b w i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     let () = mulAccumRow a b w i 0
     mulAccum a b w (i + 1)
 
 mulAccumRow : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
 mulAccumRow a b w i j =
-  if j >= 16 then ()
+  if j >= 16 then
+    ()
   else
     let k = i + j
     let () = A.setInPlace k (w[k] + a[i] * b[j]) w
@@ -760,7 +775,8 @@ scInverse a = powGo a 255 scOne
 
 powGo : Sc -> Int -> Sc -> Sc
 powGo base bitIdx acc =
-  if bitIdx < 0 then acc
+  if bitIdx < 0 then
+    acc
   else
     let sq = scMul acc acc
     let r = if expBit bitIdx then scMul sq base else sq

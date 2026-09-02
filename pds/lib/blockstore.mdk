@@ -62,26 +62,29 @@ blockStoreGet cid (BlockStore entries) = map arrayCopy (findBytes cid entries)
 export
 blockStorePut : Cid -> Array Int -> BlockStore -> Result String BlockStore
 blockStorePut cid bytes (BlockStore entries) =
-  if not (validBytes bytes 0) then Err "blockstore: block element outside byte range 0..255"
-  else
-    if not (cidEqual cid (expectedCid cid bytes)) then Err "blockstore: block content does not match CID"
-    else match get (cidKey cid) entries
-      Some (_, prior) =>
-        if prior == bytes then
-          Ok (BlockStore entries)
-        else
-          Err "blockstore: duplicate CID has different bytes"
-      None => Ok (BlockStore (set (cidKey cid) (cid, arrayCopy bytes) entries))
+  if not (validBytes bytes 0) then
+    Err "blockstore: block element outside byte range 0..255"
+  else if not (cidEqual cid (expectedCid cid bytes)) then
+    Err "blockstore: block content does not match CID"
+  else match get (cidKey cid) entries
+    Some (_, prior) =>
+      if prior == bytes then
+        Ok (BlockStore entries)
+      else
+        Err "blockstore: duplicate CID has different bytes"
+    None => Ok (BlockStore (set (cidKey cid) (cid, arrayCopy bytes) entries))
 
 addRows : List (Cid, Array Int) -> BlockStore -> Result String BlockStore
 addRows [] store = Ok store
-addRows ((cid, bytes)::rest) store = match blockStorePut cid bytes store
+addRows ((cid, bytes) :: rest) store = match blockStorePut cid bytes store
   Err message => Err message
   Ok next => addRows rest next
 
 -- | Verify and insert every row without mutating the input store.
 export
-blockStoreAddMany : List (Cid, Array Int) -> BlockStore -> Result String BlockStore
+blockStoreAddMany : List (Cid, Array Int) ->
+  BlockStore ->
+  Result String BlockStore
 blockStoreAddMany rows store = addRows rows store
 
 -- | Construct a verified immutable store from arbitrary input order.
@@ -91,11 +94,11 @@ blockStoreFromBlocks rows = addRows rows blockStoreEmpty
 
 copyEntries : List (Cid, Array Int) -> List (Cid, Array Int)
 copyEntries [] = []
-copyEntries ((cid, bytes)::rest) = (cid, arrayCopy bytes) :: copyEntries rest
+copyEntries ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyEntries rest
 
 entryValues : List (String, (Cid, Array Int)) -> List (Cid, Array Int)
 entryValues [] = []
-entryValues ((_, entry)::rest) = entry :: entryValues rest
+entryValues ((_, entry) :: rest) = entry :: entryValues rest
 
 -- | Canonical CID-sorted defensive entry view.
 export

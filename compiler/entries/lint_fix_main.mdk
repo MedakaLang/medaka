@@ -12,7 +12,8 @@ import tools.lint.{applyFixes}
 
 main = match args ()
   [targetPath] => withTarget targetPath
-  _ => ePutStrLn "usage: medaka run compiler/entries/lint_fix_main.mdk <file.mdk>"
+  _ =>
+    ePutStrLn "usage: medaka run compiler/entries/lint_fix_main.mdk <file.mdk>"
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath

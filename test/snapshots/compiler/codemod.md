@@ -1,5 +1,5 @@
 # META
-source_lines=293
+source_lines=309
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -46,8 +46,8 @@ import frontend.parser.{
   parseWithPositions,
   positionsDecls,
   positionsVariantLines,
-  positionsChainLines,
-  positionsLastContentLine,
+  trailingCommaLocs,
+  unitStarts,
 }
 import frontend.lexer.{collectComments}
 import tools.fmt.{formatProgram}
@@ -70,14 +70,13 @@ import support.util.{
 -- file's decls, returns advisory stderr lines the transform can't express (the
 -- pure transform can't do IO) — e.g. "you asked to strip a label a `DEffect`
 -- here declares".  Most codemods leave `warn` returning `[]`.
-public export data Codemod =
-  | Codemod {
-      name : String,
-      descr : String,
-      argHelp : String,
-      mk : List String -> Result String (Decl -> (Decl, Bool)),
-      warn : List String -> List Decl -> List String,
-    }
+public export data Codemod = Codemod {
+  name : String,
+  descr : String,
+  argHelp : String,
+  mk : List String -> Result String (Decl -> (Decl, Bool)),
+  warn : List String -> List Decl -> List String,
+}
 
 -- ── registry ────────────────────────────────────────────────────────────────
 -- Adding a codemod = one `mkX`/`warnX` pair + one entry here.
@@ -121,11 +120,8 @@ findCodemod name = findCodemodGo name allCodemods
 
 findCodemodGo : String -> List Codemod -> Option Codemod
 findCodemodGo _ [] = None
-findCodemodGo name (c::rest) =
-  if codemodName c == name then
-    Some c
-  else
-    findCodemodGo name rest
+findCodemodGo name (c :: rest) =
+  if codemodName c == name then Some c else findCodemodGo name rest
 
 -- Registry listing for the bare `medaka codemod` invocation.
 export
@@ -144,7 +140,9 @@ codemodListingLine c =
 -- files that carry no target label).  Parse errors surface as `Err ParseError`
 -- so the CLI reports them through the shared `ppParseError` path.
 export
-codemodSource : (Decl -> (Decl, Bool)) -> String -> Result ParseError (Option String)
+codemodSource : (Decl -> (Decl, Bool)) ->
+  String ->
+  Result ParseError (Option String)
 codemodSource xf src = match parseResult src
   Err e => Err e
   Ok _ =>
@@ -152,24 +150,27 @@ codemodSource xf src = match parseResult src
     -- (which panics on failure) is safe here.
     let (decls, pos) = parseWithPositions src
     let (decls2, changed) = mapDeclsChanged xf decls
-    if not changed then Ok None
+    if not changed then
+      Ok None
     else
       let comments = collectComments src
-      Ok (Some (formatProgram
-        decls2
-        (positionsDecls pos)
-        (positionsVariantLines pos)
-        (positionsChainLines pos)
-        comments
-        (positionsLastContentLine pos)
-        src))
+      Ok
+        (Some
+          (formatProgram
+            decls2
+            (positionsDecls pos)
+            (positionsVariantLines pos)
+            (trailingCommaLocs ())
+            (unitStarts ())
+            comments
+            src))
 
 mapDeclsChanged : (Decl -> (Decl, Bool)) -> List Decl -> (List Decl, Bool)
 mapDeclsChanged _ [] = ([], False)
-mapDeclsChanged xf (d::ds) =
+mapDeclsChanged xf (d :: ds) =
   let (d2, c1) = xf d
   let (ds2, c2) = mapDeclsChanged xf ds
-  (d2::ds2, c1 || c2)
+  (d2 :: ds2, c1 || c2)
 
 -- ── the `effect-labels` transform ────────────────────────────────────────────
 -- Per-label action, parsed from `--strip`/`--rename`.
@@ -184,30 +185,31 @@ mkEffectLabels args = match parseEffectArgs args []
 -- Parse the codemod-specific args into a (label -> action) table.  `--strip`
 -- and `--rename` each consume a following value (the CLI's generic flag/value
 -- splitter has already paired them).
-parseEffectArgs : List String -> List (String, EffAction) -> Result String (List (String, EffAction))
+parseEffectArgs : List String ->
+  List (String, EffAction) ->
+  Result String (List (String, EffAction))
 parseEffectArgs [] acc = Ok (reverseL acc)
-parseEffectArgs ("--strip"::v::rest) acc =
+parseEffectArgs ("--strip" :: v :: rest) acc =
   parseEffectArgs rest (prependDrops (splitOnChar ',' v) acc)
-parseEffectArgs ("--rename"::v::rest) acc = match splitOnChar '=' v
+parseEffectArgs ("--rename" :: v :: rest) acc = match splitOnChar '=' v
   [old, nw] =>
     if old == "" || nw == "" then
       Err "--rename expects Old=New, got '\{v}'"
     else
-      parseEffectArgs rest ((old, ARename nw)::acc)
+      parseEffectArgs rest ((old, ARename nw) :: acc)
   _ => Err "--rename expects Old=New, got '\{v}'"
 parseEffectArgs ["--strip"] _ =
   Err "--strip requires a value (e.g. --strip Rand,Net)"
 parseEffectArgs ["--rename"] _ =
   Err "--rename requires a value (e.g. --rename Old=New)"
-parseEffectArgs (x::_) _ = Err "unknown argument '\{x}'"
+parseEffectArgs (x :: _) _ = Err "unknown argument '\{x}'"
 
-prependDrops : List String -> List (String, EffAction) -> List (String, EffAction)
+prependDrops : List String ->
+  List (String, EffAction) ->
+  List (String, EffAction)
 prependDrops [] acc = acc
-prependDrops (n::ns) acc =
-  if n == "" then
-    prependDrops ns acc
-  else
-    prependDrops ns ((n, ADrop)::acc)
+prependDrops (n :: ns) acc =
+  if n == "" then prependDrops ns acc else prependDrops ns ((n, ADrop) :: acc)
 
 -- Apply the action table at one Ty node.  `TyEffect` and `TyRow` (#997, a
 -- bare row atom) are affected; everything else passes through unchanged.
@@ -218,7 +220,11 @@ effTyNode acts (TyEffect es tail t) = rewriteRow acts es tail t
 effTyNode acts (TyRow es tail l) = rewriteBareRow acts es tail l
 effTyNode _ ty = (ty, False)
 
-rewriteRow : List (String, EffAction) -> List (String, Option String) -> List String -> Ty -> (Ty, Bool)
+rewriteRow : List (String, EffAction) ->
+  List (String, Option String) ->
+  List String ->
+  Ty ->
+  (Ty, Bool)
 rewriteRow acts es tail t =
   let (deduped, changed) = rewriteAtoms acts es
   match deduped
@@ -233,12 +239,18 @@ rewriteRow acts es tail t =
 -- there is no wrapped type to fall back to when the row strips to empty, so
 -- (unlike `rewriteRow`'s `None` case above) an empty closed bare row stays a
 -- `TyRow [] []` rather than being dropped — there is no other Ty to become.
-rewriteBareRow : List (String, EffAction) -> List (String, Option String) -> List String -> Option Loc -> (Ty, Bool)
+rewriteBareRow : List (String, EffAction) ->
+  List (String, Option String) ->
+  List String ->
+  Option Loc ->
+  (Ty, Bool)
 rewriteBareRow acts es tail l =
   let (deduped, changed) = rewriteAtoms acts es
   (TyRow deduped tail l, changed)
 
-rewriteAtoms : List (String, EffAction) -> List (String, Option String) -> (List (String, Option String), Bool)
+rewriteAtoms : List (String, EffAction) ->
+  List (String, Option String) ->
+  (List (String, Option String), Bool)
 rewriteAtoms acts es =
   let stepped = map (applyAtom acts) es
   let anyChanged = anyList sndB stepped
@@ -247,7 +259,9 @@ rewriteAtoms acts es =
   let dedupChanged = listLen deduped /= listLen kept
   (deduped, anyChanged || dedupChanged)
 
-applyAtom : List (String, EffAction) -> (String, Option String) -> (Option (String, Option String), Bool)
+applyAtom : List (String, EffAction) ->
+  (String, Option String) ->
+  (Option (String, Option String), Bool)
 applyAtom acts (label, dom) = match lookupAssoc label acts
   None => (Some (label, dom), False)
   Some ADrop => (None, True)
@@ -256,10 +270,11 @@ applyAtom acts (label, dom) = match lookupAssoc label acts
 sndB : (a, Bool) -> Bool
 sndB (_, b) = b
 
-collectKept : List (Option (String, Option String), Bool) -> List (String, Option String)
+collectKept : List (Option (String, Option String), Bool) ->
+  List (String, Option String)
 collectKept [] = []
-collectKept ((None, _)::rest) = collectKept rest
-collectKept ((Some a, _)::rest) = a :: collectKept rest
+collectKept ((None, _) :: rest) = collectKept rest
+collectKept ((Some a, _) :: rest) = a :: collectKept rest
 
 -- Order-preserving dedupe (keep first) — a rename can make two atoms identical.
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
@@ -285,19 +300,20 @@ warnEffectLabels args decls = match parseEffectArgs args []
 
 declEffectWarns : List (String, EffAction) -> List Decl -> List String
 declEffectWarns _ [] = []
-declEffectWarns acts (d::ds) = declEffectWarn acts d ++ declEffectWarns acts ds
+declEffectWarns acts (d :: ds) =
+  declEffectWarn acts d ++ declEffectWarns acts ds
 
 declEffectWarn : List (String, EffAction) -> Decl -> List String
 declEffectWarn acts (DEffect _ name _) = match lookupAssoc name acts
   None => []
   Some _ => [
-    "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched"
+    "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched",
   ]
 declEffectWarn acts (DAttrib _ d) = declEffectWarn acts d
 declEffectWarn _ _ = []
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Loc" false) (mem "Decl" true) (mem "mapTyInDecl" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsChainLines" false) (mem "positionsLastContentLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
@@ -326,7 +342,7 @@ declEffectWarn _ _ = []
 (DTypeSig false "codemodListingLine" (TyFun (TyCon "Codemod") (TyCon "String")))
 (DFunDef false "codemodListingLine" ((PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "codemodName") (EVar "c")))) (ELit (LString " — "))) (EApp (EVar "display") (EApp (EVar "codemodDescr") (EVar "c")))) (ELit (LString "\n    "))) (EApp (EVar "display") (EApp (EVar "codemodArgHelp") (EVar "c")))) (ELit (LString ""))))
 (DTypeSig true "codemodSource" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls"))) (DoExpr (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "positionsChainLines") (EVar "pos"))) (EVar "comments")) (EApp (EVar "positionsLastContentLine") (EVar "pos"))) (EVar "src"))))))))))))
+(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls"))) (DoExpr (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "trailingCommaLocs") (ELit LUnit))) (EApp (EVar "unitStarts") (ELit LUnit))) (EVar "comments")) (EVar "src"))))))))))))
 (DTypeSig false "mapDeclsChanged" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "mapDeclsChanged" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapDeclsChanged" ((PVar "xf") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PTuple (PVar "d2") (PVar "c1")) (EApp (EVar "xf") (EVar "d"))) (DoLet false false (PTuple (PVar "ds2") (PVar "c2")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "ds"))) (DoExpr (ETuple (EBinOp "::" (EVar "d2") (EVar "ds2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
@@ -379,7 +395,7 @@ declEffectWarn _ _ = []
 (DFunDef false "declEffectWarn" (PWild PWild) (EListLit))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Loc" false) (mem "Decl" true) (mem "mapTyInDecl" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsChainLines" false) (mem "positionsLastContentLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
@@ -408,7 +424,7 @@ declEffectWarn _ _ = []
 (DTypeSig false "codemodListingLine" (TyFun (TyCon "Codemod") (TyCon "String")))
 (DFunDef false "codemodListingLine" ((PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "codemodName") (EVar "c")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EApp (EVar "codemodDescr") (EVar "c")))) (ELit (LString "\n    "))) (EApp (EMethodRef "display") (EApp (EVar "codemodArgHelp") (EVar "c")))) (ELit (LString ""))))
 (DTypeSig true "codemodSource" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls"))) (DoExpr (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "positionsChainLines") (EVar "pos"))) (EVar "comments")) (EApp (EVar "positionsLastContentLine") (EVar "pos"))) (EVar "src"))))))))))))
+(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls"))) (DoExpr (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "trailingCommaLocs") (ELit LUnit))) (EApp (EVar "unitStarts") (ELit LUnit))) (EVar "comments")) (EVar "src"))))))))))))
 (DTypeSig false "mapDeclsChanged" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "mapDeclsChanged" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapDeclsChanged" ((PVar "xf") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PTuple (PVar "d2") (PVar "c1")) (EApp (EVar "xf") (EVar "d"))) (DoLet false false (PTuple (PVar "ds2") (PVar "c2")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "ds"))) (DoExpr (ETuple (EBinOp "::" (EVar "d2") (EVar "ds2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))

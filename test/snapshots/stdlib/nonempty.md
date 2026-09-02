@@ -56,7 +56,7 @@ singleton x = NonEmpty x []
 export
 fromList : List a -> Option (NonEmpty a)
 fromList [] = None
-fromList (x::rest) = Some (NonEmpty x rest)
+fromList (x :: rest) = Some (NonEmpty x rest)
 
 -- # Accessing elements
 
@@ -101,7 +101,7 @@ export impl Mappable NonEmpty where
 export impl Foldable NonEmpty where
   fold f z (NonEmpty x xs) = fold f (f z x) xs
   foldRight f z (NonEmpty x xs) = foldRight f (foldRight f z xs) [x]
-  toList (NonEmpty x xs) = x::xs
+  toList (NonEmpty x xs) = x :: xs
   isEmpty _ = False
   length (NonEmpty _ xs) = 1 + length xs
 
