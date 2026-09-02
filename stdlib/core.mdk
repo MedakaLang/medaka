@@ -943,6 +943,18 @@ export
 deferFlatMap : DeferredThenable m => (a -> <e> m e b) -> m e a -> m e b
 deferFlatMap f ma = deferThen ma f
 
+-- | `when` for the deferred family: run the action only when the condition
+-- holds.  A distinct name because `when`'s `Thenable m => m Unit` cannot
+-- describe an `Effect`-indexed container.
+export
+deferWhen : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferWhen b m = if b then m else deferPure ()
+
+-- | `unless` for the deferred family.  Dual of `deferWhen`.
+export
+deferUnless : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferUnless b m = if b then deferPure () else m
+
 {- | Monadic left fold: thread an accumulator through an effectful step, in
    order, over a list.  Haskell's `foldM`.
 
