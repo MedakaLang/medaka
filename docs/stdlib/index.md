@@ -302,6 +302,8 @@ Output to standard error, debug printing, and helpers for files and the environm
 
 ## [`json`](json.md)
 
+A JSON value type with a parser and a serializer.
+
 - [`Json`](json.md#json)
 - [`jArray`](json.md#jarray)
 - [`jObject`](json.md#jobject)
