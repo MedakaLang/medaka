@@ -290,10 +290,10 @@ medakaVersion = "0.1.0-preview"
 -- `buildDate` externs (same #ifdef/empty-on-absent contract as
 -- `buildFingerprint`). Degrades to just the bare version when neither is
 -- baked (a dev/interpreted run, or a shipped binary with no provenance).
--- `mcpServerVersion` in compiler/tools/mcp.mdk CONSUMES this value (threaded
--- down as a plain String — mcp.mdk cannot import medaka_cli, see
--- `sourceStalenessVerdict`'s comment below) rather than restating its own
--- literal.
+-- Used by `printVersion` (CLI `--version`) only. MCP's `initialize` handshake
+-- reports the bare `medakaVersion` instead, not this — a per-build string
+-- that changes on every commit is unstable as a protocol field and unpinnable
+-- by any golden.
 medakaVersionString : Unit -> <IO> String
 medakaVersionString _ =
   let commit = buildCommit ()
@@ -4446,4 +4446,5 @@ runMcpServerFromEnv _ =
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict (medakaVersionString ())
+      Ok csrc =>
+        runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion

@@ -1,5 +1,5 @@
 # META
-source_lines=1498
+source_lines=1501
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -285,10 +285,13 @@ jsonPairsToListGo arr i n
 
 -- ── handshake result values ──────────────────────────────────────────────────
 
--- `serverVersion` is medaka_cli.mdk's `medakaVersionString` result, threaded
+-- `serverVersion` is medaka_cli.mdk's bare `medakaVersion` literal, threaded
 -- down as a plain String (mcp.mdk cannot import medaka_cli — it is the top
 -- of the dependency graph — so this is threaded the same way as
--- `stalenessCheck`, #846) rather than restating its own literal.
+-- `stalenessCheck`, #846) rather than restating its own literal. Deliberately
+-- NOT `medakaVersionString`'s per-build commit+date string — that value
+-- changes on every commit and would make this protocol field permanently
+-- unpinnable by a golden (issue #74 W8 follow-up).
 initializeResultFor : String -> String -> Json
 initializeResultFor protocolVersion serverVersion = jObject
   [
@@ -1490,7 +1493,7 @@ serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion = match read
 -- (e.g. medaka_check resolves a `file` target's imports against stdlibDir).
 -- `stalenessCheck` is medaka_cli.mdk's `sourceStalenessVerdict`, threaded down
 -- as a closure (#846) — see the "staleness signal" section above.
--- `serverVersion` is medaka_cli.mdk's `medakaVersionString` result (issue
+-- `serverVersion` is medaka_cli.mdk's bare `medakaVersion` literal (issue
 -- #74 W8), threaded down the same way rather than restating a literal here.
 export
 runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
