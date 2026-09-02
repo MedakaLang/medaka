@@ -2,7 +2,7 @@
 source_lines=423
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted doctest extraction + running — port of lib/doctest.ml.
+-- Self-hosted doctest extraction + running.
 --
 -- `medaka test <file>` runs the examples authored in comments:
 --
@@ -94,7 +94,7 @@ engineName : Engine -> String
 engineName EngInterp = "eval"
 engineName EngNative = "native"
 
--- ── reporting (mirrors lib/test_cmd.ml) ────────────────────────────────────
+-- ── reporting ────────────────────────────────────────────────────────────
 -- The per-example `ok`/`FAIL`/`ERROR` lines and the `(F failed, E errors)`
 -- summary suffix.  These live HERE, beside `RunResult`, rather than in a driver:
 -- a `RunResult` is engine-agnostic (Stage 1 raised `buildDetailsFrom` above the
@@ -144,7 +144,7 @@ substr3 a b s = stringSlice a b s
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
 
--- ── Comment classification (mirrors lib/doctest.ml) ────────────────────────
+-- ── Comment classification ──────────────────────────────────────────────
 -- We work over (line, text) pairs rather than the lexer's `Comment` type:
 -- the lexer exports `Comment` abstractly (no constructor), and block-comment
 -- expansion must synthesize new per-line entries.  `text` carries the FULL

@@ -527,7 +527,7 @@ strLeafRuntimeLines = [
   "      (array.set $u8arr (local.get $buf) (local.get $i) (local.get $c))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    (struct.new $str (struct.get $str $cp_count (local.get $s)) (local.get $buf)))",
-  "  ;; ── W9 debug-literal quoting (byte-identical to lib/eval.ml escape_string_lit) ──",
+  "  ;; ── W9 debug-literal quoting ──",
   "  ;; Map ONE source byte to its escaped form, appending into $buf at $bo; returns the",
   "  ;; next write offset.  Specials: \" / ' (whichever == $q) / \\ / \\n / \\t / \\r / NUL.",
   "  ;; All escapes are <backslash><ascii>, so 2 bytes; everything else copies verbatim.",
