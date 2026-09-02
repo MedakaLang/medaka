@@ -13,29 +13,29 @@
 -- because it is one of the eight collisions that motivated the arc, not
 -- because anything here drains it.
 --
--- 🚨 THIS UNIT CONVERTS NO TABLE AND HAS ZERO CALL SITES. It lands the
--- `Ident`/`Ns` identity carrier (in `frontend/ast.mdk`) and the
--- `Registry`/`MultiRegistry`/`SetRegistry` combinators (here) so each later
--- A-2 unit has something to re-key ONE table's writer + ALL its readers
--- onto, in a single PR. Nothing in `compiler/` imports this module yet —
--- that is a feature of the staging, not an oversight (see §6 A-2 in the
--- design doc: each conversion is its own reviewable, bisectable PR).
+-- WHAT THIS UNIT LANDS: the `Ident`/`Ns` identity carrier (in
+-- `frontend/ast.mdk`) and the `Registry`/`MultiRegistry`/`SetRegistry`
+-- combinators (here), so each later A-2 unit has something to re-key ONE
+-- table's writer + ALL its readers onto, in a single PR. Importers today:
+-- `compiler/types/typecheck.mdk`, in two selective blocks totalling 29
+-- names, and the sibling `compiler/types/registry_test.mdk`. Each conversion
+-- stays its own reviewable, bisectable PR — §6 A-2 in the design doc.
 --
--- 🚨 BECAUSE THERE ARE NO CALL SITES, AN API DEFECT HERE HAS NOTHING TO
--- CATCH IT. The API is therefore sized against the ACTUAL target tables
--- (enumerated in `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §11.1), not
--- against what a first conversion happens to reach for. Two API defects found by
--- adversarial review of this file's first cut were exactly that shape: no
--- composite-key form (five target tables have composite keys) and no
--- deletion/enumeration (two target conversions cannot be written without
--- them).
+-- MOST OF THIS API STILL HAS NO CALLER. `typecheck.mdk` reaches the key
+-- mints plus `Registry`/`MultiRegistry`/`SetRegistry`; the rest is exercised
+-- only by this file's doctests and by `compiler/types/registry_test.mdk`, so
+-- a defect in it has little else to catch it. The API is therefore sized
+-- against the ACTUAL target tables (enumerated in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §11.1): it carries a
+-- composite-key form because five target tables have composite keys, and
+-- deletion/enumeration because two conversions cannot be written without them.
 --
--- ⚠️ A module outside every entry's import closure is invisible to `make
--- medaka` / `make check-self` / `test/typecheck_compiler_source.sh` — this
--- unit is why `Makefile`'s `test:` target names this file explicitly, so
--- `medaka test <file>` typechecks it before running its doctests. General
--- trap + the MEASURED injection repro: `[W-MODULE-BLIND]`, AGENTS.md and
--- `.claude/dossier/workflow.md`. EVERY LATER A-2 UNIT INHERITS THIS.
+-- `types.registry` is on every driver's import closure through
+-- `compiler/types/typecheck.mdk`, so `make medaka` / `make check-self` /
+-- `test/typecheck_compiler_source.sh` do walk it. Its DOCTESTS are a separate
+-- question — `medaka test` visits only the files it is given — which is why
+-- `Makefile`'s `test:` target names this file and its sibling explicitly.
+-- General trap for a module with no importer: `[W-MODULE-BLIND]`, AGENTS.md.
 --
 -- ── Why one `Ident` type generalizes a pattern already in the tree ─────────
 -- `crossModuleFunConstraintsQualRef` (`types/typecheck.mdk`) is already keyed
