@@ -1,5 +1,5 @@
 # META
-source_lines=38888
+source_lines=38894
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -2019,31 +2019,25 @@ methodEffArgOccs scope (TyFun a b) = argPerformableOccs scope True a
   ++ methodEffArgOccs scope b
 methodEffArgOccs _ _ = []
 
--- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
--- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
--- collector below reports them all: a caller reads the row at each var
--- independently, so a var left out would be a var nothing constrains.
-occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
-occsOfTails tails labels =
-  let atoms = atomsOfWritten labels
-  map (n => (n, atoms)) tails
-
 -- rows in an argument subtree, collected only where [perf] (the impl can call
 -- or run the value at this position); each arrow-LHS descent flips it.
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
-argPerformableOccs scope perf (TyEffect labels tails t) = (if perf then occsOfTails tails labels else [])
+argPerformableOccs scope perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
   ++ argPerformableOccs scope perf t
+argPerformableOccs scope perf (TyEffect _ None t) =
+  argPerformableOccs scope perf t
 -- A bare row atom (#997) carries its own tail var + labels directly (no
 -- wrapped type to recurse into) — same treatment as the `TyEffect` arms
 -- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
 -- (as opposed to a bare `Box e Int`) was invisible to this collector, which
 -- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
 -- `effVarOccAtoms` below, which shares this gap).
-argPerformableOccs _ perf (TyRow labels tails _) =
+argPerformableOccs _ perf (TyRow labels (Some n) _) =
   if perf then
-    occsOfTails tails labels
+    [(n, atomsOfWritten labels)]
   else
     []
+argPerformableOccs _ _ (TyRow _ None _) = []
 argPerformableOccs scope perf (TyFun a b) = argPerformableOccs scope (not perf) a
   ++ argPerformableOccs scope perf b
 argPerformableOccs scope perf (TyTuple ts) =
@@ -2322,8 +2316,9 @@ krowSlotVarOccs scope perf h args = match lookupAssoc h scope
 -- merely what made it reachable from `effect_index_unrelated_ok.mdk`.
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffRetOccs scope (TyConstrained _ t) = methodEffRetOccs scope t
-methodEffRetOccs scope (TyEffect labels tails t) = occsOfTails tails labels
-  ++ methodEffRetOccs scope t
+methodEffRetOccs scope (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: methodEffRetOccs scope t
+methodEffRetOccs scope (TyEffect _ None t) = methodEffRetOccs scope t
 methodEffRetOccs scope (TyFun _ b) = methodEffRetOccs scope b
 methodEffRetOccs scope t =
   let occs = effVarOccAtoms t
@@ -2788,15 +2783,14 @@ declaredEffects (TyConstrained _ t) = declaredEffects t
 declaredEffects _ = []
 
 -- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
--- No names is a genuinely CLOSED row (`<>`, `<Stdout>`); one or more is an OPEN
--- one (`<e>`, `<Stdout | e>`, `<Stdout | e | e2>`).  Arms mirror
--- `declaredEffects` exactly, stopping at the same node, so the two always
--- describe ONE row.
-declaredEffectTail : Ty -> List String
+-- `None` is a genuinely CLOSED row (`<>`, `<Stdout>`); `Some v` is an OPEN one
+-- (`<e>`, `<Stdout | e>`).  Arms mirror `declaredEffects` exactly, stopping at
+-- the same node, so the two always describe ONE row.
+declaredEffectTail : Ty -> Option String
 declaredEffectTail (TyFun _ ret) = declaredEffectTail ret
 declaredEffectTail (TyEffect _ tail _) = tail
 declaredEffectTail (TyConstrained _ t) = declaredEffectTail t
-declaredEffectTail _ = []
+declaredEffectTail _ = None
 
 -- #797: effect-tail names occurring in ARGUMENT positions of the signature,
 -- walking the same return spine `declaredEffects` walks and stopping at the same
@@ -2825,12 +2819,10 @@ declaredArgEffNames _ = []
 -- An argument-carried var (`g : (Int -> <e> Int) -> <e> Int`) is NOT open in this
 -- sense — the caller instantiates it, so a body adding <Stdout> would launder,
 -- and the pre-existing escape rejection stands unchanged.
--- A JOIN is open when SOME member is free of the argument side: that member
--- alone already admits whatever the body performs.
 declaredEffectsOpen : Ty -> Bool
-declaredEffectsOpen ty =
-  let argNames = declaredArgEffNames ty
-  anyList (v => not (contains v argNames)) (declaredEffectTail ty)
+declaredEffectsOpen ty = match declaredEffectTail ty
+  None => False
+  Some v => not (contains v (declaredArgEffNames ty))
 
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
@@ -6897,13 +6889,14 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 -- live `universeIfaceParamKinds` table; that table is retired and `ceParamKinds` IS
 -- the answer now, so these doctests grade the production computation directly.
 ceGradedMethod : IfaceMethod
-ceGradedMethod = IfaceMethod
-  "run"
-  (TyFun
-    (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
-    (TyEffect [] ["e"] (TyVar "a")))
-  None
-  None
+ceGradedMethod =
+  IfaceMethod
+    "run"
+    (TyFun
+      (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
+      (TyEffect [] (Some "e") (TyVar "a")))
+    None
+    None
 
 ceGradedIface : Decl
 ceGradedIface = DInterface {
@@ -8542,6 +8535,11 @@ goalSiteLoc = Ref None
 currentDoOrigin : Ref (Option Loc)
 currentDoOrigin = Ref None
 
+-- #824: True while inferring a `defer` block's lowered chain (see the
+-- `EDoOrigin` arm of `infer`); selects the wording of `recordDoMonadError`.
+currentDoDeferred : Ref Bool
+currentDoDeferred = Ref False
+
 -- C8b Gap 2 (diagnostic-quality parity): set to `Some methodName` around the
 -- OUTER unify of an interface default body against its declared return type, so a
 -- leaf TypeMismatch is reported as the oracle's specialized single line
@@ -9492,7 +9490,7 @@ recordDoMonadError doLoc =
     "T-DO-NOT-MONAD"
     1
     (Some doLoc)
-    doRequiresMonadMsg
+    (if !currentDoDeferred then deferRequiresMonadMsg else doRequiresMonadMsg)
     None
     None)
 
@@ -9502,6 +9500,9 @@ monoIsApp _ = False
 
 doRequiresMonadMsg : String
 doRequiresMonadMsg = "`do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`"
+
+deferRequiresMonadMsg : String
+deferRequiresMonadMsg = "`defer` requires a DeferredThenable impl — an effect-indexed constructor such as `Async` (its `defer` block registers effects in the index and performs nothing until forced). For a strict container (`Option`/`Result`/`List`) use `do`; for IO sequencing use a bare indented block"
 
 -- SYMMETRIC complement of doRequiresMonadMsg: a `<-` bind reached a bare
 -- (non-`do`) block.  `<-` is monadic-`do`-only; a bare indented block is IO
@@ -10174,7 +10175,7 @@ effTailNames (TyCon { tyConName = _ }) = []
 effTailNames (TyApp a b) = effTailNames a ++ effTailNames b
 effTailNames (TyFun a b) = effTailNames a ++ effTailNames b
 effTailNames (TyTuple ts) = flatMap effTailNames ts
-effTailNames (TyEffect _ tail t) = tail ++ effTailNames t
+effTailNames (TyEffect _ tail t) = tailNameList tail ++ effTailNames t
 effTailNames (TyConstrained _ t) = effTailNames t
 -- A bare row atom (#997) carries its own tail var directly (no wrapped type
 -- to recurse into) — same tail-var-sharing contract as `TyEffect`'s arm
@@ -10191,7 +10192,11 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- exactly this reason and pairs this with the actually-kind-aware
 -- `rowArgNames`; this arm's over-counting is a residual channel of the same
 -- shape as that pre-existing gap, not a new one — see #784.
-effTailNames (TyRow _ tail _) = tail
+effTailNames (TyRow _ tail _) = tailNameList tail
+
+tailNameList : Option String -> List String
+tailNameList None = []
+tailNameList (Some n) = [n]
 
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffMap [] = []
@@ -10207,24 +10212,9 @@ astEffrowE etbl (TyEffect labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
 astEffrowE _ _ = pureRow
 
--- The tail cell of a written row.  No names is a closed row; one name is that
--- var's shared cell; several (#821) is their JOIN, so `<Stdout | e | e2>`
--- elaborates to the row performing Stdout plus whatever either var does.  A
--- name the table does not know contributes nothing, which is what the
--- single-name case has always done by yielding `None`.
-tailCell : List (String, Ref Effvar) -> List String -> Option (Ref Effvar)
-tailCell _ [] = None
-tailCell etbl [n] = lookupAssoc n etbl
-tailCell etbl ns = match tailCellsOf etbl ns
-  [] => None
-  [cell] => Some cell
-  cells => Some (joinCellOf cells)
-
-tailCellsOf : List (String, Ref Effvar) -> List String -> List (Ref Effvar)
-tailCellsOf _ [] = []
-tailCellsOf etbl (n::ns) = match lookupAssoc n etbl
-  Some cell => cell :: tailCellsOf etbl ns
-  None => tailCellsOf etbl ns
+tailCell : List (String, Ref Effvar) -> Option String -> Option (Ref Effvar)
+tailCell _ None = None
+tailCell etbl (Some n) = lookupAssoc n etbl
 
 fromAstType : List (String, Mono) -> Ty -> Mono
 fromAstType tvs ty = fromAstTypeE [] tvs ty
@@ -10288,7 +10278,7 @@ fromAstTypeE etbl tvs (TyRow labels tail loc) =
 -- visible yet at this point in the file, so render the row body directly with
 -- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
 -- forward reference, fine: this module is resolved as a whole, not top-down).
-rowKindMismatchMsg : List (String, Option String) -> List String -> String
+rowKindMismatchMsg : List (String, Option String) -> Option String -> String
 rowKindMismatchMsg labels tail = "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
 
 -- A type alias applied to the wrong number of arguments — over-applied,
@@ -10546,8 +10536,8 @@ krowArgVarNames (KRow::ks) ((TyVar n)::as2) = n :: krowArgVarNames ks as2
 -- same var-name contribution, just spelled with labels attached. A CLOSED
 -- written row (`Box <Stdout> Int`, no tail var) pins no name and falls
 -- through to the catch-all below, same as any other non-`TyVar` arg.
-krowArgVarNames (KRow::ks) ((TyRow _ tails _)::as2) = tails
-  ++ krowArgVarNames ks as2
+krowArgVarNames (KRow::ks) ((TyRow _ (Some n) _)::as2) =
+  n :: krowArgVarNames ks as2
 krowArgVarNames (_::ks) (_::as2) = krowArgVarNames ks as2
 
 -- ── #2110: `rowArgNamesIn` WITH THE HEAD'S DECLARED ATOM GUARANTEE ────────
@@ -10603,8 +10593,9 @@ krowArgVarAtoms [] _ _ = []
 krowArgVarAtoms _ _ [] = []
 krowArgVarAtoms (KRow::ks) decls ((TyVar n)::as2) =
   (n, headAtomsOr decls) :: krowArgVarAtoms ks (restAtoms decls) as2
-krowArgVarAtoms (KRow::ks) decls ((TyRow labels tails _)::as2) = map (n => (n, atomsNorm (atomsOfWritten labels ++ headAtomsOr decls))) tails
-  ++ krowArgVarAtoms ks (restAtoms decls) as2
+krowArgVarAtoms (KRow::ks) decls ((TyRow labels (Some n) _)::as2) =
+  (n, atomsNorm (atomsOfWritten labels ++ headAtomsOr decls)) ::
+    krowArgVarAtoms ks (restAtoms decls) as2
 krowArgVarAtoms (_::ks) decls (_::as2) =
   krowArgVarAtoms ks (restAtoms decls) as2
 
@@ -10902,11 +10893,27 @@ infer env (ELoc l e) =
 -- everywhere else it is handled — `mapKids`, `alpha`, `appSpineName`, …).
 infer env (EDoOrigin l e) =
   let prevDoOrigin = !currentDoOrigin
+  let prevDeferred = !currentDoDeferred
   currentDoOrigin := Some l
+  -- #824: the lowered chain's synthesized callee names the herald
+  -- (`deferThen` for a `defer` block), so the "requires a monad" reframe can
+  -- name the right interface.
+  currentDoDeferred := doChainIsDeferred e
   let t = infer env e
   currentDoOrigin := prevDoOrigin
+  currentDoDeferred := prevDeferred
   t
+
 infer _ _ = panic "typecheck: unsupported expression"
+
+-- is this lowered do-chain a `defer` block?  Its head callee is the tagged
+-- `deferThen` (see `callAndThen` in desugar.mdk).
+doChainIsDeferred : Expr -> Bool
+doChainIsDeferred (EApp f _) = doChainIsDeferred f
+doChainIsDeferred (ELoc _ e) = doChainIsDeferred e
+doChainIsDeferred (EDoOrigin _ (EVar "deferThen")) = True
+doChainIsDeferred (EDoOrigin _ (EVarId "deferThen" _)) = True
+doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
@@ -17016,19 +17023,20 @@ inferParamRowAtoms params variants =
 paramRowAtomOccs : String -> Ty -> List (List Atom)
 paramRowAtomOccs p (TyVar n) = if n == p then [[]] else []
 paramRowAtomOccs _ (TyCon { tyConName = _ }) = []
-paramRowAtomOccs p (TyEffect labels tails t) = paramRowAtomsFor p tails labels
+paramRowAtomOccs p (TyEffect labels (Some n) t) = (if n == p then [atomsOfWritten labels] else [])
   ++ paramRowAtomOccs p t
-paramRowAtomOccs p (TyRow labels tails _) = paramRowAtomsFor p tails labels
+paramRowAtomOccs p (TyEffect _ None t) = paramRowAtomOccs p t
+paramRowAtomOccs p (TyRow labels (Some n) _) =
+  if n == p then
+    [atomsOfWritten labels]
+  else
+    []
+paramRowAtomOccs _ (TyRow _ None _) = []
 paramRowAtomOccs p (TyFun a b) = paramRowAtomOccs p a ++ paramRowAtomOccs p b
 paramRowAtomOccs p (TyTuple ts) = flatMap (paramRowAtomOccs p) ts
 paramRowAtomOccs p (TyApp a b) = paramRowAtomOccs p a ++ paramRowAtomOccs p b
 paramRowAtomOccs p (TyConstrained _ t) = paramRowAtomOccs p t
 paramRowAtomOccs _ _ = []
-
--- The row's written atoms, once per tail var that IS [p] (a join names several).
-paramRowAtomsFor : String -> List String -> List (String, Option String) -> List (List Atom)
-paramRowAtomsFor p tails labels =
-  map (_ => atomsOfWritten labels) (filterList (== p) tails)
 
 -- The atoms present at EVERY occurrence, under the same subsumption relation
 -- the coverage check itself uses (`atomsEscape`, so `<IO>` at one occurrence
@@ -30069,14 +30077,16 @@ indexOnlyEffVars scope mty =
 -- slot (`TyRow`, `Box <Stdout | e> Unit`) — which promise rather than charge.
 methodEffChargedOccs : Ty -> List (String, List Atom)
 methodEffChargedOccs (TyConstrained _ t) = methodEffChargedOccs t
-methodEffChargedOccs (TyEffect labels tails t) = occsOfTails tails labels
-  ++ methodEffChargedOccs t
+methodEffChargedOccs (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: methodEffChargedOccs t
+methodEffChargedOccs (TyEffect _ None t) = methodEffChargedOccs t
 methodEffChargedOccs (TyFun _ b) = methodEffChargedOccs b
 methodEffChargedOccs t = effVarChargedOccs t
 
 effVarChargedOccs : Ty -> List (String, List Atom)
-effVarChargedOccs (TyEffect labels tails t) = occsOfTails tails labels
-  ++ effVarChargedOccs t
+effVarChargedOccs (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: effVarChargedOccs t
+effVarChargedOccs (TyEffect _ None t) = effVarChargedOccs t
 effVarChargedOccs (TyApp a b) = effVarChargedOccs a ++ effVarChargedOccs b
 effVarChargedOccs (TyFun a b) = effVarChargedOccs a ++ effVarChargedOccs b
 effVarChargedOccs (TyTuple ts) = flatMap effVarChargedOccs ts
@@ -30113,15 +30123,17 @@ effVarOccEscape n instAtoms ((m, declAtoms)::rest) =
 -- rows, data-arg rows).  Bare row-kinded ctor-arg slots (`Async e a`) carry no
 -- written atoms and are contributed by rowArgNames at the call site.
 effVarOccAtoms : Ty -> List (String, List Atom)
-effVarOccAtoms (TyEffect labels tails t) = occsOfTails tails labels
-  ++ effVarOccAtoms t
+effVarOccAtoms (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: effVarOccAtoms t
+effVarOccAtoms (TyEffect _ None t) = effVarOccAtoms t
 -- A bare row atom (#997) is a named-tail row occurrence exactly like
 -- `TyEffect` above, just with no wrapped type. Without this arm, a KRow
 -- ctor-arg written as `Box <Stdout | e> Int` was invisible to
 -- `checkImplEffVarRigidity`'s coverage set, so the impl-body T-EFFECT-LAUNDER
 -- check over-fired ("not sourced from any argument") on an argument that
 -- demonstrably DOES declare the atom.
-effVarOccAtoms (TyRow labels tails _) = occsOfTails tails labels
+effVarOccAtoms (TyRow labels (Some n) _) = [(n, atomsOfWritten labels)]
+effVarOccAtoms (TyRow _ None _) = []
 effVarOccAtoms (TyApp a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyFun a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyTuple ts) = flatMap effVarOccAtoms ts
@@ -32516,15 +32528,14 @@ checkEffectEscape sigs m effs = match omLookup m driverState.value.sigTyMapRef.v
 -- #797: [tail] renders alongside the atoms so an argument-carried open row —
 -- the one shape that still reaches this message with a tail — reports the row
 -- that was actually written (`<e>`, `<Stdout | e>`) instead of the false `<>`.
--- A closed row passes no tail at all and renders exactly as before.
-effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
+-- A closed row passes `None` and renders exactly as before.
+effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
 effectEscapeMsg name declared tail extras = "Function '\{name}' declared with \{renderDeclaredRow declared tail} but also performs <\{renderAtoms extras}>"
 
-renderDeclaredRow : List Atom -> List String -> String
-renderDeclaredRow declared [] = "<\{renderAtoms declared}>"
-renderDeclaredRow [] tails = "<\{joinWith " | " tails}>"
-renderDeclaredRow declared tails =
-  "<\{renderAtoms declared} | \{joinWith " | " tails}>"
+renderDeclaredRow : List Atom -> Option String -> String
+renderDeclaredRow declared None = "<\{renderAtoms declared}>"
+renderDeclaredRow [] (Some v) = "<\{v}>"
+renderDeclaredRow declared (Some v) = "<\{renderAtoms declared} | \{v}>"
 
 -- generalize each member's (sig-and-body-unified) placeholder.  A signature was
 -- already unified into the placeholder by preunifySigs, so generalizing the
@@ -32676,9 +32687,6 @@ ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
 ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"
 ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
 ppTy (TyEffect effs tail t) = "<\{ppEffInsideTy effs tail}> \{ppTy t}"
--- A label-free join takes the parenthesised type-argument spelling it is
--- written in (`f (e | e2) b`), matching tools/printer.mdk.
-ppTy (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
 -- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
@@ -32687,16 +32695,14 @@ ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
-ppEffInsideTy : List (String, Option String) -> List String -> String
-ppEffInsideTy effs tails =
+ppEffInsideTy : List (String, Option String) -> Option String -> String
+ppEffInsideTy effs tail =
   let labs = map ppEffAtomTy effs
-  match tails
-    [] => joinWith ", " labs
-    _ =>
-      let tls = joinWith " | " tails
-      match effs
-        [] => tls
-        _ => "\{joinWith ", " labs} | \{tls}"
+  match tail
+    None => joinWith ", " labs
+    Some v => match effs
+      [] => v
+      _ => "\{joinWith ", " labs} | \{v}"
 
 -- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
 ppEffAtomTy : (String, Option String) -> String
@@ -39365,11 +39371,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "True")) (EVar "a")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "b"))))
 (DFunDef false "methodEffArgOccs" (PWild PWild) (EListLit))
-(DTypeSig false "occsOfTails" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "occsOfTails" ((PVar "tails") (PVar "labels")) (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EVar "atoms")))) (EVar "tails")))))
 (DTypeSig false "argPerformableOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
-(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EListLit)) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t"))))
-(DFunDef false "argPerformableOccs" (PWild (PVar "perf") (PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EIf (EVar "perf") (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EListLit)))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t"))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" (PWild (PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
+(DFunDef false "argPerformableOccs" (PWild PWild (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))
 (DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "ts")))
 (DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "scope")) (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "krowSlotVarOccs") (EVar "scope")) (EVar "perf")) (EVar "h")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))))
@@ -39385,7 +39391,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowSlotVarOccs" ((PVar "scope") (PVar "perf") (PVar "h") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "h")) (EVar "scope")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "kinds")) (EListLit)) (EVar "args")) (EListLit)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "methodEffRetOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
-(DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t"))))
+(DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t"))))
+(DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyFun" PWild (PVar "b"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "b")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PVar "t")) (EBlock (DoLet false false (PVar "occs") (EApp (EVar "effVarOccAtoms") (EVar "t"))) (DoExpr (EBinOp "++" (EVar "occs") (EApp (EApp (EVar "filterList") (ELam ((PVar "o2")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EApp (EVar "fst") (EVar "o2"))))) (EVar "occs"))))) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "t")))))))
 (DTypeSig false "argAtomsMsgFor" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
@@ -39487,17 +39494,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
 (DFunDef false "declaredEffects" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffects") (EVar "t")))
 (DFunDef false "declaredEffects" (PWild) (EListLit))
-(DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "declaredEffectTail" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffectTail") (EVar "ret")))
 (DFunDef false "declaredEffectTail" ((PCon "TyEffect" PWild (PVar "tail") PWild)) (EVar "tail"))
 (DFunDef false "declaredEffectTail" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffectTail") (EVar "t")))
-(DFunDef false "declaredEffectTail" (PWild) (EListLit))
+(DFunDef false "declaredEffectTail" (PWild) (EVar "None"))
 (DTypeSig false "declaredArgEffNames" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declaredArgEffNames" ((PCon "TyFun" (PVar "a") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "rowArgNames") (EVar "a"))) (EApp (EVar "declaredArgEffNames") (EVar "ret"))))
 (DFunDef false "declaredArgEffNames" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredArgEffNames") (EVar "t")))
 (DFunDef false "declaredArgEffNames" (PWild) (EListLit))
 (DTypeSig false "declaredEffectsOpen" (TyFun (TyCon "Ty") (TyCon "Bool")))
-(DFunDef false "declaredEffectsOpen" ((PVar "ty")) (EBlock (DoLet false false (PVar "argNames") (EApp (EVar "declaredArgEffNames") (EVar "ty"))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "argNames"))))) (EApp (EVar "declaredEffectTail") (EVar "ty"))))))
+(DFunDef false "declaredEffectsOpen" ((PVar "ty")) (EMatch (EApp (EVar "declaredEffectTail") (EVar "ty")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EApp (EVar "declaredArgEffNames") (EVar "ty")))))))
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DData Private "Polarity" () ((variant "PCo" (ConPos)) (variant "PContra" (ConPos)) (variant "PInv" (ConPos))) ())
@@ -39974,7 +39981,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ceRowParamKindNamesAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "ceRowParamKindNamesAt" ((PVar "key") (PVar "cur") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "map") (ELam ((PVar "ks")) (EApp (EApp (EVar "map") (EVar "kindName")) (EVar "ks")))) (EApp (EVar "ceRowParamKinds") (EVar "r"))))))
 (DTypeSig false "ceGradedMethod" (TyCon "IfaceMethod"))
-(DFunDef false "ceGradedMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "run"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "e"))))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EListLit (ELit (LString "e")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
+(DFunDef false "ceGradedMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "run"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "e"))))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EApp (EVar "Some") (ELit (LString "e")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
 (DTypeSig false "ceGradedIface" (TyCon "Decl"))
 (DFunDef false "ceGradedIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Async"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceGradedMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "gmod")))))))
 (DTypeSig false "ceGradedEnv" (TyCon "ClassEnv"))
@@ -40154,6 +40161,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "goalSiteLoc" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig false "currentDoOrigin" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "currentDoOrigin" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "currentDoDeferred" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "currentDoDeferred" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "currentMethodMismatch" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "currentMethodMismatch" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -40273,12 +40282,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "typeMismatchInDo" ((PVar "a") (PVar "b") (PVar "doLoc")) (EIf (EBinOp "/=" (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "b")))) (EApp (EVar "recordDoMonadError") (EVar "doLoc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordDoMonadError" (TyFun (TyCon "Loc") (TyCon "Unit")))
-(DFunDef false "recordDoMonadError" ((PVar "doLoc")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-DO-NOT-MONAD"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "doLoc"))) (EVar "doRequiresMonadMsg")) (EVar "None")) (EVar "None"))))))
+(DFunDef false "recordDoMonadError" ((PVar "doLoc")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-DO-NOT-MONAD"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "doLoc"))) (EIf (EUnOp "!" (EVar "currentDoDeferred")) (EVar "deferRequiresMonadMsg") (EVar "doRequiresMonadMsg"))) (EVar "None")) (EVar "None"))))))
 (DTypeSig false "monoIsApp" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoIsApp" ((PCon "TApp" PWild PWild)) (EVar "True"))
 (DFunDef false "monoIsApp" (PWild) (EVar "False"))
 (DTypeSig false "doRequiresMonadMsg" (TyCon "String"))
 (DFunDef false "doRequiresMonadMsg" () (ELit (LString "`do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`")))
+(DTypeSig false "deferRequiresMonadMsg" (TyCon "String"))
+(DFunDef false "deferRequiresMonadMsg" () (ELit (LString "`defer` requires a DeferredThenable impl — an effect-indexed constructor such as `Async` (its `defer` block registers effects in the index and performs nothing until forced). For a strict container (`Option`/`Result`/`List`) use `do`; for IO sequencing use a bare indented block")))
 (DTypeSig false "bindOutsideDoMsg" (TyCon "String"))
 (DFunDef false "bindOutsideDoMsg" () (ELit (LString "`<-` bind is only valid inside a `do` block. For IO sequencing use a bare indented block without `<-`")))
 (DTypeSig false "generalize" (TyFun (TyCon "Mono") (TyCon "Scheme")))
@@ -40448,9 +40459,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effTailNames" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "effTailNames") (EVar "b"))))
 (DFunDef false "effTailNames" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "effTailNames") (EVar "b"))))
 (DFunDef false "effTailNames" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "effTailNames")) (EVar "ts")))
-(DFunDef false "effTailNames" ((PCon "TyEffect" PWild (PVar "tail") (PVar "t"))) (EBinOp "++" (EVar "tail") (EApp (EVar "effTailNames") (EVar "t"))))
+(DFunDef false "effTailNames" ((PCon "TyEffect" PWild (PVar "tail") (PVar "t"))) (EBinOp "++" (EApp (EVar "tailNameList") (EVar "tail")) (EApp (EVar "effTailNames") (EVar "t"))))
 (DFunDef false "effTailNames" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "effTailNames") (EVar "t")))
-(DFunDef false "effTailNames" ((PCon "TyRow" PWild (PVar "tail") PWild)) (EVar "tail"))
+(DFunDef false "effTailNames" ((PCon "TyRow" PWild (PVar "tail") PWild)) (EApp (EVar "tailNameList") (EVar "tail")))
+(DTypeSig false "tailNameList" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "tailNameList" ((PCon "None")) (EListLit))
+(DFunDef false "tailNameList" ((PCon "Some" (PVar "n"))) (EListLit (EVar "n")))
 (DTypeSig false "freshEffMap" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
 (DFunDef false "freshEffMap" ((PList)) (EListLit))
 (DFunDef false "freshEffMap" ((PCons (PVar "n") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "freshEffvar") (ELit LUnit))) (EApp (EVar "freshEffMap") (EVar "rest"))))
@@ -40459,13 +40473,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "astEffrowE" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyCon "Ty") (TyCon "EffRow"))))
 (DFunDef false "astEffrowE" ((PVar "etbl") (PCon "TyEffect" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "EffRow") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "tailCell") (EVar "etbl")) (EVar "tail"))))
 (DFunDef false "astEffrowE" (PWild PWild) (EVar "pureRow"))
-(DTypeSig false "tailCell" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
-(DFunDef false "tailCell" (PWild (PList)) (EVar "None"))
-(DFunDef false "tailCell" ((PVar "etbl") (PList (PVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")))
-(DFunDef false "tailCell" ((PVar "etbl") (PVar "ns")) (EMatch (EApp (EApp (EVar "tailCellsOf") (EVar "etbl")) (EVar "ns")) (arm (PList) () (EVar "None")) (arm (PList (PVar "cell")) () (EApp (EVar "Some") (EVar "cell"))) (arm (PVar "cells") () (EApp (EVar "Some") (EApp (EVar "joinCellOf") (EVar "cells"))))))
-(DTypeSig false "tailCellsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
-(DFunDef false "tailCellsOf" (PWild (PList)) (EListLit))
-(DFunDef false "tailCellsOf" ((PVar "etbl") (PCons (PVar "n") (PVar "ns"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")) (arm (PCon "Some" (PVar "cell")) () (EBinOp "::" (EVar "cell") (EApp (EApp (EVar "tailCellsOf") (EVar "etbl")) (EVar "ns")))) (arm (PCon "None") () (EApp (EApp (EVar "tailCellsOf") (EVar "etbl")) (EVar "ns")))))
+(DTypeSig false "tailCell" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
+(DFunDef false "tailCell" (PWild (PCon "None")) (EVar "None"))
+(DFunDef false "tailCell" ((PVar "etbl") (PCon "Some" (PVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")))
 (DTypeSig false "fromAstType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Ty") (TyCon "Mono"))))
 (DFunDef false "fromAstType" ((PVar "tvs") (PVar "ty")) (EApp (EApp (EApp (EVar "fromAstTypeE") (EListLit)) (EVar "tvs")) (EVar "ty")))
 (DTypeSig false "tyAppSpine" (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty")))))
@@ -40480,7 +40490,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" (PVar "labels") (PVar "tail") (PVar "loc"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-KIND-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "rowKindMismatchMsg") (EVar "labels")) (EVar "tail")))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))))
-(DTypeSig false "rowKindMismatchMsg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DTypeSig false "rowKindMismatchMsg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "rowKindMismatchMsg" ((PVar "labels") (PVar "tail")) (EBinOp "++" (EBinOp "++" (ELit (LString "A row <")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "labels")) (EVar "tail")))) (ELit (LString "> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."))))
 (DTypeSig false "aliasArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "aliasArityMsg" ((PVar "n") (PVar "expected") (PVar "got")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type alias `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` expects "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "expected")))) (ELit (LString " argument(s), got "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "got")))) (ELit (LString ""))))
@@ -40541,7 +40551,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowArgVarNames" ((PList) PWild) (EListLit))
 (DFunDef false "krowArgVarNames" (PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
-(DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyRow" PWild (PVar "tails") PWild) (PVar "as2"))) (EBinOp "++" (EVar "tails") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
+(DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyRow" PWild (PCon "Some" (PVar "n")) PWild) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
 (DFunDef false "krowArgVarNames" ((PCons PWild (PVar "ks")) (PCons PWild (PVar "as2"))) (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2")))
 (DTypeSig false "rowArgAtomsIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "rowArgAtomsIn" ((PVar "scope") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "rowArgAtomsApp") (EVar "scope")) (EVar "o")) (EVar "n")) (EVar "args")) (EBinOp "++" (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "a")) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "b"))))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "rowArgAtomsVarApp") (EVar "scope")) (EVar "h")) (EVar "args")) (EBinOp "++" (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "a")) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "b"))))) (arm PWild () (EBinOp "++" (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "a")) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "b"))))))
@@ -40558,7 +40568,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowArgVarAtoms" ((PList) PWild PWild) (EListLit))
 (DFunDef false "krowArgVarAtoms" (PWild PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarAtoms" ((PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "headAtomsOr") (EVar "decls"))) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
-(DFunDef false "krowArgVarAtoms" ((PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyRow" (PVar "labels") (PVar "tails") PWild) (PVar "as2"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "atomsNorm") (EBinOp "++" (EApp (EVar "atomsOfWritten") (EVar "labels")) (EApp (EVar "headAtomsOr") (EVar "decls"))))))) (EVar "tails")) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
+(DFunDef false "krowArgVarAtoms" ((PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild) (PVar "as2"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsNorm") (EBinOp "++" (EApp (EVar "atomsOfWritten") (EVar "labels")) (EApp (EVar "headAtomsOr") (EVar "decls"))))) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
 (DFunDef false "krowArgVarAtoms" ((PCons PWild (PVar "ks")) (PVar "decls") (PCons PWild (PVar "as2"))) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2")))
 (DTypeSig false "headAtomsOr" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "headAtomsOr" ((PList)) (EListLit))
@@ -40679,8 +40689,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EApp (EVar "inferIntRange") (EVar "env")) (EVar "lo")) (EVar "hi")) (EApp (EVar "tconBuiltin") (ELit (LString "Array")))))
 (DFunDef false "infer" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") (PVar "ty"))) (EApp (EApp (EApp (EVar "inferHeadAnnot") (EVar "env")) (EVar "e")) (EVar "ty")))
 (DFunDef false "infer" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
-(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PVar "prevDoOrigin") (EUnOp "!" (EVar "currentDoOrigin"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "prevDoOrigin"))) (DoExpr (EVar "t"))))
+(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PVar "prevDoOrigin") (EUnOp "!" (EVar "currentDoOrigin"))) (DoLet false false (PVar "prevDeferred") (EUnOp "!" (EVar "currentDoDeferred"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoDeferred")) (EApp (EVar "doChainIsDeferred") (EVar "e")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "prevDoOrigin"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoDeferred")) (EVar "prevDeferred"))) (DoExpr (EVar "t"))))
 (DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression"))))
+(DTypeSig false "doChainIsDeferred" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "doChainIsDeferred" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "doChainIsDeferred") (EVar "f")))
+(DFunDef false "doChainIsDeferred" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "doChainIsDeferred") (EVar "e")))
+(DFunDef false "doChainIsDeferred" ((PCon "EDoOrigin" PWild (PCon "EVar" (PLit (LString "deferThen"))))) (EVar "True"))
+(DFunDef false "doChainIsDeferred" ((PCon "EDoOrigin" PWild (PCon "EVarId" (PLit (LString "deferThen")) PWild))) (EVar "True"))
+(DFunDef false "doChainIsDeferred" (PWild) (EVar "False"))
 (DTypeSig false "inferArrayLit" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Mono"))))
 (DFunDef false "inferArrayLit" ((PVar "env") (PVar "es")) (EBlock (DoLet false false (PVar "elem") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unifyAll") (EVar "elem")) (EApp (EApp (EVar "inferEach") (EVar "env")) (EVar "es")))) (DoExpr (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Array")))) (EVar "elem")))))
 (DTypeSig false "inferIntRange" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
@@ -41679,15 +41695,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "paramRowAtomOccs" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EListLit)) (EListLit)))
 (DFunDef false "paramRowAtomOccs" (PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
-(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "p")) (EVar "tails")) (EVar "labels")) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t"))))
-(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "p")) (EVar "tails")) (EVar "labels")))
+(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EListLit)) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t"))))
+(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t")))
+(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EListLit)))
+(DFunDef false "paramRowAtomOccs" (PWild (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "a")) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "paramRowAtomOccs") (EVar "p"))) (EVar "ts")))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "a")) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t")))
 (DFunDef false "paramRowAtomOccs" (PWild PWild) (EListLit))
-(DTypeSig false "paramRowAtomsFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "paramRowAtomsFor" ((PVar "p") (PVar "tails") (PVar "labels")) (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "p")))) (EVar "tails"))))
 (DTypeSig false "intersectDeclAtoms" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "intersectDeclAtoms" ((PList)) (EListLit))
 (DFunDef false "intersectDeclAtoms" ((PCons (PVar "first") (PVar "rest"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EApp (EVar "allList") (ELam ((PVar "b")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EListLit (EVar "x"))) (EVar "b"))))) (EVar "rest")))) (EVar "first")))
@@ -43738,11 +43754,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "indexOnlyEffVars" ((PVar "scope") (PVar "mty")) (EBlock (DoLet false false (PVar "argNames") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "mty"))))) (DoLet false false (PVar "charged") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "methodEffChargedOccs") (EVar "mty")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "charged"))))) (EVar "argNames")))))
 (DTypeSig false "methodEffChargedOccs" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "methodEffChargedOccs" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodEffChargedOccs") (EVar "t")))
-(DFunDef false "methodEffChargedOccs" ((PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EVar "methodEffChargedOccs") (EVar "t"))))
+(DFunDef false "methodEffChargedOccs" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "methodEffChargedOccs") (EVar "t"))))
+(DFunDef false "methodEffChargedOccs" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "methodEffChargedOccs") (EVar "t")))
 (DFunDef false "methodEffChargedOccs" ((PCon "TyFun" PWild (PVar "b"))) (EApp (EVar "methodEffChargedOccs") (EVar "b")))
 (DFunDef false "methodEffChargedOccs" ((PVar "t")) (EApp (EVar "effVarChargedOccs") (EVar "t")))
 (DTypeSig false "effVarChargedOccs" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "effVarChargedOccs" ((PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EVar "effVarChargedOccs") (EVar "t"))))
+(DFunDef false "effVarChargedOccs" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "effVarChargedOccs") (EVar "t"))))
+(DFunDef false "effVarChargedOccs" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "effVarChargedOccs") (EVar "t")))
 (DFunDef false "effVarChargedOccs" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarChargedOccs") (EVar "a")) (EApp (EVar "effVarChargedOccs") (EVar "b"))))
 (DFunDef false "effVarChargedOccs" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarChargedOccs") (EVar "a")) (EApp (EVar "effVarChargedOccs") (EVar "b"))))
 (DFunDef false "effVarChargedOccs" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "effVarChargedOccs")) (EVar "ts")))
@@ -43758,8 +43776,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effVarOccEscape" (PWild PWild (PList)) (EListLit))
 (DFunDef false "effVarOccEscape" ((PVar "n") (PVar "instAtoms") (PCons (PTuple (PVar "m") (PVar "declAtoms")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "instAtoms")) (EVar "declAtoms")))) (EApp (EApp (EVar "atomsEscape") (EVar "instAtoms")) (EVar "declAtoms")) (EApp (EApp (EApp (EVar "effVarOccEscape") (EVar "n")) (EVar "instAtoms")) (EVar "rest"))))
 (DTypeSig false "effVarOccAtoms" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "effVarOccAtoms" ((PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EVar "effVarOccAtoms") (EVar "t"))))
-(DFunDef false "effVarOccAtoms" ((PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")))
+(DFunDef false "effVarOccAtoms" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "effVarOccAtoms") (EVar "t"))))
+(DFunDef false "effVarOccAtoms" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "effVarOccAtoms") (EVar "t")))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "effVarOccAtoms" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "effVarOccAtoms")) (EVar "ts")))
@@ -44274,12 +44294,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "peelOntoParams" ((PCon "Some" (PVar "src")) (PVar "patTypes") (PVar "pats")) (EApp (EApp (EVar "zipUnify") (EVar "patTypes")) (EApp (EApp (EVar "peelArrows") (EApp (EVar "listLen") (EVar "pats"))) (EVar "src"))))
 (DTypeSig false "checkEffectEscape" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
 (DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "effs")) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras")))))))))
-(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
+(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
 (DFunDef false "effectEscapeMsg" ((PVar "name") (PVar "declared") (PVar "tail") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Function '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' declared with "))) (EApp (EVar "display") (EApp (EApp (EVar "renderDeclaredRow") (EVar "declared")) (EVar "tail")))) (ELit (LString " but also performs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString ">"))))
-(DTypeSig false "renderDeclaredRow" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "renderDeclaredRow" ((PVar "declared") (PList)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString ">"))))
-(DFunDef false "renderDeclaredRow" ((PList) (PVar "tails")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ">"))))
-(DFunDef false "renderDeclaredRow" ((PVar "declared") (PVar "tails")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ">"))))
+(DTypeSig false "renderDeclaredRow" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "None")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PList) (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EVar "v"))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ">"))))
 (DTypeSig false "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "sccSchemes" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "plainVal") (EBinOp "||" (EVar "isLetrec") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (DoLet false false (PVar "sigIsFun") (EApp (EApp (EApp (EVar "memberSigIsFun") (EVar "sigs")) (EVar "m")) (EVar "v"))) (DoLet false false (PVar "isVal") (EBinOp "||" (EVar "plainVal") (EVar "sigIsFun"))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
@@ -44326,11 +44346,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ppTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppTyFunArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "ppTy" ((PCon "TyTuple" (PVar "ts"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppTy")) (EVar "ts")))) (ELit (LString ")"))))
 (DFunDef false "ppTy" ((PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "effs")) (EVar "tail")))) (ELit (LString "> "))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ""))))
-(DFunDef false "ppTy" ((PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (ELit (LString ")"))))
 (DFunDef false "ppTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "ppTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ""))))
-(DTypeSig false "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "ppEffInsideTy" ((PVar "effs") (PVar "tails")) (EBlock (DoLet false false (PVar "labs") (EApp (EApp (EVar "map") (EVar "ppEffAtomTy")) (EVar "effs"))) (DoExpr (EMatch (EVar "tails") (arm (PList) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs"))) (arm PWild () (EBlock (DoLet false false (PVar "tls") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails"))) (DoExpr (EMatch (EVar "effs") (arm (PList) () (EVar "tls")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "tls"))) (ELit (LString ""))))))))))))
+(DTypeSig false "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "ppEffInsideTy" ((PVar "effs") (PVar "tail")) (EBlock (DoLet false false (PVar "labs") (EApp (EApp (EVar "map") (EVar "ppEffAtomTy")) (EVar "effs"))) (DoExpr (EMatch (EVar "tail") (arm (PCon "None") () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs"))) (arm (PCon "Some" (PVar "v")) () (EMatch (EVar "effs") (arm (PList) () (EVar "v")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))))))))
 (DTypeSig false "ppEffAtomTy" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
@@ -45652,11 +45671,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "True")) (EVar "a")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "b"))))
 (DFunDef false "methodEffArgOccs" (PWild PWild) (EListLit))
-(DTypeSig false "occsOfTails" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "occsOfTails" ((PVar "tails") (PVar "labels")) (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EVar "atoms")))) (EVar "tails")))))
 (DTypeSig false "argPerformableOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
-(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EListLit)) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t"))))
-(DFunDef false "argPerformableOccs" (PWild (PVar "perf") (PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EIf (EVar "perf") (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EListLit)))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t"))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" (PWild (PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
+(DFunDef false "argPerformableOccs" (PWild PWild (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))
 (DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "ts")))
 (DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "scope")) (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "krowSlotVarOccs") (EVar "scope")) (EVar "perf")) (EVar "h")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))))
@@ -45672,7 +45691,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowSlotVarOccs" ((PVar "scope") (PVar "perf") (PVar "h") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "h")) (EVar "scope")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "kinds")) (EListLit)) (EVar "args")) (EListLit)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "methodEffRetOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
-(DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t"))))
+(DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t"))))
+(DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyFun" PWild (PVar "b"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "b")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PVar "t")) (EBlock (DoLet false false (PVar "occs") (EApp (EVar "effVarOccAtoms") (EVar "t"))) (DoExpr (EBinOp "++" (EVar "occs") (EApp (EApp (EVar "filterList") (ELam ((PVar "o2")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EApp (EVar "fst") (EVar "o2"))))) (EVar "occs"))))) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "t")))))))
 (DTypeSig false "argAtomsMsgFor" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
@@ -45774,17 +45794,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
 (DFunDef false "declaredEffects" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffects") (EVar "t")))
 (DFunDef false "declaredEffects" (PWild) (EListLit))
-(DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "declaredEffectTail" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffectTail") (EVar "ret")))
 (DFunDef false "declaredEffectTail" ((PCon "TyEffect" PWild (PVar "tail") PWild)) (EVar "tail"))
 (DFunDef false "declaredEffectTail" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffectTail") (EVar "t")))
-(DFunDef false "declaredEffectTail" (PWild) (EListLit))
+(DFunDef false "declaredEffectTail" (PWild) (EVar "None"))
 (DTypeSig false "declaredArgEffNames" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declaredArgEffNames" ((PCon "TyFun" (PVar "a") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "rowArgNames") (EVar "a"))) (EApp (EVar "declaredArgEffNames") (EVar "ret"))))
 (DFunDef false "declaredArgEffNames" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredArgEffNames") (EVar "t")))
 (DFunDef false "declaredArgEffNames" (PWild) (EListLit))
 (DTypeSig false "declaredEffectsOpen" (TyFun (TyCon "Ty") (TyCon "Bool")))
-(DFunDef false "declaredEffectsOpen" ((PVar "ty")) (EBlock (DoLet false false (PVar "argNames") (EApp (EVar "declaredArgEffNames") (EVar "ty"))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "argNames"))))) (EApp (EVar "declaredEffectTail") (EVar "ty"))))))
+(DFunDef false "declaredEffectsOpen" ((PVar "ty")) (EMatch (EApp (EVar "declaredEffectTail") (EVar "ty")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EApp (EVar "declaredArgEffNames") (EVar "ty")))))))
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DData Private "Polarity" () ((variant "PCo" (ConPos)) (variant "PContra" (ConPos)) (variant "PInv" (ConPos))) ())
@@ -46261,7 +46281,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ceRowParamKindNamesAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "ceRowParamKindNamesAt" ((PVar "key") (PVar "cur") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "ks")) (EApp (EApp (EMethodRef "map") (EVar "kindName")) (EVar "ks")))) (EApp (EVar "ceRowParamKinds") (EVar "r"))))))
 (DTypeSig false "ceGradedMethod" (TyCon "IfaceMethod"))
-(DFunDef false "ceGradedMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "run"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "e"))))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EListLit (ELit (LString "e")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
+(DFunDef false "ceGradedMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "run"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "e"))))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EApp (EVar "Some") (ELit (LString "e")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
 (DTypeSig false "ceGradedIface" (TyCon "Decl"))
 (DFunDef false "ceGradedIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Async"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceGradedMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "gmod")))))))
 (DTypeSig false "ceGradedEnv" (TyCon "ClassEnv"))
@@ -46441,6 +46461,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "goalSiteLoc" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig false "currentDoOrigin" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "currentDoOrigin" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "currentDoDeferred" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "currentDoDeferred" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "currentMethodMismatch" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "currentMethodMismatch" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -46560,12 +46582,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "typeMismatchInDo" ((PVar "a") (PVar "b") (PVar "doLoc")) (EIf (EBinOp "/=" (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "b")))) (EApp (EVar "recordDoMonadError") (EVar "doLoc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordDoMonadError" (TyFun (TyCon "Loc") (TyCon "Unit")))
-(DFunDef false "recordDoMonadError" ((PVar "doLoc")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-DO-NOT-MONAD"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "doLoc"))) (EVar "doRequiresMonadMsg")) (EVar "None")) (EVar "None"))))))
+(DFunDef false "recordDoMonadError" ((PVar "doLoc")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-DO-NOT-MONAD"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "doLoc"))) (EIf (EUnOp "!" (EVar "currentDoDeferred")) (EVar "deferRequiresMonadMsg") (EVar "doRequiresMonadMsg"))) (EVar "None")) (EVar "None"))))))
 (DTypeSig false "monoIsApp" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoIsApp" ((PCon "TApp" PWild PWild)) (EVar "True"))
 (DFunDef false "monoIsApp" (PWild) (EVar "False"))
 (DTypeSig false "doRequiresMonadMsg" (TyCon "String"))
 (DFunDef false "doRequiresMonadMsg" () (ELit (LString "`do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`")))
+(DTypeSig false "deferRequiresMonadMsg" (TyCon "String"))
+(DFunDef false "deferRequiresMonadMsg" () (ELit (LString "`defer` requires a DeferredThenable impl — an effect-indexed constructor such as `Async` (its `defer` block registers effects in the index and performs nothing until forced). For a strict container (`Option`/`Result`/`List`) use `do`; for IO sequencing use a bare indented block")))
 (DTypeSig false "bindOutsideDoMsg" (TyCon "String"))
 (DFunDef false "bindOutsideDoMsg" () (ELit (LString "`<-` bind is only valid inside a `do` block. For IO sequencing use a bare indented block without `<-`")))
 (DTypeSig false "generalize" (TyFun (TyCon "Mono") (TyCon "Scheme")))
@@ -46735,9 +46759,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effTailNames" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "effTailNames") (EVar "b"))))
 (DFunDef false "effTailNames" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "effTailNames") (EVar "b"))))
 (DFunDef false "effTailNames" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "effTailNames")) (EVar "ts")))
-(DFunDef false "effTailNames" ((PCon "TyEffect" PWild (PVar "tail") (PVar "t"))) (EBinOp "++" (EVar "tail") (EApp (EVar "effTailNames") (EVar "t"))))
+(DFunDef false "effTailNames" ((PCon "TyEffect" PWild (PVar "tail") (PVar "t"))) (EBinOp "++" (EApp (EVar "tailNameList") (EVar "tail")) (EApp (EVar "effTailNames") (EVar "t"))))
 (DFunDef false "effTailNames" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "effTailNames") (EVar "t")))
-(DFunDef false "effTailNames" ((PCon "TyRow" PWild (PVar "tail") PWild)) (EVar "tail"))
+(DFunDef false "effTailNames" ((PCon "TyRow" PWild (PVar "tail") PWild)) (EApp (EVar "tailNameList") (EVar "tail")))
+(DTypeSig false "tailNameList" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "tailNameList" ((PCon "None")) (EListLit))
+(DFunDef false "tailNameList" ((PCon "Some" (PVar "n"))) (EListLit (EVar "n")))
 (DTypeSig false "freshEffMap" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
 (DFunDef false "freshEffMap" ((PList)) (EListLit))
 (DFunDef false "freshEffMap" ((PCons (PVar "n") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "freshEffvar") (ELit LUnit))) (EApp (EVar "freshEffMap") (EVar "rest"))))
@@ -46746,13 +46773,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "astEffrowE" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyCon "Ty") (TyCon "EffRow"))))
 (DFunDef false "astEffrowE" ((PVar "etbl") (PCon "TyEffect" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "EffRow") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "tailCell") (EVar "etbl")) (EVar "tail"))))
 (DFunDef false "astEffrowE" (PWild PWild) (EVar "pureRow"))
-(DTypeSig false "tailCell" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
-(DFunDef false "tailCell" (PWild (PList)) (EVar "None"))
-(DFunDef false "tailCell" ((PVar "etbl") (PList (PVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")))
-(DFunDef false "tailCell" ((PVar "etbl") (PVar "ns")) (EMatch (EApp (EApp (EVar "tailCellsOf") (EVar "etbl")) (EVar "ns")) (arm (PList) () (EVar "None")) (arm (PList (PVar "cell")) () (EApp (EVar "Some") (EVar "cell"))) (arm (PVar "cells") () (EApp (EVar "Some") (EApp (EVar "joinCellOf") (EVar "cells"))))))
-(DTypeSig false "tailCellsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
-(DFunDef false "tailCellsOf" (PWild (PList)) (EListLit))
-(DFunDef false "tailCellsOf" ((PVar "etbl") (PCons (PVar "n") (PVar "ns"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")) (arm (PCon "Some" (PVar "cell")) () (EBinOp "::" (EVar "cell") (EApp (EApp (EVar "tailCellsOf") (EVar "etbl")) (EVar "ns")))) (arm (PCon "None") () (EApp (EApp (EVar "tailCellsOf") (EVar "etbl")) (EVar "ns")))))
+(DTypeSig false "tailCell" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar"))))))
+(DFunDef false "tailCell" (PWild (PCon "None")) (EVar "None"))
+(DFunDef false "tailCell" ((PVar "etbl") (PCon "Some" (PVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")))
 (DTypeSig false "fromAstType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Ty") (TyCon "Mono"))))
 (DFunDef false "fromAstType" ((PVar "tvs") (PVar "ty")) (EApp (EApp (EApp (EVar "fromAstTypeE") (EListLit)) (EVar "tvs")) (EVar "ty")))
 (DTypeSig false "tyAppSpine" (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty")))))
@@ -46767,7 +46790,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" (PVar "labels") (PVar "tail") (PVar "loc"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-KIND-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "rowKindMismatchMsg") (EVar "labels")) (EVar "tail")))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))))
-(DTypeSig false "rowKindMismatchMsg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DTypeSig false "rowKindMismatchMsg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "rowKindMismatchMsg" ((PVar "labels") (PVar "tail")) (EBinOp "++" (EBinOp "++" (ELit (LString "A row <")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "labels")) (EVar "tail")))) (ELit (LString "> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."))))
 (DTypeSig false "aliasArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "aliasArityMsg" ((PVar "n") (PVar "expected") (PVar "got")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type alias `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` expects "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "expected")))) (ELit (LString " argument(s), got "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "got")))) (ELit (LString ""))))
@@ -46828,7 +46851,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowArgVarNames" ((PList) PWild) (EListLit))
 (DFunDef false "krowArgVarNames" (PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
-(DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyRow" PWild (PVar "tails") PWild) (PVar "as2"))) (EBinOp "++" (EVar "tails") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
+(DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyRow" PWild (PCon "Some" (PVar "n")) PWild) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
 (DFunDef false "krowArgVarNames" ((PCons PWild (PVar "ks")) (PCons PWild (PVar "as2"))) (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2")))
 (DTypeSig false "rowArgAtomsIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "rowArgAtomsIn" ((PVar "scope") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "rowArgAtomsApp") (EVar "scope")) (EVar "o")) (EVar "n")) (EVar "args")) (EBinOp "++" (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "a")) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "b"))))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "rowArgAtomsVarApp") (EVar "scope")) (EVar "h")) (EVar "args")) (EBinOp "++" (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "a")) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "b"))))) (arm PWild () (EBinOp "++" (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "a")) (EApp (EApp (EVar "rowArgAtomsIn") (EVar "scope")) (EVar "b"))))))
@@ -46845,7 +46868,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowArgVarAtoms" ((PList) PWild PWild) (EListLit))
 (DFunDef false "krowArgVarAtoms" (PWild PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarAtoms" ((PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "headAtomsOr") (EVar "decls"))) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
-(DFunDef false "krowArgVarAtoms" ((PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyRow" (PVar "labels") (PVar "tails") PWild) (PVar "as2"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "atomsNorm") (EBinOp "++" (EApp (EVar "atomsOfWritten") (EVar "labels")) (EApp (EVar "headAtomsOr") (EVar "decls"))))))) (EVar "tails")) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
+(DFunDef false "krowArgVarAtoms" ((PCons (PCon "KRow") (PVar "ks")) (PVar "decls") (PCons (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild) (PVar "as2"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsNorm") (EBinOp "++" (EApp (EVar "atomsOfWritten") (EVar "labels")) (EApp (EVar "headAtomsOr") (EVar "decls"))))) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2"))))
 (DFunDef false "krowArgVarAtoms" ((PCons PWild (PVar "ks")) (PVar "decls") (PCons PWild (PVar "as2"))) (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EVar "ks")) (EApp (EVar "restAtoms") (EVar "decls"))) (EVar "as2")))
 (DTypeSig false "headAtomsOr" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "headAtomsOr" ((PList)) (EListLit))
@@ -46966,8 +46989,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EApp (EVar "inferIntRange") (EVar "env")) (EVar "lo")) (EVar "hi")) (EApp (EVar "tconBuiltin") (ELit (LString "Array")))))
 (DFunDef false "infer" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") (PVar "ty"))) (EApp (EApp (EApp (EVar "inferHeadAnnot") (EVar "env")) (EVar "e")) (EVar "ty")))
 (DFunDef false "infer" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
-(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PVar "prevDoOrigin") (EUnOp "!" (EVar "currentDoOrigin"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "prevDoOrigin"))) (DoExpr (EVar "t"))))
+(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PVar "prevDoOrigin") (EUnOp "!" (EVar "currentDoOrigin"))) (DoLet false false (PVar "prevDeferred") (EUnOp "!" (EVar "currentDoDeferred"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoDeferred")) (EApp (EVar "doChainIsDeferred") (EVar "e")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "prevDoOrigin"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoDeferred")) (EVar "prevDeferred"))) (DoExpr (EVar "t"))))
 (DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression"))))
+(DTypeSig false "doChainIsDeferred" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "doChainIsDeferred" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "doChainIsDeferred") (EVar "f")))
+(DFunDef false "doChainIsDeferred" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "doChainIsDeferred") (EVar "e")))
+(DFunDef false "doChainIsDeferred" ((PCon "EDoOrigin" PWild (PCon "EVar" (PLit (LString "deferThen"))))) (EVar "True"))
+(DFunDef false "doChainIsDeferred" ((PCon "EDoOrigin" PWild (PCon "EVarId" (PLit (LString "deferThen")) PWild))) (EVar "True"))
+(DFunDef false "doChainIsDeferred" (PWild) (EVar "False"))
 (DTypeSig false "inferArrayLit" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Mono"))))
 (DFunDef false "inferArrayLit" ((PVar "env") (PVar "es")) (EBlock (DoLet false false (PVar "elem") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unifyAll") (EDictApp "elem")) (EApp (EApp (EVar "inferEach") (EVar "env")) (EVar "es")))) (DoExpr (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Array")))) (EDictApp "elem")))))
 (DTypeSig false "inferIntRange" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
@@ -47966,15 +47995,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "paramRowAtomOccs" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EListLit)) (EListLit)))
 (DFunDef false "paramRowAtomOccs" (PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
-(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "p")) (EVar "tails")) (EVar "labels")) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t"))))
-(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EApp (EApp (EApp (EVar "paramRowAtomsFor") (EVar "p")) (EVar "tails")) (EVar "labels")))
+(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EListLit)) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t"))))
+(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t")))
+(DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EListLit)))
+(DFunDef false "paramRowAtomOccs" (PWild (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "a")) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "paramRowAtomOccs") (EVar "p"))) (EVar "ts")))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "a")) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "paramRowAtomOccs") (EVar "p")) (EVar "t")))
 (DFunDef false "paramRowAtomOccs" (PWild PWild) (EListLit))
-(DTypeSig false "paramRowAtomsFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "paramRowAtomsFor" ((PVar "p") (PVar "tails") (PVar "labels")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "p")))) (EVar "tails"))))
 (DTypeSig false "intersectDeclAtoms" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "intersectDeclAtoms" ((PList)) (EListLit))
 (DFunDef false "intersectDeclAtoms" ((PCons (PVar "first") (PVar "rest"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EApp (EVar "allList") (ELam ((PVar "b")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EListLit (EVar "x"))) (EVar "b"))))) (EVar "rest")))) (EVar "first")))
@@ -50025,11 +50054,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "indexOnlyEffVars" ((PVar "scope") (PVar "mty")) (EBlock (DoLet false false (PVar "argNames") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "mty"))))) (DoLet false false (PVar "charged") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "methodEffChargedOccs") (EVar "mty")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "charged"))))) (EVar "argNames")))))
 (DTypeSig false "methodEffChargedOccs" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "methodEffChargedOccs" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodEffChargedOccs") (EVar "t")))
-(DFunDef false "methodEffChargedOccs" ((PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EVar "methodEffChargedOccs") (EVar "t"))))
+(DFunDef false "methodEffChargedOccs" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "methodEffChargedOccs") (EVar "t"))))
+(DFunDef false "methodEffChargedOccs" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "methodEffChargedOccs") (EVar "t")))
 (DFunDef false "methodEffChargedOccs" ((PCon "TyFun" PWild (PVar "b"))) (EApp (EVar "methodEffChargedOccs") (EVar "b")))
 (DFunDef false "methodEffChargedOccs" ((PVar "t")) (EApp (EVar "effVarChargedOccs") (EVar "t")))
 (DTypeSig false "effVarChargedOccs" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "effVarChargedOccs" ((PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EVar "effVarChargedOccs") (EVar "t"))))
+(DFunDef false "effVarChargedOccs" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "effVarChargedOccs") (EVar "t"))))
+(DFunDef false "effVarChargedOccs" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "effVarChargedOccs") (EVar "t")))
 (DFunDef false "effVarChargedOccs" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarChargedOccs") (EVar "a")) (EApp (EVar "effVarChargedOccs") (EVar "b"))))
 (DFunDef false "effVarChargedOccs" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarChargedOccs") (EVar "a")) (EApp (EVar "effVarChargedOccs") (EVar "b"))))
 (DFunDef false "effVarChargedOccs" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "effVarChargedOccs")) (EVar "ts")))
@@ -50045,8 +50076,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effVarOccEscape" (PWild PWild (PList)) (EListLit))
 (DFunDef false "effVarOccEscape" ((PVar "n") (PVar "instAtoms") (PCons (PTuple (PVar "m") (PVar "declAtoms")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "instAtoms")) (EVar "declAtoms")))) (EApp (EApp (EVar "atomsEscape") (EVar "instAtoms")) (EVar "declAtoms")) (EApp (EApp (EApp (EVar "effVarOccEscape") (EVar "n")) (EVar "instAtoms")) (EVar "rest"))))
 (DTypeSig false "effVarOccAtoms" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "effVarOccAtoms" ((PCon "TyEffect" (PVar "labels") (PVar "tails") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")) (EApp (EVar "effVarOccAtoms") (EVar "t"))))
-(DFunDef false "effVarOccAtoms" ((PCon "TyRow" (PVar "labels") (PVar "tails") PWild)) (EApp (EApp (EVar "occsOfTails") (EVar "tails")) (EVar "labels")))
+(DFunDef false "effVarOccAtoms" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "effVarOccAtoms") (EVar "t"))))
+(DFunDef false "effVarOccAtoms" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "effVarOccAtoms") (EVar "t")))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "effVarOccAtoms" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "effVarOccAtoms")) (EVar "ts")))
@@ -50561,12 +50594,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "peelOntoParams" ((PCon "Some" (PVar "src")) (PVar "patTypes") (PVar "pats")) (EApp (EApp (EVar "zipUnify") (EVar "patTypes")) (EApp (EApp (EVar "peelArrows") (EApp (EVar "listLen") (EVar "pats"))) (EVar "src"))))
 (DTypeSig false "checkEffectEscape" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
 (DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "effs")) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras")))))))))
-(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
+(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
 (DFunDef false "effectEscapeMsg" ((PVar "name") (PVar "declared") (PVar "tail") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Function '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' declared with "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "renderDeclaredRow") (EVar "declared")) (EVar "tail")))) (ELit (LString " but also performs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString ">"))))
-(DTypeSig false "renderDeclaredRow" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "renderDeclaredRow" ((PVar "declared") (PList)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString ">"))))
-(DFunDef false "renderDeclaredRow" ((PList) (PVar "tails")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ">"))))
-(DFunDef false "renderDeclaredRow" ((PVar "declared") (PVar "tails")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ">"))))
+(DTypeSig false "renderDeclaredRow" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "None")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PList) (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ">"))))
 (DTypeSig false "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "sccSchemes" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "plainVal") (EBinOp "||" (EVar "isLetrec") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (DoLet false false (PVar "sigIsFun") (EApp (EApp (EApp (EVar "memberSigIsFun") (EVar "sigs")) (EVar "m")) (EVar "v"))) (DoLet false false (PVar "isVal") (EBinOp "||" (EVar "plainVal") (EVar "sigIsFun"))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
@@ -50613,11 +50646,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ppTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppTyFunArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "ppTy" ((PCon "TyTuple" (PVar "ts"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppTy")) (EVar "ts")))) (ELit (LString ")"))))
 (DFunDef false "ppTy" ((PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "effs")) (EVar "tail")))) (ELit (LString "> "))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ""))))
-(DFunDef false "ppTy" ((PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (ELit (LString ")"))))
 (DFunDef false "ppTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "ppTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ""))))
-(DTypeSig false "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "ppEffInsideTy" ((PVar "effs") (PVar "tails")) (EBlock (DoLet false false (PVar "labs") (EApp (EApp (EMethodRef "map") (EVar "ppEffAtomTy")) (EVar "effs"))) (DoExpr (EMatch (EVar "tails") (arm (PList) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs"))) (arm PWild () (EBlock (DoLet false false (PVar "tls") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails"))) (DoExpr (EMatch (EVar "effs") (arm (PList) () (EVar "tls")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "tls"))) (ELit (LString ""))))))))))))
+(DTypeSig false "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "ppEffInsideTy" ((PVar "effs") (PVar "tail")) (EBlock (DoLet false false (PVar "labs") (EApp (EApp (EMethodRef "map") (EVar "ppEffAtomTy")) (EVar "effs"))) (DoExpr (EMatch (EVar "tail") (arm (PCon "None") () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs"))) (arm (PCon "Some" (PVar "v")) () (EMatch (EVar "effs") (arm (PList) () (EVar "v")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))))))))
 (DTypeSig false "ppEffAtomTy" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))

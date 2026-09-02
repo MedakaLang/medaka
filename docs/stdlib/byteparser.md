@@ -11,8 +11,9 @@ A `ByteParser a` wraps a function from (byte array + position) to a
 (message + position).  Position threading is EXPLICIT — there is no hidden
 state monad; every primitive returns the position it consumed up to.
 
-The type is given `Mappable` / `Applicative` / `Thenable` instances so that
-`do`-notation sequences parsers, and an `Alternative` instance whose
+The type is given `DeferredMappable` / `DeferredApplicative` /
+`DeferredThenable` instances so that
+`defer`-notation sequences parsers, and a plain `orElse`/`noMatch` pair whose
 `orElse` is LEFT-BIASED with FULL BACKTRACKING: `orElse p q` tries `p` at
 the current position; if `p` fails it runs `q` at the SAME position (the
 input is immutable and we never mutate the position on failure, so
@@ -40,19 +41,32 @@ Parse result: success carries the value and the position just past what
   pattern-match `BOk`/`BErr` directly when they need byte-precise position
   control beyond what the monadic combinators give.
 
-## `ByteParser`
+## `ByteParserE`
 
 ```
-data ByteParser a
-  = ByteParser (Array Int -> Int -> BResult a)
+data ByteParserE (e : Effect) a
+  = ByteParserE (Array Int -> Int -> <e> BResult a)
 ```
 
 A byte-level parser is a function from (byte array, position) to BResult.
+  It STORES that function rather than running it, so the type indexes the
+  container by the row the stored arrow performs (`Deferred*`, core.mdk /
+  #825).  Charging a callback's row on the combinator's own arrow — what the
+  plain `Mappable`/`Applicative`/`Thenable` family does — would force the
+  stored arrow pure and run an effectful callback inside a value typed `<>`.
+  Decoding bytes performs nothing, so the exported `ByteParser a` alias pins
+  the index to `<>` and every existing signature keeps its meaning.
+
+## `ByteParser`
+
+```
+type ByteParser a = ByteParserE <> a
+```
 
 ## `runBP`
 
 ```
-runBP : ByteParser a -> Array Int -> Int -> BResult a
+runBP : ByteParserE a b -> Array Int -> Int -> BResult b
 ```
 
 Run the wrapped function directly.
@@ -78,38 +92,46 @@ Position-threading bind for BResult.  On success, passes the value and
   Lets callers chain position-threading steps without repeating the
   `BErr m ep => BErr m ep` pass-through boilerplate.
 
-## `Mappable ByteParser`
+## `DeferredMappable ByteParserE`
 
 ```
-impl Mappable ByteParser
+impl DeferredMappable ByteParserE
 ```
 
-## `Applicative ByteParser`
+## `DeferredApplicative ByteParserE`
 
 ```
-impl Applicative ByteParser
+impl DeferredApplicative ByteParserE
 ```
 
-## `Thenable ByteParser`
+## `DeferredThenable ByteParserE`
 
 ```
-impl Thenable ByteParser
+impl DeferredThenable ByteParserE
 ```
 
-## `Alternative ByteParser`
+## `noMatch`
 
 ```
-impl Alternative ByteParser
+noMatch : ByteParserE a b
 ```
 
-Left-biased, full-backtracking alternative.
+Left-biased, full-backtracking alternative.  Plain functions rather than an
+  `Alternative` impl: that interface `requires Applicative f` at kind
+  `Type -> Type`, which `ByteParserE : Effect -> Type -> Type` cannot satisfy.
   `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
   `q` from the ORIGINAL position.
+
+## `orElse`
+
+```
+orElse : ByteParserE a b -> ByteParserE a b -> ByteParserE a b
+```
 
 ## `failWith`
 
 ```
-failWith : String -> ByteParser a
+failWith : String -> ByteParserE <> a
 ```
 
 Fail unconditionally with a message.
@@ -117,7 +139,7 @@ Fail unconditionally with a message.
 ## `satisfy`
 
 ```
-satisfy : (Int -> Bool) -> ByteParser Int
+satisfy : (Int -> Bool) -> ByteParserE <> Int
 ```
 
 Consume one byte if it satisfies the predicate.
@@ -135,7 +157,7 @@ Err "unexpected byte at byte 0"
 ## `anyByte`
 
 ```
-anyByte : ByteParser Int
+anyByte : ByteParserE <> Int
 ```
 
 Consume any single byte.
@@ -151,7 +173,7 @@ Ok 42
 ## `byte`
 
 ```
-byte : Int -> ByteParser Int
+byte : Int -> ByteParserE <> Int
 ```
 
 Consume exactly the given byte value.
@@ -169,7 +191,7 @@ Err "unexpected byte at byte 0"
 ## `eof`
 
 ```
-eof : ByteParser Unit
+eof : ByteParserE <> Unit
 ```
 
 Match the end of input.  Yields Unit; consumes nothing.
@@ -187,7 +209,7 @@ Err "expected end of input at byte 0"
 ## `peek`
 
 ```
-peek : ByteParser Int
+peek : ByteParserE <> Int
 ```
 
 Peek at the current byte without consuming it.
@@ -195,7 +217,7 @@ Peek at the current byte without consuming it.
 ## `many`
 
 ```
-many : ByteParser a -> ByteParser (List a)
+many : ByteParserE <> a -> ByteParserE <> (List a)
 ```
 
 Zero-or-more.  Uses explicit position threading (a loop), since `many`
@@ -212,7 +234,7 @@ Ok [1, 1, 1]
 ## `some`
 
 ```
-some : ByteParser a -> ByteParser (List a)
+some : ByteParserE <> a -> ByteParserE <> (List a)
 ```
 
 One-or-more.
@@ -230,7 +252,7 @@ Err "unexpected byte at byte 0"
 ## `sepBy1`
 
 ```
-sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
+sepBy1 : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> (List a)
 ```
 
 One-or-more `p` separated by `sep`.
@@ -238,7 +260,7 @@ One-or-more `p` separated by `sep`.
 ## `sepBy`
 
 ```
-sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
+sepBy : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> (List a)
 ```
 
 Zero-or-more `p` separated by `sep`.
@@ -246,7 +268,7 @@ Zero-or-more `p` separated by `sep`.
 ## `optional`
 
 ```
-optional : ByteParser a -> ByteParser (Option a)
+optional : ByteParserE <> a -> ByteParserE <> (Option a)
 ```
 
 Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
@@ -264,7 +286,7 @@ Ok None
 ## `between`
 
 ```
-between : ByteParser a -> ByteParser b -> ByteParser c -> ByteParser c
+between : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> c -> ByteParserE <> c
 ```
 
 `between open close p` parses `open`, then `p`, then `close`, yielding `p`.
@@ -272,7 +294,7 @@ between : ByteParser a -> ByteParser b -> ByteParser c -> ByteParser c
 ## `choice`
 
 ```
-choice : List (ByteParser a) -> ByteParser a
+choice : List (ByteParserE <> a) -> ByteParserE <> a
 ```
 
 First successful parser in the list; fails if all fail.
@@ -280,19 +302,22 @@ First successful parser in the list; fails if all fail.
 ## `chainl1`
 
 ```
-chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
+chainl1 : ByteParserE <> a -> ByteParserE <> (a -> a -> a) -> ByteParserE <> a
 ```
 
 Left-associative chaining of `p` separated by operator parser `op`
   whose value is a binary function.
-Structurally identical to compiler/frontend/parser.mdk's chainl1, but over
-a different parser type (ByteParser vs token Parser) — not soundly
-shareable without a generic Monad/Alternative abstraction.
+Structurally identical to compiler/frontend/parser.mdk's chainl1.  Both
+containers are `DeferredThenable` now, but the loop tail also needs `orElse`,
+which each provides as a plain function rather than through a shared
+interface (`Alternative` requires `Applicative` at kind `Type -> Type`, which
+an `Effect`-indexed container cannot satisfy) — so a single generic version
+still has nothing to abstract over.
 
 ## `takeBytes`
 
 ```
-takeBytes : Int -> ByteParser (List Int)
+takeBytes : Int -> ByteParserE <> (List Int)
 ```
 
 Read exactly N bytes, returning them as a List Int.
@@ -308,7 +333,7 @@ Ok [10, 20, 30]
 ## `takeSlice`
 
 ```
-takeSlice : Int -> ByteParser (Array Int)
+takeSlice : Int -> ByteParserE <> (Array Int)
 ```
 
 Read exactly N bytes, returning them as an Array Int slice.
@@ -316,7 +341,7 @@ Read exactly N bytes, returning them as an Array Int slice.
 ## `beUint`
 
 ```
-beUint : Int -> ByteParser Int
+beUint : Int -> ByteParserE <> Int
 ```
 
 Read a big-endian unsigned integer of exactly N bytes (N in 1..8).
@@ -337,7 +362,7 @@ Ok 256
 ## `beSint`
 
 ```
-beSint : Int -> ByteParser Int
+beSint : Int -> ByteParserE <> Int
 ```
 
 Read a big-endian SIGNED integer of exactly N bytes (N in 1..8),
@@ -363,7 +388,7 @@ Ok 1
 ## `beFloat64`
 
 ```
-beFloat64 : ByteParser Float
+beFloat64 : ByteParserE <> Float
 ```
 
 Read a 64-bit IEEE 754 big-endian float as a Medaka Float.
@@ -383,7 +408,7 @@ Ok -2.0
 ## `leUint`
 
 ```
-leUint : Int -> ByteParser Int
+leUint : Int -> ByteParserE <> Int
 ```
 
 Read a little-endian unsigned integer of exactly N bytes (N in 1..8).
@@ -405,7 +430,7 @@ Ok 256
 ## `leSint`
 
 ```
-leSint : Int -> ByteParser Int
+leSint : Int -> ByteParserE <> Int
 ```
 
 Read a little-endian SIGNED integer of exactly N bytes (N in 1..8),
@@ -429,7 +454,7 @@ Ok 1
 ## `leFloat64`
 
 ```
-leFloat64 : ByteParser Float
+leFloat64 : ByteParserE <> Float
 ```
 
 Read a 64-bit IEEE 754 little-endian float as a Medaka Float.
@@ -450,7 +475,7 @@ Ok -2.0
 ## `runByteParser`
 
 ```
-runByteParser : ByteParser a -> Array Int -> Result String a
+runByteParser : ByteParserE <> a -> Array Int -> Result String a
 ```
 
 Run a `ByteParser` over the full byte array starting at position 0.

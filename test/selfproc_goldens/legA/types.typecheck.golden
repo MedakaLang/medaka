@@ -514,6 +514,7 @@ ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> St
 ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholds : String -> String -> Bool
+currentDoDeferred : Ref Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
@@ -616,7 +617,7 @@ declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintFor : String -> CDeclared
 declaredConstraintIds : String -> List Int
 declaredCrossModuleObls : String -> Option (List VecObl)
-declaredEffectTail : Ty -> List String
+declaredEffectTail : Ty -> Option String
 declaredEffects : Ty -> List Atom
 declaredEffectsOpen : Ty -> Bool
 declaredIfacesOn : String -> Ty -> List String
@@ -649,6 +650,7 @@ defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNum : List UObligation -> List Mono -> Unit
 defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
+deferRequiresMonadMsg : String
 definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
 definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverIsDictVar : String -> Mono -> Bool
@@ -701,6 +703,7 @@ djoin : Param -> Param -> Param
 djoinN : Param -> Param -> Param
 doBindArgHint : String -> String
 doBindArgMsg : String -> String
+doChainIsDeferred : Expr -> Bool
 doRequiresMonadMsg : String
 doStmtDictSites : DoStmt -> List (Ref (List Route))
 doStmtEVars : DoStmt -> List String
@@ -742,7 +745,7 @@ effVarOccAtoms : Ty -> List (String, List Atom)
 effVarOccEscape : String -> List Atom -> List (String, List Atom) -> List Atom
 effVarTailIds : List (String, Ref Effvar) -> List Int
 effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
-effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
+effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
 effectLaunderMsg : String -> String -> List Atom -> String
 effectLeakCheck : List Atom -> List Atom -> Unit
 effectLeakMsg : List Atom -> List Atom -> String
@@ -1568,7 +1571,6 @@ oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
-occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
 occurrenceCarriesMangledShadowSym : Ref Route -> Bool
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
@@ -1608,7 +1610,6 @@ paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> O
 paramPolaritiesIn : List (TabKey, List Polarity) -> TabKey -> Option (List Polarity)
 paramPolaritiesOf : TabKey -> Option (List Polarity)
 paramRowAtomOccs : String -> Ty -> List (List Atom)
-paramRowAtomsFor : String -> List String -> List (String, Option String) -> List (List Atom)
 paramRowAtomsOf : TabKey -> Option (List (List Atom))
 paramVarianceCheck : Mono -> Mono -> Unit
 paramVarianceCheckN : Mono -> Mono -> Unit
@@ -1669,7 +1670,7 @@ ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
 ppEffArgFmt : String -> String -> String
 ppEffAtomTy : (String, Option String) -> String
-ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffInsideTy : List (String, Option String) -> Option String -> String
 ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
 ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> String
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
@@ -1856,7 +1857,7 @@ renderAxisVal : Param -> String
 renderCallArg : Expr -> Option String
 renderCallArgs : List Expr -> Option (List String)
 renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List VecObl -> List String
-renderDeclaredRow : List Atom -> List String -> String
+renderDeclaredRow : List Atom -> Option String -> String
 renderEffTailVars : List String -> String
 renderFlatRow : (List Atom, List (Ref Effvar)) -> String
 renderKindAnn : KindAnn -> String
@@ -1955,7 +1956,7 @@ rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 rowFlat : EffRow -> (List Atom, List (Ref Effvar))
 rowFlatMembers : List Atom -> List (Ref Effvar) -> (List Atom, List (Ref Effvar))
 rowFreeEffvars : EffRow -> List Int
-rowKindMismatchMsg : List (String, Option String) -> List String -> String
+rowKindMismatchMsg : List (String, Option String) -> Option String -> String
 rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
 rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
@@ -2103,8 +2104,8 @@ tabKeyElem : List TabKey -> TabKey -> Bool
 tagAllLitLocs : Mono -> String -> Unit
 tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit
 tagNumlitCtxIf : Mono -> Mono -> String -> Unit
-tailCell : List (String, Ref Effvar) -> List String -> Option (Ref Effvar)
-tailCellsOf : List (String, Ref Effvar) -> List String -> List (Ref Effvar)
+tailCell : List (String, Ref Effvar) -> Option String -> Option (Ref Effvar)
+tailNameList : Option String -> List String
 taintAndDrop : Int -> List (Mono, Loc) -> List (Mono, Loc)
 takeFirst : Int -> List a -> List a
 takeUntilInclusiveS : String -> List String -> List String

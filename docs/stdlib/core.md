@@ -951,6 +951,24 @@ deferFlatMap : (a -> b c d) -> b c a -> b c d
 
 `deferThen` with arguments flipped.
 
+## `deferWhen`
+
+```
+deferWhen : Bool -> a b Unit -> a b Unit
+```
+
+`when` for the deferred family: run the action only when the condition
+holds.  A distinct name because `when`'s `Thenable m => m Unit` cannot
+describe an `Effect`-indexed container.
+
+## `deferUnless`
+
+```
+deferUnless : Bool -> a b Unit -> a b Unit
+```
+
+`unless` for the deferred family.  Dual of `deferWhen`.
+
 ## `foldThen`
 
 ```

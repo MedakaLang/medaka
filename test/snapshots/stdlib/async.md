@@ -1,5 +1,5 @@
 # META
-source_lines=116
+source_lines=121
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's basic, swappable cooperative-concurrency layer.
@@ -27,22 +27,27 @@ stages=DESUGAR,MARK
 -- next step.  This is the trampoline / free-monad-ish encoding (ASYNC-DESIGN
 -- §2.1) — `Suspend` boundaries are the yield points the scheduler interleaves
 -- on.  The thunk performs `<e>`, so `e` is the row this computation rides.
-export data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+export data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 
--- The interface instances are over `Async e` (the row fixed, the value varying)
--- — the standard partially-applied `* -> *` instance head, like `Mappable (Map
--- k)`.
-export impl Mappable (Async e) where
-  map f (Done a) = Done (f a)
-  map f (Suspend t) = Suspend (u => map f (t u))
+-- The interface instances are the DEFERRED family (core.mdk `Deferred*`):
+-- the instance head is the bare constructor `Async : Effect -> Type -> Type`,
+-- and the effect of a callback rides the INDEX, not the method's arrow.  Every
+-- arm STORES its callback under a `Suspend` — an eager `Done (f a)` would
+-- perform the callback's row at construction, from a call typed pure, and is
+-- rejected (`T-EFFECT-INDEX-EAGER`).  Cost accepted with that ruling: a
+-- map/bind on an already-`Done` value allocates one `Suspend` and pays one
+-- extra `runAsync` round.
+export impl DeferredMappable Async where
+  deferMap f (Done a) = Suspend (u => Done (f a))
+  deferMap f (Suspend t) = Suspend (u => deferMap f (t u))
 
-export impl Applicative (Async e) where
-  pure a = Done a
-  ap mf ma = andThen mf (f => map f ma)
+export impl DeferredApplicative Async where
+  deferPure a = Done a
+  deferAp mf ma = deferThen mf (f => deferMap f ma)
 
-export impl Thenable (Async e) where
-  andThen (Done a) k = k a
-  andThen (Suspend t) k = Suspend (u => andThen (t u) k)
+export impl DeferredThenable Async where
+  deferThen (Done a) k = Suspend (u => k a)
+  deferThen (Suspend t) k = Suspend (u => deferThen (t u) k)
 
 -- | Lift an effectful (or pure) thunk into `Async`, deferring it behind one
 -- `Suspend` boundary.  `liftIO (u => putStrLn "hi") : Async <Stdout> Unit`;
@@ -100,16 +105,16 @@ concurrent asyncs = Suspend (_ => concurrent (map stepAsync asyncs))
    > runAsync (Done 5)
    5
 
-   > runAsync (map (x => x + 1) (Done 4))
+   > runAsync (deferMap (x => x + 1) (Done 4))
    5
 
-   > runAsync (ap (Done (x => x * 2)) (Done 21))
+   > runAsync (deferAp (Done (x => x * 2)) (Done 21))
    42
 
-   > runAsync (andThen (Done 10) (x => Done (x + 5)))
+   > runAsync (deferThen (Done 10) (x => Done (x + 5)))
    15
 
-   > runAsync (andThen yield (_ => Done 99))
+   > runAsync (deferThen yield (_ => Done 99))
    99
 
    > runAsync (liftIO (u => 21 + 21))
@@ -120,9 +125,9 @@ concurrent asyncs = Suspend (_ => concurrent (map stepAsync asyncs))
 -}
 # DESUGAR
 (DData Abstract "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
-(DImpl true "Mappable" ((TyApp (TyCon "Async") (TyVar "e"))) () ((im "map" ((PVar "f") (PCon "Done" (PVar "a"))) (EApp (EVar "Done") (EApp (EVar "f") (EVar "a")))) (im "map" ((PVar "f") (PCon "Suspend" (PVar "t"))) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "map") (EVar "f")) (EApp (EVar "t") (EVar "u"))))))))
-(DImpl true "Applicative" ((TyApp (TyCon "Async") (TyVar "e"))) () ((im "pure" ((PVar "a")) (EApp (EVar "Done") (EVar "a"))) (im "ap" ((PVar "mf") (PVar "ma")) (EApp (EApp (EVar "andThen") (EVar "mf")) (ELam ((PVar "f")) (EApp (EApp (EVar "map") (EVar "f")) (EVar "ma")))))))
-(DImpl true "Thenable" ((TyApp (TyCon "Async") (TyVar "e"))) () ((im "andThen" ((PCon "Done" (PVar "a")) (PVar "k")) (EApp (EVar "k") (EVar "a"))) (im "andThen" ((PCon "Suspend" (PVar "t")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "andThen") (EApp (EVar "t") (EVar "u"))) (EVar "k")))))))
+(DImpl true "DeferredMappable" ((TyCon "Async")) () ((im "deferMap" ((PVar "f") (PCon "Done" (PVar "a"))) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "f") (EVar "a")))))) (im "deferMap" ((PVar "f") (PCon "Suspend" (PVar "t"))) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "deferMap") (EVar "f")) (EApp (EVar "t") (EVar "u"))))))))
+(DImpl true "DeferredApplicative" ((TyCon "Async")) () ((im "deferPure" ((PVar "a")) (EApp (EVar "Done") (EVar "a"))) (im "deferAp" ((PVar "mf") (PVar "ma")) (EApp (EApp (EVar "deferThen") (EVar "mf")) (ELam ((PVar "f")) (EApp (EApp (EVar "deferMap") (EVar "f")) (EVar "ma")))))))
+(DImpl true "DeferredThenable" ((TyCon "Async")) () ((im "deferThen" ((PCon "Done" (PVar "a")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "k") (EVar "a"))))) (im "deferThen" ((PCon "Suspend" (PVar "t")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "deferThen") (EApp (EVar "t") (EVar "u"))) (EVar "k")))))))
 (DTypeSig true "liftIO" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))
 (DFunDef false "liftIO" ((PVar "act")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "act") (EVar "u"))))))
 (DTypeSig true "yield" (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))
@@ -144,9 +149,9 @@ concurrent asyncs = Suspend (_ => concurrent (map stepAsync asyncs))
 (DFunDef false "concurrent" ((PVar "asyncs")) (EApp (EVar "Suspend") (ELam (PWild) (EApp (EVar "concurrent") (EApp (EApp (EVar "map") (EVar "stepAsync")) (EVar "asyncs"))))))
 # MARK
 (DData Abstract "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
-(DImpl true "Mappable" ((TyApp (TyCon "Async") (TyVar "e"))) () ((im "map" ((PVar "f") (PCon "Done" (PVar "a"))) (EApp (EVar "Done") (EApp (EVar "f") (EVar "a")))) (im "map" ((PVar "f") (PCon "Suspend" (PVar "t"))) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EApp (EVar "t") (EVar "u"))))))))
-(DImpl true "Applicative" ((TyApp (TyCon "Async") (TyVar "e"))) () ((im "pure" ((PVar "a")) (EApp (EVar "Done") (EVar "a"))) (im "ap" ((PVar "mf") (PVar "ma")) (EApp (EApp (EMethodRef "andThen") (EVar "mf")) (ELam ((PVar "f")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "ma")))))))
-(DImpl true "Thenable" ((TyApp (TyCon "Async") (TyVar "e"))) () ((im "andThen" ((PCon "Done" (PVar "a")) (PVar "k")) (EApp (EVar "k") (EVar "a"))) (im "andThen" ((PCon "Suspend" (PVar "t")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "t") (EVar "u"))) (EVar "k")))))))
+(DImpl true "DeferredMappable" ((TyCon "Async")) () ((im "deferMap" ((PVar "f") (PCon "Done" (PVar "a"))) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "f") (EVar "a")))))) (im "deferMap" ((PVar "f") (PCon "Suspend" (PVar "t"))) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EMethodRef "deferMap") (EVar "f")) (EApp (EVar "t") (EVar "u"))))))))
+(DImpl true "DeferredApplicative" ((TyCon "Async")) () ((im "deferPure" ((PVar "a")) (EApp (EVar "Done") (EVar "a"))) (im "deferAp" ((PVar "mf") (PVar "ma")) (EApp (EApp (EMethodRef "deferThen") (EVar "mf")) (ELam ((PVar "f")) (EApp (EApp (EMethodRef "deferMap") (EVar "f")) (EVar "ma")))))))
+(DImpl true "DeferredThenable" ((TyCon "Async")) () ((im "deferThen" ((PCon "Done" (PVar "a")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "k") (EVar "a"))))) (im "deferThen" ((PCon "Suspend" (PVar "t")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "t") (EVar "u"))) (EVar "k")))))))
 (DTypeSig true "liftIO" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))
 (DFunDef false "liftIO" ((PVar "act")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "act") (EVar "u"))))))
 (DTypeSig true "yield" (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))
