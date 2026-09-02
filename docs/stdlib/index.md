@@ -437,6 +437,8 @@ An immutable map from keys to values, ordered by key.
 
 ## [`math`](math.md)
 
+Floating-point math and a few integer helpers.
+
 - [`toRadians`](math.md#toradians)
 - [`toDegrees`](math.md#todegrees)
 - [`isNaN`](math.md#isnan)
