@@ -5,7 +5,9 @@
 //
 // It instantiates playground.wasm with the host IO ABI (a port of test/wasm/run.js)
 // over an IN-MEMORY vfs (stdlib runtime.mdk/core.mdk + the user source), runs the
-// guest once, and demuxes the guest's stdout by its first-line marker:
+// guest — on ONE instance kept alive across calls, re-entered through the
+// module's `mdk_main` export (see "persistent guest session" below) — and
+// demuxes the guest's stdout by its first-line marker:
 //
 //   __MEDAKA_WAT__\n<wat>                          -> { ok: true,  wat }
 //   __MEDAKA_WAT_DIAGS__\n<json>\n<wat>            -> { ok: true,  wat, diagnostics }  (clean, but WARNINGS)
@@ -146,6 +148,7 @@ function compiledModuleFor(wasmModuleOrBytes) {
   if (_compiledModule && _compiledLen === len) return _compiledModule;
   _compiledLen = len;
   _compiledModule = WebAssembly.compile(wasmModuleOrBytes);
+  _session = null;   // a new module means a new instance (see runGuest)
   return _compiledModule;
 }
 
@@ -167,65 +170,128 @@ function buildVfs(source, stdlib) {
   return vfsMap;
 }
 
+// ── persistent guest session ─────────────────────────────────────────────────
+// The guest module's `(start $__init)` runs the eager top-level initializers and
+// then `main`, and ALSO exports that `main` as `mdk_main` (compiler/backend/
+// wasm_emit.mdk, emitRefInit) so a host can call it again on the SAME instance.
+// Re-entering keeps every top-level `Ref` the compiler uses as a process-wide
+// memo alive across calls — above all the content-keyed prelude parse/desugar
+// caches (frontend/parse_cache.mdk, frontend/desugar_cache.mdk).  A fresh
+// instance per analyze re-parsed and re-desugared runtime.mdk + core.mdk on
+// every keystroke: natively that is the difference between a 211ms first
+// analyze and an ~85ms second one in the same process (#2036 playground arm).
+//
+// The host side of each call (argv, the vfs, the stdout/stderr accumulators) is
+// swapped per call through one mutable `host` record that the import closures
+// read at call time, so the imports bound at instantiate time stay valid.
+//
+// Safety: the session is dropped (and the next call re-instantiates) on ANY
+// exception out of the guest other than a clean `mdk_exit` — a trap or a stack
+// overflow can leave guest globals half-updated (a lazy value global stuck in
+// its FORCING state, for instance), and a fresh instance is the only state we
+// can vouch for.  `resetGuestSession()` drops it on demand (tests).
+let _session = null;   // { instance, host } for the one cached module
+
+function makeHost() {
+  const host = {
+    argv: [],
+    vfsMap: new Map(),
+    acc: [], eacc: [],
+    floatFmtBuf: [], pathBuf: [], resultBuf: new Uint8Array(0),
+    strToFloatOk: 0,   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
+    exited: false,
+    resolve: null,
+    imports: null,
+  };
+  host.reset = (vfsMap, argv, resolve) => {
+    host.argv = argv; host.vfsMap = vfsMap; host.resolve = resolve;
+    host.acc = []; host.eacc = [];
+    host.floatFmtBuf = []; host.pathBuf = []; host.resultBuf = new Uint8Array(0);
+    host.strToFloatOk = 0; host.exited = false;
+  };
+  host.finish = (code) => {
+    if (host.exited) return;
+    host.exited = true;
+    const resolve = host.resolve;
+    host.resolve = null;
+    resolve({ out: dec(host.acc), err: dec(host.eacc), exit: code | 0 });
+  };
+  const takePath = () => { const s = dec(host.pathBuf); host.pathBuf = []; return s; };
+  host.imports = { env: {
+    mdk_write_byte: (b) => { host.acc.push(b & 0xff); },
+    mdk_write_err_byte: (b) => { host.eacc.push(b & 0xff); },
+    mdk_float_fmt: (d) => { host.floatFmtBuf = Array.from(enc(fmt12g(d))); return host.floatFmtBuf.length; },
+    mdk_float_fmt_byte: (i) => host.floatFmtBuf[i] & 0xff,
+    // #101 libm math host seam (JS Math.*) — see run.js.  Harmless if unused (imports
+    // are resolved by name); provided so a math-using program run through this path works.
+    mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log,
+    mdk_log2: Math.log2, mdk_log10: Math.log10,
+    mdk_sin: Math.sin, mdk_cos: Math.cos, mdk_tan: Math.tan,
+    mdk_asin: Math.asin, mdk_acos: Math.acos, mdk_atan: Math.atan,
+    mdk_sinh: Math.sinh, mdk_cosh: Math.cosh, mdk_tanh: Math.tanh,
+    mdk_pow: Math.pow, mdk_atan2: Math.atan2, mdk_hypot: Math.hypot,
+    // layer-6 stringToFloat (#370): the guest calls mdk_path_reset+mdk_path_push to
+    // populate pathBuf, then mdk_str_to_float (which parses AND latches the ok flag),
+    // then mdk_str_to_float_ok. Two channels because Some(nan) is a LEGAL strtod
+    // result, so NaN cannot double as the failure signal (that collapse was #370).
+    mdk_str_to_float: () => { const r = mdkStrToFloat(takePath()); host.strToFloatOk = r.ok; return r.value; },
+    mdk_str_to_float_ok: () => host.strToFloatOk,
+    mdk_path_reset: () => { host.pathBuf = []; },
+    mdk_path_push: (b) => { host.pathBuf.push(b & 0xff); },
+    mdk_read_file: () => {
+      const p = takePath();
+      if (host.vfsMap.has(p)) { host.resultBuf = host.vfsMap.get(p); return 1; }
+      host.resultBuf = enc('ENOENT: ' + p); return 0;
+    },
+    mdk_file_exists: () => (host.vfsMap.has(takePath()) ? 1 : 0),
+    mdk_get_env: () => { takePath(); host.resultBuf = new Uint8Array(0); return 0; },
+    mdk_args_count: () => host.argv.length,
+    mdk_arg_len: (i) => enc(host.argv[i]).length,
+    mdk_arg_byte: (i, j) => enc(host.argv[i])[j] & 0xff,
+    mdk_result_len: () => host.resultBuf.length,
+    mdk_result_byte: (i) => host.resultBuf[i] & 0xff,
+    mdk_exit: (code) => { host.finish(code); throw new ExitSignal(); },
+  } };
+  return host;
+}
+
+// Drop the cached guest instance; the next call instantiates afresh.
+export function resetGuestSession() { _session = null; }
+
 // Run the compiler guest once over an in-memory vfs.  `vfsMap` = Map<path, Uint8Array>.
 // `argv` = string[].  Returns { out, err, exit } (out/err as strings).
+// First call: instantiate (the module's start function runs `main`).  Later
+// calls: re-enter the SAME instance through its `mdk_main` export (see above).
 function runGuest(wasmModuleOrBytes, vfsMap, argv) {
   return new Promise((resolve, reject) => {
-    const acc = [];
-    const eacc = [];
-    let floatFmtBuf = [];
-    let pathBuf = [];
-    let resultBuf = new Uint8Array(0);
-    let strToFloatOk = 0;   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
-    const takePath = () => { const s = dec(pathBuf); pathBuf = []; return s; };
-    let exited = false;
-    const finish = (code) => {
-      if (exited) return;
-      exited = true;
-      resolve({ out: dec(acc), err: dec(eacc), exit: code | 0 });
-    };
-
-    const imports = { env: {
-      mdk_write_byte: (b) => { acc.push(b & 0xff); },
-      mdk_write_err_byte: (b) => { eacc.push(b & 0xff); },
-      mdk_float_fmt: (d) => { floatFmtBuf = Array.from(enc(fmt12g(d))); return floatFmtBuf.length; },
-      mdk_float_fmt_byte: (i) => floatFmtBuf[i] & 0xff,
-      // #101 libm math host seam (JS Math.*) — see run.js.  Harmless if unused (imports
-      // are resolved by name); provided so a math-using program run through this path works.
-      mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log,
-      mdk_log2: Math.log2, mdk_log10: Math.log10,
-      mdk_sin: Math.sin, mdk_cos: Math.cos, mdk_tan: Math.tan,
-      mdk_asin: Math.asin, mdk_acos: Math.acos, mdk_atan: Math.atan,
-      mdk_sinh: Math.sinh, mdk_cosh: Math.cosh, mdk_tanh: Math.tanh,
-      mdk_pow: Math.pow, mdk_atan2: Math.atan2, mdk_hypot: Math.hypot,
-      // layer-6 stringToFloat (#370): the guest calls mdk_path_reset+mdk_path_push to
-      // populate pathBuf, then mdk_str_to_float (which parses AND latches the ok flag),
-      // then mdk_str_to_float_ok. Two channels because Some(nan) is a LEGAL strtod
-      // result, so NaN cannot double as the failure signal (that collapse was #370).
-      mdk_str_to_float: () => { const r = mdkStrToFloat(takePath()); strToFloatOk = r.ok; return r.value; },
-      mdk_str_to_float_ok: () => strToFloatOk,
-      mdk_path_reset: () => { pathBuf = []; },
-      mdk_path_push: (b) => { pathBuf.push(b & 0xff); },
-      mdk_read_file: () => {
-        const p = takePath();
-        if (vfsMap.has(p)) { resultBuf = vfsMap.get(p); return 1; }
-        resultBuf = enc('ENOENT: ' + p); return 0;
-      },
-      mdk_file_exists: () => (vfsMap.has(takePath()) ? 1 : 0),
-      mdk_get_env: () => { takePath(); resultBuf = new Uint8Array(0); return 0; },
-      mdk_args_count: () => argv.length,
-      mdk_arg_len: (i) => enc(argv[i]).length,
-      mdk_arg_byte: (i, j) => enc(argv[i])[j] & 0xff,
-      mdk_result_len: () => resultBuf.length,
-      mdk_result_byte: (i) => resultBuf[i] & 0xff,
-      mdk_exit: (code) => { finish(code); throw new ExitSignal(); },
-    } };
-
+    if (_session) {
+      const { instance, host } = _session;
+      host.reset(vfsMap, argv, resolve);
+      try {
+        instance.exports.mdk_main();
+        host.finish(0);
+      } catch (e) {
+        if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
+        _session = null;
+        reject(e);
+      }
+      return;
+    }
+    const host = makeHost();
+    host.reset(vfsMap, argv, resolve);
     compiledModuleFor(wasmModuleOrBytes)
-      .then((module) => WebAssembly.instantiate(module, imports))
-      .then(() => finish(0))
+      .then((module) => WebAssembly.instantiate(module, host.imports))
+      .then((instance) => {
+        // A module without the export (an older emitter) simply never persists.
+        if (instance && typeof instance.exports.mdk_main === 'function') {
+          _session = { instance, host };
+        }
+        host.finish(0);
+      })
       .catch((e) => {
-        if (e instanceof ExitSignal || exited) { finish(0); return; }
+        // A guest that ended through mdk_exit inside `start` never yields its
+        // instance, so it cannot be cached either — the next call instantiates.
+        if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
         reject(e);
       });
   });

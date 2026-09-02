@@ -907,20 +907,17 @@ parseErrDiag path e =
 -- is a session-lived source→decls memo threaded by the caller; the import graph is
 -- loaded via loadProgramFilesLocatedCached so an UNCHANGED dependency module skips
 -- re-parsing (only the edited entry buffer's new source misses).  The runtime/core
--- prelude desugar is memoized in the SAME cache (keyed by its source) — constant
--- across the session.  Passing a fresh `Ref []` reproduces the old uncached cost
--- exactly (correctness is identical; only the wall-clock per keystroke drops).
+-- prelude desugar goes through the process-wide content-keyed `desugaredPrelude`
+-- memo (frontend/desugar_cache.mdk) — the SAME memo the single-module `analyzeFrom`
+-- fills — so the two arms share one prelude artifact, and a caller that passes a
+-- fresh `Ref []` per call (the playground's multi-module arm) still pays the
+-- prelude parse+desugar once per process, not once per call.
 
--- Memoized prelude desugar: parse+desugar the runtime/core source once per session,
--- keyed by source in the shared parse cache (its keys never collide with a module's
--- source).  A miss parses+desugars and inserts; a hit returns the cached decls.
-preludeDesugared : Ref (List (String, List Decl)) -> String -> List Decl
-preludeDesugared parseCacheRef src = match lookupAssoc src !parseCacheRef
-  Some decls => decls
-  None =>
-    let decls = desugar (parse src)
-    parseCacheRef := (src, decls) :: !parseCacheRef
-    decls
+-- Memoized prelude desugar, by source string.  One memo for every arm: a hit here
+-- is a hit for `analyzeFrom` and for the emit drivers that read `desugaredPrelude`
+-- after analysis, and vice versa.
+preludeDesugared : String -> List Decl
+preludeDesugared src = desugaredPrelude src
 
 -- `allowInternal`/`trustedMods` gate the internal-extern guard on the RESOLVE
 -- pass exactly as `resolveModulesErrorsPairsG` (the human `check`/`run`/`build`
@@ -936,8 +933,8 @@ analyzeProject : Bool -> List String -> Ref (List (String, String)) -> Ref (List
 analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
-  let runtimeP = preludeDesugared parseCacheRef runtimeSrc
-  let coreP = preludeDesugared parseCacheRef coreSrc
+  let runtimeP = preludeDesugared runtimeSrc
+  let coreP = preludeDesugared coreSrc
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
@@ -969,8 +966,8 @@ projectEntrySchemes : Ref (List (String, String)) -> Ref (List (String, List Dec
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
-  let runtimeP = preludeDesugared parseCacheRef runtimeSrc
-  let coreP = preludeDesugared parseCacheRef coreSrc
+  let runtimeP = preludeDesugared runtimeSrc
+  let coreP = preludeDesugared coreSrc
   match loadProgramFilesLocatedCached parseCacheRef wread entry roots
     Err _ => None
     Ok mods => Some (entryOwnSchemes (checkModules runtimeP coreP (map midToDesugaredPair mods)))

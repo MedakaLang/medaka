@@ -24,22 +24,20 @@
 --
 -- HOW MANY TIMES IT RUNS (S2/#2442 — this line used to read "ONCE" and was wrong).
 -- Per invocation, over the user's program:
---   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramE`, threaded downstream),
+--   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramFilesLocatedCachedE`, threaded downstream),
 --     typechecked ONCE (`analyzeFrom`/`analyzeProject`); PLUS one further check of
 --     the SYNTHETIC auto-print wrap (`underivedMainDiags`) on the bare-value mains
 --     that trigger it, which is a different program and not a repeat of the same
 --     work.
---     Prelude parsing+desugaring is ONCE only on the SINGLE-MODULE arm
---     (`analyzeSingle` → `analyzeFrom` fills the global content-keyed
---     `desugaredPrelude` memo, `frontend/desugar_cache.mdk`; `doEmit` below then
---     hits that memo). The MULTI-MODULE arm (`analyzeMulti` → `analyzeProject`)
---     is NOT converged: `analyzeProject`'s loader fills a separate, per-call
---     `Ref` (`preludeDesugared`, `driver/diagnostics.mdk`) that `doEmit`'s
---     `desugaredPrelude` call never sees, so on that arm `doEmit` still
---     re-parses+re-desugars runtime.mdk and core.mdk from scratch — measured
---     ~103ms/compile on the multi-module arm vs ~8ms on the single-module arm
---     (Fix-1/#2442 review round). This is a known, UNCONVERGED gap, not fixed
---     here — separate follow-up work.
+--     Prelude parsing+desugaring goes through the process-wide content-keyed
+--     `desugaredPrelude` memo (`frontend/desugar_cache.mdk`) on BOTH arms —
+--     `analyzeFrom` on the single-module arm, `analyzeProject` on the
+--     multi-module arm — so `doEmit`'s reads below are cache hits either way,
+--     and, because the host re-enters `main` on one live instance
+--     (`mdk_main`, see playground/compile.mjs), the prelude is parsed and
+--     desugared once per SESSION, not once per keystroke.  User modules are
+--     loaded through the loader's source-keyed parse memo, likewise held for
+--     the session (`playgroundParseCache`).
 --   `compile` — all of the above, plus exactly one emit-side `elaborateModules`
 --     inside `runEmit`.
 -- Before S2 this entry additionally re-loaded and re-parsed every user module, re-parsed
@@ -89,7 +87,7 @@ import frontend.desugar_cache.{desugaredPrelude}
 import driver.loader.{
   LoadMsg,
   LoadParseFailed,
-  loadProgramE,
+  loadProgramFilesLocatedCachedE,
   unknownModuleIdOf,
   findImportLoc,
 }
@@ -211,7 +209,7 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
       Err e => emitLoadFail entry e
       Ok tsrc => match parseResult tsrc
         Err pe => emitParseError entry pe
-        Ok _ => match loadProgramE entry roots
+        Ok _ => match loadProgramFilesLocatedCachedE playgroundParseCache (_ => None) entry roots
           -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
           -- exactly as an entry-file parse error squiggles the entry.
           Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
@@ -224,13 +222,27 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
               None => None
               Some mid => findImportLoc mid (parseLocated tsrc)
             emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "R-MODULE-LOAD" lmsg mloc None None])])
-          Ok mods => match mods
-            [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
-            _ => analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods
+          Ok triples =>
+            let mods = map dropPath triples
+            match mods
+              [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
+              _ => analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods
+
+dropPath : (String, String, List Decl) -> (String, List Decl)
+dropPath (mid, _, decls) = (mid, decls)
+
+-- The loader's source-keyed parse memo, held for the LIFETIME OF THE INSTANCE
+-- rather than per call: the host (playground/compile.mjs) re-enters `main` on
+-- one instance for every analyze, so an imported stdlib module (list.mdk,
+-- map.mdk, …) is parsed once per session, not once per keystroke — the same
+-- reuse the LSP gets from its session-lived cache.  Bounded (MRU, 24 entries)
+-- inside the loader, so a long editing session cannot grow it.
+playgroundParseCache : Ref (List (String, List Decl))
+playgroundParseCache = Ref []
 
 -- Single module: analyzeLocated (correct single-file type errors).  Clean ⇒ emit.
 -- `mods` is `run`'s ALREADY-LOADED module list, threaded through rather than
--- re-derived downstream (S2/#2442): `loadProgramE` has no memo of its own, so
+-- re-derived downstream (S2/#2442): the uncached `loadProgramE` had no memo of its own, so
 -- `doEmit`'s second call re-read and re-parsed every user module.
 analyzeSingle : Bool -> String -> String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> Unit
 analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods =
@@ -246,8 +258,7 @@ analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods =
 analyzeMulti : Bool -> String -> String -> String -> String -> String -> String -> List String -> List (String, List Decl) -> <IO> Unit
 analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
   let cacheRef = Ref []
-  let parseCacheRef = Ref []
-  let results = analyzeProject True [] cacheRef parseCacheRef (_ => None) entry roots rsrc csrc
+  let results = analyzeProject True [] cacheRef playgroundParseCache (_ => None) entry roots rsrc csrc
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
@@ -332,14 +343,11 @@ mainShapeError decls = match findMainFunDef decls
 -- re-reads and re-parses every user module), plus `desugar (parse rsrc)` /
 -- `desugar (parse csrc)` over runtime.mdk + core.mdk.  Both are now what
 -- `medaka_cli.mdk`'s `typecheckGate`/`typecheckGateRoute` already do: the loader's
--- module list is THREADED in from `run` (the caller that loaded it), and — on the
--- SINGLE-MODULE arm only — the two prelude halves go through the content-keyed
--- `desugaredPrelude` memo that `analyzeFrom` (driver/diagnostics.mdk) already
--- filled on the way here, so this is a cache HIT, not a second desugar. The
--- MULTI-MODULE arm (`analyzeMulti` → `analyzeProject`) fills a DIFFERENT,
--- per-call `preludeDesugared` Ref instead (never `desugaredPrelude`), so on that
--- arm this call is still a cache MISS — see the header's "HOW MANY TIMES IT
--- RUNS" note; unconverged, not fixed here.
+-- module list is THREADED in from `run` (the caller that loaded it), and the two
+-- prelude halves go through the content-keyed
+-- `desugaredPrelude` memo that `analyzeFrom` / `analyzeProject`
+-- (driver/diagnostics.mdk) already filled on the way here, so this is a cache
+-- HIT on both arms, not a second desugar.
 --
 -- 🚨 IT ALSO RAN A WHOLE `mangleUnits` + `elaborateModules` HERE AND DISCARDED THE
 -- RESULT.  That call was NOT dead — bound to `_`, but its SIDE EFFECT was
