@@ -11,11 +11,14 @@ Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
 `pds/serve.mdk` admits a configuration, rehydrates or initializes the account
 repository, and hands `pds/shell/server.mdk`'s accept loop a listener and the
 shared `Ref Store`. `pds/test/serve_e2e.sh` grades it end to end (queries,
-pipelining, keep-alive, a chunked-transfer write, a malformed request, an
+pipelining, keep-alive, a chunked-transfer write, every one of the nine XRPC
+NSIDs and both well-knowns driven over the socket, a malformed request, an
 over-cap body, the idle-connection timeout, and restart-and-resume across a
 process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
-`pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, no
-effect-bearing `pds/lib` export). The bind address is loopback-only and
+`pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, every
+`pds/lib` export explicitly signed, and no such signature effect-bearing —
+the signature check is what stops an unannotated export from carrying an
+inferred effect row past the effect check). The bind address is loopback-only and
 nothing here authenticates a request — deliberately: authentication is the
 gate on ever exposing this server past loopback, not a gap in this phase. See
 `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.

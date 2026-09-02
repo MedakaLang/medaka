@@ -60,26 +60,33 @@ mustRepo (Err message) =
   panic "store_persistence: repository failed: \{message}"
 
 post : String -> DagCbor
-post text = DcMap
-  [
-    ("$type", DcString "app.bsky.feed.post"),
-    ("text", DcString text),
-    ("createdAt", DcString "2026-09-02T00:00:00.000Z"),
-  ]
+post text = DcMap [
+  ("$type", DcString "app.bsky.feed.post"),
+  ("text", DcString text),
+  ("createdAt", DcString "2026-09-02T00:00:00.000Z"),
+]
 
 write : String -> String -> String -> Repo -> Repo
 write path text rev repo =
-  mustRepo (map
-    repoMutationState
-    (repoCreate (toUtf8 path) (post text) (mustTid rev) repo))
+  mustRepo
+    (map
+      repoMutationState
+      (repoCreate (toUtf8 path) (post text) (mustTid rev) repo))
 
 -- | The repository the `save` route persists: three records at fixed revisions,
 -- so every byte of the result is deterministic.
 fixtureRepo : Repo
 fixtureRepo =
-  let base = mustRepo (repoInitFromKeyBytes accountDid (mustHex secretHex) (mustTid "3lba2s5ykxs2a"))
-  let one = write "app.bsky.feed.post/3lba2s5ykxs2b" "first" "3lba2s5ykxs2b" base
-  let two = write "app.bsky.feed.post/3lba2s5ykxs2c" "second" "3lba2s5ykxs2c" one
+  let base =
+    mustRepo
+      (repoInitFromKeyBytes
+        accountDid
+        (mustHex secretHex)
+        (mustTid "3lba2s5ykxs2a"))
+  let one =
+    write "app.bsky.feed.post/3lba2s5ykxs2b" "first" "3lba2s5ykxs2b" base
+  let two =
+    write "app.bsky.feed.post/3lba2s5ykxs2c" "second" "3lba2s5ykxs2c" one
   write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" two
 
 mustCar : Repo -> Array Int
@@ -100,9 +107,13 @@ summary label repo =
     Ok _ => "decodes"
     Err message =>
       panic "store_persistence: exported CAR does not decode: \{message}"
-  let () = println "\{label} head \{cidToString (repoCommitCid (repoLatestCommit repo))}"
+  let () =
+    println
+      "\{label} head \{cidToString (repoCommitCid (repoLatestCommit repo))}"
   let () = println "\{label} records \{intToString records}"
-  let () = println "\{label} car \{intToString (arrayLength car)} \{encode (sha256 car)} \{roots}"
+  let () =
+    println
+      "\{label} car \{intToString (arrayLength car)} \{encode (sha256 car)} \{roots}"
   ()
 
 blocksOf : Repo -> List (Cid, Array Int)

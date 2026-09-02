@@ -102,7 +102,7 @@ client() {
   "$WORK/client" "$@"
 }
 
-# ── first instance: genesis, then cases 1-7 ─────────────────────────────────
+# ── first instance: genesis, then cases 1-8 ─────────────────────────────────
 
 start_server --init "$WORK/serve1.out" "$WORK/serve1.err"
 PORT1=$(wait_for_port "$WORK/serve1.out") || {
@@ -121,18 +121,24 @@ client pipeline "$PORT1" || fail 'case 2: pipelined pair'
 client keepalive "$PORT1" || fail 'case 3: keep-alive reuse'
 
 # 4. chunked write procedure succeeds — this ALSO plants the record that
-#    case 8 (restart-and-resume) reads back after the process boundary.
+#    case 9 (restart-and-resume) reads back after the process boundary.
 client chunked "$PORT1" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
   || fail 'case 4: chunked write'
 
-# 5. malformed request -> 400, error path not a hang or crash
-client malformed "$PORT1" || fail 'case 5: malformed request'
+# 5. every remaining route: the six XRPC NSIDs no other case drives, plus
+#    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
+#    both well-knowns proven by this gate rather than by reading the registry.
+client endpoints "$PORT1" "$DID" "$HANDLE" "$COLLECTION" "$RKEY" \
+  || fail 'case 5: remaining endpoint coverage'
 
-# 6. over-cap body -> rejected (413), not truncated or hung
-client overcap "$PORT1" || fail 'case 6: over-cap body'
+# 6. malformed request -> 400, error path not a hang or crash
+client malformed "$PORT1" || fail 'case 6: malformed request'
 
-# 7. idle connection closed after ~30s (idleTimeout) — costs real wall time.
-client idle "$PORT1" || fail 'case 7: idle timeout'
+# 7. over-cap body -> rejected (413), not truncated or hung
+client overcap "$PORT1" || fail 'case 7: over-cap body'
+
+# 8. idle connection closed after ~30s (idleTimeout) — costs real wall time.
+client idle "$PORT1" || fail 'case 8: idle timeout'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
@@ -148,14 +154,14 @@ PORT2=$(wait_for_port "$WORK/serve2.out") || {
 }
 require_empty "$WORK/serve2.err" 'resumed server startup'
 
-# 8. restart-and-resume: the record written before the restart is readable
+# 9. restart-and-resume: the record written before the restart is readable
 #    from the fresh process over the same --data directory.
 client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
-  || fail 'case 8: restart-and-resume'
+  || fail 'case 9: restart-and-resume'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve2.err" 'resumed server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, malformed, over-cap, idle timeout, restart-and-resume'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, malformed, over-cap, idle timeout, restart-and-resume'

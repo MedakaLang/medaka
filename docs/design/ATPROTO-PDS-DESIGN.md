@@ -364,12 +364,16 @@ persist the account repository to disk (design row P7) and `pds/serve.mdk` is th
 entry point that admits configuration, rehydrates or initializes the repository, and
 binds the loopback listener. `pds/test/serve_e2e.sh` (#2481, #2525) drives a built
 server over a real loopback socket with a plain synchronous client and grades query,
-pipelined, and keep-alive requests; a chunked-transfer write; a malformed request and
-an over-cap body, both rejected rather than hung; the idle-connection timeout; and
-restart-and-resume across a process boundary against the same `--data` directory.
-`pds/test/lib_boundary.sh` closes out #2481 itself: `pds/lib/` never imports
-`pds/shell/` and no `pds/lib/*.mdk` export declares an effect row, so the pure core
-stays reachable from every engine Phase 3 does not run on.
+pipelined, and keep-alive requests; a chunked-transfer write; each of the nine XRPC
+NSIDs and both well-knowns, every one driven over the socket rather than read off the
+registry; a malformed request and an over-cap body, both rejected rather than hung;
+the idle-connection timeout; and restart-and-resume across a process boundary against
+the same `--data` directory. `pds/test/lib_boundary.sh` closes out #2481 itself:
+`pds/lib/` never imports `pds/shell/`, every `pds/lib/*.mdk` export carries an
+explicit type signature, and none of those signatures declares an effect row, so the
+pure core stays reachable from every engine Phase 3 does not run on. The signature
+half is load-bearing rather than stylistic: an export with no signature gets an
+inferred effect row, which a check that reads declared rows cannot see.
 
 **Loopback-only, unauthenticated, is deliberate, not an oversight.** `bindLoopback`
 takes a port and nothing else — no configuration path can move this server off

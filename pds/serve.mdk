@@ -45,7 +45,7 @@ import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.store.{Store, storeFromRepo}
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
-import shell.persist.{persistLoad, persistSave}
+import shell.persist.{persistHasHead, persistLoad, persistSave}
 import shell.server.{bindLoopback, runServer}
 import string.{toInt, trim}
 import time.{now}
@@ -128,9 +128,14 @@ openRepo : Bool ->
   SecretKey ->
   <Clock, FileRead "_", FileWrite "_"> Result String Repo
 openRepo False dir did _ secret = loadRepo dir did secret
-openRepo True dir did keyBytes secret = match loadRepo dir did secret
-  Ok _ => Err "--init refuses \{dir}: it already holds a repository"
-  Err _ => initRepo dir did keyBytes
+openRepo True dir did keyBytes secret =
+  if persistHasHead dir then match loadRepo dir did secret
+    Ok _ => Err "--init refuses \{dir}: it already holds a repository"
+    Err message =>
+      Err
+        "--init refuses \{dir}: it already holds a repository, but its head does not load under the configured --did and --key (\{message}); check those flags rather than reinitializing"
+  else
+    initRepo dir did keyBytes
 
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, and the port. -}

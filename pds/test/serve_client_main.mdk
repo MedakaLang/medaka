@@ -161,6 +161,17 @@ oneChunk chunkBytes = concat [|
 finalChunk : Array Int
 finalChunk = toUtf8 "0\r\n\r\n"
 
+-- | A `content-length` JSON POST, the ordinary shape the three write
+-- procedures take when nothing is testing chunked transfer encoding.
+postRequest : String -> String -> Array Int
+postRequest path bodyJson =
+  let body = toUtf8 bodyJson
+  concat [|
+    toUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+    body,
+  |]
+
 chunkedPostRequest : String -> String -> Array Int
 chunkedPostRequest path bodyJson =
   let body = toUtf8 bodyJson
@@ -195,15 +206,30 @@ createRecordJson did collection rkey text =
       ),
     ])
 
+deleteRecordJson : String -> String -> String -> String
+deleteRecordJson did collection rkey =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+    ])
+
+xrpcPath : String -> String
+xrpcPath nsid = "/xrpc/\{nsid}"
+
 createRecordPath : String
-createRecordPath = "/xrpc/com.atproto.repo.createRecord"
+createRecordPath = xrpcPath "com.atproto.repo.createRecord"
 
 getRecordPath : String -> String -> String -> String
 getRecordPath did collection rkey =
-  "/xrpc/com.atproto.repo.getRecord?repo=\{did}&collection=\{collection}&rkey=\{rkey}"
+  "\{xrpcPath "com.atproto.repo.getRecord"}?repo=\{did}&collection=\{collection}&rkey=\{rkey}"
 
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
+
+didJsonPath : String
+didJsonPath = "/.well-known/did.json"
 
 -- # Cases
 
@@ -327,13 +353,27 @@ runOvercap port =
       (toUtf8
         "POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString overcapFillerBytes}\r\n\r\n")
       filler
-  -- The server is expected to close its read side once the buffered request
-  -- exceeds the cap, so a send error here (broken pipe) is not itself a
-  -- failure — the assertion is on the response the closed connection leaves
-  -- behind, or, failing that, on not hanging.
-  let _ = sendAll conn request
+  -- The server may close its read side as soon as the buffered request passes
+  -- the cap, which can break this multi-megabyte write before the 413 it has
+  -- already decided on can be read back. That closure IS the rejection, so it
+  -- counts as one. What does not count: any status other than 413, or a server
+  -- that accepted the whole over-cap body and then answered nothing.
+  let sent = sendAll conn request
   let result = readResponse conn [||]
-  let () = expectStatus "OVERCAP" 413 result
+  let () = match result
+    Ok (got, _, _) =>
+      report "OVERCAP" (got == 413) "status \{intToString got} (wanted 413)"
+    Err message => match sent
+      Err sendMessage =>
+        report
+          "OVERCAP"
+          True
+          "connection closed mid-send, rejecting the over-cap body (send: \{sendMessage}; read: \{message})"
+      Ok () =>
+        report
+          "OVERCAP"
+          False
+          "whole over-cap body was accepted and no response followed: \{message}"
   ignoreResult (close conn)
 
 idleWaitCeiling : Duration
@@ -359,6 +399,78 @@ runIdle port =
         "recv error after \{floatToString elapsed}s: \{message}"
   ignoreResult (close conn)
 
+-- | Drive one route on a connection of its own and require `want`.
+checkRoute : String -> Int -> Int -> Array Int -> <IO, Net "_"> Unit
+checkRoute label port want request =
+  let conn = mustConnect port
+  let () = mustSend conn request
+  let () = expectStatus label want (readResponse conn [||])
+  ignoreResult (close conn)
+
+{- | The endpoints the other cases do not already drive, so that all nine XRPC
+   NSIDs and both well-knowns are proven by this gate rather than by reading
+   the routing table. `createRecord` is CHUNKED's, `getRecord` is RESUME's, and
+   `/.well-known/atproto-did` is QUERY's; the rest are here.
+
+   `putRecord` and `deleteRecord` do mutate, so they work on a scratch record
+   key of their own and the delete puts the repository back — RESUME reads the
+   fixture record after a process restart and must still find it. -}
+runEndpoints : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runEndpoints port did handle collection rkey =
+  let scratch = "\{rkey}scratch"
+  let () =
+    checkRoute
+      "LISTRECORDS"
+      port
+      200
+      (getRequest
+        "\{xrpcPath "com.atproto.repo.listRecords"}?repo=\{did}&collection=\{collection}")
+  let () =
+    checkRoute
+      "DESCRIBEREPO"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.repo.describeRepo"}?repo=\{did}")
+  let () =
+    checkRoute
+      "GETREPO"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.sync.getRepo"}?did=\{did}")
+  let () =
+    checkRoute
+      "GETLATESTCOMMIT"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.sync.getLatestCommit"}?did=\{did}")
+  let () =
+    checkRoute
+      "RESOLVEHANDLE"
+      port
+      200
+      (getRequest
+        "\{xrpcPath "com.atproto.identity.resolveHandle"}?handle=\{handle}")
+  let () = checkRoute "DIDJSON" port 200 (getRequest didJsonPath)
+  let () =
+    checkRoute
+      "PUTRECORD"
+      port
+      200
+      (postRequest
+        (xrpcPath "com.atproto.repo.putRecord")
+        (createRecordJson
+          did
+          collection
+          scratch
+          "pds serve_e2e scratch record"))
+  checkRoute
+    "DELETERECORD"
+    port
+    200
+    (postRequest
+      (xrpcPath "com.atproto.repo.deleteRecord")
+      (deleteRecordJson did collection scratch))
+
 runResume : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
 runResume port did collection rkey text =
   let conn = mustConnect port
@@ -380,7 +492,7 @@ runResume port did collection rkey text =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|malformed|overcap|idle|resume> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -389,6 +501,8 @@ main = match args ()
   ["keepalive", port] => runKeepalive (mustPort port)
   ["chunked", port, did, collection, rkey, text] =>
     runChunked (mustPort port) did collection rkey text
+  ["endpoints", port, did, handle, collection, rkey] =>
+    runEndpoints (mustPort port) did handle collection rkey
   ["malformed", port] => runMalformed (mustPort port)
   ["overcap", port] => runOvercap (mustPort port)
   ["idle", port] => runIdle (mustPort port)

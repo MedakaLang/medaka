@@ -38,16 +38,21 @@ blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
 blockFilePath : String -> Cid -> String
 blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
 
-writeOne : String -> Cid -> Array Int -> <FileRead "_", FileWrite "_"> Result String Unit
+writeOne : String ->
+  Cid ->
+  Array Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
 writeOne dir cid bytes = do
   () <- mkdirAll (blockShardDir dir cid)
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
   rename staged (blockFilePath dir cid)
 
-writeRows : String -> List (Cid, Array Int) -> <FileRead "_", FileWrite "_"> Result String Unit
+writeRows : String ->
+  List (Cid, Array Int) ->
+  <FileRead "_", FileWrite "_"> Result String Unit
 writeRows _ [] = Ok ()
-writeRows dir ((cid, bytes)::rest) = match writeOne dir cid bytes
+writeRows dir ((cid, bytes) :: rest) = match writeOne dir cid bytes
   Err message => Err message
   Ok () => writeRows dir rest
 
@@ -55,7 +60,9 @@ writeRows dir ((cid, bytes)::rest) = match writeOne dir cid bytes
    present is idempotent: a block's name is its content, so the promoted file
    carries exactly the bytes the old one did. -}
 export
-blockFileWrite : String -> List (Cid, Array Int) -> <FileRead "_", FileWrite "_"> Result String Unit
+blockFileWrite : String ->
+  List (Cid, Array Int) ->
+  <FileRead "_", FileWrite "_"> Result String Unit
 blockFileWrite dir rows = do
   () <- mkdirAll "\{dir}/\{stagingName}"
   writeRows dir rows
@@ -67,18 +74,26 @@ cidForName name = match decode name
     Err message => Err "blockfile: block file name is not a CID: \{message}"
     Ok cid => Ok cid
 
-readLeaves : String -> String -> List String -> List (Cid, Array Int) -> <FileRead "_"> Result String (List (Cid, Array Int))
+readLeaves : String ->
+  String ->
+  List String ->
+  List (Cid, Array Int) ->
+  <FileRead "_"> Result String (List (Cid, Array Int))
 readLeaves _ _ [] acc = Ok acc
-readLeaves dir shard (leaf::rest) acc = match cidForName leaf
+readLeaves dir shard (leaf :: rest) acc = match cidForName leaf
   Err message => Err message
   Ok cid => match readFileBytes "\{dir}/\{shard}/\{leaf}"
     Err message => Err "blockfile: unreadable block file: \{message}"
-    Ok bytes => readLeaves dir shard rest ((cid, bytes)::acc)
+    Ok bytes => readLeaves dir shard rest ((cid, bytes) :: acc)
 
-readShards : String -> List String -> List (Cid, Array Int) -> <FileRead "_"> Result String (List (Cid, Array Int))
+readShards : String ->
+  List String ->
+  List (Cid, Array Int) ->
+  <FileRead "_"> Result String (List (Cid, Array Int))
 readShards _ [] acc = Ok acc
-readShards dir (shard::rest) acc =
-  if shard == stagingName then readShards dir rest acc
+readShards dir (shard :: rest) acc =
+  if shard == stagingName then
+    readShards dir rest acc
   else match listDir "\{dir}/\{shard}"
     Err message => Err "blockfile: unreadable shard directory: \{message}"
     Ok leaves => match readLeaves dir shard leaves acc

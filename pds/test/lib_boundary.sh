@@ -1,8 +1,11 @@
 #!/bin/sh
 # #2481 pds/lib ⇄ pds/shell boundary: pds/lib/*.mdk must never import
 # pds/shell/ (the pure core performs no I/O — see pds/README.md's "Layout")
-# and no pds/lib/*.mdk export may declare an effect row (`<...>`) in its
-# signature. Both checks are cheap static greps/awk, no build required.
+# every pds/lib/*.mdk export must carry an explicit type signature, and no
+# such signature may declare an effect row (`<...>`). The signature check is
+# what makes the effect check non-bypassable: an unannotated export gets an
+# inferred row, which no grep over declared rows can see. All three checks
+# are cheap static greps/awk, no build required.
 #
 # A mutation control proves each check can actually fail: a throwaway
 # violation is injected into a scratch copy of one pds/lib file, shown to
@@ -53,6 +56,32 @@ check_no_effect_export() {
   done
 }
 
+# Prints one violation line per export that carries no explicit type
+# signature; exit 0 with no output when clean. Without this the effect check
+# above is bypassable by omission: an export with no signature at all
+# compiles (the typechecker infers its row), and an inferred effect row is
+# invisible to a grep over declared ones.
+#
+# A signature is the first non-blank line after the `export` line and has the
+# form `<name> : ...`; a definition (`<name> <args> = ...`) does not. `export
+# data`/`export interface` and friends put the keyword on the `export` line
+# itself, so they never enter this state machine.
+check_export_has_signature() {
+  dir=$1
+  for f in "$dir"/*.mdk; do
+    [ -f "$f" ] || continue
+    awk -v file="$f" '
+      /^export$/ || /^public export$/ { pending = NR; next }
+      pending {
+        if ($0 ~ /^[ \t]*$/) next
+        if ($0 !~ /^[^ \t:]+[ \t]*:/)
+          print file ":" pending ": export without a type signature: " $0
+        pending = 0
+      }
+    ' "$f"
+  done
+}
+
 # ── the real tree ────────────────────────────────────────────────────────────
 
 run_checks() {
@@ -60,6 +89,7 @@ run_checks() {
   label=$2
   shell_hits=$(check_no_shell_import "$dir")
   effect_hits=$(check_no_effect_export "$dir")
+  unsigned_hits=$(check_export_has_signature "$dir")
   if [ -n "$shell_hits" ]; then
     echo "$shell_hits" >&2
     fail "$label: pds/lib imports pds/shell"
@@ -68,10 +98,14 @@ run_checks() {
     echo "$effect_hits" >&2
     fail "$label: pds/lib exports an effect-bearing signature"
   fi
+  if [ -n "$unsigned_hits" ]; then
+    echo "$unsigned_hits" >&2
+    fail "$label: pds/lib export carries no type signature"
+  fi
 }
 
 run_checks "$LIB_DIR" 'real tree'
-echo 'boundary clean: no pds/lib -> pds/shell import, no effect-bearing pds/lib export'
+echo 'boundary clean: no pds/lib -> pds/shell import, every pds/lib export signed, none effect-bearing'
 
 # ── mutation control: prove each check can fail ─────────────────────────────
 
@@ -98,7 +132,23 @@ fi
 echo 'mutation control: injected effect-bearing export correctly caught'
 rm -rf "$SCRATCH"
 
+# Violation 3: an unannotated export whose effect row the typechecker would
+# infer. This is exactly what violation 2's check cannot see, which is why
+# the signature check exists.
+cp -R "$LIB_DIR" "$SCRATCH"
+VICTIM3="$SCRATCH/repo.mdk"
+printf '\nexport\nboundaryUnsignedProbeForTest x = println x\n' >>"$VICTIM3"
+if effect_hits=$(check_no_effect_export "$SCRATCH") && [ -n "$effect_hits" ]; then
+  fail 'mutation control: the effect check was expected to MISS an unannotated export'
+fi
+if unsigned_hits=$(check_export_has_signature "$SCRATCH") \
+  && [ -z "$unsigned_hits" ]; then
+  fail 'mutation control: injected unannotated export was not caught'
+fi
+echo 'mutation control: injected unannotated effect-bearing export correctly caught'
+rm -rf "$SCRATCH"
+
 # The real tree is untouched (checks ran against copies only) and still green.
 run_checks "$LIB_DIR" 'real tree, post-mutation-control'
 
-echo 'PASS: lib_boundary — no shell import, no effect export, mutation control caught both'
+echo 'PASS: lib_boundary — no shell import, every export signed, no effect export, mutation control caught all three'
