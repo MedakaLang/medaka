@@ -1,5 +1,5 @@
 # META
-source_lines=5359
+source_lines=5362
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -359,9 +359,12 @@ optTrailingCommaTuple : List a -> Parser Unit
 optTrailingCommaTuple [_] = deferPure ()
 optTrailingCommaTuple _ = optTrailingComma
 
--- Structurally identical to stdlib/byteparser.mdk's chainl1, but over a
--- different parser type (token Parser vs ByteParser) with no shared Monad
--- typeclass to hang a single generic version off of — not soundly shareable.
+-- Structurally identical to stdlib/byteparser.mdk's chainl1.  Both containers
+-- are `DeferredThenable` now, but the loop tail also needs `orElse`, which each
+-- provides as a plain function rather than through a shared interface
+-- (`Alternative` requires `Applicative` at kind `Type -> Type`, which an
+-- `Effect`-indexed container cannot satisfy) — so there is still nothing to hang
+-- a single generic version off of.
 chainl1 : Parser a -> Parser (a -> a -> a) -> Parser a
 -- lint-disable-next-line rule-duplicate-body
 chainl1 p op = defer
