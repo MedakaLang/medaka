@@ -1,0 +1,5 @@
+-- One half of resolve.programIsCore is not a self-prelude.  The normal prelude
+-- remains present, so this duplicate declaration must stay a loud reject.
+public export data Ordering = OnlyOrdering
+
+main = println 1

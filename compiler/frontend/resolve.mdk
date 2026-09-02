@@ -1685,6 +1685,7 @@ firstOr : String -> List String -> String
 firstOr d [] = d
 firstOr _ (x :: _) = x
 
+export
 programIsCore : List Decl -> Bool
 programIsCore prog = hasOrdering prog && hasFoldable prog
 

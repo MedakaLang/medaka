@@ -1,0 +1,17 @@
+export interface Same a where
+  same : a -> Int
+
+export impl Same Int where
+  same x = x + 10
+
+export
+selective : Same a => a -> Int
+selective x = same x + 100
+
+export
+wildcard : Same a => a -> Int
+wildcard x = same x + 200
+
+export
+reexported : Same a => a -> Int
+reexported x = same x + 300

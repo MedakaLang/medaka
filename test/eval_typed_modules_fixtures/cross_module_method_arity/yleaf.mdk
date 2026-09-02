@@ -1,9 +1,10 @@
 export interface BuildB t where
-  shape : (Num e, Num f) => e -> f -> t
+  shape : (Num e, Num f) => t -> e -> f -> f
 data BoxB = MkBoxB Int
 export impl BuildB BoxB where
-  shape n m = MkBoxB (n + m)
+  shape _ _ m = m + 5
 unboxB : BoxB -> Int
 unboxB (MkBoxB x) = x
-export callY : Int
-callY = unboxB (shape 4 5 : BoxB)
+export
+callY : Int
+callY = shape (MkBoxB 0) 4 4

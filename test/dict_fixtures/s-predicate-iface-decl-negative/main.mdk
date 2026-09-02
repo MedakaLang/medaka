@@ -1,0 +1,3 @@
+import amod.{bad}
+
+main = println (bad 1)

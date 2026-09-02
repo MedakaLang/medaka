@@ -1,0 +1,6 @@
+-- Operator syntax has no complete parameter vector at the occurrence.  Its
+-- explicit Unknown request still matches the enclosing Known Num slot.
+plus : Num a => a -> a -> a
+plus x y = x + y
+
+main = println (plus 2 3)
