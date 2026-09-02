@@ -297,7 +297,7 @@ done
 # Also skipped by NO_STALE_CHECK=1 (build_oracles.sh's own internal invocations).
 if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; then
   newest_src=0
-  for f in $(find "$ROOT/compiler" "$ROOT/stdlib" -name '*.mdk'; \
+  for f in $(find "$ROOT/compiler" "$ROOT/stdlib" -name '*.mdk' -not -name '*_test.mdk'; \
              find "$ROOT/runtime" -name '*.c' -o -name '*.h'); do
     m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null)
     [ "$m" -gt "$newest_src" ] && newest_src=$m

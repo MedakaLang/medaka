@@ -124,6 +124,7 @@ import types.registry.{
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
+  programIsCore,
   stampBindingIds,
   stampGraphTyOrigins,
   stampFlatTyOrigins,
@@ -3148,7 +3149,7 @@ seedAbstractRecordTypes coreDecls modules =
 -- payload-carrying `SiteKind`) records which recorder built it and carries the
 -- fields unique to that shape.  The common fields are: the method/name, the route
 -- ref the resolver stamps, the primary discriminating mono, and the enclosing-fn
--- name (`currentFn` at record time; "" for RLocal sites, which carry no encl).  The
+-- name (`currentFn` at record time, including RLocal sites).  The
 -- five pending lists stay SEPARATE (the drain schedule is unchanged — this is a
 -- pure data-representation change): each recorder builds a `PendingEntry` with its
 -- own `kind`, and each resolver reads the fields instead of destructuring a tuple.
@@ -3168,7 +3169,7 @@ public export data SiteKind =
   | SKOp Bool
   -- standalone-shadow RLocal site: mangled standalone symbol, forceLocal (P0-20),
   -- and the shadowing standalone's own `=>`-constraint dict monos + iface names
-  -- (S-1).  Primary mono = receiver mono; encl is unused ("").
+  -- (S-1).  Primary mono = receiver mono; encl owns deferred dictionary routing.
   -- FIX-shadow-arity-skew: the 5th field is the slot-parallel predicate ARGUMENT VECTOR
   -- list, so `resolveRLocalSites` can select each slot with `routesOfMonosTopV`'s vector
   -- goal instead of the scalar `Ix Int _`.  It is `ShadowDicts`' third projection and
@@ -3551,8 +3552,8 @@ routeLocalSym _ = ""
 -- `[]` and reproduce the S-1 bug with more code.  This way the fix is ordering-immune
 -- and the route has a single writer.  Empty for an unconstrained standalone.
 -- #156 S3a: these fields now live in `PendingEntry`'s `SKRLocal` kind (mangledSym,
--- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono are the shared
--- PendingEntry fields, and encl is unused ("") for RLocal sites.
+-- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono/enclosing-fn are
+-- the shared PendingEntry fields.
 
 -- #158 PR4: the NON-REENTRANT global toggles — booleans a caller flips True around a
 -- sub-computation and restores after, so a reader lower in the SAME inference sees the
@@ -7818,6 +7819,32 @@ data VecObl = VecObl {
 -- there, once.
 data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 
+-- B-4 (#1318): a non-authoritative view of ONE predicate-owned dictionary slot.
+-- `PSArgsUnknown` is not `PSArgsKnown []`: the former means the legacy argument-vector
+-- row was absent or its prefix ended before this slot, while the latter is a known
+-- nullary predicate.  [psBoundIds] is likewise the whole ordered id projection for the
+-- predicate.  Function slots currently contribute one lead id; impl-`requires` slots
+-- contribute every id in their argument vector.  This slice stores neither type: the
+-- live legacy producers below round-trip through it only as a migration audit.
+data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateRequest = PredicateRequest {
+  prIface : IfaceRef,
+  prArgs : PredicateSlotArgs,
+}
+data PredicateSlot = PredicateSlot {
+  psIface : IfaceRef,
+  psArgs : PredicateSlotArgs,
+  psBoundIds : List Int,
+}
+
+-- One method-level predicate and the stable positions of every quantified variable
+-- it mentions.  The positions, unlike allocation-local tyvar ids, survive the
+-- separate scheme builds used by module discovery and final elaboration.
+data MethodPredicateSlot = MethodPredicateSlot {
+  mpsPredicate : PredicateSlot,
+  mpsPositions : List Int,
+}
+
 -- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
 -- `expandSupersPairs`' transitive super expansion APPENDED any.
 -- ⚠️ THAT WORDING IS THE CORRECTION, and the direction of the old one matters.  This
@@ -7888,24 +7915,87 @@ data ShadowDicts = ShadowDicts {
 emptyShadowDicts : ShadowDicts
 emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 
--- THE pairing point — the only place in the tree where a slot-id list meets a
--- slot-parallel interface list.
---
--- ⚠️ POLICY: truncate, exactly as the three zips it replaces did
--- (`shatterVecObls`, `recordCallObligations`, `expandSupersEntry`'s `zipL`).  This is
--- BEHAVIOUR, not tidiness: per the paragraph on `CSlot` a real mismatch is reachable,
--- and today's answer is "drop the unpaired tail, never over-reject".  Diagnosing
--- instead is only safe once someone has MEASURED that no real program reaches a
--- mismatch (an instrumented build over the compiler's own source + `stdlib/`); until
--- then the default is byte-identical truncation, and changing it is a separate,
--- evidence-bearing change.
-pairSlots : List Int -> List IfaceRef -> List CSlot
-pairSlots [] _ = []
-pairSlots _ [] = []
-pairSlots (id :: ids) (iface :: ifs) =
-  CSlot { csIface = iface, csId = id } :: pairSlots ids ifs
-
 data Predicate = Predicate { iface : IfaceRef, args : List Mono }
+
+-- The inverse function-slot projections.  A malformed carrier (non-singleton bound ids,
+-- or a known vector after an unknown one) deliberately loses that field so the live
+-- round-trip comparator below panics instead of silently normalising it.
+predicateSlotCSlots : List PredicateSlot -> List CSlot
+predicateSlotCSlots [] = []
+predicateSlotCSlots (s :: rest) = match s.psBoundIds
+  id :: _ =>
+    CSlot { csIface = s.psIface, csId = id } :: predicateSlotCSlots rest
+  _ => predicateSlotCSlots rest
+
+-- B-4 producer migration: pure legacy projections at reader seams.  Mutable state
+-- stores only `PredicateSlot`; ids, ifaces and the known argument-vector prefix are
+-- derived on demand so they cannot drift into separate authorities again.
+predicateSlotIds : List PredicateSlot -> List Int
+predicateSlotIds [] = []
+predicateSlotIds (s :: rest) = match s.psBoundIds
+  [] => predicateSlotIds rest
+  id :: _ => id :: predicateSlotIds rest
+
+predicateSlotView : PredicateSlot -> (CSlot, List Mono)
+predicateSlotView s = match s.psBoundIds
+  [] =>
+    (CSlot { csIface = s.psIface, csId = 0 }, predicateSlotKnownArgs s.psArgs)
+  id :: _ => (
+    CSlot {
+      csIface = s.psIface,
+      csId = id,
+    },
+    predicateSlotKnownArgs s.psArgs,
+  )
+
+predicateSlotArgs : List PredicateSlot -> List (List Mono)
+predicateSlotArgs [] = []
+predicateSlotArgs (slot :: rest) = match slot.psArgs
+  PSArgsUnknown => []
+  PSArgsKnown args => args :: predicateSlotArgs rest
+
+lookupPredicateSlots : String ->
+  List (String, List PredicateSlot) ->
+  Option (List PredicateSlot)
+lookupPredicateSlots _ [] = None
+lookupPredicateSlots k ((k2, slots) :: rest)
+  | k == k2 = Some slots
+  | otherwise = lookupPredicateSlots k rest
+
+hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
+hasPredicateSlots k table = isSome (lookupPredicateSlots k table)
+
+predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
+predicateSlotIdsAt name table =
+  predicateSlotIds (optionOr [] (lookupPredicateSlots name table))
+
+predicateSlotWithoutArgs : PredicateSlot -> PredicateSlot
+predicateSlotWithoutArgs s = PredicateSlot {
+  psIface = s.psIface,
+  psArgs = PSArgsUnknown,
+  psBoundIds = s.psBoundIds,
+}
+
+predicateSlotsWithoutArgs : List PredicateSlot -> List PredicateSlot
+predicateSlotsWithoutArgs slots = map predicateSlotWithoutArgs slots
+
+predicateSlotTableWithoutArgs : List (a, List PredicateSlot) ->
+  List (a, List PredicateSlot)
+predicateSlotTableWithoutArgs entries =
+  map (entry => (fst entry, predicateSlotsWithoutArgs (snd entry))) entries
+
+-- The impl-`requires` adapter keeps the dict parameter name beside the carrier rather
+-- than pretending it is part of predicate identity.  Unlike a function CSlot, this
+-- producer already owns the predicate's complete ordered bound-id vector.
+implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
+implReqPredicateSlot (dname, ids, p) = (
+  dname,
+  PredicateSlot {
+    psIface = p.iface,
+    psArgs = PSArgsKnown p.args,
+    psBoundIds = ids,
+  },
+)
 
 -- #991: every arm below is now LIVE — stamped by the producer that records the
 -- obligation, on the ONE storage shape (`UObligation`).  The three arms that read
@@ -8089,41 +8179,35 @@ uOblIsDecidableNow o =
 -- elaboration machinery): per top-level binding, the deferred impl obligations it
 -- generalizes over — (iface, the quantified-var id the obligation discriminates on).
 -- Populated UNCONDITIONALLY at generalization in processSCC/processTopGroups (unlike
--- funConstraintsRef, which the check path leaves empty because its inferred-constraint
+-- funPredicateSlotsRef, which the check path leaves empty because inferred-constraint
 -- registration is gated on dictEligibleSetRef).  At a USE site (inferVar) the binding's
 -- entry is freshened through the call's instantiation subst and checked against the
 -- impl table — inferred constraints carried
 -- on a scheme and re-checked at every instantiation.
 
--- E6 (module emit path only): funConstraintsRef is wiped by resetState at the start
+-- E6 (module emit path only): funPredicateSlotsRef is wiped by resetState at the start
 -- of EACH module's typecheck, but a cross-module `=>`-constrained CALL site (entry
 -- calling an imported `clampU`) must still find the callee's generalized constraint
--- ids so inferDictAt records a real pendingDictApp (→ the call gets its dict ARG).
--- This ref ACCUMULATES every module's registered fn-constraints across the graph and
--- is NOT cleared by resetState; checkModuleFullImpl re-seeds funConstraintsRef from
--- it after the per-module reset.  The DEFINING module's entry (real
--- ids, registered first) wins the lookupAssocSL2 first-match.
--- WS-2/D2: module-attributed mirror of crossModuleFunConstraintsRef.  Keyed by
--- (owning module id, fn name) so the FINAL dict-pass (scopeArities) can keep only
+-- slots so inferDictAt records a real pendingDictApp (→ the call gets its dict ARG).
+-- The cross-run carrier accumulates every module's predicates across the graph;
+-- checkModuleFullImpl re-seeds the per-run carrier after reset.  The defining
+-- module's complete record, registered first, wins lookupPredicateSlots first-match.
+-- WS-2/D2: module-attributed mirror of the bare cross-run carrier.  Keyed by
+-- (owning module id, fn name) so the final scopePredicateSlots projection keeps only
 -- the inferred-arity entry whose DEFINING module is in the dict-passed module's
 -- scope.  Without this, two distinct top-level fns sharing a bare name but with
 -- different `=>`-constraint arity (e.g. `wrap : Tag a => …` in module A vs
 -- `wrap : (P a, Q a) => …` in module B) both land in the bare cross-module table;
--- scopeArities keeps both (both pass the bare scopeNames membership), and
+-- a bare-name-only scope keeps both, and
 -- dictArityOf's first-match returns the WRONG module's arity → a call site in A's
 -- importer is sized to B's 2 dict params (over-application) → run-path crash while
 -- the emit path's arg-stamp recovers (the §1 D2 repro).  Populated per-module in
 -- checkModuleFullImpl (each fn DEFINED in this module's `prog` is attributed to mid);
--- consumed by scopeAritiesQual.  The bare crossModuleFunConstraintsRef is KEPT — the
+-- consumed by scopePredicateSlots.  The bare cross-run carrier is kept — the
 -- per-module reseed at checkModuleFullImpl:7546 needs the bare form for the current
 -- module's E6 cross-module call-site discovery.
--- cross-module accumulator for funConstraintIfacesRef, mirroring
--- crossModuleFunConstraintsRef exactly (accumulate across the graph, NOT cleared by
--- resetState, re-seeded after the per-module reset).
--- WS-2/D2 (ifaces analog of crossModuleFunConstraintsQualRef): module-attributed
--- mirror of crossModuleFunConstraintIfacesRef, keyed by (DEFINER module id, fn name),
--- slot-parallel to crossModuleFunConstraintsQualRef.  inferDictAtFound reads the
--- callee's dict ids AND their ifaces from the SAME qualified (definer,name) source so
+-- Predicate interface identity is stored in the same cross-module carrier record as
+-- its arguments and ids; there is no slot-parallel interface accumulator.
 -- the two stay aligned across a bare-name cross-module collision (a foreign same-named
 -- fn of different `=>`-arity must not contribute its ifaces).  Populated/reset in
 -- lockstep with the ids qual ref (checkModuleFullImpl / elaborateModules).
@@ -8163,60 +8247,41 @@ uOblIsDecidableNow o =
 -- ports `pendingDictApps` onto `Windowed` too (see `dictApps` below); mutated ONLY
 -- by `resetState` and `pushDictApp`.
 
--- #1155 (F-3c): the 5th element is the `currentLoc` span snapshotted at the RECORD
+-- #1155 (F-3c): [pdaLoc] is the `currentLoc` span snapshotted at the RECORD
 -- site, the same reason and the same shape as `PendingEntry`'s 6th field and
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
 -- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
-pushDictApp : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) ->
-  Unit
+data PendingDictApp = PendingDictApp {
+  pdaRoutesRef : Ref (List Route),
+  pdaMonos : List Mono,
+  pdaIfaces : List IfaceRef,
+  pdaArgVecs : List (List Mono),
+  pdaEncl : String,
+  pdaLoc : Option Loc,
+}
+
+pushDictApp : PendingDictApp -> Unit
 pushDictApp app = wPush perRun.value.dictApps app
 
--- method-level-constraint dict-passing (the reference's res_method_dicts, Phase
--- 69.x-e).  An interface method whose signature carries a `=>` constraint over a
--- tyvar that is NOT the interface param (canonically `foldMap : Monoid m => …`,
--- where `Monoid m` constrains the result monoid, not the container `t`):
---   methodConstraintsRef : method name → one tyvar id per such constraint, in slot
---                          order.  Captured while BUILDING the env method schemes
---                          (ifaceMethodSchemes) so the ids are the SAME quantified
---                          ids a call-site instantiation maps through its subst.
---   pendingMethodDicts   : a method occurrence's method-dicts ref to fill + the
---                          instantiated constraint monos (mirrors pendingDictApps),
---                          routed by resolveMethodDicts after inference.
+-- Method-level-constraint dict-passing.  `methodPredicateSlotsRef` is the sole
+-- per-run authority: each method constraint owns one complete PredicateSlot and the
+-- stable quantifier positions needed to instantiate it at an occurrence.  Positions
+-- survive the separate fresh-id scheme builds used by discovery and elaboration;
+-- dictionary cardinality is the number of MethodPredicateSlot records, never the
+-- number of bound ids inside a predicate.  `pendingMethodDicts` carries the resulting
+-- instantiated PredicateSlots until `resolveMethodDicts` routes them after inference.
+--
+-- Cross-run snapshots retain the same record payload.  The bare table supports
+-- per-module discovery and first-match compatibility; its `(module, method)`-keyed
+-- qualified peer is the authority consumed by final scoped dict passing.  Thus a
+-- same-spelled method in another module cannot lend this method either its predicate
+-- identity or its arity, while non-colliding programs preserve the historical order.
+data PendingMethodDict = PendingMethodDict {
+  pmdRoutesRef : Ref (List Route),
+  pmdSlots : List PredicateSlot,
+  pmdEncl : String,
+}
 
--- Per method name, the POSITIONS (indices into the scheme's ordered quantified id
--- list) of its constraint slots.  Positions are allocation-INDEPENDENT: the env
--- scheme and the registry scheme are separate `sigToSchemeTvs mty` instantiations
--- with DIFFERENT fresh ids, but the SAME var order, so a slot's index is stable.
--- recordMethodDicts indexes THIS occurrence's ordered subst at these positions to
--- get the exact live constraint monos — sidestepping the cross-sweep/parametric-
--- sibling id-overlap that defeats countInSubst's overlap heuristic (a stale id can
--- land in the live range mapping to the container `t` instead of the applicative
--- `m`; the position never confuses the two).  One entry per method (dedup);
--- cleared in resetState.  Absent ⇒ fall back to alignedMethodConstraintIds.
-
--- Cross-module analog of methodConstraintsRef, mirroring crossModuleFunConstraintsRef
--- exactly.  resetState wipes methodConstraintsRef at each module start, then
--- checkModuleFullImpl re-registers via `ifaceMethodSchemes prog` over the CURRENT
--- module's decls only — so a method declared in an imported module (canonically
--- core's `foldMap : Monoid m =>` on `Foldable`) is absent during a later USER
--- module's pass, and its dict never gets recorded.  This ref ACCUMULATES every
--- module's registered method-constraints across the graph and is NOT cleared by
--- resetState; checkModuleFullImpl re-seeds methodConstraintsRef from it after the
--- per-module reset+registration (MERGE, the per-module entry wins first-match).
--- WS-2/D2 (method-level analog of crossModuleFunConstraintsQualRef): module-attributed
--- mirror of crossModuleMethodConstraintsRef, keyed by (owning interface's module id,
--- method name).  Without it, two modules declaring distinct interfaces that share a
--- bare METHOD name but with different method-level `=>`-constraint arity (e.g.
--- `shape : Num e => …` in module A vs `shape : (Num e, Num f) => …` in module B) both
--- land in the bare methodConstraintsRef; methodDictArityOf's first-match returns the
--- WRONG module's arity → an impl/default method in one module is sized to the other's
--- dict-param count → a dict is mis-bound into a value parameter (`unknown op '+'` /
--- garbage / run≠build — the method-level twin of the §1 D2 fn repro, which `check`
--- accepts).  Populated per-module in checkModuleFullImpl (each method whose INTERFACE
--- is declared in this module's `prog`); consumed by scopeMethodArities in the final
--- per-scope dict-pass.  The bare crossModuleMethodConstraintsRef is KEPT — the
--- per-module reseed at checkModuleFullImpl needs the bare form for the current module's
--- cross-module call-site discovery (recordMethodDicts), exactly like the fn side.
 -- #158 PR2: the 22 per-run cross-module accumulators declared above (the six
 -- crossModule* dict-arity mirrors of #143/#144, plus the #154 universe*/obUniv* universe
 -- accumulators) are bundled into ONE typed record so their survive/clear lifecycle is a
@@ -8278,22 +8343,15 @@ data CrossRun = CrossRun {
   --      stage K's `IE` (`declEnvsRef.deImpls`, projected by `ieUniverseAt`) is the
   --      single answer to "what impls exist" on the Module path.  Not merely unread.
   builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
-  crossModuleFunConstraintsRef : Ref (List (String, List Int)),
-  crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
-  crossModuleFunConstraintIfacesRef : Ref (List (String, List IfaceRef)),
-  crossModuleFunConstraintIfacesQualRef : Ref (List ((String, String), List IfaceRef)),
-  -- S-xmod-vector-supply (#1868/#1867): the (definer module, exported name)-keyed twin
-  -- of `funConstraintArgsRef`, seeded and consumed exactly like the ids/ifaces/prefix
-  -- qual tables beside it.  ⚠️ THERE IS DELIBERATELY NO BARE-NAME PEER: a stored vector
-  -- carries the DEFINING signature's instantiation tyvars, and only the source-exact
-  -- key guarantees the call site substitutes them through THAT signature's own
-  -- instantiation subst — see `declaredConstraintArgs`' header for why a vector read
-  -- off another module's entry is strictly worse than no vector at all.
-  crossModuleFunConstraintArgsQualRef : Ref (List ((String, String), List (List Mono))),
+  -- B-4 (#1318): one cross-run row per function, one carrier element per dictionary
+  -- slot.  The bare table deliberately stores `PSArgsUnknown`; only the source-exact
+  -- qualified table may transport signature-instantiation vectors across modules.
+  crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot)),
+  crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List PredicateSlot)),
   crossModuleFunConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
   crossModuleFunConstraintDeclaredQualRef : Ref (List ((String, String), CDeclaredPrefix)),
-  crossModuleMethodConstraintsRef : Ref (List (String, List Int)),
-  crossModuleMethodConstraintsQualRef : Ref (List ((String, String), List Int)),
+  crossModuleMethodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot)),
+  crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot)),
   coreSchemeObligationsRef : Ref (OrdMap (List VecObl)),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
   crossModuleSchemeOblsQualRef : Ref (List ((String, String), List VecObl)),  -- #1114/#845: every USER module's schemeObligationsRef, (mid, name)-attributed (see attributeModuleSchemeObls)
 }
@@ -8349,15 +8407,12 @@ freshCrossRun env = CrossRun {
   universeCtorIdentsRef = Ref omEmpty,
   universeCtorCollidedRef = Ref [],
   builtinClassesRef = Ref emptyBuiltinClasses,
-  crossModuleFunConstraintsRef = Ref [],
-  crossModuleFunConstraintsQualRef = Ref [],
-  crossModuleFunConstraintIfacesRef = Ref [],
-  crossModuleFunConstraintIfacesQualRef = Ref [],
-  crossModuleFunConstraintArgsQualRef = Ref [],
+  crossModuleFunPredicateSlotsRef = Ref [],
+  crossModuleFunPredicateSlotsQualRef = Ref [],
   crossModuleFunConstraintDeclaredRef = Ref [],
   crossModuleFunConstraintDeclaredQualRef = Ref [],
-  crossModuleMethodConstraintsRef = Ref [],
-  crossModuleMethodConstraintsQualRef = Ref [],
+  crossModuleMethodPredicateSlotsRef = Ref [],
+  crossModuleMethodPredicateSlotsQualRef = Ref [],
   coreSchemeObligationsRef = Ref omEmpty,
   crossModuleSchemeOblsQualRef = Ref [],
 }
@@ -8485,7 +8540,7 @@ sitesFor fn idx = optionOr [] (omLookup fn idx)
 -- cells are still bound).  Reset per pass by resetState, like pendingSites.
 -- D3b-1: also carries the method name + the EMethodAt impl-dicts ref, so a
 -- concrete site whose head names a parametric `requires` impl can thread the
--- element dict (resolveArgStamp → argImplDictRoutesFor), exactly as the
+-- element dict (resolveArgStamp → argImplDictRoutesForEncl), exactly as the
 -- return-position pendingSites carry implRef for resolveSite.
 -- #156 S3a: entries are `PendingEntry`s of kind `SKArg`.
 
@@ -9220,29 +9275,26 @@ data PerRun = PerRun {
   -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
   -- same predicate as another iff they have equal length and `monoSameGiven` holds at
   -- every position, in order — see `monoVecSameGiven`.
-  activeDictPreds : Ref (List (String, List Mono, String)),
+  activeDictPreds : Ref (List (PredicateSlot, String)),
   -- #1154 RESIDUAL: the impl-`requires` twin of `enclPreds`.  One entry per dict slot
   -- an impl's `requires` opens: the tyvar ids the slot is keyed on, and the WHOLE
   -- predicate that slot discharges.  `activeDictVars` above cannot answer a body's
   -- method site on its own — every entry of `requires Ix a Char, Dbg2 a` carries the
   -- SAME id `a`, so its first-match returns the LAST-registered slot for every method
   -- in the body.  See `implReqDictVarOf`.
-  implReqPreds : Ref (List (String, List Int, Predicate)),
-  funConstraintsRef : Ref (List (String, List Int)),
+  implReqPredicateSlots : Ref (List (String, PredicateSlot)),
+  funPredicateSlotsRef : Ref (List (String, List PredicateSlot)),
   funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
-  funConstraintArgsRef : Ref (List (String, List (List Mono))),
-  funConstraintIfacesRef : Ref (List (String, List IfaceRef)),
   currentImportDefinersRef : Ref (List (String, String)),
   currentImportOriginsRef : Ref (List (String, String)),
   importedSchemeOblsRef : Ref (OrdMap (List VecObl)),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
-  dictApps : Windowed (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc),  -- #841: pendingDictApps/N, ported onto Windowed
+  dictApps : Windowed PendingDictApp,  -- #841: pendingDictApps/N, ported onto Windowed
   obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
   absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
   schemeObligationsRef : Ref (List ((String, Int), List VecObl)),  -- #837: keyed by (binding-name, binding-id) — the id from resolve's
   schemeDefIdsRef : Ref (OrdMap Int),  -- stampBindingIds, so a where-helper `g`'s obligations can no longer leak
-  methodConstraintsRef : Ref (List (String, List Int)),  -- onto an unrelated top-level `g` (retires the three snapshot/restore windows).
-  methodConstraintPositionsRef : Ref (List (String, List Int)),  -- id 0 = a local/where/cross-module binder → the bare-name fallback path.
-  pendingMethodDicts : Ref (List (Ref (List Route), List Mono)),
+  methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot)),  -- onto an unrelated top-level `g` (retires the three snapshot/restore windows).
+  pendingMethodDicts : Ref (List PendingMethodDict),
   pendingRecDictApps : Ref (List RecDictApp),  -- #837: each TOP-LEVEL value binder → its stampBindingIds id, set once per
   currentFn : Ref String,  -- module (checkBodyImpl) right after stamping.  registerSchemeObligations
   currentImplBody : Ref Bool,  -- reads it to tag a top-level member's obligations with its binding id.
@@ -9334,11 +9386,9 @@ freshPerRun _ = PerRun {
   pendingArgStamps = Ref [],
   activeDictVars = Ref [],
   activeDictPreds = Ref [],
-  implReqPreds = Ref [],
-  funConstraintsRef = Ref [],
+  implReqPredicateSlots = Ref [],
+  funPredicateSlotsRef = Ref [],
   funConstraintDeclaredRef = Ref [],
-  funConstraintArgsRef = Ref [],
-  funConstraintIfacesRef = Ref [],
   currentImportDefinersRef = Ref [],
   currentImportOriginsRef = Ref [],
   importedSchemeOblsRef = Ref omEmpty,
@@ -9347,8 +9397,7 @@ freshPerRun _ = PerRun {
   absorptions = wNew (),  -- #839 2a: resets per module for free via this whole-record re-mint
   schemeObligationsRef = Ref [],
   schemeDefIdsRef = Ref omEmpty,
-  methodConstraintsRef = Ref [],
-  methodConstraintPositionsRef = Ref [],
+  methodPredicateSlotsRef = Ref [],
   pendingMethodDicts = Ref [],
   pendingRecDictApps = Ref [],
   currentFn = Ref "",
@@ -10644,9 +10693,9 @@ sigToScheme : Ty -> Scheme
 sigToScheme ty = fst (sigToSchemeTvs ty)
 
 -- like sigToScheme but also returns the name→tyvar map it built, so a caller can
--- recover the id of a specific constraint variable (methodConstraintsRef) — the
--- SAME quantified ids the returned scheme carries, so a call-site instantiation's
--- subst maps them.
+-- recover each constraint variable's quantified id and stable position for the
+-- MethodPredicateSlot carrier.  The returned scheme carries those same ids, so a
+-- call-site instantiation's subst maps them.
 sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvs ty = sigToSchemeTvsIn [] ty
 
@@ -11696,7 +11745,7 @@ recordRLocalSite env name tagRef inst
           name
           tagRef
           inst
-          ""
+          perRun.value.currentFn.value
           (SKRLocal (routeLocalSym !tagRef) True [] [] [])
           !currentLoc
         :: perRun.value.pendingRLocalSites.value
@@ -11716,7 +11765,7 @@ recordRLocalSite env name tagRef inst
               name
               tagRef
               am
-              ""
+              perRun.value.currentFn.value
               (SKRLocal
                 sym
                 (standaloneValuePinned name)
@@ -11859,63 +11908,84 @@ lookupIdxById iface n (((ir, mn), i) :: rest)
 -- constraint records nothing — methodRef stays [], eval's fold is a no-op.
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodDicts name methodRef subst =
-  match alignedMethodConstraintIds name subst
+  match (lookupMethodPredicateSlots
+    name
+    perRun.value.methodPredicateSlotsRef.value)
     None => ()
-    Some ids =>
+    Some slots =>
       perRun.value.pendingMethodDicts :=
-        (methodRef, constraintMonosOf ids subst)
+        PendingMethodDict {
+            pmdRoutesRef = methodRef,
+            pmdSlots = instantiateMethodPredicateSlots slots subst,
+            pmdEncl = perRun.value.currentFn.value,
+          }
           :: perRun.value.pendingMethodDicts.value
 
--- D2: the constraint-slot ids of method [name] that line up with THIS occurrence's
--- instantiation [subst].  methodConstraintsRef can hold MULTIPLE entries for one
--- (uniquely-named) method, each registered with its own FRESH ids by a different
--- elaborate sweep (discoverPromotedModules' discovery sweep, then the real
--- elabWorker sweep) — crossModuleMethodConstraintsRef accumulates them across
--- sweeps and is not re-keyed before recordMethodDicts reads it.  A plain bare-name
--- first-match (lookupAssocSL2) returns whichever entry is frontmost, which after the
--- discovery sweep is a STALE entry whose ids belong to a dead id range, disjoint from
--- the live [subst] keys → constraintMonosOf drops them all → empty route → the
--- cross-module method-level dict is never threaded ("no matching impl" at run /
--- SIGSEGV at build).  The LIVE entry is the one the call's instantiateTracked actually
--- quantified — i.e. whose ids are keys of [subst].  Pick the entry with the most ids
--- present in [subst] (>0); fall back to bare first-match when none overlap (preserves
--- the single-entry / no-instantiation goldens byte-for-byte).  Diamond-safe: a method
--- re-exported through an intermediate keeps the ORIGINAL definer's scheme ids (seedVars
--- threads the scheme object verbatim), so its [subst] keys match the original entry,
--- which alignment selects regardless of intermediate sweeps.
-alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
-alignedMethodConstraintIds name subst =
-  match positionMatch name subst perRun.value.methodConstraintPositionsRef.value
-    Some ids => Some ids
-    None =>
-      let entries =
-        filterList (e => fst e == name) perRun.value.methodConstraintsRef.value
-      match entries
-        [] => None
-        _ => match bestAlignedEntry subst entries (0 - 1) None
-          Some ids => Some ids
-          None => lookupAssocSL2 name perRun.value.methodConstraintsRef.value
+-- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
+-- stable positions index the occurrence's ordered substitution, avoiding any reliance
+-- on allocation-local ids from an earlier discovery sweep.  A re-exported method keeps
+-- its original scheme order, so the same positional projection is diamond-safe.
+lookupMethodPredicateSlots : String ->
+  List (String, List MethodPredicateSlot) ->
+  Option (List MethodPredicateSlot)
+lookupMethodPredicateSlots _ [] = None
+lookupMethodPredicateSlots name ((name2, slots) :: rest)
+  | name == name2 = Some slots
+  | otherwise = lookupMethodPredicateSlots name rest
 
--- The DEFINITIVE slot ids for THIS occurrence: index the occurrence's ORDERED subst
--- (instantiateTracked keys subst by the scheme's own ids via freshSubst, preserving
--- var order) at the method's stable constraint-slot POSITIONS.  Allocation-
--- independent, so it picks the applicative `m` slot regardless of cross-sweep id
--- overlap (where a stale id maps to the container `t` — both Thenable).  None when
--- the method has no recorded positions, or a position is out of range (e.g. an empty
--- subst from a monomorphic recursive call) ⇒ caller falls back to countInSubst.
-positionMatch : String ->
+instantiateMethodPredicateSlots : List MethodPredicateSlot ->
   List (Int, Mono) ->
-  List (String, List Int) ->
-  Option (List Int)
-positionMatch name subst positionsTbl = match lookupAssocSL2 name positionsTbl
-  None => None
-  Some positions =>
-    let keys = map fst subst
-    let n = listLen keys
-    if allInRange positions n then
-      Some (map (p => nthInt p keys) positions)
-    else
-      None
+  List PredicateSlot
+instantiateMethodPredicateSlots [] _ = []
+instantiateMethodPredicateSlots (slot :: rest) subst =
+  match instantiateMethodPredicateSlot slot subst
+    Some pred => pred :: instantiateMethodPredicateSlots rest subst
+    None => instantiateMethodPredicateSlots rest subst
+
+instantiateMethodPredicateSlot : MethodPredicateSlot ->
+  List (Int, Mono) ->
+  Option PredicateSlot
+instantiateMethodPredicateSlot slot subst =
+  map
+    (instantiatedMethodPredicate slot subst)
+    (methodSlotSubst slot.mpsPredicate.psBoundIds slot.mpsPositions subst)
+
+instantiatedMethodPredicate : MethodPredicateSlot ->
+  List (Int, Mono) ->
+  List (Int, Mono) ->
+  PredicateSlot
+instantiatedMethodPredicate slot subst slotSubst =
+  let args2 = instantiatedMethodPredicateArgs slot.mpsPredicate.psArgs slotSubst
+  PredicateSlot {
+    psIface = slot.mpsPredicate.psIface,
+    psArgs = args2,
+    psBoundIds = map (p => nthInt p (map fst subst)) slot.mpsPositions,
+  }
+
+instantiatedMethodPredicateArgs : PredicateSlotArgs ->
+  List (Int, Mono) ->
+  PredicateSlotArgs
+instantiatedMethodPredicateArgs PSArgsUnknown _ = PSArgsUnknown
+instantiatedMethodPredicateArgs (PSArgsKnown args) subst =
+  PSArgsKnown (map (substMono subst []) args)
+
+methodSlotSubst : List Int ->
+  List Int ->
+  List (Int, Mono) ->
+  Option (List (Int, Mono))
+methodSlotSubst ids positions subst =
+  let vals = map snd subst
+  let n = listLen subst
+  if listLen ids == listLen positions && allInRange positions n then
+    Some (zipMethodSlotSubst ids positions vals)
+  else
+    None
+
+zipMethodSlotSubst : List Int -> List Int -> List Mono -> List (Int, Mono)
+zipMethodSlotSubst [] _ _ = []
+zipMethodSlotSubst _ [] _ = []
+zipMethodSlotSubst (id :: ids) (pos :: positions) vals =
+  (id, nthMethodMono pos vals) :: zipMethodSlotSubst ids positions vals
 
 allInRange : List Int -> Int -> Bool
 allInRange [] _ = True
@@ -11926,28 +11996,10 @@ nthInt _ [] = 0 - 1
 nthInt 0 (x :: _) = x
 nthInt i (_ :: xs) = nthInt (i - 1) xs
 
--- among [entries] (all the same-named method-constraint records), the ids of the one
--- with the most slots present in [subst]; None until a positive-overlap entry is seen.
-bestAlignedEntry : List (Int, Mono) ->
-  List (String, List Int) ->
-  Int ->
-  Option (List Int) ->
-  Option (List Int)
-bestAlignedEntry _ [] _ best = best
-bestAlignedEntry subst ((_, ids) :: rest) bestN best =
-  let n = countInSubst ids subst
-  if n > 0 && n > bestN then
-    bestAlignedEntry subst rest n (Some ids)
-  else
-    bestAlignedEntry subst rest bestN best
-
-countInSubst : List Int -> List (Int, Mono) -> Int
-countInSubst [] _ = 0
-countInSubst (id :: rest) subst =
-  (match lookupAssocI id subst
-      Some _ => 1
-      None => 0)
-    + countInSubst rest subst
+nthMethodMono : Int -> List Mono -> Mono
+nthMethodMono _ [] = tconUnresolved "__missing_method_slot__"
+nthMethodMono 0 (x :: _) = x
+nthMethodMono i (_ :: xs) = nthMethodMono (i - 1) xs
 
 -- record a return-position method occurrence: resolveSite later stamps its route
 -- (RKey/RDict) once inference grounds the result mono.
@@ -12022,27 +12074,16 @@ qualConstraintDecl : String -> Option CDeclared
 qualConstraintDecl name = match qualConstraintKey name
   None => None
   Some (src, origin) =>
-    -- U1b (#1482): the independent lookups still default to `[]` independently —
-    -- that is the manufacturable mismatch described on `CSlot` — but they now meet in
-    -- `pairSlots`, which owns the policy, instead of in three downstream zips.
     map
-      (ids => qualDeclOf src origin ids)
+      (slots => qualDeclOf src origin slots)
       (lookupQualPayload
         src
         origin
-        crossRun.value.crossModuleFunConstraintsQualRef.value)
+        crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
 
-qualDeclOf : String -> String -> List Int -> CDeclared
-qualDeclOf src origin ids =
-  let slots =
-    pairSlots
-      ids
-      (optionOr
-        []
-        (lookupQualPayload
-          src
-          origin
-          crossRun.value.crossModuleFunConstraintIfacesQualRef.value))
+qualDeclOf : String -> String -> List PredicateSlot -> CDeclared
+qualDeclOf src origin stored =
+  let slots = predicateSlotCSlots stored
   CDeclared {
     cdSlots = slots,
     cdPrefix =
@@ -12058,13 +12099,7 @@ qualDeclOf src origin ids =
     -- ids but no args is unaffected.  S-inferred-vector-supply (#1869): an INFERRED callee
     -- is no longer automatically in that class — `registerInferredFor` writes a real row
     -- when it recovers one, and writes none (this arm) when it recovers nothing.
-    cdArgs =
-      optionOr
-        []
-        (lookupQualPayload
-          src
-          origin
-          crossRun.value.crossModuleFunConstraintArgsQualRef.value),
+    cdArgs = predicateSlotArgs stored,
   }
 
 -- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
@@ -12121,16 +12156,18 @@ declaredConstraintIds name = match qualConstraintIds name
     if hasImportDefiner name then
       []
     else
-      optionOr [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value)
+      predicateSlotIdsAt name perRun.value.funPredicateSlotsRef.value
 
 qualConstraintIds : String -> Option (List Int)
 qualConstraintIds name = match qualConstraintKey name
   None => None
   Some (src, origin) =>
-    lookupQualPayload
-      src
-      origin
-      crossRun.value.crossModuleFunConstraintsQualRef.value
+    map
+      predicateSlotIds
+      (lookupQualPayload
+        src
+        origin
+        crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
 
 -- first-match lookup in a `(definer module, exported name)`-keyed qual table.
 --
@@ -12195,14 +12232,11 @@ declaredConstraintFor name = match qualConstraintDecl name
     if hasImportDefiner name then
       CDeclared { cdSlots = [], cdPrefix = CDPLen 0, cdArgs = [] }
     else
-      let slots =
-        pairSlots
-          (optionOr
-            []
-            (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
-          (optionOr
-            []
-            (lookupAssocS name perRun.value.funConstraintIfacesRef.value))
+      let stored =
+        optionOr
+          []
+          (lookupPredicateSlots name perRun.value.funPredicateSlotsRef.value)
+      let slots = predicateSlotCSlots stored
       CDeclared {
         cdSlots = slots,
         cdPrefix =
@@ -12212,7 +12246,7 @@ declaredConstraintFor name = match qualConstraintDecl name
         -- the LOCAL / wildcard / re-export / check-path arm keeps the bare-name vector
         -- table this slice did not touch — `declaredConstraintArgs`, the same lookup
         -- `enclPreds` uses for the ENCLOSING fn.
-        cdArgs = declaredConstraintArgs name,
+        cdArgs = predicateSlotArgs stored,
       }
 
 -- B-2.2-f (#1113): a recorded prefix, clamped to the slots it indexes into; an ABSENT
@@ -12251,7 +12285,7 @@ inferDictAtFound name routesRef inst =
   let declaredIds = declaredConstraintIds name
   let known = match q
     Some _ => True
-    None => hasKeySL2 name perRun.value.funConstraintsRef.value
+    None => hasPredicateSlots name perRun.value.funPredicateSlotsRef.value
   -- #739: an explicitly-imported callee with NO cross-module constraint (declaredIds empty
   -- and source-exact per Fix A above) is genuinely UNCONSTRAINED — it only reached this
   -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
@@ -12280,16 +12314,18 @@ inferDictAtFound name routesRef inst =
     let expanded = map fst expandedV
     let ids = map (s => s.csId) expanded
     let monos = constraintMonosOf ids (snd inst)
+    let argVecs = callArgVecsV expandedV (snd inst)
     -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
-    let _ = pushDictApp (
-      routesRef,
-      monos,
-      map (s => s.csIface) expanded,
-      callArgVecsV expandedV (snd inst),
-      !currentLoc,
-    )
+    let _ = pushDictApp PendingDictApp {
+      pdaRoutesRef = routesRef,
+      pdaMonos = monos,
+      pdaIfaces = map (s => s.csIface) expanded,
+      pdaArgVecs = argVecs,
+      pdaEncl = perRun.value.currentFn.value,
+      pdaLoc = !currentLoc,
+    }
     perRun.value.dictAppFns :=
       consSiteFn
         perRun.value.currentFn.value
@@ -12299,7 +12335,7 @@ inferDictAtFound name routesRef inst =
     -- with the call's constraint mono), checked after inference by checkCallObligations.
     -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
     -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
-    let _ = recordCallObligations expanded monos
+    let _ = recordCallObligations expanded monos argVecs
     fst inst
   else
     perRun.value.pendingRecDictApps :=
@@ -12321,11 +12357,24 @@ anyIdPinned (id :: rest) subst = match lookupAssocI id subst
 -- pendingCallObligations.  Length-zips defensively (an iface list shorter than the
 -- mono list — e.g. a multi-param constraint whose ifaces weren't recorded — just
 -- stops, never over-rejecting).
-recordCallObligations : List CSlot -> List Mono -> Unit
-recordCallObligations [] _ = ()
-recordCallObligations _ [] = ()
-recordCallObligations (s :: ss) (mono :: ms)
-  | s.csIface.irName == "" = recordCallObligations ss ms
+recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
+recordCallObligations [] _ _ = ()
+recordCallObligations _ [] _ = ()
+recordCallObligations (s :: ss) (mono :: ms) []
+  | s.csIface.irName == "" = recordCallObligations ss ms []
+  | otherwise =
+    let _ =
+      recordObl
+        Predicate {
+          iface = s.csIface,
+          args = [mono],
+        }
+        0
+        PCallSlot
+        !currentLoc
+    recordCallObligations ss ms []
+recordCallObligations (s :: ss) (mono :: ms) (args :: rest)
+  | s.csIface.irName == "" = recordCallObligations ss ms rest
   | otherwise =
     -- 1-ary by construction: these slots are funConstraintsRef's SHATTERED
     -- per-tyvar dict slots (`Ix a i` => two slots), so each carries one mono.
@@ -12346,26 +12395,14 @@ recordCallObligations (s :: ss) (mono :: ms)
     -- P1 (#1446) / U1b (#1482): `funConstraintIfacesRef`'s payload is `List IfaceRef`,
     -- so this site records the interface OCCURRENCE's identity instead of
     -- `OriginUnresolved`.  It was one of the two `ifaceRefBare` producers.
+    let goalArgs = if isEmptyL args then [mono] else args
     let _ =
       recordObl
-        Predicate { iface = s.csIface, args = [mono] }
+        Predicate { iface = s.csIface, args = goalArgs }
         0
         PCallSlot
         !currentLoc
-    recordCallObligations ss ms
-
--- String-keyed assoc lookup over funConstraintIfacesRef (returns the iface name list).
-lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
-lookupAssocS _ [] = None
-lookupAssocS k ((k2, v) :: rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocS k rest
-
-hasKeySL2 : String -> List (String, List Int) -> Bool
-hasKeySL2 _ [] = False
-hasKeySL2 k ((k2, _) :: rest)
-  | k == k2 = True
-  | otherwise = hasKeySL2 k rest
+    recordCallObligations ss ms rest
 
 -- instantiate a scheme, returning both the mono and the (quantified id → fresh
 -- var) substitution, so a caller can recover specific quantified variables
@@ -12373,63 +12410,6 @@ instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateTracked (Forall ids evars t) =
   let subst = freshSubst ids
   (substMonoP True subst (freshEffSubst evars) t, subst)
-
--- #1161 (F-3a-ii): the callee's declared per-slot predicate ARGUMENT VECTORS, as
--- recorded at signature registration (registerMember).  Bare-name keyed, mirroring the
--- `None` arm of `declaredConstraintFor`.
--- ⚠️ THIS IS THE LOCAL LOOKUP ONLY, and that is now a NARROWER claim than it was.
--- S-xmod-vector-supply (#1868 silent / #1867 loud) CLOSED the cross-module residual this
--- header used to describe: `crossModuleFunConstraintArgsQualRef` is the `(definer module,
--- exported name)`-keyed twin, seeded beside the ids/ifaces/prefix snapshots and read
--- through `declaredConstraintFor`'s `cdArgs`, so an IMPORTED constrained callee's call
--- site now sees the same argument vector a local one does.  What still reads THIS bare
--- table is (a) `declaredConstraintFor`'s local/wildcard/re-export/check-path arm and
--- (b) `enclPreds`, whose subject is the ENCLOSING fn and therefore always local.
---
--- 🚨 WHY THE QUAL KEY IS WHAT MAKES THE VECTOR SAFE TO CROSS — the hazard this header
--- used to cite as the reason NOT to build the table, and the measurement that answers
--- it.  A stored vector's tyvars are not re-attributed by `attributeModuleEntries` (it
--- only re-keys by `(mid, name)`), and each module resets `tyvarCounter`, so a vector
--- read off the WRONG module's entry substitutes to a wrong-but-concrete goal — strictly
--- worse than missing.  The vector is safe because it never needs re-attribution in the
--- first place: `constraintVarIfaceMonos` (which mints the slot IDS) and
--- `constraintVarArgMonos` (which mints these VECTORS) are called on ONE signature
--- instantiation's `snd inst` in `preunifySigsEx`, so a slot's `csId` is literally one of
--- its own vector's tyvar ids.  The call site then maps BOTH through the same
--- `instantiateTracked` subst of that callee's own scheme, whose quantified ids are those
--- same signature vars.  So the vector lives in exactly the id space the already-shipped
--- ids table crosses in — no wider — and the ONLY way to leave it is to resolve the entry
--- by bare name.  Hence: qual key, no bare-name cross-module peer, no seed back into
--- `funConstraintArgsRef`.  The residual's cost is what drained with it: `useIx : Ix a
--- Char => a -> Int` printed 222 compiled alone and 111 imported — byte-identical source,
--- different answer, exit 0, both engines.
--- ✅ SECOND RESIDUAL — CLOSED by FIX-shadow-arity-skew, and the prose that stood here is
--- kept only as the record of why it had to be.  It read: `resolveRLocalSites` / `SKRLocal`
--- fill their dict routes with the SCALAR `routesOfMonosTop`, so an importer- or
--- definer-shadowed constrained standalone with a multi-argument predicate keeps the
--- per-tyvar goal; and S-xmod-vector-supply left it there deliberately, on the measured
--- ground that it changed only `cdArgs` while the shadow route read only `cdSlots`, so the
--- neighbour was "neither newly wrong nor newly reachable".
--- 🚨 That clearance was SOUND FOR ITS OWN SLICE AND FALSIFIED BY THE NEXT ONE.
--- S-slot-key-vector (#1866) re-keyed `cdSlots` ITSELF on the whole predicate, which is
--- precisely the premise the clearance rested on, and the shadow route — still expanding
--- against a constant `[]` — under-counted the definition's dict params: `run` E-PANIC,
--- `build` a per-execution heap pointer, wasm illegal cast, `check` exit 0.  The lesson is
--- not "that reasoning was careless"; it is that "reads only X, and I touched only Y" has
--- a HALF-LIFE OF ONE SLICE, and a comment recording such a clearance must be re-read by
--- whoever next moves X.  `SKRLocal` now carries the vectors and both resolvers select
--- through `routesOfMonosTopV`; empty vectors make that the scalar router term for term.
-declaredConstraintArgs : String -> List (List Mono)
-declaredConstraintArgs name =
-  optionOr [] (lookupAssocVecs name perRun.value.funConstraintArgsRef.value)
-
-lookupAssocVecs : String ->
-  List (String, List (List Mono)) ->
-  Option (List (List Mono))
-lookupAssocVecs _ [] = None
-lookupAssocVecs k ((k2, v) :: rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocVecs k rest
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
 -- SAME slot list against the SAME [subst] and applies the SAME drop rule (an id absent
@@ -12470,12 +12450,6 @@ constraintMonosOf (id :: rest) subst = match lookupAssocI id subst
   Some m => m :: constraintMonosOf rest subst
   None => constraintMonosOf rest subst
 
-lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)
-lookupAssocSL2 _ [] = None
-lookupAssocSL2 k ((k2, v) :: rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocSL2 k rest
-
 -- #994 (B-3-b): THE write op for the per-run fn-constraint table PAIR, and its
 -- cross-module twin below.  `funConstraintsRef` and `funConstraintIfacesRef` are
 -- slot-parallel per entry and index-parallel across entries; every whole-table
@@ -12492,20 +12466,44 @@ lookupAssocSL2 k ((k2, v) :: rest)
 -- both tables and returns both results makes both reads happen before either write, so
 -- the ordering constraint is discharged by the TYPE rather than by statement order in a
 -- caller that a later edit can reshuffle.
-setFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) ->
-  Unit
-setFunConstraintTables tables =
-  perRun.value.funConstraintsRef := fst tables
-  perRun.value.funConstraintIfacesRef := snd tables
+expandFunPredicateSlots : List Decl ->
+  List (String, List PredicateSlot) ->
+  List (String, List PredicateSlot)
+expandFunPredicateSlots allDecls table =
+  map (expandPredicateSlotEntry allDecls) table
 
--- the same op for the CROSS-module snapshot pair (`crossModuleFunConstraintsRef` /
--- `crossModuleFunConstraintIfacesRef`), so the snapshot `expandSupersCross` produces is
--- never unbundled into two locals that a later edit could write independently.
-setCrossFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) ->
-  Unit
-setCrossFunConstraintTables tables =
-  crossRun.value.crossModuleFunConstraintsRef := fst tables
-  crossRun.value.crossModuleFunConstraintIfacesRef := snd tables
+expandPredicateSlotEntry : List Decl ->
+  (String, List PredicateSlot) ->
+  (String, List PredicateSlot)
+expandPredicateSlotEntry allDecls (name, slots) =
+  (name, expandPredicateSlots allDecls slots)
+
+expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
+expandPredicateSlots allDecls slots =
+  let idx = predicateSlotIndex slots omEmpty
+  map
+    (predicateSlotFromExpanded idx)
+    (expandSupersVecs allDecls (map predicateSlotView slots))
+
+predicateSlotIndex : List PredicateSlot ->
+  OrdMap PredicateSlot ->
+  OrdMap PredicateSlot
+predicateSlotIndex [] acc = acc
+predicateSlotIndex (s :: rest) acc =
+  predicateSlotIndex rest (omInsert (cslotVecKey (predicateSlotView s)) s acc)
+
+predicateSlotFromExpanded : OrdMap PredicateSlot ->
+  (CSlot, List Mono) ->
+  PredicateSlot
+predicateSlotFromExpanded idx pair = match omLookup (cslotVecKey pair) idx
+  Some s => s
+  None =>
+    let (slot, args) = pair
+    PredicateSlot {
+      psIface = slot.csIface,
+      psArgs = PSArgsKnown args,
+      psBoundIds = dedupI (slot.csId :: flatMap monoTyvarIds args),
+    }
 
 -- ── WS-1b: superclass-evidence flatten ──────────────────────────────────
 -- A `=>`-constrained fn whose body calls a SUPERCLASS method (e.g. `build : Sub a =>`
@@ -12533,79 +12531,8 @@ setCrossFunConstraintTables tables =
 -- `setFunConstraintTables` for why writing the two members simultaneously is forbidden.
 expandSupersTable : List Decl -> Unit
 expandSupersTable allDecls =
-  setFunConstraintTables
-    (expandSupersCross
-      allDecls
-      perRun.value.funConstraintsRef.value
-      perRun.value.funConstraintIfacesRef.value
-      perRun.value.funConstraintArgsRef.value)
-
--- as expandSupersTable but operates on the cross-module snapshot pair (so a
--- cross-module constrained fn gets the same expansion — else it under-fills).
--- S-slot-key-vector (#1866): [argsTbl] joins, for the ID entry only.  The id entry is the
--- one whose dedup decides emitted dict ARITY, and since the key is now the whole predicate
--- it needs the same argument vectors the CALL side already expands with
--- (`inferDictAtFound`'s `zipSlotVecs slots dc.cdArgs`) — otherwise define and call
--- disagree on the slot count for `(Ix a Char, Ix a Bool) => …`.  The IFACE entry
--- deliberately does NOT take it: it expands a SYNTHETIC id list purely to reproduce the
--- same iface SEQUENCE, and feeding it vectors it has no id space for would move that
--- sequence.  See `expandSupersIfaceEntry`.
-expandSupersCross : List Decl ->
-  List (String, List Int) ->
-  List (String, List IfaceRef) ->
-  List (String, List (List Mono)) ->
-  (List (String, List Int), List (String, List IfaceRef))
-expandSupersCross allDecls idsTbl ifacesTbl argsTbl = (
-  map (expandSupersEntry allDecls ifacesTbl argsTbl) idsTbl,
-  map (expandSupersIfaceEntry allDecls) ifacesTbl,
-)
-
--- expand one (fn, ids) entry: the parallel iface list is looked up by fn name.
--- S-slot-key-vector (#1866): so is the parallel ARGUMENT-VECTOR list, which `zipSlotVecs`
--- pairs onto the slots (a legitimate PREFIX — a slot past its end reads `[]`, i.e. "no
--- vector recoverable", and keys exactly as it did before this widening).
-expandSupersEntry : List Decl ->
-  List (String, List IfaceRef) ->
-  List (String, List (List Mono)) ->
-  (String, List Int) ->
-  (String, List Int)
-expandSupersEntry allDecls ifacesTbl argsTbl (fn, ids) =
-  let ifaces = optionOr [] (lookupAssocS fn ifacesTbl)
-  let args = optionOr [] (lookupAssocVecs fn argsTbl)
-  let pairs =
-    expandSupersVecs allDecls (zipSlotVecs (pairSlots ids ifaces) args)
-  (fn, map (s => (fst s).csId) pairs)
-
--- expand one (fn, ifaces) entry the SAME way, returning the parallel iface names.
-expandSupersIfaceEntry : List Decl ->
-  (String, List IfaceRef) ->
-  (String, List IfaceRef)
-expandSupersIfaceEntry allDecls (fn, ifaces) =
-  let ids = idsForIfaceSlots ifaces
-  let pairs = expandSupersPairs allDecls (pairSlots ids ifaces)
-  (fn, map (s => s.csIface) pairs)
-
--- a synthetic id list parallel to the iface list when only the iface entry is in
--- hand (the iface-entry expansion must produce the same iface SEQUENCE as the id
--- entry; positions, not values, must agree).  Uses slot index as the id so the
--- super-name substitution + dedup walk identically.  NOTE: this works because in a
--- `requires` chain every slot in one fn's expansion shares its declared tyvar — but
--- DISTINCT declared constraints get distinct synthetic ids, so two unrelated
--- constraints sharing a super still dedup correctly per chain.
-idsForIfaceSlots : List IfaceRef -> List Int
-idsForIfaceSlots ifaces = idsForIfaceSlotsGo 0 ifaces
-
-idsForIfaceSlotsGo : Int -> List IfaceRef -> List Int
-idsForIfaceSlotsGo _ [] = []
-idsForIfaceSlotsGo i (_ :: rest) = i :: idsForIfaceSlotsGo (i + 1) rest
-
--- transitive super-closure over the declared (iface, id) slots: start from the
--- declared slots, repeatedly append direct supers of every current slot until no
--- new (iface, id) pair appears.  Result is the declared slots first (order/indices
--- preserved) then the appended supers, deduped by (iface, id).
-expandSupersPairs : List Decl -> List CSlot -> List CSlot
-expandSupersPairs allDecls declared =
-  map fst (expandSupersVecs allDecls (map (s => (s, [])) declared))
+  perRun.value.funPredicateSlotsRef :=
+    expandFunPredicateSlots allDecls perRun.value.funPredicateSlotsRef.value
 
 -- 🚨 S-dict-arity-contract: the SAME fixpoint, carrying each slot's PREDICATE ARGUMENT
 -- VECTOR (in the callee signature's instantiation vars) alongside the slot.  `Ix a b`
@@ -12759,16 +12686,6 @@ dropN n xs
   | otherwise = match xs
     [] => []
     _ :: rest => dropN (n - 1) rest
-
--- dedup (iface, id) pairs, keeping first occurrence (so declared slots stay leading).
--- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
--- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed so the
--- key is injective for ANY name content.
-dedupPairs : List (String, Int) -> List (String, Int)
-dedupPairs xs = dedupBy slotKey xs
-
-slotKey : (String, Int) -> String
-slotKey (iface, id) = lenKey iface ++ intToString id
 
 -- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
 -- deliberately — this key feeds the dedup that decides how many dict slots a constrained
@@ -15957,7 +15874,7 @@ recordImporterShadowDicts env mname (r :: rest) tx =
           mname
           r
           tx
-          ""
+          perRun.value.currentFn.value
           (SKRLocal
             (routeLocalSym !r)
             True
@@ -15996,7 +15913,7 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
           mname
           r
           tx
-          ""
+          perRun.value.currentFn.value
           (SKRLocal
             (routeLocalSym !r)
             True
@@ -16230,19 +16147,16 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
   -- that may ground LATER (Num defaulting on an unsignatured standalone) is exactly how
   -- `check` and the binary came to disagree.  A dispatching receiver still re-derives
   -- (its head is already ground; RKey comes from resolveArgStamps on the emit path).
-  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
-  -- lint-disable-next-line rule-prefer-assign-op
   let _ =
     if isDictVar then
       ()
     else
-      setRef
-        perRun.value.pendingRLocalSites
-        (PendingEntry
+      perRun.value.pendingRLocalSites :=
+        PendingEntry
             name
             tagRef
             xt
-            ""
+            perRun.value.currentFn.value
             (SKRLocal
               (routeLocalSym !tagRef)
               (not dispatches)
@@ -16250,7 +16164,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
               dicts.sdIfaces
               dicts.sdArgVecs)
             !currentLoc
-          :: perRun.value.pendingRLocalSites.value)
+          :: perRun.value.pendingRLocalSites.value
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
     -- only arm whose route this stamp decides.  On the STANDALONE arm `ft` is the
@@ -19251,13 +19165,14 @@ dictForwardedPairs callN0 dictN0 =
   flatMap dictAppMonoIds (wWindow perRun.value.dictApps dictN0)
     ++ flatMap callOblMonoIds (callOblsWindow callN0)
 
-dictAppMonoIds : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) ->
-  List (Int, String)
+dictAppMonoIds : PendingDictApp -> List (Int, String)
 -- B-4b-iii: the ROUTE carrier is now `IfaceRef`; this reader is a SPELLING consumer
 -- (its pairs key `dictForwardedPairs`' name-keyed forwarding test), so it projects
 -- `.irName` here and its answer is byte-identical to the pre-widening one.
-dictAppMonoIds (_, monos, ifaces, _, _) =
-  flatMap monoIdsWithIface (zipL monos (map (i => i.irName) ifaces))
+dictAppMonoIds app =
+  flatMap
+    monoIdsWithIface
+    (zipL app.pdaMonos (map (i => i.irName) app.pdaIfaces))
 
 callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblMonoIds (iface, monos, _) =
@@ -20045,7 +19960,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let _ = resolveOpSites True implTable perRun.value.pendingBinopSites.value
   let _ = resolveOpSites False implTable perRun.value.pendingUnopSites.value
   let _ = resolveArithSites perRun.value.pendingArithSites.value
-  let _ = realizeRecDictApps perRun.value.pendingRecDictApps.value
+  let _ = realizeRecDictApps implTable perRun.value.pendingRecDictApps.value
   let _ = resolveDictApps prog2 implTable perRun.value.dictApps.items.value
   let _ = resolveMethodDicts implTable perRun.value.pendingMethodDicts.value
   let _ = resolveArgStamps implTable perRun.value.pendingArgStamps.value
@@ -20182,10 +20097,8 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let grown =
     discoverPromotedJoint runtimeDecls discoveryJoint rpNames argNames dictSeed
   let promoted = filterList (n => not (contains n dictSeed)) grown
-  let snapshot =
-    promotedConstraints promoted perRun.value.funConstraintsRef.value
-  let snapshotIfaces =
-    promotedConstraintIfaces promoted perRun.value.funConstraintIfacesRef.value
+  let snapshotSlots =
+    promotedConstraints promoted perRun.value.funPredicateSlotsRef.value
   -- B-2.2-f (#1113): the declared-prefix sidecar for the SAME promoted entries.  Without
   -- it every promoted cross-module callee reaches a fill site with no recorded prefix
   -- (module 1 is seeded from this crossRun table), and the sidecar would be vacuous
@@ -20203,16 +20116,14 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   -- S-slot-key-vector (#1866): the same promoted filter over the VECTOR table, so the
   -- snapshot expansion keys its slots on the whole predicate exactly as the per-run one
   -- does.  Read here, before `resetState`, with the other three.
-  let snapshotArgs =
-    promotedConstraints promoted perRun.value.funConstraintArgsRef.value
-  let expandedPair =
-    expandSupersCross joint snapshot snapshotIfaces snapshotArgs
+  let expandedSlots = expandFunPredicateSlots joint snapshotSlots
   let _ = resetState ()
   typeErrorsSticky := savedSticky
   let _ = wRestore perRun.value.typeErrors savedErrSnap
   perRun.value.typeErrorMsgSetRef := savedMsgSet
   perRun.value.errorsDetected := savedDetected
-  let _ = setCrossFunConstraintTables expandedPair
+  crossRun.value.crossModuleFunPredicateSlotsRef :=
+    predicateSlotTableWithoutArgs expandedSlots
   crossRun.value.crossModuleFunConstraintDeclaredRef := snapshotDeclared
   promoted
 -- DRIVER-COLLAPSE Phase 2: discovery is a SCRATCH joint typecheck (see below); its
@@ -20228,8 +20139,8 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
 -- discoverPromotedJoint returns dictSeed GROWN by the newly-promoted user fns;
 -- subtract the seed so [promoted] is ONLY the inferred-constraint user fns (the
 -- prelude constrained fns in dictSeed are already handled by moduleDictNames +
--- constrainedSigArity — re-snapshotting THEIR joint-discovery arity into
--- crossModuleFunConstraintsRef would override each module's own sig-registered
+-- constrainedSigPredicateSlots — re-snapshotting their joint-discovery carrier would
+-- override each module's own signature-registered
 -- arity and drop the prelude helpers' element-dict args → SIGSEGV).
 
 -- Discovery is a SCRATCH typecheck purely to compute the promoted-name set; its
@@ -20291,13 +20202,6 @@ discoverNextJoint runtimeDecls joint rpNames argNames current next
 -- than by a third structural copy of this one-line body.
 promotedConstraints : List String -> List (String, a) -> List (String, a)
 promotedConstraints promoted entries =
-  filterList (e => contains (fst e) promoted) entries
-
--- iface-list analog of promotedConstraints (parallel filter for funConstraintIfacesRef).
-promotedConstraintIfaces : List String ->
-  List (String, List IfaceRef) ->
-  List (String, List IfaceRef)
-promotedConstraintIfaces promoted entries =
   filterList (e => contains (fst e) promoted) entries
 
 -- the USER modules' top-level fn names (NOT core/prelude) — the promotion-eligible
@@ -20804,7 +20708,7 @@ recPatFieldVarsTc (RecPatField _ _ (Some p)) = patVarsTc p
 -- interface methods carrying a method-level constraint (a `=>` over a tyvar that is
 -- NOT the interface param, e.g. foldMap's `Monoid m`) — rewritten to EMethodAt
 -- alongside the return-position methods so the method-level dict can be folded on.
--- Computed structurally (runs before checkProgramSeeded populates methodConstraintsRef).
+-- Computed structurally (runs before checkProgramSeeded populates methodPredicateSlotsRef).
 methodConstraintNames : List Decl -> List String
 methodConstraintNames prog = flatMap methodConstraintNamesOfDecl prog
 
@@ -21348,15 +21252,27 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
 resolveRLocalSites : List Decl -> ImplBuckets -> List PendingEntry -> Unit
 resolveRLocalSites _ _ [] = goalSiteLoc := None
-resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc) :: rest) =
+resolveRLocalSites prog implTable ((PendingEntry name tagRef am encl kind loc) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
         tagRef :=
-          RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs)
+          RLocal
+            sym
+            (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
       else
-        resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs
+        resolveRLocalSite
+          prog
+          implTable
+          name
+          tagRef
+          am
+          encl
+          sym
+          monos
+          ifaces
+          argVecs
     _ => ()
   resolveRLocalSites prog implTable rest
 
@@ -21373,11 +21289,12 @@ resolveRLocalSite : List Decl ->
   Ref Route ->
   Mono ->
   String ->
+  String ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   Unit
-resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs =
+resolveRLocalSite prog implTable name tagRef am encl sym monos ifaces argVecs =
   match headTyconMono am
     -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
@@ -21410,13 +21327,15 @@ resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs =
           && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
         tagRef
         sym
-        (routesOfMonosTopV prog implTable monos ifaces argVecs)
+        (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
     -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
     -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
     None =>
       if contains name perRun.value.definerShadowNamesRef.value then
         tagRef :=
-          RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs)
+          RLocal
+            sym
+            (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
 -- or RKey stamped by resolveArgStamps on emit) — leave untouched.
@@ -21438,26 +21357,25 @@ activeDictVarOf m = match normalize m
   TApp a _ => activeDictVarOf a
   _ => None
 
--- activeDictVarOf, but PREFER the activeDictVars entry whose dict-param name belongs
--- to the enclosing method [encl] (`$dict_<encl>_<slot>`).  registerImplRequires
+-- The lexical active-dict lookup: return an activeDictVars entry only when its
+-- dict-param name belongs to the enclosing method [encl]
+-- (`$dict_<encl>_<slot>`).  registerImplRequires
 -- registers EVERY method of an impl under the SAME impl tyvar id (`impl Ord (List a)`
 -- registers `a`'s id once per compare/lt/gt/min/max/… each to `$dict_<method>_<slot>`),
 -- so the global first-match `activeDictVarOf` returns whichever method registered
 -- LAST — inside `compare`'s body that wrongly yields `$dict_max_0` (out of compare's
 -- scope → emitter "unbound dict witness").  Picking the [encl]-owned entry keeps each
--- method body's element-dict route bound to ITS OWN leading param.  encl == "" or no
--- match ⇒ fall back to the global lookup (genuine element dict from another impl).
+-- method body's element-dict route bound to ITS OWN leading param.  An empty owner or
+-- owner-prefix miss is not evidence: it must not borrow an unrelated global entry.
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarForEncl m encl
-  | encl == "" = activeDictVarOf m
+  | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
-      match (firstDictForEncl
+      firstDictForEncl
         (tyvarId cell)
         ("$dict_" ++ encl ++ "_")
-        perRun.value.activeDictVars.value)
-        Some dname => Some dname
-        None => activeDictVarOf m
+        perRun.value.activeDictVars.value
     TApp a _ => activeDictVarForEncl a encl
     _ => None
 
@@ -21473,23 +21391,21 @@ firstDictForEncl id pfx ((eid, ename) :: rest)
 -- the siblings unify to one id; activeDictVars (global, uncleared) maps that id to
 -- whichever sibling registered it LAST — so an arg-stamp inside `evenCat` would
 -- forward `$dict_oddCat_0` (out of scope in evenCat's body).  Preferring encl's own
--- slot keeps the forwarded dict the one actually bound in the body.  Falls back to
--- the global lookup when the var is not one of encl's (a genuine element dict from a
--- different in-scope impl).
+-- slot keeps the forwarded dict the one actually bound in the body.  A miss is None;
+-- evidence owned by a different impl is not in scope here.
 -- #1177: [goal] is the PREDICATE the use site has to discharge (its interface, and
 -- the instantiated argument vector when the occurrence let one be recovered), NOT
--- just the constraint var — see `enclDictVarOf`.  `None` reproduces the pre-#1177
--- tyvar-keyed lookup exactly.
-activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
-activeDictVarOfEncl goal m encl = match enclDictVarOf goal m encl
-  Some dname => Some dname
-  -- #1154 RESIDUAL: the impl-`requires` channel, asked by PREDICATE, between the
-  -- signature channel and the historical tyvar-id scan.  It answers only where an impl
-  -- `requires` slot of THIS method carries the goal's interface at the goal's variable;
-  -- everything else falls through to `activeDictVarForEncl` unchanged.
-  None => match implReqDictVarOf goal m encl
-    Some dname => Some dname
-    None => activeDictVarForEncl m encl
+-- just the constraint var — see `enclDictVarOf`.  `None` selects the legacy scalar
+-- lookup, still bounded by the same lexical owner.
+activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
+activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
+activeDictVarOfEncl (Some request) m encl =
+  -- A complete predicate request is terminal: a miss must not be overwritten by
+  -- the scalar tyvar-id registry, whose key cannot distinguish declarations or
+  -- complete argument vectors.  The None arm above is the legacy scalar control.
+  orElseOpt
+    (enclDictVarOf (Some request) m encl)
+    (implReqDictVarOf (Some request) m encl)
 
 -- 🚨 #1154 RESIDUAL: AN IMPL-`requires` SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS
 -- CONSTRAINT VAR'S ID — the same rule #1177 established for the SIGNATURE `=>` channel,
@@ -21510,40 +21426,35 @@ activeDictVarOfEncl goal m encl = match enclDictVarOf goal m encl
 -- the CONSUMPTION side, in which slot the impl BODY reads.  A fix aimed at the routing
 -- ladder would have moved nothing.
 --
--- ⚠️ FAILING TO MATCH FALLS BACK, deliberately, exactly as `enclSlotIndex` does: a goal
--- with no recoverable interface, a var no `requires` slot of this method is keyed on, or
--- an interface no entry names, all answer as they did before.  Two passes, most specific
--- first, for `enclSlotIndex`'s reason — a `requires` may name one interface twice at
--- different arguments (`Ix a Char, Ix a Bool`), where only the recorded vector separates
--- the two slots.
-implReqDictVarOf : Option Predicate -> Mono -> String -> Option String
+-- A complete request uses one exact pass.  A miss is terminal at
+-- `activeDictVarOfEncl`; only an explicit no-predicate route may consult scalar state.
+implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
 implReqDictVarOf None _ _ = None
-implReqDictVarOf (Some p) m encl
+implReqDictVarOf (Some request) m encl
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
-      let entries = perRun.value.implReqPreds.value
+      let entries = perRun.value.implReqPredicateSlots.value
       let pfx = "$dict_\{encl}_"
-      match implReqPick (tyvarId cell) p pfx True entries
-        Some dname => Some dname
-        None => implReqPick (tyvarId cell) p pfx False entries
-    TApp a _ => implReqDictVarOf (Some p) a encl
+      implReqPick (tyvarId cell) request pfx entries
+    TApp a _ => implReqDictVarOf (Some request) a encl
     _ => None
 
 implReqPick : Int ->
-  Predicate ->
+  PredicateRequest ->
   String ->
-  Bool ->
-  List (String, List Int, Predicate) ->
+  List (String, PredicateSlot) ->
   Option String
-implReqPick _ _ _ _ [] = None
-implReqPick target p pfx needArgs ((dname, ids, sp) :: rest)
+implReqPick _ _ _ [] = None
+implReqPick target request pfx ((dname, slot) :: rest)
   | startsWith pfx dname
-    && containsI target ids
-    && sp.iface.irName /= ""
-    && sp.iface.irName == p.iface.irName
-    && (not needArgs || predArgsAgree p.args sp.args) = Some dname
-  | otherwise = implReqPick target p pfx needArgs rest
+    && containsI target slot.psBoundIds
+    && predicateRequestMatchesSlot request slot = Some dname
+  | otherwise = implReqPick target request pfx rest
+
+predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
+predicateSlotKnownArgs PSArgsUnknown = []
+predicateSlotKnownArgs (PSArgsKnown args) = args
 
 -- 🚨 #1177: A USE SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS CONSTRAINT VAR'S ID.
 -- `funConstraintsRef` is the SHATTERED per-tyvar slot table, so a context naming two
@@ -21555,20 +21466,9 @@ implReqPick target p pfx needArgs ((dname, ids, sp) :: rest)
 -- predicates — a meaning-preserving edit — moved the answer from 116 to the correct
 -- 227, on both engines, at exit 0, with `check --json` clean.
 --
--- The slots are id-parallel to `funConstraintIfacesRef` (both projections come off ONE
--- `CSlot` list, `setFunConstraintEntry`) and prefix-parallel to `funConstraintArgsRef`
--- (#1161 F-3a-ii), so the whole predicate of each slot is recoverable HERE without any
--- new table — see `enclPreds`.
---
--- ⚠️ FAILING TO MATCH FALLS BACK TO THE HISTORICAL FIRST-ID SCAN, deliberately, and
--- that is what keeps this change narrow.  A goal with no recoverable interface (a
--- top-level constrained call routed through EKNestedTop, a method absent from
--- `methodIfaceParamsRef`), a slot registered by `registerInferredFor` with an
--- unrecoverable iface (`""`), and a super slot appended past `pairSlots`' truncation
--- all answer exactly as they did before.  The ONLY sites whose answer moves are those
--- where a LATER slot at the same id carries the goal's interface and an earlier one
--- does not — i.e. precisely the #1177 shape.
-enclDictVarOf : Option Predicate -> Mono -> String -> Option String
+-- `funPredicateSlotsRef` carries the authoritative slots in order, so this lookup
+-- never has to reconstruct a predicate from parallel scalar tables.
+enclDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
 enclDictVarOf goal m encl
   | encl == "" = None
   | otherwise = match normalize m
@@ -21580,158 +21480,53 @@ enclDictVarOf goal m encl
 -- the slot index [target]'s dict param sits at in [encl]'s own constraint slots:
 -- by PREDICATE when the goal supplies one and a slot answers it, else the historical
 -- first-tyvar-id match.
-enclSlotIndex : Option Predicate -> Int -> String -> Option Int
+enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
-enclSlotIndex (Some p) target encl = match indexOfPred target p (enclPreds encl)
-  Some i => Some i
-  None => indexOfId target (enclSlotIds encl)
+enclSlotIndex (Some request) target encl =
+  indexOfPred target request (enclPreds encl)
 
 enclSlotIds : String -> List Int
 enclSlotIds encl =
-  optionOr [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value)
+  predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value
 
 -- [encl]'s own constraint slots as PREDICATES, in slot order: each slot's interface
--- and the argument vector its signature recorded, paired with the tyvar id the slot
--- is keyed on.  `Predicate` is reused rather than a second n-ary shape invented.
--- The vector list is a PREFIX of the slots (`keptConstraintArgs`, and
--- `registerInferredFor` records `[]` for an unrecovered slot), so a slot past its end —
--- or one whose recorded vector is empty — gets `args = []`
--- — which `predArgsAgreeEncl` reads as "no vector to disambiguate on", never as a match.
-enclPreds : String -> List (Int, Predicate)
+-- and the argument vector its signature recorded, paired with every bound tyvar id.
+enclPreds : String -> List PredicateSlot
 enclPreds encl =
-  zipSlotArgs
-    (pairSlots
-      (enclSlotIds encl)
-      (optionOr
-        []
-        (lookupAssocS encl perRun.value.funConstraintIfacesRef.value)))
-    (declaredConstraintArgs encl)
+  optionOr
+    []
+    (lookupPredicateSlots encl perRun.value.funPredicateSlotsRef.value)
 
-zipSlotArgs : List CSlot -> List (List Mono) -> List (Int, Predicate)
-zipSlotArgs [] _ = []
-zipSlotArgs (s :: rest) [] =
-  (s.csId, Predicate { iface = s.csIface, args = [] }) :: zipSlotArgs rest []
-zipSlotArgs (s :: rest) (v :: vs) =
-  (s.csId, Predicate { iface = s.csIface, args = v }) :: zipSlotArgs rest vs
-
--- TWO PASSES, MOST SPECIFIC FIRST, and the order is behaviour: a context may name one
--- interface twice over one variable at different arguments (`(Ix a Char, Ix a Bool)`),
--- where the iface alone cannot tell the two slots apart and only the recorded argument
--- vector can.  Pass 1 requires both; pass 2 requires the interface alone, which is what
--- answers #1177's `(Dbg a, Ix a Char)`.
-indexOfPred : Int -> Predicate -> List (Int, Predicate) -> Option Int
-indexOfPred target p preds = match indexOfPredGo 0 target p True preds
-  Some i => Some i
-  None => indexOfPredGo 0 target p False preds
+-- Stable one-pass predicate lookup.  Known/Known vector disagreement cannot downgrade
+-- to interface-only or scalar matching.
+indexOfPred : Int -> PredicateRequest -> List PredicateSlot -> Option Int
+indexOfPred target request preds = indexOfPredGo 0 target request preds
 
 indexOfPredGo : Int ->
   Int ->
-  Predicate ->
-  Bool ->
-  List (Int, Predicate) ->
+  PredicateRequest ->
+  List PredicateSlot ->
   Option Int
-indexOfPredGo _ _ _ _ [] = None
-indexOfPredGo i target p needArgs ((id, sp) :: rest)
-  | id == target
-    && sp.iface.irName /= ""
-    && sp.iface.irName == p.iface.irName
-    && (not needArgs || predArgsAgreeEncl p.args sp.args) = Some i
-  | otherwise = indexOfPredGo (i + 1) target p needArgs rest
+indexOfPredGo _ _ _ [] = None
+indexOfPredGo i target request (sp :: rest)
+  | containsI target sp.psBoundIds && predicateRequestMatchesSlot request sp =
+    Some i
+  | otherwise = indexOfPredGo (i + 1) target request rest
 
--- 🚨 S-nonlead-arg-identity (#1904) — THE ENCLOSING-SCOPE ROUTING RELATION, and it is
--- deliberately a SIBLING of `predArgsAgree` rather than a change to it.
---
--- THE CONTRACT ANSWER, for this channel: two argument vectors are the same predicate iff
--- they have equal length and, AT EVERY POSITION IN ORDER, either both sides normalize to
--- a type VARIABLE and those variables have the SAME tyvar id, or `monoHeadAgrees` holds
--- (head-tycon-wise, and only where both sides are ground).  The first disjunct is the new
--- half; the second is `predArgsAgree` unchanged.
---
--- WHY THE ID COMPARISON IS AVAILABLE HERE and not at `predArgsAgree`'s other caller.
--- `predArgsAgree`'s header states — correctly, for `implReqPick`'s impl-`requires`
--- channel — that its two vectors live in DIFFERENT instantiations, so a variable position
--- "carries no information here".  MEASURED, panic-instrumented at `indexOfPred`, on
--- `probes/p1904_both.mdk`: for a BODY occurrence of the ENCLOSING function's OWN declared
--- predicate the two vectors are in the SAME instantiation and the ids CORRESPOND —
--- `goal=Ix[v98,v100,v99] slots=[id98:Ix[v98,v99,v100]]`.  `declaredConstraintArgs`' own
--- header says why: `constraintVarIfaceMonos` (which mints the slot IDS) and
--- `constraintVarArgMonos` (which mints these VECTORS) are called on ONE signature
--- instantiation's `snd inst` in `preunifySigsEx`, so a slot's `csId` is literally one of
--- its own vector's tyvar ids — and `enclPreds`' subject is the ENCLOSING fn, always local,
--- so nothing re-instantiates between the recording and this lookup.
---
--- ⚠️ SCOPED NARROWER THAN `predArgsAgree` ON PURPOSE.  `indexOfPredGo` is reached only
--- from `indexOfPred` ← `enclSlotIndex` ← `enclDictVarOf`, i.e. only the enclosing-fn
--- channel the measurement covers.  `implReqPick`/`implReqDictVarOf` keep calling
--- `predArgsAgree`: that channel's vectors come from an impl's `requires` in the IMPL's
--- tyvar space, which this dispatch did NOT measure, and widening it on the unverified
--- assumption that the same correspondence holds is exactly what the header warns against.
---
--- WHAT IT FIXES: `(Ix a b c, Ix a c b)` is all-tyvar at every position, so
--- `monoHeadAgrees` returned `None`-agrees-with-everything at each one, pass 1 matched
--- SLOT 0 for both `ix n x y` and `ix n y x`, and the second dict slot the key half opens
--- was dead — `333 + 333 = 666` where the answer is `333 + 111 = 444`.
---
--- ⚠️ FAILING TO MATCH STILL FALLS BACK, exactly as before: a pass-1 miss drops to pass 2
--- (interface-only) and then to the historical first-id scan, so this can only ever move a
--- site that pass 1 was previously answering with a WRONG slot — never one it was
--- answering `None` for.  A goal whose position is an unsolved variable with an id from a
--- genuinely different instantiation stops matching in pass 1 and is answered by pass 2,
--- i.e. by the interface alone, which is where such a goal sat before `predArgsAgree`
--- existed at all.
-predArgsAgreeEncl : List Mono -> List Mono -> Bool
-predArgsAgreeEncl [] _ = False
-predArgsAgreeEncl _ [] = False
-predArgsAgreeEncl gs vs
-  | listLen gs /= listLen vs = False
-  | otherwise = argPosAgreeEncl gs vs
+-- The single request/slot routing relation.  Declaration identity is complete and
+-- fail-closed.  Known vectors compare recursively at every position; interface-only
+-- compatibility is available only when at least one side explicitly says Unknown.
+predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
+predicateRequestMatchesSlot request slot =
+  request.prIface.irName /= ""
+    && slot.psIface.irName /= ""
+    && sameIfaceDecl request.prIface slot.psIface
+    && predicateRequestArgsMatch request.prArgs slot.psArgs
 
-argPosAgreeEncl : List Mono -> List Mono -> Bool
-argPosAgreeEncl (g :: gs) (v :: vs) =
-  monoPosAgreesEncl g v && argPosAgreeEncl gs vs
-argPosAgreeEncl _ _ = True
-
--- ONE position of the relation above: TWO VARIABLES compare by IDENTITY (the
--- `monoSameGiven` `TVar`/`TVar` arm, which is what makes this the same notion of "same
--- predicate" slice 2 landed on the given channel); every other pairing — including a
--- variable against a ground type, where the instantiations genuinely may not line up —
--- keeps `monoHeadAgrees`' permissive head-tycon rule verbatim.
-monoPosAgreesEncl : Mono -> Mono -> Bool
-monoPosAgreesEncl a b = match normalize a
-  TVar c1 => match normalize b
-    TVar c2 => tyvarId c1 == tyvarId c2
-    _ => monoHeadAgrees a b
-  _ => monoHeadAgrees a b
-
--- Does the goal's instantiated argument vector agree with a slot's recorded one?
--- ⚠️ SINCE #1904 THIS IS THE `implReqPick` CHANNEL'S RELATION ONLY.  The
--- enclosing-fn channel (`indexOfPredGo`) calls `predArgsAgreeEncl`, which adds a
--- tyvar-IDENTITY arm on the strength of a measurement that its two vectors share one
--- instantiation.  That measurement covers only that channel — the caution below is
--- unretracted here, and widening it to this one needs its own measurement.
--- ⚠️ EMPTY ON EITHER SIDE IS **NOT** AGREEMENT — an absent vector must not let pass 1
--- claim a slot it knows nothing about, or the two passes collapse into one and the
--- `(Ix a Char, Ix a Bool)` discrimination is lost.  Agreement is head-tycon-wise and
--- only where BOTH sides are ground: the recorded vector is in the SIGNATURE's
--- instantiation vars while the goal is in the call's, so a position that is a variable
--- on either side carries no information here and must not veto.
-predArgsAgree : List Mono -> List Mono -> Bool
-predArgsAgree [] _ = False
-predArgsAgree _ [] = False
-predArgsAgree gs vs
-  | listLen gs /= listLen vs = False
-  | otherwise = argHeadsAgree gs vs
-
-argHeadsAgree : List Mono -> List Mono -> Bool
-argHeadsAgree (g :: gs) (v :: vs) = monoHeadAgrees g v && argHeadsAgree gs vs
-argHeadsAgree _ _ = True
-
-monoHeadAgrees : Mono -> Mono -> Bool
-monoHeadAgrees a b = match headTyconNameMono a
-  None => True
-  Some x => match headTyconNameMono b
-    None => True
-    Some y => x == y
+predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
+predicateRequestArgsMatch (PSArgsKnown requestArgs) (PSArgsKnown slotArgs) =
+  monoVecSameGiven requestArgs slotArgs
+predicateRequestArgsMatch _ _ = True
 
 -- #1177: the predicate a METHOD occurrence discharges — the interface [name] is
 -- declared by, plus its full instantiated type-parameter vector when [fullMono] lets
@@ -21748,22 +21543,24 @@ monoHeadAgrees a b = match headTyconNameMono a
 -- origin — so nothing selects differently today.  What it buys is that the goal side
 -- is no longer laundered through `OriginUnresolved`, which is the precondition for
 -- re-keying those two comparators onto `sameTyConHead`.
-goalPredOf : String -> Mono -> Option Predicate
+goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOf name fullMono =
+  let args = match ifaceParamMonos name fullMono
+    Some xs => PSArgsKnown xs
+    None => PSArgsUnknown
   map
-    (ifr => Predicate {
-      iface = ifr,
-      args = optionOr [] (ifaceParamMonos name fullMono),
-    })
+    (ifr => PredicateRequest { prIface = ifr, prArgs = args })
     (admittedIfaceFor name)
 
 -- the operator/unop form: the node carries one operand mono, not a method occurrence,
 -- so no argument vector is recoverable (`stampOpRouteVal` says the same).  Every
 -- operator interface is single-param anyway, so the interface alone is the predicate.
 -- Same SLICE-1 supply as `goalPredOf` above, same table, same reasoning.
-goalPredOfOp : String -> Option Predicate
+goalPredOfOp : String -> Option PredicateRequest
 goalPredOfOp name =
-  map (ifr => Predicate { iface = ifr, args = [] }) (admittedIfaceFor name)
+  map
+    (ifr => PredicateRequest { prIface = ifr, prArgs = PSArgsUnknown })
+    (admittedIfaceFor name)
 
 -- Phase 151 / Gap G: stamp each comparison/equality OPERATOR site's EBinOp route
 -- ref with the resolved Eq/Ord impl key (RKey) — but ONLY when the operand type
@@ -21893,13 +21690,18 @@ resolveOpSites isBinop implTable ((PendingEntry method tagRef operandMono encl k
 -- So `-x` on an impl's own abstract `requires`-bound tyvar stays on the structural
 -- builtin (RNone) via a top-level fn's own declared constraint slot, never
 -- activeDictVarOf — a residual, not a regression (mirrors the `++` residual exactly).
-opDictVarOf : Bool -> String -> Mono -> Bool -> String -> Option String
-opDictVarOf True "append" m _ encl =
-  enclDictVarOf (goalPredOfOp "append") m encl
-opDictVarOf True name m inImpl encl
+opDictVarOf : Option PredicateRequest ->
+  Bool ->
+  String ->
+  Mono ->
+  Bool ->
+  String ->
+  Option String
+opDictVarOf request True "append" m _ encl = enclDictVarOf request m encl
+opDictVarOf request True _ m inImpl encl
   | inImpl = activeDictVarOf m
-  | otherwise = enclDictVarOf (goalPredOfOp name) m encl
-opDictVarOf False name m _ encl = enclDictVarOf (goalPredOfOp name) m encl
+  | otherwise = enclDictVarOf request m encl
+opDictVarOf request False _ m _ encl = enclDictVarOf request m encl
 
 -- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
 -- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
@@ -21935,7 +21737,7 @@ resolveOpSite isBinop implTable method tagRef operandMono inImpl encl =
 -- head's Ord impl HAS `requires` (parametric, e.g. tuple / `List a` / `Box a`).  This
 -- stamps the RKey route with the SAME element-dict reqs as the `==`/`eq` path, but
 -- keyed on the INNER same-interface `compare` (the relational method has no own impl
--- at this head, so `argImplDictRoutesFor` keyed on it would find nothing).
+-- at this head, so `argImplDictRoutesForEncl` keyed on it would find nothing).
 -- binopMethodApp forwards them as the EMethodAt impl-dicts; emitDefaultRKey passes
 -- them as leading words to `@mdk_default_<op>_<tag>`, whose emitDefaultDefine
 -- eta-PREPENDS the matching dict params and threads them into the inner
@@ -21958,8 +21760,14 @@ resolveOpSite isBinop implTable method tagRef operandMono inImpl encl =
 -- Else a concrete non-builtin head → `RKey key reqs` with the element `requires` dicts
 -- PACKED into the primary route's reqs (binopRouteSplit later rips them onto the
 -- EMethodAt impl-dict ref).  Byte-identical to the pre-S3c stampOpRoute stamper.
-stampOpRouteVal : Bool -> ImplBuckets -> String -> Mono -> String -> Route
-stampOpRouteVal isBinop implTable method operandMono tag =
+stampOpRouteVal : Bool ->
+  ImplBuckets ->
+  String ->
+  String ->
+  Mono ->
+  String ->
+  Route
+stampOpRouteVal isBinop implTable encl method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
   if isBuiltin then
@@ -21987,7 +21795,13 @@ stampOpRouteVal isBinop implTable method operandMono tag =
           innerDefaultMethod method
       else
         method
-    let reqs = argImplDictRoutesFor implTable dictMethod tag operandMono
+    let reqs = argImplDictRoutesForEncl
+      implTable
+      encl
+      dictMethod
+      tag
+      operandMono
+      [operandMono]
     RKey key reqs
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
@@ -22006,8 +21820,8 @@ innerDefaultMethod m =
 -- 🚨 THE PREDECESSOR (`implDefinesMethodAt`, over the cumulative-prefix
 -- `ImplBuckets`) WAS THE LAST "ONE DECISION, TWO SUBSTRATES" SITE, and it was
 -- MEASURED, not inferred.  Its answer chooses the METHOD NAME
--- (`method` vs `innerDefaultMethod method`) that `argImplDictRoutesFor`/
--- `argImplDictRoutesForEncl` then SELECT ON over the graph-global `IE`
+-- (`method` vs `innerDefaultMethod method`) that `argImplDictRoutesForEncl` then
+-- SELECTS ON over the graph-global `IE`
 -- (`bodyImplEnvRef`) — so a prefix miss did not merely lose a route, it handed the
 -- global selector a DIFFERENT GOAL for the same program.  Repro (`.claude/sprint-b/
 -- repair/F1-verdicts.md` finding 6): an `impl Cmp (Box a) requires Cmp a` defining
@@ -25134,9 +24948,9 @@ implEntryFromTys iface (headTy :: rest) reqs methods =
 --    was actually costing a wrong answer.  Fixed.
 --
 --  • `implEntryFromTys` / ImplBuckets holds only requires-BEARING impls and is read
---    by `findImplEntry` (the iface-UNKNOWN `""` FIRST-MATCH fallback) and
---    `argImplDictRoutesFor`, each via `bucketOf tag` at the
---    GOAL's head.  (ARCH B-2.1-h moved the third reader, `implDefinesMethodAt`, onto
+--    by `findImplEntry` (the iface-UNKNOWN `""` FIRST-MATCH fallback) via
+--    `bucketOf tag` at the GOAL's head.  (ARCH B-2.1-h moved the other reader,
+--    `implDefinesMethodAt`, onto
 --    graph-global `IE` as `ieDefinesReqMethodAt` — it kept the requires-only filter,
 --    so this bullet's argument still covers it, one substrate over.)  Registering a headless entry under `noneHeadTag` here without also
 --    unioning those lookups is inert — nothing would ever look the bucket up — and
@@ -27010,15 +26824,19 @@ findImplEntryGo ((ImplEntry tag2 ms hty reqs itys ifn) :: rest) iface tag m
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List Decl ->
-  ImplBuckets ->
-  List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) ->
-  Unit
+resolveDictApps : List Decl -> ImplBuckets -> List PendingDictApp -> Unit
 resolveDictApps _ _ [] = goalSiteLoc := None
-resolveDictApps prog implTable ((routesRef, monos, ifaces, argVecs, loc) :: rest) =
-  goalSiteLoc := loc
-  let routes = routesOfMonosTopV prog implTable monos ifaces argVecs
-  routesRef := routes
+resolveDictApps prog implTable (app :: rest) =
+  goalSiteLoc := app.pdaLoc
+  let routes =
+    routesOfMonosTopV
+      prog
+      implTable
+      app.pdaEncl
+      app.pdaMonos
+      app.pdaIfaces
+      app.pdaArgVecs
+  app.pdaRoutesRef := routes
   resolveDictApps prog implTable rest
 
 -- Caller-supplied policy for the UNDETERMINED arm of routeOf (the constraint var is
@@ -27164,54 +26982,54 @@ entail implTable name m encl kind = match entailAssum m encl name kind
 -- because it recurses to the spine head and a structured subject has a TCon there.
 -- Strictly additive: every goal the tyvar path already answers routes exactly as before.
 entailAssum : Mono -> String -> String -> EntailKind -> Option String
-entailAssum m encl name kind = match entailAssumVar m encl name kind
-  Some dname => Some dname
-  None => match ifaceOfMethodName name
-    Some iface => activeDictPredOf iface (goalVecOfKind name m kind) encl
-    None => None
+entailAssum m encl name kind =
+  let request = goalRequestOfKind name kind
+  match entailAssumVar request m encl name kind
+    Some dname => Some dname
+    None => match request
+      Some req => activeDictPredOf req m encl
+      None => None
 
--- #1956: the GOAL PREDICATE's whole argument vector at this site, which is what the
--- vector-keyed given registry is keyed on.  Each arm is the SAME projection `entailInst`
--- selects its impl row on, one rung down the ladder — so the rung that ANSWERS a goal
--- from an in-scope dict and the rung that SELECTS an impl for it ask about one and the
--- same predicate.  Reading `m` alone here is #1956: `m` is a single position (the
--- discriminating mono), and a multi-parameter predicate is not identified by it.
---   * EKReturn / EKArg — `ifaceParamMonos`, exactly `entailInst`'s `paramMonos`/`goals`,
---     falling back to `[m]` when the method has no registered interface (unchanged
---     single-position behaviour for a plain `=>`-constrained fn).
---   * EKNestedTop — `m::rest`: the kind stores only the TAIL past arg 0 on purpose (arg
---     0 lives in `entail`'s own [m] so the two copies cannot drift), and `entailInst`'s
---     own arm reassembles it the same way for `keyForSiteByIface`.
---   * EKOp — `[m]`: an operator node carries one operand mono and no method occurrence,
---     so no vector is recoverable; every operator interface is single-param anyway
---     (`goalPredOfOp` and `stampOpRouteVal` say the same).
-goalVecOfKind : String -> Mono -> EntailKind -> List Mono
-goalVecOfKind name m (EKReturn fullMono _) =
-  optionOr [m] (ifaceParamMonos name fullMono)
-goalVecOfKind name m (EKArg fullMono) =
-  optionOr [m] (ifaceParamMonos name fullMono)
-goalVecOfKind _ m (EKNestedTop _ _ _ _ rest) = m :: rest
-goalVecOfKind _ m (EKOp _ _) = [m]
+goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
+goalRequestOfKind name (EKReturn fullMono _) = goalPredOf name fullMono
+goalRequestOfKind name (EKArg fullMono) = goalPredOf name fullMono
+goalRequestOfKind name (EKOp _ _) = goalPredOfOp name
+goalRequestOfKind _ (EKNestedTop _ _ _ _ _) = None
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
 -- genuine/arg kinds prefer the enclosing method's own slot (activeDictVarOfEncl); the
 -- nested/top kind uses the plain encl-aware lookup (activeDictVarForEncl); the op kind
 -- routes through opDictVarOf (isBinop/inImpl-keyed, needs the method [name]).  [name] is
 -- ignored by the non-op kinds.
-entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
+entailAssumVar : Option PredicateRequest ->
+  Mono ->
+  String ->
+  String ->
+  EntailKind ->
+  Option String
 -- #1177: the genuine/arg kinds now hand `activeDictVarOfEncl` the site's PREDICATE —
 -- [name]'s interface plus the vector `ifaceParamMonos` recovers from the kind's own
 -- full occurrence mono, the SAME vector `entailInst` selects the impl row on — so the
 -- slot the body reads and the impl the site dispatches to answer one question.  The
 -- nested/top kind keeps `activeDictVarForEncl` (no predicate: [name] there is a
 -- constrained FUNCTION, not a method occurrence).
-entailAssumVar m encl name (EKReturn fullMono _) =
-  activeDictVarOfEncl (goalPredOf name fullMono) m encl
-entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl
-entailAssumVar m encl name (EKArg fullMono) =
-  activeDictVarOfEncl (goalPredOf name fullMono) m encl
-entailAssumVar m encl name (EKOp isBinop inImpl) =
-  opDictVarOf isBinop name m inImpl encl
+entailAssumVar request m encl _ (EKReturn _ _) =
+  activeDictVarOfEncl request m encl
+entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
+  match (activeFunDictPredOf
+    PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
+    encl)
+    Some dname => Some dname
+    -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
+    -- its pre-migration spelling fallback until that producer has declaration identity.
+    None => match activeFunDictPredOfResidual iface.irName (m :: rest) encl
+      Some dname => Some dname
+      None => activeDictVarForEncl m encl
+entailAssumVar request m encl _ (EKArg _) = activeDictVarOfEncl request m encl
+entailAssumVar request m encl name (EKOp isBinop inImpl) =
+  -- #1318 residual: the in-impl non-append operator arm in opDictVarOf retains its
+  -- historical scalar bypass; fixing its parameter-offset contract is later work.
+  opDictVarOf request isBinop name m inImpl encl
 
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumRoute dname (EKReturn _ isRp) =
@@ -27361,8 +27179,8 @@ entailInst implTable name m encl tag (EKArg fullMono) =
     RKey routeKey [],
     argImplDictRoutesForEncl implTable encl dictName tag m goals,
   )
-entailInst implTable name m _ tag (EKOp isBinop _) =
-  (stampOpRouteVal isBinop implTable name m tag, [])
+entailInst implTable name m encl tag (EKOp isBinop _) =
+  (stampOpRouteVal isBinop implTable encl name m tag, [])
 
 entailFallback : ImplBuckets -> EntailKind -> Route
 entailFallback _ (EKReturn _ _) = RNone
@@ -27373,9 +27191,8 @@ entailFallback _ (EKOp _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
--- [encl] == "" ⇒ global activeDictVarOf (activeDictVarForEncl short-circuits); else
--- the enclosing method's own constraint-var dict.  [policy] decides the undetermined
--- arm (see Undetermined).
+-- Only a non-empty [encl] can supply an active dict, and only from that owner's
+-- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
 routeOf : ImplBuckets -> IfaceRef -> String -> Undetermined -> Mono -> Route
 routeOf implTable iface encl policy m =
   routeOfD implTable iface encl policy m [] 0 0
@@ -27423,8 +27240,8 @@ undeterminedRoute implTable (CountImpls prog iface) =
 -- #1161 (F-3a-ii): the vector-aware form.  Slot COUNT, slot ORDER and the number of
 -- Routes produced are IDENTICAL to routesOfMonosTop's — the ONLY difference is the
 -- GOAL each slot is selected with.  That is what keeps the change arity-neutral:
--- dictArityOf / dictPass / scopeArities and the cross-module arity snapshot all read
--- funConstraintsRef, whose payload this leaves untouched.
+-- dictArityOf, dictPass, scopePredicateSlots, and the cross-module snapshot all read
+-- the same predicate carrier, whose slot count this leaves untouched.
 --
 -- #1909 REWRITES THE INVARIANT THIS HEADER USED TO STATE.  It read: the widening is
 -- "GATED ON `listLen v > 1` (topRouteV's two-cons pattern), so a 1-ary `=>` constraint —
@@ -27449,20 +27266,21 @@ undeterminedRoute implTable (CountImpls prog iface) =
 -- absence-of-regression, never correctness of the new path — as before.
 routesOfMonosTopV : List Decl ->
   ImplBuckets ->
+  String ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
-routesOfMonosTopV prog implTable monos ifaces [] =
-  routesOfMonosTop prog implTable monos ifaces
-routesOfMonosTopV _ _ [] _ _ = []
-routesOfMonosTopV prog implTable (m :: rest) [] (_ :: vs) =
-  routeOf implTable ifaceRefNone "" (CountImpls prog "") m
-    :: routesOfMonosTopV prog implTable rest [] vs
-routesOfMonosTopV prog implTable (m :: rest) (iface :: ifacesRest) (v :: vs) =
-  topRouteV prog implTable iface m v
-    :: routesOfMonosTopV prog implTable rest ifacesRest vs
+routesOfMonosTopV prog implTable encl monos ifaces [] =
+  routesOfMonosTop prog implTable encl monos ifaces
+routesOfMonosTopV _ _ _ [] _ _ = []
+routesOfMonosTopV prog implTable encl (m :: rest) [] (_ :: vs) =
+  routeOf implTable ifaceRefNone encl (CountImpls prog "") m
+    :: routesOfMonosTopV prog implTable encl rest [] vs
+routesOfMonosTopV prog implTable encl (m :: rest) (iface :: ifacesRest) (v :: vs) =
+  topRouteV prog implTable encl iface m v
+    :: routesOfMonosTopV prog implTable encl rest ifacesRest vs
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
@@ -27473,11 +27291,17 @@ routesOfMonosTopV prog implTable (m :: rest) (iface :: ifacesRest) (v :: vs) =
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : List Decl -> ImplBuckets -> IfaceRef -> Mono -> List Mono -> Route
-topRouteV prog implTable iface m goals = match vectorGoal iface goals
+topRouteV : List Decl ->
+  ImplBuckets ->
+  String ->
+  IfaceRef ->
+  Mono ->
+  List Mono ->
+  Route
+topRouteV prog implTable encl iface m goals = match vectorGoal iface goals
   Some (g0, gs) =>
-    routeOfD implTable iface "" (CountImpls prog iface.irName) g0 gs 0 0
-  None => routeOf implTable iface "" (CountImpls prog iface.irName) m
+    routeOfD implTable iface encl (CountImpls prog iface.irName) g0 gs 0 0
+  None => routeOf implTable iface encl (CountImpls prog iface.irName) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -27500,16 +27324,17 @@ vectorGoal iface (g0 :: gs) = if iface.irName == "" then None else Some (g0, gs)
 
 routesOfMonosTop : List Decl ->
   ImplBuckets ->
+  String ->
   List Mono ->
   List IfaceRef ->
   List Route
-routesOfMonosTop _ _ [] _ = []
-routesOfMonosTop prog implTable (m :: rest) [] =
-  routeOf implTable ifaceRefNone "" (CountImpls prog "") m
-    :: routesOfMonosTop prog implTable rest []
-routesOfMonosTop prog implTable (m :: rest) (iface :: ifacesRest) =
-  routeOf implTable iface "" (CountImpls prog iface.irName) m
-    :: routesOfMonosTop prog implTable rest ifacesRest
+routesOfMonosTop _ _ _ [] _ = []
+routesOfMonosTop prog implTable encl (m :: rest) [] =
+  routeOf implTable ifaceRefNone encl (CountImpls prog "") m
+    :: routesOfMonosTop prog implTable encl rest []
+routesOfMonosTop prog implTable encl (m :: rest) (iface :: ifacesRest) =
+  routeOf implTable iface encl (CountImpls prog iface.irName) m
+    :: routesOfMonosTop prog implTable encl rest ifacesRest
 
 -- the undetermined-constraint resolution: count impls of [iface] in [prog].
 routeUndeterminedTop : List Decl -> ImplBuckets -> String -> Route
@@ -27569,11 +27394,6 @@ ambiguousImplMsg iface =
   "Ambiguous instance for `"
     ++ iface
     ++ "`. Cannot determine which impl; add a type annotation"
-
-routesOfMonos : ImplBuckets -> List Mono -> List Route
-routesOfMonos _ [] = []
-routesOfMonos implTable (m :: rest) =
-  routeOf implTable ifaceRefNone "" KeepNone m :: routesOfMonos implTable rest
 
 -- Native #54/#21 residual: the activeDictVar-AWARE requires recursion.  Recursing
 -- via routeOf (not the removed blind reqRoute) keeps every nesting level
@@ -27771,7 +27591,7 @@ selectReqImpl implTable iface tag m goals
 -- (RDict); a concrete element (`MyList Int`) materializes a static RKey.  #217: the
 -- return position (implDictRoutesIn) now shares this same aware requires recursion — the
 -- two chains were unified; this entry runs for emit-path arg stamps specifically.
--- #609: the operator entry.  The goal is the singleton [mono] — and unlike the
+-- #609: the operator route passes the singleton [mono] — and unlike the
 -- deferred EKNestedTop case this is not a scope cut, it is EXACT: every interface
 -- owning an operator method is single-param (`Eq a`, `Ord a`, `Num a`,
 -- `Semigroup a`, `Monoid a` in stdlib/core.mdk), so `itys` has length 1, the
@@ -27779,14 +27599,10 @@ selectReqImpl implTable iface tag m goals
 -- reduces to matchTyMono hty m.  Should a multi-param interface ever own an
 -- operator, entryHeadMatches degrades to the arg-0 fallback rather than
 -- mis-selecting.
-argImplDictRoutesFor : ImplBuckets -> String -> String -> Mono -> List Route
-argImplDictRoutesFor implTable name tag mono =
-  argImplDictRoutesForEncl implTable "" name tag mono [mono]
-
 -- encl-aware variant: thread the ENCLOSING method [encl] so the recursively-routed
 -- element dicts forward [encl]'s own `$dict_<encl>_<slot>` params (not whichever
--- method registered the shared impl tyvar id LAST — see activeDictVarForEncl).  encl
--- == "" recovers the original global routing (binop path, single-method impls).
+-- method registered the shared impl tyvar id LAST — see activeDictVarForEncl).  An
+-- empty [encl] has no lexical dict owner and therefore cannot forward one.
 -- #203 (H): the arg/op-position element routes.  Was a FIRST-MATCH scan of the
 -- ImplBuckets [tag] bucket (blind to no-requires siblings, see implDictRoutesForFull);
 -- now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
@@ -27879,39 +27695,75 @@ argReqRoute implTable iface encl subst (arg :: more) prevSize spent =
 -- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
 -- constraint variable still (the caller is itself constrained) → RDict forwarding
 -- the caller's dict.  Mirrors resolveDictApps; runs after inference.
-resolveMethodDicts : ImplBuckets -> List (Ref (List Route), List Mono) -> Unit
+resolveMethodDicts : ImplBuckets -> List PendingMethodDict -> Unit
 resolveMethodDicts _ [] = ()
-resolveMethodDicts implTable ((methodRef, monos) :: rest) =
-  methodRef := routesOfMonos implTable monos
+resolveMethodDicts implTable (pending :: rest) =
+  pending.pmdRoutesRef :=
+    methodPredicateRoutes implTable pending.pmdEncl pending.pmdSlots
   resolveMethodDicts implTable rest
+
+methodPredicateRoutes : ImplBuckets ->
+  String ->
+  List PredicateSlot ->
+  List Route
+methodPredicateRoutes _ _ [] = []
+methodPredicateRoutes implTable encl (slot :: rest) =
+  methodPredicateRoute implTable encl slot
+    :: methodPredicateRoutes implTable encl rest
+
+methodPredicateRoute : ImplBuckets -> String -> PredicateSlot -> Route
+methodPredicateRoute implTable encl slot = match slot.psArgs
+  PSArgsKnown (g0 :: gs) =>
+    routeOfD implTable slot.psIface encl KeepNone g0 gs 0 0
+  _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
 -- A deferred recursive call records one route per the CALLEE's constraint slot
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
 -- ENCLOSING fn's own dict param.  Run after inference, when funConstraintsRef is
 -- fully populated.
-realizeRecDictApps : List RecDictApp -> Unit
-realizeRecDictApps [] = ()
-realizeRecDictApps ((RecDictApp routesRef callee encl mono) :: rest) =
-  let ids =
-    optionOr [] (lookupAssocSL2 callee perRun.value.funConstraintsRef.value)
-  let routes = recRoutes encl mono ids
+realizeRecDictApps : ImplBuckets -> List RecDictApp -> Unit
+realizeRecDictApps _ [] = ()
+realizeRecDictApps implTable ((RecDictApp routesRef callee encl mono) :: rest) =
+  let slots =
+    optionOr
+      []
+      (lookupPredicateSlots callee perRun.value.funPredicateSlotsRef.value)
+  let routes = recRoutes implTable encl mono slots
   routesRef := routes
-  realizeRecDictApps rest
+  realizeRecDictApps implTable rest
 
-recRoutes : String -> Mono -> List Int -> List Route
-recRoutes _ _ [] = []
-recRoutes encl mono (id :: rest) =
-  recRoute encl mono id :: recRoutes encl mono rest
+recRoutes : ImplBuckets -> String -> Mono -> List PredicateSlot -> List Route
+recRoutes _ _ _ [] = []
+recRoutes implTable encl mono (slot :: rest) =
+  recRoute implTable encl mono slot :: recRoutes implTable encl mono rest
 
 -- For one of the callee's constraint ids, recover the live occurrence type from
 -- [mono] (the var the body unified it to).  Concrete head → RKey; still a
 -- constraint variable that is one of [encl]'s own → forward [encl]'s dict param
--- (RDict, the slot it sits at); otherwise fall back to the global routing.
-recRoute : String -> Mono -> Int -> Route
-recRoute encl mono id = match findTvarInMono mono id
-  None => RNone
-  Some m => resolveRecMono encl m
+-- (RDict, the slot it sits at); otherwise leave the route unresolved.
+recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
+recRoute implTable encl mono slot = match recPredicateArgs mono slot
+  Some (g0 :: gs) => routeOfD implTable slot.psIface encl KeepNone g0 gs 0 0
+  _ => match slot.psBoundIds
+    id :: _ => match findTvarInMono mono id
+      None => RNone
+      Some m => resolveRecMono encl m
+    [] => RNone
+
+recPredicateArgs : Mono -> PredicateSlot -> Option (List Mono)
+recPredicateArgs mono slot = match slot.psArgs
+  PSArgsUnknown => None
+  PSArgsKnown args =>
+    map
+      (subst => map (substMono subst []) args)
+      (recSlotSubst mono slot.psBoundIds)
+
+recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
+recSlotSubst _ [] = Some []
+recSlotSubst mono (id :: rest) = match findTvarInMono mono id
+  None => None
+  Some m => map ((id, m) :: _) (recSlotSubst mono rest)
 
 resolveRecMono : String -> Mono -> Route
 resolveRecMono encl m = match headTyconNameMono m
@@ -27927,7 +27779,7 @@ enclSlot encl m = match normalize m
   TVar cell =>
     indexOfId
       (tyvarId cell)
-      (optionOr [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value))
+      (predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value)
   _ => None
 
 indexOfId : Int -> List Int -> Option Int
@@ -28135,7 +27987,9 @@ ifaceDictPassDefault n ty pats body mloc k
 methodDictArityOf : String -> Int
 methodDictArityOf n =
   listLen
-    (optionOr [] (lookupAssocSL2 n perRun.value.methodConstraintsRef.value))
+    (optionOr
+      []
+      (lookupMethodPredicateSlots n perRun.value.methodPredicateSlotsRef.value))
 
 -- D3b-1: add the leading `$dict_<method>_<slot>` params UNIFORMLY across all
 -- clauses of a method.  An impl method is many ImplMethod entries (one per
@@ -28358,7 +28212,10 @@ fieldAssignDictSites (FieldAssign _ e) = collectDictSites e
 
 dictArityOf : String -> Int
 dictArityOf n =
-  listLen (optionOr [] (lookupAssocSL2 n perRun.value.funConstraintsRef.value))
+  listLen
+    (optionOr
+      []
+      (lookupPredicateSlots n perRun.value.funPredicateSlotsRef.value))
 
 dictParams : String -> Int -> List Pat
 dictParams n k = dictParamsGo n 0 k
@@ -28924,28 +28781,20 @@ checkBodyImpl seed mode prog0 =
       -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
       driverState.value.methodDispatchIdxByIdRef :=
         crossRun.value.universeMethodDispatchIdxByIdRef.value
-      perRun.value.funConstraintsRef :=
-        crossRun.value.crossModuleFunConstraintsRef.value
-      perRun.value.funConstraintIfacesRef :=
-        crossRun.value.crossModuleFunConstraintIfacesRef.value
+      perRun.value.funPredicateSlotsRef :=
+        crossRun.value.crossModuleFunPredicateSlotsRef.value
       -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
       -- whole-table replacement of `funConstraintsRef` owes one of these.
       perRun.value.funConstraintDeclaredRef :=
         crossRun.value.crossModuleFunConstraintDeclaredRef.value
       let _ =
         setRef
-          perRun.value.funConstraintsRef
-          (aliasConstraintEntries
-              prog
-              crossRun.value.crossModuleFunConstraintsQualRef.value
-            ++ perRun.value.funConstraintsRef.value)
-      let _ =
-        setRef
-          perRun.value.funConstraintIfacesRef
-          (aliasConstraintEntries
-              prog
-              crossRun.value.crossModuleFunConstraintIfacesQualRef.value
-            ++ perRun.value.funConstraintIfacesRef.value)
+          perRun.value.funPredicateSlotsRef
+          (predicateSlotTableWithoutArgs
+              (aliasConstraintEntries
+                prog
+                crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
+            ++ perRun.value.funPredicateSlotsRef.value)
       let _ =
         setRef
           perRun.value.funConstraintDeclaredRef
@@ -28961,20 +28810,12 @@ checkBodyImpl seed mode prog0 =
       -- IDS table, and this is a whole-table replacement of all three.
       let _ =
         setRef
-          perRun.value.funConstraintsRef
+          perRun.value.funPredicateSlotsRef
           (selfDeclArities
             mid
             prog
-            crossRun.value.crossModuleFunConstraintsQualRef.value
-            perRun.value.funConstraintsRef.value)
-      let _ =
-        setRef
-          perRun.value.funConstraintIfacesRef
-          (selfDeclArities
-            mid
-            prog
-            crossRun.value.crossModuleFunConstraintIfacesQualRef.value
-            perRun.value.funConstraintIfacesRef.value)
+            crossRun.value.crossModuleFunPredicateSlotsQualRef.value
+            perRun.value.funPredicateSlotsRef.value)
       let _ =
         setRef
           perRun.value.funConstraintDeclaredRef
@@ -29244,7 +29085,7 @@ checkBodyImpl seed mode prog0 =
       -- is called EXACTLY ONCE, as before: it is effectful (mints tyvar ids, registers
       -- method constraints), so a second call here would shift ids and break this leaf's
       -- zero-behaviour-change property.  `pickSchemes` is pure, so hoisting moves no
-      -- effect relative to the `methodConstraintsRef` write below.
+      -- effect relative to the `methodPredicateSlotsRef` write below.
       let ifaceSchemes = ifaceMethodSchemes implDecls
       perRun.value.ifaceMethodSchemesByIdRef :=
         zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes
@@ -29261,9 +29102,9 @@ checkBodyImpl seed mode prog0 =
           importerShadows
           ifaceSchemes
           perRun.value.ifaceMethodSchemesByIdRef.value
-      perRun.value.methodConstraintsRef :=
-        perRun.value.methodConstraintsRef.value
-          ++ crossRun.value.crossModuleMethodConstraintsRef.value
+      perRun.value.methodPredicateSlotsRef :=
+        perRun.value.methodPredicateSlotsRef.value
+          ++ crossRun.value.crossModuleMethodPredicateSlotsRef.value
       sm
   let env1 =
     extendVars (extendVars (extendVars dataEnv seed) globalS) shadowLayer
@@ -29332,38 +29173,20 @@ checkBodyImpl seed mode prog0 =
       -- must not propagate as a graph-wide deletion into the next module's seed.
       let _ =
         setRef
-          crossRun.value.crossModuleFunConstraintsRef
-          (perRun.value.funConstraintsRef.value
-            ++ selfNameRows
-              prog
-              crossRun.value.crossModuleFunConstraintsRef.value)
+          crossRun.value.crossModuleFunPredicateSlotsRef
+          (predicateSlotTableWithoutArgs
+            (perRun.value.funPredicateSlotsRef.value
+              ++ selfNameRows
+                prog
+                crossRun.value.crossModuleFunPredicateSlotsRef.value))
       let _ =
         setRef
-          crossRun.value.crossModuleFunConstraintsQualRef
-          (attributeModuleEntries mid prog perRun.value.funConstraintsRef.value
-            ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
-      let _ =
-        setRef
-          crossRun.value.crossModuleFunConstraintIfacesQualRef
+          crossRun.value.crossModuleFunPredicateSlotsQualRef
           (attributeModuleEntries
               mid
               prog
-              perRun.value.funConstraintIfacesRef.value
-            ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
-      -- S-xmod-vector-supply (#1868/#1867): the ARGUMENT-VECTOR snapshot, attributed by the
-      -- same `(mid, name)` key as the ids/ifaces snapshots it is slot-parallel to.  It gets
-      -- NO `crossModuleFunConstraintArgsRef` bare-name peer and NO seed back into
-      -- `funConstraintArgsRef` (the reset/restore block above): a bare-name vector table is
-      -- the misattribution `declaredConstraintArgs`' header calls strictly worse than
-      -- missing, and the qual key is the whole reason this one is safe.
-      let _ =
-        setRef
-          crossRun.value.crossModuleFunConstraintArgsQualRef
-          (attributeModuleEntries
-              mid
-              prog
-              perRun.value.funConstraintArgsRef.value
-            ++ crossRun.value.crossModuleFunConstraintArgsQualRef.value)
+              perRun.value.funPredicateSlotsRef.value
+            ++ crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
       -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
       let _ =
         setRef
@@ -29380,23 +29203,16 @@ checkBodyImpl seed mode prog0 =
               prog
               perRun.value.funConstraintDeclaredRef.value
             ++ crossRun.value.crossModuleFunConstraintDeclaredQualRef.value)
+      crossRun.value.crossModuleMethodPredicateSlotsRef :=
+        perRun.value.methodPredicateSlotsRef.value
       let _ =
         setRef
-          crossRun.value.crossModuleFunConstraintIfacesRef
-          (perRun.value.funConstraintIfacesRef.value
-            ++ selfNameRows
-              prog
-              crossRun.value.crossModuleFunConstraintIfacesRef.value)
-      crossRun.value.crossModuleMethodConstraintsRef :=
-        perRun.value.methodConstraintsRef.value
-      let _ =
-        setRef
-          crossRun.value.crossModuleMethodConstraintsQualRef
-          (attributeMethodModuleArities
+          crossRun.value.crossModuleMethodPredicateSlotsQualRef
+          (attributeMethodModulePredicateSlots
               mid
               prog
-              perRun.value.methodConstraintsRef.value
-            ++ crossRun.value.crossModuleMethodConstraintsQualRef.value)
+              perRun.value.methodPredicateSlotsRef.value
+            ++ crossRun.value.crossModuleMethodPredicateSlotsQualRef.value)
       -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
       -- alongside the three arity tables above.  The arity tables carry only what
       -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
@@ -29814,7 +29630,7 @@ inferDefaultMethods env iface dscope typarams (m :: rest) =
 --   emit path), infer body, unify.
 --   CRITICAL: the constraint slot ids AND the default-body instantiation MUST come
 --   from the SAME sigToSchemeTvs build of THIS method's type.  Reading the ids from
---   methodConstraintsRef (filled by a SEPARATE ifaceMethodSchemes build with its own
+--   methodPredicateSlotsRef (filled by a separate ifaceMethodSchemes build with its own
 --   fresh tyvar ids) and instantiating an unrelated methodSchemesPure scheme gave ids
 --   that did not appear in the instantiation subst → registerOneMethodDict's
 --   `lookupAssocI id subst` returned None → activeDictVars got no entry → the in-body
@@ -29856,7 +29672,8 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- body of a graded method must see its Row slots as rows, not as tyvars.
   let st = sigToSchemeTvsIn dscope mty
   let ids = methodConstraintSlotIds typarams mty (snd st)
-  perRun.value.currentFn := ""
+  let savedCurrentFn = perRun.value.currentFn.value
+  perRun.value.currentFn := mname
   perRun.value.inRigidityBodyRef := True
   -- #837: the schemeObligationsRef snapshot/restore window is RETIRED — a where-helper
   -- named like a top-level binding can no longer leak, now that registration/lookup key
@@ -29945,8 +29762,56 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- Registering BEFORE inference recorded the pre-unification id; the in-body
   -- site could become the surviving root instead, so activeDictVarOf missed it →
   -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
-  registerMethodDictSlots mname 0 ids (snd inst)
+  let _ = registerMethodDictSlots mname 0 ids (snd inst)
+  -- The predicate-keyed twin of the scalar registrations above.  Instantiate the
+  -- authoritative method carrier with this very default-body substitution, then
+  -- publish the same slots into the lexical given registry before route resolution.
+  -- A complete request miss is terminal, so this carrier is not optional.
+  let slots =
+    methodLevelPredicateSlots
+      typarams
+      mty
+      (instantiateNamedMonos (snd st) (snd inst))
+  let _ = registerSlotPredGivens mname 0 slots
+  perRun.value.currentFn := savedCurrentFn
 inferDefaultMethod _ _ _ _ _ = ()
+
+instantiateNamedMonos : List (String, Mono) ->
+  List (Int, Mono) ->
+  List (String, Mono)
+instantiateNamedMonos [] _ = []
+instantiateNamedMonos ((name, mono) :: rest) subst =
+  (name, substMono subst [] mono) :: instantiateNamedMonos rest subst
+
+methodLevelPredicateSlots : List String ->
+  Ty ->
+  List (String, Mono) ->
+  List PredicateSlot
+methodLevelPredicateSlots typarams (TyConstrained cs t) tvMap =
+  flatMap (methodLevelPredicateSlot typarams tvMap) cs
+    ++ methodLevelPredicateSlots typarams t tvMap
+methodLevelPredicateSlots typarams (TyEffect _ _ t) tvMap =
+  methodLevelPredicateSlots typarams t tvMap
+methodLevelPredicateSlots _ _ _ = []
+
+methodLevelPredicateSlot : List String ->
+  List (String, Mono) ->
+  Constraint ->
+  List PredicateSlot
+methodLevelPredicateSlot typarams tvMap c
+  | isEmptyL (constraintNonParamVars typarams c) = []
+  | otherwise =
+    let args = map (fromAstType tvMap) c.constraintArgs
+    [
+      PredicateSlot {
+        psIface = IfaceRef {
+          irName = constraintIface c,
+          irOrigin = c.constraintOrigin,
+        },
+        psArgs = PSArgsKnown args,
+        psBoundIds = dedupI (flatMap monoTyvarIds args),
+      },
+    ]
 
 -- Infer a default method body against [expectedTy], suppressing this unify if the
 -- body itself already detected a type error (GATE S2).  Medaka ACCUMULATES rather
@@ -30832,10 +30697,9 @@ checkOneCallObligation deferNonGround univ iface occs loc =
     ()
   else if not (allConcreteHeads args) then
     -- #838 I4: the ONE per-channel branch (see checkCallObligations).  IMPL channel
-    -- (deferNonGround) defers a non-ground obligation unconditionally — byte-identical to
-    -- the retired checkOneImplObligation step 7; its genuine ambiguities arrive via the
-    -- CALL channel (registerAmbiguousConstraints → PCallSlot).  CALL channel runs the
-    -- RULE 2/3 undetermined-var analysis.
+    -- (deferNonGround) defers a non-ground obligation unconditionally; the signed-body
+    -- coverage census below verifies that its complete predicate is declared.  CALL
+    -- channel runs the RULE 2/3 undetermined-var analysis.
 
     if deferNonGround then
       ()
@@ -32069,6 +31933,15 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
       -- the route, so register the var → dict-param mapping here (AFTER body inference,
       -- so each var is its surviving union-find root, mirroring registerMethodDictSlots).
       let _ = registerImplMethodDicts mname ifaceParams mty extraMap
+      -- Complete-predicate twin: specialized default copies and explicit impl methods
+      -- publish the method-level slots from THIS body instantiation.  The generic
+      -- default's carrier belongs to a distinct tyvar population and cannot answer a
+      -- Known request under recursive mono identity.
+      let _ =
+        registerSlotPredGivens
+          mname
+          0
+          (methodLevelPredicateSlots ifaceParams mty extraMap)
       -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
       perRun.value.inRigidityBodyRef := False
       perRun.value.currentImplBody := False
@@ -33082,7 +32955,8 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let _ = registerEachActive ids (dictParamName mname slot)
-  let _ = registerPredGiven iface argMonos (dictParamName mname slot)
+  let reqIface = IfaceRef { irName = iface, irOrigin = ro }
+  let _ = registerPredGiven reqIface argMonos (dictParamName mname slot)
   -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
   -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
   -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
@@ -33100,7 +32974,8 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
       args = argMonos,
     },
   )
-  perRun.value.implReqPreds := entry :: perRun.value.implReqPreds.value
+  perRun.value.implReqPredicateSlots :=
+    implReqPredicateSlot entry :: perRun.value.implReqPredicateSlots.value
   registerReqSlots mname implTvMap (slot + 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
@@ -33136,20 +33011,9 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- would, and this is deliberately not unification.  Pinned by
 -- test/build_diff_fixtures/impl_requires_structured_rigid_control.mdk.
 --
--- ⚠️ STRUCTURED vectors ONLY (the `allList monoIsBareTyvar` guard — a vector EVERY one of
--- whose positions is a bare tyvar registers nothing) — a MINIMALITY guard, kept because
--- the all-bare case buys nothing and costs surface, not because a gate caught it.  A
--- bare-tyvar
--- given (`requires S a`) is already answered by `activeDictVars`, which `entailAssum`
--- consults FIRST, so registering it here could only ever produce a second answer to an
--- already-answered goal.  It would also opt that goal into this registry's one sharp edge:
--- `monoSameGiven` compares TVar to TVar by ID, and ids here are not unique forever — see
--- the G4 note at `currentImplBody` ("an operand could normalize to an unsolved tyvar whose
--- id collides with a stale activeDictVars entry left by a previously-inferred impl"), which
--- `activeDictVarOf` is scope-gated against by the `inImpl` flag and this lookup is not.
--- A STRUCTURED subject is matched head-first down a TCon spine, so it answers only a goal
--- of the same shape at the same interface, and the id comparison is reached only after that
--- shape already agrees.
+-- All-bare impl `requires` vectors stay on the historical scalar path.  Function
+-- carriers have a distinct Known-slot writer (`registerSlotPredGivens`) because their
+-- complete multi-parameter identity is required by EKNestedTop.
 --
 -- ⚠️ #1956 WIDENS THAT SHARP EDGE TO MORE POSITIONS, and does not introduce a new one.
 -- A vector like `[Wrap a, b]` is admitted because SOME position is structured, but its
@@ -33160,16 +33024,19 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- which is why this is a widening of an existing hazard rather than a new one.  Removing
 -- it is the same scoped-projection question `activeDictVarOf`'s `inImpl` gate answers,
 -- and belongs with the key-side work (#1904), not here.
-registerPredGiven : String -> List Mono -> String -> Unit
+registerPredGiven : IfaceRef -> List Mono -> String -> Unit
 registerPredGiven _ [] _ = ()
 registerPredGiven iface args dname
   | allList monoIsBareTyvar args = ()
   | otherwise =
+    let slot = PredicateSlot {
+      psIface = iface,
+      psArgs = PSArgsKnown args,
+      psBoundIds = dedupI (flatMap monoTyvarIds args),
+    }
     perRun.value.activeDictPreds :=
-      (iface, args, dname) :: perRun.value.activeDictPreds.value
+      (slot, dname) :: perRun.value.activeDictPreds.value
 
--- True iff [m] normalizes to a bare type VARIABLE (the given shape `activeDictVars`
--- already covers). `TApp`/`TCon`/`TFun` are the STRUCTURED shapes it cannot see.
 monoIsBareTyvar : Mono -> Bool
 monoIsBareTyvar m = match normalize m
   TVar _ => True
@@ -33220,26 +33087,88 @@ monoVecSameGiven _ _ = False
 
 -- assum lookup over the predicate-keyed givens: the in-scope dict param holding evidence
 -- for `iface subject`.  PREFERS the entry owned by the enclosing method [encl] (`$dict_
--- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does: registerImplRequires
--- registers every method of an impl against the SAME given, so a global first-match would
--- return whichever method registered LAST — a dict param out of scope in this body.
-activeDictPredOf : String -> List Mono -> String -> Option String
-activeDictPredOf iface goalArgs encl =
+-- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does.
+activeDictPredOf : PredicateRequest -> Mono -> String -> Option String
+activeDictPredOf request targetMono encl =
   let preds = perRun.value.activeDictPreds.value
-  match firstPredForEncl iface goalArgs "$dict_\{encl}_" preds
+  let local =
+    if encl == "" then
+      None
+    else match request.prArgs
+      PSArgsKnown _ => firstPredForEncl request "$dict_\{encl}_" preds
+      PSArgsUnknown => match predicateTargetId targetMono
+        Some target => firstPredForEnclAt target request "$dict_\{encl}_" preds
+        None => None
+  match local
     Some dname => Some dname
-    None => firstPredForEncl iface goalArgs "" preds
+    None => match request.prArgs
+      PSArgsKnown _ => firstPredForEncl request "" preds
+      PSArgsUnknown => match predicateTargetId targetMono
+        Some target => firstPredForEnclAt target request "" preds
+        None => None
 
-firstPredForEncl : String ->
+predicateTargetId : Mono -> Option Int
+predicateTargetId m = match normalize m
+  TVar cell => Some (tyvarId cell)
+  TApp a _ => predicateTargetId a
+  _ => None
+
+-- Function-carrier predicate evidence is lexical to [encl].  Unlike activeDictPredOf,
+-- this lookup deliberately has no global fallback: activeDictPreds accumulates across
+-- functions, so an unscoped hit could route stale evidence from a different body.
+activeFunDictPredOf : PredicateRequest -> String -> Option String
+activeFunDictPredOf _ "" = None
+activeFunDictPredOf request encl =
+  firstPredForEncl
+    request
+    ("$dict_" ++ encl ++ "_")
+    perRun.value.activeDictPreds.value
+
+firstPredForEncl : PredicateRequest ->
+  String ->
+  List (PredicateSlot, String) ->
+  Option String
+firstPredForEncl _ _ [] = None
+firstPredForEncl request pfx ((slot, ename) :: rest)
+  | startsWith pfx ename && predicateRequestMatchesSlot request slot =
+    Some ename
+  | otherwise = firstPredForEncl request pfx rest
+
+firstPredForEnclAt : Int ->
+  PredicateRequest ->
+  String ->
+  List (PredicateSlot, String) ->
+  Option String
+firstPredForEnclAt _ _ _ [] = None
+firstPredForEnclAt target request pfx ((slot, ename) :: rest)
+  | containsI target slot.psBoundIds
+    && startsWith pfx ename
+    && predicateRequestMatchesSlot request slot = Some ename
+  | otherwise = firstPredForEnclAt target request pfx rest
+
+-- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
+-- for a producer that can still supply OriginUnresolved.  Complete method requests do
+-- not reach it.
+activeFunDictPredOfResidual : String -> List Mono -> String -> Option String
+activeFunDictPredOfResidual _ _ "" = None
+activeFunDictPredOfResidual iface args encl =
+  firstPredForEnclResidual
+    iface
+    args
+    ("$dict_" ++ encl ++ "_")
+    perRun.value.activeDictPreds.value
+
+firstPredForEnclResidual : String ->
   List Mono ->
   String ->
-  List (String, List Mono, String) ->
+  List (PredicateSlot, String) ->
   Option String
-firstPredForEncl _ _ _ [] = None
-firstPredForEncl iface goalArgs pfx ((eiface, eargs, ename) :: rest)
-  | eiface == iface && startsWith pfx ename && monoVecSameGiven eargs goalArgs =
-    Some ename
-  | otherwise = firstPredForEncl iface goalArgs pfx rest
+firstPredForEnclResidual _ _ _ [] = None
+firstPredForEnclResidual iface args pfx ((slot, ename) :: rest)
+  | slot.psIface.irName == iface
+    && startsWith pfx ename
+    && predicateRequestArgsMatch (PSArgsKnown args) slot.psArgs = Some ename
+  | otherwise = firstPredForEnclResidual iface args pfx rest
 
 -- the interface a method NAME belongs to, for the predicate-keyed assum lookup.  A
 -- non-method [name] (a top-level constrained call routed through EKNestedTop) is absent
@@ -34150,7 +34079,7 @@ declIfaceMethods _ = []
 -- 🚨 WHY THIS IS A KEY-ONLY WALK AND NOT A SECOND `ifaceMethodSchemes` CALL.  A second
 -- call would NOT be observationally neutral: `methodSchemes` mints tyvar ids through
 -- `sigToSchemeTvsIn` (off `PerRun.tyvarCounter`) AND registers method-level constraints
--- into `methodConstraintsRef`.  Re-obtaining the same schemes under a richer key that way
+-- into `methodPredicateSlotsRef`.  Re-obtaining the same schemes under a richer key that way
 -- would shift every downstream tyvar id — an observable change, which L1 (a pure-addition
 -- leaf) may not make.  `methodSchemesPure` is no escape: it drops the registration but
 -- still mints ids.  So this walk produces ONLY the keys, and `zipIfaceMethodSchemeIds`
@@ -34210,7 +34139,7 @@ zipIfaceMethodSchemeIds (k :: ks) ((_, s) :: ss) =
 -- special-case the name.
 --
 -- 🚨 SELECTED FROM THE ALREADY-MINTED SCHEMES, NEVER RE-ELABORATED.  `methodSchemes`
--- mints tyvar ids off `PerRun.tyvarCounter` AND registers `methodConstraintsRef` keyed by
+-- mints tyvar ids off `PerRun.tyvarCounter` AND registers `methodPredicateSlotsRef` keyed by
 -- those ids.  A second `sigToSchemeTvsIn` here would hand `recordMethodDicts` a scheme
 -- whose ids no constraint row is keyed by (silently: it aligns nothing and records no
 -- dict), besides shifting every downstream id.  Hence the zip against the caller's own
@@ -34358,7 +34287,7 @@ registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _ 
   registerMethodIfaceParamsMethods iface typarams scope rest
 
 -- build each method's scheme AND register its method-level constraints (foldMap's
--- `Monoid m`) into methodConstraintsRef, keyed by the scheme's own quantified ids
+-- `Monoid m`) into methodPredicateSlotsRef, keyed by the scheme's own quantified ids
 -- (from the same tvs map), so a call-site instantiation can route the dict.
 methodSchemes : List (String, List Kind) ->
   List String ->
@@ -34373,7 +34302,7 @@ methodSchemes scope typarams ((IfaceMethod mname mty _ _) :: rest) =
 
 -- like methodSchemes but WITHOUT the registerMethodConstraints side effect — for
 -- callers (inferOneIfaceDefaults) that only need the schemes to look up a method's
--- own type and must not double-register methodConstraintsRef entries (those are
+-- own type and must not double-register methodPredicateSlotsRef entries (those are
 -- registered once during ifaceMethodSchemes at env setup).
 methodSchemesPure : List (String, List Kind) ->
   List IfaceMethod ->
@@ -34382,9 +34311,9 @@ methodSchemesPure _ [] = []
 methodSchemesPure scope ((IfaceMethod mname mty _ _) :: rest) =
   (mname, fst (sigToSchemeTvsIn scope mty)) :: methodSchemesPure scope rest
 
--- the method-level-constraint slot ids of [mname]: one id per `=>` constraint over
--- a non-interface-param tyvar, looked up in the scheme's tvs map.  Registered only
--- when non-empty (so methodConstraintsRef holds only genuinely-constrained methods).
+-- Build one MethodPredicateSlot per method-level `=>` predicate that mentions a
+-- non-interface-param variable.  Each slot retains the whole predicate, every bound
+-- id it mentions, and their stable positions in the scheme's quantified-id order.
 registerMethodConstraints : List String ->
   String ->
   Ty ->
@@ -34392,32 +34321,59 @@ registerMethodConstraints : List String ->
   List Int ->
   Unit
 registerMethodConstraints typarams mname mty tvs fullIds =
-  let ids = methodConstraintSlotIds typarams mty tvs
-  if isEmptyL ids
-    || hasAssocSL2 mname perRun.value.methodConstraintsRef.value then
+  let slots = methodPredicateSlotsOfType typarams mty tvs fullIds
+  if isEmptyL slots
+    || isSome
+      (lookupMethodPredicateSlots
+        mname
+        perRun.value.methodPredicateSlotsRef.value) then
     ()
   else
-    setMethodConstraintEntry mname fullIds ids
+    setMethodPredicateSlotEntry mname slots
 
--- #994 (B-3-c): THE write op for the method-constraint table pair — the sole site that
--- writes both.  The positions entry is DERIVED inside the op from the same [ids] list the
--- op stores, so the two tables cannot be given different lengths or a different slot
--- order; previously the caller held one list and mapped it into the second table itself,
--- which is the same convention `funConstraintsRef`/`funConstraintIfacesRef` carried.
---
--- ⚠️ Deliberately NOT a single record-valued table.  `methodConstraintsRef` also has
--- ids-ONLY writers (the cross-module reseeds at `checkModuleFullImpl` / `scopeMethodArities`),
--- and positions-ABSENCE selects a fallback arm in `alignedMethodConstraintIds` — so a fused
--- table would need `Option` positions, and a non-optional field would change WHICH ARM RUNS,
--- not merely invent data.  Keeping the tables separate keeps absence representable by there
--- being no positions entry at all.
-setMethodConstraintEntry : String -> List Int -> List Int -> Unit
-setMethodConstraintEntry mname fullIds ids =
-  perRun.value.methodConstraintsRef :=
-    (mname, ids) :: perRun.value.methodConstraintsRef.value
-  perRun.value.methodConstraintPositionsRef :=
-    (mname, map (id => indexOfInt id fullIds) ids)
-      :: perRun.value.methodConstraintPositionsRef.value
+-- The sole per-run method-carrier writer.  Predicate identity, bound ids, and stable
+-- positions arrive in one record-valued payload, so no split writer or absence-based
+-- fallback can disagree about slot count or order.
+setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
+setMethodPredicateSlotEntry mname slots =
+  perRun.value.methodPredicateSlotsRef :=
+    (mname, slots) :: perRun.value.methodPredicateSlotsRef.value
+
+methodPredicateSlotsOfType : List String ->
+  Ty ->
+  List (String, Mono) ->
+  List Int ->
+  List MethodPredicateSlot
+methodPredicateSlotsOfType typarams (TyConstrained cs t) tvs fullIds =
+  flatMap (constraintMethodPredicateSlot typarams tvs fullIds) cs
+    ++ methodPredicateSlotsOfType typarams t tvs fullIds
+methodPredicateSlotsOfType typarams (TyEffect _ _ t) tvs fullIds =
+  methodPredicateSlotsOfType typarams t tvs fullIds
+methodPredicateSlotsOfType _ _ _ _ = []
+
+constraintMethodPredicateSlot : List String ->
+  List (String, Mono) ->
+  List Int ->
+  Constraint ->
+  List MethodPredicateSlot
+constraintMethodPredicateSlot typarams tvs fullIds c
+  | isEmptyL (constraintNonParamVars typarams c) = []
+  | otherwise =
+    let bound = constraintNameMonos (constraintVarNames c) tvs
+    let ids = map monoTyvarId bound
+    [
+      MethodPredicateSlot {
+        mpsPredicate = PredicateSlot {
+          psIface = IfaceRef {
+            irName = constraintIface c,
+            irOrigin = c.constraintOrigin,
+          },
+          psArgs = PSArgsKnown (map (fromAstType tvs) c.constraintArgs),
+          psBoundIds = ids,
+        },
+        mpsPositions = map (id => indexOfInt id fullIds) ids,
+      },
+    ]
 
 -- index of [x] in [xs] (0-based; -1 if absent — absent shouldn't happen, slot ids
 -- are always quantified ids of the same scheme).
@@ -34428,20 +34384,14 @@ indexOfIntGo _ [] _ = 0 - 1
 indexOfIntGo x (y :: ys) i = if x == y then i else indexOfIntGo x ys (i + 1)
 -- DRIVER-COLLAPSE Phase 2: skip when [mname] is ALREADY registered in THIS pass.
 -- The ids must be the SAME quantified ids the call-site instantiation maps through
--- its subst (see methodConstraintsRef doc).  The module path's checkModuleFullImpl
+-- its subst (see the method carrier doc).  The module path's checkModuleFullImpl
 -- can call ifaceMethodSchemes more than once per pass (env setup + impl/default body
 -- inference re-resolving schemes), and a SECOND registration prepends DIFFERENT
--- freshly-instantiated ids → lookupAssocSL2 (first-match) returns the stale ids →
--- constraintMonosOf drops them → empty method-dict route (method_constraint_impl_offset:
--- methodN=0).  Keeping the FIRST (env-setup) registration — whose scheme is the one
+-- freshly-instantiated carrier → first-match would select metadata from the wrong
+-- scheme build.  Keeping the FIRST (env-setup) registration — whose scheme is the one
 -- lookupVar returns at call sites — restores the flat path's single-registration
--- invariant.  resetState clears methodConstraintsRef between modules, so this only
+-- invariant.  resetState clears methodPredicateSlotsRef between modules, so this only
 -- de-dups WITHIN a pass.
-
-hasAssocSL2 : String -> List (String, List Int) -> Bool
-hasAssocSL2 n xs = match lookupAssocSL2 n xs
-  Some _ => True
-  None => False
 
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
 methodConstraintSlotIds typarams (TyConstrained cs t) tvs =
@@ -34769,8 +34719,7 @@ numCallObls ((iface, monos, loc) :: rest) = match (iface.irName, monos)
       :: numCallObls rest
   _ => numCallObls rest
 
-numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) ->
-  List UObligation
+numDictObls : List PendingDictApp -> List UObligation
 -- #1155: the loc comes from the ENTRY's own snapshot, not from the ambient
 -- `currentLoc`.  This runs at a generalized group close, well after inference left
 -- the call site, so `currentLoc` named whichever ELoc happened to be entered last.
@@ -34782,7 +34731,7 @@ numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono)
 numDictObls [] = []
 -- B-4b-iii: SPELLING consumer of the widened route carrier — the `"Num"` test is a
 -- name test against the prelude spelling, unchanged, so `.irName` is projected here.
-numDictObls ((_, monos, ifaces, _, loc) :: rest) =
+numDictObls (app :: rest) =
   flatMap
       (p =>
         if fst p == "Num" then
@@ -34793,11 +34742,11 @@ numDictObls ((_, monos, ifaces, _, loc) :: rest) =
               (TyVar "a")
               (snd p)
               PNumLit
-              loc,
+              app.pdaLoc,
           ]
         else
           [])
-      (zipL (map (i => i.irName) ifaces) monos)
+      (zipL (map (i => i.irName) app.pdaIfaces) app.pdaMonos)
     ++ numDictObls rest
 
 -- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not
@@ -35171,15 +35120,12 @@ registerConstraintRegs ((m, ifaceMonos, argVecs) :: rest) =
 -- legitimately a PREFIX of the slots, and folding it in per-slot would either truncate
 -- the id list (a dict-ARITY change) or invent a vector.  Entry-ABSENCE is also
 -- meaningful — an ids-only entry is a distinct state from an entry with empty args.
-setFunConstraintEntry : String ->
-  List CSlot ->
-  Option (List (List Mono)) ->
-  Unit
+setFunConstraintEntry : String -> List PredicateSlot -> Unit
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-setFunConstraintEntry m slots argsOpt =
-  perRun.value.funConstraintsRef :=
-    (m, map (s => s.csId) slots) :: perRun.value.funConstraintsRef.value
+setFunConstraintEntry m slots =
+  perRun.value.funPredicateSlotsRef :=
+    (m, slots) :: perRun.value.funPredicateSlotsRef.value
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.
   --
@@ -35200,19 +35146,9 @@ setFunConstraintEntry m slots argsOpt =
   let _ =
     setRef
       perRun.value.funConstraintDeclaredRef
-      ((
-          m,
-          CDPLen
-            (listLen (dedupSlotVecs (zipSlotVecs slots (optionOr [] argsOpt)))),
-        )
+      ((m, CDPLen (listLen (dedupSlotVecs (map predicateSlotView slots))))
         :: perRun.value.funConstraintDeclaredRef.value)
-  perRun.value.funConstraintIfacesRef :=
-    (m, map (s => s.csIface) slots) :: perRun.value.funConstraintIfacesRef.value
-  match argsOpt
-    Some args =>
-      perRun.value.funConstraintArgsRef :=
-        (m, args) :: perRun.value.funConstraintArgsRef.value
-    None => ()
+  ()
 
 -- register a member's constraints: ids into funConstraintsRef + activeDictVars (the
 -- kept/abstract slots), and the SLOT-ALIGNED iface names into funConstraintIfacesRef.
@@ -35235,13 +35171,12 @@ registerMember : String ->
 -- no entry (mirrors registerInferredFor's empty-ids guard).
 registerMember _ [] _ = ()
 registerMember m ifaceMonos argVecs =
-  let slots = registerMemberSlots m 0 ifaceMonos
-  let keptArgs = keptConstraintArgs ifaceMonos argVecs
+  let slots = registerMemberSlots m 0 ifaceMonos argVecs
   -- #1909: the PREDICATE-keyed half of the given, alongside the tyvar-id half
   -- `registerMemberSlots` just wrote.  Exactly `registerReqSlots`' pairing, one channel
   -- over — see `registerSlotPredGivens`.
-  let _ = registerSlotPredGivens m 0 slots keptArgs
-  setFunConstraintEntry m slots (Some keptArgs)
+  let _ = registerSlotPredGivens m 0 slots
+  setFunConstraintEntry m slots
 
 -- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
 -- in the same slot order — the same `normalize`-is-a-TVar filter applied to the parallel
@@ -35251,15 +35186,6 @@ registerMember m ifaceMonos argVecs =
 -- the second clause stops early.  That is why #994's fusion keeps this payload
 -- entry-level and OPTIONAL instead of folding it into `CSlot` — see
 -- `setFunConstraintEntry`.
-keptConstraintArgs : List (IfaceRef, List Mono) ->
-  List (List Mono) ->
-  List (List Mono)
-keptConstraintArgs [] _ = []
-keptConstraintArgs _ [] = []
-keptConstraintArgs ((_, monos) :: rest) (v :: vs) = match abstractSlotIds monos
-  [] => keptConstraintArgs rest vs
-  _ => v :: keptConstraintArgs rest vs
-
 -- [kept] is the next dict-param slot; a constraint variable forced concrete by the
 -- body takes no dict and doesn't advance the slot (so param names stay 0..k-1,
 -- matching dict_pass).
@@ -35287,18 +35213,34 @@ keptConstraintArgs ((_, monos) :: rest) (v :: vs) = match abstractSlotIds monos
 -- is what answers those sites (`enclSlotIndex`'s predicate/first-id rungs are keyed on
 -- the slot's lead id and legitimately miss).  This mirrors `registerReqSlots`'
 -- `registerEachActive`, which has keyed many ids onto one `requires` slot all along.
-registerMemberSlots : String -> Int -> List (IfaceRef, List Mono) -> List CSlot
-registerMemberSlots _ _ [] = []
-registerMemberSlots m kept ((iface, monos) :: rest) =
+registerMemberSlots : String ->
+  Int ->
+  List (IfaceRef, List Mono) ->
+  List (List Mono) ->
+  List PredicateSlot
+registerMemberSlots _ _ [] _ = []
+registerMemberSlots m kept ((iface, monos) :: rest) [] =
   match abstractSlotIds monos
-    [] => registerMemberSlots m kept rest
+    [] => registerMemberSlots m kept rest []
     id :: more =>
       let _ = registerEachActiveId (id :: more) (dictParamName m kept)
-      CSlot {
-          csIface = iface,
-          csId = id,
+      PredicateSlot {
+          psIface = iface,
+          psArgs = PSArgsUnknown,
+          psBoundIds = id :: more,
         }
-        :: registerMemberSlots m (kept + 1) rest
+        :: registerMemberSlots m (kept + 1) rest []
+registerMemberSlots m kept ((iface, monos) :: rest) (args :: argRest) =
+  match abstractSlotIds monos
+    [] => registerMemberSlots m kept rest argRest
+    id :: more =>
+      let _ = registerEachActiveId (id :: more) (dictParamName m kept)
+      PredicateSlot {
+          psIface = iface,
+          psArgs = PSArgsKnown args,
+          psBoundIds = id :: more,
+        }
+        :: registerMemberSlots m (kept + 1) rest argRest
 
 -- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
 -- `registerMemberSlots` and `keptConstraintArgs` must agree on, factored so the two
@@ -35333,22 +35275,66 @@ registerEachActiveId (id :: rest) dname =
 -- that no selector call may be reachable from `entailAssum`.  This restores an EARLIER
 -- rung's ability to answer; it does not re-select.
 --
--- Strictly ADDITIVE by construction, via `registerPredGiven`'s own two guards: a
--- bare-tyvar context (`Shw a => …`) hits `monoIsBareTyvar` and registers nothing (the
--- tyvar-id path above still answers it byte-identically), and a multi-parameter predicate
--- (`Ix a Char => …`) misses the `[subject]` pattern and registers nothing.  Only a
--- STRUCTURED SINGLE-SUBJECT context gains an answer it did not have.
---
 -- [slot] counts dict params the way `registerMemberSlots`' `kept` does, so the nth kept
 -- slot gets `dictParamName m n`.  The vector list is legitimately a PREFIX of the slots
 -- (`keptConstraintArgs` stops when its input runs out — see `setFunConstraintEntry`), so
 -- the second clause stops early rather than inventing a subject for a vectorless slot.
-registerSlotPredGivens : String -> Int -> List CSlot -> List (List Mono) -> Unit
-registerSlotPredGivens _ _ [] _ = ()
-registerSlotPredGivens _ _ _ [] = ()
-registerSlotPredGivens m slot (s :: srest) (v :: vrest) =
-  let _ = registerPredGiven s.csIface.irName v (dictParamName m slot)
-  registerSlotPredGivens m (slot + 1) srest vrest
+registerSlotPredGivens : String -> Int -> List PredicateSlot -> Unit
+registerSlotPredGivens _ _ [] = ()
+registerSlotPredGivens m slot (s :: srest) =
+  let _ = registerFunPredGiven s (dictParamName m slot)
+  registerSlotPredGivens m (slot + 1) srest
+
+registerFunPredGiven : PredicateSlot -> String -> Unit
+registerFunPredGiven slot dname
+  | slot.psIface.irName == "" = ()
+  | otherwise =
+    registerFunPredGivenSlots (predicateSlotSelfAndSupers slot) dname
+
+registerFunPredGivenSlots : List PredicateSlot -> String -> Unit
+registerFunPredGivenSlots [] _ = ()
+registerFunPredGivenSlots (slot :: rest) dname =
+  perRun.value.activeDictPreds :=
+    (slot, dname) :: perRun.value.activeDictPreds.value
+  registerFunPredGivenSlots rest dname
+
+-- A dictionary supplied for one predicate also supplies every transitive
+-- superinterface.  This is routing-only: all aliases retain the SAME dict parameter,
+-- so it does not alter dict arity.  Unlike `expandSupersVecs`, this closure is ungated
+-- because prelude chains (`Thenable` -> `Applicative` -> `Mappable`) are evidence too.
+-- Unknown vectors stay direct-only: projecting a superclass argument without the
+-- sub-predicate's positional vector would invent identity.
+predicateSlotSelfAndSupers : PredicateSlot -> List PredicateSlot
+predicateSlotSelfAndSupers slot = slot :: predicateSlotKnownSupers slot
+
+predicateSlotKnownSupers : PredicateSlot -> List PredicateSlot
+predicateSlotKnownSupers slot = match slot.psArgs
+  PSArgsUnknown => []
+  PSArgsKnown args =>
+    match (ifaceSupersOf
+      driverState.value.superDeclsRef.value
+      slot.psIface.irName)
+      None => []
+      Some (typarams, supers) =>
+        if listLen args /= listLen typarams then
+          []
+        else
+          let direct = flatMap (predicateSuperSlot (zipL typarams args)) supers
+          direct ++ flatMap predicateSlotKnownSupers direct
+
+predicateSuperSlot : List (String, Mono) -> Super -> List PredicateSlot
+predicateSuperSlot subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
+  let mapped = filterMaybeMonos (map (p => lookupAssoc p subst) params)
+  if listLen mapped /= listLen params then
+    []
+  else
+    [
+      PredicateSlot {
+        psIface = IfaceRef { irName = superName, irOrigin = so },
+        psArgs = PSArgsKnown mapped,
+        psBoundIds = dedupI (flatMap monoTyvarIds mapped),
+      },
+    ]
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -35805,16 +35791,13 @@ registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch) ::
     schemeIds sch ++ perRun.value.deferrableVarIds.value
   let obs =
     dedupVecObls (schemeOblsForMember sigTvMaps callObls addedObls m sch)
-  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
-  -- lint-disable-next-line rule-prefer-assign-op
   let _ =
     if isEmptyL obs then
       ()
     else
       let defId = optionOr 0 (omLookup m memberDefIds)
-      setRef
-        perRun.value.schemeObligationsRef
-        (((m, defId), obs) :: perRun.value.schemeObligationsRef.value)
+      perRun.value.schemeObligationsRef :=
+        ((m, defId), obs) :: perRun.value.schemeObligationsRef.value
   registerSchemeObligations memberDefIds sigTvMaps callObls addedObls rest
 
 -- #619: a SIGNED binding's scheme context is EXACTLY its declared `=>` predicates
@@ -36026,7 +36009,7 @@ oblArgKey m = match normalize m
 containsVecObl : VecObl -> List VecObl -> Bool
 containsVecObl _ [] = False
 containsVecObl o (o2 :: rest) =
-  o.voIface.irName == o2.voIface.irName && eqIntList o.voIds o2.voIds
+  sameIfaceDecl o.voIface o2.voIface && eqIntList o.voIds o2.voIds
     || containsVecObl o rest
 
 eqIntList : List Int -> List Int -> Bool
@@ -36583,16 +36566,14 @@ goalDefersOpenWorld iface args =
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
 goalMatchesGiven _ [] = False
 goalMatchesGiven iface args =
-  anyGivenMatches iface.irName args perRun.value.activeDictPreds.value
+  anyGivenMatches
+    PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+    perRun.value.activeDictPreds.value
 
-anyGivenMatches : String ->
-  List Mono ->
-  List (String, List Mono, String) ->
-  Bool
-anyGivenMatches _ _ [] = False
-anyGivenMatches iface args ((eiface, eargs, _) :: rest) =
-  eiface == iface && monoVecSameGiven eargs args
-    || anyGivenMatches iface args rest
+anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
+anyGivenMatches _ [] = False
+anyGivenMatches request ((slot, _) :: rest) =
+  predicateRequestMatchesSlot request slot || anyGivenMatches request rest
 
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
@@ -36621,12 +36602,14 @@ goalSlotStillOpen args = not (goalIdsClaimed (flatMap monoUnboundIds args))
 -- them — the fixedness, not the channel, is what decides.
 goalIdsClaimed : List Int -> Bool
 goalIdsClaimed [] = False
-goalIdsClaimed ids = anyClaimRow ids perRun.value.funConstraintArgsRef.value
+goalIdsClaimed ids = anyClaimRow ids perRun.value.funPredicateSlotsRef.value
 
-anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
+anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyClaimRow _ [] = False
-anyClaimRow ids ((_, vecs) :: rest) =
-  anyList (v => anyList (m => anyIn (monoTyvarIds m) ids) v) vecs
+anyClaimRow ids ((_, slots) :: rest) =
+  anyList
+      (v => anyList (m => anyIn (monoTyvarIds m) ids) v)
+      (predicateSlotArgs slots)
     || anyClaimRow ids rest
 
 -- is this argument's dispatch head a real type CONSTRUCTOR?  `headTyconMono`'s
@@ -36825,15 +36808,14 @@ boundTyvarIds boundIds (d :: rest) = match normalize d
 schemeIds : Scheme -> List Int
 schemeIds (Forall ids _ _) = ids
 
--- shatter vector obligations into (iface, id) pairs — the currency of the
+-- shatter vector obligations into (interface declaration, id) pairs — the currency of the
 -- coverage subset test.  See checkSigConstraintCoverage's header.
--- ⚠️ Drops to the SPELLING currency on purpose — the coverage (subset) test compares
--- an INFERRED constraint against a DECLARED one written in the same signature, which is
--- a "did you write this down" question, not an identity question.
-pairsOfVecObls : List VecObl -> List (String, Int)
+-- A signed body's inferred predicate is covered only by the same interface declaration;
+-- same spelling from a foreign module is not evidence.
+pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
 pairsOfVecObls [] = []
 pairsOfVecObls (o :: rest) =
-  map (id => (o.voIface.irName, id)) o.voIds ++ pairsOfVecObls rest
+  map (id => (o.voIface, id)) o.voIds ++ pairsOfVecObls rest
 
 -- ── signature-constraint soundness check ─────────────────────────────────────
 -- For each SIGNED member, the interface constraints its body INFERS on the
@@ -36893,7 +36875,7 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
       let inferredFwd =
         pairsOfVecObls (forwardedVecObls (schemeIds sch) callObls)
       let inferredB = inferredIfacePairs m (schemeIds sch)
-      let inferred = dedupPairs (inferredA ++ inferredFwd ++ inferredB)
+      let inferred = dedupIfacePairs (inferredA ++ inferredFwd ++ inferredB)
       let _ = reportUncovered m sigTvMaps declaredPairs inferred
       let declaredVecs =
         censusSuperCloseVec
@@ -36906,23 +36888,23 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
 
 -- inferred (iface, id) pairs from the marked path: each inferred constraint var id
 -- paired with its recovered iface (skip an id whose iface can't be recovered).
-inferredIfacePairs : String -> List Int -> List (String, Int)
+inferredIfacePairs : String -> List Int -> List (IfaceRef, Int)
 inferredIfacePairs m boundIds =
   flatMap (pairIface m) (inferredConstraintIds m boundIds)
 
-pairIface : String -> Int -> List (String, Int)
+pairIface : String -> Int -> List (IfaceRef, Int)
 pairIface m id =
   let ir = ifaceForInferredId m id
   match ir.irName
     "" => []
-    iface => [(iface, id)]
+    _ => [(ir, id)]
 
 -- the declared (iface, id) constraint pairs of member m: each declared constraint
 -- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
 -- constraints — no tyvar — carry no dict slot and are skipped).
 declaredPairsFor : String ->
   List (String, List (IfaceRef, List Mono), List (List Mono)) ->
-  List (String, Int)
+  List (IfaceRef, Int)
 declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
 
 -- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
@@ -36952,41 +36934,37 @@ regIfaceMonosOf (_, ims, _) = ims
 ifaceMonoName : (IfaceRef, List Mono) -> List (String, Mono)
 ifaceMonoName (ir, monos) = map (mono => (ir.irName, mono)) monos
 
-declaredPairOne : (IfaceRef, List Mono) -> List (String, Int)
-declaredPairOne (iface, monos) =
-  map (id => (iface.irName, id)) (abstractSlotIds monos)
+declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
+declaredPairOne (iface, monos) = map (id => (iface, id)) (abstractSlotIds monos)
 
 -- UNGATED transitive super-closure over declared (iface, id) slots — mirrors
 -- expandSupersPairs but WITHOUT the userIfaceNamesRef gate, so prelude super chains
 -- (Applicative requires Mappable, Thenable requires Applicative, …) are included.
 -- (The gated expandSupersPairs stays user-only because its slots drive dict arity;
 -- this closure only feeds the read-only subset test, so gating is not needed here.)
-censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
+censusSuperClose : List Decl -> List (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperClose allDecls declared =
   censusSuperCloseFix allDecls declared declared
 
 censusSuperCloseFix : List Decl ->
-  List (String, Int) ->
-  List (String, Int) ->
-  List (String, Int)
+  List (IfaceRef, Int) ->
+  List (IfaceRef, Int) ->
+  List (IfaceRef, Int)
 censusSuperCloseFix allDecls acc frontier =
-  let next = dedupPairs (acc ++ flatMap (censusSuperSlotsOf allDecls) frontier)
+  let next =
+    dedupIfacePairs (acc ++ flatMap (censusSuperSlotsOf allDecls) frontier)
   if listLen next == listLen acc then
     acc
   else
     censusSuperCloseFix allDecls next (dropN (listLen acc) next)
 
--- ⚠️ Drops each super slot back to the SPELLING currency (`csIface.irName`): this
--- closure only feeds the read-only coverage subset test, which asks "did the signature
--- declare this", not an identity question.  See `pairsOfVecObls`.
-censusSuperSlotsOf : List Decl -> (String, Int) -> List (String, Int)
-censusSuperSlotsOf allDecls (iface, id) = match ifaceSupersOf allDecls iface
-  None => []
-  Some (typarams, supers) =>
-    let subst = zipL typarams (replicate (listLen typarams) id)
-    map
-      (sl => (sl.csIface.irName, sl.csId))
-      (flatMap (superSlotOf subst) supers)
+censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
+censusSuperSlotsOf allDecls (iface, id) =
+  match ifaceSupersOf allDecls iface.irName
+    None => []
+    Some (typarams, supers) =>
+      let subst = zipL typarams (replicate (listLen typarams) id)
+      map (sl => (sl.csIface, sl.csId)) (flatMap (superSlotOf subst) supers)
 
 -- #619/#607 item 4: VECTOR-valued transitive super-closure over declared constraint
 -- vectors.  Unlike censusSuperClose (which collapses each predicate to per-arg pairs),
@@ -37038,7 +37016,7 @@ superSlotVecOf subst (Super { superHead = superName, superParams = params, super
 -- vector absent) reports here.  Arity < 2 is fully handled by the pair test.
 reportUncoveredVec : String ->
   List (String, Ty, List (String, Mono)) ->
-  List (String, Int) ->
+  List (IfaceRef, Int) ->
   List VecObl ->
   List VecObl ->
   Unit
@@ -37049,7 +37027,7 @@ reportUncoveredVec m sigTvMaps declaredPairs declaredVecs (o :: rest) =
       ()
     else if containsVecObl o declaredVecs then
       ()
-    else if not (allPairsIn o.voIface.irName o.voIds declaredPairs) then
+    else if not (allPairsIn o.voIface o.voIds declaredPairs) then
       ()
     else
       pushTypeError
@@ -37060,9 +37038,9 @@ reportUncoveredVec m sigTvMaps declaredPairs declaredVecs (o :: rest) =
           (map (varNameForId sigTvMaps m) o.voIds))
   reportUncoveredVec m sigTvMaps declaredPairs declaredVecs rest
 
-allPairsIn : String -> List Int -> List (String, Int) -> Bool
+allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
 allPairsIn iface ids declaredPairs =
-  allList (id => containsPair (iface, id) declaredPairs) ids
+  allList (id => containsIfacePair (iface, id) declaredPairs) ids
 
 missingConstraintVecMsg : String -> String -> List String -> String
 missingConstraintVecMsg name iface varNames =
@@ -37072,24 +37050,31 @@ missingConstraintVecMsg name iface varNames =
 -- one type_error per inferred (iface, id) not covered by the declared-closed set.
 reportUncovered : String ->
   List (String, Ty, List (String, Mono)) ->
-  List (String, Int) ->
-  List (String, Int) ->
+  List (IfaceRef, Int) ->
+  List (IfaceRef, Int) ->
   Unit
 reportUncovered _ _ _ [] = ()
 reportUncovered m sigTvMaps declared ((iface, id) :: rest) =
   let _ =
-    if containsPair (iface, id) declared then
+    if containsIfacePair (iface, id) declared then
       ()
     else
       pushTypeError
         "T-MISSING-CONSTRAINT"
-        (missingConstraintMsg m iface (varNameForId sigTvMaps m id))
+        (missingConstraintMsg m iface.irName (varNameForId sigTvMaps m id))
   reportUncovered m sigTvMaps declared rest
 
-containsPair : (String, Int) -> List (String, Int) -> Bool
-containsPair _ [] = False
-containsPair (i, d) ((i2, d2) :: rest) =
-  i == i2 && d == d2 || containsPair (i, d) rest
+containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
+containsIfacePair _ [] = False
+containsIfacePair (i, d) ((i2, d2) :: rest) =
+  sameIfaceDecl i i2 && d == d2 || containsIfacePair (i, d) rest
+
+dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
+dedupIfacePairs xs = dedupBy ifacePairKey xs
+
+ifacePairKey : (IfaceRef, Int) -> String
+ifacePairKey (iface, id) =
+  regKeyRender (regKeyOfTab (oblIfaceKey iface)) ++ intToString id
 
 -- recover the sig-tyvar NAME for a constraint var id (for a readable message);
 -- falls back to "a" if the id isn't found among the member's sig tyvars.
@@ -37159,11 +37144,9 @@ registerInferredFor m ids vecs =
   -- sit in the second `setRef`'s argument, i.e. after it); that is sound only because it
   -- reads `implObls` / `schemeObligationsRef` / `dictApps` and NEITHER fn-constraint
   -- table — checked, since a recovery that consulted them would change answers here.
-  let slots =
-    map (id => CSlot { csIface = ifaceForInferredId m id, csId = id }) ids
-  let slotVecs = map (s => inferredVecFor s.csIface s.csId vecs) slots
-  let _ = setFunConstraintEntry m slots (inferredArgsOpt slotVecs)
-  let _ = registerActiveDictVars m 0 ids
+  let slots = inferredPredicateSlots m ids vecs
+  let _ = setFunConstraintEntry m slots
+  let _ = registerActiveDictVars m 0 slots
   -- #1909, the INFERRED twin of `registerMember`'s call: this writer is likewise ids-only
   -- (`registerActiveDictVars` above), so an inferred binding whose deferred predicate is
   -- STRUCTURED (`nest x = tagOf (Wrap x)`) had the same unreachable-`entailAssum` gap as
@@ -37171,8 +37154,28 @@ registerInferredFor m ids vecs =
   -- The subject comes from the vector `inferredVecFor` already recovers per slot since
   -- #1869; a slot that recovered nothing carries `[]` and registers nothing, exactly as
   -- it did before.  See `registerSlotPredGivens` for why this adds no selector call.
-  let _ = registerSlotPredGivens m 0 slots slotVecs
+  let _ = registerSlotPredGivens m 0 slots
   perRun.value.promotedRef := m :: perRun.value.promotedRef.value
+
+inferredPredicateSlots : String ->
+  List Int ->
+  List (IfaceRef, Int, List Mono) ->
+  List PredicateSlot
+inferredPredicateSlots _ [] _ = []
+inferredPredicateSlots m (id :: rest) vecs =
+  let iface = ifaceForInferredId m id
+  let args = inferredVecFor iface id vecs
+  let bound =
+    if isEmptyL args then [id] else dedupI (id :: flatMap monoTyvarIds args)
+  PredicateSlot {
+      psIface = iface,
+      psArgs = if isEmptyL args then PSArgsUnknown else PSArgsKnown args,
+      psBoundIds = bound,
+    }
+    :: inferredPredicateSlots
+      m
+      (filterList (x => not (containsI x bound)) rest)
+      vecs
 
 -- N5 (inherited, slice 1): entry ABSENCE means "no argument vector was recorded for this
 -- callee at all", and every reader turns it into `(slot, [])` — the historical scalar
@@ -37180,11 +37183,6 @@ registerInferredFor m ids vecs =
 -- reader, same-module and cross-module alike, so writing one would only ADD a
 -- `funConstraintArgsRef` / `crossModuleFunConstraintArgsQualRef` row that says nothing.
 -- Recover nothing ⇒ write nothing, exactly as before this slice.
-inferredArgsOpt : List (List Mono) -> Option (List (List Mono))
-inferredArgsOpt vecs
-  | allList isEmptyL vecs = None
-  | otherwise = Some vecs
-
 -- #23: the iface name for an inferred constraint var.  `ifaceForConstraintId` only
 -- recovers it from a pendingImplObligation whose `occ` is a BARE `TVar id`; a
 -- constraint induced by a `fromInt`/method site records a COMPOUND occ (the whole
@@ -37245,12 +37243,10 @@ lookupIfaceById id (o :: rest)
 -- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
 -- B-4b-iii: SPELLING consumer of the widened route carrier — it RETURNS a bare name,
 -- so `.irName` is projected at the one read and `ifaceAtMonoId` keeps its `List String`.
-ifaceFromDictApps : Int ->
-  List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) ->
-  String
+ifaceFromDictApps : Int -> List PendingDictApp -> String
 ifaceFromDictApps _ [] = ""
-ifaceFromDictApps id ((_, monos, ifaces, _, _) :: rest) =
-  match ifaceAtMonoId id monos (map (i => i.irName) ifaces)
+ifaceFromDictApps id (app :: rest) =
+  match ifaceAtMonoId id app.pdaMonos (map (i => i.irName) app.pdaIfaces)
     Some s => s
     None => ifaceFromDictApps id rest
 
@@ -37286,11 +37282,10 @@ ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
     _ => ifaceForConstraintIdGo id rest
   OpProjected => ifaceForConstraintIdGo id rest
 
-registerActiveDictVars : String -> Int -> List Int -> Unit
+registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
 registerActiveDictVars _ _ [] = ()
-registerActiveDictVars m slot (id :: rest) =
-  perRun.value.activeDictVars :=
-    (id, dictParamName m slot) :: perRun.value.activeDictVars.value
+registerActiveDictVars m slot (s :: rest) =
+  let _ = registerEachActiveId s.psBoundIds (dictParamName m slot)
   registerActiveDictVars m (slot + 1) rest
 
 -- Render accumulated type errors as `TYPE ERROR: <msg>` lines (in order of
@@ -38743,8 +38738,8 @@ aliasEntriesFor _ _ _ = []
 -- downstream stage — marker, typecheck route stamping, private_mangle, the emitter, both
 -- eval drivers — then sees an ordinary method reference and needs no alias awareness.
 --
--- That is also precisely why the METHOD-side dict-arity tables (methodConstraintsRef /
--- crossModuleMethodConstraintsQualRef / scopeMethodArities) need no alias re-keying the
+-- That is also precisely why the METHOD-side predicate carrier and its qualified
+-- scoped projection need no alias re-keying the
 -- way funConstraintsRef did: by the time they are built, no aliased method name survives.
 -- The standalone `=>`-constrained functions are the opposite case — they ARE per-module
 -- bindings that keep their local name, which is why they needed the re-keying.
@@ -40576,22 +40571,17 @@ copyCrossRun c = CrossRun {
   universeCtorIdentsRef = Ref c.universeCtorIdentsRef.value,
   universeCtorCollidedRef = Ref c.universeCtorCollidedRef.value,
   builtinClassesRef = Ref c.builtinClassesRef.value,
-  crossModuleFunConstraintsRef = Ref c.crossModuleFunConstraintsRef.value,
-  crossModuleFunConstraintsQualRef =
-    Ref c.crossModuleFunConstraintsQualRef.value,
-  crossModuleFunConstraintIfacesRef =
-    Ref c.crossModuleFunConstraintIfacesRef.value,
-  crossModuleFunConstraintIfacesQualRef =
-    Ref c.crossModuleFunConstraintIfacesQualRef.value,
-  crossModuleFunConstraintArgsQualRef =
-    Ref c.crossModuleFunConstraintArgsQualRef.value,
+  crossModuleFunPredicateSlotsRef = Ref c.crossModuleFunPredicateSlotsRef.value,
+  crossModuleFunPredicateSlotsQualRef =
+    Ref c.crossModuleFunPredicateSlotsQualRef.value,
   crossModuleFunConstraintDeclaredRef =
     Ref c.crossModuleFunConstraintDeclaredRef.value,
   crossModuleFunConstraintDeclaredQualRef =
     Ref c.crossModuleFunConstraintDeclaredQualRef.value,
-  crossModuleMethodConstraintsRef = Ref c.crossModuleMethodConstraintsRef.value,
-  crossModuleMethodConstraintsQualRef =
-    Ref c.crossModuleMethodConstraintsQualRef.value,
+  crossModuleMethodPredicateSlotsRef =
+    Ref c.crossModuleMethodPredicateSlotsRef.value,
+  crossModuleMethodPredicateSlotsQualRef =
+    Ref c.crossModuleMethodPredicateSlotsQualRef.value,
   coreSchemeObligationsRef = Ref c.coreSchemeObligationsRef.value,
   crossModuleSchemeOblsQualRef = Ref c.crossModuleSchemeOblsQualRef.value,
 }
@@ -41363,12 +41353,28 @@ checkModulesEntryFullSplitK : Option (Int, Int) ->
   List (String, List Decl) ->
   (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
+  -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
+  -- once as the singleton `__user__` module.  Resolve already owns the syntactic
+  -- self-test that prevents double-seeding core.  Apply that same authority before
+  -- identity stamping, so one declaration graph is not stamped once as `core` and
+  -- again as `__user__`.  `None` also prevents the empty prelude pass from sharing a
+  -- memo key with the separately loaded declarations we deliberately dropped.
+  -- Partial lookalikes remain ordinary because `programIsCore` requires BOTH halves.
+  let (effectivePreludeKey, effectiveCoreDecls0, effectiveModules0) =
+    match modules0
+      [(_, prog)] =>
+        if programIsCore prog then
+          (None, [], [("core", prog)])
+        else
+          (preludeKey, coreDecls0, modules0)
+      _ => (preludeKey, coreDecls0, modules0)
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let (coreDecls, modules) =
+    stampGraphTyOrigins effectiveCoreDecls0 effectiveModules0
   let (runtimeSeed, coreSchemes) =
-    checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
+    checkModulesPreambleK effectivePreludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
   -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
   -- witness, not the perf-gate path).
@@ -42065,7 +42071,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- `$dict_<fn>_<slot>` params.  Only the COUNT is read here (the body's EDictAt/RDict
 -- routes were already stamped, with real ids, during each module's own pass), so a
 -- placeholder id list of the correct length is sufficient.  Prepended → wins the
--- lookupAssocSL2 first-match over any stale last-module entry.  (Golden module
+-- lookupPredicateSlots first-match over any stale last-module entry.  (Golden module
 -- drivers never reach elaborateModules, so their trees are untouched.)
 -- Step 4 (Phase-134 fix): per-module importer-scoped arity, mirroring the oracle
 -- eval.ml:2104-2164 collect_arities-per-scope.  The pre-fix JOINT
@@ -42076,18 +42082,18 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- scope.  Each module's scope = its own decls ∪ the decls of its transitive
 -- importers ∪ core (the importer part covers a PUBLIC constrained fn referenced only
 -- by its importers; mangleUnits already de-collided PRIVATES).  promotedC = the
--- joint-discovered promoted-fn arities (unsignatured, so constrainedSigArity misses
--- them) carried across resetState in crossModuleFunConstraintsRef.
+-- joint-discovered promoted-fn slots (unsignatured, so constrainedSigPredicateSlots misses
+-- them) carried across resetState in the cross-module function carrier.
 dictPassModulesIfEnabled : List String ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 dictPassModulesIfEnabled dictNames core2 modules2 =
   let allModDecls = flatMap snd modules2
-  let promotedQ = crossRun.value.crossModuleFunConstraintsQualRef.value
+  let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
-  perRun.value.funConstraintsRef :=
-    scopeArities promotedQ allMods (core2 ++ allModDecls)
+  perRun.value.funPredicateSlotsRef :=
+    scopePredicateSlots promotedQ allMods (core2 ++ allModDecls)
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
   -- REQUIRES WRITING `[]`.  `resetState ()` fires at exactly two sites and neither runs
@@ -42097,9 +42103,9 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   -- `CDPUnknown` to trip on.  Empty ⇒ `clampPrefix`'s `None` arm ⇒ `CDPUnknown` ⇒
   -- withhold, which is the honest answer for a table this phase does not repopulate.
   perRun.value.funConstraintDeclaredRef := []
-  perRun.value.methodConstraintsRef :=
-    scopeMethodArities
-      crossRun.value.crossModuleMethodConstraintsQualRef.value
+  perRun.value.methodPredicateSlotsRef :=
+    scopeMethodPredicateSlots
+      crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       allMods
   let core2' = dictPass dictNames core2
   let modules2' =
@@ -42114,14 +42120,14 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
 -- its leading element-dict param (nested_instance_dicts: `impl Default (List a)
 -- requires Default a`) gets dict-passed even with no top-level constrained FUNCTION.
 -- Mirrors flat elaborateDict's unconditional final dictPass.  No-op when nothing was
--- marked → byte-identical golden trees.  scopeArities sizes each define's leading
+-- marked → byte-identical golden trees.  scopePredicateSlots sizes each define's leading
 -- dict params to its surviving-constraint count.
 
 -- per-module: set funConstraintsRef to the module's importer-scoped arities, then
 -- dict-pass that module.  [allModules] is the full set (for the transitive-importer
 -- walk); [modules2] is the remaining suffix to process.  core2 is always in scope.
 dictPassModulesScoped : List String ->
-  List ((String, String), List Int) ->
+  List ((String, String), List PredicateSlot) ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
@@ -42134,42 +42140,42 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog) :: rest)
   let scope = core2 ++ prog ++ importerDecls
   let scopeMods =
     namesToSet (mid :: transitiveImporterIds mid allModules) omEmpty
-  -- IMPORT ALIASING: scopeArities keys arity by the DEFINITION's name, but an aliased
+  -- IMPORT ALIASING: scopePredicateSlots keys arity by the DEFINITION's name, but an aliased
   -- call site in THIS module writes the LOCAL name.  Re-key this module's own aliases
   -- (from its DUse decls) onto the origin's arity, else the aliased call under-applies
   -- its dicts.  This is the RUN/eval path's counterpart to the same fix in
   -- checkModuleFullImpl — the EMIT path never needs it, because private_mangle has
   -- already rewritten `A.name` to the origin's real symbol before this point.
   -- #1425 site 3: re-key the names THIS module declares onto its own qual rows before the
-  -- table is handed to `dictPass`.  `scopeArities` reduces `(mid, name)` to a bare name and
+  -- table is handed to `dictPass`.  `scopePredicateSlots` reduces `(mid, name)` to a bare name and
   -- throws the module id away, which is where a foreign module's constrained row becomes
   -- this module's phantom dict param; `selfDeclArities` is what puts the identity back for
   -- the one set of names this module can answer authoritatively — its own.
   let _ =
     setRef
-      perRun.value.funConstraintsRef
+      perRun.value.funPredicateSlotsRef
       (selfDeclArities
         mid
         prog
         promotedQ
         (aliasConstraintEntries prog promotedQ
-          ++ scopeArities promotedQ scopeMods scope))
+          ++ scopePredicateSlots promotedQ scopeMods scope))
   -- B-2.2-b1: cleared for the same reason as in `dictPassModulesIfEnabled` — a stale
   -- prefix table is worse than an empty one, because only the empty one answers
   -- `CDPUnknown`.
   perRun.value.funConstraintDeclaredRef := []
-  perRun.value.methodConstraintsRef :=
-    scopeMethodArities
-      crossRun.value.crossModuleMethodConstraintsQualRef.value
+  perRun.value.methodPredicateSlotsRef :=
+    scopeMethodPredicateSlots
+      crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
   (mid, dictPass dictNames prog)
     :: dictPassModulesScoped dictNames promotedQ core2 allModules rest
 
 -- the arity table for a scope: every `=>`-constrained signature in [scope]
--- (constrainedSigArity) PLUS the joint-discovered promoted-fn arities whose fn is
+-- (constrainedSigPredicateSlots) PLUS the joint-discovered promoted-fn slots whose fn is
 -- DEFINED in [scope] (so a promoted fn out of scope doesn't leak a param count in).
--- #55: the signature count (`constrainedSigArity`) is the SYNTACTIC `=>`-constraint
--- count; the INFERRED count in [promotedC] (crossModuleFunConstraintsRef, the
+-- #55: the signature count (`constrainedSigPredicateSlots`) is the syntactic predicate
+-- count; the inferred count in the cross-module carrier (the
 -- surviving generalized constraint vars from each body's inference) is what every
 -- CALL site computes (constraintMonosOf over the call's instantiated scheme).  These
 -- diverge for a point-free fn whose body MONOMORPHIZES a constraint var — e.g.
@@ -42193,11 +42199,11 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog) :: rest)
 -- is intentionally minimal: it changes arity ONLY for the cross-module bare-name
 -- collision, so non-colliding programs (every golden) are byte-identical.
 -- Reduces the qualified entries to the bare (name,ids) form downstream readers expect.
-scopeArities : List ((String, String), List Int) ->
+scopePredicateSlots : List ((String, String), List PredicateSlot) ->
   OrdMap Unit ->
   List Decl ->
-  List (String, List Int)
-scopeArities promotedQ scopeMods scope =
+  List (String, List PredicateSlot)
+scopePredicateSlots promotedQ scopeMods scope =
   let scopeNames = namesToSet (declTopFnNames scope) omEmpty
   let nameInScope =
     filterList (e => omHasKey (snd (fst e)) scopeNames) promotedQ
@@ -42219,7 +42225,7 @@ scopeArities promotedQ scopeMods scope =
   let sigEntries =
     filterList
       (e => not (omHasKey (fst e) inferredNames))
-      (flatMap constrainedSigArity scope)
+      (flatMap constrainedSigPredicateSlots scope)
   inferred ++ sigEntries
 
 -- ── #1425 / #1351: a module's OWN declarations take their arity from their OWN row ──
@@ -42232,7 +42238,7 @@ scopeArities promotedQ scopeMods scope =
 -- of two `import` lines, because that decides the topological order the bare accumulator is
 -- grown in — a wrong answer selected by source-file layout.
 --
--- ⚠️ THIS IS THE CASE `scopeArities`' OWN in-scope-preference CANNOT REACH, and it is why
+-- ⚠️ THIS IS THE CASE `scopePredicateSlots`' own in-scope preference cannot reach, and it is why
 -- that preference is not enough on its own.  Its ladder prefers "an entry whose owning
 -- module is in scope", and an unconstrained binding HAS NO ENTRY — it can never win a
 -- preference it does not enter.  Worse, `scopeMods` is the IMPORTER direction (`mid` ∪ the
@@ -42302,7 +42308,7 @@ selfQualEntries mid own qual =
     (e => (snd (fst e), snd e))
     (filterList (e => fst (fst e) == mid && omHasKey (snd (fst e)) own) qual)
 
--- WS-2/D2 method analog of scopeArities, WITHOUT the sig-fallback: every method-level
+-- WS-2/D2 method analog of scopePredicateSlots, WITHOUT the sig-fallback: every method-level
 -- constraint is registered during its interface module's typecheck
 -- (registerMethodConstraints over ifaceMethodSchemes), so there is no
 -- unsignatured-promoted residual to seed from signatures.  No method-name scope filter
@@ -42310,12 +42316,12 @@ selfQualEntries mid own qual =
 -- method whose impl lives in a different module than its interface is never dropped),
 -- and for the SUBSET of names that DO collide, prefer the entry whose owning (interface)
 -- module is in [scopeMods] — the bare-name disambiguation.  Non-colliding programs keep
--- every entry → the per-scope methodConstraintsRef is identical to the bare accumulated
+-- every entry → the per-scope methodPredicateSlotsRef is identical to the bare accumulated
 -- table → byte-identical method dict-pass (every existing fixture, and the fixpoint).
-scopeMethodArities : List ((String, String), List Int) ->
+scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
   OrdMap Unit ->
-  List (String, List Int)
-scopeMethodArities promotedMQ scopeMods =
+  List (String, List MethodPredicateSlot)
+scopeMethodPredicateSlots promotedMQ scopeMods =
   let resolvedNames =
     namesToSet
       (map
@@ -42449,14 +42455,14 @@ attributeSchemeOblsGo mid progNames seen (e :: rest)
         rest
 
 -- WS-2/D2 method analog: attribute each method whose INTERFACE is declared in [prog]
--- (carrying a methodConstraintsRef entry) to [mid].  Keyed by the interface's module —
+-- (carrying a methodPredicateSlotsRef entry) to [mid].  Keyed by the interface's module —
 -- the arity is a property of the method signature, registered during that module's
 -- ifaceMethodSchemes pass.
-attributeMethodModuleArities : String ->
+attributeMethodModulePredicateSlots : String ->
   List Decl ->
-  List (String, List Int) ->
-  List ((String, String), List Int)
-attributeMethodModuleArities mid prog entries =
+  List (String, List MethodPredicateSlot) ->
+  List ((String, String), List MethodPredicateSlot)
+attributeMethodModulePredicateSlots mid prog entries =
   let progMethods = namesToSet (allIfaceMethodNames prog) omEmpty
   map
     (e => ((mid, fst e), snd e))
@@ -42481,7 +42487,7 @@ transitiveImporterDecls mid modules =
     modules
 
 -- the module IDS that transitively import [mid] (excluding [mid]) — the id-level
--- analog of transitiveImporterDecls, for the scopeArities owning-module set.
+-- analog of transitiveImporterDecls, for the scopePredicateSlots owning-module set.
 transitiveImporterIds : String -> List (String, List Decl) -> List String
 transitiveImporterIds mid modules =
   flatMap
@@ -42554,7 +42560,7 @@ moduleDictNames coreDecls allDecls modules =
 -- FULL constrainedSigNames (every `=>`-constrained module signature), mirroring flat
 -- elaborateDict's caller (constrainedSigNames userDecls) — NOT the return-position
 -- subset.  Rationale: dictPass adds a leading dict PARAM to every fn whose
--- constrained signature is in scopeArities (all constrained sigs), so the prePass
+-- constrained signature is in scopePredicateSlots (all constrained sigs), so the prePass
 -- MARK set must match or a fn like `quad : Monoid a => a -> a` (body calls another
 -- constrained fn, NOT a return-position method directly) gets the PARAM but its call
 -- sites are unmarked → `unbound identifier: $dict_quad_0`.  The PRELUDE part stays
@@ -42574,16 +42580,15 @@ moduleDictNames coreDecls allDecls modules =
 -- (prop-shrinker oscillation when neq/elem/any/… were swept into the eval dict
 -- set); guarded by the `medaka test stdlib/core.mdk` canary.
 
-constrainedSigArity : Decl -> List (String, List Int)
-constrainedSigArity (DTypeSig _ n ty)
-  | isConstrainedTy ty = [(n, zerosL (listLen (sigConstraints ty)))]
+constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
+constrainedSigPredicateSlots (DTypeSig _ n ty)
+  | isConstrainedTy ty = [(n, map sigPredicateSlot (sigConstraints ty))]
   | otherwise = []
-constrainedSigArity _ = []
+constrainedSigPredicateSlots _ = []
 
-zerosL : Int -> List Int
-zerosL k
-  | k <= 0 = []
-  | otherwise = 0 :: zerosL (k - 1)
+sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
+sigPredicateSlot (iface, _) =
+  PredicateSlot { psIface = iface, psArgs = PSArgsUnknown, psBoundIds = [] }
 
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
@@ -42877,7 +42882,8 @@ elabModuleStamp mid seedVars accData implDecls prog =
       implDecls
       stampImplTable
       perRun.value.pendingRLocalSites.value
-  let _ = realizeRecDictApps perRun.value.pendingRecDictApps.value
+  let _ =
+    realizeRecDictApps stampImplTable perRun.value.pendingRecDictApps.value
   let _ =
     resolveDictApps implDecls stampImplTable perRun.value.dictApps.items.value
   let _ =

@@ -79,10 +79,9 @@
 -- pull it in is the anti-pattern `AGENTS.md` measures at +34 KB / +4.8%
 -- self-compile (DCE keeps a `DImpl`/`DInterface` whole once it is
 -- reachable at all) — this module avoids that by riding the SAME `OrdMap`
--- everything else already rides. `list.{sort}` and `map.{toList}` below are
--- likewise both already-forced surface (typecheck.mdk imports `list`
--- directly; `toList` operates on the already-forced `Map` type), so neither
--- adds new retained instance surface.
+-- everything else already rides. `map.{toList}` below is likewise
+-- already-forced surface (`toList` operates on the already-forced `Map`
+-- type), so it adds no new retained instance surface.
 --
 -- ── `identKey`: the ONE renderer, collision-free by construction ───────────
 -- Every component (namespace tag, origin tag, origin module-or-empty, name)
@@ -110,19 +109,29 @@
 -- key — it keeps the original `RegKey` alongside its value in the backing map
 -- instead, so recovering identities never depends on the key being decodable.
 --
--- ⚠️ THE DOCTESTS IN THIS FILE ARE A STATED EXCEPTION, AND DELETING THEM
--- WOULD BE A REGRESSION, NOT A CLEANUP. Several assertions below read the
--- key's BYTES on purpose (`identKey identTypeFooM == "4:type6:module1:m3:Foo"`
--- and the three `startsWith "1:…"` count-prefix lines). They are not
--- consumers violating the contract; they are the only witnesses to two
--- invariants that no property-level test can see — that the origin TAG is
--- present, and that the ident-COUNT prefix is present. Both are documented
--- below as defense in depth precisely because the module still behaves
--- correctly without them TODAY, so a reviewer who reads only this paragraph,
--- concludes the byte-reading tests violate the contract, and deletes them
--- removes the one thing keeping injectivity independent of `nsTag`'s
--- alphabet. The contract is: opaque to CONSUMERS, transparent to the tests
--- that pin the encoding.
+-- ⚠️ THIS MODULE'S TESTS ARE A STATED EXCEPTION, AND DELETING THEM WOULD BE A
+-- REGRESSION, NOT A CLEANUP. Several assertions in
+-- `compiler/types/registry_test.mdk` read the key's BYTES on purpose (`identKey
+-- identTypeFooM == "4:type6:module1:m3:Foo"` and the three `startsWith "1:…"`
+-- count-prefix lines). They are not consumers violating the contract; they are
+-- the only witnesses to two invariants that no property-level test can see —
+-- that the origin TAG is present, and that the ident-COUNT prefix is present.
+-- Both are documented below as defense in depth precisely because the module
+-- still behaves correctly without them TODAY, so a reviewer who reads only
+-- this paragraph, concludes the byte-reading tests violate the contract, and
+-- deletes them removes the one thing keeping injectivity independent of
+-- `nsTag`'s alphabet. The contract is: opaque to CONSUMERS, transparent to the
+-- tests that pin the encoding.
+--
+-- ── Where the tests are ────────────────────────────────────────────────────
+-- The doctests kept in this file ILLUSTRATE a return value to a reader. The
+-- boolean assertions about the same machinery — the ones standing in for unit
+-- tests — live in the sibling `compiler/types/registry_test.mdk`, which
+-- redeclares the fixtures it needs rather than importing them, so no doctest
+-- fixture reaches this module's public surface. Three of those boolean
+-- assertions could not move: the ones naming `OriginUnresolved`, because
+-- `test/typecheck_compiler_source.sh`'s #1110 producer ratchet pins the set of
+-- tracked files carrying a live mention of that sentinel.
 --
 -- ── What the target tables need: COMPOSITE keys (`RegKey`) — see
 -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §11 for the RegKey design
@@ -164,15 +173,7 @@ import support.ordmap.{
   omDelete,
   omSize,
 }
-import support.util.{lenKey, listLen, joinWith, filterList, startsWith}
--- ⚠️ `sort` looks unused — it is reached ONLY from the `mregMerge`/`mregAdd`
--- doctests, which compare multi-registry buckets as multisets. MEASURED
--- 2026-08-03: deleting this line does NOT fail `medaka check`; it fails at
--- doctest RUN time with `runtime error [E-PANIC]: unbound constrained fn:
--- sort`. So the only thing standing between this import and a silent
--- "tidy-up" deletion is `make test` actually running this file's doctests —
--- which is exactly why `Makefile`'s `test:` target now names this module.
-import list.{sort}
+import support.util.{lenKey, listLen, joinWith, filterList}
 import map.{toList}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
@@ -997,6 +998,13 @@ dispKeyRender base rigids =
 -- (Ns, IdentOrigin, or name) so each doctest isolates one collision
 -- dimension.
 --
+-- ⚠️ Nine of them carry a `rule-duplicate-body` directive because
+-- `compiler/types/registry_test.mdk` declares the same fixture for the
+-- assertions that moved there. The rule's remedy — consolidate into a shared
+-- module — would put doctest fixtures on a module's public surface, so the
+-- duplication is deliberate and the directive is per-binding rather than
+-- file-wide, to keep a genuine duplicate elsewhere in this file visible.
+--
 -- ⚠️ Every module-origin fixture is minted through `mkIdent`, because that is
 -- now the ONLY way to obtain a module origin at all — `IdentModule` is
 -- private to `frontend/ast.mdk`. `mkIdent` is partial, so the fixtures need a
@@ -1010,6 +1018,7 @@ identBuiltinFixture : Ns -> String -> Ident
 identBuiltinFixture ns name = Ident ns identOriginBuiltin name
 
 identIn : Ns -> String -> String -> Ident
+-- lint-disable-next-line rule-duplicate-body
 identIn ns mid name =
   optionOr
     (identBuiltinFixture ns "__fixture_fallback__")
@@ -1052,6 +1061,7 @@ identShiftB : Ident
 identShiftB = identIn NsType "a" "bc"
 
 regBothNs : Registry Int
+-- lint-disable-next-line rule-duplicate-body
 regBothNs = regInsert identIfaceFooM 2 (regInsert identTypeFooM 1 regEmpty)
 
 regBothOrigin : Registry Int
@@ -1082,10 +1092,12 @@ identTypeIntM = identIn NsType "m" "Int"
 
 -- `Ix Int b0` — argument 0 present (head `Int`), argument 1 undetermined.
 keyIxIntUndet : RegKey
+-- lint-disable-next-line rule-duplicate-body
 keyIxIntUndet = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 0]
 
 -- `Ix a0 Int` — argument 0 undetermined, argument 1 present (head `Int`).
 keyIxUndetInt : RegKey
+-- lint-disable-next-line rule-duplicate-body
 keyIxUndetInt = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 1]
 
 -- What the `[Ident]` shape would have produced for BOTH of the above: the
@@ -1096,46 +1108,10 @@ keyIxPresentOnly = regKeyN [identIfaceIxM, identTypeIntM]
 regIxUndet : Registry Int
 regIxUndet = regInsertK keyIxUndetInt 2 (regInsertK keyIxIntUndet 1 regEmpty)
 
--- ── A-2.2b: the RIGID position, beside the absent one ──────────────────────
--- `dispKeyRender`'s three-way discrimination, one fixture per fact at the
--- SAME position of the SAME 2-argument vector, so each doctest below isolates
--- one axis. `keyIxNoDecl` is the vector with NO declaration positions at all —
--- arity 2, nothing present — so a rigid can be placed at position 0 or 1
--- without colliding with a declaration slot.
-keyIxNoDecl : RegKey
-keyIxNoDecl = regKeyNAt [identIfaceIxM] [2]
-
--- A DECLARATION at position 0 whose name is `a` — the exact spelling a rigid
--- type parameter carries. `tabKeyOf`'s two arms are both exercised: `TkIdent`
--- here, `TkBare` in `keyIxBareAOnly` below, and NEITHER may equal the rigid.
-identTypeLowerAM : Ident
-identTypeLowerAM = identIn NsType "m" "a"
-
-keyIxDeclAOnly : RegKey
-keyIxDeclAOnly = regKeyNAt [identIfaceIxM, identTypeLowerAM] [2, 0]
-
--- The same declaration on the FLAT path — no identity acquired yet, so
--- `tabKeyOf` lands it in `TkBare`. Distinct from both the `TkIdent` row above
--- and the rigid.
-keyIxBareAOnly : RegKey
-keyIxBareAOnly = RegKey [TkIdent identIfaceIxM, TkBare NsType "a"] [2, 0]
-
--- Head-bucket fixtures: the three facts `headBucketKey` classifies.
-headDeclFoo : Option HeadKey
-headDeclFoo = Some (headKeyOfCon (OriginModule "m") "Foo")
-
--- ⚠️ Spelled with the CONSTRUCTOR, not `headKeyOfCon OriginUnresolved "Foo"`.
--- That mention would enrol this file in the #1110 `OriginUnresolved` PRODUCER
--- ratchet (`test/typecheck_compiler_source.sh`), which exists to keep
--- pre-resolve node construction inside `tyConUnresolved` — a doctest fixture is
--- not a producer, and widening that allowlist to admit one would be the masking
--- path the ratchet's own remedy forbids. `tabKeyOf`'s identity-less arm is
--- asserted directly elsewhere in this block, so nothing is lost.
-headBareFoo : Option HeadKey
-headBareFoo = Some (HkDecl (TkBare NsType "Foo"))
-
-headRigidA : Option HeadKey
-headRigidA = Some (HkRigid "a")
+-- The rigid-position and head-bucket fixtures that used to sit here
+-- (`keyIxNoDecl`, `identTypeLowerAM`, `keyIxDeclAOnly`, `keyIxBareAOnly`,
+-- `headDeclFoo`, `headBareFoo`, `headRigidA`) moved with the assertions that
+-- were their only consumers, to `compiler/types/registry_test.mdk`.
 
 -- One entry per namespace, all under origin `m` and name `size`: any two
 -- namespace tags collapsing into one makes this registry SMALLER than six.
@@ -1165,9 +1141,11 @@ regPairs =
 -- mregAdd, called in OPPOSITE orders under the SAME Ident with the SAME two
 -- values — demonstrates no registration is lost to call order.
 mregOrderA : MultiRegistry Int
+-- lint-disable-next-line rule-duplicate-body
 mregOrderA = mregAdd identTypeFooM 2 (mregAdd identTypeFooM 1 mregEmpty)
 
 mregOrderB : MultiRegistry Int
+-- lint-disable-next-line rule-duplicate-body
 mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 
 -- ── F1: neither non-identity can become an identity ────────────────────────
@@ -1179,38 +1157,22 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- identity keys a registry row, i.e. exactly the collision
 -- `resolve.mdk`'s consumer rule and `DICT-SEMANTICS.md` §8 I6.3 forbid.
 --
--- ⚠️ These are now the LAST WORD on the empty-module case, not a backstop for
--- it: `IdentModule` is private to `frontend/ast.mdk`, so `IdentModule ""` is
--- not spellable anywhere and a doctest asserting how it keys could not be
--- written even if someone wanted to. Round 1's F1 residual is closed at the
--- type. What these pin is that the MINT still refuses the two non-identities
--- — the property the privacy of the constructor rests on.
+-- ⚠️ The refusal is the LAST WORD on the two non-identities, not a backstop
+-- for them: `IdentModule` is private to `frontend/ast.mdk`, so `IdentModule
+-- ""` is not spellable anywhere and a doctest asserting how it keys could not
+-- be written even if someone wanted to. Round 1's F1 residual is closed at the
+-- type. What these pin is that the MINT still refuses both — the property the
+-- privacy of the constructor rests on.
+--
+-- ⚠️ ONLY THE `OriginUnresolved` ARM IS STILL HERE, and it is here because it
+-- cannot be anywhere else: `test/typecheck_compiler_source.sh`'s #1110
+-- producer ratchet pins the set of tracked files carrying a non-comment
+-- `OriginUnresolved` mention, and a `test` block is live code. The
+-- empty-module arm, the builtin arm, and the fixture-fallback guard are in
+-- `compiler/types/registry_test.mdk`.
 -- > identOriginOf OriginUnresolved == None
 -- True
--- > identOriginOf (OriginModule "") == None
--- True
--- > identOriginOf OriginBuiltin == Some identOriginBuiltin
--- True
--- > identOriginOf (OriginModule "m") == identOriginOf (OriginModule "m")
--- True
--- > identOriginOf (OriginModule "m") == identOriginOf (OriginModule "n")
--- False
--- > identOriginOf OriginBuiltin == identOriginOf (OriginModule "builtin")
--- False
 -- > mkIdent NsType OriginUnresolved "Foo" == None
--- True
--- > mkIdent NsType (OriginModule "") "Foo" == None
--- True
--- > mkIdent NsType (OriginModule "m") "Foo" == Some identTypeFooM
--- True
--- > mkIdent NsType OriginBuiltin "Foo" == Some identTypeFooBuiltin
--- True
-
--- The fixture-fallback guard (see `identIn` above): every module-origin
--- fixture is a `Some`, so none of them silently became the builtin fallback.
--- > isSome (mkIdent NsType (OriginModule "m") "Foo")
--- True
--- > isSome (mkIdent NsType (OriginModule "ab") "c")
 -- True
 
 -- Round-trip: insert then lookup under the SAME Ident finds the value; a
@@ -1237,8 +1199,10 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- run 2026-08-03), not relayed: `nsTag NsMethod = NsCtor = NsField = NsValue
 -- = "type"` gave **23/23 passed, exit 0**, and so did `nsTag NsField =
 -- "method"` — the exact field-vs-method collision `Ns`'s doc-comment gives as
--- the REASON six namespaces exist. Against the doctests below the same two
--- mutations give 73/80 and 76/80, both exit 1.
+-- the REASON six namespaces exist. Against this file's doctests AS THEY STOOD
+-- BEFORE the unit-test-shaped half moved to `registry_test.mdk` the same two
+-- mutations give 73/80 and 76/80, both exit 1; the counts are the measurement
+-- as taken, not a claim about the current corpus.
 -- > regSize regAllNs
 -- 6
 -- > regLookup (identSizeIn NsType) regAllNs
@@ -1253,11 +1217,6 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- Some 5
 -- > regLookup (identSizeIn NsValue) regAllNs
 -- Some 6
-
--- The field-vs-method case `Ns`'s own doc-comment names, asserted directly on
--- the renderer rather than through a registry.
--- > identKey (identSizeIn NsField) == identKey (identSizeIn NsMethod)
--- False
 
 -- Two Idents differing ONLY in IdentOrigin's module string do not collide.
 -- > regLookup identTypeFooM regBothOrigin
@@ -1282,27 +1241,14 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- `originModuleOf` alone already separates builtin from every module, and
 -- MEASURED 2026-08-03 the mutation `originTag = identOriginFold "module" (_
 -- => "module")` gives 92/93 — every PROPERTY-level doctest in this file still
--- passes, and the single failure is the byte-shape line immediately below.
--- The tag is therefore defense in depth in exactly the sense the count prefix
--- is (see the module doc-comment): it keeps the builtin/module distinction
--- from resting on the emptiness of one field, so a future third `IdentOrigin`
--- inhabitant cannot quietly alias onto the builtin. Pinning it needs a
--- BYTE-SHAPE assertion, because no property-level one can see it.
--- `identKey` is four netstrings: ns, origin tag, origin module, name.
--- > identKey identTypeFooBuiltin == "4:type7:builtin0:3:Foo"
--- True
--- > identKey identTypeFooM == "4:type6:module1:m3:Foo"
--- True
-
--- The count prefix (see the module doc-comment): three more of the
--- byte-shape assertions, and the only thing that can distinguish the prefix
--- being there at all.
--- > startsWith "1:1" (regKeyRender (regKeyOf identTypeFooM))
--- True
--- > startsWith "1:2" (regKeyRender (regKeyN [identTypeFooM, identTypeBarM]))
--- True
--- > startsWith "1:0" (regKeyRender (regKeyN []))
--- True
+-- passes, and the single failure was the byte-shape assertion that pins the
+-- tag's four netstrings. The tag is therefore defense in depth in exactly the
+-- sense the count prefix is (see the module doc-comment): it keeps the
+-- builtin/module distinction from resting on the emptiness of one field, so a
+-- future third `IdentOrigin` inhabitant cannot quietly alias onto the builtin.
+-- Pinning it needs a BYTE-SHAPE assertion, because no property-level one can
+-- see it — that assertion, and the count-prefix ones beside it, are in
+-- `compiler/types/registry_test.mdk`.
 
 -- Two Idents differing ONLY in name do not collide.
 -- > regLookup identTypeFooM regBothNames
@@ -1310,10 +1256,8 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > regLookup identTypeBarM regBothNames
 -- Some 200
 
--- Adversarial boundary-shift case: identKey itself must differ (this is the
--- property that keeps regShift's two entries apart above).
--- > identKey identShiftA == identKey identShiftB
--- False
+-- Adversarial boundary-shift case: the two entries stay apart because
+-- `identKey` itself differs — that half is asserted in `registry_test.mdk`.
 -- > regLookup identShiftA regShift
 -- Some 1
 -- > regLookup identShiftB regShift
@@ -1325,10 +1269,6 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- position the present head came from, which under the wrong row would have
 -- made them one key and silently dropped one ambiguity diagnostic. See
 -- `TYPECHECK-TARGET-ARCHITECTURE.md` §11.1 for the derivation.
--- > regKeyRender keyIxIntUndet == regKeyRender keyIxUndetInt
--- False
--- > regKeyTabs keyIxIntUndet == regKeyTabs keyIxUndetInt
--- True
 -- > regSize regIxUndet
 -- 2
 -- > regLookupK keyIxIntUndet regIxUndet
@@ -1336,73 +1276,10 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > regLookupK keyIxUndetInt regIxUndet
 -- Some 2
 
--- ── F3b (A-2.2b): the same property THROUGH `dispKeyRender`'s join ─────────
--- The #607 assertion above is about `regKeyRender` alone. `dispKeyRender`
--- appends a second netstring group after it, and the whole reason
--- `regKeyRender`'s output is netstring-WRAPPED there is that the ordinal
--- block is not count-prefixed — so a raw join could read a rigid position as
--- an ordinal and re-conflate exactly what F3 keeps apart. These re-assert
--- #607 on the composed renderer, with an empty residual.
--- > dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxUndetInt []
--- False
--- > dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxIntUndet []
--- True
-
--- ── F3c (A-2.2b): a RIGID position is none of the other two facts ──────────
--- Same vector, same position, three different facts at it. The first two are
--- the conflations a bare-name key admits: `headKeyNameOr ""` renders a rigid
--- `a` as `"a"`, which is byte-identical to what it renders a type CONSTRUCTOR
--- named `a` as — and `""` is what it renders an absent position as, which any
--- head whose name were empty would equal.
---
--- ⚠️ The declaration arm is asserted on BOTH `TabKey` halves. `TkIdent` alone
--- would leave the flat path untested, and the flat path is where every user
--- declaration currently lands (A-2 is module-path-only until #1115/E-1) — so
--- it is the arm a rigid is most likely to be confused with in practice.
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl []
--- False
--- > dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")]
--- False
--- > dispKeyRender keyIxBareAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")]
--- False
--- > dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxBareAOnly []
--- False
-
--- A rigid's POSITION and NAME both discriminate...
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(1, "a")]
--- False
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(0, "b")]
--- False
--- > dispKeyRender keyIxNoDecl [(0, "a"), (1, "b")] == dispKeyRender keyIxNoDecl [(0, "b"), (1, "a")]
--- False
-
--- ...and two occurrences of the SAME rigid name at the SAME position DO
--- compare equal. That is not an oversight: it is what the bare-name key did,
--- and A-2.2b is answer-preserving by construction. See `dispKeyRender`'s
--- doc-comment for why an occurrence identity is not available (and would be
--- the I6.3 violation A-2.0's review rejected).
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(0, "a")]
--- True
-
--- ── F3d (A-2.2b): `headBucketKey`'s three-way classification ───────────────
--- A rigid head yields NO key at all — the §8 I6.1 refusal. An ABSENT head
--- does yield one (the empty identity block), and it can never equal a
--- declaration's, because every declaration key carries at least one `TabKey`.
--- > isSome (headBucketKey headRigidA)
--- False
--- > isSome (headBucketKey None)
--- True
--- > map regKeyRender (headBucketKey None) == map regKeyRender (headBucketKey headDeclFoo)
--- False
--- > map regKeyRender (headBucketKey headDeclFoo) == map regKeyRender (headBucketKey headBareFoo)
--- False
--- > map regKeyRender (headBucketKey headDeclFoo) == map regKeyRender (headBucketKey headDeclFoo)
--- True
-
--- ...and the key the DISCARDED shape would have produced for both of them is
--- a THIRD key, distinct from either: dropping the positions does not merely
--- conflate the two, it also aliases nothing else, so no existing assertion
--- about `regKeyN` could have detected the loss.
+-- The key the DISCARDED `[Ident]` shape would have produced for BOTH of the
+-- #607 vectors above is a THIRD key, distinct from either: dropping the
+-- positions does not merely conflate the two, it also aliases nothing else, so
+-- no existing assertion about `regKeyN` could have detected the loss.
 -- > regLookupK keyIxPresentOnly regIxUndet
 -- None
 -- > regSize (regInsertK keyIxPresentOnly 3 regIxUndet)
@@ -1417,11 +1294,6 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > regLookupK (regKeyAt identIfaceFooM 1) regSlots
 -- Some 11
 
--- A one-ident key and the same ident at slot 0 are DIFFERENT keys — the
--- ordinal block is not silently equivalent to its absence.
--- > regKeyRender (regKeyOf identIfaceFooM) == regKeyRender (regKeyAt identIfaceFooM 0)
--- False
-
 -- Identity TUPLES: two pairs sharing their first member stay apart, and a
 -- one-element tuple is the same key as the plain identity form.
 -- > regSize regPairs
@@ -1432,37 +1304,6 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- Some 2
 -- > regLookupK (regKeyN [identIfaceFooM]) (regInsert identIfaceFooM 7 regEmpty)
 -- Some 7
-
--- The grouping is what keeps tuples apart, not a separator: `[A, B]` and
--- `[B, A]` are different keys, and no concatenation of two 1-tuples equals a
--- 2-tuple (the leading ident-count differs).
--- > regKeyRender (regKeyN [identTypeFooM, identTypeBarM]) == regKeyRender (regKeyN [identTypeBarM, identTypeFooM])
--- False
--- > identKeys [identTypeFooM, identTypeBarM] == identKey identTypeFooM ++ identKey identTypeBarM
--- True
--- > identKeys [identTypeFooM] == identKey identTypeFooM
--- True
-
--- regInsertChecked's overwrite signal fires both ways: True when an entry
--- under the exact same Ident already existed, False when the key was fresh.
--- > snd (regInsertChecked identTypeFooM 99 (regInsert identTypeFooM 1 regEmpty))
--- True
--- > snd (regInsertChecked identTypeFooM 99 regEmpty)
--- False
-
--- ── F4: regEntries hands back the ORIGINAL identities ──────────────────────
--- Asserted by comparing the returned `Ident`s themselves (derived `Eq`), not
--- merely by counting them: the first cut of this file claimed this property
--- while testing only `listLen (regEntries regBothNs) == 2`, which a
--- `regEntries` returning two FABRICATED identities would also pass.
--- Enumeration is in `regKeyRender` order, and `lenKey "type"` = `4:type`
--- sorts before `lenKey "iface"` = `5:iface`, so NsType comes first.
--- > map (e => regKeyTabs (fst e)) (regEntries regBothNs) == [[TkIdent identTypeFooM], [TkIdent identIfaceFooM]]
--- True
--- > map snd (regEntries regBothNs) == [1, 2]
--- True
--- > regKeys regBothNs == [regKeyOf identTypeFooM, regKeyOf identIfaceFooM]
--- True
 
 -- ── F3: delete / filter / fromEntries / merge / size ────────────────────────
 -- > regSize (regDelete identTypeFooM regBothNs)
@@ -1493,26 +1334,18 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- Some 200
 
 -- mregAdd never drops a registration to call order: both orders keep BOTH
--- values (as a multiset — sorted before comparing, since the internal list
--- order is not itself the guarantee).
+-- values, and a key never registered under holds nothing. (The multiset
+-- equality of the two orders is asserted in `registry_test.mdk`.)
 -- > listLen (mregLookup identTypeFooM mregOrderA)
 -- 2
 -- > listLen (mregLookup identTypeFooM mregOrderB)
 -- 2
--- > sort (mregLookup identTypeFooM mregOrderA) == sort (mregLookup identTypeFooM mregOrderB)
--- True
 -- > mregLookup identTypeBarM mregOrderA
 -- []
 
 -- ── F3: MultiRegistry enumeration and union ────────────────────────────────
 -- > mregSize (mregAdd identIfaceFooM 9 mregOrderA)
 -- 2
--- > map (e => regKeyTabs (fst e)) (mregEntries mregOrderA) == [[TkIdent identTypeFooM]]
--- True
--- > mregKeys mregOrderA == [regKeyOf identTypeFooM]
--- True
--- > sort (mregLookup identTypeFooM (mregMerge mregOrderA mregOrderB)) == [1, 1, 2, 2]
--- True
 -- > mregSize (mregMerge mregOrderA (mregAdd identTypeBarM 5 mregEmpty))
 -- 2
 -- > mregLookup identTypeBarM (mregMerge mregOrderA (mregAdd identTypeBarM 5 mregEmpty))
@@ -1521,24 +1354,14 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- [4]
 
 -- SetRegistry: membership, size, enumeration, union.
--- > sregMember identTypeFooM (sregAdd identTypeFooM sregEmpty)
--- True
--- > sregMember identTypeBarM (sregAdd identTypeFooM sregEmpty)
--- False
 -- > sregSize (sregAdd identTypeFooM (sregAdd identTypeBarM sregEmpty))
 -- 2
 -- > sregSize (sregAdd identTypeFooM (sregAdd identTypeFooM sregEmpty))
 -- 1
 -- > sregSize (sregAdd (identSizeIn NsField) (sregAdd (identSizeIn NsMethod) sregEmpty))
 -- 2
--- > sregKeys (sregAdd identTypeFooM sregEmpty) == [regKeyOf identTypeFooM]
--- True
 -- > sregSize (sregMerge (sregAdd identTypeFooM sregEmpty) (sregAdd identTypeBarM sregEmpty))
 -- 2
--- > sregMemberK (regKeyAt identIfaceFooM 3) (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty)
--- True
--- > sregMemberK (regKeyAt identIfaceFooM 4) (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty)
--- False
 
 -- ── F4: TabKey — the assoc-list half (A-2.3's two tables) ──────────────────
 -- Fixtures mirror the `Ident` ones above: `tabA`/`tabZ` are the SAME bare name
@@ -1546,9 +1369,11 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- shape verbatim; `tabU` is what a flat/single-file driver mints for that same
 -- name (no identity at all).
 tabA : TabKey
+-- lint-disable-next-line rule-duplicate-body
 tabA = tabKeyOf NsType (OriginModule "apub") "Box"
 
 tabZ : TabKey
+-- lint-disable-next-line rule-duplicate-body
 tabZ = tabKeyOf NsType (OriginModule "zopapub") "Box"
 
 -- ⚠️ Spelled with the CONSTRUCTOR rather than as `tabKeyOf NsType
@@ -1572,13 +1397,10 @@ tabTable : List (TabKey, Int)
 tabTable = [(tabZ, 2), (tabA, 1)]
 
 -- The mint is total, and each of the three origin cases lands where it must.
--- > tabKeyOf NsType (OriginModule "apub") "Box" == TkIdent (Ident NsType identOriginBuiltin "Box")
--- False
+-- The other two cases are in `registry_test.mdk`; this one stays here because
+-- the #1110 producer ratchet pins the file set carrying a live
+-- `OriginUnresolved` mention, and a `test` block is live code.
 -- > tabKeyOf NsType OriginUnresolved "Box" == TkBare NsType "Box"
--- True
--- > tabKeyOf NsType (OriginModule "") "Box" == TkBare NsType "Box"
--- True
--- > tabKeyOf NsType OriginBuiltin "Box" == TkIdent (Ident NsType identOriginBuiltin "Box")
 -- True
 
 -- 🚨 THE DRAIN, in one assertion: the shadower is at the FRONT of the list and
@@ -1622,17 +1444,6 @@ tabTable = [(tabZ, 2), (tabA, 1)]
 -- > tabKeyName tabU
 -- "Box"
 
--- `tabHasName` is the name-only membership predicate: it sees BOTH halves and
--- returns no value, so it can never select a row.
--- > tabHasName "Box" tabTable
--- True
--- > tabHasName "Box" [(tabU, 7)]
--- True
--- > tabHasName "Bx" tabTable
--- False
--- > tabHasName "Box" ([] : List (TabKey, Int))
--- False
-
 -- ── F5: RegKey over TabKey — the COMPOSITE half of A-2.4 ──────────────────
 -- `universeIfaceParamKinds`' real key shape: an INTERFACE identity plus a
 -- parameter-SLOT ordinal. `slotGA`/`slotGB` are the same slot of two
@@ -1643,6 +1454,7 @@ ifaceG : TabKey
 ifaceG = tabKeyOf NsIface (OriginModule "gmod") "Same"
 
 ifaceP : TabKey
+-- lint-disable-next-line rule-duplicate-body
 ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
 
 -- Spelled with the CONSTRUCTOR, not `tabKeyOf NsIface OriginUnresolved "Same"`,
@@ -1701,8 +1513,6 @@ slotTable = [(slotGA, 2), (slotPA, 1)]
 -- `OrdMap`-backed `Registry`/`SetRegistry` actually compares. This is the
 -- assertion that would catch a `tabKeyRender` whose bare arm collided with an
 -- identity arm — `tabKeyEq` is not consulted at all down here.
--- > regKeyRender slotUA == regKeyRender slotPA
--- False
 -- > regSize (regInsertK slotUA 7 (regInsertK slotPA 1 (regInsertK slotGA 2 regEmpty)))
 -- 3
 -- > regLookupK slotUA (regInsertK slotUA 7 (regInsertK slotPA 1 regEmpty))
@@ -1710,43 +1520,27 @@ slotTable = [(slotGA, 2), (slotPA, 1)]
 -- > regLookupK slotPA (regInsertK slotUA 7 (regInsertK slotPA 1 regEmpty))
 -- Some 1
 
--- `regKeyOfTab` and `regKeyOf` agree on an identity-bearing key — the widening
--- is answer-preserving for every pre-A-2.4 caller.
--- > regKeyOfTab (TkIdent identIfaceFooM) == regKeyOf identIfaceFooM
--- True
--- > regKeyRender (regKeyOfTab (TkIdent identIfaceFooM)) == regKeyRender (regKeyOf identIfaceFooM)
--- True
--- > regKeyTabAt (TkIdent identIfaceFooM) 3 == regKeyAt identIfaceFooM 3
--- True
-
--- `tabKeyRender`'s identity arm IS `identKey`, unchanged, and its bare arm is
--- four netstrings with a `bare` tag that `originTag` cannot produce.
--- > tabKeyRender (TkIdent identTypeFooM) == identKey identTypeFooM
--- True
+-- `tabKeyRender`'s bare arm is four netstrings with a `bare` tag that
+-- `originTag` cannot produce. (Its identity arm being `identKey` verbatim, and
+-- the namespace still discriminating through the render, are asserted in
+-- `registry_test.mdk`.)
 -- > tabKeyRender (TkBare NsType "Foo")
 -- "4:type4:bare0:3:Foo"
 
--- Namespace still discriminates on the bare half, through the render too.
--- > regKeyRender (regKeyOfTab (TkBare NsType "Same")) == regKeyRender (regKeyOfTab (TkBare NsIface "Same"))
--- False
-
--- The ident-COUNT prefix is present on a `TabKey`-built key exactly as on an
--- `Ident`-built one (see the count-prefix paragraph in the module header).
---
--- 🚨 THE BLANK LINE BELOW IS PART OF THE ASSERTION, NOT SPACING. A doctest's
+-- 🚨 A BLANK LINE BETWEEN A DOCTEST AND THE PROSE UNDER IT IS PART OF THE
+-- ASSERTION, NOT SPACING — the trap this file paid for, kept here because
+-- every doctest above and below is exposed to it. A doctest's
 -- expected block runs to the next bare `--`, blank line, or `-- >` line
 -- (`splitIntoBlocks`/`extractGo`, `compiler/tools/doctest.mdk`), so an
 -- unseparated prose paragraph underneath is SWALLOWED INTO the expected text
 -- and the example fails with `expected: True <six lines of prose>` /
--- `actual: True`. That is exactly how this line reddened `inlang` on PR #1270:
--- A-2.4 appended this example and #1268 prepended the F5 header below it, each
--- green alone, and git merged the two seams with no blank line between them —
+-- `actual: True`. That is exactly how a count-prefix example here reddened
+-- `inlang` on PR #1270: A-2.4 appended it and #1268 prepended the F5 header
+-- below it, each green alone, and git merged the two seams unseparated —
 -- a conflict-free merge that no gate on either branch could have seen. Derive
 -- the whole file's exposure rather than eyeballing this one site: every
 -- example's expected block, and any with more than one line, falls out of
 -- replaying those two functions over the comment stream.
--- > startsWith "1:1" (regKeyRender slotPA)
--- True
 
 -- ── F5: HeadKey — the head-tycon projection's key (A-2.2) ──────────────────
 -- Fixtures mirror the `TabKey` ones above, because the declaration half of a
@@ -1758,8 +1552,9 @@ slotTable = [(slotGA, 2), (slotPA, 1)]
 -- OriginUnresolved "Box"`, for the reason `tabU` above gives: the #1110
 -- ratchet in `test/typecheck_compiler_source.sh` pins the SET OF FILES
 -- carrying a non-comment `OriginUnresolved` mention. Nothing is lost — the
--- mint's own answer for that origin is asserted below via `OriginModule ""`,
--- the other input `mkIdent` refuses, and both land in the same half.
+-- mint's own answer for that origin is asserted in `registry_test.mdk` via
+-- `OriginModule ""`, the other input `mkIdent` refuses, and both land in the
+-- same half.
 headA : HeadKey
 headA = headKeyOfCon (OriginModule "apub") "Box"
 
@@ -1768,43 +1563,6 @@ headZ = headKeyOfCon (OriginModule "zopapub") "Box"
 
 headU : HeadKey
 headU = HkDecl (TkBare NsType "Box")
-
--- The mint is total, it delegates the identity question to `tabKeyOf`, and it
--- is the one site that fixes the namespace to `NsType`.
--- > headKeyOfCon (OriginModule "apub") "Box" == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box"))
--- False
--- > headKeyOfCon OriginBuiltin "Box" == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box"))
--- True
--- > headKeyOfCon (OriginModule "") "Box" == HkDecl (TkBare NsType "Box")
--- True
--- > headKeyOfCon (OriginModule "apub") "Box" == HkDecl (tabKeyOf NsIface (OriginModule "apub") "Box")
--- False
-
--- 🚨 THE POINT OF THE WIDENING: two modules' same-named heads are now DISTINCT
--- keys, where the old `Option String` made them the same string.
--- > headA == headZ
--- False
--- > headA == headKeyOfCon (OriginModule "apub") "Box"
--- True
-
--- A declaration head and a rigid type variable never equate, in either
--- direction — §8 I6.1, which is why `HkRigid` is a separate inhabitant rather
--- than a `TkBare` with a parameter name in it.
--- > headA == HkRigid "Box"
--- False
--- > headU == HkRigid "Box"
--- False
--- > HkRigid "Box" == HkRigid "Box"
--- True
-
--- Inside the declaration half, `TabKey`'s own separation is inherited: an
--- identity-bearing head is not an identity-less one, and two identity-less
--- heads of the same name still match — which is what keeps the flat/
--- single-file path answering exactly as it does today.
--- > headA == headU
--- False
--- > headU == HkDecl (TkBare NsType "Box")
--- True
 
 -- 🚨 ANSWER-PRESERVATION IS STRUCTURAL, AND THE DOCTESTS BELOW ONLY
 -- ILLUSTRATE IT. The proof is that `headKeyName` inverts the mint on the name,
@@ -1827,17 +1585,11 @@ headU = HkDecl (TkBare NsType "Box")
 -- ["Box", "Box", "Box", "a", "__tuple2__"]
 
 -- `headKeyIdent` (#1319 unit 3): the identity a head carries, for a consumer
--- selecting a ROW rather than keying a bucket.  Two modules' same-named heads
--- give DIFFERENT identities — that is the whole discrimination the record
--- lookup in `types/typecheck.mdk` buys from it — and BOTH identity-less
--- inhabitants answer `None`, which is `tabKeyEq`'s absence rule at the row
--- layer rather than a fallback.
--- > headKeyIdent headA == headKeyIdent headZ
--- False
--- > headKeyIdent headA == headKeyIdent (headKeyOfCon (OriginModule "apub") "Box")
--- True
--- > headKeyIdent (headKeyOfCon OriginBuiltin "Box") == Some (Ident NsType identOriginBuiltin "Box")
--- True
+-- selecting a ROW rather than keying a bucket.  BOTH identity-less inhabitants
+-- answer `None`, which is `tabKeyEq`'s absence rule at the row layer rather
+-- than a fallback.  (That two modules' same-named heads give DIFFERENT
+-- identities — the whole discrimination the record lookup in
+-- `types/typecheck.mdk` buys from it — is asserted in `registry_test.mdk`.)
 -- > headKeyIdent headU
 -- None
 -- > headKeyIdent (HkRigid "a")

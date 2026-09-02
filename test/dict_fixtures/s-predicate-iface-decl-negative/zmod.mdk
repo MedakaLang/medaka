@@ -1,0 +1,2 @@
+export interface Same a where
+  bMeth : a -> Int

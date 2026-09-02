@@ -12,16 +12,12 @@
 -- Any belief that #1938 costs only a spurious diagnostic on an unusual CLI
 -- invocation is refuted by this row.
 --
--- ⚠️ `main` DELIBERATELY DOES NOT CALL `describe`. It would be the more obvious
--- entry, and it does not work: `describe`'s residual is a STRUCTURED predicate
--- (`Tag (Wrap a)`, not a bare `Tag a`), and `funConstraintsRef`'s dict slots are
--- shattered per tyvar, so no joint dict slot exists to route it across the
--- module boundary. That is #1560 / #1937's still-open half, MEASURED byte-
--- identically at the pre-slice base `7941e5fe` and unrelated to what this
--- fixture asserts: with `main = println (describe 5)` both arms give check exit
--- 0 and run exit 1, the #1812 unlocated elaboration error. Calling `tag`
--- directly keeps this row about the OPEN-WORLD question and nothing else. When
--- #1560 lands, switching to `describe 5` is the strictly better body.
+-- `main` deliberately calls `tag` directly so this row stays about the open-world
+-- question.  Historically `describe 5` also exposed #1560/#1937's shattered
+-- structured-residual route; that consumer is now covered, and drained, by the
+-- dedicated joint-residual fixtures.  Changing this body would erase the exact
+-- topology that originally isolated #1938, so the direct call remains a control,
+-- not a claim that structured forwarding is still broken.
 import lib.*
 import impls
 

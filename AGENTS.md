@@ -84,6 +84,21 @@ Support files:
 | `compiler/tools/doc.mdk` / `new_cmd.mdk` / `repl.mdk` | `medaka doc` / `new` / `repl` |
 | `compiler/support/util.mdk` + siblings | Compiler-private helpers, thin `stdlib/` wrappers. Weigh imports per module — [T-STDLIB-IMPORT] |
 
+⚠️ **[P-TEST-SIBLING] A compiler-internal test lives in a `*_test.mdk` sibling beside its
+subject** — `compiler/types/registry_test.mdk` tests `compiler/types/registry.mdk`. The
+suffix is load-bearing, not cosmetic: it is what three computations subtract on. The two
+`find compiler -name '*.mdk'` fingerprints (`src_fingerprint_compiler`/`src_fingerprint_full`
+in `test/build_native_medaka.sh`, mirrored byte-for-byte by `liveSourceFingerprint` in
+`compiler/driver/medaka_cli.mdk`) exclude it, so editing a test never rebuilds the emitter and
+never makes every `./medaka` run warn stale ([B-STALENESS], [B-STDERR]); the `compiler` family
+in `test/diff_compiler_snapshot_frontend.sh` excludes it, so a test owes no blessed snapshot
+and `--bless` on one is refused. `test/preflight.sh` needs no exclusion — its `compiler/<dir>/*`
+arms are path globs, so a sibling derives its SUBJECT's gate set. Run one with
+`medaka test <file>`; a module outside every entry's import closure is otherwise unwalked
+([W-MODULE-BLIND]), so name it in Makefile's `test:` target.
+
+⚠️ Only `foo_test.mdk` loads — `foo.test.mdk` is not a resolvable module name.
+
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
 `vector` (growable array), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
@@ -794,6 +809,7 @@ The two that must reach you before you load it — both silent:
 | **extend-stdlib** | Pure-Medaka stdlib fn/impl/doctest/prop, not externs. User-reserved. |
 | **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
 | **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
+| **write-tests** | Asked to "write tests"/"add unit tests" for a module — picks the vehicle (doctest / prop / `*_test.mdk` sibling / gate) before you write one. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |

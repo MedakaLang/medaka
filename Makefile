@@ -88,6 +88,7 @@ test: medaka
 	./medaka test stdlib/list.mdk
 	./medaka test stdlib/core.mdk
 	./medaka test compiler/types/registry.mdk
+	./medaka test compiler/types/registry_test.mdk
 	## ARCH B-2.2-a: the shared route-word mint — call-site-free BY DESIGN (the
 	## bites after it move `implKeyTc`/`implKeyOf`/`declRouteKey` onto it), so
 	## this line is the ONLY thing that typechecks it or runs its doctests.

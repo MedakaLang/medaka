@@ -215,21 +215,26 @@ hash_stream() {
 #   FP_COMPILER  = compiler/**.mdk ONLY.  Baked into ./medaka as -DMEDAKA_SRC_FP
 #                  (below) and recomputed at runtime by `liveSourceFingerprint` in
 #                  compiler/driver/medaka_cli.mdk, which is documented as a
-#                  byte-for-byte mirror hashing `find compiler -name '*.mdk'`. The
+#                  byte-for-byte mirror hashing the SAME find expression. The
 #                  baked value MUST match that compiler-only computation, else every
 #                  ./medaka invocation warns "stale" (and hard-fails under
 #                  MEDAKA_STRICT=1). So the bake stays compiler-only; do NOT fold
 #                  runtime/*.c into it without also editing medaka_cli.mdk.
 #
+# Both fingerprints exclude `*_test.mdk`: a test sibling (compiler/types/registry_test.mdk
+# and peers) is never linked into the emitter or the CLI, so hashing one would make
+# editing a test rebuild the compiler and — because the baked FP_COMPILER is recomputed
+# at runtime — make every ./medaka invocation warn stale. medaka_cli.mdk's
+# `liveSourceFingerprint` carries the identical exclusion; the two must move together.
 # FORCE_EMITTER_REBUILD=1 overrides the FP_FULL skip regardless.
 src_fingerprint_compiler() {
-  ( cd "$ROOT" && find compiler -name '*.mdk' -print | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$ROOT" && find compiler -name '*.mdk' -not -name '*_test.mdk' -print | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s\n' "$f"
       cat "$f"
     done ) | hash_stream | cut -d' ' -f1
 }
 src_fingerprint_full() {
-  ( cd "$ROOT" && { find compiler -name '*.mdk' -print; find runtime -name '*.c' -print; } | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$ROOT" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print; find runtime -name '*.c' -print; } | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s\n' "$f"
       cat "$f"
     done ) | hash_stream | cut -d' ' -f1

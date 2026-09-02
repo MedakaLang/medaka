@@ -131,6 +131,10 @@ if [ "${1:-}" = "--bless" ]; then
       "$ROOT"/test/positions_fixtures/*)  sub=positions_fixtures ;;
       "$ROOT"/test/diff_fixtures/*)       sub=diff_fixtures ;;
       "$ROOT"/stdlib/*|"$ROOT"/stdlib)    sub=stdlib ;;
+      "$ROOT"/compiler/*_test.mdk)
+        echo "not part of the snapshot corpus: $p" >&2
+        echo "  (a *_test.mdk sibling is excluded from the compiler family)" >&2
+        rc=1; continue ;;
       "$ROOT"/compiler/*|"$ROOT"/compiler) sub=compiler ;;
       *)
         echo "not part of the snapshot corpus: $p" >&2
@@ -169,11 +173,22 @@ run_family positions_fixtures  positions          "$ROOT"/test/positions_fixture
 run_family comment_fixtures    comments           "$ROOT"/test/comment_fixtures/*.mdk
 run_family stdlib              desugar,mark       "$ROOT"/stdlib/*.mdk
 run_family diff_fixtures       tokens,desugar,mark "$ROOT"/test/diff_fixtures/*.mdk
-run_family compiler            desugar,mark \
-  "$ROOT"/compiler/frontend/*.mdk "$ROOT"/compiler/types/*.mdk \
-  "$ROOT"/compiler/ir/*.mdk "$ROOT"/compiler/backend/*.mdk \
-  "$ROOT"/compiler/eval/*.mdk "$ROOT"/compiler/driver/*.mdk \
-  "$ROOT"/compiler/tools/*.mdk "$ROOT"/compiler/support/*.mdk
+# `*_test.mdk` siblings are NOT compiler source and stay out of the corpus: a test
+# module is free to change shape without owing a blessed snapshot. `compiler_sources`
+# subtracts them here; the --bless arm above refuses the same paths, so a golden the
+# check never compares cannot be minted.
+compiler_sources() {
+  for f in "$ROOT"/compiler/frontend/*.mdk "$ROOT"/compiler/types/*.mdk \
+           "$ROOT"/compiler/ir/*.mdk "$ROOT"/compiler/backend/*.mdk \
+           "$ROOT"/compiler/eval/*.mdk "$ROOT"/compiler/driver/*.mdk \
+           "$ROOT"/compiler/tools/*.mdk "$ROOT"/compiler/support/*.mdk; do
+    case "$f" in *_test.mdk) continue ;; esac
+    printf '%s\n' "$f"
+  done
+}
+
+# shellcheck disable=SC2046  # word-splitting is how the file list reaches run_family
+run_family compiler            desugar,mark $(compiler_sources)
 
 # ── THE SUMMARY MUST DESCRIBE WHAT IT ACTUALLY DID ───────────────────────────
 #

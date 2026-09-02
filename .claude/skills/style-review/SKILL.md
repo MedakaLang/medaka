@@ -66,10 +66,10 @@ proves what, fixture/golden authoring, and the dash-not-bash shell half. Also
 `[WT-GOLDEN-ENSHRINES]` and `[T-SHARED-CORPUS]` in `AGENTS.md`, both of whose
 failure mode is silent.
 
-*Pending:* #2297 will add a `write-tests` skill carrying the vehicle dispatch
-table (doctest vs. property vs. `test "…"` vs. differential gate vs. must-fail
-pin) and its sharp edges. Until it exists, the `gates` skill plus `AGENTS.md`
-§ "Writing tests" is the source; point at it, do not improvise a table here.
+For the vehicle dispatch itself (doctest vs. property vs. `test "…"` sibling
+vs. differential gate) source the **`write-tests`** skill
+(`.claude/skills/write-tests/SKILL.md`) — its dispatch table and negative
+space, not an improvised one here.
 
 ### 4. Placement — does this code live where it belongs?
 
