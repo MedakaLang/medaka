@@ -25,8 +25,10 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -75,7 +77,7 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
 -- both, so an ambient Record mode leak changes the second observation to exit 0.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] "" [] []
+  let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] "" [] [] []
   let cp = CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
@@ -96,5 +98,5 @@ runEmit runtimeDecls preludeDecls userDecls =
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
   let elaborated = elaborateDict runtimeDecls dictNames userNames combined
-  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
-  emitProgram input (lowerProgramEmit elaborated)
+  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (validateFfiExternTypeNames (checkedFfiExternTypeNames combined)) (ifaceImplHeadTable elaborated)
+  emitProgram input (lowerProgramEmit TargetNative elaborated)
