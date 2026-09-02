@@ -3,7 +3,7 @@
    `parse` turns JSON text into a `Json` value and `stringify` turns a value
    back into compact text. Arrays and objects are stored in arrays, so
    indexing is `O(1)` and an object keeps its keys in source order. The
-   accessors (`lookup`, `at`, `asString`, and the rest) take a value apart
+   accessors (`get`, `at`, `asString`, and the rest) take a value apart
    without pattern matching.
 
    Integers and floats are kept apart, so `3` parses as `JInt 3` and
@@ -519,14 +519,14 @@ ensureEnd arr j v
 
    The lookup scans the members in order.
 
-   > lookup "b" (jObject [("a", JInt 1), ("b", JInt 2)])
+   > get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
    Some 2
-   > lookup "z" (jObject [("a", JInt 1)])
+   > get "z" (jObject [("a", JInt 1)])
    None -}
 export
-lookup : String -> Json -> Option Json
-lookup key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
-lookup _ _ = None
+get : String -> Json -> Option Json
+get key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
+get _ _ = None
 
 lookupGo : String -> Array (String, Json) -> Int -> Int -> Option Json
 lookupGo key pairs i n
@@ -715,5 +715,5 @@ prop "at k recovers the k-th element of a JArray" (n : Int) =
   let k = if n < 0 then 0 - n else n
   at k (jArray (map JInt [0..=k])) == Some (JInt k)
 
-prop "lookup finds an inserted key" (k : Int) (v : Int) =
-  lookup (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
+prop "get finds an inserted key" (k : Int) (v : Int) =
+  get (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)

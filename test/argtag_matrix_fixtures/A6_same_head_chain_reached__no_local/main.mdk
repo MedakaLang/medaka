@@ -1,0 +1,25 @@
+-- A6 — the same-head collision that REACHES the native arg-tag CHAIN, with no
+-- pinned local anywhere. See CENSUS.md.
+--
+-- A2 shares this cell's head collision but routes through a `let`-local, so the
+-- native side dies in the emitter before any chain is built and the collision is
+-- never observable in IR. Here the interface is HIGHER-KINDED (`Wrap f`), so the
+-- constraint on `go` is not dict-abstracted and `wsize` falls back to the arg-tag
+-- route — the one route on which a head collision is decided by a runtime
+-- constructor tag that cannot tell `Pair Int _` from `Pair String _`.
+interface Wrap f where
+  wsize : f a -> Int
+
+data Pair a b = Pair a b
+
+impl Wrap (Pair Int) where
+  wsize _ = 1
+
+impl Wrap (Pair String) where
+  wsize _ = 2
+
+go xs = wsize xs
+
+main =
+  let _ = println (go (Pair 1 True))
+  println (go (Pair "x" True))

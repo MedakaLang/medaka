@@ -1,5 +1,5 @@
 # META
-source_lines=585
+source_lines=586
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -67,7 +67,8 @@ extern readExactly : Int -> <Stdin> Option String
 -- with `r := v`.
 extern Ref : a -> Ref a
 
--- | Replaces the value in a cell. The same as `r := v`.
+-- The primitive behind `r := v`; the operator is the surface form and this
+-- name is kept out of the reference.
 extern setRef : Ref a -> a -> Unit
 
 -- # Files

@@ -25,6 +25,14 @@ COMMA
 IDENT "fromUtf8"
 RBRACE
 NEWLINE
+IMPORT
+IDENT "time"
+DOT_LBRACE
+UPPER "Duration"
+COMMA
+IDENT "toMillis"
+RBRACE
+NEWLINE
 EXPORT
 DATA
 UPPER "Connection"
@@ -38,6 +46,17 @@ UPPER "Listener"
 EQUAL
 UPPER "Listener"
 UPPER "Int"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "Shutdown"
+EQUAL
+UPPER "ShutdownRead"
+PIPE
+UPPER "ShutdownWrite"
+PIPE
+UPPER "ShutdownBoth"
 NEWLINE
 EXPORT
 NEWLINE
@@ -622,7 +641,7 @@ IDENT "shutdown"
 COLON
 UPPER "Connection"
 ARROW
-UPPER "Int"
+UPPER "Shutdown"
 ARROW
 LT
 UPPER "Net"
@@ -641,61 +660,85 @@ IDENT "how"
 EQUAL
 IDENT "netShutdown"
 IDENT "fd"
+LPAREN
+IDENT "shutdownCode"
 IDENT "how"
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "close"
-COLON
-UPPER "Connection"
-ARROW
-LT
-UPPER "Net"
-STRING "_"
-GT
-UPPER "Result"
-UPPER "String"
-UPPER "Unit"
-NEWLINE
-IDENT "close"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
 RPAREN
-EQUAL
-IDENT "netClose"
-IDENT "fd"
 NEWLINE
-EXPORT
-NEWLINE
-IDENT "closeListener"
+IDENT "shutdownCode"
 COLON
-UPPER "Listener"
-ARROW
-LT
-UPPER "Net"
-STRING "_"
-GT
-UPPER "Result"
-UPPER "String"
-UPPER "Unit"
-NEWLINE
-IDENT "closeListener"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
-EQUAL
-IDENT "netClose"
-IDENT "fd"
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "setTimeout"
-COLON
-UPPER "Connection"
+UPPER "Shutdown"
 ARROW
 UPPER "Int"
+NEWLINE
+IDENT "shutdownCode"
+UPPER "ShutdownRead"
+EQUAL
+INT 0
+NEWLINE
+IDENT "shutdownCode"
+UPPER "ShutdownWrite"
+EQUAL
+INT 1
+NEWLINE
+IDENT "shutdownCode"
+UPPER "ShutdownBoth"
+EQUAL
+INT 2
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "close"
+COLON
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "close"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "netClose"
+IDENT "fd"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "closeListener"
+COLON
+UPPER "Listener"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "closeListener"
+LPAREN
+UPPER "Listener"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "netClose"
+IDENT "fd"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "setTimeout"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Duration"
 ARROW
 LT
 UPPER "Net"
@@ -710,11 +753,14 @@ LPAREN
 UPPER "Connection"
 IDENT "fd"
 RPAREN
-IDENT "ms"
+IDENT "d"
 EQUAL
 IDENT "netSetTimeout"
 IDENT "fd"
-IDENT "ms"
+LPAREN
+IDENT "toMillis"
+IDENT "d"
+RPAREN
 NEWLINE
 EXPORT
 NEWLINE

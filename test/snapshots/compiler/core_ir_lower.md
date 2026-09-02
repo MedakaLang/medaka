@@ -1,5 +1,5 @@
 # META
-source_lines=2366
+source_lines=2386
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1825,6 +1825,26 @@ ifaceRouteKeysGo heads iface ((_, i, tag, key)::rest)
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
 
+-- #2445: the HEAD TYCON tag of the declared impl a route WORD names.  The word is
+-- whatever `declRouteKey` minted — the bare head tag when the head is unique, the
+-- canonical key when it is NOT — so a caller holding a list of route words cannot
+-- compare them to head tags by string equality: at exactly the collision this maps
+-- back for, the word is the key and never string-equals the bare tag.  (That is the
+-- fail-OPEN a naive duplicate test over `map groupTag groups ++ raw` walks into: the
+-- "one impl defines, sibling at the same head inherits the default" shape is the one
+-- where the two spellings differ.)  Empty when no declared impl of [iface] answers to
+-- the word, which an EMPTY table also gives — the same degrade-to-today's-output
+-- direction `ifaceDeclHeadUnique` already takes.
+export
+declHeadOfRouteWord : List (String, String, String, String) -> String -> String -> String
+declHeadOfRouteWord heads iface word = declHeadOfRouteWordGo iface word heads
+
+declHeadOfRouteWordGo : String -> String -> List (String, String, String, String) -> String
+declHeadOfRouteWordGo _ _ [] = ""
+declHeadOfRouteWordGo iface word ((_, i, t, k)::rest)
+  | i == iface && (t == word || k == word) = t
+  | otherwise = declHeadOfRouteWordGo iface word rest
+
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
@@ -2903,6 +2923,11 @@ nodeTag _ = "?"
 (DFunDef false "ifaceRouteKeysGo" ((PVar "heads") (PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "heads")) (EVar "i")) (EVar "tag"))) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
+(DTypeSig true "declHeadOfRouteWord" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWord" ((PVar "heads") (PVar "iface") (PVar "word")) (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "heads")))
+(DTypeSig false "declHeadOfRouteWordGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWordGo" (PWild PWild (PList)) (ELit (LString "")))
+(DFunDef false "declHeadOfRouteWordGo" ((PVar "iface") (PVar "word") (PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "word")) (EBinOp "==" (EVar "k") (EVar "word")))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ifaceDeclHeadUnique" ((PVar "heads") (PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "heads")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -3622,6 +3647,11 @@ nodeTag _ = "?"
 (DFunDef false "ifaceRouteKeysGo" ((PVar "heads") (PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "heads")) (EVar "i")) (EVar "tag"))) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
+(DTypeSig true "declHeadOfRouteWord" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWord" ((PVar "heads") (PVar "iface") (PVar "word")) (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "heads")))
+(DTypeSig false "declHeadOfRouteWordGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWordGo" (PWild PWild (PList)) (ELit (LString "")))
+(DFunDef false "declHeadOfRouteWordGo" ((PVar "iface") (PVar "word") (PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "word")) (EBinOp "==" (EVar "k") (EVar "word")))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ifaceDeclHeadUnique" ((PVar "heads") (PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "heads")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))

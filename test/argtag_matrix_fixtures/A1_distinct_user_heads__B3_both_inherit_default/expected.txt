@@ -1,0 +1,6 @@
+class: bug
+correct: <dog>|<cat>
+check: 0
+run: 0 | <dog>|<cat>
+build: 0 | built main.mdk -> <BIN>
+exec: 0 | <dog>|<dog>

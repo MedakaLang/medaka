@@ -55,7 +55,7 @@ import json.{
   jObject,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
   asArray,
@@ -258,13 +258,13 @@ decodeEntry stamp path hash text = match parse text
         dupOccs = ds,
         directives = dirs,
         dirty = False,
-      }) (decList decFinding (lookup "findings" j)) (decList (decOcc path) (lookup "dupOccs" j)) (decList decDirective (lookup "directives" j))
+      }) (decList decFinding (get "findings" j)) (decList (decOcc path) (get "dupOccs" j)) (decList decDirective (get "directives" j))
 
 decStr : String -> Json -> Option String
-decStr k j = optBind (lookup k j) asString
+decStr k j = optBind (get k j) asString
 
 decInt : String -> Json -> Option Int
-decInt k j = optBind (lookup k j) asInt
+decInt k j = optBind (get k j) asInt
 
 -- A JArray of decodable elements → a List, all-or-nothing: one bad element
 -- fails the whole shard rather than silently yielding a SHORTER list, which
@@ -285,7 +285,7 @@ decFinding j = map4
   (decStr "rule" j)
   (decStr "message" j)
   (optBind (decStr "severity" j) decSeverity)
-  (decLoc (lookup "loc" j))
+  (decLoc (get "loc" j))
 
 decSeverity : String -> Option Severity
 decSeverity "error" = Some SevError
@@ -318,8 +318,8 @@ decOcc path j = map3
 decDirective : Json -> Option Directive
 decDirective j = map2
   (scope names => Directive scope names)
-  (optBind (lookup "scope" j) decScope)
-  (decList asString (lookup "rules" j))
+  (optBind (get "scope" j) decScope)
+  (decList asString (get "rules" j))
 
 decScope : Json -> Option DirScope
 decScope (JString "file") = Some DScopeFile

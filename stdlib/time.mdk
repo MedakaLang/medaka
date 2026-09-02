@@ -333,11 +333,6 @@ export
 sleep : Duration -> <Clock> Unit
 sleep d = sleepMs (toMillis d)
 
--- | Pauses the program for `s` seconds. The same as `sleep (seconds s)`.
-export
-sleepSeconds : Int -> <Clock> Unit
-sleepSeconds s = sleepMs (s * 1000)
-
 -- Round-trip: epoch → civil → epoch is the identity (n constrained ≥ 0 to a
 -- sane band; negatives are supported too, see the `fromEpochSeconds (0 - 1)`
 -- doctest).

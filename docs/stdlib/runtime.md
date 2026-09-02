@@ -106,14 +106,6 @@ Ref : a -> Ref a
 A new mutable cell holding a value. Read it with `!r` and write it
 with `r := v`.
 
-### `setRef`
-
-```
-setRef : Ref a -> a -> Unit
-```
-
-Replaces the value in a cell. The same as `r := v`.
-
 ## Files
 
 ### `readFile`

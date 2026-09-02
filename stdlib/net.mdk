@@ -24,6 +24,7 @@
 import array.{drop}
 import vector.{Vector, new, push, toArray}
 import string.{toUtf8, fromUtf8}
+import time.{Duration, toMillis}
 
 -- # Handles
 
@@ -35,6 +36,9 @@ export data Connection = Connection Int
 
 -- | A listening TCP socket, from `listen`.
 export data Listener = Listener Int
+
+-- | Which direction of a connection `shutdown` closes.
+public export data Shutdown = ShutdownRead | ShutdownWrite | ShutdownBoth
 
 -- # Clients
 
@@ -167,11 +171,15 @@ recvLine conn = recvLineLoop conn (new ())
 
 -- # Lifecycle
 
-{- | Shuts down one or both directions of a connection without closing it:
-   `0` for reading, `1` for writing, `2` for both. -}
+-- | Shuts down one or both directions of a connection without closing it.
 export
-shutdown : Connection -> Int -> <Net "_"> Result String Unit
-shutdown (Connection fd) how = netShutdown fd how
+shutdown : Connection -> Shutdown -> <Net "_"> Result String Unit
+shutdown (Connection fd) how = netShutdown fd (shutdownCode how)
+
+shutdownCode : Shutdown -> Int
+shutdownCode ShutdownRead = 0
+shutdownCode ShutdownWrite = 1
+shutdownCode ShutdownBoth = 2
 
 {- | Closes a connection.
 
@@ -185,13 +193,13 @@ export
 closeListener : Listener -> <Net "_"> Result String Unit
 closeListener (Listener fd) = netClose fd
 
-{- | Sets a connection's send and receive timeout in milliseconds.
+{- | Sets a connection's send and receive timeout.
 
-   `0` means no timeout. Set one on any long-lived connection so a stalled
-   peer cannot block forever. -}
+   A zero duration means no timeout. Set one on any long-lived connection
+   so a stalled peer cannot block forever. -}
 export
-setTimeout : Connection -> Int -> <Net "_"> Result String Unit
-setTimeout (Connection fd) ms = netSetTimeout fd ms
+setTimeout : Connection -> Duration -> <Net "_"> Result String Unit
+setTimeout (Connection fd) d = netSetTimeout fd (toMillis d)
 
 {- | Connects to `host` on `port`, runs `body` on the connection, and closes
    it whatever `body` returns.

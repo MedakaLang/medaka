@@ -3,7 +3,7 @@
    `NonEmpty a` is a first element and a tail, so it cannot be empty. That
    makes `head`, `maximum`, and `minimum` total: they return the element
    itself rather than an `Option`. Build one with `singleton`, `fromList`,
-   or the `NECons` constructor.
+   or the `NonEmpty` constructor.
 
    Import the module by name, `import nonempty`, and call `nonempty.head`
    and the rest qualified, since the names overlap with `list`'s. -}
@@ -25,7 +25,7 @@ import core.{
 }
 
 -- | A first element and the rest of the list.
-public export data NonEmpty a = NECons a (List a)
+public export data NonEmpty a = NonEmpty a (List a)
 
 -- # Construction
 
@@ -35,7 +35,7 @@ public export data NonEmpty a = NECons a (List a)
    [9] -}
 export
 singleton : a -> NonEmpty a
-singleton x = NECons x []
+singleton x = NonEmpty x []
 
 -- > head (singleton 9)
 -- 9
@@ -52,77 +52,78 @@ singleton x = NECons x []
 export
 fromList : List a -> Option (NonEmpty a)
 fromList [] = None
-fromList (x::rest) = Some (NECons x rest)
+fromList (x::rest) = Some (NonEmpty x rest)
 
 -- # Accessing elements
 
 {- | The first element.
 
-   > head (NECons 7 [8, 9])
+   > head (NonEmpty 7 [8, 9])
    7 -}
 export
 head : NonEmpty a -> a
-head (NECons x _) = x
+head (NonEmpty x _) = x
 
 {- | The largest element.
 
-   > maximum (NECons 3 [1, 4, 1, 5])
+   > maximum (NonEmpty 3 [1, 4, 1, 5])
    5 -}
 export
 maximum : Ord a => NonEmpty a -> a
-maximum (NECons x xs) = fold (acc y => max y acc) x xs
+maximum (NonEmpty x xs) = fold (acc y => max y acc) x xs
 
 {- | The smallest element.
 
-   > minimum (NECons 3 [1, 4, 1, 5])
+   > minimum (NonEmpty 3 [1, 4, 1, 5])
    1 -}
 export
 minimum : Ord a => NonEmpty a -> a
-minimum (NECons x xs) = fold (acc y => min y acc) x xs
+minimum (NonEmpty x xs) = fold (acc y => min y acc) x xs
 
 -- ── Instances ──────────────────────────────────────────────────────────────
 
 {- | `map` applies a function to every element.
 
-   > toList (map (n => n * 2) (NECons 1 [2, 3]))
+   > toList (map (n => n * 2) (NonEmpty 1 [2, 3]))
    [2, 4, 6] -}
 export impl Mappable NonEmpty where
-  map f (NECons x xs) = NECons (f x) (map f xs)
+  map f (NonEmpty x xs) = NonEmpty (f x) (map f xs)
 
 {- | The `Foldable` methods visit the elements in order, first element
    first. `toList` gives back the plain list.
 
-   > toList (NECons 1 [2, 3])
+   > toList (NonEmpty 1 [2, 3])
    [1, 2, 3] -}
 export impl Foldable NonEmpty where
-  fold f z (NECons x xs) = fold f (f z x) xs
-  foldRight f z (NECons x xs) = foldRight f (foldRight f z xs) [x]
-  toList (NECons x xs) = x::xs
+  fold f z (NonEmpty x xs) = fold f (f z x) xs
+  foldRight f z (NonEmpty x xs) = foldRight f (foldRight f z xs) [x]
+  toList (NonEmpty x xs) = x::xs
   isEmpty _ = False
-  length (NECons _ xs) = 1 + length xs
+  length (NonEmpty _ xs) = 1 + length xs
 
--- > fold (acc y => acc + y) 0 (NECons 1 [2, 3])
+-- > fold (acc y => acc + y) 0 (NonEmpty 1 [2, 3])
 -- 6
 
 export impl Traversable NonEmpty where
-  traverse f (NECons x xs) = andThen (f x) (y => map (NECons y) (traverse f xs))
+  traverse f (NonEmpty x xs) =
+    andThen (f x) (y => map (NonEmpty y) (traverse f xs))
 
 {- | `++` concatenates two non-empty lists.
 
-   > toList (append (NECons 1 [2]) (NECons 3 [4]))
+   > toList (append (NonEmpty 1 [2]) (NonEmpty 3 [4]))
    [1, 2, 3, 4] -}
 export impl Semigroup (NonEmpty a) where
-  append (NECons x xs) other = NECons x (xs ++ toList other)
+  append (NonEmpty x xs) other = NonEmpty x (xs ++ toList other)
 
 export impl Eq (NonEmpty a) requires Eq a where
-  eq (NECons x xs) (NECons y ys) = eq x y && eq xs ys
+  eq (NonEmpty x xs) (NonEmpty y ys) = eq x y && eq xs ys
 
 export impl Debug (NonEmpty a) requires Debug a where
   debug ne = "NonEmpty \{debug (toList ne)}"
 
 {- | `display` renders a non-empty list as `NonEmpty [x, ...]`.
 
-   > display (NECons 1 [2, 3])
+   > display (NonEmpty 1 [2, 3])
    "NonEmpty [1, 2, 3]" -}
 export impl Display (NonEmpty a) requires Display a where
   display ne = "NonEmpty \{toList ne}"
@@ -132,7 +133,7 @@ export impl Display (NonEmpty a) requires Display a where
 prop "singleton has one element" (x : Int) = eq (toList (singleton x)) [x]
 
 prop "head is the first element" (x : Int) (xs : List Int) =
-  head (NECons x xs) == x
+  head (NonEmpty x xs) == x
 
 prop "fromList . toList round-trips" (x : Int) (xs : List Int) =
-  eq (fromList (toList (NECons x xs))) (Some (NECons x xs))
+  eq (fromList (toList (NonEmpty x xs))) (Some (NonEmpty x xs))
