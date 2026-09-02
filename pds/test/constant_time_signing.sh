@@ -54,24 +54,24 @@ write_source_manifest() {
 
 expected_internal_source_manifest() {
   cat <<'EOF'
-2128046436 26463  pds/lib/field.mdk
-2693440632 31918  pds/lib/scalar.mdk
-209766332 13042  pds/lib/sha256.mdk
-2955477369 1997  pds/lib/hmac_sha256.mdk
-1959740629 24445  pds/lib/secp256k1.mdk
-1507350302 4544  pds/test/constant_time_signing_main.mdk
+3840689225 26477  pds/lib/field.mdk
+771369044 31975  pds/lib/scalar.mdk
+104684450 13107  pds/lib/sha256.mdk
+2565296540 2009  pds/lib/hmac_sha256.mdk
+1503851136 24611  pds/lib/secp256k1.mdk
+3267398383 4682  pds/test/constant_time_signing_main.mdk
 EOF
 }
 
 expected_public_source_manifest() {
   cat <<'EOF'
-2128046436 26463  pds/lib/field.mdk
-2693440632 31918  pds/lib/scalar.mdk
-209766332 13042  pds/lib/sha256.mdk
-2955477369 1997  pds/lib/hmac_sha256.mdk
-1959740629 24445  pds/lib/secp256k1.mdk
-2769643849 3846  pds/lib/sign.mdk
-1515542623 3110  pds/test/constant_time_signing_public_main.mdk
+3840689225 26477  pds/lib/field.mdk
+771369044 31975  pds/lib/scalar.mdk
+104684450 13107  pds/lib/sha256.mdk
+2565296540 2009  pds/lib/hmac_sha256.mdk
+1503851136 24611  pds/lib/secp256k1.mdk
+3175129806 3842  pds/lib/sign.mdk
+2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF
 }
 
@@ -124,7 +124,7 @@ internal_source_routes_ok() {
   grep -F -q 'let signed1 = signCandidate secret digest candidate1' "$secp" || return 1
   grep -F -q 'let safeNonce = scSelect (1 - nonceValidBit) nonce scOne' "$secp" || return 1
   grep -F -q 'let lowS = scSelect (scHighBit rawS) rawS (scNegateCt rawS)' "$secp" || return 1
-  grep -F -q 'if scIsZero r || scIsZero s || scIsHigh s then False' "$secp" || return 1
+  tr -s '[:space:]' ' ' < "$secp" | grep -F -q 'if scIsZero r || scIsZero s || scIsHigh s then False' || return 1
   grep -F -q 'let out = arrayMake 64 0' "$secp" || return 1
   grep -F -q 'let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)' "$secp" || return 1
   grep -F -q 'let r = scFromFixedBytesReduce (feToBytes x)' "$secp" || return 1
@@ -359,8 +359,8 @@ apply_mutation M09 "$WORK/pds/lib/secp256k1.mdk" \
 expect_route_red 'M09 arithmetic low-S selection changed to a branch'
 
 apply_mutation M10 "$WORK/pds/lib/secp256k1.mdk" \
-  'if scIsZero r || scIsZero s || scIsHigh s then False' \
-  's/if scIsZero r \|\| scIsZero s \|\| scIsHigh s then False/if scIsZero r || scIsZero s then False/'
+  'else if scIsZero r || scIsZero s || scIsHigh s then' \
+  's/else if scIsZero r \|\| scIsZero s \|\| scIsHigh s then/else if scIsZero r || scIsZero s then/'
 expect_route_red 'M10 verifier high-S boundary disabled'
 
 apply_mutation M11 "$WORK/pds/lib/secp256k1.mdk" \

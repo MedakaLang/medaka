@@ -109,21 +109,22 @@ for required in \
     exit 1
   }
 done
+TYPED_FLAT="$(tr -s '[:space:]' ' ' < "$TYPED_ENTRY")"
 for required in \
-  '"--reemit-ref-trap-state"::_' \
-  '"--emit-ref-trap-state"::_' \
+  '"--reemit-ref-trap-state" :: _' \
+  '"--emit-ref-trap-state" :: _' \
   'reemitRefTrapState : Unit -> <IO> Unit' \
   'let p1 = emitProgram refTrapStateInput refTrapStateProgram' \
   'let u = emitProgram refTrapStateInput refTrapStateControlProgram' \
   '"REF_TRAP_P2"' \
   'refTrapCtorArities = [("TrapToken", 0)]' \
   'refTrapStateAbortProgram : CProgram'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B8-REF-TRAP-HARNESS: missing $required"
     exit 1
   }
 done
-[ "$(grep -F 'let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)' "$TYPED_ENTRY" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+[ "$(printf '%s' "$TYPED_FLAT" | grep -o -F 'let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
   echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
   exit 1
 }

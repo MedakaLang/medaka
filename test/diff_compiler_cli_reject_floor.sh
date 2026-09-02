@@ -176,8 +176,11 @@ SRC_SPECS=$(grep -rh 'requireArgs ' "$ROOT/compiler" 2>/dev/null \
 # token between `=` and `spec` for a spec opted into it — the `\(withStrictDash (\)\?`
 # group tolerates that wrapper without requiring it, so this still matches
 # both `<name> = spec "<verb>"` and `<name> = withStrictDash (spec "<verb>"`.
+# The formatter may also break after the `=` (`<name> =` / `  withStrictDash` /
+# `    (spec "<verb>" [`, or `(spec` / `"<verb>" [` for a wide one), so the
+# window also opens on a bare `<name> =` line and reads four lines.
 SRC_VERBS=$(for _s in $SRC_SPECS; do
-              grep -rhA3 "^$_s = \(withStrictDash (\)\?spec" "$ROOT/compiler" 2>/dev/null \
+              grep -rhA4 "^$_s =\( \(withStrictDash (\)\?spec\| *\)$\|^$_s = \(withStrictDash (\)\?spec" "$ROOT/compiler" 2>/dev/null \
                 | sed -n 's/.*"\([a-z][a-z0-9-]*\)".*/\1/p' | head -n 1
             done | sort -u | tr '\n' ' ')
 
@@ -342,7 +345,7 @@ echo "-- U: unrouted flag-literal argv arms outside stdlib/args.mdk --"
 # Raw scan 1: compiler/driver + compiler/tools (NOT entries/), function
 # clauses only — a dispatch-table \`match\` arm always ends \`=>\` and is
 # excluded by that shape.
-U_NONENTRY=$(grep -rEn '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*"::' "$ROOT/compiler" --include=*.mdk 2>/dev/null \
+U_NONENTRY=$(grep -rEn '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*" ?::' "$ROOT/compiler" --include=*.mdk 2>/dev/null \
              | grep -v '/compiler/entries/' \
              | grep -v '=>' \
              | sed -E "s#^$ROOT/##" \
@@ -352,7 +355,7 @@ U_NONENTRY=$(grep -rEn '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*"::' "$ROOT/compiler" --inc
 # Raw scan 2: compiler/entries/*.mdk, ANY flag-literal cons arm (\`=>\`
 # included — each of these files IS its own tiny dispatch table; there is no
 # separate per-verb parser to distinguish it from), deduped BY FILE.
-U_ENTRIES=$(grep -rEln '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*"::' "$ROOT/compiler/entries" --include=*.mdk 2>/dev/null \
+U_ENTRIES=$(grep -rEln '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*" ?::' "$ROOT/compiler/entries" --include=*.mdk 2>/dev/null \
             | sed -E "s#^$ROOT/##" \
             | sort -u | tr '\n' ' ')
 
