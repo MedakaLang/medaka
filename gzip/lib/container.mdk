@@ -98,7 +98,7 @@ public export data GzipHeader =
       xfl : Int,
       os : Int,
     }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 hasFlag : Int -> Int -> Bool
 hasFlag flg mask = bitAnd flg mask /= 0

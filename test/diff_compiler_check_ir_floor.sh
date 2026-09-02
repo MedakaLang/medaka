@@ -95,16 +95,28 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # tree. Do NOT quietly bump one if it starts failing — re-measure, understand what
 # regrew, and only then adjust WITH a comment (same discipline as
 # diff_compiler_ir_size.sh).
-CEIL_check="${CHECK_IR_CEIL:-735000000}"
-CEIL_build="${BUILD_IR_CEIL:-520000000}"
-# `run` re-measured 2026-09-02 at 791,372,632 Ir after the effects-lane PR (#2491): the
-# prelude grew by the `Deferred*` family (3 interfaces, `deferFlatMap`/`deferWhen`/
-# `deferUnless`) and `run` type-checks and elaborates the prelude, so ~0.8% more Ir is
-# the size of the prelude, not an algorithmic regression (the one such regression that
-# PR introduced — a per-signed-clause polarity-table scan — was removed, which is what
-# brought `check` back under its unchanged ceiling). New ceiling ~1.1% over the measured.
-CEIL_run="${RUN_IR_CEIL:-800000000}"
-CEIL_test="${TEST_IR_CEIL:-505000000}"
+# RE-DERIVED 2026-09-02 (effects-lane PR #2491, on top of main dda57d221), same method
+# (cachegrind, GC_INITIAL_HEAP_SIZE pinned to 1GiB, hello.mdk), one run per verb:
+#
+#   verb    main dda57d221   this tree       CEIL (= measured x1.20, rounded up to 5M)
+#   check   706,374,377      729,831,411     880,000,000
+#   build   (not re-run)     512,703,259     615,000,000
+#   run     763,641,635      788,736,518     950,000,000
+#   test    (not re-run)     495,239,502     595,000,000
+#
+# main had already drifted to within 4% of the sprint-10 `check` ceiling (608M -> 706M)
+# and within 1.5% of the `build` one, and the CI runner measures ~10M Ir above this box,
+# so the PR's +3.3% tipped `check`/`run` over. That +3.3% was split by cross-loading the
+# PR binary against main's stdlib: 11M is the prelude growing by the `Deferred*` family
+# (proportional to prelude size); the rest is declaration-time passes the PR added
+# (declared-kind checks, the polarity seed, the D-3 detector — the detector's
+# every-impl-method row pairing now exits early when the interface has no index-only
+# effect variable, which is what brought the local figure back under the old ceiling).
+# The 20% convention is re-applied to the fresh measurement.
+CEIL_check="${CHECK_IR_CEIL:-880000000}"
+CEIL_build="${BUILD_IR_CEIL:-615000000}"
+CEIL_run="${RUN_IR_CEIL:-950000000}"
+CEIL_test="${TEST_IR_CEIL:-595000000}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mdk-checkirfloor.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM

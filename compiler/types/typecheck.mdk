@@ -29954,12 +29954,12 @@ checkIndexOnlyEffVarsOpen subject effMap loc eager =
 -- (`pairRowCells`), and the scan asks whether any of a var's actual
 -- counterparts is a tail of some body arrow row.
 eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
-eagerIndexOnlyVars scope mty effMap actualArrows expected actual =
-  let tails = flatMap rowTailId actualArrows
-  let pairs = pairRowCells expected actual
-  filterList
-    (v => effVarCellPerformed v effMap pairs tails)
-    (indexOnlyEffVars scope mty)
+eagerIndexOnlyVars scope mty effMap actualArrows expected actual = match indexOnlyEffVars scope mty
+  [] => []
+  idx =>
+    let tails = flatMap rowTailId actualArrows
+    let pairs = pairRowCells expected actual
+    filterList (v => effVarCellPerformed v effMap pairs tails) idx
 
 -- (declared cell id, actual cell id) for every row found at the same
 -- structural position of the two types — arrow latent rows and index rows,
