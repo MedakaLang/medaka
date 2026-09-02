@@ -1,24 +1,18 @@
 # META
-source_lines=242
+source_lines=238
 stages=DESUGAR,MARK
 # SOURCE
-{- base64.mdk — RFC 4648 base64 encoding/decoding of raw bytes.
+{- | Base64 encoding and decoding of bytes, per RFC 4648.
 
-   Bytes are `Array Int` (each element `0..255`), the same convention used by
-   `readFileBytes`/`writeFileBytes` (stdlib/runtime.mdk) and the
-   `byteparser`/`bytebuilder` codecs.
+   Bytes are an `Array Int` with each element from `0` to `255`, the same
+   form `readFileBytes` and `writeFileBytes` use. `encode` and `decode` use
+   the standard alphabet with `=` padding; `encodeUrlSafe` and
+   `decodeUrlSafe` use the URL and filename safe alphabet, with `-` and `_`
+   in place of `+` and `/`, still padded.
 
-   **Decode strictness.**  `decode` is strict, matching Python's `b64decode`
-   default: the input length must be a multiple of 4, only the standard
-   alphabet (`A-Z a-z 0-9 + /`) plus `=` padding is accepted, padding may only
-   appear in the final 4-character group (as `""`, `"X=="`, or `"XX="`... i.e.
-   0, 1, or 2 trailing `=`), and any other arrangement (bad char, misplaced
-   `=`, wrong length) is `Err`.  Whitespace is NOT skipped — embedded
-   whitespace is an error, it must be stripped by the caller first.
-
-   `encodeUrlSafe`/`decodeUrlSafe` are the RFC 4648 §5 URL-and-filename-safe
-   variant (`-`/`_` in place of `+`/`/`); padding is still emitted/required,
-   for symmetry with the standard variant above. -}
+   Decoding is strict: the length must be a multiple of four, only the
+   alphabet and trailing padding are accepted, and whitespace is not
+   skipped. -}
 
 -- base64/hex codec wrappers over a module-local decode share identical wrapper bodies by design.
 -- lint-disable-file rule-duplicate-body
@@ -26,10 +20,10 @@ stages=DESUGAR,MARK
 import array.{get, fromList}
 import string.{toUtf8, fromUtf8, toChars}
 
--- | In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
---   call site below only ever indexes within the array's own known length,
---   so the `None` arm is unreachable — this avoids the internal-only
---   `arrayGetUnsafe` primitive.
+-- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
+-- call site below only ever indexes within the array's own known length, so
+-- the `None` arm is unreachable; this avoids the internal-only
+-- `arrayGetUnsafe` primitive.
 byteAt : Int -> Array Int -> Int
 byteAt i arr = match get i arr
   Some b => b
@@ -42,7 +36,7 @@ charAt i arr = match get i arr
 
 -- ── Alphabet ──────────────────────────────────────────────────────────────
 
--- | 0..63 → base64 char.  `urlSafe` picks `-`/`_` (RFC 4648 §5) vs `+`/`/`.
+-- 0..63 → base64 char.  `urlSafe` picks `-`/`_` (RFC 4648 §5) vs `+`/`/`.
 b64Char : Int -> Bool -> Char
 b64Char n urlSafe
   | n < 26 = charOrFallback (charFromCode (n + 65))
@@ -55,7 +49,7 @@ charOrFallback : Option Char -> Char
 charOrFallback (Some c) = c
 charOrFallback None = '?'
 
--- | Base64 char → 0..63, or `None` if not in the (given-variant) alphabet.
+-- Base64 char → 0..63, or `None` if not in the (given-variant) alphabet.
 b64Val : Char -> Bool -> Option Int
 b64Val c urlSafe =
   let n = charCode c
@@ -68,7 +62,7 @@ b64Val c urlSafe =
   else if not urlSafe && c == '/' then Some 63
   else None
 
--- ── Encode ──────────────────────────────────────────────────────────────────
+-- # Encoding
 
 encodeGo : Array Int -> Int -> Int -> Bool -> List Char -> List Char
 encodeGo bytes i n urlSafe acc
@@ -88,23 +82,12 @@ encodeGo bytes i n urlSafe acc
     let ch3 = if remain > 2 then b64Char c3 urlSafe else '='
     encodeGo bytes (i + 3) n urlSafe (acc ++ [ch0, ch1, ch2, ch3])
 
-{- | Bytes → standard base64 string, `=`-padded.  RFC 4648 test vectors
-   (input is the UTF-8 bytes of the ASCII string):
+{- | The bytes as standard base64, padded with `=`.
 
-   > encode (toUtf8 "")
-   ""
-   > encode (toUtf8 "f")
-   "Zg=="
-   > encode (toUtf8 "fo")
-   "Zm8="
-   > encode (toUtf8 "foo")
-   "Zm9v"
-   > encode (toUtf8 "foob")
-   "Zm9vYg=="
-   > encode (toUtf8 "fooba")
-   "Zm9vYmE="
    > encode (toUtf8 "foobar")
-   "Zm9vYmFy" -}
+   "Zm9vYmFy"
+   > encode (toUtf8 "fo")
+   "Zm8=" -}
 export
 encode : Array Int -> String
 encode bytes =
@@ -115,7 +98,19 @@ encode bytes =
     False
     []))
 
-{- | Bytes → URL-and-filename-safe base64 (`-`/`_`, still `=`-padded).
+-- RFC 4648 test vectors.
+-- > encode (toUtf8 "")
+-- ""
+-- > encode (toUtf8 "f")
+-- "Zg=="
+-- > encode (toUtf8 "foo")
+-- "Zm9v"
+-- > encode (toUtf8 "foob")
+-- "Zm9vYg=="
+-- > encode (toUtf8 "fooba")
+-- "Zm9vYmE="
+
+{- | The bytes as URL and filename safe base64, padded with `=`.
 
    > encodeUrlSafe (fromList [255, 239, 191])
    "_--_" -}
@@ -124,12 +119,20 @@ encodeUrlSafe : Array Int -> String
 encodeUrlSafe bytes =
   stringFromChars (arrayFromList (encodeGo bytes 0 (arrayLength bytes) True []))
 
--- ── Decode ──────────────────────────────────────────────────────────────────
+{- | The UTF-8 bytes of a string as standard base64.
 
--- | Ternary classification of a char in the two trailing group positions:
---   a real alphabet char (`TokVal code`), literal `=` padding (`TokPad`), or
---   anything else (`TokBad`, e.g. a stray non-alphabet character) — kept
---   distinct from `TokPad` so a bad char is never mistaken for padding.
+   > encodeString "foo"
+   "Zm9v" -}
+export
+encodeString : String -> String
+encodeString s = encode (toUtf8 s)
+
+-- # Decoding
+
+-- Ternary classification of a char in the two trailing group positions: a
+-- real alphabet char (`TokVal code`), literal `=` padding (`TokPad`), or
+-- anything else (`TokBad`, e.g. a stray non-alphabet character), kept
+-- distinct from `TokPad` so a bad char is never mistaken for padding.
 data Tok = TokVal Int | TokPad | TokBad
 
 tok : Char -> Bool -> Tok
@@ -139,8 +142,8 @@ tok c urlSafe =
     Some v => TokVal v
     None => TokBad
 
--- | Decode one 4-char group.  `isLast` gates whether `=` padding is legal
---   here (only the final group of a well-formed input may be padded).
+-- Decode one 4-char group.  `isLast` gates whether `=` padding is legal here
+-- (only the final group of a well-formed input may be padded).
 decodeQuad : Char -> Char -> Char -> Char -> Bool -> Bool -> Result String (List Int)
 decodeQuad c0 c1 c2 c3 urlSafe isLast = match (b64Val c0 urlSafe, b64Val c1 urlSafe, tok c2 urlSafe, tok c3 urlSafe)
   (Some a, Some b, TokVal c, TokVal d) => Ok [
@@ -181,28 +184,31 @@ decodeWith s urlSafe =
   else
     map arrayFromList (decodeGo chars 0 n urlSafe [])
 
-{- | Standard base64 → bytes.  Strict: `Err` on bad length, invalid
-   character, or misplaced padding.
+{- | The bytes written in standard base64.
 
-   > decode ""
-   Ok [||]
-   > decode "Zg=="
-   Ok [|102|]
-   > decode "Zm8="
-   Ok [|102, 111|]
-   > decode "Zm9v"
-   Ok [|102, 111, 111|]
+   `Err` when the length is not a multiple of four, a character is outside
+   the alphabet, or padding appears anywhere but the end.
+
    > decode "Zm9vYmFy"
    Ok [|102, 111, 111, 98, 97, 114|]
    > decode "Zg="
-   Err "base64.decode: length not a multiple of 4"
-   > decode "Z@=="
-   Err "base64.decode: invalid character or padding" -}
+   Err "base64.decode: length not a multiple of 4" -}
 export
 decode : String -> Result String (Array Int)
 decode s = decodeWith s False
 
-{- | URL-and-filename-safe base64 → bytes.
+-- > decode ""
+-- Ok [||]
+-- > decode "Zg=="
+-- Ok [|102|]
+-- > decode "Zm8="
+-- Ok [|102, 111|]
+-- > decode "Zm9v"
+-- Ok [|102, 111, 111|]
+-- > decode "Z@=="
+-- Err "base64.decode: invalid character or padding"
+
+{- | The bytes written in URL and filename safe base64.
 
    > decodeUrlSafe "_--_"
    Ok [|255, 239, 191|] -}
@@ -210,17 +216,7 @@ export
 decodeUrlSafe : String -> Result String (Array Int)
 decodeUrlSafe s = decodeWith s True
 
--- ── String convenience ───────────────────────────────────────────────────────
-
-{- | UTF-8 bytes of `s` → standard base64 string.
-
-   > encodeString "foo"
-   "Zm9v" -}
-export
-encodeString : String -> String
-encodeString s = encode (toUtf8 s)
-
-{- | Standard base64 → UTF-8-decoded String.
+{- | The string whose UTF-8 bytes are written in standard base64.
 
    > decodeString "Zm9v"
    Ok "foo" -}
@@ -264,6 +260,8 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "encode" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "False")) (EListLit)))))
 (DTypeSig true "encodeUrlSafe" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "encodeUrlSafe" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "True")) (EListLit)))))
+(DTypeSig true "encodeString" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "toUtf8") (EVar "s"))))
 (DData Private "Tok" () ((variant "TokVal" (ConPos (TyCon "Int"))) (variant "TokPad" (ConPos)) (variant "TokBad" (ConPos))) ())
 (DTypeSig false "tok" (TyFun (TyCon "Char") (TyFun (TyCon "Bool") (TyCon "Tok"))))
 (DFunDef false "tok" ((PVar "c") (PVar "urlSafe")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "="))) (EVar "TokPad") (EMatch (EApp (EApp (EVar "b64Val") (EVar "c")) (EVar "urlSafe")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "TokVal") (EVar "v"))) (arm (PCon "None") () (EVar "TokBad")))))
@@ -277,8 +275,6 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "decode" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "False")))
 (DTypeSig true "decodeUrlSafe" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))
 (DFunDef false "decodeUrlSafe" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "True")))
-(DTypeSig true "encodeString" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "toUtf8") (EVar "s"))))
 (DTypeSig true "decodeString" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "decodeString" ((PVar "s")) (EApp (EApp (EVar "map") (EVar "fromUtf8")) (EApp (EVar "decode") (EVar "s"))))
 (DTypeSig false "toByteArray" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int"))))
@@ -306,6 +302,8 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "encode" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "False")) (EListLit)))))
 (DTypeSig true "encodeUrlSafe" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "encodeUrlSafe" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "True")) (EListLit)))))
+(DTypeSig true "encodeString" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "toUtf8") (EVar "s"))))
 (DData Private "Tok" () ((variant "TokVal" (ConPos (TyCon "Int"))) (variant "TokPad" (ConPos)) (variant "TokBad" (ConPos))) ())
 (DTypeSig false "tok" (TyFun (TyCon "Char") (TyFun (TyCon "Bool") (TyCon "Tok"))))
 (DFunDef false "tok" ((PVar "c") (PVar "urlSafe")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "="))) (EVar "TokPad") (EMatch (EApp (EApp (EVar "b64Val") (EVar "c")) (EVar "urlSafe")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "TokVal") (EVar "v"))) (arm (PCon "None") () (EVar "TokBad")))))
@@ -319,8 +317,6 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "decode" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "False")))
 (DTypeSig true "decodeUrlSafe" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))
 (DFunDef false "decodeUrlSafe" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "True")))
-(DTypeSig true "encodeString" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "toUtf8") (EVar "s"))))
 (DTypeSig true "decodeString" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "decodeString" ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "fromUtf8")) (EApp (EVar "decode") (EVar "s"))))
 (DTypeSig false "toByteArray" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int"))))

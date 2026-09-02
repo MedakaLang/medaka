@@ -1,6 +1,16 @@
 # test
 
-## `Expectation`
+Assertions for unit tests.
+
+An assertion produces an `Expectation`: `Pass`, or `Fail` with a
+message. Write a test as `test "name" = expectEqual expected actual`,
+and run the file with `medaka test`, which also runs the doctests and
+`prop` declarations it finds. `runTests` runs a list of tests from an
+ordinary program instead.
+
+Import what you need: `import test.{expectEqual, expectTrue}`.
+
+### `Expectation`
 
 ```
 data Expectation
@@ -8,43 +18,45 @@ data Expectation
   | Fail String
 ```
 
-The result of a single test expectation.
+The result of one assertion.
 
 Instances: `Eq`, `Debug`
 
-## `pass`
+## Assertions
+
+### `pass`
 
 ```
 pass : Expectation
 ```
 
-Always passes.
+An assertion that always passes.
 
 ```medaka
 > pass
 Pass
 ```
 
-## `fail`
+### `fail`
 
 ```
 fail : String -> Expectation
 ```
 
-Fails with the given message.
+An assertion that fails with a message.
 
 ```medaka
 > fail "not ready"
 Fail "not ready"
 ```
 
-## `expectTrue`
+### `expectTrue`
 
 ```
 expectTrue : Bool -> Expectation
 ```
 
-Passes when the `Bool` is `True`.
+Passes when the value is `True`.
 
 ```medaka
 > expectTrue True
@@ -53,13 +65,13 @@ Pass
 Fail "expected True but got False"
 ```
 
-## `expectFalse`
+### `expectFalse`
 
 ```
 expectFalse : Bool -> Expectation
 ```
 
-Passes when the `Bool` is `False`.
+Passes when the value is `False`.
 
 ```medaka
 > expectFalse False
@@ -68,13 +80,15 @@ Pass
 Fail "expected False but got True"
 ```
 
-## `expectEqual`
+### `expectEqual`
 
 ```
 expectEqual : (Eq a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when the two values are equal.
+
+The message names both values in their `debug` form.
 
 ```medaka
 > expectEqual 42 42
@@ -83,13 +97,13 @@ Pass
 Fail "expected 1 but got 2"
 ```
 
-## `expectNotEqual`
+### `expectNotEqual`
 
 ```
 expectNotEqual : (Eq a, Debug a) => a -> a -> Expectation
 ```
 
-Passes when the two values are not equal.
+Passes when the two values differ.
 
 ```medaka
 > expectNotEqual 1 2
@@ -98,13 +112,13 @@ Pass
 Fail "expected values to differ but both were 1"
 ```
 
-## `expectLessThan`
+### `expectLessThan`
 
 ```
 expectLessThan : (Ord a, Debug a) => a -> a -> Expectation
 ```
 
-Passes when `actual < expected`.
+Passes when `actual` is less than `expected`.
 
 ```medaka
 > expectLessThan 10 3
@@ -113,13 +127,13 @@ Pass
 Fail "expected 15 < 10"
 ```
 
-## `expectGreaterThan`
+### `expectGreaterThan`
 
 ```
 expectGreaterThan : (Ord a, Debug a) => a -> a -> Expectation
 ```
 
-Passes when `actual > expected`.
+Passes when `actual` is greater than `expected`.
 
 ```medaka
 > expectGreaterThan 0 5
@@ -128,14 +142,15 @@ Pass
 Fail "expected 3 > 10"
 ```
 
-## `expectAll`
+### `expectAll`
 
 ```
 expectAll : List Expectation -> Expectation
 ```
 
-Combine a list of expectations: passes only when all of them pass.
-The first `Fail` is returned immediately.
+Passes when every expectation in the list passes.
+
+The result is the first `Fail`, when there is one.
 
 ```medaka
 > expectAll [Pass, Pass, Pass]
@@ -144,14 +159,18 @@ Pass
 Fail "oops"
 ```
 
-## `runTests`
+## Running tests
+
+### `runTests`
 
 ```
 runTests : List (String, Unit -> Expectation) -> <IO> Bool
 ```
 
-Run a list of `(name, thunk)` test pairs.  Prints each result and a
-final summary; returns `True` when all tests pass.
+Runs a list of named tests, printing each result and a summary.
+
+Each test is a name and a function from `Unit` to an `Expectation`.
+Returns `True` when every test passes.
 
 ## Instances
 

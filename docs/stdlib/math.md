@@ -1,259 +1,226 @@
 # math
 
-## `toRadians`
+Floating-point math and a few integer helpers.
+
+The libm functions (`sqrt`, `exp`, `log`, `sin`, `pow`, `floor`, and the
+rest) and the constants `pi` and `e` are primitives, in scope everywhere
+without an import; see the `runtime` page. This module adds the
+functions built on them: angle conversion, float predicates,
+interpolation, and exact integer division, `gcd`, `lcm`, and `powInt`.
+
+`abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
+work on floats already.
+
+The float functions run on the native backend only. On the WebAssembly
+backend they trap.
+
+## Angles
+
+### `toRadians`
 
 ```
 toRadians : Float -> Float
 ```
 
-Convert degrees to radians.
+An angle in degrees converted to radians.
 
 ```medaka
 > toRadians 0.0
 0.0
 ```
 
-## `toDegrees`
+### `toDegrees`
 
 ```
 toDegrees : Float -> Float
 ```
 
-Convert radians to degrees.
+An angle in radians converted to degrees.
 
 ```medaka
 > toDegrees 0.0
 0.0
 ```
 
-## `isNaN`
+## Float predicates
+
+### `isNaN`
 
 ```
 isNaN : Float -> Bool
 ```
 
-True iff the argument is NaN (the only value not equal to itself).
+Whether `x` is NaN, the one value not equal to itself.
 
 ```medaka
 > isNaN 1.0
 False
 ```
 
-## `isInfinite`
+### `isInfinite`
 
 ```
 isInfinite : Float -> Bool
 ```
 
-True iff the argument is positive or negative infinity.  A finite `x`
-  has `x - x == 0.0`; an infinite `x` has `x - x == NaN`.
+Whether `x` is positive or negative infinity.
 
 ```medaka
 > isInfinite 1.0
 False
 ```
 
-## `isFinite`
+### `isFinite`
 
 ```
 isFinite : Float -> Bool
 ```
 
-True iff the argument is neither NaN nor infinite — i.e. an ordinary,
-  representable Float.  The third of the `isNaN`/`isInfinite`/`isFinite`
-  trio.
+Whether `x` is an ordinary number: neither NaN nor infinite.
 
 ```medaka
 > isFinite 1.0
 True
 ```
 
-## `lerp`
+## Interpolation
+
+### `lerp`
 
 ```
 lerp : Float -> Float -> Float -> Float
 ```
 
-Linear interpolation from `a` (at `t = 0.0`) to `b` (at `t = 1.0`):
-  `lerp a b t = a + (b - a) * t`.  `t` is **not clamped** — `t` outside
-  `[0.0, 1.0]` extrapolates past `a`/`b` rather than saturating, matching
-  the usual graphics convention (GLSL `mix`, Rust's `f64::lerp`) and this
-  module's own house style of leaving clamping to the generic `clamp` in
-  `core` (see the module header) rather than baking it into every
-  interpolant. Compose `lerp a b (clamp 0.0 1.0 t)` for a clamped result.
+The point a fraction `t` of the way from `a` to `b`: `a + (b - a) * t`.
+
+`t` is not clamped, so a value outside `[0.0, 1.0]` extrapolates.
+`lerp a b (clamp 0.0 1.0 t)` is the clamped form.
 
 ```medaka
 > lerp 0.0 10.0 0.5
 5.0
-> lerp 0.0 10.0 0.0
-0.0
-> lerp 0.0 10.0 1.0
-10.0
 > lerp 0.0 10.0 2.0
 20.0
-> lerp 0.0 10.0 (0.0 - 1.0)
--10.0
 ```
 
-## `approxEq`
+### `approxEq`
 
 ```
 approxEq : Float -> Float -> Float -> Bool
 ```
 
-Approximate equality: `True` iff `|a - b| <= eps`.  Uses an ABSOLUTE
-  epsilon (not relative/scale-aware) — the natural choice for a general
-  tolerance-compare utility, since a relative epsilon is undefined at
-  `a == b == 0.0` and requires a design decision (relative to which
-  operand?) this module does not need to make.  Callers comparing
-  large-magnitude Floats should pick an `eps` that accounts for scale.
+Whether `a` and `b` differ by at most `eps`.
 
-  NaN: `|NaN - x|` is NaN, and every IEEE `<=` involving NaN is `False`
-  (this repo's decided semantics — see EMITTER-SEMANTICS.md §4 N5: derived
-  `< <= > >=` stay IEEE). So `approxEq NaN NaN eps` is `False` for every
-  `eps`, including `NaN` itself — consistent with `isNaN` (`x /= x`) and
-  with plain `==` already treating NaN as equal to nothing, itself
-  included.
-
-  The same reasoning makes `approxEq Infinity Infinity eps` `False` too
-  (not `True`, which may surprise): `Infinity - Infinity` is IEEE NaN, so
-  it hits the exact same `NaN <= eps` dead end.  There is no special-cased
-  "equal infinities" path — this function is arithmetic-only, on purpose.
+The tolerance is absolute, so choose `eps` to suit the magnitude of the
+values. `False` whenever either value is NaN, and also for two equal
+infinities, since their difference is NaN.
 
 ```medaka
 > approxEq 1.0 1.0000001 0.001
 True
 > approxEq 1.0 2.0 0.001
 False
-> approxEq 0.0 0.0 0.0
-True
 ```
 
-## `logBase`
+## Logarithms
+
+### `logBase`
 
 ```
 logBase : Float -> Float -> Float
 ```
 
-Logarithm of `x` in an arbitrary base: `logBase b x = log x / log b`. Not
-  exact in general (it's a log division, IEEE 754 float rounding applies);
-  the second example below asserts the real computed value, confirmed
-  externally via `python3 -c "import math; print(repr(math.log(1000.0)/math.log(10.0)))"`.
+The logarithm of `x` in base `base`, computed as `log x / log base`.
+
+Subject to floating-point rounding, so `logBase 10.0 1000.0` is not
+exactly `3.0`.
 
 ```medaka
 > logBase 2.0 8.0
 3.0
-> logBase 10.0 1000.0
-2.9999999999999996
 ```
 
-## `floorDiv`
+## Integers
+
+### `floorDiv`
 
 ```
 floorDiv : Int -> Int -> Int
 ```
 
-Floor division: rounds the quotient toward negative infinity, unlike
-  Medaka's `/` which truncates toward zero (see `stdlib/runtime.mdk` and
-  `compiler/backend/llvm_emit.mdk`'s `sdiv`).  This is the variant index
-  arithmetic and calendar math want — `stdlib/time.mdk`'s civil-calendar
-  conversion needs it so a negative (pre-1970) epoch second maps to the
-  correct earlier day rather than truncating toward 1970.
+Division rounding the quotient towards negative infinity.
 
-  Promoted here from a private helper `time.mdk` hand-rolled internally
-  (see #433) — this is the SAME algorithm, unchanged, so every caller's
-  behavior at negative operands and at zero is unchanged.
+The `/` operator rounds towards zero, so the two differ on negative
+operands. This is the form that calendar and index arithmetic want.
 
 ```medaka
 > floorDiv 7 3
 2
 > floorDiv (0 - 7) 3
 -3
-> floorDiv 7 (0 - 3)
--3
-> floorDiv (0 - 7) (0 - 3)
-2
-> floorDiv 0 5
-0
 ```
 
-## `floorMod`
+### `floorMod`
 
 ```
 floorMod : Int -> Int -> Int
 ```
 
-Floor modulo: the remainder that pairs with `floorDiv`, so
-  `floorDiv a b * b + floorMod a b == a` always holds and the result
-  takes the SIGN OF THE DIVISOR (unlike `%`, which takes the sign of the
-  dividend because it pairs with truncating `/`) — the Python-`%`
-  convention, not the C-`%`/Medaka-`%` one.
+The remainder that goes with `floorDiv`, taking the sign of the
+divisor.
+
+`floorDiv a b * b + floorMod a b` is always `a`. The `%` operator takes
+the sign of the dividend instead.
 
 ```medaka
 > floorMod 7 3
 1
 > floorMod (0 - 7) 3
 2
-> floorMod 7 (0 - 3)
--2
-> floorMod (0 - 7) (0 - 3)
--1
-> floorMod 0 5
-0
 ```
 
-## `gcd`
+### `gcd`
 
 ```
 gcd : Int -> Int -> Int
 ```
 
-Greatest common divisor via the Euclidean algorithm, on absolute
-  values so the result is non-negative.  `gcd 0 0 = 0`.
+The greatest common divisor, never negative.
+
+`gcd 0 0` is `0`.
 
 ```medaka
 > gcd 12 18
 6
-> gcd 17 5
-1
 ```
 
-## `lcm`
+### `lcm`
 
 ```
 lcm : Int -> Int -> Int
 ```
 
-Least common multiple, non-negative.  `lcm _ 0 = 0`.
+The least common multiple, never negative.
+
+`0` when either argument is `0`.
 
 ```medaka
 > lcm 4 6
 12
-> lcm 3 5
-15
 ```
 
-## `powInt`
+### `powInt`
 
 ```
 powInt : Int -> Int -> Int
 ```
 
-Integer exponentiation by squaring.  A non-positive exponent yields 1
-  (the empty product); `powInt b 0 = 1` for any `b`.
+`b` raised to the integer power `n`.
 
-  KEEPS its `Int` suffix while `gcdInt`/`lcmInt` lost theirs (#2306 J-2):
-  `runtime.pow : Float -> Float -> Float` is an extern, so it is in scope
-  UNQUALIFIED everywhere, and a `math.pow : Int -> Int -> Int` would meet
-  it head-on in that scope.  The suffix is load-bearing for exactly this
-  one of the three; `gcd`/`lcm` have no such peer.
+`1` when `n <= 0`. `pow` is the float form.
 
 ```medaka
 > powInt 2 10
 1024
-> powInt 3 0
-1
-> powInt 5 3
-125
 ```
 

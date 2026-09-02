@@ -1,168 +1,133 @@
-{- math.mdk — floating-point math: roots, transcendentals, rounding, and a
-   handful of pure integer helpers.
+{- | Floating-point math and a few integer helpers.
 
-   See STDLIB.md for the module plan.
+   The libm functions (`sqrt`, `exp`, `log`, `sin`, `pow`, `floor`, and the
+   rest) and the constants `pi` and `e` are primitives, in scope everywhere
+   without an import; see the `runtime` page. This module adds the
+   functions built on them: angle conversion, float predicates,
+   interpolation, and exact integer division, `gcd`, `lcm`, and `powInt`.
 
-   This is a thin pure-Medaka layer over the libm externs declared in
-   stdlib/runtime.mdk (`sqrt`/`exp`/`log`/`sin`/… — 22 one- and two-arg
-   Float functions, each a direct call into the C runtime's math.h shim).
-   The externs themselves are globally in scope (like every runtime
-   primitive); this module adds the derived conveniences on top of them.
+   `abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
+   work on floats already.
 
-   Constants `pi` and `e` are runtime externs (see runtime.mdk) and are
-   available unqualified everywhere — this module just documents them here.
+   The float functions run on the native backend only. On the WebAssembly
+   backend they trap. -}
 
-   ── Backend scope ──────────────────────────────────────────────────────
-   The math externs are NATIVE / LLVM only.  Wasm currently ports only five
-   float externs; every other float extern (including this batch AND the
-   pre-existing `floatRem`) routes to a trap on the WasmGC backend.  Wasm
-   math is a native-only residual: the transcendentals need a host-import
-   seam or a polyfill and are DEFERRED.  On native (`medaka run` / `build`)
-   everything here works.
+-- Wasm currently ports only five float externs; every other float extern
+-- (including this batch and the pre-existing `floatRem`) routes to a trap on
+-- the WasmGC backend.  The transcendentals need a host-import seam or a
+-- polyfill and are deferred.
 
-   ── What is NOT here (already generic in the prelude) ──────────────────
-   • `abs` / `signum` — `Num Float` methods in core (use them directly).
-   • `min` / `max` / `clamp` — `Ord`-generic in core; `clamp lo hi x`
-     already works for Float, so there is no Float-specific `clampF`. -}
+-- # Angles
 
--- ── Angle conversion ────────────────────────────────────────────────────
+{- | An angle in degrees converted to radians.
 
--- | Convert degrees to radians.
---
--- > toRadians 0.0
--- 0.0
+   > toRadians 0.0
+   0.0 -}
 export
 toRadians : Float -> Float
 toRadians deg = deg * pi / 180.0
 
--- | Convert radians to degrees.
---
--- > toDegrees 0.0
--- 0.0
+{- | An angle in radians converted to degrees.
+
+   > toDegrees 0.0
+   0.0 -}
 export
 toDegrees : Float -> Float
 toDegrees rad = rad * 180.0 / pi
 
--- ── Float predicates ────────────────────────────────────────────────────
+-- # Float predicates
 
--- | True iff the argument is NaN (the only value not equal to itself).
---
--- > isNaN 1.0
--- False
+{- | Whether `x` is NaN, the one value not equal to itself.
+
+   > isNaN 1.0
+   False -}
 export
 isNaN : Float -> Bool
 isNaN x = x /= x
 
--- | True iff the argument is positive or negative infinity.  A finite `x`
---   has `x - x == 0.0`; an infinite `x` has `x - x == NaN`.
---
--- > isInfinite 1.0
--- False
+-- A finite `x` has `x - x == 0.0`; an infinite `x` has `x - x == NaN`.
+{- | Whether `x` is positive or negative infinity.
+
+   > isInfinite 1.0
+   False -}
 export
 isInfinite : Float -> Bool
 isInfinite x = not (isNaN x) && isNaN (x - x)
 
--- | True iff the argument is neither NaN nor infinite — i.e. an ordinary,
---   representable Float.  The third of the `isNaN`/`isInfinite`/`isFinite`
---   trio.
---
--- > isFinite 1.0
--- True
+{- | Whether `x` is an ordinary number: neither NaN nor infinite.
+
+   > isFinite 1.0
+   True -}
 export
 isFinite : Float -> Bool
 isFinite x = not (isNaN x) && not (isInfinite x)
 
--- ── Interpolation ───────────────────────────────────────────────────────
+-- # Interpolation
 
--- | Linear interpolation from `a` (at `t = 0.0`) to `b` (at `t = 1.0`):
---   `lerp a b t = a + (b - a) * t`.  `t` is **not clamped** — `t` outside
---   `[0.0, 1.0]` extrapolates past `a`/`b` rather than saturating, matching
---   the usual graphics convention (GLSL `mix`, Rust's `f64::lerp`) and this
---   module's own house style of leaving clamping to the generic `clamp` in
---   `core` (see the module header) rather than baking it into every
---   interpolant. Compose `lerp a b (clamp 0.0 1.0 t)` for a clamped result.
---
--- > lerp 0.0 10.0 0.5
--- 5.0
--- > lerp 0.0 10.0 0.0
--- 0.0
--- > lerp 0.0 10.0 1.0
--- 10.0
--- > lerp 0.0 10.0 2.0
--- 20.0
--- > lerp 0.0 10.0 (0.0 - 1.0)
--- -10.0
+{- | The point a fraction `t` of the way from `a` to `b`: `a + (b - a) * t`.
+
+   `t` is not clamped, so a value outside `[0.0, 1.0]` extrapolates.
+   `lerp a b (clamp 0.0 1.0 t)` is the clamped form.
+
+   > lerp 0.0 10.0 0.5
+   5.0
+   > lerp 0.0 10.0 2.0
+   20.0 -}
 export
 lerp : Float -> Float -> Float -> Float
 lerp a b t = a + (b - a) * t
 
--- | Approximate equality: `True` iff `|a - b| <= eps`.  Uses an ABSOLUTE
---   epsilon (not relative/scale-aware) — the natural choice for a general
---   tolerance-compare utility, since a relative epsilon is undefined at
---   `a == b == 0.0` and requires a design decision (relative to which
---   operand?) this module does not need to make.  Callers comparing
---   large-magnitude Floats should pick an `eps` that accounts for scale.
---
---   NaN: `|NaN - x|` is NaN, and every IEEE `<=` involving NaN is `False`
---   (this repo's decided semantics — see EMITTER-SEMANTICS.md §4 N5: derived
---   `< <= > >=` stay IEEE). So `approxEq NaN NaN eps` is `False` for every
---   `eps`, including `NaN` itself — consistent with `isNaN` (`x /= x`) and
---   with plain `==` already treating NaN as equal to nothing, itself
---   included.
---
---   The same reasoning makes `approxEq Infinity Infinity eps` `False` too
---   (not `True`, which may surprise): `Infinity - Infinity` is IEEE NaN, so
---   it hits the exact same `NaN <= eps` dead end.  There is no special-cased
---   "equal infinities" path — this function is arithmetic-only, on purpose.
---
--- > approxEq 1.0 1.0000001 0.001
--- True
--- > approxEq 1.0 2.0 0.001
--- False
--- > approxEq 0.0 0.0 0.0
--- True
+-- > lerp 0.0 10.0 0.0
+-- 0.0
+-- > lerp 0.0 10.0 1.0
+-- 10.0
+-- > lerp 0.0 10.0 (0.0 - 1.0)
+-- -10.0
+
+{- | Whether `a` and `b` differ by at most `eps`.
+
+   The tolerance is absolute, so choose `eps` to suit the magnitude of the
+   values. `False` whenever either value is NaN, and also for two equal
+   infinities, since their difference is NaN.
+
+   > approxEq 1.0 1.0000001 0.001
+   True
+   > approxEq 1.0 2.0 0.001
+   False -}
 export
 approxEq : Float -> Float -> Float -> Bool
 approxEq a b eps = abs (a - b) <= eps
 
--- ── Logarithms ──────────────────────────────────────────────────────────
+-- > approxEq 0.0 0.0 0.0
+-- True
 
--- | Logarithm of `x` in an arbitrary base: `logBase b x = log x / log b`. Not
---   exact in general (it's a log division, IEEE 754 float rounding applies);
---   the second example below asserts the real computed value, confirmed
---   externally via `python3 -c "import math; print(repr(math.log(1000.0)/math.log(10.0)))"`.
---
--- > logBase 2.0 8.0
--- 3.0
--- > logBase 10.0 1000.0
--- 2.9999999999999996
+-- # Logarithms
+
+{- | The logarithm of `x` in base `base`, computed as `log x / log base`.
+
+   Subject to floating-point rounding, so `logBase 10.0 1000.0` is not
+   exactly `3.0`.
+
+   > logBase 2.0 8.0
+   3.0 -}
 export
 logBase : Float -> Float -> Float
 logBase base x = log x / log base
 
--- ── Pure integer helpers ────────────────────────────────────────────────
+-- > logBase 10.0 1000.0
+-- 2.9999999999999996
 
--- | Floor division: rounds the quotient toward negative infinity, unlike
---   Medaka's `/` which truncates toward zero (see `stdlib/runtime.mdk` and
---   `compiler/backend/llvm_emit.mdk`'s `sdiv`).  This is the variant index
---   arithmetic and calendar math want — `stdlib/time.mdk`'s civil-calendar
---   conversion needs it so a negative (pre-1970) epoch second maps to the
---   correct earlier day rather than truncating toward 1970.
---
---   Promoted here from a private helper `time.mdk` hand-rolled internally
---   (see #433) — this is the SAME algorithm, unchanged, so every caller's
---   behavior at negative operands and at zero is unchanged.
---
--- > floorDiv 7 3
--- 2
--- > floorDiv (0 - 7) 3
--- -3
--- > floorDiv 7 (0 - 3)
--- -3
--- > floorDiv (0 - 7) (0 - 3)
--- 2
--- > floorDiv 0 5
--- 0
+-- # Integers
+
+{- | Division rounding the quotient towards negative infinity.
+
+   The `/` operator rounds towards zero, so the two differ on negative
+   operands. This is the form that calendar and index arithmetic want.
+
+   > floorDiv 7 3
+   2
+   > floorDiv (0 - 7) 3
+   -3 -}
 export
 floorDiv : Int -> Int -> Int
 floorDiv a b =
@@ -170,72 +135,84 @@ floorDiv a b =
   let r = a - q * b
   if r /= 0 && r < 0 /= (b < 0) then q - 1 else q
 
--- | Floor modulo: the remainder that pairs with `floorDiv`, so
---   `floorDiv a b * b + floorMod a b == a` always holds and the result
---   takes the SIGN OF THE DIVISOR (unlike `%`, which takes the sign of the
---   dividend because it pairs with truncating `/`) — the Python-`%`
---   convention, not the C-`%`/Medaka-`%` one.
---
--- > floorMod 7 3
--- 1
--- > floorMod (0 - 7) 3
+-- > floorDiv 7 (0 - 3)
+-- -3
+-- > floorDiv (0 - 7) (0 - 3)
 -- 2
+-- > floorDiv 0 5
+-- 0
+
+{- | The remainder that goes with `floorDiv`, taking the sign of the
+   divisor.
+
+   `floorDiv a b * b + floorMod a b` is always `a`. The `%` operator takes
+   the sign of the dividend instead.
+
+   > floorMod 7 3
+   1
+   > floorMod (0 - 7) 3
+   2 -}
+export
+floorMod : Int -> Int -> Int
+floorMod a b = a - floorDiv a b * b
+
 -- > floorMod 7 (0 - 3)
 -- -2
 -- > floorMod (0 - 7) (0 - 3)
 -- -1
 -- > floorMod 0 5
 -- 0
-export
-floorMod : Int -> Int -> Int
-floorMod a b = a - floorDiv a b * b
 
--- | Greatest common divisor via the Euclidean algorithm, on absolute
---   values so the result is non-negative.  `gcd 0 0 = 0`.
---
--- > gcd 12 18
--- 6
--- > gcd 17 5
--- 1
+{- | The greatest common divisor, never negative.
+
+   `gcd 0 0` is `0`.
+
+   > gcd 12 18
+   6 -}
 export
 gcd : Int -> Int -> Int
 gcd a b = gcdGo (absInt a) (absInt b)
+
+-- > gcd 17 5
+-- 1
 
 gcdGo : Int -> Int -> Int
 gcdGo a 0 = a
 gcdGo a b = gcdGo b (a % b)
 
--- | Least common multiple, non-negative.  `lcm _ 0 = 0`.
---
--- > lcm 4 6
--- 12
--- > lcm 3 5
--- 15
+{- | The least common multiple, never negative.
+
+   `0` when either argument is `0`.
+
+   > lcm 4 6
+   12 -}
 export
 lcm : Int -> Int -> Int
 lcm 0 _ = 0
 lcm _ 0 = 0
 lcm a b = absInt (a / gcd a b * b)
 
--- | Integer exponentiation by squaring.  A non-positive exponent yields 1
---   (the empty product); `powInt b 0 = 1` for any `b`.
---
---   KEEPS its `Int` suffix while `gcdInt`/`lcmInt` lost theirs (#2306 J-2):
---   `runtime.pow : Float -> Float -> Float` is an extern, so it is in scope
---   UNQUALIFIED everywhere, and a `math.pow : Int -> Int -> Int` would meet
---   it head-on in that scope.  The suffix is load-bearing for exactly this
---   one of the three; `gcd`/`lcm` have no such peer.
---
--- > powInt 2 10
--- 1024
--- > powInt 3 0
--- 1
--- > powInt 5 3
--- 125
+-- > lcm 3 5
+-- 15
+
+-- Keeps its `Int` suffix while `gcd`/`lcm` lost theirs: `runtime.pow` is an
+-- extern, in scope unqualified everywhere, and a `math.pow` would meet it
+-- head-on in that scope.
+{- | `b` raised to the integer power `n`.
+
+   `1` when `n <= 0`. `pow` is the float form.
+
+   > powInt 2 10
+   1024 -}
 export
 powInt : Int -> Int -> Int
 powInt _ 0 = 1
 powInt b n = if n < 0 then 1 else powGo b n 1
+
+-- > powInt 3 0
+-- 1
+-- > powInt 5 3
+-- 125
 
 powGo : Int -> Int -> Int -> Int
 powGo _ 0 acc = acc
@@ -243,7 +220,7 @@ powGo b n acc =
   let acc2 = if n % 2 == 1 then acc * b else acc
   powGo (b * b) (n / 2) acc2
 
--- Absolute value on Int (local helper — core's `abs` is a Num method but a
+-- Absolute value on Int (local helper: core's `abs` is a Num method but a
 -- monomorphic helper keeps the fast integer path here self-contained).
 absInt : Int -> Int
 absInt n = if n < 0 then 0 - n else n

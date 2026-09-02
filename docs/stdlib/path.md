@@ -1,274 +1,227 @@
 # path
 
-## `dirname`
+Manipulation of `/`-separated paths as text.
+
+Nothing here touches the filesystem. A path is split, joined, and
+simplified by its text alone, so `normalize` cannot tell a directory
+from a symbolic link. `fs` is the module that reads the filesystem.
+
+An extension includes its leading dot: `extname "a.txt"` is `".txt"`.
+A name that starts with a dot and has no other dot, such as `.bashrc`,
+has no extension.
+
+## Components
+
+### `dirname`
 
 ```
 dirname : String -> String
 ```
 
-Directory portion of a path — everything up to (not including) the final
-`/`. `"."` if the path has no `/`. A trailing `/` is ignored (the last
-segment before it is still stripped as the basename).
+The directory part of a path: everything before the last `/`.
+
+`"."` when the path has no `/`. A trailing `/` is ignored, so the last
+segment before it is still the part removed.
 
 ```medaka
 > dirname "a/b/c.txt"
 "a/b"
-```
-
-```medaka
 > dirname "c.txt"
 "."
 ```
 
-## `basename`
+### `basename`
 
 ```
 basename : String -> String
 ```
 
-Final path component — the text after the last `/` (the whole string if
-there is none). A trailing `/` yields `""`, matching `path.Base`'s sibling
-`path.Split` semantics (use `normalize` first if you want `basename` to
-ignore a trailing slash).
+The last component of a path: everything after the last `/`.
+
+The whole path when it has no `/`, and `""` when it ends in `/`. Apply
+`normalize` first to ignore a trailing slash.
 
 ```medaka
 > basename "a/b/c.txt"
 "c.txt"
-```
-
-```medaka
-> basename "c.txt"
-"c.txt"
-```
-
-```medaka
 > basename "a/b/"
 ""
 ```
 
-## `extname`
+### `extname`
 
 ```
 extname : String -> String
 ```
 
-Extension of the final component, dot included (`""` if none). See the
-module doc-comment for the exact dotfile convention.
+The extension of the last component, with its dot.
+
+`""` when there is none, including for a name that starts with its only
+dot.
 
 ```medaka
 > extname "a/b/c.txt"
 ".txt"
-```
-
-```medaka
-> extname "README"
-""
-```
-
-```medaka
 > extname ".bashrc"
 ""
 ```
 
-## `stem`
+### `stem`
 
 ```
 stem : String -> String
 ```
 
-Final component with its extension removed (the module-doc convention's
-`""` extension leaves `stem` unchanged, e.g. dotfiles).
+The last component without its extension.
 
 ```medaka
 > stem "a/b/c.txt"
 "c"
-```
-
-```medaka
 > stem ".bashrc"
 ".bashrc"
 ```
 
-## `hasExtension`
+### `hasExtension`
 
 ```
 hasExtension : String -> String -> Bool
 ```
 
-`True` if the final component has extension `ext` (leading dot optional
-on either side — `hasExtension "txt"` and `hasExtension ".txt"` both match).
+Whether the last component has the extension `ext`.
+
+The leading dot on `ext` is optional.
 
 ```medaka
 > hasExtension "txt" "a/b.txt"
 True
-```
-
-```medaka
 > hasExtension ".md" "a/b.txt"
 False
 ```
 
-## `withExtension`
+### `withExtension`
 
 ```
 withExtension : String -> String -> String
 ```
 
-Replace the final component's extension with `ext` (leading dot on `ext`
-is optional). If the path has no extension, `ext` is appended.
+The path with the last component's extension replaced by `ext`.
+
+The leading dot on `ext` is optional. When the path has no extension,
+`ext` is appended.
 
 ```medaka
 > withExtension ".md" "a/b.txt"
 "a/b.md"
-```
-
-```medaka
 > withExtension "md" "a/b"
 "a/b.md"
 ```
 
-## `joinPath`
+## Joining and splitting
+
+### `joinPath`
 
 ```
 joinPath : String -> String -> String
 ```
 
-Join two path segments with a single `/`, collapsing any slashes already
-present at the boundary. An empty first (or second) segment is skipped.
+Two path segments joined with a single `/`.
+
+Slashes already at the boundary are collapsed, and an empty segment is
+skipped.
 
 ```medaka
 > joinPath "a/b" "c.txt"
 "a/b/c.txt"
-```
-
-```medaka
 > joinPath "a/b/" "/c.txt"
 "a/b/c.txt"
 ```
 
-```medaka
-> joinPath "" "c.txt"
-"c.txt"
-```
-
-## `joinAll`
+### `joinAll`
 
 ```
 joinAll : List String -> String
 ```
 
-Join every segment in order with `joinPath`; `""` for the empty list.
+The segments joined in order with `joinPath`.
+
+`""` for the empty list.
 
 ```medaka
 > joinAll ["a", "b", "c.txt"]
 "a/b/c.txt"
 ```
 
-```medaka
-> joinAll []
-""
-```
-
-## `segments`
+### `segments`
 
 ```
 segments : String -> List String
 ```
 
-Split a path into its non-empty `/`-separated components (no `.`/`..`
-resolution — use `normalize` first if you want those collapsed).
+The non-empty components of a path, split on `/`.
+
+`.` and `..` are kept; apply `normalize` first to resolve them.
 
 ```medaka
 > segments "a/b/c.txt"
 ["a", "b", "c.txt"]
-```
-
-```medaka
 > segments "/a//b/"
 ["a", "b"]
 ```
 
-## `isAbsolute`
+## Predicates
+
+### `isAbsolute`
 
 ```
 isAbsolute : String -> Bool
 ```
 
-`True` if the path starts with `/`.
+Whether the path starts with `/`.
 
 ```medaka
 > isAbsolute "/a/b"
 True
-```
-
-```medaka
 > isAbsolute "a/b"
 False
 ```
 
-## `stripPrefix`
+### `stripPrefix`
 
 ```
 stripPrefix : String -> String -> Option String
 ```
 
-Drop `prefix` from the front of `path` if `path` starts with it at a
-whole component boundary (i.e. right after `prefix` comes either the end
-of the string or a `/`); `None` when it does not.
+The path with `prefix` removed from its front, or `None` when the path
+does not start with `prefix` at a component boundary.
 
-Returns `Option` for the same reason `string.stripPrefix` does (#2310): the
-old fail-soft form returned the input path on no-match, which is also what
-a successful strip of `""` returns, so a caller could not tell the two
-apart.  The empty prefix strips nothing and succeeds.
+The empty prefix always matches.
 
 ```medaka
 > stripPrefix "a/b" "a/b/c.txt"
 Some "c.txt"
-```
-
-```medaka
 > stripPrefix "a/x" "a/b/c.txt"
 None
 ```
 
-```medaka
-> stripPrefix "a/b" "a/b"
-Some ""
-```
+## Normalization
 
-```medaka
-> stripPrefix "" "a/b"
-Some "a/b"
-```
-
-## `normalize`
+### `normalize`
 
 ```
 normalize : String -> String
 ```
 
-Lexically simplify a path (Go `path.Clean` semantics — see the module
-doc-comment): collapses repeated `/`, drops `.` segments, resolves `..`
-against a preceding real segment, and drops a trailing `/`. The empty path
-becomes `"."`.
+The path simplified by its text alone.
+
+Repeated `/` are collapsed, `.` segments are dropped, a `..` cancels the
+segment before it, and a trailing `/` is dropped. A leading `..` on a
+relative path is kept, and a `..` above the root of an absolute path is
+dropped. The empty path becomes `"."`.
 
 ```medaka
 > normalize "a//b/./c/../d"
 "a/b/d"
-```
-
-```medaka
 > normalize "../a/../../b"
 "../../b"
-```
-
-```medaka
-> normalize "/../a"
-"/a"
-```
-
-```medaka
-> normalize ""
-"."
 ```
 
