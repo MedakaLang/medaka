@@ -27,7 +27,7 @@ import ir.dce.{dceFilter}
 import entries.entry_support.{driveModules, runEmitWith}
 
 main : <IO> Unit
-main = driveModules (runEmitWith emitTail)
+main = driveModules (runEmitWith "runAsyncIOMain" emitTail)
 
 -- The llvm_emit_modules_main emitTail with `putStr (emitProgram …)` swapped for
 -- the S-expression serializer; no side-table installs (they feed the emitter,

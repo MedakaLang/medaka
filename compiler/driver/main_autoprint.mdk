@@ -31,7 +31,14 @@
 -- mangled `display`/`println` obligations to impl heads and mis-fires on every
 -- program.  Routing through checkOneDiags on un-mangled decls avoids that.)
 
-import frontend.ast.{Decl(..), Expr(..), Pat, Loc}
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  Pat,
+  Loc(..),
+  UsePath(..),
+  UseMember(..),
+}
 import types.typecheck.{
   mainTypeIsUnit,
   mainTypeIsAsync,
@@ -170,13 +177,25 @@ autoPrintPinCore : List Decl -> List Decl
 autoPrintPinCore coreDecls = coreDecls ++ pinnedPrintlnDecls coreDecls
 
 pinnedPrintlnDecls : List Decl -> List Decl
-pinnedPrintlnDecls [] = []
-pinnedPrintlnDecls ((DAttrib _ d) :: rest) = pinnedPrintlnDecls (d :: rest)
-pinnedPrintlnDecls ((DTypeSig pub "println" ty) :: rest) =
-  DTypeSig pub autoPrintPinName ty :: pinnedPrintlnDecls rest
-pinnedPrintlnDecls ((DFunDef pub "println" ps body) :: rest) =
-  DFunDef pub autoPrintPinName ps body :: pinnedPrintlnDecls rest
-pinnedPrintlnDecls (_ :: rest) = pinnedPrintlnDecls rest
+pinnedPrintlnDecls decls = pinnedCopies "println" autoPrintPinName decls
+
+-- Copies of every signature and clause of `origin` re-bound under `pin`, marked
+-- exported so a synthesized import can reach them.
+pinnedCopies : String -> String -> List Decl -> List Decl
+pinnedCopies _ _ [] = []
+pinnedCopies origin pin ((DAttrib _ d) :: rest) =
+  pinnedCopies origin pin (d :: rest)
+pinnedCopies origin pin ((DTypeSig _ n ty) :: rest) =
+  if n == origin then
+    DTypeSig True pin ty :: pinnedCopies origin pin rest
+  else
+    pinnedCopies origin pin rest
+pinnedCopies origin pin ((DFunDef _ n ps body) :: rest) =
+  if n == origin then
+    DFunDef True pin ps body :: pinnedCopies origin pin rest
+  else
+    pinnedCopies origin pin rest
+pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 
 -- `main = <e>` → `main = 0autoprintln <e>`, re-attaching the body's own source
 -- span (its outer `ELoc`, from `parseLocated`) around the synthetic application
@@ -191,9 +210,12 @@ pinnedPrintlnDecls (_ :: rest) = pinnedPrintlnDecls rest
 -- calls `autoPrintWrapModules` MUST also pass `autoPrintPinCore coreDecls` as
 -- the core decl list, or the name is unbound.
 wrapPrintln : Expr -> Expr
-wrapPrintln (ELoc l inner) =
-  ELoc l (EApp (EVar autoPrintPinName) (ELoc l inner))
-wrapPrintln body = EApp (EVar autoPrintPinName) body
+wrapPrintln body = wrapCall autoPrintPinName body
+
+-- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
+wrapCall : String -> Expr -> Expr
+wrapCall callee (ELoc l inner) = ELoc l (EApp (EVar callee) (ELoc l inner))
+wrapCall callee body = EApp (EVar callee) body
 
 -- Re-run the CHECK gate on the wrapped program to surface an underived-ADT main
 -- as the clean `No impl of Display …` type error.  Gated to a SINGLE loaded
@@ -252,3 +274,91 @@ underivedMainDiags runtimeDecls coreDecls [(mid, entryDecls)] =
     checkOneDiagsSynthetic runtimeDecls coreDecls (mid, entryDecls)
   tcErrs
 underivedMainDiags _ _ _ = []
+
+-- ── `main : Async _` driver wrap (ASYNC-DESIGN D5, ASYNC-RUNTIME-DESIGN §4.4) ──
+-- A `main` whose type heads in `Async` is an inert VALUE until a driver forces
+-- it, so forcing it alone runs nothing (#2506).  Every engine drives it through
+-- the same rewrite the auto-print wrap uses:
+--   main = <e>   ⟶   main = 0runasync <e>
+-- where `0runasync` is the `async` module's own entry driver (`runAsyncIOMain`,
+-- or `runAsyncMain` on a target with no clock; each declares a `Unit` result so
+-- no backend auto-prints it) re-bound under an unspellable name and
+-- imported into the entry module by a synthesized `import async.{0runasync}`.
+-- The pinned copy is a DECLARATION OF THE ASYNC MODULE, so its body resolves
+-- in that module's scope and no user name can capture the reference — the
+-- same argument `autoPrintPinCore` makes for `println`.  The driver's own row
+-- is applied here, not in user source, so a program's manifest still lists
+-- only what the program performs.
+export
+asyncMainPinName : String
+asyncMainPinName = "0runasync"
+
+asyncModuleId : String
+asyncModuleId = "async"
+
+-- Fires iff main's inferred type heads in `Async`, the entry `main` is a
+-- zero-arg VALUE, and the `async` module is loaded and defines `driver`.
+-- Requires the caller to have run an elaborate first (populates mainSchemeRef).
+export
+shouldAsyncWrapMain : String -> List (String, List Decl) -> Bool
+shouldAsyncWrapMain driver modules =
+  if not (mainTypeIsAsync ()) then
+    False
+  else match entryPair modules
+    None => False
+    Some (_, decls) => match findMainParams decls
+      Some [] =>
+        any (p => fst p == asyncModuleId && definesFun driver (snd p)) modules
+      _ => False
+
+definesFun : String -> List Decl -> Bool
+definesFun _ [] = False
+definesFun n ((DAttrib _ d) :: rest) = definesFun n (d :: rest)
+definesFun n ((DFunDef _ m _ _) :: rest) =
+  if m == n then True else definesFun n rest
+definesFun n (_ :: rest) = definesFun n rest
+
+-- Pin `driver` in the `async` module under `asyncMainPinName`, import the pin
+-- into the entry module, and rewrite `main = <e>` to `main = 0runasync <e>`.
+-- The entry's `main : T` signature is dropped: the wrapped main's type is the
+-- driver's result, not `Async`.
+export
+asyncWrapModules : String ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+asyncWrapModules driver modules =
+  wrapAsyncEntry (map (pinAsyncDriver driver) modules)
+
+pinAsyncDriver : String -> (String, List Decl) -> (String, List Decl)
+pinAsyncDriver driver (mid, decls) =
+  if mid == asyncModuleId then
+    (mid, decls ++ pinnedCopies driver asyncMainPinName decls)
+  else
+    (mid, decls)
+
+wrapAsyncEntry : List (String, List Decl) -> List (String, List Decl)
+wrapAsyncEntry [] = []
+wrapAsyncEntry [(mid, decls)] = [
+  (
+    mid,
+    asyncPinImport
+      :: map wrapAsyncMainDecl (filter (d => not (isMainTypeSig d)) decls),
+  ),
+]
+wrapAsyncEntry (p :: rest) = p :: wrapAsyncEntry rest
+
+synthLoc : Loc
+synthLoc = Loc "" 0 0 0 0
+
+asyncPinImport : Decl
+asyncPinImport =
+  DUse
+    False
+    (UseGroup [asyncModuleId] [UseMember asyncMainPinName False synthLoc None])
+    synthLoc
+
+wrapAsyncMainDecl : Decl -> Decl
+wrapAsyncMainDecl (DFunDef vis "main" [] body) =
+  DFunDef vis "main" [] (wrapCall asyncMainPinName body)
+wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
+wrapAsyncMainDecl d = d

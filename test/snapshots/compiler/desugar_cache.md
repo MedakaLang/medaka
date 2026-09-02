@@ -1,5 +1,5 @@
 # META
-source_lines=82
+source_lines=73
 stages=DESUGAR,MARK
 # SOURCE
 -- Source-keyed memoization of `desugar (parsePrelude src)` (#2234, S-1).
@@ -26,7 +26,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{Decl}
 import frontend.parse_cache.{parsePrelude, takeFirstN}
 import frontend.desugar.{desugar}
-import support.util.{lookupAssoc}
+import support.util.{lookupAssoc, dropAssoc}
 
 desugarCacheLimit : Int
 desugarCacheLimit = 4
@@ -51,7 +51,7 @@ noteDesugaredPrelude src decls =
   desugarCacheRef :=
     takeFirstN
       desugarCacheLimit
-      ((src, (gen, decls)) :: dropKeyD src !desugarCacheRef)
+      ((src, (gen, decls)) :: dropAssoc src !desugarCacheRef)
   gen
 
 -- `desugar (parsePrelude src)`, memoized by source string. Most-recently-used
@@ -75,20 +75,11 @@ desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
     let decls = desugar (parsePrelude src)
     let gen = noteDesugaredPrelude src decls
     (gen, decls)
-
--- drop any existing entry with this key (so a re-desugar refreshes its position).
-dropKeyD : String ->
-  List (String, (Int, List Decl)) ->
-  List (String, (Int, List Decl))
-dropKeyD _ [] = []
-dropKeyD k ((k2, v) :: rest)
-  | k == k2 = dropKeyD k rest
-  | otherwise = (k2, v) :: dropKeyD k rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false) (mem "takeFirstN" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "dropAssoc" false))))
 (DTypeSig false "desugarCacheLimit" (TyCon "Int"))
 (DFunDef false "desugarCacheLimit" () (ELit (LInt 4)))
 (DTypeSig false "desugarCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -96,21 +87,18 @@ dropKeyD k ((k2, v) :: rest)
 (DTypeSig false "desugarGenRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "desugarGenRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "noteDesugaredPrelude" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Int"))))
-(DFunDef false "noteDesugaredPrelude" ((PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "gen") (EBinOp "+" (EUnOp "!" (EVar "desugarGenRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarGenRef")) (EVar "gen"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarCacheRef")) (EApp (EApp (EVar "takeFirstN") (EVar "desugarCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (ETuple (EVar "gen") (EVar "decls"))) (EApp (EApp (EVar "dropKeyD") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))))))) (DoExpr (EVar "gen"))))
+(DFunDef false "noteDesugaredPrelude" ((PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "gen") (EBinOp "+" (EUnOp "!" (EVar "desugarGenRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarGenRef")) (EVar "gen"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarCacheRef")) (EApp (EApp (EVar "takeFirstN") (EVar "desugarCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (ETuple (EVar "gen") (EVar "decls"))) (EApp (EApp (EVar "dropAssoc") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))))))) (DoExpr (EVar "gen"))))
 (DTypeSig true "desugaredPrelude" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugaredPrelude" ((PVar "src")) (EApp (EVar "snd") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
 (DTypeSig true "desugaredPreludeKey" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "desugaredPreludeKey" ((PVar "src")) (EApp (EVar "fst") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
 (DTypeSig false "desugaredPreludeEntry" (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugaredPreludeEntry" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))) (arm (PCon "Some" (PVar "e")) () (EVar "e")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "src")))) (DoLet false false (PVar "gen") (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EVar "decls"))) (DoExpr (ETuple (EVar "gen") (EVar "decls")))))))
-(DTypeSig false "dropKeyD" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "dropKeyD" (PWild (PList)) (EListLit))
-(DFunDef false "dropKeyD" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKeyD") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKeyD") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false) (mem "takeFirstN" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "dropAssoc" false))))
 (DTypeSig false "desugarCacheLimit" (TyCon "Int"))
 (DFunDef false "desugarCacheLimit" () (ELit (LInt 4)))
 (DTypeSig false "desugarCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -118,13 +106,10 @@ dropKeyD k ((k2, v) :: rest)
 (DTypeSig false "desugarGenRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "desugarGenRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "noteDesugaredPrelude" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Int"))))
-(DFunDef false "noteDesugaredPrelude" ((PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "gen") (EBinOp "+" (EUnOp "!" (EVar "desugarGenRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarGenRef")) (EVar "gen"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarCacheRef")) (EApp (EApp (EVar "takeFirstN") (EVar "desugarCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (ETuple (EVar "gen") (EVar "decls"))) (EApp (EApp (EVar "dropKeyD") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))))))) (DoExpr (EVar "gen"))))
+(DFunDef false "noteDesugaredPrelude" ((PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "gen") (EBinOp "+" (EUnOp "!" (EVar "desugarGenRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarGenRef")) (EVar "gen"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "desugarCacheRef")) (EApp (EApp (EVar "takeFirstN") (EVar "desugarCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (ETuple (EVar "gen") (EVar "decls"))) (EApp (EApp (EVar "dropAssoc") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))))))) (DoExpr (EVar "gen"))))
 (DTypeSig true "desugaredPrelude" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugaredPrelude" ((PVar "src")) (EApp (EVar "snd") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
 (DTypeSig true "desugaredPreludeKey" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "desugaredPreludeKey" ((PVar "src")) (EApp (EVar "fst") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
 (DTypeSig false "desugaredPreludeEntry" (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugaredPreludeEntry" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))) (arm (PCon "Some" (PVar "e")) () (EVar "e")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "src")))) (DoLet false false (PVar "gen") (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EVar "decls"))) (DoExpr (ETuple (EVar "gen") (EVar "decls")))))))
-(DTypeSig false "dropKeyD" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "dropKeyD" (PWild (PList)) (EListLit))
-(DFunDef false "dropKeyD" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKeyD") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKeyD") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

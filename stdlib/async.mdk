@@ -1,41 +1,79 @@
--- async.mdk — Medaka's basic, swappable cooperative-concurrency layer.
+-- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
+-- deferred instances, and the two drivers.
 --
--- See ASYNC-DESIGN.md for the locked design. v1 is PURE MEDAKA (D6): the
--- scheduler is a pure interpreter of a trampolined `Async e a` description; no
--- eval.ml / runtime.c primitives. The cooperative-concurrency *contract* (D3)
--- is committed to (tasks interleave at yield boundaries, single-thread, no
--- parallelism), implemented as a degenerate sequential scheduler — swapping the
--- scheduler later changes performance + parallelism, never observable behavior.
+-- ASYNC-DESIGN.md (archive/design) locked the type and the contract:
+-- `Async e a` is a value-level description of deferred work; tasks interleave
+-- only at yield boundaries, on one OS thread, with no observable parallelism.
+-- Errors ride `Result` inside `Async`; there is no rejected-promise channel and
+-- `panic` still aborts the process.  docs/design/ASYNC-RUNTIME-DESIGN.md adds
+-- the runtime behind that contract: a single-threaded scheduler with a run
+-- queue and a park table, driven by `runAsyncIO`.
 --
--- Errors ride `Result` inside `Async` (D4); there is no rejected-promise
--- channel and `panic` still aborts the process uncatchably.
+-- EFFECT POLYMORPHISM.  `Async` is parametric in an effect ROW `e` as well as
+-- its value `a`: every stored continuation performs `<e>`, so the type carries
+-- exactly the capabilities the deferred work needs, and a driver performs
+-- exactly that row.  `runAsync` runs the pure trampoline (`Async e a -> <e> a`);
+-- `runAsyncIO` also performs the scheduler's own `<Clock>` (timers) and
+-- `<Net "_">` (readiness polling, once the network stage lands).
 --
--- EFFECT POLYMORPHISM (D2 done precisely).  `Async` is parametric in an effect
--- ROW `e` as well as its value `a`: a `Suspend` thunk performs `<e>`, so the
--- type *carries* exactly the capabilities the suspended work needs — just as
--- `Result` carries errors instead of a `Throws` effect.  `runAsync` then
--- performs *exactly* that stored row (`Async e a -> <e> a`): an `Async <> a`
--- runs purely, an `Async <IO> a` performs `<IO>`.  This relies on effect-row
--- parameters on data declarations (`e` is kind-inferred KRow from its use in
--- the `Suspend` field's effect tail); see the `data Async e a` note.
+-- Every scheduler queue is ordinary GC-visible Medaka data held in `Ref`s local
+-- to one `runAsyncIO` call; the runtime owns no descriptors and no C-side state.
 
--- | A deferred computation: either a finished value, or a thunk producing the
--- next step.  This is the trampoline / free-monad-ish encoding (ASYNC-DESIGN
--- §2.1) — `Suspend` boundaries are the yield points the scheduler interleaves
--- on.  The thunk performs `<e>`, so `e` is the row this computation rides.
-export data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
+import list.{partition}
+import time.{Duration, millis, toMillis}
+
+{- | Cooperative concurrency: build a description of deferred work with
+   `defer` blocks, then run it with `runAsync` or `runAsyncIO`.
+
+   `Async e a` is a value: nothing in it runs until a driver forces it. The
+   row `e` records the effects the stored work performs. `sleep` parks a
+   task until a deadline, `spawn` and `spawnTask` hand a child task to the
+   scheduler, `await` waits for a spawned task's value, and `concurrent`
+   runs a list of tasks and collects their results in input order.
+
+   `runAsync` runs one task sequentially and cannot wait on a timer; it is
+   the driver for pure, deterministic programs and for doctests.
+   `runAsyncIO` is the scheduler: it interleaves tasks round-robin at every
+   yield, sleeps until the earliest deadline when every task is parked, and
+   returns once the program and every task it spawned have finished.
+   A `main : Async e Unit` is driven by `runAsyncIO` on the native target
+   and by `runAsync` under the WebAssembly target, which has no clock. -}
+
+-- | A deferred computation.  `Done` holds a finished value; the other arms
+-- hold the next step under a thunk that performs `<e>`.  `Suspend` is a plain
+-- yield point, `Await` parks the task until any of its waits is satisfied, and
+-- `Spawn` hands a child task to the scheduler before continuing.
+export data Async (e : Effect) a =
+  | Done a
+  | Suspend (Unit -> <e> Async e a)
+  | Await (List Wait) (Unit -> <e> Async e a)
+  | Spawn (Async e Unit) (Unit -> <e> Async e a)
+
+-- | What a parked task is waiting on.  A task woken by any one of its waits
+-- simply retries, so a spurious wake is harmless.  `WaitRead` and `WaitWrite`
+-- name a file descriptor; `WaitUntil` is a monotonic deadline in seconds;
+-- `WaitFlag` is set when a spawned task finishes.
+export data Wait =
+  | WaitRead Int
+  | WaitWrite Int
+  | WaitUntil Float
+  | WaitFlag (Ref Bool)
+
+-- | A handle to a task started with `spawnTask`.  `await` reads its value.
+export data Task a = Task (Ref Bool) (Ref (Option a))
 
 -- The interface instances are the DEFERRED family (core.mdk `Deferred*`):
 -- the instance head is the bare constructor `Async : Effect -> Type -> Type`,
 -- and the effect of a callback rides the INDEX, not the method's arrow.  Every
--- arm STORES its callback under a `Suspend` — an eager `Done (f a)` would
--- perform the callback's row at construction, from a call typed pure, and is
--- rejected (`T-EFFECT-INDEX-EAGER`).  Cost accepted with that ruling: a
--- map/bind on an already-`Done` value allocates one `Suspend` and pays one
--- extra `runAsync` round.
+-- arm STORES its callback under a thunk — an eager `Done (f a)` would perform
+-- the callback's row at construction, from a call typed pure, and is rejected
+-- (`T-EFFECT-INDEX-EAGER`).  Cost accepted with that ruling: a map/bind on an
+-- already-`Done` value allocates one `Suspend` and pays one extra step.
 export impl DeferredMappable Async where
   deferMap f (Done a) = Suspend (u => Done (f a))
   deferMap f (Suspend t) = Suspend (u => deferMap f (t u))
+  deferMap f (Await ws t) = Await ws (u => deferMap f (t u))
+  deferMap f (Spawn c t) = Spawn c (u => deferMap f (t u))
 
 export impl DeferredApplicative Async where
   deferPure a = Done a
@@ -44,57 +82,257 @@ export impl DeferredApplicative Async where
 export impl DeferredThenable Async where
   deferThen (Done a) k = Suspend (u => k a)
   deferThen (Suspend t) k = Suspend (u => deferThen (t u) k)
+  deferThen (Await ws t) k = Await ws (u => deferThen (t u) k)
+  deferThen (Spawn c t) k = Spawn c (u => deferThen (t u) k)
 
--- | Lift an effectful (or pure) thunk into `Async`, deferring it behind one
--- `Suspend` boundary.  `liftIO (u => putStrLn "hi") : Async <Stdout> Unit`;
--- `runAsync`-ing it performs the `<Stdout>`.  A pure thunk yields `Async <> a`.
+{- | Lifts a thunk into `Async`, deferring it behind one yield boundary.
+
+   `liftIO (u => putStrLn "hi") : Async <Stdout> Unit`; a pure thunk yields
+   `Async <> a`. -}
 export
 liftIO : (Unit -> <e> a) -> Async e a
 liftIO act = Suspend (u => Done (act u))
 
--- | A cooperative yield point: hand control back to the scheduler, then resume.
--- Inert for a single chain; observable only once `concurrent` interleaves tasks.
--- Performs nothing, so it rides any row `e`.
+{- | A yield point: hands control back to the scheduler, then resumes.
+
+   Inert for a single task; observable once other tasks are runnable. -}
 export
 yield : Async e Unit
 yield = Suspend (_ => Done ())
 
--- | Drive one computation to its value (ASYNC-DESIGN §2.2), performing exactly
--- its row `e`.  Forces `Suspend` thunks until `Done`.  This is a tail-loop; for
--- a single chain it is just sequential execution.  (Compiled code TCOs this via
--- `-O2`, so a single chain is unbounded; the `medaka run` interpreter caps deep
--- chains at ~100–500k.  No stdlib rewrite needed when the runtime swap lands.)
+{- | Parks the task for `d`, letting other tasks run meanwhile.
+
+   Reads the clock, so `<Clock>` joins `e`. Needs `runAsyncIO`. -}
+export
+sleep : Duration -> Async e Unit
+sleep d = Suspend (u => sleepFrom (monotonicSec ()) d)
+
+sleepFrom : Float -> Duration -> Async e Unit
+sleepFrom now d =
+  let deadline = now + intToFloat (toMillis d) / 1000.0
+  Await [WaitUntil deadline] (u => Done ())
+
+{- | Starts `child` as a task of its own and continues at once.
+
+   The driver returns only after every spawned task has finished. -}
+export
+spawn : Async e Unit -> Async e Unit
+spawn child = Spawn child (u => Done ())
+
+{- | Starts `act` as a task of its own and returns a handle to its value.
+
+   `await` the handle to read the value once the task finishes. -}
+export
+spawnTask : Async e a -> Async e (Task a)
+spawnTask act = Suspend (u => spawnWith (Ref False) (Ref None) act)
+
+spawnWith : Ref Bool -> Ref (Option a) -> Async e a -> Async e (Task a)
+spawnWith done cell act = Spawn (deferThen act (a => Suspend (u =>
+  finish done cell a))) (u =>
+  Done (Task done cell))
+
+finish : Ref Bool -> Ref (Option a) -> a -> Async e Unit
+finish done cell a =
+  cell := Some a
+  done := True
+  Done ()
+
+{- | Waits for a spawned task and yields its value.
+
+   Parks until the task finishes; awaiting a finished task yields at once. -}
+export
+await : Task a -> Async e a
+await t = Await [WaitFlag (taskDone t)] (u => awaitResume t)
+
+taskDone : Task a -> Ref Bool
+taskDone (Task done _) = done
+
+awaitResume : Task a -> Async e a
+awaitResume (Task done cell) = match !cell
+  Some a => Done a
+  None => await (Task done cell)
+
+{- | Runs every task in the list and collects their values in input order.
+
+   Each task is spawned, so they interleave under `runAsyncIO`; the result
+   arrives once all of them have finished. -}
+export
+concurrent : List (Async e a) -> Async e (List a)
+concurrent asyncs = deferThen (spawnAll asyncs) (ts => awaitAll ts)
+
+spawnAll : List (Async e a) -> Async e (List (Task a))
+spawnAll [] = Done []
+spawnAll (a :: rest) =
+  deferThen (spawnTask a) (t => deferMap (t :: _) (spawnAll rest))
+
+awaitAll : List (Task a) -> Async e (List a)
+awaitAll [] = Done []
+awaitAll (t :: rest) =
+  deferThen (await t) (a => deferMap (a :: _) (awaitAll rest))
+
+{- | Runs a task to its value sequentially, performing exactly its row `e`.
+
+   A spawned child runs to completion before its parent continues, so the
+   result is deterministic. A task that waits on a timer or a descriptor
+   panics: use `runAsyncIO` for those. -}
 export
 runAsync : Async e a -> <e> a
-runAsync (Done a) = a
-runAsync (Suspend t) = runAsync (t ())
+runAsync prog =
+  let cell = Ref None
+  let _ = runSeq (deferThen prog (a => Suspend (u => storeResult cell a)))
+  match !cell
+    Some a => a
+    None => panic "async: the program finished without producing a value"
 
--- internal — advance one step (a `Suspend` round, or stay `Done`).
-stepAsync : Async e a -> <e> Async e a
-stepAsync (Done a) = Done a
-stepAsync (Suspend t) = t ()
+-- The sequential driver over Unit-typed tasks: a task's recursion stays at one
+-- type, so a spawned child can be run inline by the same loop.
+runSeq : Async e Unit -> <e> Unit
+runSeq (Done _) = ()
+runSeq (Suspend t) = runSeq (t ())
+runSeq (Spawn child k) =
+  let _ = runSeq child
+  runSeq (k ())
+runSeq (Await ws k) =
+  if any flagSet ws then
+    runSeq (k ())
+  else
+    panic
+      "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"
 
--- internal — is this computation finished?
-isDone : Async e a -> Bool
-isDone (Done _) = True
-isDone (Suspend _) = False
+flagSet : Wait -> Bool
+flagSet (WaitFlag r) = !r
+flagSet _ = False
 
--- internal — extract a finished value (only called once every task is `Done`).
-forceVal : Async e a -> a
-forceVal (Done a) = a
-forceVal (Suspend _) = panic "async: forceVal on an unfinished computation"
+{- | Runs a task under the scheduler, performing its row `e` plus the
+   scheduler's own `<Clock>` and `<Net "_">`.
 
--- | Run N computations concurrently, collecting results in input order once all
--- complete (ASYNC-DESIGN §2.3, D8 structured concurrency).  v1 advances each
--- task one `Suspend` round-robin so the interleave is *observable* even under
--- the sequential scheduler — surfaces order-dependent bugs before the real
--- scheduler lands.  Because v1 I/O externs block, this gains no wall-clock
--- overlap; the *semantics* are the production semantics (the point of D3).
+   Runnable tasks take turns at every yield. When every task is parked, the
+   scheduler sleeps until the earliest deadline. It returns the program's
+   value once the program and every spawned task have finished, and panics
+   if the remaining tasks can never be woken. -}
 export
-concurrent : List (Async e a) -> <e> Async e (List a)
-concurrent asyncs
-  | all isDone asyncs = Done (map forceVal asyncs)
-concurrent asyncs = Suspend (_ => concurrent (map stepAsync asyncs))
+runAsyncIO : Async e a -> <Clock, Net "_" | e> a
+runAsyncIO prog =
+  let cell = Ref None
+  let queue = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
+  let parked = Ref []
+  let _ = schedule queue parked
+  match !cell
+    Some a => a
+    None => panic "async: the program finished without producing a value"
+
+{- | `runAsyncIO` for a program whose value is `Unit`.
+
+   A `main : Async e Unit` is driven through this on the native target and
+   under `medaka run`. -}
+export
+runAsyncIOMain : Async e Unit -> <Clock, Net "_" | e> Unit
+runAsyncIOMain prog = runAsyncIO prog
+
+{- | `runAsync` for a program whose value is `Unit`.
+
+   A `main : Async e Unit` is driven through this on the WebAssembly target,
+   which has no clock. -}
+export
+runAsyncMain : Async e Unit -> <e> Unit
+runAsyncMain prog = runAsync prog
+
+storeResult : Ref (Option a) -> a -> Async e Unit
+storeResult cell a =
+  cell := Some a
+  Done ()
+
+-- One scheduler round: step the head of the run queue, or wake parked tasks
+-- when the queue is empty.  Tail-recursive so compiled code loops.
+schedule : Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  <Clock | e> Unit
+schedule queue parked = match !queue
+  t :: rest =>
+    queue := rest
+    let _ = dispatch queue parked (stepTask t)
+    schedule queue parked
+  [] => match !parked
+    [] => ()
+    _ =>
+      let _ = wakeParked queue parked
+      schedule queue parked
+
+stepTask : Async e Unit -> <e> Async e Unit
+stepTask (Suspend k) = k ()
+stepTask other = other
+
+dispatch : Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Async e Unit ->
+  Unit
+dispatch _ _ (Done _) = ()
+dispatch queue _ (Suspend k) = pushBack queue (Suspend k)
+dispatch _ parked (Await ws k) = parked := (ws, k) :: !parked
+dispatch queue _ (Spawn child k) =
+  let _ = pushBack queue child
+  pushBack queue (Suspend k)
+
+pushBack : Ref (List (Async e Unit)) -> Async e Unit -> Unit
+pushBack queue t = queue := !queue ++ [t]
+
+-- Nothing is runnable: move every task whose wait is satisfied back to the
+-- queue, or sleep until the earliest deadline, or report a deadlock.
+wakeParked : Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  <Clock> Unit
+wakeParked queue parked =
+  let now = monotonicSec ()
+  let (ready, waiting) = partition (p => isReady now p) !parked
+  match ready
+    _ :: _ =>
+      parked := waiting
+      requeue queue ready
+    [] => match earliestDeadline waiting
+      Some t => sleepMs (floatToInt ((t - now) * 1000.0) + 1)
+      None =>
+        if any (p => any isFdWait (fst p)) waiting then
+          panic
+            "async: waiting on a file descriptor needs the network runtime, which is not available yet"
+        else
+          panic
+            "async: every remaining task is waiting on a task that can never finish (deadlock)"
+
+requeue : Ref (List (Async e Unit)) ->
+  List (List Wait, Unit -> <e> Async e Unit) ->
+  Unit
+requeue _ [] = ()
+requeue queue ((_, k) :: rest) =
+  let _ = pushBack queue (Suspend k)
+  requeue queue rest
+
+isReady : Float -> (List Wait, Unit -> <e> Async e Unit) -> Bool
+isReady now (ws, _) = any (w => waitReady now w) ws
+
+waitReady : Float -> Wait -> Bool
+waitReady now (WaitUntil t) = t <= now
+waitReady _ (WaitFlag r) = !r
+waitReady _ _ = False
+
+isFdWait : Wait -> Bool
+isFdWait (WaitRead _) = True
+isFdWait (WaitWrite _) = True
+isFdWait _ = False
+
+earliestDeadline : List (List Wait, Unit -> <e> Async e Unit) -> Option Float
+earliestDeadline [] = None
+earliestDeadline ((ws, _) :: rest) =
+  minDeadline (deadlinesOf ws) (earliestDeadline rest)
+
+deadlinesOf : List Wait -> Option Float
+deadlinesOf [] = None
+deadlinesOf ((WaitUntil t) :: rest) = minDeadline (Some t) (deadlinesOf rest)
+deadlinesOf (_ :: rest) = deadlinesOf rest
+
+minDeadline : Option Float -> Option Float -> Option Float
+minDeadline None b = b
+minDeadline a None = a
+minDeadline (Some x) (Some y) = Some (min x y)
 
 {- Doctests.
 
@@ -118,4 +356,16 @@ concurrent asyncs = Suspend (_ => concurrent (map stepAsync asyncs))
 
    > runAsync (concurrent [Done 1, Done 2, Done 3])
    [1, 2, 3]
+
+   > runAsync (deferThen (spawnTask (Done 7)) await)
+   7
+
+   > runAsyncIO (concurrent [Done 1, Done 2, Done 3])
+   [1, 2, 3]
+
+   > runAsyncIO (deferThen (spawnTask (deferThen (sleep (millis 5)) (_ => Done 8))) await)
+   8
+
+   > runAsyncIO (deferMap length (concurrent [sleep (millis 5), sleep (millis 5), sleep (millis 5)]))
+   3
 -}

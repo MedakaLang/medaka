@@ -23,6 +23,8 @@ import driver.main_autoprint.{
   autoPrintWrapModules,
   autoPrintPinCore,
   underivedMainDiags,
+  shouldAsyncWrapMain,
+  asyncWrapModules,
 }
 
 -- ── failure ──────────────────────────────────────────────────────────────────
@@ -183,15 +185,21 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- COMPOSITE-MAIN AUTO-PRINT (design §10): after the elaborate that learns main's
 -- type, a bare non-Unit VALUE main is rewritten `main = <e>` → `main = println
 -- <e>` and re-emitted; a bare underived-ADT main surfaces the clean `No impl of
--- Display …` error.  A Unit/Async main (incl. every compiler-graph main) takes
--- the unchanged path, so emitter output on the compiler graph is byte-identical.
+-- Display …` error.  A `main : Async _` is rewritten to apply the `async`
+-- module's driver named by `asyncDriver` (`runAsyncIOMain` for a target with a
+-- clock, `runAsyncMain` otherwise; both declare a `Unit` result so no backend
+-- auto-prints it) and re-emitted — see main_autoprint.
+-- asyncWrapModules (#2506).  A Unit main (incl. every compiler-graph main)
+-- takes the unchanged path, so emitter output on the compiler graph is
+-- byte-identical.
 export
-runEmitWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+runEmitWith : String ->
+  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-runEmitWith emitTail runtimeDecls coreDecls modules =
+runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
   let (coreD, modules2) =
     elaborateModules runtimeDecls coreMangled modulesMangled
@@ -203,6 +211,12 @@ runEmitWith emitTail runtimeDecls coreDecls modules =
     match underivedMainDiags runtimeDecls coreW modulesW
       d :: _ => failWith (tcMsg d)
       [] => emitModulesWith emitTail runtimeDecls coreW modulesW
+  else if shouldAsyncWrapMain asyncDriver modules then
+    emitModulesWith
+      emitTail
+      runtimeDecls
+      coreDecls
+      (asyncWrapModules asyncDriver modules)
   else
     emitTail runtimeDecls coreD modules2
 

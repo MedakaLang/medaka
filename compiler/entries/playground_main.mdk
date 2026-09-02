@@ -112,6 +112,8 @@ import driver.main_autoprint.{
   autoPrintWrapModules,
   autoPrintPinCore,
   underivedMainDiags,
+  shouldAsyncWrapMain,
+  asyncWrapModules,
 }
 import json.{
   Json,
@@ -452,6 +454,16 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
       [] => finishClean emit warnTriples rt coreW modulesW
       errs =>
         emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
+  else if shouldAsyncWrapMain "runAsyncMain" modules then
+    -- An `Async` main is driven by the sequential `runAsync`: the browser build
+    -- has no clock host-imports (see wasm_emit_modules_main).
+
+    finishClean
+      emit
+      warnTriples
+      rt
+      core
+      (asyncWrapModules "runAsyncMain" modules)
   else
     finishClean emit warnTriples rt core modules
 

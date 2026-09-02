@@ -15,7 +15,7 @@ import ir.draft_semantic_program.{
 import entries.entry_support.{driveModules, runEmitWith}
 
 main : <IO> Unit
-main = driveModules (runEmitWith reportDraft)
+main = driveModules (runEmitWith "runAsyncIOMain" reportDraft)
 
 unrelatedModule : List (String, List Decl) -> (String, List Decl)
 unrelatedModule [] = ("__draft_unrelated__", [])

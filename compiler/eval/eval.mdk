@@ -3041,8 +3041,7 @@ appendOutput s =
   -- abort can flush it.  Called from BOTH the real `medaka run` path and the
   -- pure differential-oracle path (this function is shared), which is fine:
   -- the stash is inert unless `enableRunStdoutFlush` was also called, and
-  -- only `evalModulesOutputRun`/`evalModulesOutputAsync` (never the oracle
-  -- probes) call that.
+  -- only `evalModulesOutputRun` (never the oracle probes) calls that.
   let _ = stashRunStdout !outputRef
   VUnit
 
@@ -4799,34 +4798,6 @@ evalModulesOutputRun preludeDecls modules =
   let binds = evalModulesWith (ioExternBindings ()) preludeDecls modules
   let _ = runMainForEffect binds
   !outputRef
-
--- ASYNC-DESIGN Stage 2 (D5): the `main : Async _` analog of evalModulesOutput.
--- A `main` whose inferred type heads in `Async` forces to an INERT Async value
--- (its row sits unperformed behind `Suspend` thunks), so forcing it alone prints
--- nothing.  Instead drive it through the program's own `runAsync` (looked up in
--- the root module's FULL env — locals ∪ imports ∪ globals — so an imported
--- `runAsync` is reachable), which trampolines the suspensions and performs the
--- stored row, appending to outputRef.  Mirrors bin/main.ml's Run-branch dispatch.
-export
-evalModulesOutputAsync : List Decl -> List (String, List Decl) -> <e> String
-evalModulesOutputAsync preludeDecls modules =
-  outputRef := ""
-  -- Same reasoning as evalModulesOutputRun above: only the real `medaka run`
-  -- CLI driver (an Async main) reaches this function.
-  let _ = enableRunStdoutFlush ()
-  let binds = evalModulesRootEnv preludeDecls modules
-  let _ = driveAsyncMain binds
-  !outputRef
-
-driveAsyncMain : List (String, Value e) -> <e> Value e
-driveAsyncMain binds = match lookupBinding "main" binds
-  None => runtimePanic "E-NO-MAIN" noMainMsg
-  Some mv => match lookupBinding "runAsync" binds
-    Some rf => apply rf (force mv)
-    None =>
-      runtimePanic
-        "E-NO-RUNASYNC"
-        "main : Async _ requires `runAsync` in scope. Add `import async`"
 
 -- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModules ──────
 -- evalOne / evalOneOutput / evalOneRootEnv run a SINGLE program as the degenerate
