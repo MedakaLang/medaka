@@ -94,6 +94,23 @@ check_threshold() {
   fi
 }
 
+# check_min_alloc NAME LABEL — the inverse of check_threshold: asserts
+# allocBytes stayed AT OR ABOVE THRESHOLD, i.e. the per-call allocation is
+# still happening. Used for the capturing-lambda parity fixture, where
+# staying above threshold (not below it) is the healthy state.
+check_min_alloc() {
+  name="$1"
+  label="$2"
+  if [ -f "$WORK/$name.alloc" ]; then
+    alloc=$(cat "$WORK/$name.alloc")
+    if [ "$alloc" -ge "$THRESHOLD" ]; then
+      ok "$label (allocBytes=$alloc >= $THRESHOLD; still allocates per call)"
+    else
+      bad "$label" "allocBytes=$alloc (< $THRESHOLD; capturing lambda unexpectedly hoisted)"
+    fi
+  fi
+}
+
 build_one flat && check_probe flat flat 33000000
 build_one where_nocapture && check_probe where_nocapture where-nocapture 33000000
 build_one eta && check_probe eta eta 2000000
@@ -103,13 +120,25 @@ build_one eta && check_probe eta eta 2000000
 # check_threshold call, since a capturing closure legitimately allocates on
 # every call and that is not what this fixture pins.
 build_one capture_correctness && check_probe capture_correctness capture-correctness 13012011
+# BARE-LAMBDA HOIST (#2255 item 2): a capture-free anonymous `x => ...`
+# lambda literal (CLam) used as a first-class value -- the emitLamGo/
+# emitLamPat path this slice hoists, distinct from eta.mdk's named-function
+# eta-closure path.
+build_one lambda_value_nocapture &&
+  check_probe lambda_value_nocapture lambda-nocapture 2000000
+# BARE-LAMBDA CAPTURE PARITY: the same construct but the lambda DOES close
+# over an enclosing value, so it must still allocate a fresh cell every call.
+build_one lambda_value_capture &&
+  check_probe lambda_value_capture lambda-capture 1999999000000
 
 check_threshold flat flat-alloc-baseline
 check_threshold where_nocapture where-nocapture-alloc
 check_threshold eta eta-closure-alloc
+check_threshold lambda_value_nocapture lambda-nocapture-alloc
+check_min_alloc lambda_value_capture lambda-capture-alloc
 
-if [ "$checked" -lt 8 ]; then
-  echo "FAIL anti-rot floor: checked $checked, expected at least 8"
+if [ "$checked" -lt 10 ]; then
+  echo "FAIL anti-rot floor: checked $checked, expected at least 10"
   fail=$((fail + 1))
 fi
 

@@ -1,0 +1,20 @@
+-- BARE LAMBDA, NO CAPTURE: an anonymous `x => ...` lambda literal (CLam, not a
+-- named top-level function or a `where` binding) passed as a first-class
+-- VALUE on every iteration of a tight loop. Exercises `emitLamGo`'s own
+-- closure-alloc path directly (S-3 target) -- distinct from `eta.mdk`'s
+-- named-function eta-closure path (S-2) and from `where_nocapture.mdk`'s
+-- direct (non-value) call.
+apply1 : (Int -> Int) -> Int -> Int
+apply1 f x = f x
+
+loop : Int -> Int -> Int
+loop n acc
+  | n <= 0 = acc
+  | otherwise = loop (n - 1) (apply1 (x => x + 1) acc)
+
+main =
+  let a0 = allocBytes ()
+  let r = loop 2000000 0
+  let a1 = allocBytes ()
+  println "lambda-nocapture result=\{debug r}"
+  println "lambda-nocapture allocBytes=\{debug (a1 - a0)}"
