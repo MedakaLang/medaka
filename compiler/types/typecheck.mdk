@@ -464,9 +464,17 @@ tconUnresolved n = TCon n OriginUnresolved
 -- Inference-synthesized arrows use open rows so effect-subsumption survives
 -- equality unification; user annotations are closed unless they name a tail.
 public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
+-- #821: a tail cell may stand for the JOIN of several tails (`e ⊔ e2`, written
+-- `(e | e2)` in an index slot).  The row stays single-tailed syntactically; the
+-- join lives in the cell, so every consumer that only follows links keeps
+-- working, and `rowFlat` is the one place a join is taken apart.  A join with
+-- fewer than two unbound members normalizes back to a plain row
+-- (`effrowNorm`), so joins are only ever visible where two genuinely distinct
+-- variables meet — a graded impl body (rigid `e` and `e2`) or a written join.
 public export data Effvar =
   | EUnbound Int Int  -- EUnbound id level | link
   | ELink EffRow
+  | EJoin Int Int (List (Ref Effvar))  -- EJoin id level members
 
 -- ── Effect refinement domains (capability-effects v2, Stage 1) ─────────────
 -- An effect label may carry a PARAMETER drawn from its declared refinement
@@ -1132,6 +1140,18 @@ effrowNorm (EffRow labels tail) = match tail
       match nr
         EffRow ls2 t2 => EffRow (atomsUnion labels ls2) t2
     EUnbound _ _ => EffRow labels tail
+    -- #821: a join normalizes through its members — atoms merge in, bound
+    -- members disappear, and a join left with fewer than two unbound members
+    -- IS a plain row.  The cell is path-compressed to its live members so a
+    -- later read pays for the flattening once.
+    EJoin id lvl _ =>
+      let f = rowFlat (EffRow labels (Some cell))
+      match snd f
+        [] => EffRow (fst f) None
+        [m] => EffRow (fst f) (Some m)
+        ms =>
+          cell := EJoin id lvl ms
+          EffRow (fst f) (Some cell)
   None => EffRow labels tail
 
 -- the concrete labels (atoms) currently known for a row (ignores the open tail)
@@ -1191,6 +1211,7 @@ effvarLevel : Ref Effvar -> Int
 effvarLevel cell = match !cell
   EUnbound _ l => l
   ELink _ => 0
+  EJoin _ l _ => l
 
 -- sorted + deduplicated string set (canonical effect-label order, matching the
 -- OCaml `List.sort_uniq String.compare` so multi-label rows render identically)
@@ -1214,6 +1235,56 @@ effvarId : Ref Effvar -> Int
 effvarId cell = match !cell
   EUnbound id _ => id
   ELink _ => 0 - 1
+  EJoin id _ _ => id
+
+isJoinCell : Ref Effvar -> Bool
+isJoinCell cell = match !cell
+  EJoin _ _ _ => True
+  _ => False
+
+-- #821: a rigid method effect variable (its cell id is in the current impl
+-- body's rigid set) must never be identified with another tail; two such tails
+-- meeting in an ambient row JOIN instead.
+isRigidCell : Ref Effvar -> Bool
+isRigidCell cell = containsI (effvarId cell) perRun.value.rigidEffvarsRef.value
+
+-- a row's FLAT view: every atom reachable through links and joins, and every
+-- UNBOUND leaf cell (deduped by id).  The one place a join is decomposed.
+rowFlat : EffRow -> (List Atom, List (Ref Effvar))
+rowFlat (EffRow labels None) = (labels, [])
+rowFlat (EffRow labels (Some c)) = match !c
+  EUnbound _ _ => (labels, [c])
+  ELink r =>
+    let f = rowFlat r
+    (atomsUnion labels (fst f), snd f)
+  EJoin _ _ ms => rowFlatMembers labels ms
+
+rowFlatMembers : List Atom -> List (Ref Effvar) -> (List Atom, List (Ref Effvar))
+rowFlatMembers labels [] = (labels, [])
+rowFlatMembers labels (m::ms) =
+  let f = rowFlat (EffRow [] (Some m))
+  let rest = rowFlatMembers (atomsUnion labels (fst f)) ms
+  (fst rest, dedupCells (snd f ++ snd rest))
+
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+dedupCells [] = []
+dedupCells (c::cs) =
+  c :: dedupCells (filterList (d => effvarId d /= effvarId c) cs)
+
+-- a row whose tail stands for exactly [members]: closed for none, the cell
+-- itself for one, a fresh join cell for several.
+rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
+rowOfMembers labels [] = EffRow labels None
+rowOfMembers labels [m] = EffRow labels (Some m)
+rowOfMembers labels ms = EffRow labels (Some (joinCellOf ms))
+
+joinCellOf : List (Ref Effvar) -> Ref Effvar
+joinCellOf ms = Ref (EJoin (newEffvarId ()) (minLevelOf ms) ms)
+
+minLevelOf : List (Ref Effvar) -> Int
+minLevelOf [] = 0
+minLevelOf [m] = effvarLevel m
+minLevelOf (m::ms) = minI (effvarLevel m) (minLevelOf ms)
 
 -- record that the current context performs row [eff]'s effects, widening ambient
 -- [cur] WITHOUT closing its tail (so the next performed effect can still be
@@ -1226,8 +1297,26 @@ performEffect cur eff = match effrowNorm !cur
     EffRow effLabels effTail =>
       cur := EffRow (atomsUnion curLabels effLabels) (Some ct)
       match effTail
-        Some et => if effvarId et == effvarId ct then () else performLink ct et
+        Some et => if effvarId et == effvarId ct then ()
+        -- #821: a RIGID tail (a method effect variable inside an impl body) or
+        -- a join never gets identified with the ambient's tail — the ambient
+        -- becomes the JOIN of the two, so `t u` (performing `e`) followed by
+        -- `g a` (performing `e2`) leaves a row whose tail stands for `e ⊔ e2`
+        -- instead of forcing `e ~ e2` (a rigidity violation).  Everywhere
+        -- else the shared-fresh-tail link is byte-identical to before.
+        else if isJoinCell ct || isJoinCell et || isRigidCell ct || isRigidCell et then
+          performJoin cur ct et
+        else
+          performLink ct et
         None => ()
+
+performJoin : Ref EffRow -> Ref Effvar -> Ref Effvar -> Unit
+performJoin cur ct et =
+  let ms = dedupCells (snd (rowFlat (EffRow [] (Some ct))) ++ snd (rowFlat (EffRow [] (Some et))))
+  match !ct
+    EJoin id lvl _ => ct := EJoin id lvl ms
+    _ => match !cur
+      EffRow labels _ => cur := EffRow labels (Some (joinCellOf ms))
 
 performLink : Ref Effvar -> Ref Effvar -> Unit
 performLink ct et =
@@ -1242,6 +1331,118 @@ performLink ct et =
 unifyRow : EffRow -> EffRow -> Unit
 unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
 
+-- #821: a row whose (normalized) tail is a JOIN takes the join unifier; every
+-- other pair takes the four plain arms below, byte-identical to before.
+unifyRowN : EffRow -> EffRow -> Unit
+unifyRowN r1 r2 =
+  if rowTailIsJoin r1 || rowTailIsJoin r2 then
+    unifyJoinRows False r1 r2
+  else
+    unifyRowPlain r1 r2
+
+rowTailIsJoin : EffRow -> Bool
+rowTailIsJoin (EffRow _ (Some c)) = isJoinCell c
+rowTailIsJoin (EffRow _ None) = False
+
+-- ── #821: unifying rows whose tails are JOINS ─────────────────────────────
+-- Both rows are taken apart into (atoms, unbound member cells).  Members
+-- common to both sides cancel; what remains on each side is split into RIGID
+-- members (a method effect variable of the impl body being checked — never
+-- bound) and FLEXIBLE ones (ordinary metavariables).  The spec's discipline
+-- (EFFECTS-SEMANTICS §6, "unification never decomposes a join") is honoured by
+-- never binding a rigid member: a join is solved only by binding the flexible
+-- members on each side to whatever the OTHER side has left over, which is the
+-- ordinary open-absorbs rule generalized from one tail to a set.  A rigid
+-- member with nothing on the other side to match it is a genuine mismatch.
+--   * flexible on both sides — every flexible member is bound to a fresh
+--     shared tail joined with the other side's rigid residue (the plain
+--     BOTH-OPEN arm, over sets);
+--   * flexible on one side only — those members are bound to the other side's
+--     residue; a closed residue also runs the §5 leak check on the open side's
+--     atoms (the plain OPEN~CLOSED arm), and in INDEX mode the atoms must be
+--     equal (the plain index arm);
+--   * no flexible member anywhere — the rigid residues must both be empty and
+--     (index mode) the atoms equal; an arrow row with equal member sets and
+--     differing prefixes keeps the plain SAME-TAIL arm's leniency.
+unifyJoinRows : Bool -> EffRow -> EffRow -> Unit
+unifyJoinRows isIndex r1 r2 =
+  let fa = rowFlat r1
+  let fb = rowFlat r2
+  let ma = snd fa
+  let mb = snd fb
+  let onlyA = filterList (c => not (cellIn c mb)) ma
+  let onlyB = filterList (c => not (cellIn c ma)) mb
+  let rigidA = filterList isRigidCell onlyA
+  let flexA = filterList (c => not (isRigidCell c)) onlyA
+  let rigidB = filterList isRigidCell onlyB
+  let flexB = filterList (c => not (isRigidCell c)) onlyB
+  let dA = atomsDiff (fst fa) (fst fb)
+  let dB = atomsDiff (fst fb) (fst fa)
+  if isNonEmptyL flexA && isNonEmptyL flexB then
+    let v3 = freshEffvarAt (minI (minLevelOf flexA) (minLevelOf flexB))
+    let _ = bindEach flexA (rowOfMembers dB (v3::rigidB))
+    let _ = bindEach flexB (rowOfMembers dA (v3::rigidA))
+    recordAbsorptions (dA ++ dB) v3
+  else
+    if isNonEmptyL flexA then
+      let _ = if isNonEmptyL rigidA then joinMismatch isIndex fa fb else ()
+      let _ = if isEmptyL rigidB then
+        joinSideCheck isIndex dA dB (fst fa) (fst fb)
+      else
+        ()
+      bindEach flexA (rowOfMembers dB rigidB)
+    else
+      if isNonEmptyL flexB then
+        let _ = if isNonEmptyL rigidB then joinMismatch isIndex fa fb else ()
+        let _ = if isEmptyL rigidA then
+          joinSideCheck isIndex dB dA (fst fb) (fst fa)
+        else
+          ()
+        bindEach flexB (rowOfMembers dA rigidA)
+      else
+        let _ = if isNonEmptyL rigidA || isNonEmptyL rigidB then
+          joinMismatch isIndex fa fb
+        else
+          ()
+        if isIndex then indexRowEqCheck dA dB (fst fa) (fst fb) else ()
+
+cellIn : Ref Effvar -> List (Ref Effvar) -> Bool
+cellIn c cs = anyList (d => effvarId d == effvarId c) cs
+
+bindEach : List (Ref Effvar) -> EffRow -> Unit
+bindEach [] _ = ()
+bindEach (c::cs) row =
+  c := ELink row
+  bindEach cs row
+
+-- the open side's atoms [dOpen] escaping the closed side's bound: the plain
+-- OPEN~CLOSED arm's leak check for arrows, equality for an index.
+joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
+joinSideCheck True dOpen dClosed lOpen lClosed =
+  indexRowEqCheck dOpen dClosed lOpen lClosed
+joinSideCheck False _ _ lOpen lClosed =
+  effectLeakCheck (atomsEscape lOpen lClosed) lClosed
+
+joinMismatch : Bool -> (List Atom, List (Ref Effvar)) -> (List Atom, List (Ref Effvar)) -> Unit
+joinMismatch isIndex fa fb = pushTypeError
+  (if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK")
+  (joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb))
+
+renderFlatRow : (List Atom, List (Ref Effvar)) -> String
+renderFlatRow f =
+  let ctx = Ref []
+  let cnt = Ref 0
+  ppEffArgFmt
+    (renderAtomsOrEmpty (fst f))
+    (joinWith " | " (map (m => ppEffvarName ctx cnt m) (snd f)))
+
+renderAtomsOrEmpty : List Atom -> String
+renderAtomsOrEmpty [] = ""
+renderAtomsOrEmpty ls = renderAtoms ls
+
+joinMismatchMsg : String -> String -> String
+joinMismatchMsg a b = "Effect rows \{a} and \{b} cannot be made equal: each carries an effect variable the other side has no room for. A method's effect variables are the caller's to choose, so an impl may not tie one of them to another (or to the instance head's row); where the effects genuinely combine, the signature must say so with a join in the result index (`f (e | e2) b`)."
+
 -- #839 STRICTNESS AUDIT.  The four arms below are classified against
 -- EFFECTS-SEMANTICS §5 (docs/spec/EFFECTS-SEMANTICS.md:335-371) and §6
 -- (:406-451).  Each open-tailed arm can ABSORB or DISCARD a concrete effect
@@ -1255,8 +1456,8 @@ unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
 -- (see the both-open note), which is the whole reason the trail is needed.
 -- (Intra-file refs below name SYMBOLS, not line numbers — the latter rot; the
 -- §N (:lines) spec cites point into EFFECTS-SEMANTICS.md, verified current.)
-unifyRowN : EffRow -> EffRow -> Unit
-unifyRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyRowPlain : EffRow -> EffRow -> Unit
+unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   -- SAME-TAIL arm (v1 == v2): the SAME physical effvar on both sides carrying
   -- possibly DIFFERENT concrete prefixes (`<e>` ~ `<Stdout | e>`).  Returns ()
   -- and DISCARDS the prefix mismatch (symmetric diff of l1,l2) — no link, no
@@ -1300,10 +1501,10 @@ unifyRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
 -- §5's binding-boundary escape check (:339-351), checking the OPEN side's labels against
 -- the CLOSED side's bound at the open-meets-closed seam.  (Absorbing into a CLOSED tail is
 -- the guarded direction.)
-unifyRowN (EffRow l1 (Some v1)) (EffRow l2 None) =
+unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
   let _ = effectLeakCheck (atomsEscape l1 l2) l2
   v1 := ELink (EffRow (atomsDiff l2 l1) None)
-unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
+unifyRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
   let _ = effectLeakCheck (atomsEscape l2 l1) l1
   v2 := ELink (EffRow (atomsDiff l1 l2) None)
 -- CLOSED~CLOSED arm: a SILENT no-op — and NOT effect-guarded (unlike the two arms just
@@ -1327,7 +1528,7 @@ unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- is simply false there and the atoms are discarded for good (#1094, an S0).  Index rows
 -- therefore route to `unifyIndexRow` below, NOT here.  Do not re-point `unifyN`'s
 -- `TEff`/`TEff` arm at `unifyRow`.
-unifyRowN (EffRow _ None) (EffRow _ None) = ()
+unifyRowPlain (EffRow _ None) (EffRow _ None) = ()
 
 -- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
 -- `Mono` carries two different kinds of row and they obey different rules:
@@ -1382,13 +1583,22 @@ unifyRowN (EffRow _ None) (EffRow _ None) = ()
 unifyIndexRow : EffRow -> EffRow -> Unit
 unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
 
+-- #821: an index row whose tail is a join is solved by the join unifier in
+-- INDEX mode (equality, never subsumption).
 unifyIndexRowN : EffRow -> EffRow -> Unit
-unifyIndexRowN (EffRow l1 None) (EffRow l2 None) =
+unifyIndexRowN r1 r2 =
+  if rowTailIsJoin r1 || rowTailIsJoin r2 then
+    unifyJoinRows True r1 r2
+  else
+    unifyIndexRowPlain r1 r2
+
+unifyIndexRowPlain : EffRow -> EffRow -> Unit
+unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) =
   indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
-unifyIndexRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 =
     indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
-unifyIndexRowN r1 r2 = unifyRowN r1 r2
+unifyIndexRowPlain r1 r2 = unifyRowN r1 r2
 
 -- Two index rows with nothing left to solve — both closed, or both already ending in the
 -- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
@@ -2498,7 +2708,16 @@ substRow esub r = match effrowNorm r
       Some v2 => EffRow labels (Some v2)
       None => EffRow labels (Some v)
     ELink _ => EffRow labels (Some v)
+    -- #821: a join instantiates member-wise — each generalized member gets
+    -- the call site's fresh cell, the rest stay shared — into a FRESH join
+    -- cell, so the scheme's own join is never mutated by a caller.
+    EJoin _ _ ms => rowOfMembers labels (map (m => substMember esub m) ms)
   EffRow labels None => EffRow labels None
+
+substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
+substMember esub m = match !m
+  EUnbound id _ => optionOr m (lookupAssocI id esub)
+  _ => m
 
 -- lower a row's tail effvar level to <= [level] alongside the tyvar being bound
 lowerRowLevels : Int -> EffRow -> Unit
@@ -2506,7 +2725,16 @@ lowerRowLevels level r = match effrowNorm r
   EffRow _ (Some v) => match !v
     EUnbound id lvl => if lvl > level then v := EUnbound id level else ()
     ELink _ => ()
+    EJoin id lvl ms =>
+      let _ = if lvl > level then v := EJoin id level ms else ()
+      lowerMembers level ms
   EffRow _ None => ()
+
+lowerMembers : Int -> List (Ref Effvar) -> Unit
+lowerMembers _ [] = ()
+lowerMembers level (m::ms) =
+  let _ = lowerRowLevels level (EffRow [] (Some m))
+  lowerMembers level ms
 
 -- build a curried arrow carrying the body's latent effect [eff] on the LAST arrow
 -- only; intermediate arrows stay pure-open (partial application performs nothing)
@@ -2538,6 +2766,8 @@ rowFreeEffvars r = match effrowNorm r
       else
         []
     ELink _ => []
+    -- #821: a join generalizes over each of its free members.
+    EJoin _ _ ms => flatMap (m => rowFreeEffvars (EffRow [] (Some m))) ms
   EffRow _ None => []
 
 -- the declared concrete effect set of a signature: labels on the first `<…>`
@@ -8505,6 +8735,7 @@ data PerRun = PerRun {
     inRigidityBodyRef : Ref Bool,  -- True while an IMPL or DEFAULT method body is being inferred — the scope
     effvarCounter : Ref Int,  -- in which registerLocalScheme records obligations (see its comment)
     curEffect : Ref EffRow,  -- names GENERALIZED inside the top-level body currently being inferred
+    rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
     recordByNameRef : Ref (OrdMap RecordInfo),  -- (local `let`/`where` helpers), reset at each body start: an occurrence resolving
     fieldOwnersRef : Ref (OrdMap (List String)),  -- to one is a LOCAL shadow, never a method occurrence, so no method obligation is recorded for it (round-2 adversarial break 3).
     dataParamKindsRef : Ref (List (TabKey, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
@@ -8623,6 +8854,7 @@ freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
   effvarCounter = Ref 0,
   curEffect = Ref (EffRow [] None),
+  rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
   dataParamKindsRef = Ref [],
@@ -9670,11 +9902,19 @@ ppEffArg ctx cnt r = match effrowNorm r
       [] => ""
       ls => renderAtoms ls
     let tailS = match tail
-      Some cell => match !cell
-        EUnbound id _ => nameOf ctx cnt (id + 1000000)
-        ELink _ => ""
+      Some cell => ppEffvarName ctx cnt cell
       None => ""
-    ppEffArgFmt lbl tailS
+    -- #821: a bare join in an index slot renders parenthesised, `(e | e2)`,
+    -- which is also its written form; with labels, `<L | e | e2>`.
+    match tail
+      Some cell => if isJoinCell cell && lbl == "" then "(" ++ tailS ++ ")" else ppEffArgFmt lbl tailS
+      None => ppEffArgFmt lbl tailS
+
+ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
+ppEffvarName ctx cnt cell = match !cell
+  EUnbound id _ => nameOf ctx cnt (id + 1000000)
+  ELink _ => ""
+  EJoin _ _ ms => joinWith " | " (map (m => ppEffvarName ctx cnt m) ms)
 
 ppEffArgFmt : String -> String -> String
 ppEffArgFmt l t
@@ -27305,7 +27545,11 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- whole body inference — which is broader than any one unify, and is why no
   -- unify-level failure signal could have answered this: `inferDefaultMethodBody`
   -- also pushes T-EFFECT-LAUNDER, and contains its own gated unify.
+  -- #821: rigid window for the default body, mirroring the impl seam.
+  let savedRigid = perRun.value.rigidEffvarsRef.value
+  perRun.value.rigidEffvarsRef := monoIndexEffvarIds (fst inst)
   let (bodyErred, actualTy) = erredDuring (_ => inferDefaultMethodBody mname subject defLoc env (fst inst) pats body)
+  perRun.value.rigidEffvarsRef := savedRigid
   let _ = if bodyErred then
     ()
   else
@@ -29151,7 +29395,12 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- laundering at the CALL site remains #784's concern.
     let effMap = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn gscope mty))
     let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
+    -- #821: the method's effect variables are RIGID for the body — two of them
+    -- meeting in an ambient row join rather than being identified.
+    let savedRigid = perRun.value.rigidEffvarsRef.value
+    perRun.value.rigidEffvarsRef := map effvarIdOf effMap
     let actual = inferClauses env [(pats, body)]
+    perRun.value.rigidEffvarsRef := savedRigid
     let launderLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
     -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
     -- DECLARED return by the effect the method declares at that same arrow.  An effect an
@@ -29726,10 +29975,9 @@ eagerIndexOnlyVars scope mty effMap actualArrows =
   let tails = flatMap rowTailId actualArrows
   filterList (v => effVarCellIn v effMap tails) (indexOnlyEffVars scope mty)
 
+-- every unbound tail id the row reaches — a join contributes each member.
 rowTailId : EffRow -> List Int
-rowTailId row = match effrowNorm row
-  EffRow _ (Some t) => [effvarId t]
-  EffRow _ None => []
+rowTailId row = map effvarId (snd (rowFlat row))
 
 effVarCellIn : String -> List (String, Ref Effvar) -> List Int -> Bool
 effVarCellIn v effMap tails = match lookupAssoc v effMap
@@ -29833,7 +30081,9 @@ effVarOccAtoms _ = []
 effVarTailIds : List (String, Ref Effvar) -> List Int
 effVarTailIds [] = []
 effVarTailIds ((_, cell)::rest) = match effrowNorm (EffRow [] (Some cell))
-  EffRow _ (Some t) => effvarId t :: effVarTailIds rest
+  -- #821: a var whose cell became a JOIN is still its own (unidentified)
+  -- variable; only a plain single surviving tail counts toward the dup set.
+  EffRow _ (Some t) => if isJoinCell t then effVarTailIds rest else effvarId t :: effVarTailIds rest
   EffRow _ None => effVarTailIds rest
 
 quotedNames : List String -> String
