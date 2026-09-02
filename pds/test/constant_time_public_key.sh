@@ -23,7 +23,7 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 source_closure_ok() {
   tree=$1
   [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '3175129806 3842' ] || return 1
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1503851136 24611' ] || return 1
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
   [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '771369044 31975' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '3840689225 26477' ] || return 1
 

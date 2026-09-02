@@ -108,12 +108,12 @@ len (_ :: rest) = 1 + len rest
 
 -- Ordered ascending ⇒ the projected ints are non-decreasing, and ORDER BY is a
 -- permutation (it neither drops nor invents rows), so the count is preserved.
-test "ORDER BY ASC is a sorted, count-preserving permutation" = match (q
-  "SELECT age FROM users WHERE age IS NOT NULL ORDER BY age ASC")
-  Err e => fail e
-  Ok ordered => match q "SELECT age FROM users WHERE age IS NOT NULL"
+test "ORDER BY ASC is a sorted, count-preserving permutation" =
+  match q "SELECT age FROM users WHERE age IS NOT NULL ORDER BY age ASC"
     Err e => fail e
-    Ok unordered => expectAll [
-      expectTrue (nonDecreasing (map firstInt ordered)),
-      expectEqual (len ordered) (len unordered),
-    ]
+    Ok ordered => match q "SELECT age FROM users WHERE age IS NOT NULL"
+      Err e => fail e
+      Ok unordered => expectAll [
+        expectTrue (nonDecreasing (map firstInt ordered)),
+        expectEqual (len ordered) (len unordered),
+      ]

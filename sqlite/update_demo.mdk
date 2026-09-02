@@ -42,12 +42,12 @@ runUpdate path table asgn whereCol op whereVal =
 
 main : <IO, FileRead, FileWrite> Unit
 main = match args ()
-  [path, table, setCol, setType, setVal, whereCol, op, whereIntVal] => match (toInt
-    whereIntVal)
-    None => println "Error: invalid WHERE integer: \{whereIntVal}"
-    Some n => match makeAssign setCol setType setVal
-      None => println "Error: invalid set-type or set-val"
-      Some asgn => runUpdate path table asgn whereCol op n
+  [path, table, setCol, setType, setVal, whereCol, op, whereIntVal] =>
+    match toInt whereIntVal
+      None => println "Error: invalid WHERE integer: \{whereIntVal}"
+      Some n => match makeAssign setCol setType setVal
+        None => println "Error: invalid set-type or set-val"
+        Some asgn => runUpdate path table asgn whereCol op n
   _ =>
     println
       "usage: update_demo <path> <table> <set-col> <set-type:int|text> <set-val> <where-col> <op:eq|ne|lt|le|gt|ge> <int-value>"

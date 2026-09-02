@@ -58,7 +58,7 @@ expected_internal_source_manifest() {
 771369044 31975  pds/lib/scalar.mdk
 104684450 13107  pds/lib/sha256.mdk
 2565296540 2009  pds/lib/hmac_sha256.mdk
-1503851136 24611  pds/lib/secp256k1.mdk
+1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
 EOF
 }
@@ -69,7 +69,7 @@ expected_public_source_manifest() {
 771369044 31975  pds/lib/scalar.mdk
 104684450 13107  pds/lib/sha256.mdk
 2565296540 2009  pds/lib/hmac_sha256.mdk
-1503851136 24611  pds/lib/secp256k1.mdk
+1691956410 24617  pds/lib/secp256k1.mdk
 3175129806 3842  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF

@@ -140,32 +140,33 @@ decodeSections input pos count acc =
     Ok (reverse acc)
   else match checkCarBlocks (count + 1)
     Err message => Err message
-    Ok () => match (readVarintAt
-      "trailing corruption in section length"
-      input
-      pos
-      (arrayLength input))
-      Err message => Err message
-      Ok (sectionLength, payloadPos) =>
-        if sectionLength == 0 then
-          Err "car: zero-length section"
-        else match checkCarSectionBytes sectionLength
-          Err message => Err message
-          Ok () =>
-            if sectionLength > arrayLength input - payloadPos then
-              Err
-                "car: truncated or overlong section length exceeds remaining bytes"
-            else
-              let sectionEnd = payloadPos + sectionLength
-              match parseCidAt input payloadPos sectionEnd
-                Err message => Err message
-                Ok (cid, cidEnd) =>
-                  let block = slice input cidEnd (sectionEnd - cidEnd)
-                  decodeSections
-                    input
-                    sectionEnd
-                    (count + 1)
-                    ((cid, block) :: acc)
+    Ok () =>
+      match (readVarintAt
+        "trailing corruption in section length"
+        input
+        pos
+        (arrayLength input))
+        Err message => Err message
+        Ok (sectionLength, payloadPos) =>
+          if sectionLength == 0 then
+            Err "car: zero-length section"
+          else match checkCarSectionBytes sectionLength
+            Err message => Err message
+            Ok () =>
+              if sectionLength > arrayLength input - payloadPos then
+                Err
+                  "car: truncated or overlong section length exceeds remaining bytes"
+              else
+                let sectionEnd = payloadPos + sectionLength
+                match parseCidAt input payloadPos sectionEnd
+                  Err message => Err message
+                  Ok (cid, cidEnd) =>
+                    let block = slice input cidEnd (sectionEnd - cidEnd)
+                    decodeSections
+                      input
+                      sectionEnd
+                      (count + 1)
+                      ((cid, block) :: acc)
 
 rootsPresent : List Cid -> BlockStore -> Result String Unit
 rootsPresent [] _ = Ok ()
@@ -256,10 +257,7 @@ carDecode input = match checkCarBytes (arrayLength input)
           let header = slice input headerPos headerLength
           match decodeHeader header
             Err message => Err message
-            Ok roots => match (decodeSections
-              input
-              (headerPos + headerLength)
-              0
-              [])
-              Err message => Err message
-              Ok blocks => makeCar roots blocks
+            Ok roots =>
+              match decodeSections input (headerPos + headerLength) 0 []
+                Err message => Err message
+                Ok blocks => makeCar roots blocks

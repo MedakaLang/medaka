@@ -651,12 +651,12 @@ ecdsaVerifyRawForTest : AffinePoint ->
   Array Int ->
   Array Int ->
   Bool
-ecdsaVerifyRawForTest publicPoint digest rBytes sBytes = match (scFromBytes
-  rBytes)
-  Err _ => False
-  Ok r => match scFromBytes sBytes
+ecdsaVerifyRawForTest publicPoint digest rBytes sBytes =
+  match scFromBytes rBytes
     Err _ => False
-    Ok s => ecdsaVerifyDigest publicPoint digest (EcdsaSignature r s)
+    Ok r => match scFromBytes sBytes
+      Err _ => False
+      Ok s => ecdsaVerifyDigest publicPoint digest (EcdsaSignature r s)
 
 -- | Wycheproof's pinned P1363 corpus carries SEC 1 uncompressed public keys.
 --   This public-input parser is test-facing only; the consumer API remains the

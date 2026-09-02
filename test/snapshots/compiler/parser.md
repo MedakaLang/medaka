@@ -1,5 +1,5 @@
 # META
-source_lines=5664
+source_lines=5663
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -4976,10 +4976,9 @@ mkLocated : String ->
   String ->
   Int ->
   ParseError
-mkLocated src toks offs srcLen msg pos = match (offsetToLineCol
-  src
-  (locateOffset toks offs srcLen pos))
-  (line, col) => ParseError line col msg
+mkLocated src toks offs srcLen msg pos =
+  match offsetToLineCol src (locateOffset toks offs srcLen pos)
+    (line, col) => ParseError line col msg
 
 -- Is the char at `offset` the first non-whitespace character on its line?  If
 -- so, return `Some col` where `col` is its (0-based, tab-not-expanded — same

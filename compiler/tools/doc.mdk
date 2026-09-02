@@ -146,9 +146,10 @@ ppEffAtomDoc (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 
 -- a constraint `Iface arg…` (mirror pp_c inside TyConstrained / pp_requires).
 ppConstrDoc : Constraint -> String
-ppConstrDoc (Constraint { constraintHead = iface, constraintArgs = args }) = match args
-  [] => iface
-  _ => "\{iface} \{joinWith " " (map (ppTyP 2) args)}"
+ppConstrDoc (Constraint { constraintHead = iface, constraintArgs = args }) =
+  match args
+    [] => iface
+    _ => "\{iface} \{joinWith " " (map (ppTyP 2) args)}"
 
 ppTyDoc : Ty -> String
 ppTyDoc t = ppTyP 0 t
@@ -714,20 +715,20 @@ originModuleSchemes : String ->
   List String ->
   List String ->
   <IO> List (String, Scheme)
-originModuleSchemes runtimeSrc coreSrc roots path = match (findOriginFile
-  roots
-  (joinWith "/" path))
-  None => []
-  Some p => match (projectEntrySchemes
-    (Ref [])
-    (Ref [])
-    (_ => None)
-    p
-    roots
-    runtimeSrc
-    coreSrc)
+originModuleSchemes runtimeSrc coreSrc roots path =
+  match findOriginFile roots (joinWith "/" path)
     None => []
-    Some ss => ss
+    Some p =>
+      match (projectEntrySchemes
+        (Ref [])
+        (Ref [])
+        (_ => None)
+        p
+        roots
+        runtimeSrc
+        coreSrc)
+        None => []
+        Some ss => ss
 
 findOriginFile : List String -> String -> <IO> Option String
 findOriginFile [] _ = None
@@ -1171,13 +1172,9 @@ uniqueDoc (x :: xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 -- import-bearing target resolves its siblings before inferring schemes.
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
-runDoc runtimeSrc coreSrc src filename roots = match (computeModuleDoc
-  runtimeSrc
-  coreSrc
-  src
-  filename
-  roots)
-  ModuleDoc name header entries _ => renderMarkdown name header entries
+runDoc runtimeSrc coreSrc src filename roots =
+  match computeModuleDoc runtimeSrc coreSrc src filename roots
+    ModuleDoc name header entries _ => renderMarkdown name header entries
 
 -- ── library mode (S-doc-library-mode) ───────────────────────────────────────
 -- A module's full extracted doc: name (page/index title, page filename minus
@@ -1451,12 +1448,10 @@ entryTarget : List (String, String) ->
   String ->
   DocEntry ->
   Option String
-entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd)) _) = match (ownerOfType
-  owners
-  mentions
-  hd)
-  Some m => if m == here then None else Some m
-  None => None
+entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd)) _) =
+  match ownerOfType owners mentions hd
+    Some m => if m == here then None else Some m
+    None => None
 entryTarget _ _ _ _ = None
 
 movedFrom : List (String, String) ->
@@ -1656,18 +1651,19 @@ docSchemesFor : String ->
   List String ->
   List Decl ->
   <IO> List (String, Scheme)
-docSchemesFor runtimeSrc coreSrc filename roots rawUser = match (projectEntrySchemes
-  (Ref [])
-  (Ref [])
-  (_ => None)
-  filename
-  roots
-  runtimeSrc
-  coreSrc)
-  None =>
-    let _ =
-      ePutStrLn
-        "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
-    let _ = exit 1
-    []
-  Some schemes => schemes
+docSchemesFor runtimeSrc coreSrc filename roots rawUser =
+  match (projectEntrySchemes
+    (Ref [])
+    (Ref [])
+    (_ => None)
+    filename
+    roots
+    runtimeSrc
+    coreSrc)
+    None =>
+      let _ =
+        ePutStrLn
+          "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+      let _ = exit 1
+      []
+    Some schemes => schemes

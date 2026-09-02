@@ -1,5 +1,5 @@
 # META
-source_lines=480
+source_lines=478
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -471,17 +471,15 @@ dropLastSeg (x :: rest) = x :: dropLastSeg rest
 
 -- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
 makeStagingDir : String -> <IO> Result String String
-makeStagingDir cacheDir = match (runCommand "mktemp" [
-  "-d",
-  "\{cacheDir}/.staging_XXXXXX",
-])
-  Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
-  Ok (code, out, err) =>
-    if code /= 0 then
-      Err (if err == "" then "mktemp -d failed" else err)
-    else
-      let dir = stringTrim out
-      if dir == "" then Err "mktemp -d printed no path" else Ok dir
+makeStagingDir cacheDir =
+  match runCommand "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
+    Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err (if err == "" then "mktemp -d failed" else err)
+      else
+        let dir = stringTrim out
+        if dir == "" then Err "mktemp -d printed no path" else Ok dir
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))

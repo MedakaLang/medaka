@@ -1,5 +1,5 @@
 # META
-source_lines=408
+source_lines=407
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -171,20 +171,19 @@ nativeRendered : String ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> Result String (List (Result String String))
-nativeRendered target tsrc userDecls examples synthResults = match (nativeSkipReason
-  target
-  userDecls)
-  Some reason => Err reason
-  None => match makeTempDir ()
-    Err e =>
-      Err "native doctest runner: could not create a scratch directory: \{e}"
-    Ok tmpDir =>
-      -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
-      -- teardown, so the probe binary still exists while it runs.  Same shape as
-      -- `build_cmd.mdk`'s `runBuildNative`.
-      let rendered = runInTmp target tsrc examples synthResults tmpDir
-      let _ = cleanupTempDir tmpDir
-      rendered
+nativeRendered target tsrc userDecls examples synthResults =
+  match nativeSkipReason target userDecls
+    Some reason => Err reason
+    None => match makeTempDir ()
+      Err e =>
+        Err "native doctest runner: could not create a scratch directory: \{e}"
+      Ok tmpDir =>
+        -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
+        -- teardown, so the probe binary still exists while it runs.  Same shape as
+        -- `build_cmd.mdk`'s `runBuildNative`.
+        let rendered = runInTmp target tsrc examples synthResults tmpDir
+        let _ = cleanupTempDir tmpDir
+        rendered
 
 -- ── the scratch project ─────────────────────────────────────────────────────
 -- ⚠️ TRUSTED-ROOT PROBLEM.  A copy of a stdlib module living outside `stdlib/`

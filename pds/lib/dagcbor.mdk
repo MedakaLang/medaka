@@ -175,20 +175,18 @@ foldUIntGo bytes i acc =
     foldUIntGo bytes (i + 1) (acc * 256 + bytes[i])
 
 readSizedArgument : Array Int -> Int -> Int -> Int -> BResult Int
-readSizedArgument input pos width minimum = match (runBP
-  (takeSlice width)
-  input
-  pos)
-  BErr message errorPos => BErr message errorPos
-  BOk bytes endPos =>
-    if width == 8 && bytes[0] >= 64 then
-      BErr "dagcbor: integer/length exceeds representable Int range" pos
-    else
-      let value = foldUInt bytes 0
-      if value < minimum then
-        BErr "dagcbor: non-canonical shortest integer/length" pos
+readSizedArgument input pos width minimum =
+  match runBP (takeSlice width) input pos
+    BErr message errorPos => BErr message errorPos
+    BOk bytes endPos =>
+      if width == 8 && bytes[0] >= 64 then
+        BErr "dagcbor: integer/length exceeds representable Int range" pos
       else
-        BOk value endPos
+        let value = foldUInt bytes 0
+        if value < minimum then
+          BErr "dagcbor: non-canonical shortest integer/length" pos
+        else
+          BOk value endPos
 
 readArgument : Array Int -> Int -> Int -> BResult Int
 readArgument _ pos additional
@@ -222,18 +220,14 @@ parseMajor input pos _ 1 additional = match readArgument input pos additional
   BOk value endPos => BOk (DcInt (0 - 1 - value)) endPos
 parseMajor input pos _ 2 additional = parseBytes input pos additional
 parseMajor input pos _ 3 additional = parseString input pos additional
-parseMajor input pos depth 4 additional = match (readArgument
-  input
-  pos
-  additional)
-  BErr message errorPos => BErr message errorPos
-  BOk count endPos => parseArray input endPos depth count []
-parseMajor input pos depth 5 additional = match (readArgument
-  input
-  pos
-  additional)
-  BErr message errorPos => BErr message errorPos
-  BOk count endPos => parseMap input endPos depth count None []
+parseMajor input pos depth 4 additional =
+  match readArgument input pos additional
+    BErr message errorPos => BErr message errorPos
+    BOk count endPos => parseArray input endPos depth count []
+parseMajor input pos depth 5 additional =
+  match readArgument input pos additional
+    BErr message errorPos => BErr message errorPos
+    BOk count endPos => parseMap input endPos depth count None []
 parseMajor input pos depth 6 additional = parseTag input pos depth additional
 parseMajor _ pos _ 7 20 = BOk (DcBool False) pos
 parseMajor _ pos _ 7 21 = BOk (DcBool True) pos
@@ -319,13 +313,11 @@ validUtf8Four bytes i first =
 
 parseArray : Array Int -> Int -> Int -> Int -> List DagCbor -> BResult DagCbor
 parseArray _ pos _ 0 acc = BOk (DcArray (reverse acc)) pos
-parseArray input pos depth remaining acc = match (parseValueAt
-  input
-  pos
-  (depth + 1))
-  BErr message errorPos => BErr message errorPos
-  BOk value endPos =>
-    parseArray input endPos depth (remaining - 1) (value :: acc)
+parseArray input pos depth remaining acc =
+  match parseValueAt input pos (depth + 1)
+    BErr message errorPos => BErr message errorPos
+    BOk value endPos =>
+      parseArray input endPos depth (remaining - 1) (value :: acc)
 
 parseMap : Array Int ->
   Int ->
@@ -335,25 +327,23 @@ parseMap : Array Int ->
   List (String, DagCbor) ->
   BResult DagCbor
 parseMap _ pos _ 0 _ acc = BOk (DcMap (reverse acc)) pos
-parseMap input pos depth remaining previous acc = match (parseValueAt
-  input
-  pos
-  (depth + 1))
-  BErr message errorPos => BErr message errorPos
-  BOk keyValue keyEnd => match keyValue
-    DcString key => match mapKeyOrder previous key
-      Err message => BErr message pos
-      Ok () => match parseValueAt input keyEnd (depth + 1)
-        BErr message errorPos => BErr message errorPos
-        BOk value valueEnd =>
-          parseMap
-            input
-            valueEnd
-            depth
-            (remaining - 1)
-            (Some key)
-            ((key, value) :: acc)
-    _ => BErr "dagcbor: map key is not a string" pos
+parseMap input pos depth remaining previous acc =
+  match parseValueAt input pos (depth + 1)
+    BErr message errorPos => BErr message errorPos
+    BOk keyValue keyEnd => match keyValue
+      DcString key => match mapKeyOrder previous key
+        Err message => BErr message pos
+        Ok () => match parseValueAt input keyEnd (depth + 1)
+          BErr message errorPos => BErr message errorPos
+          BOk value valueEnd =>
+            parseMap
+              input
+              valueEnd
+              depth
+              (remaining - 1)
+              (Some key)
+              ((key, value) :: acc)
+      _ => BErr "dagcbor: map key is not a string" pos
 
 mapKeyOrder : Option String -> String -> Result String Unit
 mapKeyOrder None _ = Ok ()

@@ -58,18 +58,14 @@ setAge cells age = cells
 
 -- Build → parse → scan → print one table.
 readTable : String -> String -> Int -> List (List Cell) -> <IO> Unit
-readTable name createSql colCount rows = match (buildDatabase
-  name
-  createSql
-  colCount
-  ipk
-  rows)
-  Err e => println "build error: \{e}"
-  Ok bytes => match fromBytes bytes
-    Err e => println "fromBytes error: \{e}"
-    Ok db => match scanTableRows db name
-      Err e => println "scan error: \{e}"
-      Ok found => printRows display found
+readTable name createSql colCount rows =
+  match buildDatabase name createSql colCount ipk rows
+    Err e => println "build error: \{e}"
+    Ok bytes => match fromBytes bytes
+      Err e => println "fromBytes error: \{e}"
+      Ok db => match scanTableRows db name
+        Err e => println "scan error: \{e}"
+        Ok found => printRows display found
 
 main : <IO> Unit
 main =

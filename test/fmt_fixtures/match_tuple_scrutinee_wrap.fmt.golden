@@ -72,6 +72,7 @@ fNested a b = match (
 )
   ((x, y), z) => x
 
-fNonTuple a = match (someVeryLongNameHereForANonTupleScrutineeExpressionThatWouldOtherwiseWrapAcrossLinesXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-  + 1)
-  n => n
+fNonTuple a =
+  match (someVeryLongNameHereForANonTupleScrutineeExpressionThatWouldOtherwiseWrapAcrossLinesXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    + 1)
+    n => n

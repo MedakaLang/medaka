@@ -169,20 +169,19 @@ printFileSummary path checked failed skipped =
 runAll : List String -> Int -> Int -> Int -> Int -> <IO, FileRead "_"> Unit
 runAll [] maxBytes totalChecked totalFailed totalSkipped =
   if totalFailed > 0 || totalChecked == 0 then exit 1 else exit 0
-runAll (f :: rest) maxBytes totalChecked totalFailed totalSkipped = match (runFile
-  f
-  maxBytes)
-  Err e =>
-    println "ERROR reading \{f}: \{e}"
-    exit 1
-  Ok (c, fl, s) =>
-    printFileSummary f c fl s
-    runAll
-      rest
-      maxBytes
-      (totalChecked + c)
-      (totalFailed + fl)
-      (totalSkipped + s)
+runAll (f :: rest) maxBytes totalChecked totalFailed totalSkipped =
+  match runFile f maxBytes
+    Err e =>
+      println "ERROR reading \{f}: \{e}"
+      exit 1
+    Ok (c, fl, s) =>
+      printFileSummary f c fl s
+      runAll
+        rest
+        maxBytes
+        (totalChecked + c)
+        (totalFailed + fl)
+        (totalSkipped + s)
 
 parseArgs : List String -> (Int, List String)
 parseArgs ("--max-bytes" :: nStr :: rest) = match toInt nStr

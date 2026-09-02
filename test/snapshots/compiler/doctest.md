@@ -1,5 +1,5 @@
 # META
-source_lines=446
+source_lines=445
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -248,11 +248,10 @@ extractGo : List Example ->
   List String ->
   List (Int, String) ->
   List Example
-extractGo examples curInput expectedRev [] = match (sealExample
-  curInput
-  expectedRev)
-  None => examples
-  Some ex => ex :: examples
+extractGo examples curInput expectedRev [] =
+  match sealExample curInput expectedRev
+    None => examples
+    Some ex => ex :: examples
 extractGo examples curInput expectedRev (c :: rest)
   | isInputLine c =
     let examples2 = match sealExample curInput expectedRev

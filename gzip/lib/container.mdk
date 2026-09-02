@@ -347,26 +347,28 @@ test "parseGzipTrailer: reads the LAST 8 bytes of a full member" =
 -- Error path: bad magic (first two bytes wrong). The failure position is 2,
 -- not 0: `takeBytes 2` already consumed both magic bytes before `checkMagic`
 -- runs (ByteParser position-threading is post-hoc, not lookahead).
-test "parseGzipHeader: bad magic is rejected" = match (parseGzipHeader
-  (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3]))
-  Err msg => expectEqual "not a gzip stream (bad magic) at byte 2" msg
-  Ok _ => fail "expected Err on bad magic"
+test "parseGzipHeader: bad magic is rejected" =
+  match parseGzipHeader (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3])
+    Err msg => expectEqual "not a gzip stream (bad magic) at byte 2" msg
+    Ok _ => fail "expected Err on bad magic"
 
 -- Error path: CM /= 8 (deflate is the only method gzip actually uses).
-test "parseGzipHeader: CM /= 8 is rejected" = match (parseGzipHeader
-  (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3]))
-  Err msg =>
-    expectEqual
-      "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3"
-      msg
-  Ok _ => fail "expected Err on CM /= 8"
+test "parseGzipHeader: CM /= 8 is rejected" =
+  match parseGzipHeader (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
+    Err msg =>
+      expectEqual
+        "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3"
+        msg
+    Ok _ => fail "expected Err on CM /= 8"
 
 -- Error path: a reserved FLG bit (bit 5, value 32) is set.
-test "parseGzipHeader: a reserved FLG bit is rejected" = match (parseGzipHeader
-  (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3]))
-  Err msg =>
-    expectEqual "reserved FLG bits (5,6,7) must be 0, got FLG=32 at byte 4" msg
-  Ok _ => fail "expected Err on a reserved FLG bit"
+test "parseGzipHeader: a reserved FLG bit is rejected" =
+  match parseGzipHeader (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3])
+    Err msg =>
+      expectEqual
+        "reserved FLG bits (5,6,7) must be 0, got FLG=32 at byte 4"
+        msg
+    Ok _ => fail "expected Err on a reserved FLG bit"
 
 -- ---------------------------------------------------------------------------
 -- Properties
@@ -421,8 +423,8 @@ prop "emitGzipHeader/parseGzipHeader round-trips FNAME" (nameIn : String) =
     Err _ => False
 
 -- Trailer round-trip, wrapped to uint32 the same way the header is.
-prop "emitGzipTrailer/parseGzipTrailer round-trips" (crcIn : Int) (isizeIn : Int) = match (parseGzipTrailer
-  (emitGzipTrailer crcIn isizeIn))
-  Ok (crc, isize) =>
-    crc == bitAnd crcIn 4294967295 && isize == bitAnd isizeIn 4294967295
-  Err _ => False
+prop "emitGzipTrailer/parseGzipTrailer round-trips" (crcIn : Int) (isizeIn : Int) =
+  match parseGzipTrailer (emitGzipTrailer crcIn isizeIn)
+    Ok (crc, isize) =>
+      crc == bitAnd crcIn 4294967295 && isize == bitAnd isizeIn 4294967295
+    Err _ => False

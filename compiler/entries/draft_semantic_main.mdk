@@ -28,27 +28,27 @@ prepareDraft : List Decl ->
   Bool ->
   DraftSemanticProgram ->
   <IO> DraftSemanticProgram
-prepareDraft runtimeDecls coreD modules unitHint floatHint draft = match (getEnv
-  "MEDAKA_DRAFT_MUTATION")
-  Some "method-iface" => draftWithoutFirstMethodIface draft
-  Some "method-iface-provenance" => draftWithWrongMethodIfaceProvenance draft
-  Some "unrelated-control" =>
-    buildDraftSemanticProgram
-      runtimeDecls
-      coreD
-      (modules ++ [unrelatedModule modules])
-      unitHint
-      floatHint
-  Some "same-process" =>
-    let _ =
+prepareDraft runtimeDecls coreD modules unitHint floatHint draft =
+  match getEnv "MEDAKA_DRAFT_MUTATION"
+    Some "method-iface" => draftWithoutFirstMethodIface draft
+    Some "method-iface-provenance" => draftWithWrongMethodIfaceProvenance draft
+    Some "unrelated-control" =>
       buildDraftSemanticProgram
         runtimeDecls
         coreD
         (modules ++ [unrelatedModule modules])
         unitHint
         floatHint
-    draft
-  _ => draft
+    Some "same-process" =>
+      let _ =
+        buildDraftSemanticProgram
+          runtimeDecls
+          coreD
+          (modules ++ [unrelatedModule modules])
+          unitHint
+          floatHint
+      draft
+    _ => draft
 
 reportDraft : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 reportDraft runtimeDecls coreD modules =

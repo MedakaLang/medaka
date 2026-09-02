@@ -549,31 +549,30 @@ repoExportGraph : Cid ->
   Cid ->
   BlockStore ->
   Result String (List (Cid, Array Int), Array Int)
-repoExportGraph commitCid commitBytes dataRoot store = match (blockStoreGet
-  commitCid
-  store)
-  None => Err "repo: missing graph commit block"
-  Some storedCommit =>
-    if storedCommit /= commitBytes
-      || not (cidEqual commitCid (cidForDagCbor commitBytes)) then
-      Err "repo: tampered graph commit block"
-    else match decodeSignedCommit commitBytes
-      Err message => Err "repo: invalid graph commit: {message}"
-      Ok (_, commitData, _, _) =>
-        if not (cidEqual commitData dataRoot) then
-          Err "repo: commit data mismatch"
-        else match walkNodes [dataRoot] store [] [] 0
-          Err message => Err message
-          Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
-            Err message => Err "repo: invalid graph MST: \{message}"
-            Ok () => match recordBlocks leaves store []
-              Err message => Err message
-              Ok records =>
-                let blocks =
-                  (commitCid, arrayCopy commitBytes) :: nodes ++ records
-                match carEncode [commitCid] blocks
-                  Err message => Err "repo: CAR export failed: {message}"
-                  Ok bytes => Ok (blocks, bytes)
+repoExportGraph commitCid commitBytes dataRoot store =
+  match blockStoreGet commitCid store
+    None => Err "repo: missing graph commit block"
+    Some storedCommit =>
+      if storedCommit /= commitBytes
+        || not (cidEqual commitCid (cidForDagCbor commitBytes)) then
+        Err "repo: tampered graph commit block"
+      else match decodeSignedCommit commitBytes
+        Err message => Err "repo: invalid graph commit: {message}"
+        Ok (_, commitData, _, _) =>
+          if not (cidEqual commitData dataRoot) then
+            Err "repo: commit data mismatch"
+          else match walkNodes [dataRoot] store [] [] 0
+            Err message => Err message
+            Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
+              Err message => Err "repo: invalid graph MST: \{message}"
+              Ok () => match recordBlocks leaves store []
+                Err message => Err message
+                Ok records =>
+                  let blocks =
+                    (commitCid, arrayCopy commitBytes) :: nodes ++ records
+                  match carEncode [commitCid] blocks
+                    Err message => Err "repo: CAR export failed: {message}"
+                    Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
 export
@@ -638,12 +637,9 @@ repoValidateCommit expectedDid expectedData expectedRev bytes = do
 -- | Verify the canonical unsigned bytes and compact signature of metadata.
 export
 repoVerifyCommit : String -> PublicKey -> RepoCommit -> Bool
-repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signature) = match (repoValidateCommit
-  did
-  dataCid
-  rev
-  signed)
-  Err _ => False
-  Ok parsed =>
-    signatureCompact parsed == signatureCompact signature
-      && verifyDigest publicKey (sha256 unsigned) signature
+repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signature) =
+  match repoValidateCommit did dataCid rev signed
+    Err _ => False
+    Ok parsed =>
+      signatureCompact parsed == signatureCompact signature
+        && verifyDigest publicKey (sha256 unsigned) signature

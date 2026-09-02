@@ -504,12 +504,12 @@ mergeStep : (a -> a -> <e> Ordering) ->
   Int ->
   List a ->
   <e> List a
-mergeStep cmp left right il ir nl nr acc = match (cmp
-  (arrayGetUnsafe il left)
-  (arrayGetUnsafe ir right))
-  Gt =>
-    mergeGo cmp left right il (ir + 1) nl nr (arrayGetUnsafe ir right :: acc)
-  _ => mergeGo cmp left right (il + 1) ir nl nr (arrayGetUnsafe il left :: acc)
+mergeStep cmp left right il ir nl nr acc =
+  match cmp (arrayGetUnsafe il left) (arrayGetUnsafe ir right)
+    Gt =>
+      mergeGo cmp left right il (ir + 1) nl nr (arrayGetUnsafe ir right :: acc)
+    _ =>
+      mergeGo cmp left right (il + 1) ir nl nr (arrayGetUnsafe il left :: acc)
 
 -- # Searching
 

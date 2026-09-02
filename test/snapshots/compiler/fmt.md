@@ -1,5 +1,5 @@
 # META
-source_lines=728
+source_lines=725
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -199,36 +199,35 @@ countPairs ((ld, tr) :: xs) = listLen ld + listLen tr + countPairs xs
 -- to keep vlines aligned) and interleaving any interior comment before the
 -- variant it documents.  Other decls render opaquely.
 declDoc : FmtState -> Decl -> (String, FmtState)
-declDoc (FmtState pieces cs vlines cursor started placed) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives })) = match (takeNVariantLines
-  vlines
-  (listLen variants))
-  (vlinesRest, vls) => match vcommentsFor cs vls
-    (vcomments, csRest) =>
-      if listLen vcomments == listLen variants
-        && not (allEmptyPairs vcomments) then
-        (
-          render
-            (printDataDeclCommented
-              vis
-              n
-              params
-              kinds
-              variants
-              derives
-              vcomments),
-          FmtState
-            pieces
-            csRest
-            vlinesRest
-            cursor
-            started
-            (placed + countPairs vcomments),
-        )
-      else
-        (
-          render (printDecl d),
-          FmtState pieces cs vlinesRest cursor started placed,
-        )
+declDoc (FmtState pieces cs vlines cursor started placed) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives })) =
+  match takeNVariantLines vlines (listLen variants)
+    (vlinesRest, vls) => match vcommentsFor cs vls
+      (vcomments, csRest) =>
+        if listLen vcomments == listLen variants
+          && not (allEmptyPairs vcomments) then
+          (
+            render
+              (printDataDeclCommented
+                vis
+                n
+                params
+                kinds
+                variants
+                derives
+                vcomments),
+            FmtState
+              pieces
+              csRest
+              vlinesRest
+              cursor
+              started
+              (placed + countPairs vcomments),
+          )
+        else
+          (
+            render (printDecl d),
+            FmtState pieces cs vlinesRest cursor started placed,
+          )
 declDoc st decl = (render (printDecl decl), st)
 
 -- ── Trailing comments ─────────────────────────────
@@ -281,13 +280,12 @@ isSingleNamedFieldData _ = False
 -- Render a single-variant named-field data decl one-field-per-line, consuming
 -- its one variant line (to keep vlines aligned).
 renderNamedFieldMulti : FmtState -> Decl -> (String, FmtState)
-renderNamedFieldMulti (FmtState pieces cs vlines cursor started placed) (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) = match (takeNVariantLines
-  vlines
-  1)
-  (vlinesRest, _) => (
-    render (printNamedFieldData vis n params kinds variants derives),
-    FmtState pieces cs vlinesRest cursor started placed,
-  )
+renderNamedFieldMulti (FmtState pieces cs vlines cursor started placed) (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) =
+  match takeNVariantLines vlines 1
+    (vlinesRest, _) => (
+      render (printNamedFieldData vis n params kinds variants derives),
+      FmtState pieces cs vlinesRest cursor started placed,
+    )
 renderNamedFieldMulti st decl = declDoc st decl
 
 -- Splice interior comments into a rendered record decl by output-line index
@@ -491,13 +489,12 @@ stepDecl st srcLines commas decl dp =
   let endLine = declPosEndLine dp
   let st1 = flushBefore st line
   match st1
-    FmtState pieces1 cs1 vlines1 cursor1 started1 placed1 => match (splitByEndLine
-      cs1
-      endLine)
-      (mine, after) =>
-        let stSpan = FmtState pieces1 mine vlines1 cursor1 started1 placed1
-        let stOut = stepDeclSpan stSpan srcLines commas decl line endLine
-        appendAfterComments stOut after
+    FmtState pieces1 cs1 vlines1 cursor1 started1 placed1 =>
+      match splitByEndLine cs1 endLine
+        (mine, after) =>
+          let stSpan = FmtState pieces1 mine vlines1 cursor1 started1 placed1
+          let stOut = stepDeclSpan stSpan srcLines commas decl line endLine
+          appendAfterComments stOut after
 
 -- The per-decl body, over a comment stream narrowed to [line, endLine].
 stepDeclSpan : FmtState ->

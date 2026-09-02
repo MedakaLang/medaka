@@ -1,5 +1,5 @@
 # META
-source_lines=1143
+source_lines=1145
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -558,18 +558,20 @@ checkDerives decls = flatMap declDeriveErrors decls
 -- passing `map fst (dataDerivers …)` to a decl with NO derives would still build
 -- the deriver table for every `data` in the program.
 declDeriveErrors : Decl -> List (String, Option Loc)
-declDeriveErrors (DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives }) = match derives
-  [] => []
-  _ =>
-    flatMap
-      (unknownDerive name (map fst (dataDerivers name params variants)))
-      derives
-declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = match derives
-  [] => []
-  _ =>
-    flatMap
-      (unknownDerive name (map fst (newtypeDerivers name params con fty)))
-      derives
+declDeriveErrors (DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives }) =
+  match derives
+    [] => []
+    _ =>
+      flatMap
+        (unknownDerive name (map fst (dataDerivers name params variants)))
+        derives
+declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) =
+  match derives
+    [] => []
+    _ =>
+      flatMap
+        (unknownDerive name (map fst (newtypeDerivers name params con fty)))
+        derives
 declDeriveErrors (DAttrib _ d) = declDeriveErrors d
 declDeriveErrors _ = []
 

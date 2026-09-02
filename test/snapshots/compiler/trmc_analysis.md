@@ -1,5 +1,5 @@
 # META
-source_lines=1705
+source_lines=1674
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -967,52 +967,53 @@ dispDetectGo : (String -> String) ->
   OrdMap Unit ->
   List DispGroup
 dispDetectGo _ _ _ _ _ _ _ _ _ _ [] accepted _ _ = reverseL accepted
-dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets (b :: rest) accepted claimed doomed = match (dispTryRoot
-  cf
-  isFn
-  fa
-  s1
-  fnSet
-  bindIx
-  headsMap
-  headsIx
-  implHeads
-  consTargets
-  claimed
-  doomed
-  b)
-  (Some grp, doomed2) =>
-    dispDetectGo
-      cf
-      isFn
-      fa
-      s1
-      fnSet
-      bindIx
-      headsMap
-      headsIx
-      implHeads
-      consTargets
-      rest
-      (grp :: accepted)
-      (omFromNames (dispMembersOf grp) claimed)
-      doomed2
-  (None, doomed2) =>
-    dispDetectGo
-      cf
-      isFn
-      fa
-      s1
-      fnSet
-      bindIx
-      headsMap
-      headsIx
-      implHeads
-      consTargets
-      rest
-      accepted
-      claimed
-      doomed2
+dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets (b :: rest) accepted claimed doomed =
+  match (dispTryRoot
+    cf
+    isFn
+    fa
+    s1
+    fnSet
+    bindIx
+    headsMap
+    headsIx
+    implHeads
+    consTargets
+    claimed
+    doomed
+    b)
+    (Some grp, doomed2) =>
+      dispDetectGo
+        cf
+        isFn
+        fa
+        s1
+        fnSet
+        bindIx
+        headsMap
+        headsIx
+        implHeads
+        consTargets
+        rest
+        (grp :: accepted)
+        (omFromNames (dispMembersOf grp) claimed)
+        doomed2
+    (None, doomed2) =>
+      dispDetectGo
+        cf
+        isFn
+        fa
+        s1
+        fnSet
+        bindIx
+        headsMap
+        headsIx
+        implHeads
+        consTargets
+        rest
+        accepted
+        claimed
+        doomed2
 
 -- the bind's group if it roots a valid one, else None — plus the (possibly extended)
 -- `doomed` set.  `claimed` replaces the old `flatMap dispMembersOf accepted`, which
@@ -1211,14 +1212,10 @@ dispExprConsTargets cf isFn fa fnSet (CBlock stmts) = match lastStmtExpr stmts
   None => []
 dispExprConsTargets cf isFn fa fnSet (CDecision _ arms _) =
   flatMap (a => dispExprConsTargets cf isFn fa fnSet (armBody a)) arms
-dispExprConsTargets cf isFn fa fnSet other = match (dispSpineParts
-  cf
-  isFn
-  fa
-  (f => omHasKey f fnSet)
-  other)
-  Some (_, f, _) => [f]
-  None => []
+dispExprConsTargets cf isFn fa fnSet other =
+  match dispSpineParts cf isFn fa (f => omHasKey f fnSet) other
+    Some (_, f, _) => [f]
+    None => []
 
 -- a saturated direct call to `root` (canonicalized): flattenApp head is `CVar f`,
 -- `cf f == root`, arg count == arity.
@@ -1352,45 +1349,37 @@ dispGrow cf isFn fa bindIx fnSet claimed root [] back accRev accSet parents doom
     accSet
     parents
     doomed
-dispGrow cf isFn fa bindIx fnSet claimed root (m :: rest) back accRev accSet parents doomed = match (omLookup
-  m
-  bindIx)
-  None => (None, doomed)
-  Some (CBind _ clauses) =>
-    -- a non-root member must be non-dict (it is emitted via the normal clause
-    -- machinery with redirected leaves); it MAY have literal- or ctor-pattern
-    -- clauses (singleOp dispatch on a Char, `layout` dispatch on the RawTok
-    -- head) — the clause-chain emit handles them and the context redirect
-    -- reaches each arm's leaves.
-    if not (dispNonDict clauses) then
-      (None, doomed)
-    else match dispMemberTailsOk cf isFn fa fnSet root clauses
-      None => (None, doomed)
-      Some newMembers => match (dispAddNew
-        newMembers
-        claimed
-        doomed
-        m
-        accRev
-        accSet
-        parents
-        [])
-        None => (None, dispMarkDoomed parents m doomed)
-        Some (accRev2, accSet2, parents2, addedRev) =>
-          dispGrow
-            cf
-            isFn
-            fa
-            bindIx
-            fnSet
-            claimed
-            root
-            rest
-            (addedRev ++ back)
-            accRev2
-            accSet2
-            parents2
-            doomed
+dispGrow cf isFn fa bindIx fnSet claimed root (m :: rest) back accRev accSet parents doomed =
+  match omLookup m bindIx
+    None => (None, doomed)
+    Some (CBind _ clauses) =>
+      -- a non-root member must be non-dict (it is emitted via the normal clause
+      -- machinery with redirected leaves); it MAY have literal- or ctor-pattern
+      -- clauses (singleOp dispatch on a Char, `layout` dispatch on the RawTok
+      -- head) — the clause-chain emit handles them and the context redirect
+      -- reaches each arm's leaves.
+      if not (dispNonDict clauses) then
+        (None, doomed)
+      else match dispMemberTailsOk cf isFn fa fnSet root clauses
+        None => (None, doomed)
+        Some newMembers =>
+          match dispAddNew newMembers claimed doomed m accRev accSet parents []
+            None => (None, dispMarkDoomed parents m doomed)
+            Some (accRev2, accSet2, parents2, addedRev) =>
+              dispGrow
+                cf
+                isFn
+                fa
+                bindIx
+                fnSet
+                claimed
+                root
+                rest
+                (addedRev ++ back)
+                accRev2
+                accSet2
+                parents2
+                doomed
 
 -- Fold the newly-referenced members into (accRev, accSet, parents), returning also the
 -- additions in REVERSE order (ready to splice onto the queue's reversed back).
@@ -1490,16 +1479,10 @@ dispClausesGo : (String -> String) ->
   List String ->
   Option (List String)
 dispClausesGo _ _ _ _ _ [] found = Some found
-dispClausesGo cf isFn fa fnSet root ((CClause _ body) :: rest) found = match (dispLeavesOk
-  cf
-  isFn
-  fa
-  fnSet
-  root
-  body
-  found)
-  None => None
-  Some found2 => dispClausesGo cf isFn fa fnSet root rest found2
+dispClausesGo cf isFn fa fnSet root ((CClause _ body) :: rest) found =
+  match dispLeavesOk cf isFn fa fnSet root body found
+    None => None
+    Some found2 => dispClausesGo cf isFn fa fnSet root rest found2
 
 -- descend the tail wrappers; check each leaf; accumulate referenced new group fns.
 -- (Block-prefix statements, let-RHSs, guards, and scrutinees are validated by
@@ -1512,24 +1495,18 @@ dispLeavesOk : (String -> String) ->
   CExpr ->
   List String ->
   Option (List String)
-dispLeavesOk cf isFn fa fnSet root (CIf _ t f) found = match (dispLeavesOk
-  cf
-  isFn
-  fa
-  fnSet
-  root
-  t
-  found)
-  None => None
-  Some f2 => dispLeavesOk cf isFn fa fnSet root f f2
+dispLeavesOk cf isFn fa fnSet root (CIf _ t f) found =
+  match dispLeavesOk cf isFn fa fnSet root t found
+    None => None
+    Some f2 => dispLeavesOk cf isFn fa fnSet root f f2
 dispLeavesOk cf isFn fa fnSet root (CLet False (PVar _ _) _ b) found =
   dispLeavesOk cf isFn fa fnSet root b found
 dispLeavesOk cf isFn fa fnSet root (CLet False PWild _ b) found =
   dispLeavesOk cf isFn fa fnSet root b found
-dispLeavesOk cf isFn fa fnSet root (CBlock stmts) found = match (lastStmtExpr
-  stmts)
-  Some ex => dispLeavesOk cf isFn fa fnSet root ex found
-  None => None
+dispLeavesOk cf isFn fa fnSet root (CBlock stmts) found =
+  match lastStmtExpr stmts
+    Some ex => dispLeavesOk cf isFn fa fnSet root ex found
+    None => None
 dispLeavesOk cf isFn fa fnSet root (CDecision _ arms _) found =
   dispArmsOk cf isFn fa fnSet root arms found
 dispLeavesOk cf isFn fa fnSet root other found =
@@ -1564,32 +1541,28 @@ dispLeafOk : (String -> String) ->
   CExpr ->
   List String ->
   Option (List String)
-dispLeafOk cf isFn fa fnSet root e found = match (dispSpineParts
-  cf
-  isFn
-  fa
-  (f => omHasKey f fnSet)
-  e)
-  Some (heads, f, _) =>
-    -- the heads become the cells' lead fields; one that re-enters the root would
-    -- run a nested spine build mid-leaf — poison the group.  (Non-root member
-    -- references in heads are caught by dispValidate v3.)
-    if anyListM (h => dispCallsRoot cf root h) heads then
-      None
-    else
-      Some (f :: found)
-  None => match flattenApp e []
-    (CVar f0 _, args) =>
-      let f = cf f0
-      if omHasKey f fnSet && isFn f && listLen args == fa f then
-        -- saturated tail-call to a user fn (the root included): pull it into the
-        -- group (case 3).  Its own tails are validated when the worklist reaches it.
-        Some (f :: found)
-      else if dispLeafIsBase cf root e then
-        Some found
-      else
+dispLeafOk cf isFn fa fnSet root e found =
+  match dispSpineParts cf isFn fa (f => omHasKey f fnSet) e
+    Some (heads, f, _) =>
+      -- the heads become the cells' lead fields; one that re-enters the root would
+      -- run a nested spine build mid-leaf — poison the group.  (Non-root member
+      -- references in heads are caught by dispValidate v3.)
+      if anyListM (h => dispCallsRoot cf root h) heads then
         None
-    _ => if dispLeafIsBase cf root e then Some found else None
+      else
+        Some (f :: found)
+    None => match flattenApp e []
+      (CVar f0 _, args) =>
+        let f = cf f0
+        if omHasKey f fnSet && isFn f && listLen args == fa f then
+          -- saturated tail-call to a user fn (the root included): pull it into the
+          -- group (case 3).  Its own tails are validated when the worklist reaches it.
+          Some (f :: found)
+        else if dispLeafIsBase cf root e then
+          Some found
+        else
+          None
+      _ => if dispLeafIsBase cf root e then Some found else None
 
 -- a BASE leaf: a value with NO call to `root` and no tail-call into a group fn — e.g. `[]`,
 -- a literal, a non-recursive value.  (Root-free here; dispValidate v3 re-checks every
@@ -1661,22 +1634,18 @@ dispNonTailHeads cf isFn fa memberSet (CBlock stmts) =
 dispNonTailHeads cf isFn fa memberSet (CDecision scrut arms _) =
   allCallHeads cf scrut
     ++ flatMap (a => dispArmNonTailHeads cf isFn fa memberSet a) arms
-dispNonTailHeads cf isFn fa memberSet leaf = match (dispSpineParts
-  cf
-  isFn
-  fa
-  (f => omHasKey f memberSet)
-  leaf)
-  Some (heads, _, args) =>
-    flatMap (allCallHeads cf) heads ++ flatMap (allCallHeads cf) args
-  None => match flattenApp leaf []
-    (CVar f0 _, args) =>
-      let f = cf f0
-      if omHasKey f memberSet && listLen args == fa f then
-        flatMap (allCallHeads cf) args
-      else
-        allCallHeads cf leaf
-    _ => allCallHeads cf leaf
+dispNonTailHeads cf isFn fa memberSet leaf =
+  match dispSpineParts cf isFn fa (f => omHasKey f memberSet) leaf
+    Some (heads, _, args) =>
+      flatMap (allCallHeads cf) heads ++ flatMap (allCallHeads cf) args
+    None => match flattenApp leaf []
+      (CVar f0 _, args) =>
+        let f = cf f0
+        if omHasKey f memberSet && listLen args == fa f then
+          flatMap (allCallHeads cf) args
+        else
+          allCallHeads cf leaf
+      _ => allCallHeads cf leaf
 
 dispArmNonTailHeads : (String -> String) ->
   (String -> Bool) ->

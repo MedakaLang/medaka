@@ -640,26 +640,26 @@ probeWasmTools _ = match runCommand "wasm-tools" ["--version"]
 -- against the artifact as assembled; gate-consumed WAT/`wasm-tools print` output
 -- never goes through this function, so names stay intact there.
 wasmAssemble : String -> String -> String -> <IO> BuildResult
-wasmAssemble watPath outPath inputAbs = match (runCommand "wasm-tools" [
-  "parse", watPath, "-o", outPath
-])
-  Err e => BuildErr ("error: could not run wasm-tools parse: " ++ e)
-  Ok (0, _, _) => match (runCommand "wasm-tools" [
-    "validate", "--features=all", outPath
-  ])
-    Err e => BuildErr ("error: could not run wasm-tools validate: " ++ e)
-    Ok (0, _, _) => match (runCommand "wasm-tools" [
-      "strip", "--all", outPath, "-o", outPath
-    ])
-      Err e => BuildErr ("error: could not run wasm-tools strip: " ++ e)
-      Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
-      Ok (_, _, stripErr) =>
-        BuildErr "error: wasm-tools strip failed on \{outPath}\n\{stripErr}"
-    Ok (_, _, valErr) =>
-      BuildErr "error: wasm-tools validate rejected \{outPath}\n\{valErr}"
-  Ok (_, _, parseErr) =>
-    BuildErr
-      "error: wasm-tools parse failed assembling \{inputAbs}\n\{parseErr}"
+wasmAssemble watPath outPath inputAbs =
+  match runCommand "wasm-tools" ["parse", watPath, "-o", outPath]
+    Err e => BuildErr ("error: could not run wasm-tools parse: " ++ e)
+    Ok (0, _, _) =>
+      match runCommand "wasm-tools" ["validate", "--features=all", outPath]
+        Err e => BuildErr ("error: could not run wasm-tools validate: " ++ e)
+        Ok (0, _, _) =>
+          match (runCommand "wasm-tools" [
+            "strip", "--all", outPath, "-o", outPath
+          ])
+            Err e => BuildErr ("error: could not run wasm-tools strip: " ++ e)
+            Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
+            Ok (_, _, stripErr) =>
+              BuildErr
+                "error: wasm-tools strip failed on \{outPath}\n\{stripErr}"
+        Ok (_, _, valErr) =>
+          BuildErr "error: wasm-tools validate rejected \{outPath}\n\{valErr}"
+    Ok (_, _, parseErr) =>
+      BuildErr
+        "error: wasm-tools parse failed assembling \{inputAbs}\n\{parseErr}"
 -- EMIT STEP.  Two paths, selected by the MEDAKA_EMITTER env var:
 --   * set   → invoke that NATIVE EMITTER BINARY directly (OCaml-free path — the
 --             clang(seed) binary from test/bootstrap_from_seed.sh).  Args are the
@@ -960,31 +960,30 @@ populateRtObj : String ->
   String ->
   String ->
   <IO> String
-populateRtObj cc rtC optFlag gcCflags dir objPath = match (runCommand "mkdir" [
-  "-p", dir
-])
-  Ok (0, _, _) => match runCommand "mktemp" [joinPath dir "rtobj_XXXXXX"]
-    Ok (0, tOut, _) =>
-      let tmpObj = stringTrim tOut
-      if tmpObj == "" then
-        ""
-      else
-        let ccArgs =
-          [optFlag, "-pthread"]
-            ++ gcSectionsCflags
-            ++ gcCflags
-            ++ ["-c", rtC, "-o", tmpObj]
-        match runCommand cc ccArgs
-          Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
-            Ok (0, _, _) => objPath
+populateRtObj cc rtC optFlag gcCflags dir objPath =
+  match runCommand "mkdir" ["-p", dir]
+    Ok (0, _, _) => match runCommand "mktemp" [joinPath dir "rtobj_XXXXXX"]
+      Ok (0, tOut, _) =>
+        let tmpObj = stringTrim tOut
+        if tmpObj == "" then
+          ""
+        else
+          let ccArgs =
+            [optFlag, "-pthread"]
+              ++ gcSectionsCflags
+              ++ gcCflags
+              ++ ["-c", rtC, "-o", tmpObj]
+          match runCommand cc ccArgs
+            Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
+              Ok (0, _, _) => objPath
+              _ =>
+                let _ = removeFile tmpObj
+                ""
             _ =>
               let _ = removeFile tmpObj
               ""
-          _ =>
-            let _ = removeFile tmpObj
-            ""
+      _ => ""
     _ => ""
-  _ => ""
 
 -- The `[perf] rt-obj` row's ops field: which of the three runtime-object paths
 -- this build actually took, so the row is self-explaining in a log.
@@ -1031,99 +1030,98 @@ clangLinkTimed : String ->
   Bool ->
   Float ->
   <IO> BuildResult
-clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = match (detectGC
-  cc
-  tmpDir)
-  None =>
-    BuildErr
-      "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
-  Some (gcCflags, gcLibs) =>
-    -- `[perf] gc-probe` gets its OWN row rather than being folded into `rt-obj`:
-    -- detectGC shells out (pkg-config, then possibly brew, then a real clang
-    -- compile of a probe .c), so on a box where pkg-config misses it is not a
-    -- rounding error, and charging that to the object cache would misattribute
-    -- it to exactly the thing this slice is trying to measure.
-    let tGcProbe = now ()
-    let _ = emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
-    let optFlag = clangOptFlag
-    -- CI FAST PATH (MEDAKA_RT_OBJ).  Every `medaka build` otherwise recompiles the
-    -- identical runtime/medaka_rt.c from scratch (~0.6s of clang each).  A gate
-    -- that does hundreds of builds can precompile the runtime ONCE (via
-    -- `medaka build --emit-rt-obj <path>`, which compiles medaka_rt.c with EXACTLY
-    -- these same flags — see emitRtObj) and point MEDAKA_RT_OBJ at the object; we
-    -- then link that object instead of recompiling the .c.  The precompile path
-    -- reuses clangOptFlag + detectGC, so the object's flags can't drift from the
-    -- link's.  Purely additive: unset (or a missing file) → the exact original
-    -- behavior, byte-for-byte, so an ordinary user build is unaffected.  The
-    -- inline-vs-prebuilt binaries are proven byte-identical by
-    -- test/diff_compiler_rt_obj.sh.
-    --
-    -- SINCE #133/G1 this is no longer the only way to get the prebuilt object:
-    -- an explicit MEDAKA_RT_OBJ still WINS outright (so every existing CI caller
-    -- keeps its exact behavior), but when it is unset we now consult the
-    -- automatic, self-managed, fingerprint-keyed object cache above — which is
-    -- what makes the ~0.76 s saving the DEFAULT for ordinary users instead of a
-    -- CI-only trick.  `cachedRtObj` fails open to "" (⇒ rtC, the inline compile).
-    let rtObjEnv = envOr "MEDAKA_RT_OBJ" ""
-    let rtCached =
-      if rtObjEnv /= "" && fileExists rtObjEnv then
-        rtObjEnv
-      else
-        cachedRtObj cc rtC optFlag gcCflags tmpDir
-    let rtInput = if rtCached == "" then rtC else rtCached
-    let tRtObj = now ()
-    let _ =
-      emitPhase
-        perfOn
-        "rt-obj"
-        (tRtObj - tGcProbe)
-        (rtObjNote rtObjEnv rtCached)
-    -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the LINK half.  Exactly the
-    -- MEDAKA_RT_OBJ trick one level up: the prelude is 88% of a small program's IR,
-    -- and clang -O2 re-optimises all of it on every build.  Precompile it ONCE
-    -- (`medaka build --emit-prelude-obj <path>`, emitPreludeObj — same clangOptFlag,
-    -- same detectGC cflags, so the object's flags cannot drift from the link's) and
-    -- link the object instead.  The emitter was told to emit the PROGRAM half above,
-    -- so the two are complementary halves of one module: prelude.o defines
-    -- `@mdk_core__*`/`@mdk_impl_*`, the program half defines its own code, the
-    -- per-program `@mdk_disp_*` dispatchers, and `@mdk_program_main`.
-    --
-    -- Purely additive: unset (or a missing file) → the exact original behavior,
-    -- byte-for-byte, so an ordinary user build is unaffected.  It is opt-in on
-    -- purpose and NOT the default for `--release`: separate objects cannot inline
-    -- prelude functions into user code without LTO.  Proven output-identical
-    -- inline-vs-prebuilt by test/diff_compiler_prelude_obj.sh.
-    let preludeObj = preludeObjOf ()
-    let objInputs =
-      if preludeObj == "" then
-        [llPath, rtInput]
-      else
-        [llPath, preludeObj, rtInput]
-    -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
-    -- worker thread via GC_pthread_create, so it self-provisions its stack: no
-    -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
-    -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
-    let sectionsLink = gcSectionsLinkFlag ()
-    let clangArgs =
-      [optFlag, "-pthread"]
-        ++ gcSectionsCflags
-        ++ gcCflags
-        ++ objInputs
-        ++ libFlags
-        ++ gcLibs
-        ++ [sectionsLink, "-lm", "-o", outPath]
-    -- Bound to a `let` (not matched directly) purely so the stopwatch can be read
-    -- ONCE, after the clang child exits, without duplicating the row across three
-    -- result arms.  Medaka is strict, so this runs clang exactly where the
-    -- `match` used to.
-    let ccRes = runCommand cc clangArgs
-    let tClang = now ()
-    let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
-    match ccRes
-      Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
-      Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
-      Ok (_, _, ccErr) =>
-        BuildErr "error: clang failed linking \{inputAbs}\n\{ccErr}"
+clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
+  match detectGC cc tmpDir
+    None =>
+      BuildErr
+        "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+    Some (gcCflags, gcLibs) =>
+      -- `[perf] gc-probe` gets its OWN row rather than being folded into `rt-obj`:
+      -- detectGC shells out (pkg-config, then possibly brew, then a real clang
+      -- compile of a probe .c), so on a box where pkg-config misses it is not a
+      -- rounding error, and charging that to the object cache would misattribute
+      -- it to exactly the thing this slice is trying to measure.
+      let tGcProbe = now ()
+      let _ = emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
+      let optFlag = clangOptFlag
+      -- CI FAST PATH (MEDAKA_RT_OBJ).  Every `medaka build` otherwise recompiles the
+      -- identical runtime/medaka_rt.c from scratch (~0.6s of clang each).  A gate
+      -- that does hundreds of builds can precompile the runtime ONCE (via
+      -- `medaka build --emit-rt-obj <path>`, which compiles medaka_rt.c with EXACTLY
+      -- these same flags — see emitRtObj) and point MEDAKA_RT_OBJ at the object; we
+      -- then link that object instead of recompiling the .c.  The precompile path
+      -- reuses clangOptFlag + detectGC, so the object's flags can't drift from the
+      -- link's.  Purely additive: unset (or a missing file) → the exact original
+      -- behavior, byte-for-byte, so an ordinary user build is unaffected.  The
+      -- inline-vs-prebuilt binaries are proven byte-identical by
+      -- test/diff_compiler_rt_obj.sh.
+      --
+      -- SINCE #133/G1 this is no longer the only way to get the prebuilt object:
+      -- an explicit MEDAKA_RT_OBJ still WINS outright (so every existing CI caller
+      -- keeps its exact behavior), but when it is unset we now consult the
+      -- automatic, self-managed, fingerprint-keyed object cache above — which is
+      -- what makes the ~0.76 s saving the DEFAULT for ordinary users instead of a
+      -- CI-only trick.  `cachedRtObj` fails open to "" (⇒ rtC, the inline compile).
+      let rtObjEnv = envOr "MEDAKA_RT_OBJ" ""
+      let rtCached =
+        if rtObjEnv /= "" && fileExists rtObjEnv then
+          rtObjEnv
+        else
+          cachedRtObj cc rtC optFlag gcCflags tmpDir
+      let rtInput = if rtCached == "" then rtC else rtCached
+      let tRtObj = now ()
+      let _ =
+        emitPhase
+          perfOn
+          "rt-obj"
+          (tRtObj - tGcProbe)
+          (rtObjNote rtObjEnv rtCached)
+      -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the LINK half.  Exactly the
+      -- MEDAKA_RT_OBJ trick one level up: the prelude is 88% of a small program's IR,
+      -- and clang -O2 re-optimises all of it on every build.  Precompile it ONCE
+      -- (`medaka build --emit-prelude-obj <path>`, emitPreludeObj — same clangOptFlag,
+      -- same detectGC cflags, so the object's flags cannot drift from the link's) and
+      -- link the object instead.  The emitter was told to emit the PROGRAM half above,
+      -- so the two are complementary halves of one module: prelude.o defines
+      -- `@mdk_core__*`/`@mdk_impl_*`, the program half defines its own code, the
+      -- per-program `@mdk_disp_*` dispatchers, and `@mdk_program_main`.
+      --
+      -- Purely additive: unset (or a missing file) → the exact original behavior,
+      -- byte-for-byte, so an ordinary user build is unaffected.  It is opt-in on
+      -- purpose and NOT the default for `--release`: separate objects cannot inline
+      -- prelude functions into user code without LTO.  Proven output-identical
+      -- inline-vs-prebuilt by test/diff_compiler_prelude_obj.sh.
+      let preludeObj = preludeObjOf ()
+      let objInputs =
+        if preludeObj == "" then
+          [llPath, rtInput]
+        else
+          [llPath, preludeObj, rtInput]
+      -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
+      -- worker thread via GC_pthread_create, so it self-provisions its stack: no
+      -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
+      -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
+      let sectionsLink = gcSectionsLinkFlag ()
+      let clangArgs =
+        [optFlag, "-pthread"]
+          ++ gcSectionsCflags
+          ++ gcCflags
+          ++ objInputs
+          ++ libFlags
+          ++ gcLibs
+          ++ [sectionsLink, "-lm", "-o", outPath]
+      -- Bound to a `let` (not matched directly) purely so the stopwatch can be read
+      -- ONCE, after the clang child exits, without duplicating the row across three
+      -- result arms.  Medaka is strict, so this runs clang exactly where the
+      -- `match` used to.
+      let ccRes = runCommand cc clangArgs
+      let tClang = now ()
+      let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
+      match ccRes
+        Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
+        Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
+        Ok (_, _, ccErr) =>
+          BuildErr "error: clang failed linking \{inputAbs}\n\{ccErr}"
 
 -- ---- the prelude object (issue #118) ---------------------------------------
 -- MEDAKA_PRELUDE_OBJ, honoured only when it names a file that exists (same

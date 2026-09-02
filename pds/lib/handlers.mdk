@@ -143,14 +143,11 @@ contentTypeHeader value = match makeHeader "content-type" (toUtf8 value)
 {- | The success counterpart of `xrpcErrorResponse`: 200 with an exact body and
    one declared media type. `lib.http`'s serializer owns all framing. -}
 bytesOkResponse : String -> Array Int -> Response
-bytesOkResponse contentType body = match (makeResponse
-  200
-  "OK"
-  [contentTypeHeader contentType]
-  body)
-  Ok response => response
-  Err message =>
-    panic "handlers: internal response construction error: \{message}"
+bytesOkResponse contentType body =
+  match makeResponse 200 "OK" [contentTypeHeader contentType] body
+    Ok response => response
+    Err message =>
+      panic "handlers: internal response construction error: \{message}"
 
 {- | The standard XRPC success envelope: 200 with a serialized JSON body.
    `lib.xrpc` owns the matching error envelope (`xrpcErrorResponse`) but has no

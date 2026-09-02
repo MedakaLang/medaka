@@ -1,5 +1,5 @@
 # META
-source_lines=1068
+source_lines=1067
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -628,13 +628,10 @@ firstWitnessBranch : Oracle ->
   Int ->
   Option (List Pat)
 firstWitnessBranch _ [] _ _ = None
-firstWitnessBranch oracle (c :: cs) pmat ncols = match (witnessBranch
-  oracle
-  c
-  pmat
-  ncols)
-  Some w => Some w
-  None => firstWitnessBranch oracle cs pmat ncols
+firstWitnessBranch oracle (c :: cs) pmat ncols =
+  match witnessBranch oracle c pmat ncols
+    Some w => Some w
+    None => firstWitnessBranch oracle cs pmat ncols
 
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessBranch oracle c pmat ncols =
@@ -805,16 +802,18 @@ checkGroupClauses oracle name clauses =
 -- unwrap it so the case reads `Blue`, not `(Blue)` (parity with `match`).  Falls
 -- back to a generic wording when no witness is recoverable.
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String
-nonExhaustiveClausesMsg oracle name arity rows = match (usefulWitness
-  oracle
-  (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
-  rows
-  1)
-  Some (w :: _) =>
-    let witnessStr = renderClauseWitness arity w
-    let hint = "add a '\{witnessStr}' clause, or a '_' catch-all clause."
-    "Warning: non-exhaustive clauses of '\{name}'. Missing case: '\{witnessStr}'; \{hint}"
-  _ => "Warning: non-exhaustive clauses of '\{name}'. Not all cases are covered"
+nonExhaustiveClausesMsg oracle name arity rows =
+  match (usefulWitness
+    oracle
+    (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
+    rows
+    1)
+    Some (w :: _) =>
+      let witnessStr = renderClauseWitness arity w
+      let hint = "add a '\{witnessStr}' clause, or a '_' catch-all clause."
+      "Warning: non-exhaustive clauses of '\{name}'. Missing case: '\{witnessStr}'; \{hint}"
+    _ =>
+      "Warning: non-exhaustive clauses of '\{name}'. Not all cases are covered"
 
 -- Arity-1 witnesses are a 1-tuple wrapper around the single missing pattern;
 -- unwrap so the rendered case is the bare pattern.  Higher arities render as the

@@ -225,12 +225,11 @@ mstFromEntries entries = map buildMst (prepareEntries entries)
 
 lookupEntry : Array Int -> List MstEntry -> Option Cid
 lookupEntry _ [] = None
-lookupEntry key ((MstEntry candidate value _) :: rest) = match (bytesCompare
-  key
-  candidate)
-  Lt => None
-  Eq => Some value
-  Gt => lookupEntry key rest
+lookupEntry key ((MstEntry candidate value _) :: rest) =
+  match bytesCompare key candidate
+    Lt => None
+    Eq => Some value
+    Gt => lookupEntry key rest
 
 -- | Look up one exact byte key.
 export
@@ -363,11 +362,11 @@ decodeNode : Array Int -> Result String DecodedNode
 decodeNode bytes = match dagCborDecode bytes
   Err message => Err "mst: \{message}"
   Ok value => match value
-    DcMap [("e", DcArray entries), ("l", left)] => match (decodeOptionalLink
-      "left subtree"
-      left)
-      Err message => Err message
-      Ok leftLink => map (DecodedNode leftLink) (decodeEntries entries None [])
+    DcMap [("e", DcArray entries), ("l", left)] =>
+      match decodeOptionalLink "left subtree" left
+        Err message => Err message
+        Ok leftLink =>
+          map (DecodedNode leftLink) (decodeEntries entries None [])
     _ => Err "mst: invalid node form; expected exactly fields e and l"
 
 entryKey : DecodedEntry -> Array Int
@@ -583,29 +582,30 @@ walkKnownBlock : Array Int ->
   Int ->
   Int ->
   Result String (Map String Unit)
-walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal limit = do
-  _ <- checkMstNodeBytes (arrayLength bytes)
-  node <- decodeNode bytes
-  _ <- validateNodeEntries node
-  let depth = match expected
-    Some value => value
-    None => nodeDepth node
-  _ <- validateDecoded depth isRoot node
-  match node
-    DecodedNode _ entries =>
-      if not (entriesWithinBounds entries lower upper) then
-        Err "mst: subtree key falls outside its lexical range"
-      else
-        walkNodeChildren
-          node
-          (depth - 1)
-          lower
-          upper
-          blocks
-          (set key () active)
-          (set key () visited)
-          (traversal + 1)
-          limit
+walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal limit =
+  do
+    _ <- checkMstNodeBytes (arrayLength bytes)
+    node <- decodeNode bytes
+    _ <- validateNodeEntries node
+    let depth = match expected
+      Some value => value
+      None => nodeDepth node
+    _ <- validateDecoded depth isRoot node
+    match node
+      DecodedNode _ entries =>
+        if not (entriesWithinBounds entries lower upper) then
+          Err "mst: subtree key falls outside its lexical range"
+        else
+          walkNodeChildren
+            node
+            (depth - 1)
+            lower
+            upper
+            blocks
+            (set key () active)
+            (set key () visited)
+            (traversal + 1)
+            limit
 
 checkTraversalDepth : Int -> Int -> Result String Unit
 checkTraversalDepth limit traversal =
@@ -627,31 +627,30 @@ walkBlock : Cid ->
   Int ->
   Int ->
   Result String (Map String Unit)
-walkBlock cid expected isRoot lower upper blocks active visited traversal limit = match (checkTraversalDepth
-  limit
-  traversal)
-  Err message => Err message
-  Ok () =>
-    let key = cidKey cid
-    if has key active then
-      Err "mst: invalid node form; subtree link cycle"
-    else if has key visited then
-      Err "mst: invalid node form; subtree block is referenced more than once"
-    else match get key blocks
-      None => Err "mst: missing reachable node block"
-      Some bytes =>
-        walkKnownBlock
-          bytes
-          expected
-          isRoot
-          lower
-          upper
-          blocks
-          active
-          visited
-          key
-          traversal
-          limit
+walkBlock cid expected isRoot lower upper blocks active visited traversal limit =
+  match checkTraversalDepth limit traversal
+    Err message => Err message
+    Ok () =>
+      let key = cidKey cid
+      if has key active then
+        Err "mst: invalid node form; subtree link cycle"
+      else if has key visited then
+        Err "mst: invalid node form; subtree block is referenced more than once"
+      else match get key blocks
+        None => Err "mst: missing reachable node block"
+        Some bytes =>
+          walkKnownBlock
+            bytes
+            expected
+            isRoot
+            lower
+            upper
+            blocks
+            active
+            visited
+            key
+            traversal
+            limit
 
 validateBlocksWithTraversalLimit : Int ->
   Cid ->

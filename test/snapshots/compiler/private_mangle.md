@@ -1,5 +1,5 @@
 # META
-source_lines=1504
+source_lines=1503
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -607,11 +607,10 @@ ctorImportEntries _ ctorExportsPerUnit decls =
 
 coreCtorImportEntries : List (String, List (String, List String)) ->
   List (String, String)
-coreCtorImportEntries ctorExportsPerUnit = match (lookupCtorExports
-  "core"
-  ctorExportsPerUnit)
-  Some entries => flatMap coreCtorEntry entries
-  None => []
+coreCtorImportEntries ctorExportsPerUnit =
+  match lookupCtorExports "core" ctorExportsPerUnit
+    Some entries => flatMap coreCtorEntry entries
+    None => []
 
 coreCtorEntry : (String, List String) -> List (String, String)
 coreCtorEntry (_, ctors) = flatMap (n => [(n, mangledName "core" n)]) ctors

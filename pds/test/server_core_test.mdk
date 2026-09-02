@@ -41,13 +41,14 @@ mustHeader name value = match makeHeader name (toUtf8 value)
   Err message => panic "server_core_test: header setup failed: \{message}"
 
 mustResponse : Int -> String -> String -> Response
-mustResponse status reason body = match (makeResponse
-  status
-  reason
-  [mustHeader "content-type" "text/plain"]
-  (toUtf8 body))
-  Ok response => response
-  Err message => panic "server_core_test: response setup failed: \{message}"
+mustResponse status reason body =
+  match (makeResponse
+    status
+    reason
+    [mustHeader "content-type" "text/plain"]
+    (toUtf8 body))
+    Ok response => response
+    Err message => panic "server_core_test: response setup failed: \{message}"
 
 mustEndpoint : Result String Endpoint -> Endpoint
 mustEndpoint (Ok endpoint) = endpoint
@@ -70,22 +71,18 @@ registry =
 handler : Handler
 handler store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match (storePut
-  (cidForRaw bytes)
-  bytes
-  store)
-  Err message =>
-    panic "server_core_test: verified store update failed: \{message}"
-  Ok next => (next, mustResponse 201 "Created" "stored")
+handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
+  match storePut (cidForRaw bytes) bytes store
+    Err message =>
+      panic "server_core_test: verified store update failed: \{message}"
+    Ok next => (next, mustResponse 201 "Created" "stored")
 handler _ _ = panic "server_core_test: unexpected routed call"
 
 account : Account
-account = match (makeAccount
-  "did:plc:medakaservertest"
-  "server.example"
-  "pds.example")
-  Ok value => value
-  Err message => panic "server_core_test: account setup failed: \{message}"
+account =
+  match makeAccount "did:plc:medakaservertest" "server.example" "pds.example"
+    Ok value => value
+    Err message => panic "server_core_test: account setup failed: \{message}"
 
 server : Server
 server = makeServer account registry handler
@@ -168,29 +165,30 @@ test "Store insertion and lookup both retain defensive copies" =
         let () = A.setInPlace 1 98 viewed
         expectEqual (storeGet cid next) (Some [|4, 5, 6|])
 
-test "classified parser exposes malformed framing without diagnostic matching" = match (parseRequestClassified
-  malformedRequest)
-  Err (HttpMalformed _) => expectTrue True
-  _ => expectTrue False
+test "classified parser exposes malformed framing without diagnostic matching" =
+  match parseRequestClassified malformedRequest
+    Err (HttpMalformed _) => expectTrue True
+    _ => expectTrue False
 
-test "classified parser exposes resource excess without diagnostic matching" = match (parseRequestClassified
-  resourceRequest)
-  Err (HttpResourceExcess _) => expectTrue True
-  _ => expectTrue False
+test "classified parser exposes resource excess without diagnostic matching" =
+  match parseRequestClassified resourceRequest
+    Err (HttpResourceExcess _) => expectTrue True
+    _ => expectTrue False
 
-test "original parseRequest API retains its Result String contract" = match (parseRequest
-  fixedQuery)
-  Ok _ => expectTrue True
-  Err _ => expectTrue False
+test "original parseRequest API retains its Result String contract" =
+  match parseRequest fixedQuery
+    Ok _ => expectTrue True
+    Err _ => expectTrue False
 
-test "direct configured handle preserves Store for a fixed query" = match (parseRequest
-  fixedQuery)
-  Err _ => expectTrue False
-  Ok request =>
-    let (next, response) = handle server seededStore request
-    expectTrue
-      (seedPreserved next
-        && serializeResponse response == expectedTextResponse 200 "OK" "fixed")
+test "direct configured handle preserves Store for a fixed query" =
+  match parseRequest fixedQuery
+    Err _ => expectTrue False
+    Ok request =>
+      let (next, response) = handle server seededStore request
+      expectTrue
+        (seedPreserved next
+          && serializeResponse response
+            == expectedTextResponse 200 "OK" "fixed")
 
 test "fixed raw request returns successor Store and exact response bytes" =
   let (next, bytes) = handleBytes server storeEmpty fixedPut

@@ -68,12 +68,10 @@ mustServer account = match recordServer account
   Err message => panic "record_handlers: server setup failed: \{message}"
 
 mustRepo : String -> String -> Tid -> Repo
-mustRepo did secretHex rev = match (repoInitFromKeyBytes
-  did
-  (mustHex secretHex)
-  rev)
-  Ok repo => repo
-  Err message => panic "record_handlers: repository init failed: \{message}"
+mustRepo did secretHex rev =
+  match repoInitFromKeyBytes did (mustHex secretHex) rev
+    Ok repo => repo
+    Err message => panic "record_handlers: repository init failed: \{message}"
 
 -- ── request framing ─────────────────────────────────────────────────────────
 

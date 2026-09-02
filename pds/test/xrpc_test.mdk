@@ -182,12 +182,13 @@ test "encoded and otherwise invalid XRPC method identities are rejected" =
         "Invalid XRPC method NSID"
         (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/"))
 
-test "routing matches authority case-insensitively and returns registered spelling" = match (routeRequest
-  registry
-  (noBodyRequest "GET" "/xrpc/Com.AtProto.server.describeServer"))
-  RouteCall (QueryCall "com.atproto.server.describeServer" []) =>
-    expectTrue True
-  _ => expectTrue False
+test "routing matches authority case-insensitively and returns registered spelling" =
+  match (routeRequest
+    registry
+    (noBodyRequest "GET" "/xrpc/Com.AtProto.server.describeServer"))
+    RouteCall (QueryCall "com.atproto.server.describeServer" []) =>
+      expectTrue True
+    _ => expectTrue False
 
 test "empty XRPC method path is rejected without producing a call" =
   expectTrue
@@ -261,12 +262,13 @@ test "query rejects zero-length framing and Content-Type" =
         "Content-Type: application/json\r\n"
         [||]))
 
-test "no-input procedure produces a typed call" = match (routeRequest
-  registry
-  (noBodyRequest "POST" "/xrpc/com.example.nobody.ping"))
-  RouteCall (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-    expectTrue True
-  _ => expectTrue False
+test "no-input procedure produces a typed call" =
+  match (routeRequest
+    registry
+    (noBodyRequest "POST" "/xrpc/com.example.nobody.ping"))
+    RouteCall (ProcedureNoInputCall "com.example.nobody.ping" []) =>
+      expectTrue True
+    _ => expectTrue False
 
 test "no-input procedure rejects body framing" =
   expectTrue

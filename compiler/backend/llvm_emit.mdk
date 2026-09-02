@@ -520,11 +520,12 @@ methodArityOfInput e method = match omLookup method e.input.methodIfaceIndex
 -- the field.  A miss on the identity key falls back to the bare table, so every
 -- collision-free program emits byte-identically to before.
 methodArityOfIface : Emit -> String -> String -> Int
-methodArityOfIface e ifaceWord method = match (omLookup
-  (ifaceMethodArityKey ifaceWord method)
-  e.input.methodIfaceIdIndex)
-  Some arity => arity
-  None => methodArityOfInput e method
+methodArityOfIface e ifaceWord method =
+  match (omLookup
+    (ifaceMethodArityKey ifaceWord method)
+    e.input.methodIfaceIdIndex)
+    Some arity => arity
+    None => methodArityOfInput e method
 
 -- the DECLARATION word of the interface an impl entry implements.  A tagged impl
 -- carries it as the first field of its route key; an interface DEFAULT carries it
@@ -596,11 +597,10 @@ methodArityOfRoute e name _ = methodArityOfInput e name
 -- time without baking a single Monoid tag into the shared default define.
 -- the method-level constraint interface names for [method], in slot order ([]=none).
 methodConstraintIfacesOf : Emit -> String -> List String
-methodConstraintIfacesOf e method = match (lookupAssoc
-  method
-  e.input.methodConstraintIfaces)
-  Some ifaces => ifaces
-  None => []
+methodConstraintIfacesOf e method =
+  match lookupAssoc method e.input.methodConstraintIfaces
+    Some ifaces => ifaces
+    None => []
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- The ctor → declared-field-type-head-name table from core_ir_lower's
@@ -1411,11 +1411,10 @@ filterTagged method (_ :: rest) = filterTagged method rest
 -- So this narrows in exactly one situation: candidates of MIXED declared arity, at
 -- least one of which is the arity actually being dispatched.
 narrowImplsByArity : Emit -> String -> List CImplEntry -> Int -> List CImplEntry
-narrowImplsByArity e method impls nargs = match (filterList
-  (ent => methodArityOfEntry e ent method == nargs)
-  impls)
-  [] => impls
-  narrowed => narrowed
+narrowImplsByArity e method impls nargs =
+  match filterList (ent => methodArityOfEntry e ent method == nargs) impls
+    [] => impls
+    narrowed => narrowed
 
 -- the single tagged impl an RKey route names: the CImplTagged of `method` whose
 -- type-head tag `t` OR canonical full-type key `k` equals `tag`.  The typechecker
@@ -5204,33 +5203,31 @@ emitMethod e env name route implRoutes methRoutes argOps
       methRoutes
       argOps
       (methodArityOfInput e name)
-emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match (implFor
-  e
-  name
-  tag)
-  Some entry =>
-    let dictWords =
-      dictWordsOf
+emitMethod e env name (RKey tag _) implRoutes methRoutes argOps =
+  match implFor e name tag
+    Some entry =>
+      let dictWords =
+        dictWordsOf
+          e
+          env
+          (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
+      -- [tag] is the stamped route tag — the bare head when the head is unique, the
+      -- canonical key on a C7 collision.  For tagToLTy/returns-self use the matched
+      -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
+      -- unique, sanitized key on collision) so it matches emitGroup's name.
+      let headTag = implEntryTag entry
+      let resTy =
+        if methodReturnsSelf e (implEntryIface entry) name then
+          tagToLTy headTag
+        else
+          LTInt
+      emitImplCallSat
         e
-        env
-        (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
-    -- [tag] is the stamped route tag — the bare head when the head is unique, the
-    -- canonical key on a C7 collision.  For tagToLTy/returns-self use the matched
-    -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
-    -- unique, sanitized key on collision) so it matches emitGroup's name.
-    let headTag = implEntryTag entry
-    let resTy =
-      if methodReturnsSelf e (implEntryIface entry) name then
-        tagToLTy headTag
-      else
-        LTInt
-    emitImplCallSat
-      e
-      (implFnName (implFnSymE e name entry) name)
-      (dictWords ++ argOps)
-      (methodArityOfEntry e entry name + lengthS dictWords)
-      resTy
-  None => emitGeneralRKey e env name tag methRoutes implRoutes argOps
+        (implFnName (implFnSymE e name entry) name)
+        (dictWords ++ argOps)
+        (methodArityOfEntry e entry name + lengthS dictWords)
+        resTy
+    None => emitGeneralRKey e env name tag methRoutes implRoutes argOps
 emitMethod e env name (RDict d) implRoutes methRoutes argOps =
   emitMethodDispatch e env name d methRoutes argOps
 emitMethod e env name (RDictFwd d) implRoutes methRoutes argOps =
@@ -5586,21 +5583,19 @@ emitDefaultRKey : Emit ->
 -- collision, not an interface-name one (the interfaces' own names are irrelevant),
 -- and the tag does NOT disambiguate when ONE tag carries TWO interfaces sharing a
 -- method name — that is #1265, still open.
-emitDefaultRKey e env name tag methRoutes implRoutes argOps = match (defaultForAt
-  e
-  name
-  tag)
-  Some entry =>
-    let fname = defaultFnName tag name
-    let _ = ensureDefaultEmitted e fname tag name entry
-    let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
-    let resTy =
-      if methodReturnsSelf e (methodIfaceOfInput e name) name then
-        tagToLTy tag
-      else
-        LTInt
-    emitImplCall e fname (dictWords ++ argOps) resTy
-  None => gapE e "no impl of method '\{name}' for type '\{tag}'"
+emitDefaultRKey e env name tag methRoutes implRoutes argOps =
+  match defaultForAt e name tag
+    Some entry =>
+      let fname = defaultFnName tag name
+      let _ = ensureDefaultEmitted e fname tag name entry
+      let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
+      let resTy =
+        if methodReturnsSelf e (methodIfaceOfInput e name) name then
+          tagToLTy tag
+        else
+          LTInt
+      emitImplCall e fname (dictWords ++ argOps) resTy
+    None => gapE e "no impl of method '\{name}' for type '\{tag}'"
 
 -- Dispatch tier for an RKey route that matched no concrete impl: a GENERAL instance
 -- (`impl Iface a`), whose head is a bare type variable and so is registered under
@@ -5623,28 +5618,27 @@ emitGeneralRKey : Emit ->
   List Route ->
   List String ->
   (String, LTy)
-emitGeneralRKey e env name tag methRoutes implRoutes argOps = match (findByTag
-  noneHeadTag
-  (implsOf e name))
-  Some entry =>
-    let dictWords =
-      dictWordsOf
+emitGeneralRKey e env name tag methRoutes implRoutes argOps =
+  match findByTag noneHeadTag (implsOf e name)
+    Some entry =>
+      let dictWords =
+        dictWordsOf
+          e
+          env
+          (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
+      let headTag = implEntryTag entry
+      let resTy =
+        if methodReturnsSelf e (implEntryIface entry) name then
+          tagToLTy headTag
+        else
+          LTInt
+      emitImplCallSat
         e
-        env
-        (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
-    let headTag = implEntryTag entry
-    let resTy =
-      if methodReturnsSelf e (implEntryIface entry) name then
-        tagToLTy headTag
-      else
-        LTInt
-    emitImplCallSat
-      e
-      (implFnName (implFnSymE e name entry) name)
-      (dictWords ++ argOps)
-      (methodArityOfEntry e entry name + lengthS dictWords)
-      resTy
-  None => emitDefaultRKey e env name tag methRoutes implRoutes argOps
+        (implFnName (implFnSymE e name entry) name)
+        (dictWords ++ argOps)
+        (methodArityOfEntry e entry name + lengthS dictWords)
+        resTy
+    None => emitDefaultRKey e env name tag methRoutes implRoutes argOps
 -- Native Gap C (parametric default-method dict-synthesis, 2026-06-12): a
 -- relational OPERATOR (`<`→`lt`/…) on a parametric Ord head (tuple/`List a`/
 -- `Box a`) carries the impl's element `requires` dicts on implRoutes (stamped by
@@ -5898,28 +5892,27 @@ emitMethodDispatch : Emit ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatch e env name d methRoutes argOps = match (soleImplDirectSite
-  e
-  name)
-  Some ent =>
-    -- WS-1b: the method has exactly ONE impl with no `requires` element dicts, so a
-    -- well-typed call always reaches that impl regardless of the runtime dict (mirrors
-    -- eval's `narrowMethod (VMulti vs) ""` → sole-impl pick, and the arg-position
-    -- single-impl-group DIRECT-call optimization).  Emitting a direct call here avoids
-    -- LOADING the dict head tag — which, under an AMBIGUOUS return-position superclass
-    -- constraint (`build : Sub a => Int -> a; build n = mk n`, where `mk`'s `Sup` dict
-    -- stays ungrounded → the caller passes a NULL dict), would dereference null → the
-    -- run≠build SIGTRAP.  Concrete-grounded callers (a real dict) are unaffected: the
-    -- direct call is the same impl the tag-dispatch chain would have selected.
-    let symTag = implFnSymE e name ent
-    -- F10: saturate against the impl's own declared arity (see emitDispatchArmBody).
-    emitKnownFnSat
-      e
-      (implFnName symTag name)
-      argOps
-      (methodArityOfEntry e ent name)
-      LTInt
-  None => emitMethodDispatchChain e env name d methRoutes argOps
+emitMethodDispatch e env name d methRoutes argOps =
+  match soleImplDirectSite e name
+    Some ent =>
+      -- WS-1b: the method has exactly ONE impl with no `requires` element dicts, so a
+      -- well-typed call always reaches that impl regardless of the runtime dict (mirrors
+      -- eval's `narrowMethod (VMulti vs) ""` → sole-impl pick, and the arg-position
+      -- single-impl-group DIRECT-call optimization).  Emitting a direct call here avoids
+      -- LOADING the dict head tag — which, under an AMBIGUOUS return-position superclass
+      -- constraint (`build : Sub a => Int -> a; build n = mk n`, where `mk`'s `Sup` dict
+      -- stays ungrounded → the caller passes a NULL dict), would dereference null → the
+      -- run≠build SIGTRAP.  Concrete-grounded callers (a real dict) are unaffected: the
+      -- direct call is the same impl the tag-dispatch chain would have selected.
+      let symTag = implFnSymE e name ent
+      -- F10: saturate against the impl's own declared arity (see emitDispatchArmBody).
+      emitKnownFnSat
+        e
+        (implFnName symTag name)
+        argOps
+        (methodArityOfEntry e ent name)
+        LTInt
+    None => emitMethodDispatchChain e env name d methRoutes argOps
 
 -- WS-1b: Some impl iff [name] has exactly one tagged impl AND that impl takes no
 -- leading `requires` element-dict params (reqCount 0) — the case where a direct call
@@ -7355,39 +7348,39 @@ emitArgDefaultChain : Emit ->
 emitArgDefaultChain e _ _ [] _ _ _ _ =
   let _ = emit e "  call void @mdk_dispatch_no_impl()"
   emit e "  unreachable"
-emitArgDefaultChain e method tagReg (tag :: rest) argOps colliding slot endL = match (defaultForAt
-  e
-  method
-  tag)
-  None =>
-    let _ = emit e "  call void @mdk_dispatch_no_impl()"
-    emit e "  unreachable"
-  Some entry =>
-    let cond = emitTagMatch e tagReg (ctorsOfType e tag)
-    let n = intToString (freshLocal e)
-    let yes = "argdefyes" ++ n
-    let next = "argdefnext" ++ n
-    let _ = emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
-    let _ = emit e (yes ++ ":")
-    -- #2445, the default-arm half of the retiming: an inheriting head that another
-    -- declared impl also sits at is just as undecidable as a defining one, so it gets
-    -- the same trapped body under the same tag test.
-    let _ =
-      if argTagArmAmbiguous colliding tag then
-        emitAmbiguousArm e
-      else
-        let fname = defaultFnName tag method
-        let _ = ensureDefaultEmitted e fname tag method entry
-        -- the arity `emitDefaultDefine` eta-expands the body to, with its
-        -- dict/`requires` prefixes known to be zero here (argDefaultEmittable) —
-        -- so caller and callee agree by the same ruler rather than by coincidence.
-        let arity =
-          maxInt (methodArityOfEntry e entry method) (listLen (implPats entry))
-        let (rv, _) = emitKnownFnSat e fname argOps arity LTInt
-        let _ = emit e "  store i64 \{rv}, ptr \{slot}"
-        emit e ("  br label %" ++ endL)
-    let _ = emit e (next ++ ":")
-    emitArgDefaultChain e method tagReg rest argOps colliding slot endL
+emitArgDefaultChain e method tagReg (tag :: rest) argOps colliding slot endL =
+  match defaultForAt e method tag
+    None =>
+      let _ = emit e "  call void @mdk_dispatch_no_impl()"
+      emit e "  unreachable"
+    Some entry =>
+      let cond = emitTagMatch e tagReg (ctorsOfType e tag)
+      let n = intToString (freshLocal e)
+      let yes = "argdefyes" ++ n
+      let next = "argdefnext" ++ n
+      let _ = emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
+      let _ = emit e (yes ++ ":")
+      -- #2445, the default-arm half of the retiming: an inheriting head that another
+      -- declared impl also sits at is just as undecidable as a defining one, so it gets
+      -- the same trapped body under the same tag test.
+      let _ =
+        if argTagArmAmbiguous colliding tag then
+          emitAmbiguousArm e
+        else
+          let fname = defaultFnName tag method
+          let _ = ensureDefaultEmitted e fname tag method entry
+          -- the arity `emitDefaultDefine` eta-expands the body to, with its
+          -- dict/`requires` prefixes known to be zero here (argDefaultEmittable) —
+          -- so caller and callee agree by the same ruler rather than by coincidence.
+          let arity =
+            maxInt
+              (methodArityOfEntry e entry method)
+              (listLen (implPats entry))
+          let (rv, _) = emitKnownFnSat e fname argOps arity LTInt
+          let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+          emit e ("  br label %" ++ endL)
+      let _ = emit e (next ++ ":")
+      emitArgDefaultChain e method tagReg rest argOps colliding slot endL
 
 -- an i1 that is true when the loaded ctor tag equals ANY of a type's constructor
 -- tags (OR-chain of icmp eq against each hashName).
@@ -7815,12 +7808,10 @@ emitDefaultDefine e fname tag method entry =
 -- reduce to `compare`; that impl carries the parametric element dicts.  A method WITH
 -- its own impl at [tag], or whose inner impl has no requires, yields 0 (concrete path).
 innerDefaultReqCount : Emit -> String -> String -> Int
-innerDefaultReqCount e method tag = match (implFor
-  e
-  (innerDefaultMethodE method)
-  tag)
-  Some entry => maxInt 0 (implReqCount e (innerDefaultMethodE method) entry)
-  None => 0
+innerDefaultReqCount e method tag =
+  match implFor e (innerDefaultMethodE method) tag
+    Some entry => maxInt 0 (implReqCount e (innerDefaultMethodE method) entry)
+    None => 0
 
 -- the inner same-interface method a relational default reduces to (mirror of
 -- typecheck.mdk's innerDefaultMethod): Ord defaults reduce to `compare`.
@@ -7974,12 +7965,10 @@ restampCrossIface : List (String, (String, Int)) ->
 restampCrossIface tbl method difs (CVar m ad) = match crossDictSlot tbl difs m
   Some k => CMethod m (RDict (dictParamNameE method k)) [] []
   None => CVar m ad
-restampCrossIface tbl method difs (CMethod m RNone irs mrs) = match (crossDictSlot
-  tbl
-  difs
-  m)
-  Some k => CMethod m (RDict (dictParamNameE method k)) irs mrs
-  None => CMethod m RNone irs mrs
+restampCrossIface tbl method difs (CMethod m RNone irs mrs) =
+  match crossDictSlot tbl difs m
+    Some k => CMethod m (RDict (dictParamNameE method k)) irs mrs
+    None => CMethod m RNone irs mrs
 restampCrossIface tbl method difs (CApp f a) =
   CApp
     (restampCrossIface tbl method difs f)
@@ -9582,36 +9571,35 @@ emitTree e env roots arms _ slot endL _ rty (CTLeaf i) =
 -- self-compile path no longer needs the guard-free convention for `CGBool`
 -- guards.  A refutable `p <- e` pattern guard stays a contained gap (not produced
 -- by current source); a bad arm index likewise.
-emitTree e env roots arms occs slot endL ftL rty (CTGuard i fail) = match (nthArm
-  arms
-  i)
-  Some (CArm pat guards body) =>
-    if allGuardsEmittable guards then
-      emitGuardedArm
-        e
-        env
-        roots
-        arms
-        occs
-        pat
-        guards
-        body
-        fail
-        slot
-        endL
-        ftL
-        rty
-    else
-      let _ =
-        gapU
+emitTree e env roots arms occs slot endL ftL rty (CTGuard i fail) =
+  match nthArm arms i
+    Some (CArm pat guards body) =>
+      if allGuardsEmittable guards then
+        emitGuardedArm
           e
-          "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+          env
+          roots
+          arms
+          occs
+          pat
+          guards
+          body
+          fail
+          slot
+          endL
+          ftL
+          rty
+      else
+        let _ =
+          gapU
+            e
+            "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+        let _ = emit e ("  store i64 0, ptr " ++ slot)
+        emit e ("  br label %" ++ endL)
+    None =>
+      let _ = gapU e "guarded arm index out of range (CTGuard)"
       let _ = emit e ("  store i64 0, ptr " ++ slot)
       emit e ("  br label %" ++ endL)
-  None =>
-    let _ = gapU e "guarded arm index out of range (CTGuard)"
-    let _ = emit e ("  store i64 0, ptr " ++ slot)
-    emit e ("  br label %" ++ endL)
 emitTree e env roots arms occs slot endL ftL rty (CTDrop sub) =
   emitTree e env roots arms (tailS occs) slot endL ftL rty sub
 emitTree e env roots arms occs slot endL ftL rty (CTSwitch branches dft) =
@@ -10076,12 +10064,25 @@ emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch (HLit _) _) :: _)
   emitLitChain e env roots arms foc rest branches dft slot endL ftL rty
 emitSwitch e env roots arms (foc :: rest) ((CTBranch HUnit sub) :: _) dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty sub
-emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft slot endL ftL rty = match (conHeadInfo
-  h)
-  Some _ =>
-    let tagReg = loadDiscriminant e foc
-    emitConChain e env roots arms foc rest tagReg branches dft slot endL ftL rty
-  None => gapSwitchHead e slot endL
+emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft slot endL ftL rty =
+  match conHeadInfo h
+    Some _ =>
+      let tagReg = loadDiscriminant e foc
+      emitConChain
+        e
+        env
+        roots
+        arms
+        foc
+        rest
+        tagReg
+        branches
+        dft
+        slot
+        endL
+        ftL
+        rty
+    None => gapSwitchHead e slot endL
 -- HUnit is irrefutable (Unit has exactly one inhabitant): no discriminant test
 -- needed.  Drop the focus occurrence and descend into the single branch body.
 -- This closes gap #12 (the 6 Arbitrary impls in core.mdk and any user f()=…).
@@ -10136,28 +10137,28 @@ emitConChain : Emit ->
   Unit
 emitConChain e env roots arms _ rest _ [] dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty dft
-emitConChain e env roots arms foc rest tagReg ((CTBranch h sub) :: more) dft slot endL ftL rty = match (conHeadInfo
-  h)
-  Some (c, a) =>
-    let cmp = freshReg e
-    let _ =
-      emit e "  \{cmp} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
-    let n = intToString (freshLocal e)
-    let yes = "conyes" ++ n
-    let next = "connext" ++ n
-    let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-    let _ = emit e (yes ++ ":")
-    let fields = loadFields e foc a 0
-    let _ = emitTree e env roots arms (fields ++ rest) slot endL ftL rty sub
-    let _ = emit e (next ++ ":")
-    emitConChain e env roots arms foc rest tagReg more dft slot endL ftL rty
-  None =>
-    let _ =
-      gapU
-        e
-        "heterogeneous constructor switch (a column is all-constructor or all-literal)"
-    let _ = emit e ("  store i64 0, ptr " ++ slot)
-    emit e ("  br label %" ++ endL)
+emitConChain e env roots arms foc rest tagReg ((CTBranch h sub) :: more) dft slot endL ftL rty =
+  match conHeadInfo h
+    Some (c, a) =>
+      let cmp = freshReg e
+      let _ =
+        emit e "  \{cmp} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      let n = intToString (freshLocal e)
+      let yes = "conyes" ++ n
+      let next = "connext" ++ n
+      let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      let _ = emit e (yes ++ ":")
+      let fields = loadFields e foc a 0
+      let _ = emitTree e env roots arms (fields ++ rest) slot endL ftL rty sub
+      let _ = emit e (next ++ ":")
+      emitConChain e env roots arms foc rest tagReg more dft slot endL ftL rty
+    None =>
+      let _ =
+        gapU
+          e
+          "heterogeneous constructor switch (a column is all-constructor or all-literal)"
+      let _ = emit e ("  store i64 0, ptr " ++ slot)
+      emit e ("  br label %" ++ endL)
 
 -- the literal-switch test chain: compare the focus immediate against each branch's
 -- tagged-int constant; a literal head has arity 0, so a match descends with the
@@ -10282,18 +10283,17 @@ emitFns e (b :: rest) =
 -- (v3/v4 prove nothing outside the group references it); the ROOT emits the whole
 -- group define at its own bind position (deterministic emission order).
 emitFn : Emit -> CBind -> Unit
-emitFn e (CBind name [CClause pats body]) = match (dispGroupOf
-  !e.gDispGroups
-  name)
-  Some grp => if dispRootOf grp == name then emitGDispGroup e grp
-  None =>
-    let (pats2, body2) = etaSaturateMethodBody e name pats body
-    if trmcTryFn e name [(pats2, body2)] True then
-      ()
-    else if allPVar pats2 then
-      emitFnClause e name pats2 body2
-    else
-      emitMultiClauseFn e name [(pats2, body2)]
+emitFn e (CBind name [CClause pats body]) =
+  match dispGroupOf !e.gDispGroups name
+    Some grp => if dispRootOf grp == name then emitGDispGroup e grp
+    None =>
+      let (pats2, body2) = etaSaturateMethodBody e name pats body
+      if trmcTryFn e name [(pats2, body2)] True then
+        ()
+      else if allPVar pats2 then
+        emitFnClause e name pats2 body2
+      else
+        emitMultiClauseFn e name [(pats2, body2)]
 emitFn e (CBind name (c :: rest)) = match dispGroupOf !e.gDispGroups name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp
   None =>
@@ -11314,11 +11314,10 @@ selfFreeW self ex = not (contains self (freeVars [] ex))
 floatWorkerOk : String -> Int -> CExpr -> Bool
 floatWorkerOk self arity (CIf c t f) =
   selfFreeW self c && floatWorkerOk self arity t && floatWorkerOk self arity f
-floatWorkerOk self arity (CDecision scrut arms tree) = match (decisionToIf
-  scrut
-  arms)
-  Some cif => floatWorkerOk self arity cif
-  None => selfFreeW self (CDecision scrut arms tree)
+floatWorkerOk self arity (CDecision scrut arms tree) =
+  match decisionToIf scrut arms
+    Some cif => floatWorkerOk self arity cif
+    None => selfFreeW self (CDecision scrut arms tree)
 floatWorkerOk self arity (CBlock stmts) = floatWorkerBlockOk self arity stmts
 floatWorkerOk self arity ex = match flattenApp ex []
   (CVar f _, args) =>
@@ -11498,13 +11497,12 @@ emitFnBodyD e env self worker fp arity (CIf c t f) =
   let _ = emitFnBodyD e env self worker fp arity t
   let _ = emit e (elseL ++ ":")
   emitFnBodyD e env self worker fp arity f
-emitFnBodyD e env self worker fp arity (CDecision scrut arms tree) = match (decisionToIf
-  scrut
-  arms)
-  Some cif => emitFnBodyD e env self worker fp arity cif
-  None =>
-    let d = emitFloatD e env (CDecision scrut arms tree)
-    emit e ("  ret double " ++ d)
+emitFnBodyD e env self worker fp arity (CDecision scrut arms tree) =
+  match decisionToIf scrut arms
+    Some cif => emitFnBodyD e env self worker fp arity cif
+    None =>
+      let d = emitFloatD e env (CDecision scrut arms tree)
+      emit e ("  ret double " ++ d)
 emitFnBodyD e env self worker fp arity (CBlock stmts) =
   emitFnBodyDBlock e env self worker fp arity stmts
 emitFnBodyD e env self worker fp arity other =

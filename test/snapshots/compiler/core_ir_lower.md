@@ -1,5 +1,5 @@
 # META
-source_lines=2530
+source_lines=2528
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1347,16 +1347,15 @@ lgMergeName : List ((String, Int), CClause) ->
   List ((String, Int), CClause)
 lgMergeName [] ys = ys
 lgMergeName xs [] = xs
-lgMergeName (((n1, i1), c1) :: xs) (((n2, i2), c2) :: ys) = match (stringCompare
-  n1
-  n2)
-  Lt => ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2) :: ys)
-  Gt => ((n2, i2), c2) :: lgMergeName (((n1, i1), c1) :: xs) ys
-  Eq =>
-    if i1 <= i2 then
-      ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2) :: ys)
-    else
-      ((n2, i2), c2) :: lgMergeName (((n1, i1), c1) :: xs) ys
+lgMergeName (((n1, i1), c1) :: xs) (((n2, i2), c2) :: ys) =
+  match stringCompare n1 n2
+    Lt => ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2) :: ys)
+    Gt => ((n2, i2), c2) :: lgMergeName (((n1, i1), c1) :: xs) ys
+    Eq =>
+      if i1 <= i2 then
+        ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2) :: ys)
+      else
+        ((n2, i2), c2) :: lgMergeName (((n1, i1), c1) :: xs) ys
 
 -- collapse runs of equal name (now contiguous, index-ascending) into
 -- ((name, firstIdx), clausesInOrder).
@@ -1610,15 +1609,14 @@ collidingHeads : List (String, String, String) ->
   OrdMap Unit ->
   OrdMap Unit
 collidingHeads [] _ acc = acc
-collidingHeads ((m, tag, key) :: rest) firstKey acc = match (omLookup
-  (implHeadKey m tag)
-  firstKey)
-  None => collidingHeads rest (omInsert (implHeadKey m tag) key firstKey) acc
-  Some k0 =>
-    if k0 == key then
-      collidingHeads rest firstKey acc
-    else
-      collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
+collidingHeads ((m, tag, key) :: rest) firstKey acc =
+  match omLookup (implHeadKey m tag) firstKey
+    None => collidingHeads rest (omInsert (implHeadKey m tag) key firstKey) acc
+    Some k0 =>
+      if k0 == key then
+        collidingHeads rest firstKey acc
+      else
+        collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
 
 implHeadKey : String -> String -> String
 implHeadKey m tag = "\{m}\n\{tag}"

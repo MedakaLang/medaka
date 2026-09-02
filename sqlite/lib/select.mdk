@@ -2061,9 +2061,10 @@ selectColumnCount db sel = map length (compoundOutputNames db sel)
 --   `SELECT *` ⇒ the source column names (from table, then each joined table in
 --   order).
 compoundOutputNames : Db -> Select -> Result String (List String)
-compoundOutputNames db (Select { from = tbl, joins = js, columns = cols, columnAliases = cas }) = match cols
-  [] => starColumnNames db tbl js
-  _ => Ok (map outName (zipAliases cols cas))
+compoundOutputNames db (Select { from = tbl, joins = js, columns = cols, columnAliases = cas }) =
+  match cols
+    [] => starColumnNames db tbl js
+    _ => Ok (map outName (zipAliases cols cas))
 
 outName : (SqlExpr, Option String) -> String
 outName (_, Some a) = a
@@ -2269,14 +2270,15 @@ runPipeline db sel0 = do
   runPipelineCore db sel
 
 runPipelineCore : Db -> Select -> Result String (List (List Cell))
-runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) = do
-  (lookup, rawRows) <- sourceRows db tbl fa js
-  pred <- compileWhere lookup w
-  let kept = filter pred rawRows
-  if isAggregate gb h ob cols then
-    runGrouped lookup gb h ob cols kept
-  else
-    runFlat lookup ob cols kept
+runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) =
+  do
+    (lookup, rawRows) <- sourceRows db tbl fa js
+    pred <- compileWhere lookup w
+    let kept = filter pred rawRows
+    if isAggregate gb h ob cols then
+      runGrouped lookup gb h ob cols kept
+    else
+      runFlat lookup ob cols kept
 
 -- FROM + JOINs → (combined column resolver, materialized wide rows).
 -- The no-join case keeps its own single-table lookup (`columnIndex` over the one
@@ -2650,11 +2652,10 @@ rewritePostGroup gb aggs e = match indexOfExpr e gb
   None => rewriteInner gb aggs e
 
 rewriteInner : List SqlExpr -> List SqlExpr -> SqlExpr -> Result String SqlExpr
-rewriteInner gb aggs (EAgg fn operand) = match (indexOfExpr
-  (EAgg fn operand)
-  aggs)
-  Some j => Ok (ECol (intToString (length gb + j)))
-  None => Err "internal: aggregate was not collected before the rewrite"
+rewriteInner gb aggs (EAgg fn operand) =
+  match indexOfExpr (EAgg fn operand) aggs
+    Some j => Ok (ECol (intToString (length gb + j)))
+    None => Err "internal: aggregate was not collected before the rewrite"
 rewriteInner _ _ (ELit lit) = Ok (ELit lit)
 -- THE rule: in an aggregate query a bare column must be a GROUP BY key or sit
 -- inside an aggregate.  sqlite is lenient here (it silently picks an arbitrary

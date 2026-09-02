@@ -82,13 +82,10 @@ mustHeader name value = match makeHeader name value
   Err message => panic message
 
 mustResponse : Int -> String -> List Header -> Array Int -> Response
-mustResponse status reason headers body = match (makeResponse
-  status
-  reason
-  headers
-  body)
-  Ok response => response
-  Err message => panic message
+mustResponse status reason headers body =
+  match makeResponse status reason headers body
+    Ok response => response
+    Err message => panic message
 
 requestWithBody : String -> Array Int -> Request
 requestWithBody contentType body =
@@ -529,13 +526,14 @@ test "empty query names are rejected" =
     mustRequest (toUtf8 "GET /x?a=1&&b=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   expectTrue (isErr (parseTargetQuery first) && isErr (parseTargetQuery later))
 
-test "media type and subtype are case-insensitive with bounded parameters" = match (parseMediaType
-  (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
-  Ok mediaType =>
-    expectTrue
-      (mediaTypeType mediaType == "application"
-        && mediaTypeSubtype mediaType == "json")
-  Err _ => expectTrue False
+test "media type and subtype are case-insensitive with bounded parameters" =
+  match (parseMediaType
+    (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
+    Ok mediaType =>
+      expectTrue
+        (mediaTypeType mediaType == "application"
+          && mediaTypeSubtype mediaType == "json")
+    Err _ => expectTrue False
 
 test "malformed and non-ASCII media types are rejected" =
   expectTrue
@@ -543,10 +541,13 @@ test "malformed and non-ASCII media types are rejected" =
       && isErr (parseMediaType (toUtf8 "text/plain; charset=\"unterminated"))
       && isErr (parseMediaType [|97, 112, 112, 47, 255|]))
 
-test "JSON request body is syntax-checked after strict UTF-8 decoding" = match (decodeRequestBody
-  (requestWithBody "Application/JSON; charset=utf-8" (toUtf8 "{\"ok\":true}")))
-  Ok (JsonBody _ _) => expectTrue True
-  _ => expectTrue False
+test "JSON request body is syntax-checked after strict UTF-8 decoding" =
+  match (decodeRequestBody
+    (requestWithBody
+      "Application/JSON; charset=utf-8"
+      (toUtf8 "{\"ok\":true}")))
+    Ok (JsonBody _ _) => expectTrue True
+    _ => expectTrue False
 
 test "invalid JSON syntax is rejected" =
   expectTrue
@@ -574,11 +575,12 @@ test "missing Content-Type is rejected" =
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 2\r\n\r\n{}")
   expectTrue (bodyRejects "requires Content-Type" request)
 
-test "text media types decode strict UTF-8" = match (decodeRequestBody
-  (requestWithBody "Text/Plain; charset=utf-8" (toUtf8 "héllo")))
-  Ok (TextBody mediaType text) =>
-    expectTrue (mediaTypeType mediaType == "text" && text == "héllo")
-  _ => expectTrue False
+test "text media types decode strict UTF-8" =
+  match (decodeRequestBody
+    (requestWithBody "Text/Plain; charset=utf-8" (toUtf8 "héllo")))
+    Ok (TextBody mediaType text) =>
+      expectTrue (mediaTypeType mediaType == "text" && text == "héllo")
+    _ => expectTrue False
 
 test "invalid text UTF-8 is rejected" =
   expectTrue
@@ -586,14 +588,14 @@ test "invalid text UTF-8 is rejected" =
       "not valid UTF-8"
       (requestWithBody "text/plain" [|0xed, 0xa0, 0x80|]))
 
-test "raw media types preserve binary bytes" = match (decodeRequestBody
-  (requestWithBody "image/png" [|0, 128, 255|]))
-  Ok (RawBody mediaType bytes) =>
-    expectTrue
-      (mediaTypeType mediaType == "image"
-        && mediaTypeSubtype mediaType == "png"
-        && bytes == [|0, 128, 255|])
-  _ => expectTrue False
+test "raw media types preserve binary bytes" =
+  match decodeRequestBody (requestWithBody "image/png" [|0, 128, 255|])
+    Ok (RawBody mediaType bytes) =>
+      expectTrue
+        (mediaTypeType mediaType == "image"
+          && mediaTypeSubtype mediaType == "png"
+          && bytes == [|0, 128, 255|])
+    _ => expectTrue False
 
 test "JSON body ceiling accepts at and rejects over" =
   expectTrue

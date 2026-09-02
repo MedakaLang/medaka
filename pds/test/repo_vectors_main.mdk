@@ -480,21 +480,20 @@ runRepresentativeRead (Err message) =
 runRepresentativeRead (Ok raw) = runRepresentativeRows (filter meaningful raw)
 
 runRepresentativeRows : List String -> <IO> Unit
-runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, createCar, _, _, _, _, _, _, _, _, "END"] = match (split
-  "\t"
-  meta)
-  ["META", did, secretHex] =>
-    runRepresentative
-      did
-      (mustSecret secretHex)
-      t0
-      t1
-      initLine
-      op1
-      c1
-      createOrder
-      createCar
-  _ => panic "repo_vectors: malformed representative META row"
+runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, createCar, _, _, _, _, _, _, _, _, "END"] =
+  match split "\t" meta
+    ["META", did, secretHex] =>
+      runRepresentative
+        did
+        (mustSecret secretHex)
+        t0
+        t1
+        initLine
+        op1
+        c1
+        createOrder
+        createCar
+    _ => panic "repo_vectors: malformed representative META row"
 runRepresentativeRows _ =
   panic "repo_vectors: unexpected representative corpus shape"
 

@@ -1,5 +1,5 @@
 # META
-source_lines=5185
+source_lines=5179
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1346,11 +1346,10 @@ isBareParam _ _ = False
 --     as the token `p`, so a real reference is never missed (the scan can only
 --     over-bail, which is safe).
 matchParamFix : Oracle -> Decl -> Option (List Decl)
-matchParamFix _ (DFunDef vis name pats body) = match (matchBodyOnBareParam
-  pats
-  body)
-  Some (p, k, arms) => matchParamFixArms vis name pats p k arms
-  None => None
+matchParamFix _ (DFunDef vis name pats body) =
+  match matchBodyOnBareParam pats body
+    Some (p, k, arms) => matchParamFixArms vis name pats p k arms
+    None => None
 matchParamFix _ _ = None
 
 matchParamFixArms : Bool ->
@@ -1578,11 +1577,10 @@ ctorIsSingle orc c = match oGetCtorType orc c
 -- already proved the pattern irrefutable and the param unreferenced, so
 -- `armToClause`'s PWild re-bind special-case never triggers here.
 destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body) = match (matchBodyOnBareParam
-  pats
-  body)
-  Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
-  None => None
+destructureInParamFix orc (DFunDef vis name pats body) =
+  match matchBodyOnBareParam pats body
+    Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
+    None => None
 destructureInParamFix _ _ = None
 
 destructureInParamFixArms : Oracle ->
@@ -1872,12 +1870,10 @@ firstMatchingExport : StdlibIndex ->
   List String ->
   Option (String, String)
 firstMatchingExport _ _ _ [] = None
-firstMatchingExport idx ownMod canon (std :: rest) = match (firstMatchingModule
-  ownMod
-  canon
-  (stdlibEntriesOf idx std))
-  Some modName => Some (modName, std)
-  None => firstMatchingExport idx ownMod canon rest
+firstMatchingExport idx ownMod canon (std :: rest) =
+  match firstMatchingModule ownMod canon (stdlibEntriesOf idx std)
+    Some modName => Some (modName, std)
+    None => firstMatchingExport idx ownMod canon rest
 
 -- Skip a candidate OWNED by `ownMod` (the linted file's own module) before
 -- testing the signature at all: the true owner's definition can never be a
@@ -4316,12 +4312,10 @@ bindChainOkPat _ _ = False
 -- success arm re-wraps with the SAME ctor (`Ok x => Ok (f x)`) — that's a `map`,
 -- excluded here (owned by `rule-match-to-map`).  Reuses the same linchpin.
 bindChainRewrap : Bool -> Pat -> Expr -> Bool
-bindChainRewrap isResult p body = match (matchToMapTransform
-  (if isResult then "Ok" else "Some")
-  p
-  body)
-  Some _ => True
-  None => False
+bindChainRewrap isResult p body =
+  match matchToMapTransform (if isResult then "Ok" else "Some") p body
+    Some _ => True
+    None => False
 
 bindChainIsTermMap : Expr -> Bool
 bindChainIsTermMap e = match unwrapLoc e

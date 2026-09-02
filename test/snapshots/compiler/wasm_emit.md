@@ -1,5 +1,5 @@
 # META
-source_lines=12204
+source_lines=12187
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -689,22 +689,20 @@ inputMethodIfaces (WasmEmitInputData xs _ _ _ _ _ _ _ _ _ _ _ _) = xs
 
 methodIfaceOfW : Prog -> String -> String
 methodIfaceOfW prog name = match progInput prog
-  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _ => match (omLookup
-    name
-    methodIndex)
-    Some (iface, _) => iface
-    None => ""
+  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _ =>
+    match omLookup name methodIndex
+      Some (iface, _) => iface
+      None => ""
 
 methodArityOfW : Prog -> String -> Int
 methodArityOfW prog name = match progInput prog
   input => methodArityOfInput input name
 
 methodArityOfInput : WasmEmitInput -> String -> Int
-methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name = match (omLookup
-  name
-  methodIndex)
-  Some (_, arity) => arity
-  None => 0
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name =
+  match omLookup name methodIndex
+    Some (_, arity) => arity
+    None => 0
 
 -- ── ARITY BY DECLARATION (#1450, #1668) -- mirror of llvm_emit's block ──────
 -- THE ARITY LEG MOVED; THE `methodIfaceOfW` ROUTE LEG DID NOT.  The bare-name
@@ -724,11 +722,12 @@ inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _ _) =
   idIndex
 
 methodArityOfIfaceInput : WasmEmitInput -> String -> String -> Int
-methodArityOfIfaceInput input ifaceWord method = match (omLookup
-  (ifaceMethodArityKey ifaceWord method)
-  (inputMethodIfaceIdIndex input))
-  Some arity => arity
-  None => methodArityOfInput input method
+methodArityOfIfaceInput input ifaceWord method =
+  match (omLookup
+    (ifaceMethodArityKey ifaceWord method)
+    (inputMethodIfaceIdIndex input))
+    Some arity => arity
+    None => methodArityOfInput input method
 
 methodArityOfIfaceW : Prog -> String -> String -> Int
 methodArityOfIfaceW prog ifaceWord method =
@@ -751,12 +750,10 @@ methodArityOfEntryW prog ent method =
 -- the declared arity of [method] at the impl registered under [tag], for the sites
 -- that hold a tag rather than the entry.  No impl at that tag ⇒ the bare table.
 methodArityOfTagW : Prog -> String -> String -> Int
-methodArityOfTagW prog method tag = match (findByTagW
-  method
-  tag
-  (methodEntriesW prog method))
-  Some ent => methodArityOfEntryW prog ent method
-  None => methodArityOfW prog method
+methodArityOfTagW prog method tag =
+  match findByTagW method tag (methodEntriesW prog method)
+    Some ent => methodArityOfEntryW prog ent method
+    None => methodArityOfW prog method
 
 -- Declared parameter/return type heads drive Unit-main and Float recovery.
 declRetLookupW : Prog -> String -> Option (List String, String)
@@ -1193,11 +1190,10 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ => match (omLookup
-    ctor
-    ctorFloatIndex)
-    Some idxs => containsInt idx idxs
-    None => False
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ =>
+    match omLookup ctor ctorFloatIndex
+      Some idxs => containsInt idx idxs
+      None => False
 
 -- the distinct tuple arities used anywhere in the program (construction or match).
 noteTupleArity : WasmEmit -> Int -> Unit
@@ -5334,13 +5330,11 @@ implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 -- Before #1950 both spellings were `sanitizeId` and so agreed by accident — keeping
 -- them equal by construction is what preserves that, and costs one token.
 implSymTagW : Prog -> String -> String -> String
-implSymTagW prog method tag = match (findByTagW
-  method
-  tag
-  (methodEntriesW prog method))
-  Some (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =>
-    implFnSymTagW (methodEntriesW prog method) method t k
-  _ => injectiveIdent tag
+implSymTagW prog method tag =
+  match findByTagW method tag (methodEntriesW prog method)
+    Some (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =>
+      implFnSymTagW (methodEntriesW prog method) method t k
+    _ => injectiveIdent tag
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
@@ -5850,11 +5844,10 @@ narrowImplsByArityW : Prog ->
   List (String, String) ->
   Int ->
   List (String, String)
-narrowImplsByArityW prog method impls nargs = match (filterList
-  (p => methodArityOfTagW prog method (snd p) == nargs)
-  impls)
-  [] => impls
-  narrowed => narrowed
+narrowImplsByArityW prog method impls nargs =
+  match filterList (p => methodArityOfTagW prog method (snd p) == nargs) impls
+    [] => impls
+    narrowed => narrowed
 
 -- ── layer-15: defaulted-method emission (peer to llvm_emit's E19 default subsystem) ──
 -- A `Filterable List` provides `filterMap` as a CONCRETE impl but inherits `filter`
@@ -5969,19 +5962,19 @@ emitDefaultRKeyRef : Prog ->
   String ->
   String ->
   List String
-emitDefaultRKeyRef prog dictWords argInstrs name tag = match (findByTagW
-  name
-  noneHeadTag
-  (methodEntriesW prog name))
-  Some _ =>
-    dictWords ++ argInstrs ++ ["call $" ++ implFnSym prog noneHeadTag name]
-  None => match defaultForW prog name tag
-    Some entry =>
-      let fname = defaultFnNameW tag name
-      let _ = ensureDefaultEmittedW prog fname tag name entry
-      dictWords ++ argInstrs ++ ["call $" ++ fname]
-    None =>
-      gapLP prog "wasm layer-15: no impl of method '\{name}' for type '\{tag}'"
+emitDefaultRKeyRef prog dictWords argInstrs name tag =
+  match findByTagW name noneHeadTag (methodEntriesW prog name)
+    Some _ =>
+      dictWords ++ argInstrs ++ ["call $" ++ implFnSym prog noneHeadTag name]
+    None => match defaultForW prog name tag
+      Some entry =>
+        let fname = defaultFnNameW tag name
+        let _ = ensureDefaultEmittedW prog fname tag name entry
+        dictWords ++ argInstrs ++ ["call $" ++ fname]
+      None =>
+        gapLP
+          prog
+          "wasm layer-15: no impl of method '\{name}' for type '\{tag}'"
 
 -- Per-emission set of synthesized default symbols plus their accumulated define
 -- blocks. The ordered name list was duplicate authority; membership alone preserves
@@ -7009,13 +7002,11 @@ cexprIsFloat prog env (CApp f a) = match appHead (CApp f a)
 -- Look up the record ctor that owns `label` (by the stamped record name when
 -- available, else by label) and check if that field's 0-based index is in
 -- WasmEmitInput's constructor-Float index.
-cexprIsFloat prog env (CFieldAccess _ label recName) = match (recByName
-  prog
-  recName
-  label)
-  Some (ctor, labels) =>
-    isFloatCtorField prog ctor (orZeroIdx (indexOfL label labels))
-  None => False
+cexprIsFloat prog env (CFieldAccess _ label recName) =
+  match recByName prog recName label
+    Some (ctor, labels) =>
+      isFloatCtorField prog ctor (orZeroIdx (indexOfL label labels))
+    None => False
 cexprIsFloat prog env _ = False
 
 isArithOp : String -> Bool
@@ -7029,11 +7020,10 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ => match (omLookup
-    c
-    ctorFloatIndex)
-    Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
-    None => []
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ =>
+    match omLookup c ctorFloatIndex
+      Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
+      None => []
 ctorPatFloatBinders _ _ = []
 
 ctorPatFloatBindersGo : String -> List Int -> List Pat -> Int -> List String
@@ -8250,23 +8240,21 @@ emitWDispLeaf : Prog ->
   List String ->
   CExpr ->
   List String
-emitWDispLeaf prog env root loopLbl rootArity members (e@(CBinPrim "::" _ _ _)) = match (wDispSpineParts
-  prog
-  (f => contains f members)
-  e)
-  Some (heads, f, args) =>
-    emitWDispSpineCons
-      prog
-      env
-      root
-      (if f == root then loopLbl else f)
-      heads
-      args
-  None =>
-    -- a cons that does not bottom in a saturated group call (the spine terminator
-    -- can be a cons onto a non-spine value): group validation guaranteed it is
-    -- member-free, so it is a BASE value — close the dest + return the head global.
-    emitWDispBase prog env root e
+emitWDispLeaf prog env root loopLbl rootArity members (e@(CBinPrim "::" _ _ _)) =
+  match wDispSpineParts prog (f => contains f members) e
+    Some (heads, f, args) =>
+      emitWDispSpineCons
+        prog
+        env
+        root
+        (if f == root then loopLbl else f)
+        heads
+        args
+    None =>
+      -- a cons that does not bottom in a saturated group call (the spine terminator
+      -- can be a cons onto a non-spine value): group validation guaranteed it is
+      -- member-free, so it is a BASE value — close the dest + return the head global.
+      emitWDispBase prog env root e
 emitWDispLeaf prog env root loopLbl rootArity members other =
   if wDispIsSatRootCall prog root rootArity other then match flattenApp other []
     -- a bare saturated tail-call to root: emit the args + return_call the inner loop
@@ -9139,25 +9127,25 @@ implSelfReturnCall : Prog ->
   CExpr ->
   List CExpr ->
   Option (List String)
-implSelfReturnCall prog env name route methRoutes implRoutes app args = match ((progEmit
-  prog).implSelfCtx.value)
-  ImplSelfOff => None
-  ImplSelfOn method tag arity =>
-    if name == method
-      && isSelfSatApp (SelfByMethod method tag) arity app then match route
-      RKey rtag _ => match implForW prog name rtag
-        Some _ =>
-          let dictWords =
-            flatMap (routeWitness prog env 0) (methRoutes ++ implRoutes)
-          let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
-          Some
-            (dictWords
-              ++ argInstrs
-              ++ ["return_call $" ++ implFnSym prog rtag name])
-        None => None
-      _ => None
-    else
-      None
+implSelfReturnCall prog env name route methRoutes implRoutes app args =
+  match (progEmit prog).implSelfCtx.value
+    ImplSelfOff => None
+    ImplSelfOn method tag arity =>
+      if name == method
+        && isSelfSatApp (SelfByMethod method tag) arity app then match route
+        RKey rtag _ => match implForW prog name rtag
+          Some _ =>
+            let dictWords =
+              flatMap (routeWitness prog env 0) (methRoutes ++ implRoutes)
+            let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
+            Some
+              (dictWords
+                ++ argInstrs
+                ++ ["return_call $" ++ implFnSym prog rtag name])
+          None => None
+        _ => None
+      else
+        None
 
 -- a tail application: saturated direct known-fn → return_call; ctor → value+return;
 -- everything else → indirect via return_call $__mdk_apply.
@@ -9215,31 +9203,32 @@ emitAppTail prog env arity app =
     -- if-chain, or a CDict dict-prepended call) and `return` it.  (return_call
     -- specialization of the RKey direct call is deferred; the dispatch fixtures
     -- here are not deep-recursive through a method, so a plain return is sound.)
-    CMethod name route implRoutes methRoutes => match (implSelfReturnCall
-      prog
-      env
-      name
-      route
-      methRoutes
-      implRoutes
-      app
-      args)
-      -- layer-18: a PLAIN-tail impl-method self-call.  When we are emitting impl
-      -- `(method, tag)`'s ordinary body and THIS tail application is a saturated self-call
-      -- to exactly that `CMethod method (RKey tag)` (`isSelfSatApp (SelfByMethod …)`), emit
-      -- the recomputed args + `return_call $mdk_impl_<tag>_<method>` (a real tail call, zero
-      -- stack growth) instead of `call … ; return`.  This is the impl-method analog of the
-      -- top-level plain-tail return_call.  SAFETY NET: gated on the saturated-self-call
-      -- detection AND on being in tail position (only emitAppTail reaches here); a NON-tail
-      -- self-call goes through emitRefExpr/emitMethodRef and stays a plain `call`.  A
-      -- self-call to a DIFFERENT method/tag, or an unsaturated one, fails the gate and stays
-      -- ordinary.  (A cons-tail impl is already diverted to wTrmcImplTry's TMC loop and never
-      -- reaches this path.)
+    CMethod name route implRoutes methRoutes =>
+      match (implSelfReturnCall
+        prog
+        env
+        name
+        route
+        methRoutes
+        implRoutes
+        app
+        args)
+        -- layer-18: a PLAIN-tail impl-method self-call.  When we are emitting impl
+        -- `(method, tag)`'s ordinary body and THIS tail application is a saturated self-call
+        -- to exactly that `CMethod method (RKey tag)` (`isSelfSatApp (SelfByMethod …)`), emit
+        -- the recomputed args + `return_call $mdk_impl_<tag>_<method>` (a real tail call, zero
+        -- stack growth) instead of `call … ; return`.  This is the impl-method analog of the
+        -- top-level plain-tail return_call.  SAFETY NET: gated on the saturated-self-call
+        -- detection AND on being in tail position (only emitAppTail reaches here); a NON-tail
+        -- self-call goes through emitRefExpr/emitMethodRef and stays a plain `call`.  A
+        -- self-call to a DIFFERENT method/tag, or an unsaturated one, fails the gate and stays
+        -- ordinary.  (A cons-tail impl is already diverted to wTrmcImplTry's TMC loop and never
+        -- reaches this path.)
 
-      Some retInstrs => retInstrs
-      None =>
-        emitMethodRef prog env 0 name route implRoutes methRoutes args
-          ++ ["return"]
+        Some retInstrs => retInstrs
+        None =>
+          emitMethodRef prog env 0 name route implRoutes methRoutes args
+            ++ ["return"]
     -- P0-7: a `=>`-constrained NAMED function (`CDict`) in tail position.  The
     -- un-annotated self-tail-recursive `Num a` loop (`loop acc n = … loop (acc+n) (n-1)`)
     -- lowers its recursive call to a `CDict loop [<Num route>]` head — the dict-pass
@@ -9406,10 +9395,10 @@ emitSwitchTail prog env arity d root (foc :: rest) arms (branches@((CTBranch (HL
   emitLitSwitchTail prog env arity d root foc rest arms branches dft 0
 emitSwitchTail prog env arity d root (foc :: rest) arms ((CTBranch HUnit sub) :: _) dft =
   emitTreeTail prog env arity d root rest arms sub
-emitSwitchTail prog env arity d root (foc :: rest) arms (branches@((CTBranch h _) :: _)) dft = match (conHeadInfo
-  h)
-  Some _ => emitConSwitchTail prog env arity d root foc rest arms branches dft
-  None => gapLP prog "ref-mode: unsupported tail switch head"
+emitSwitchTail prog env arity d root (foc :: rest) arms (branches@((CTBranch h _) :: _)) dft =
+  match conHeadInfo h
+    Some _ => emitConSwitchTail prog env arity d root foc rest arms branches dft
+    None => gapLP prog "ref-mode: unsupported tail switch head"
 
 -- constructor switch (tail): stash focus, br_table on the discriminant; each slot
 -- tail-emits its arm (which return_calls / returns), so we need no result block.
@@ -9550,26 +9539,25 @@ emitOrdinalSlotTail : Prog ->
   Int ->
   Int ->
   List String
-emitOrdinalSlotTail prog env arity d root svRead rest arms branches ty sd k = match (branchForOrdinal
-  branches
-  k)
-  Some (CTBranch h sub) =>
-    -- #712: key the field-extract cast off the CHead (headCtorStructName), not the
-    -- bare ctor name — so a built-in `HCons` stays on the reserved `$C_Cons` even when
-    -- a user ADT also declares a `Cons` (which resolves to `$CU_Cons`).
-    let cs = headCtorStructName prog h
-    let a = snd (conHeadInfoUnsafe prog h)
-    let fieldOccs =
-      map
-        (i =>
-          svRead
-            ++ [
-              "ref.cast (ref $" ++ cs ++ ")",
-              "struct.get $\{cs} \{intToString (i + 1)}",
-            ])
-        (rangeList 0 a)
-    emitTreeTail prog env arity d root (fieldOccs ++ rest) arms sub
-  None => ["br $swdt" ++ intToString sd]
+emitOrdinalSlotTail prog env arity d root svRead rest arms branches ty sd k =
+  match branchForOrdinal branches k
+    Some (CTBranch h sub) =>
+      -- #712: key the field-extract cast off the CHead (headCtorStructName), not the
+      -- bare ctor name — so a built-in `HCons` stays on the reserved `$C_Cons` even when
+      -- a user ADT also declares a `Cons` (which resolves to `$CU_Cons`).
+      let cs = headCtorStructName prog h
+      let a = snd (conHeadInfoUnsafe prog h)
+      let fieldOccs =
+        map
+          (i =>
+            svRead
+              ++ [
+                "ref.cast (ref $" ++ cs ++ ")",
+                "struct.get $\{cs} \{intToString (i + 1)}",
+              ])
+          (rangeList 0 a)
+      emitTreeTail prog env arity d root (fieldOccs ++ rest) arms sub
+    None => ["br $swdt" ++ intToString sd]
 
 -- `idt` (trailing) is the chain's own INDENT depth — see emitLitSwitchRef (#381).
 emitLitSwitchTail : Prog ->
@@ -10459,29 +10447,27 @@ emitFieldAccessRef : Prog ->
   String ->
   String ->
   List String
-emitFieldAccessRef prog env d ex label recName = match (recByName
-  prog
-  recName
-  label)
-  Some (ctor, labels) =>
-    let idx = orZeroIdx (indexOfL label labels)
-    emitRefExpr prog env d ex
-      ++ [
-        "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
-        "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
-      ]
-  -- `r.value` on a Ref: no record ctor owns the field `value`, so this is a
-  -- $refbox read — cast to $refbox and read the mutable field at slot 0.
-  None =>
-    if label == "value" then
+emitFieldAccessRef prog env d ex label recName =
+  match recByName prog recName label
+    Some (ctor, labels) =>
+      let idx = orZeroIdx (indexOfL label labels)
       emitRefExpr prog env d ex
-        ++ ["ref.cast (ref $refbox)", "struct.get $refbox 0"]
-    else
-      gapLP
-        prog
-        ("ref-mode: CFieldAccess on unknown field '"
-          ++ label
-          ++ "' (no record ctor in the field-order table)")
+        ++ [
+          "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
+          "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
+        ]
+    -- `r.value` on a Ref: no record ctor owns the field `value`, so this is a
+    -- $refbox read — cast to $refbox and read the mutable field at slot 0.
+    None =>
+      if label == "value" then
+        emitRefExpr prog env d ex
+          ++ ["ref.cast (ref $refbox)", "struct.get $refbox 0"]
+      else
+        gapLP
+          prog
+          ("ref-mode: CFieldAccess on unknown field '"
+            ++ label
+            ++ "' (no record ctor in the field-order table)")
 
 -- functional update `{ base | f = v … }`: copy the base's struct, overriding the
 -- named fields.  The record type is recovered from the first update field's label.
@@ -10492,13 +10478,13 @@ emitRecordUpdateRef : Prog ->
   CExpr ->
   List CField ->
   List String
-emitRecordUpdateRef prog env d recName base fields = match (firstFieldLabel
-  fields)
-  None => gapLP prog "ref-mode: empty record update"
-  Some k0 => match recByName prog recName k0
-    Some (ctor, labels) => emitUpdateCopy prog env d ctor labels base fields
-    None =>
-      gapLP prog ("ref-mode: CRecordUpdate on unknown field '" ++ k0 ++ "'")
+emitRecordUpdateRef prog env d recName base fields =
+  match firstFieldLabel fields
+    None => gapLP prog "ref-mode: empty record update"
+    Some k0 => match recByName prog recName k0
+      Some (ctor, labels) => emitUpdateCopy prog env d ctor labels base fields
+      None =>
+        gapLP prog ("ref-mode: CRecordUpdate on unknown field '" ++ k0 ++ "'")
 
 -- Resolve a record by the typecheck-stamped record name (carried on
 -- CFieldAccess / CRecordUpdate) when it is usable — non-empty, in the
@@ -10588,15 +10574,14 @@ oneUpdateField : Prog ->
   List CField ->
   (Int, String) ->
   List String
-oneUpdateField prog env d ctor bL fields (idx, label) = match (findUpdateExpr
-  label
-  fields)
-  Some ex => emitRefExpr prog env d ex
-  None => [
-    "local.get " ++ bL,
-    "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
-    "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
-  ]
+oneUpdateField prog env d ctor bL fields (idx, label) =
+  match findUpdateExpr label fields
+    Some ex => emitRefExpr prog env d ex
+    None => [
+      "local.get " ++ bL,
+      "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
+      "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
+    ]
 
 findUpdateExpr : String -> List CField -> Option CExpr
 findUpdateExpr _ [] = None
@@ -10616,19 +10601,17 @@ findRecByField ((ctor, labels) :: rest) label =
 
 recordFieldsOf : Prog -> String -> Option (List String)
 recordFieldsOf prog ctor = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ => match (omLookup
-    ctor
-    recordIndex)
-    Some labels => Some labels
-    None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
+  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ =>
+    match omLookup ctor recordIndex
+      Some labels => Some labels
+      None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
 
 recordByField : Prog -> String -> Option (String, List String)
 recordByField prog label = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ => match (omLookup
-    label
-    labelIndex)
-    Some entry => Some entry
-    None => findRecByField (indexRecFieldsW (progIndex prog)) label
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ =>
+    match omLookup label labelIndex
+      Some entry => Some entry
+      None => findRecByField (indexRecFieldsW (progIndex prog)) label
 
 -- ── match lowering: CDecision → discriminant + br_table + field extraction ───
 -- The scrutinee is a (ref eq).  The decision tree (CTree) is walked into a nest of
@@ -10847,13 +10830,14 @@ emitSwitchRef prog env d decLabel root (foc :: rest) arms (branches@((CTBranch (
   emitLitSwitchRef prog env d decLabel root foc rest arms branches dft 0
 emitSwitchRef prog env d decLabel root (foc :: rest) arms ((CTBranch HUnit sub) :: _) dft =
   emitTreeRef prog env d decLabel root rest arms sub
-emitSwitchRef prog env d decLabel root (foc :: rest) arms (branches@((CTBranch h _) :: _)) dft = match (conHeadInfo
-  h)
-  Some _ => emitConSwitchRef prog env d decLabel root foc rest arms branches dft
-  None =>
-    gapLP
-      prog
-      "ref-mode: unsupported switch head (constructor / int-literal / unit only)"
+emitSwitchRef prog env d decLabel root (foc :: rest) arms (branches@((CTBranch h _) :: _)) dft =
+  match conHeadInfo h
+    Some _ =>
+      emitConSwitchRef prog env d decLabel root foc rest arms branches dft
+    None =>
+      gapLP
+        prog
+        "ref-mode: unsupported switch head (constructor / int-literal / unit only)"
 
 -- the constructor switch (§3.4): stash the focus into scratch local `$__rf<d>`,
 -- read its discriminant, and `br_table` on the dense per-type ordinal.  Recurses
@@ -11031,26 +11015,25 @@ emitOrdinalSlot : Prog ->
   Int ->
   Int ->
   List String
-emitOrdinalSlot prog env d decLabel root svRead rest arms branches ty sd k = match (branchForOrdinal
-  branches
-  k)
-  Some (CTBranch h sub) =>
-    -- #712: key the field-extract cast off the CHead (headCtorStructName), not the
-    -- bare ctor name — so a built-in `HCons` stays on the reserved `$C_Cons` even when
-    -- a user ADT also declares a `Cons` (which resolves to `$CU_Cons`).
-    let cs = headCtorStructName prog h
-    let a = snd (conHeadInfoUnsafe prog h)
-    let fieldOccs =
-      map
-        (i =>
-          svRead
-            ++ [
-              "ref.cast (ref $" ++ cs ++ ")",
-              "struct.get $\{cs} \{intToString (i + 1)}",
-            ])
-        (rangeList 0 a)
-    emitTreeRef prog env d decLabel root (fieldOccs ++ rest) arms sub
-  None => ["br $swd" ++ intToString sd]
+emitOrdinalSlot prog env d decLabel root svRead rest arms branches ty sd k =
+  match branchForOrdinal branches k
+    Some (CTBranch h sub) =>
+      -- #712: key the field-extract cast off the CHead (headCtorStructName), not the
+      -- bare ctor name — so a built-in `HCons` stays on the reserved `$C_Cons` even when
+      -- a user ADT also declares a `Cons` (which resolves to `$CU_Cons`).
+      let cs = headCtorStructName prog h
+      let a = snd (conHeadInfoUnsafe prog h)
+      let fieldOccs =
+        map
+          (i =>
+            svRead
+              ++ [
+                "ref.cast (ref $" ++ cs ++ ")",
+                "struct.get $\{cs} \{intToString (i + 1)}",
+              ])
+          (rangeList 0 a)
+      emitTreeRef prog env d decLabel root (fieldOccs ++ rest) arms sub
+    None => ["br $swd" ++ intToString sd]
 
 -- the literal switch: compare the focus i31 Int against each branch's constant via
 -- an if/else chain.  The focus is re-read per comparison through `foc`.

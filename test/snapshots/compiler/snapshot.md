@@ -1,5 +1,5 @@
 # META
-source_lines=1448
+source_lines=1449
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -1012,43 +1012,44 @@ runChunk : String ->
   List String ->
   <IO> List SnapResult
 runChunk _ _ _ _ [] = []
-runChunk root mode outDir sel pending = match (runCommand
-  (executablePath ())
-  (workerArgv root sel pending))
-  Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
-  Ok (code, out, err) =>
-    let streamed = parseStream out
-    let done = map fixtureOf streamed
-    let banked = map (settle root mode outDir sel) streamed
-    let missing = notIn done pending
-    -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
-    -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
-    -- a clean run while silently dropping every fixture after it.  "Every pending fixture
-    -- reached its END" is the only claim worth trusting.
-    if missing == [] then
-      banked
-    else match lastBegun out
-      -- the child died: the last BEGIN with no END names the killer.
-
-      None =>
+runChunk root mode outDir sel pending =
+  match runCommand (executablePath ()) (workerArgv root sel pending)
+    Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
+    Ok (code, out, err) =>
+      let streamed = parseStream out
+      let done = map fixtureOf streamed
+      let banked = map (settle root mode outDir sel) streamed
+      let missing = notIn done pending
+      -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
+      -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
+      -- a clean run while silently dropping every fixture after it.  "Every pending fixture
+      -- reached its END" is the only claim worth trusting.
+      if missing == [] then
         banked
-          ++ map
-            (f => (
-              f,
-              "ERROR worker died with no BEGIN (exit \{intToString code})",
-              False,
-            ))
-            missing
-      Some victim =>
-        -- the victim's own snapshot = whatever it streamed before dying + its stderr.
-        -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
-        -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
-        -- day a panic message changes, someone reads it.
-        let crashSecs =
-          streamTail out ++ [("CRASH", normalizeText root err, True)]
-        let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
-        let remaining = afterFirst victim pending
-        banked ++ [(victim, v, True)] ++ runChunk root mode outDir sel remaining
+      else match lastBegun out
+        -- the child died: the last BEGIN with no END names the killer.
+
+        None =>
+          banked
+            ++ map
+              (f => (
+                f,
+                "ERROR worker died with no BEGIN (exit \{intToString code})",
+                False,
+              ))
+              missing
+        Some victim =>
+          -- the victim's own snapshot = whatever it streamed before dying + its stderr.
+          -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
+          -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
+          -- day a panic message changes, someone reads it.
+          let crashSecs =
+            streamTail out ++ [("CRASH", normalizeText root err, True)]
+          let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
+          let remaining = afterFirst victim pending
+          banked
+            ++ [(victim, v, True)]
+            ++ runChunk root mode outDir sel remaining
 
 workerArgv : String -> List String -> List String -> List String
 workerArgv root [] files = ["snapshot", "--worker", "--root", root] ++ files

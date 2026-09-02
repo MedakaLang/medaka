@@ -813,21 +813,20 @@ typeAtPoint : String ->
 -- while hoverEnvFor is <IO> Option, and the nesting deliberately mirrors hoverFor's
 -- load-bearing order — a `do` block cannot express the mixed pure/IO steps.
 -- lint-disable-next-line rule-bind-chain-to-do
-typeAtPoint runtimeSrc coreSrc filePath src line col = match (identifierAt
-  src
-  line
-  col)
-  None => None
-  Some name =>
-    let uri = uriOfPath filePath
-    let docs = docsPut uri src emptyDocs
-    match hoverEnvFor runtimeSrc coreSrc uri src docs
-      None => None
-      Some env => match hoverSchemeAt name src line col env
+typeAtPoint runtimeSrc coreSrc filePath src line col =
+  match identifierAt src line col
+    None => None
+    Some name =>
+      let uri = uriOfPath filePath
+      let docs = docsPut uri src emptyDocs
+      match hoverEnvFor runtimeSrc coreSrc uri src docs
         None => None
-        Some (sch, isLocal) =>
-          let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
-          Some (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
+        Some env => match hoverSchemeAt name src line col env
+          None => None
+          Some (sch, isLocal) =>
+            let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
+            Some
+              (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (loads the import graph; the
@@ -1150,16 +1149,12 @@ completionFor runtimeSrc coreSrc uri src params docs = match (
   positionLine params,
   positionChar params,
 )
-  (Some line, Some col) => match (completionEnvFor
-    runtimeSrc
-    coreSrc
-    uri
-    src
-    docs)
-    None => JNull
-    Some env =>
-      let prefix = prefixBefore src line col
-      jArray (filterCompletions prefix [] env)
+  (Some line, Some col) =>
+    match completionEnvFor runtimeSrc coreSrc uri src docs
+      None => JNull
+      Some env =>
+        let prefix = prefixBefore src line col
+        jArray (filterCompletions prefix [] env)
   _ => JNull
 
 -- Completion suggests names from the env directly (no side-channel fallback like
@@ -1866,28 +1861,26 @@ publishFor runtimeSrc coreSrc uri text docs =
 -- didChange: params.textDocument.uri + params.contentChanges[last].text
 --            (Full sync: the last change replaces the whole document).
 handleDidOpen : String -> String -> Json -> Docs -> <IO> Docs
-handleDidOpen runtimeSrc coreSrc params docs = match (fieldStr
-  "uri"
-  (fieldOr "textDocument" params))
-  None => docs
-  Some uri => match fieldStr "text" (fieldOr "textDocument" params)
+handleDidOpen runtimeSrc coreSrc params docs =
+  match fieldStr "uri" (fieldOr "textDocument" params)
     None => docs
-    Some text =>
-      let docs2 = docsPut uri text docs
-      let _ = publishFor runtimeSrc coreSrc uri text docs2
-      docs2
+    Some uri => match fieldStr "text" (fieldOr "textDocument" params)
+      None => docs
+      Some text =>
+        let docs2 = docsPut uri text docs
+        let _ = publishFor runtimeSrc coreSrc uri text docs2
+        docs2
 
 handleDidChange : String -> String -> Json -> Docs -> <IO> Docs
-handleDidChange runtimeSrc coreSrc params docs = match (fieldStr
-  "uri"
-  (fieldOr "textDocument" params))
-  None => docs
-  Some uri => match lastChangeText (fieldOr "contentChanges" params)
+handleDidChange runtimeSrc coreSrc params docs =
+  match fieldStr "uri" (fieldOr "textDocument" params)
     None => docs
-    Some text =>
-      let docs2 = docsPut uri text docs
-      let _ = publishFor runtimeSrc coreSrc uri text docs2
-      docs2
+    Some uri => match lastChangeText (fieldOr "contentChanges" params)
+      None => docs
+      Some text =>
+        let docs2 = docsPut uri text docs
+        let _ = publishFor runtimeSrc coreSrc uri text docs2
+        docs2
 
 -- ── B.10.3 request handlers ─────────────────────────────────────────────────
 -- Each looks the doc up in the store and writes a JSON-RPC response.  A missing
@@ -2051,15 +2044,14 @@ referenceLocations idx key includeDecl =
 
 -- (path, then start line, then start char) — see `referenceLocations`.
 compareUseLoc : (String, Loc) -> (String, Loc) -> Ordering
-compareUseLoc (p1, Loc _ sl1 sc1 _ _) (p2, Loc _ sl2 sc2 _ _) = match (compare
-  p1
-  p2)
-  Lt => Lt
-  Gt => Gt
-  Eq => match compare sl1 sl2
+compareUseLoc (p1, Loc _ sl1 sc1 _ _) (p2, Loc _ sl2 sc2 _ _) =
+  match compare p1 p2
     Lt => Lt
     Gt => Gt
-    Eq => compare sc1 sc2
+    Eq => match compare sl1 sl2
+      Lt => Lt
+      Gt => Gt
+      Eq => compare sc1 sc2
 
 locationJson : (String, Loc) -> Json
 locationJson (path, loc) =

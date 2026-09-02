@@ -1,5 +1,5 @@
 # META
-source_lines=1726
+source_lines=1721
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -688,15 +688,10 @@ runTypeAtTool runtimeSrc coreSrc _stdlibDir args = match (
 -- on that line (#849) — applies to BOTH addressing modes, since a col-mode
 -- miss is exactly the ambiguity #849 reports.
 typeAtOneCol : String -> String -> String -> String -> Int -> Int -> <IO> Json
-typeAtOneCol runtimeSrc coreSrc path src line col = match (typeAtPoint
-  runtimeSrc
-  coreSrc
-  path
-  src
-  line
-  col)
-  Some ty => toolTextResult ty False
-  None => toolTextResult (typeAtMissNote src line col) False
+typeAtOneCol runtimeSrc coreSrc path src line col =
+  match typeAtPoint runtimeSrc coreSrc path src line col
+    Some ty => toolTextResult ty False
+    None => toolTextResult (typeAtMissNote src line col) False
 
 typeAtMissNote : String -> Int -> Int -> String
 typeAtMissNote src line col = match lineTextAt src line
@@ -845,12 +840,10 @@ positionParams line col =
 -- here".  Applies to BOTH addressing modes — a col-mode miss is exactly the
 -- ambiguity #849 reports.
 definitionAtCol : String -> String -> Int -> Int -> Json
-definitionAtCol path src line col = match (definitionResult
-  path
-  src
-  (positionParams line col))
-  JNull => definitionMissNote line (Some col) src
-  hit => hit
+definitionAtCol path src line col =
+  match definitionResult path src (positionParams line col)
+    JNull => definitionMissNote line (Some col) src
+    hit => hit
 
 -- Shared miss-note shape for medaka_definition: an empty `matches`, a short
 -- `note`, and (when the line exists) the identifiers actually on it.
@@ -1604,21 +1597,23 @@ handleToolsCall : String ->
   Json ->
   (Unit -> <IO> Option String) ->
   <IO> Unit
-handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck = match (fieldStr
-  "name"
-  params)
-  None =>
-    writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
-  Some name =>
-    let args = fieldOr "arguments" params
-    let _ = logMcpCall "tools/call" name (stringify args)
-    match callTool runtimeSrc coreSrc stdlibDir name args
-      None =>
-        writeMessage
-          (errorMsg idJson (0 - 32601) (stringConcat ["Unknown tool: ", name]))
-      Some result =>
-        let augmented = attachStaleness stalenessCheck result
-        writeMessage (responseMsg idJson augmented)
+handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
+  match fieldStr "name" params
+    None =>
+      writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
+    Some name =>
+      let args = fieldOr "arguments" params
+      let _ = logMcpCall "tools/call" name (stringify args)
+      match callTool runtimeSrc coreSrc stdlibDir name args
+        None =>
+          writeMessage
+            (errorMsg
+              idJson
+              (0 - 32601)
+              (stringConcat ["Unknown tool: ", name]))
+        Some result =>
+          let augmented = attachStaleness stalenessCheck result
+          writeMessage (responseMsg idJson augmented)
 
 -- ── request dispatch ─────────────────────────────────────────────────────────
 

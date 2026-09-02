@@ -213,36 +213,47 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
       Err e => emitLoadFail entry e
       Ok tsrc => match parseResult tsrc
         Err pe => emitParseError entry pe
-        Ok _ => match (loadProgramFilesLocatedCachedE
-          playgroundParseCache
-          (_ => None)
-          entry
-          roots)
-          -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
-          -- exactly as an entry-file parse error squiggles the entry.
-          Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
-          Err (LoadMsg lmsg) =>
-            -- Recover the failing import's own span so the squiggle lands on the
-            -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
-            -- entry-scan). Available-modules help is CLI-only (needs a stdlib dir
-            -- listing, unavailable over the browser vfs).
-            let mloc = match unknownModuleIdOf lmsg
-              None => None
-              Some mid => findImportLoc mid (parseLocated tsrc)
-            emitDiagnostics
-              (cjAllToJson [
-                (
-                  entry,
-                  tsrc,
-                  [Diag SevError "R-MODULE-LOAD" lmsg mloc None None],
-                ),
-              ])
-          Ok triples =>
-            let mods = map dropPath triples
-            match mods
-              [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
-              _ =>
-                analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods
+        Ok _ =>
+          match (loadProgramFilesLocatedCachedE
+            playgroundParseCache
+            (_ => None)
+            entry
+            roots)
+            -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
+            -- exactly as an entry-file parse error squiggles the entry.
+            Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
+            Err (LoadMsg lmsg) =>
+              -- Recover the failing import's own span so the squiggle lands on the
+              -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
+              -- entry-scan). Available-modules help is CLI-only (needs a stdlib dir
+              -- listing, unavailable over the browser vfs).
+              let mloc = match unknownModuleIdOf lmsg
+                None => None
+                Some mid => findImportLoc mid (parseLocated tsrc)
+              emitDiagnostics
+                (cjAllToJson [
+                  (
+                    entry,
+                    tsrc,
+                    [Diag SevError "R-MODULE-LOAD" lmsg mloc None None],
+                  ),
+                ])
+            Ok triples =>
+              let mods = map dropPath triples
+              match mods
+                [_] =>
+                  analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
+                _ =>
+                  analyzeMulti
+                    emit
+                    rsrc
+                    csrc
+                    tsrc
+                    entry
+                    runtimeP
+                    coreP
+                    roots
+                    mods
 
 dropPath : (String, String, List Decl) -> (String, List Decl)
 dropPath (mid, _, decls) = (mid, decls)
@@ -621,17 +632,23 @@ isDiagError _ = False
 -- + a CompletionItem[] (or null).  Reads the three sources; a read/parse failure
 -- degrades to a null result (never a trap), keeping the browser seam happy.
 runQuery : Bool -> String -> String -> String -> List String -> <IO> Unit
-runQuery isHover runtimeP coreP entry (lineS :: colS :: _) = match (readFile
-  runtimeP)
-  Err _ => emitQuery isHover JNull
-  Ok rsrc => match readFile coreP
+runQuery isHover runtimeP coreP entry (lineS :: colS :: _) =
+  match readFile runtimeP
     Err _ => emitQuery isHover JNull
-    Ok csrc => match readFile entry
+    Ok rsrc => match readFile coreP
       Err _ => emitQuery isHover JNull
-      Ok tsrc =>
-        emitQuery
-          isHover
-          (queryResult isHover rsrc csrc tsrc (parseNat lineS) (parseNat colS))
+      Ok csrc => match readFile entry
+        Err _ => emitQuery isHover JNull
+        Ok tsrc =>
+          emitQuery
+            isHover
+            (queryResult
+              isHover
+              rsrc
+              csrc
+              tsrc
+              (parseNat lineS)
+              (parseNat colS))
 runQuery isHover _ _ _ _ = emitQuery isHover JNull
 
 emitQuery : Bool -> Json -> <IO> Unit

@@ -1,5 +1,5 @@
 # META
-source_lines=930
+source_lines=926
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -701,14 +701,10 @@ shrinkLoopFuel : List (String, Value e) ->
   Int ->
   <e> (List (String, Value e), Bool)
 shrinkLoopFuel _ _ _ candidate 0 = (candidate, True)
-shrinkLoopFuel evalEnv params body candidate fuel = match (tryShrinkOne
-  evalEnv
-  params
-  body
-  candidate
-  0)
-  Some better => shrinkLoopFuel evalEnv params body better (fuel - 1)
-  None => (candidate, False)
+shrinkLoopFuel evalEnv params body candidate fuel =
+  match tryShrinkOne evalEnv params body candidate 0
+    Some better => shrinkLoopFuel evalEnv params body better (fuel - 1)
+    None => (candidate, False)
 
 -- Try each param in order; return the first candidate where some smaller value
 -- still fails the prop.

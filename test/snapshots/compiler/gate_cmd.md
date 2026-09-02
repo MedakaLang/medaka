@@ -1,5 +1,5 @@
 # META
-source_lines=5288
+source_lines=5282
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1021,11 +1021,10 @@ stripBinPrefix s =
     s
 
 scrapedOraclesIn : String -> <IO> List String
-scrapedOraclesIn scriptPath = match (runCommand "grep" [
-  "-ohE", "test/bin/[a-z_0-9]+", scriptPath
-])
-  Err _ => []
-  Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
+scrapedOraclesIn scriptPath =
+  match runCommand "grep" ["-ohE", "test/bin/[a-z_0-9]+", scriptPath]
+    Err _ => []
+    Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
 
 nonBlankLine : String -> Bool
 nonBlankLine s = stringTrim s /= ""
@@ -1573,12 +1572,11 @@ gitExitMsg code msg =
     "git ls-files exited \{intToString code}: \{msg}"
 
 gitLsFilesSh : String -> List String -> <IO> Result String (List String)
-gitLsFilesSh root args = match (runCommand
-  "git"
-  (["-C", root] ++ args ++ ["*.sh"]))
-  Err e => Err "git ls-files failed to run: \{e}"
-  Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
-  Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
+gitLsFilesSh root args =
+  match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
+    Err e => Err "git ls-files failed to run: \{e}"
+    Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
+    Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
 
 gateCandidates : String -> <IO> Result String (List String)
 gateCandidates root = match gitLsFilesSh root ["ls-files"]
@@ -1640,12 +1638,10 @@ runTargetViolations root (g :: gs) =
 -- Check 3: every non-empty oracle name is one of build_oracles.sh's own
 -- ENTRIES (via its `--list` mode — no clang/libgc needed, builds nothing).
 knownOracles : String -> <IO> List String
-knownOracles root = match (runCommand "sh" [
-  "\{root}/test/build_oracles.sh",
-  "--list",
-])
-  Err _ => []
-  Ok (_, out, _) => filterList nonBlank (splitNl out)
+knownOracles root =
+  match runCommand "sh" ["\{root}/test/build_oracles.sh", "--list"]
+    Err _ => []
+    Ok (_, out, _) => filterList nonBlank (splitNl out)
 
 -- Two probe names build_oracles.sh deliberately does NOT list in ENTRIES,
 -- because a DIFFERENT script builds them (test/wasm/build_wasm_oracle.sh) —
@@ -2932,11 +2928,11 @@ ciCheckResult wfPath wfSrc out
       ])
 
 ciCmdBody : List String -> <IO> Unit
-ciCmdBody argv = match (parseCiArgs argv CiArgs {
+ciCmdBody argv = match parseCiArgs argv CiArgs {
   registry = None,
   workflow = None,
   check = False,
-})
+}
   Err m => emit (Err m)
   Ok a =>
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -3647,30 +3643,28 @@ balPlace : Bool ->
   List Place ->
   Result String (List Place, List Row)
 balPlace _ [] rs acc = Ok (reverseL acc, rs)
-balPlace stab (c :: cs) rs acc = match (if stab then
-  balPickStable c rs
-else
-  balPick c rs)
-  None =>
-    Err
-      (stringConcat [
-        "medaka gate balance: no row can run '\{c.cname}'.\n",
-        "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
-        "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ",
-        joinSpace (balWasmRowNames rs),
-        "\n",
-      ])
-  Some rn =>
-    balPlace
-      stab
-      cs
-      (balAdd rn c.cms rs)
-      (Place {
-          pname = c.cname,
-          pfrom = c.curRow,
-          pto = rn,
-        }
-        :: acc)
+balPlace stab (c :: cs) rs acc =
+  match if stab then balPickStable c rs else balPick c rs
+    None =>
+      Err
+        (stringConcat [
+          "medaka gate balance: no row can run '\{c.cname}'.\n",
+          "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
+          "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ",
+          joinSpace (balWasmRowNames rs),
+          "\n",
+        ])
+    Some rn =>
+      balPlace
+        stab
+        cs
+        (balAdd rn c.cms rs)
+        (Place {
+            pname = c.cname,
+            pfrom = c.curRow,
+            pto = rn,
+          }
+          :: acc)
 
 balWasmRowNames : List Row -> List String
 balWasmRowNames [] = []
@@ -4913,11 +4907,11 @@ balCheckResult regPath regSrc out head
       ])
 
 balCmdBody : List String -> <IO> Unit
-balCmdBody argv = match (parseBalArgs argv BalArgs {
+balCmdBody argv = match parseBalArgs argv BalArgs {
   registry = None,
   baseline = None,
   check = False,
-})
+}
   Err m => emit (Err m)
   Ok a =>
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot

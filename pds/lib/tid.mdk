@@ -95,14 +95,13 @@ tidCompare left right = compare (tidToString left) (tidToString right)
    the prior timestamp by one microsecond using the proposed clock id. -}
 export
 tidNext : Tid -> Int -> Int -> Result String Tid
-tidNext prior proposedMicros proposedClockId = match (tidEncode
-  proposedMicros
-  proposedClockId)
-  Err message => Err message
-  Ok proposed =>
-    if tidCompare proposed prior == Gt then
-      Ok proposed
-    else if tidMicros prior == tidTimestampMax then
-      Err "tid: monotonic successor exceeds the representable range"
-    else
-      tidEncode (tidMicros prior + 1) proposedClockId
+tidNext prior proposedMicros proposedClockId =
+  match tidEncode proposedMicros proposedClockId
+    Err message => Err message
+    Ok proposed =>
+      if tidCompare proposed prior == Gt then
+        Ok proposed
+      else if tidMicros prior == tidTimestampMax then
+        Err "tid: monotonic successor exceeds the representable range"
+      else
+        tidEncode (tidMicros prior + 1) proposedClockId

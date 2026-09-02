@@ -603,11 +603,10 @@ ctorImportEntries _ ctorExportsPerUnit decls =
 
 coreCtorImportEntries : List (String, List (String, List String)) ->
   List (String, String)
-coreCtorImportEntries ctorExportsPerUnit = match (lookupCtorExports
-  "core"
-  ctorExportsPerUnit)
-  Some entries => flatMap coreCtorEntry entries
-  None => []
+coreCtorImportEntries ctorExportsPerUnit =
+  match lookupCtorExports "core" ctorExportsPerUnit
+    Some entries => flatMap coreCtorEntry entries
+    None => []
 
 coreCtorEntry : (String, List String) -> List (String, String)
 coreCtorEntry (_, ctors) = flatMap (n => [(n, mangledName "core" n)]) ctors

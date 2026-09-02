@@ -147,51 +147,51 @@ runTest : List Engine ->
   Int ->
   Option String ->
   <IO> Bool
-runTest engines runtimeP coreP target roots cases filterOpt = match (readPreludeFile
-  runtimeP)
-  Err e =>
-    let _ = ePutStrLn e
-    False
-  Ok rsrc => match readPreludeFile coreP
+runTest engines runtimeP coreP target roots cases filterOpt =
+  match readPreludeFile runtimeP
     Err e =>
       let _ = ePutStrLn e
       False
-    Ok csrc => match readFile target
+    Ok rsrc => match readPreludeFile coreP
       Err e =>
         let _ = ePutStrLn e
         False
-      -- A FILE-LEVEL parse error in the target must surface as the SAME located
-      -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
-      -- `panic "parse error"` the bare `desugar (parse tsrc)` below would raise
-      -- (issue #892).  Route through the non-panicking `parseResult` first (the
-      -- exact gate `check` uses) and, on failure, render the structured
-      -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
-      -- returning False so the caller exits nonzero — accumulate-and-report, not
-      -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
-      -- this covers a parse error in the module SOURCE itself.)
-      Ok tsrc => match parseResult tsrc
+      Ok csrc => match readFile target
         Err e =>
-          let _ = ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
+          let _ = ePutStrLn e
           False
-        Ok _ =>
-          let userDecls = desugar (parse tsrc)
-          match doctestGate target roots rsrc csrc tsrc userDecls
-            Some errText =>
-              let _ = ePutStrLn (typecheckGateFail target errText)
-              False
-            -- S-1/#2234 (F-converge): the prelude halves go through the
-            -- content-keyed `desugaredPrelude` memo; only the USER source is
-            -- parsed+desugared fresh here.
-            None =>
-              driveAll
-                engines
-                (desugaredPrelude rsrc)
-                (desugaredPrelude csrc)
-                target
-                tsrc
-                roots
-                cases
-                filterOpt
+        -- A FILE-LEVEL parse error in the target must surface as the SAME located
+        -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
+        -- `panic "parse error"` the bare `desugar (parse tsrc)` below would raise
+        -- (issue #892).  Route through the non-panicking `parseResult` first (the
+        -- exact gate `check` uses) and, on failure, render the structured
+        -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
+        -- returning False so the caller exits nonzero — accumulate-and-report, not
+        -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
+        -- this covers a parse error in the module SOURCE itself.)
+        Ok tsrc => match parseResult tsrc
+          Err e =>
+            let _ = ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
+            False
+          Ok _ =>
+            let userDecls = desugar (parse tsrc)
+            match doctestGate target roots rsrc csrc tsrc userDecls
+              Some errText =>
+                let _ = ePutStrLn (typecheckGateFail target errText)
+                False
+              -- S-1/#2234 (F-converge): the prelude halves go through the
+              -- content-keyed `desugaredPrelude` memo; only the USER source is
+              -- parsed+desugared fresh here.
+              None =>
+                driveAll
+                  engines
+                  (desugaredPrelude rsrc)
+                  (desugaredPrelude csrc)
+                  target
+                  tsrc
+                  roots
+                  cases
+                  filterOpt
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` used to GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -724,16 +724,18 @@ runMulti : List Decl ->
   List Decl ->
   List (Result String (List Decl)) ->
   <IO> RunResult
-runMulti runtimeDecls coreDecls target _userDecls roots examples synthDecls synthResults = match (loadProgram
-  target
-  roots)
-  Err e => buildDetailsFrom (Err e) synthResults examples
-  Ok mods =>
-    let injected = injectIntoRoot target synthDecls (map desugarPair mods)
-    let elaborated = elaborateModulesMangled runtimeDecls coreDecls injected
-    let env =
-      evalModulesWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
-    buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
+runMulti runtimeDecls coreDecls target _userDecls roots examples synthDecls synthResults =
+  match loadProgram target roots
+    Err e => buildDetailsFrom (Err e) synthResults examples
+    Ok mods =>
+      let injected = injectIntoRoot target synthDecls (map desugarPair mods)
+      let elaborated = elaborateModulesMangled runtimeDecls coreDecls injected
+      let env =
+        evalModulesWith
+          (testCapableExterns ())
+          (fst elaborated)
+          (snd elaborated)
+      buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
@@ -909,22 +911,21 @@ runPropsMulti : List Decl ->
   Int ->
   Option String ->
   <IO> Bool
-runPropsMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt = match (loadProgram
-  target
-  roots)
-  Err e =>
-    let _ = ePutStrLn e
-    False
-  Ok mods =>
-    let elaborated =
-      elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
-    let env =
-      evalModulesRootEnvWith
-        (testCapableExterns ())
-        (fst elaborated)
-        (snd elaborated)
-    let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllProps cases filterOpt target (propLineTests tsrc) env rootProps
+runPropsMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt =
+  match loadProgram target roots
+    Err e =>
+      let _ = ePutStrLn e
+      False
+    Ok mods =>
+      let elaborated =
+        elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
+      let env =
+        evalModulesRootEnvWith
+          (testCapableExterns ())
+          (fst elaborated)
+          (snd elaborated)
+      let rootProps = elaboratedRootProps target (snd elaborated) userDecls
+      runAllProps cases filterOpt target (propLineTests tsrc) env rootProps
 -- DRIVER-COLLAPSE Phase 2: the eval-dict layer now promotes the file's own
 -- `=>`-constrained fns (set's `wellFormed`/`fromList`, etc.), so the bindings in
 -- [env] take a leading dict ARGUMENT.  A prop body calls those fns, so its call
@@ -1055,27 +1056,26 @@ runTestDeclsMulti : List Decl ->
   List String ->
   Option String ->
   <IO> Bool
-runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt = match (loadProgram
-  target
-  roots)
-  Err e =>
-    let _ = ePutStrLn e
-    False
-  Ok mods =>
-    let elaborated =
-      elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
-    let env =
-      evalModulesRootEnvWith
-        (testCapableExterns ())
-        (fst elaborated)
-        (snd elaborated)
-    let rootTests = elaboratedRootProps target (snd elaborated) userDecls
-    reportTests
-      target
-      env
-      (filterTestsByName
-        filterOpt
-        (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
+runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  match loadProgram target roots
+    Err e =>
+      let _ = ePutStrLn e
+      False
+    Ok mods =>
+      let elaborated =
+        elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
+      let env =
+        evalModulesRootEnvWith
+          (testCapableExterns ())
+          (fst elaborated)
+          (snd elaborated)
+      let rootTests = elaboratedRootProps target (snd elaborated) userDecls
+      reportTests
+        target
+        env
+        (filterTestsByName
+          filterOpt
+          (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
 
 -- The elaborated (dict-passed) body loses its leading ELoc (the marker rewrites
 -- the leftmost method EVar into a dict node), so take each test's line from the
@@ -1409,20 +1409,19 @@ propsReportMulti : List Decl ->
   Int ->
   Option String ->
   <IO> List PropResult
-propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt = match (loadProgram
-  target
-  roots)
-  Err _ => []
-  Ok mods =>
-    let elaborated =
-      elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
-    let env =
-      evalModulesRootEnvWith
-        (testCapableExterns ())
-        (fst elaborated)
-        (snd elaborated)
-    let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllPropsResults cases filterOpt (propLineTests tsrc) env rootProps
+propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt =
+  match loadProgram target roots
+    Err _ => []
+    Ok mods =>
+      let elaborated =
+        elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
+      let env =
+        evalModulesRootEnvWith
+          (testCapableExterns ())
+          (fst elaborated)
+          (snd elaborated)
+      let rootProps = elaboratedRootProps target (snd elaborated) userDecls
+      runAllPropsResults cases filterOpt (propLineTests tsrc) env rootProps
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split
@@ -1500,24 +1499,23 @@ testDeclsReportMulti : List Decl ->
   List String ->
   Option String ->
   <IO> List (String, Int, ExResult)
-testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt = match (loadProgram
-  target
-  roots)
-  Err _ => []
-  Ok mods =>
-    let elaborated =
-      elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
-    let env =
-      evalModulesRootEnvWith
-        (testCapableExterns ())
-        (fst elaborated)
-        (snd elaborated)
-    let rootTests = elaboratedRootProps target (snd elaborated) userDecls
-    runTestsCollect
-      env
-      (filterTestsByName
-        filterOpt
-        (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
+testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  match loadProgram target roots
+    Err _ => []
+    Ok mods =>
+      let elaborated =
+        elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
+      let env =
+        evalModulesRootEnvWith
+          (testCapableExterns ())
+          (fst elaborated)
+          (snd elaborated)
+      let rootTests = elaboratedRootProps target (snd elaborated) userDecls
+      runTestsCollect
+        env
+        (filterTestsByName
+          filterOpt
+          (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
 
 runTestsCollect : List (String, Value e) ->
   List (String, Int, Expr) ->

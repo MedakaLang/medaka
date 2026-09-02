@@ -1,5 +1,5 @@
 # META
-source_lines=4850
+source_lines=4846
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -524,10 +524,10 @@ ifaceMethodArity (IfaceMethod mname mty _ _) = (mname, listLen (argsOfTy mty))
 -- one ((method, tag), reqCount) per impl method; reqCount = impl pats - declared arity.
 implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
 implMethodReqCounts arities (DAttrib _ d) = implMethodReqCounts arities d
-implMethodReqCounts arities (DImpl { tys = typeArgs, methods, ... }) = match (headTyconHead
-  typeArgs)
-  Some tag => flatMap (implMethodReqCountEntry arities tag) methods
-  None => []
+implMethodReqCounts arities (DImpl { tys = typeArgs, methods, ... }) =
+  match headTyconHead typeArgs
+    Some tag => flatMap (implMethodReqCountEntry arities tag) methods
+    None => []
 implMethodReqCounts _ _ = []
 
 implMethodReqCountEntry : List (String, Int) ->
@@ -1070,11 +1070,10 @@ matchRecFields : List RecPatField ->
   List (String, Value e) ->
   Option (List (String, Value e))
 matchRecFields [] _ = Some []
-matchRecFields ((RecPatField fname _ mp) :: rest) recFields = match (lookupAssoc
-  fname
-  recFields)
-  None => None
-  Some v => matchRecField fname mp v rest recFields
+matchRecFields ((RecPatField fname _ mp) :: rest) recFields =
+  match lookupAssoc fname recFields
+    None => None
+    Some v => matchRecField fname mp v rest recFields
 
 -- Zip a registered ctor's field order with its positional VCon vals into a
 -- name->value assoc, so a record pattern can match a named-field data variant
@@ -1473,11 +1472,10 @@ ownDefault env method tag =
 
 defaultCellOf : EvalEnv (Value e) -> String -> String -> <e> List (Value e)
 defaultCellOf _ _ "" = []
-defaultCellOf env method ifaceId = match (lookupEnvOpt
-  env
-  (defaultCellName ifaceId method))
-  Some v => [v]
-  None => []
+defaultCellOf env method ifaceId =
+  match lookupEnvOpt env (defaultCellName ifaceId method)
+    Some v => [v]
+    None => []
 
 oneOnly : List a -> Option a
 oneOnly [x] = Some x
@@ -4367,11 +4365,10 @@ importFrameOf exportsMap decls = flatMap (useImports exportsMap) decls
 useImports : List (String, ModExports (Value e)) ->
   Decl ->
   List (String, Ref (Value e))
-useImports exportsMap (DUse _ path _) = match (lookupAssoc
-  (useModuleId path)
-  exportsMap)
-  None => []
-  Some exports => resolveMembers path exports
+useImports exportsMap (DUse _ path _) =
+  match lookupAssoc (useModuleId path) exportsMap
+    None => []
+    Some exports => resolveMembers path exports
 useImports _ _ = []
 
 -- cells re-exported by a `pub import`.
@@ -4447,11 +4444,10 @@ resolveMembers (UseAlias _ a) (ModExports exports _) =
 -- index already carries under that spelling, so the plain bind would be a duplicate
 -- naming the same cell.
 memberCells : ModExports (Value e) -> UseMember -> List (String, Ref (Value e))
-memberCells (ModExports exports ctorsByType) (m@(UseMember n True _ _)) = match (lookupAssoc
-  n
-  ctorsByType)
-  Some cs => bindNames (map selfBind cs) exports
-  None => bindNames [memberBind m] exports
+memberCells (ModExports exports ctorsByType) (m@(UseMember n True _ _)) =
+  match lookupAssoc n ctorsByType
+    Some cs => bindNames (map selfBind cs) exports
+    None => bindNames [memberBind m] exports
 memberCells (ModExports exports _) m = bindNames [memberBind m] exports
 
 qualifyCell : String -> (String, Ref (Value e)) -> (String, Ref (Value e))

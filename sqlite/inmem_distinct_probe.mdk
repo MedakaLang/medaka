@@ -50,22 +50,24 @@ noIpk = None
 runAll : Db -> <IO> Unit
 runAll db =
   let _ = println "-- distinct n from nums order by n --"
-  let _ = match (queryDistinct
-    db
-    (withOrderBy "n" True (withDistinct (selectFrom "nums")))
-    tInt)
-    Err e => println "query error: \{e}"
-    Ok rows => printInts rows
+  let _ =
+    match (queryDistinct
+      db
+      (withOrderBy "n" True (withDistinct (selectFrom "nums")))
+      tInt)
+      Err e => println "query error: \{e}"
+      Ok rows => printInts rows
   let _ = println "-- distinct a,b from pairs order by a,b --"
-  let _ = match (queryDistinct
-    db
-    (withOrderBy
-      "b"
-      True
-      (withOrderBy "a" True (withDistinct (selectFrom "pairs"))))
-    (t2 tInt tInt))
-    Err e => println "query error: \{e}"
-    Ok rows => printPairs rows
+  let _ =
+    match (queryDistinct
+      db
+      (withOrderBy
+        "b"
+        True
+        (withOrderBy "a" True (withDistinct (selectFrom "pairs"))))
+      (t2 tInt tInt))
+      Err e => println "query error: \{e}"
+      Ok rows => printPairs rows
   let _ = println "-- distinct n from nums order by n limit 2 --"
   match (queryDistinct
     db
@@ -77,10 +79,10 @@ runAll db =
 main : <IO> Unit
 main =
   let _ = println "-- CREATE nums, pairs (in-memory) --"
-  match (buildDatabaseMulti [
+  match buildDatabaseMulti [
     ("nums", numsSql, noIpk, numsRows),
     ("pairs", pairsSql, noIpk, pairsRows),
-  ])
+  ]
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes
       Err e => println "fromBytes error: \{e}"

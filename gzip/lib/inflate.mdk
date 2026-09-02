@@ -712,13 +712,13 @@ setAt _ _ [] = []
 setAt 0 v (_ :: rest) = v :: rest
 setAt i v (x :: rest) = x :: setAt (i - 1) v rest
 
-test "gunzipMember: a corrupted NLEN is rejected" = match (gunzipMember
-  corruptedNlenGz)
-  Err msg =>
-    expectEqual
-      "stored block: NLEN (65336) is not the one's complement of LEN (200)"
-      msg
-  Ok _ => fail "expected Err on corrupted NLEN"
+test "gunzipMember: a corrupted NLEN is rejected" =
+  match gunzipMember corruptedNlenGz
+    Err msg =>
+      expectEqual
+        "stored block: NLEN (65336) is not the one's complement of LEN (200)"
+        msg
+    Ok _ => fail "expected Err on corrupted NLEN"
 
 -- Truncate mid-payload (keep only the header + block header + a handful of
 -- payload bytes, well short of LEN=200 and short of the trailer). Must be an
@@ -735,13 +735,13 @@ corruptedCrcGz : Array Int
 corruptedCrcGz =
   arrayFromList (setAt (arrayLength randGz - 8) 0 (toList randGz))
 
-test "gunzipMember: a corrupted trailer CRC-32 is rejected" = match (gunzipMember
-  corruptedCrcGz)
-  Err msg =>
-    expectEqual
-      "gzip trailer CRC-32 mismatch: computed 547945378, trailer says 547945216"
-      msg
-  Ok _ => fail "expected Err on a corrupted trailer CRC-32"
+test "gunzipMember: a corrupted trailer CRC-32 is rejected" =
+  match gunzipMember corruptedCrcGz
+    Err msg =>
+      expectEqual
+        "gzip trailer CRC-32 mismatch: computed 547945378, trailer says 547945216"
+        msg
+    Ok _ => fail "expected Err on a corrupted trailer CRC-32"
 
 -- ---------------------------------------------------------------------------
 -- `copyBack` — the sliding-window primitive, exercised now even though no
@@ -777,13 +777,11 @@ test "copyBack: distance=2, length=5 alternates the seed bytes" =
     (copyBackResult [1, 2] 2 5)
 
 -- `distance > length(out)` is a malformed stream, not a wrap-around: `Err`.
-test "copyBack: distance > outLen is rejected" = match (copyBackResult
-  [65, 66]
-  5
-  1)
-  Err msg =>
-    expectEqual "copyBack: distance 5 exceeds current output length 2" msg
-  Ok _ => fail "expected Err on distance > outLen"
+test "copyBack: distance > outLen is rejected" =
+  match copyBackResult [65, 66] 5 1
+    Err msg =>
+      expectEqual "copyBack: distance 5 exceeds current output length 2" msg
+    Ok _ => fail "expected Err on distance > outLen"
 
 -- `distance <= 0` is also malformed (there is no RFC encoding for it, but a
 -- corrupted/adversarial stream could still produce it once Phase 2/3 decode

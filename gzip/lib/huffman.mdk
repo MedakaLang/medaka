@@ -438,11 +438,11 @@ decodeFour h r = do
   d <- decodeSym h r
   Ok (a, b, c, d)
 
-test "buildHuffman [2,1,3,3]: symbols decode back in stream order (1,0,2,3)" = match (buildHuffman
-  [|2, 1, 3, 3|])
-  Ok h =>
-    expectEqual (Ok (1, 0, 2, 3)) (decodeFour h (newBitReader lex233Bytes))
-  Err msg => fail "expected Ok from buildHuffman [2,1,3,3], got Err \{msg}"
+test "buildHuffman [2,1,3,3]: symbols decode back in stream order (1,0,2,3)" =
+  match buildHuffman [|2, 1, 3, 3|]
+    Ok h =>
+      expectEqual (Ok (1, 0, 2, 3)) (decodeFour h (newBitReader lex233Bytes))
+    Err msg => fail "expected Ok from buildHuffman [2,1,3,3], got Err \{msg}"
 
 -- Over-subscribed: three symbols all at length 1. Kraft sum = 3 * 2^-1 =
 -- 1.5 > 1. The violation is detected the first time `left` goes negative,
@@ -464,12 +464,12 @@ test "buildHuffman: two length-2 codes (numUsed=2) is incomplete, Err" =
 -- RFC 1951 §3.2.6 sanctions it. The RFC's own convention for this case is
 -- the 1-bit code "0" (reading bit "1" would be a malformed stream), which
 -- is exactly the code this test decodes.
-test "buildHuffman: single length-1 code (the RFC 1951 exception) is Ok, decodes" = match (buildHuffman
-  [|1|])
-  Ok h => expectEqual (Ok 0) (decodeSym h (newBitReader (codeBytesFor 0 1)))
-  Err msg =>
-    fail
-      "expected Ok from buildHuffman [1] (single-code exception), got Err \{msg}"
+test "buildHuffman: single length-1 code (the RFC 1951 exception) is Ok, decodes" =
+  match buildHuffman [|1|]
+    Ok h => expectEqual (Ok 0) (decodeSym h (newBitReader (codeBytesFor 0 1)))
+    Err msg =>
+      fail
+        "expected Ok from buildHuffman [1] (single-code exception), got Err \{msg}"
 
 -- NARROWED (was "single length-9 code is also Ok under the exception"):
 -- a coordinator review caught that this pinned a broader exception than
@@ -501,14 +501,14 @@ test "buildHuffmanStrict: an all-zero-length table (numUsed=0) is ALSO Ok (the e
 -- reads up to `maxCodeLen` bits and then `Err`s, exactly puff.c's own
 -- documented behavior for this shape ("decode() will fail any code since
 -- all codes are invalid"), never a hang and never a garbage symbol.
-test "decodeSym over a numUsed=0 table errors rather than hanging or reading garbage" = match (buildHuffman
-  [|0, 0, 0|])
-  Ok h =>
-    expectEqual
-      (Err
-        "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)")
-      (decodeSym h (newBitReader [|0, 0, 0|]))
-  Err msg => fail "expected Ok from buildHuffman [0,0,0], got Err \{msg}"
+test "decodeSym over a numUsed=0 table errors rather than hanging or reading garbage" =
+  match buildHuffman [|0, 0, 0|]
+    Ok h =>
+      expectEqual
+        (Err
+          "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)")
+        (decodeSym h (newBitReader [|0, 0, 0|]))
+    Err msg => fail "expected Ok from buildHuffman [0,0,0], got Err \{msg}"
 
 -- `buildHuffmanStrict` DOES still forbid the single-length-1 exception that
 -- `buildHuffman` allows — this is the load-bearing difference between the

@@ -208,31 +208,31 @@ runPublicSigningRow : Array Int ->
   String ->
   String ->
   <IO> Unit
-runPublicSigningRow counts keyHex digest publicHex expectedCompact = match (secretKeyFromBytes
-  (bytes keyHex))
-  Err message =>
-    let () = bump counts 1
-    println "FAIL public signing secret ingress: \{message}"
-  Ok secret => match signDigest secret digest
+runPublicSigningRow counts keyHex digest publicHex expectedCompact =
+  match secretKeyFromBytes (bytes keyHex)
     Err message =>
       let () = bump counts 1
-      println "FAIL public signing: \{message}"
-    Ok signature =>
-      let compactOk = encode (signatureCompact signature) == expectedCompact
-      let verifyOk = match publicKeyFromCompressed (bytes publicHex)
-        Err _ => False
-        Ok publicKey => verifyDigest publicKey digest signature
-      let () =
-        if compactOk then
-          bump counts 11
+      println "FAIL public signing secret ingress: \{message}"
+    Ok secret => match signDigest secret digest
+      Err message =>
+        let () = bump counts 1
+        println "FAIL public signing: \{message}"
+      Ok signature =>
+        let compactOk = encode (signatureCompact signature) == expectedCompact
+        let verifyOk = match publicKeyFromCompressed (bytes publicHex)
+          Err _ => False
+          Ok publicKey => verifyDigest publicKey digest signature
+        let () =
+          if compactOk then
+            bump counts 11
+          else
+            let () = bump counts 1
+            println "FAIL public signing compact mismatch"
+        if verifyOk then
+          bump counts 12
         else
           let () = bump counts 1
-          println "FAIL public signing compact mismatch"
-      if verifyOk then
-        bump counts 12
-      else
-        let () = bump counts 1
-        println "FAIL public signing self-verification"
+          println "FAIL public signing self-verification"
 
 runSigningRow : Array Int -> Int -> String -> <IO> Unit
 runSigningRow counts lineNo text = match split " " (trim text)
@@ -272,10 +272,10 @@ runSigningRows counts (row :: rest) lineNo =
   runSigningRows counts rest (lineNo + 1)
 
 verifyCompact : AffinePoint -> Array Int -> Array Int -> Bool
-verifyCompact publicPoint digest compact = match (ecdsaSignatureFromCompact
-  compact)
-  Err _ => False
-  Ok signature => ecdsaVerifyDigest publicPoint digest signature
+verifyCompact publicPoint digest compact =
+  match ecdsaSignatureFromCompact compact
+    Err _ => False
+    Ok signature => ecdsaVerifyDigest publicPoint digest signature
 
 copyUncompressedX : Array Int -> Array Int -> Int -> Unit
 copyUncompressedX input out i =
@@ -296,12 +296,12 @@ compressedFromUncompressed input =
     out
 
 verifyPublicCompact : Array Int -> Array Int -> Array Int -> Bool
-verifyPublicCompact uncompressed digest compact = match (publicKeyFromCompressed
-  (compressedFromUncompressed uncompressed))
-  Err _ => False
-  Ok publicKey => match signatureFromCompact compact
+verifyPublicCompact uncompressed digest compact =
+  match publicKeyFromCompressed (compressedFromUncompressed uncompressed)
     Err _ => False
-    Ok signature => verifyDigest publicKey digest signature
+    Ok publicKey => match signatureFromCompact compact
+      Err _ => False
+      Ok signature => verifyDigest publicKey digest signature
 
 recordHighWitness : Array Int ->
   AffinePoint ->

@@ -1,5 +1,5 @@
 # META
-source_lines=791
+source_lines=790
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -371,11 +371,10 @@ lastIndexOf needle haystack
 -- Walks forward from each hit, advancing one codepoint so overlapping
 -- matches still count, and keeps the latest.
 lastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
-lastIndexOfGo needle haystack from acc = match (indexOf
-  needle
-  (stringSlice from (stringLength haystack) haystack))
-  None => acc
-  Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
+lastIndexOfGo needle haystack from acc =
+  match indexOf needle (stringSlice from (stringLength haystack) haystack)
+    None => acc
+    Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 

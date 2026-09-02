@@ -116,12 +116,12 @@ test "secret key stores a scalar before caller input mutates" =
   let () = A.setInPlace 31 0 mutable
   expectTrue (isOk admitted && isErr (secretKeyFromBytes mutable))
 
-test "public compact signatures round trip as exactly 64 bytes" = match (signatureFromCompact
-  knownCompact)
-  Err _ => expectTrue False
-  Ok signature =>
-    let compact = signatureCompact signature
-    expectTrue (arrayLength compact == 64 && compact == knownCompact)
+test "public compact signatures round trip as exactly 64 bytes" =
+  match signatureFromCompact knownCompact
+    Err _ => expectTrue False
+    Ok signature =>
+      let compact = signatureCompact signature
+      expectTrue (arrayLength compact == 64 && compact == knownCompact)
 
 test "public compact parsing rejects 63-byte and 65-byte lengths" =
   expectTrue
@@ -141,13 +141,13 @@ test "public compact parsing rejects zero range and high-S components" =
       && isErr (signatureFromCompact rangeSCompact)
       && isErr (signatureFromCompact highSCompact))
 
-test "public signing rejects malformed digests before production" = match (secretKeyFromBytes
-  oneBytes)
-  Err _ => expectTrue False
-  Ok secret =>
-    let zeroDigest = arrayMake 32 0
-    expectTrue
-      (isErr (signDigest secret (arrayMake 31 0))
-        && isErr (signDigest secret (arrayMake 33 0))
-        && isErr (signDigest secret (setAt 0 (-1) zeroDigest))
-        && isErr (signDigest secret (setAt 31 256 zeroDigest)))
+test "public signing rejects malformed digests before production" =
+  match secretKeyFromBytes oneBytes
+    Err _ => expectTrue False
+    Ok secret =>
+      let zeroDigest = arrayMake 32 0
+      expectTrue
+        (isErr (signDigest secret (arrayMake 31 0))
+          && isErr (signDigest secret (arrayMake 33 0))
+          && isErr (signDigest secret (setAt 0 (-1) zeroDigest))
+          && isErr (signDigest secret (setAt 31 256 zeroDigest)))

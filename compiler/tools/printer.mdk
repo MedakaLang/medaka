@@ -1474,7 +1474,12 @@ sepBody : String -> Expr -> Doc
 sepBody sep body
   | isGuardsBody body = printExprBody body
   | isBareBlock body = Cat (text sep) (printExprBody body)
-  | isKeywordBlock body = Cat (text (sep ++ " ")) (printExprBody body)
+  | isKeywordBlock body =
+    -- `= match scrut` / `= do` stays on the head's line when that line
+    -- fits; otherwise the whole block moves below the separator, so a wide
+    -- head breaks at `=` before anything inside the scrutinee does.
+    let b = printExprBody body
+    Alt (Cat (text (sep ++ " ")) b) (Cat (text sep) (Nest 2 (Cat Hardline b)))
   | otherwise =
     let s = spanStart (exprSpan body)
     let leading = if s > 0 then popBefore s else []
@@ -1628,11 +1633,37 @@ matchScrutineeDoc sc =
   if exprPrec sc >= precAtom then
     d
   else match exprSpan sc
-    (s, sc, en, ec) =>
-      if s > 0 && pendingInside s sc en ec then
+    (s, scol, en, ec) =>
+      if s > 0 && pendingInside s scol en ec then
         Cat (text "(") (Cat d (text ")"))
+      else if docHasHardline d then
+        -- a forced break (a magic-comma literal, a preserved blank line) must
+        -- not be flattened into text; a hugged last argument keeps its opener
+        -- on the `match` line and breaks inside its own brackets.
+        if appHugsLast sc || isDelimitedBody sc then
+          d
+        else
+          Cat (text "(") (Cat d (text ")"))
       else
         Alt (text (renderFlat d)) (Cat (text "(") (Cat d (text ")")))
+
+-- Does the document contain a break that no layout can remove?
+docHasHardline : Doc -> Bool
+docHasHardline Hardline = True
+docHasHardline BlankLine = True
+docHasHardline (LineComment _) = True
+docHasHardline (Cat a b) = docHasHardline a || docHasHardline b
+docHasHardline (Nest _ d) = docHasHardline d
+docHasHardline (Group d) = docHasHardline d
+docHasHardline (FlatAlt _ b) = docHasHardline b
+docHasHardline (Alt a _) = docHasHardline a
+docHasHardline (Hang _ d) = docHasHardline d
+docHasHardline (Fill _ ds) = docsHaveHardline ds
+docHasHardline _ = False
+
+docsHaveHardline : List Doc -> Bool
+docsHaveHardline [] = False
+docsHaveHardline (d :: ds) = docHasHardline d || docsHaveHardline ds
 
 -- An arm's start is its pattern's position, which a bare constructor pattern
 -- (`None =>`) does not carry — the parser records every arm's start position
@@ -2343,12 +2374,11 @@ oneReq (Require { requireHead = iface, requireArgs = args }) =
   Cat (text iface) (concatD (map (t => Cat (text " ") (printTypeAtom t)) args))
 
 implMethodPiece : ImplMethod -> Piece
-implMethodPiece (ImplMethod n pats body) = match (mergeSpan
-  (spansOf patSpan pats)
-  (exprSpan body))
-  (s, sc, en, ec) => match unitStartAt 2 s sc
-    (s2, sc2) =>
-      Piece s2 sc2 en ec (_ => implMethodDoc (ImplMethod n pats body))
+implMethodPiece (ImplMethod n pats body) =
+  match mergeSpan (spansOf patSpan pats) (exprSpan body)
+    (s, sc, en, ec) => match unitStartAt 2 s sc
+      (s2, sc2) =>
+        Piece s2 sc2 en ec (_ => implMethodDoc (ImplMethod n pats body))
 
 implMethodDoc : ImplMethod -> Doc
 implMethodDoc (ImplMethod n pats body) =

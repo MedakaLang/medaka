@@ -74,12 +74,10 @@ mustServer account = match pdsServer account
   Err message => panic "read_handlers: server setup failed: \{message}"
 
 mustRepo : String -> String -> Tid -> Repo
-mustRepo did secretHex rev = match (repoInitFromKeyBytes
-  did
-  (mustHex secretHex)
-  rev)
-  Ok repo => repo
-  Err message => panic "read_handlers: repository init failed: \{message}"
+mustRepo did secretHex rev =
+  match repoInitFromKeyBytes did (mustHex secretHex) rev
+    Ok repo => repo
+    Err message => panic "read_handlers: repository init failed: \{message}"
 
 storeMustRepo : Store -> Repo
 storeMustRepo store = match storeRepo store

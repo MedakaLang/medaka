@@ -1,5 +1,5 @@
 # META
-source_lines=2780
+source_lines=2776
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -2763,15 +2763,11 @@ rawToComments src toks = rawToCommentsGo src toks 0 1 0
 
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
 rawToCommentsGo _ [] _ _ _ = []
-rawToCommentsGo src ((RComment startPos text) :: rest) p line lineStart = match (posLineColFrom
-  src
-  startPos
-  p
-  line
-  lineStart)
-  (line2, col) =>
-    Comment line2 col text
-      :: rawToCommentsGo src rest startPos line2 (startPos - col)
+rawToCommentsGo src ((RComment startPos text) :: rest) p line lineStart =
+  match posLineColFrom src startPos p line lineStart
+    (line2, col) =>
+      Comment line2 col text
+        :: rawToCommentsGo src rest startPos line2 (startPos - col)
 rawToCommentsGo src (_ :: rest) p line lineStart =
   rawToCommentsGo src rest p line lineStart
 

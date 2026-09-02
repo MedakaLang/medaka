@@ -124,38 +124,34 @@ parsePolicy : String -> List (String, Param)
 parsePolicy s = map parsePolicyTok (splitComma s)
 
 parsePolicyTok : String -> (String, Param)
-parsePolicyTok tok = match (splitOnFirstEq
-  (stringToChars tok)
-  (arrayLength (stringToChars tok))
-  0)
-  None => (tok, PPrefix None)
-  Some i =>
-    let cs = stringToChars tok
-    let n = arrayLength cs
-    let label = sliceStr cs 0 i
-    let rhs = sliceStr cs (i + 1) n
-    -- WS-4: a PRODUCT policy rhs (`Host="…";Method={…}`) carries an axis `=`.
-    -- Detect it and decode via the shared `decodeProductParam` (wrapping in the
-    -- carrier sentinel `@P{…}`), so the policy compare reaches `dsub` over a
-    -- `PProduct` — pointwise subsumption is inherited.  A plain prefix rhs
-    -- (`a.com/*`, no axis `=`) stays `PPrefix (Some rhs)`, byte-identical to WS-1b.
-    if rhsIsProduct rhs then
-      (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
-    else if rhsIsSet rhs then
-      (label, PSet (Some (decodeSetParam rhs)))
-    else
-      (label, PPrefix (Some rhs))
+parsePolicyTok tok =
+  match splitOnFirstEq (stringToChars tok) (arrayLength (stringToChars tok)) 0
+    None => (tok, PPrefix None)
+    Some i =>
+      let cs = stringToChars tok
+      let n = arrayLength cs
+      let label = sliceStr cs 0 i
+      let rhs = sliceStr cs (i + 1) n
+      -- WS-4: a PRODUCT policy rhs (`Host="…";Method={…}`) carries an axis `=`.
+      -- Detect it and decode via the shared `decodeProductParam` (wrapping in the
+      -- carrier sentinel `@P{…}`), so the policy compare reaches `dsub` over a
+      -- `PProduct` — pointwise subsumption is inherited.  A plain prefix rhs
+      -- (`a.com/*`, no axis `=`) stays `PPrefix (Some rhs)`, byte-identical to WS-1b.
+      if rhsIsProduct rhs then
+        (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
+      else if rhsIsSet rhs then
+        (label, PSet (Some (decodeSetParam rhs)))
+      else
+        (label, PPrefix (Some rhs))
 
 -- a policy rhs is a product when it contains an axis assignment `=` (after the
 -- label `=` already consumed) — e.g. `Host="…"` / `Method={…}`.  A bare prefix
 -- pattern (`a.com/*`) has no `=`.
 rhsIsProduct : String -> Bool
-rhsIsProduct rhs = match (splitOnFirstEq
-  (stringToChars rhs)
-  (arrayLength (stringToChars rhs))
-  0)
-  None => False
-  Some _ => True
+rhsIsProduct rhs =
+  match splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0
+    None => False
+    Some _ => True
 
 -- a policy rhs is a top-level Set-domain literal when it is brace-delimited
 -- (`Env={HOME,PATH}`) with no axis `=` inside (that's the product case, already

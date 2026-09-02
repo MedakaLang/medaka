@@ -556,16 +556,14 @@ readModuleProgF : (String -> Result ParseError (List Decl)) ->
   List String ->
   String ->
   <IO> Result LoadError (String, String, List Decl)
-readModuleProgF parseFn read deps roots modId = match (findModuleFile
-  deps
-  roots
-  modId)
-  None => Err (LoadMsg (stringConcat ["unknown module: ", modId]))
-  Some (path, owningRoot) => match read path
-    Some src => parsedModule parseFn owningRoot path src
-    None => match readFile path
-      Err e => Err (LoadMsg e)
-      Ok src => parsedModule parseFn owningRoot path src
+readModuleProgF parseFn read deps roots modId =
+  match findModuleFile deps roots modId
+    None => Err (LoadMsg (stringConcat ["unknown module: ", modId]))
+    Some (path, owningRoot) => match read path
+      Some src => parsedModule parseFn owningRoot path src
+      None => match readFile path
+        Err e => Err (LoadMsg e)
+        Ok src => parsedModule parseFn owningRoot path src
 -- unsaved editor buffer shadows disk
 
 -- Parse one module's source, tagging a failure with the module it came from.
@@ -1021,17 +1019,17 @@ projectTrustedMods : String ->
   String ->
   List (String, List Decl) ->
   <IO> List String
-projectTrustedMods entry roots stdlibRoot mods = match (findProjectRoot
-  (parentDir entry))
-  Some projectRoot =>
-    let deps = readDeps projectRoot
-    let trustedRoots =
-      if manifestAllowsInternal projectRoot then
-        map canonicalizePath (stdlibRoot :: roots)
-      else
-        [canonicalizePath stdlibRoot]
-    trustedModsGo deps roots trustedRoots (map fst mods)
-  None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+projectTrustedMods entry roots stdlibRoot mods =
+  match findProjectRoot (parentDir entry)
+    Some projectRoot =>
+      let deps = readDeps projectRoot
+      let trustedRoots =
+        if manifestAllowsInternal projectRoot then
+          map canonicalizePath (stdlibRoot :: roots)
+        else
+          [canonicalizePath stdlibRoot]
+      trustedModsGo deps roots trustedRoots (map fst mods)
+    None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
 
 -- #2072 (epic #2070, R2): which of `mods` does the loader own to `stdlibRoot`?
 --
@@ -1060,15 +1058,15 @@ stdlibOwnedMods : String ->
   String ->
   List (String, List Decl) ->
   <IO> List String
-stdlibOwnedMods entry roots stdlibRoot mods = match (findProjectRoot
-  (parentDir entry))
-  Some projectRoot =>
-    trustedModsGo
-      (readDeps projectRoot)
-      roots
-      [canonicalizePath stdlibRoot]
-      (map fst mods)
-  None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+stdlibOwnedMods entry roots stdlibRoot mods =
+  match findProjectRoot (parentDir entry)
+    Some projectRoot =>
+      trustedModsGo
+        (readDeps projectRoot)
+        roots
+        [canonicalizePath stdlibRoot]
+        (map fst mods)
+    None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
 
 -- The pair every typecheck driver needs from `stdlibOwnedMods`, in one call:
 -- (is the ENTRY module stdlib-owned?, the stdlib-owned modIds).  The first
@@ -1138,16 +1136,14 @@ trustedModsGo : List (String, String) ->
   List String ->
   <IO> List String
 trustedModsGo _ _ _ [] = []
-trustedModsGo deps roots trustedRoots (m :: ms) = match (findModuleFile
-  deps
-  roots
-  m)
-  Some (_, owningRoot) =>
-    if contains (canonicalizePath owningRoot) trustedRoots then
-      m :: trustedModsGo deps roots trustedRoots ms
-    else
-      trustedModsGo deps roots trustedRoots ms
-  None => trustedModsGo deps roots trustedRoots ms
+trustedModsGo deps roots trustedRoots (m :: ms) =
+  match findModuleFile deps roots m
+    Some (_, owningRoot) =>
+      if contains (canonicalizePath owningRoot) trustedRoots then
+        m :: trustedModsGo deps roots trustedRoots ms
+      else
+        trustedModsGo deps roots trustedRoots ms
+    None => trustedModsGo deps roots trustedRoots ms
 
 -- Load a root file + transitive deps, dependency-first, WITHOUT the file paths.
 -- A projection of `loadProgramFilesE` (disk-only read, paths dropped) rather than a
@@ -1230,17 +1226,10 @@ visitModsF : (String -> Result ParseError (List Decl)) ->
   List String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
 visitModsF _ _ _ _ _ visited acc [] = Ok (visited, acc)
-visitModsF parseFn read deps roots stack visited acc (d :: ds) = match (visitModF
-  parseFn
-  read
-  deps
-  roots
-  stack
-  visited
-  acc
-  d)
-  Err e => Err e
-  Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 ds
+visitModsF parseFn read deps roots stack visited acc (d :: ds) =
+  match visitModF parseFn read deps roots stack visited acc d
+    Err e => Err e
+    Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 ds
 
 -- Load a root file + transitive deps, dependency-first, with an unsaved-buffer
 -- override and FILE PATHS in the result, returning `(mod_id, file_path, prog)`

@@ -81,11 +81,10 @@ serverAccount (Server account _ _) = account
 -- and return the identical input Store.
 export
 handle : Server -> Store -> Request -> (Store, Response)
-handle (Server _ registry handler) store request = match (routeRequest
-  registry
-  request)
-  RouteFailure failed => (store, xrpcFailureResponse failed)
-  RouteCall call => handler store call
+handle (Server _ registry handler) store request =
+  match routeRequest registry request
+    RouteFailure failed => (store, xrpcFailureResponse failed)
+    RouteCall call => handler store call
 
 malformedHttpResponse : Response
 malformedHttpResponse =

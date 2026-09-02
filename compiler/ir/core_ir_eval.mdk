@@ -298,13 +298,12 @@ cevalGuardedBody : EvalEnv (Value e) ->
   CExpr ->
   CTree ->
   <e> Value e
-cevalGuardedBody env root arms occs pat guards body fail = match (matchPat
-  pat
-  root)
-  None => cevalTree env root arms occs fail
-  Some binds => match cevalGuards (extendEnv env binds) guards
-    Some env2 => ceval env2 body
+cevalGuardedBody env root arms occs pat guards body fail =
+  match matchPat pat root
     None => cevalTree env root arms occs fail
+    Some binds => match cevalGuards (extendEnv env binds) guards
+      Some env2 => ceval env2 body
+      None => cevalTree env root arms occs fail
 
 -- a switch: the head occurrence (column 0) is `occs`'s head; try each branch's
 -- head against it (constructors/literals are disjoint, so the first match is
@@ -330,11 +329,10 @@ cevalSwitchOn : EvalEnv (Value e) ->
   CTree ->
   <e> Value e
 cevalSwitchOn env root arms _ rest [] dft = cevalTree env root arms rest dft
-cevalSwitchOn env root arms v rest ((CTBranch head sub) :: more) dft = match (headExtract
-  head
-  v)
-  Some subs => cevalTree env root arms (subs ++ rest) sub
-  None => cevalSwitchOn env root arms v rest more dft
+cevalSwitchOn env root arms v rest ((CTBranch head sub) :: more) dft =
+  match headExtract head v
+    Some subs => cevalTree env root arms (subs ++ rest) sub
+    None => cevalSwitchOn env root arms v rest more dft
 
 -- test a head against a value, returning its decomposed sub-values when it
 -- matches.  Reuses matchPat (with fresh binders) for BOTH the test and the

@@ -1,5 +1,5 @@
 # META
-source_lines=1795
+source_lines=1781
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -385,38 +385,30 @@ resolveVal (W ctx _ _ useEnv _) scope name = match lookupScope ctx name scope
       None => extKey nsVal name
 
 resolveCtor : W -> String -> String
-resolveCtor (W ctx _ _ useEnv _) name = match (hmGetC
-  ctx
-  useEnv
-  (nsCtor ++ sep ++ name))
-  Some k => k
-  None => extKey nsCtor name
+resolveCtor (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsCtor ++ sep ++ name)
+    Some k => k
+    None => extKey nsCtor name
 
 resolveTy : W -> String -> String
-resolveTy (W ctx _ _ useEnv _) name = match (hmGetC
-  ctx
-  useEnv
-  (nsTy ++ sep ++ name))
-  Some k => k
-  None => extKey nsTy name
+resolveTy (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsTy ++ sep ++ name)
+    Some k => k
+    None => extKey nsTy name
 
 resolveField : W -> String -> String
-resolveField (W ctx _ _ useEnv _) name = match (hmGetC
-  ctx
-  useEnv
-  (nsField ++ sep ++ name))
-  Some k => k
-  None => extKey nsField name
+resolveField (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsField ++ sep ++ name)
+    Some k => k
+    None => extKey nsField name
 
 -- An impl header's interface name → its ORIGIN key, resolved in the INTERFACE
 -- namespace (#1044).  See `nsIface` for why this namespace and not `nsTy`.
 resolveIface : W -> String -> String
-resolveIface (W ctx _ _ useEnv _) name = match (hmGetC
-  ctx
-  useEnv
-  (nsIface ++ sep ++ name))
-  Some k => k
-  None => extKey nsIface name
+resolveIface (W ctx _ _ useEnv _) name =
+  match hmGetC ctx useEnv (nsIface ++ sep ++ name)
+    Some k => k
+    None => extKey nsIface name
 
 -- The defining-module id of an impl's INTERFACE, for keying its method heads
 -- (#1002).  Derived from the interface NAME the impl header itself spells —
@@ -598,12 +590,10 @@ aliasHeadOf (W ctx _ _ _ aliasM) (EVar a) = hmGetC ctx aliasM a
 aliasHeadOf _ _ = None
 
 aliasOriginKey : W -> String -> String -> String
-aliasOriginKey (W ctx _ _ _ _) srcMod f = match (hmGetC
-  ctx
-  ctx.originOf
-  (mkKey srcMod nsVal f))
-  Some k => k
-  None => extKey nsVal f
+aliasOriginKey (W ctx _ _ _ _) srcMod f =
+  match hmGetC ctx ctx.originOf (mkKey srcMod nsVal f)
+    Some k => k
+    None => extKey nsVal f
 
 peelLoc : Expr -> Expr
 peelLoc (ELoc _ e) = peelLoc e
@@ -1202,12 +1192,10 @@ reExportOne ctx mid srcMod o l =
   reExportNs ctx mid srcMod o l nsMethod
 
 reExportNs : Ctx -> String -> String -> String -> String -> String -> Unit
-reExportNs ctx mid srcMod o l ns = match (hmGetC
-  ctx
-  ctx.originOf
-  (mkKey srcMod ns o))
-  Some originKey => addExport ctx mid ns l originKey
-  None => ()
+reExportNs ctx mid srcMod o l ns =
+  match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
+    Some originKey => addExport ctx mid ns l originKey
+    None => ()
 
 reExportWild : Ctx -> String -> String -> Unit
 reExportWild ctx mid srcMod = match hmGetC ctx ctx.modExp srcMod
@@ -1271,12 +1259,10 @@ importNs : Ctx ->
   String ->
   String ->
   Unit
-importNs ctx useEnv srcMod o l ns = match (hmGetC
-  ctx
-  ctx.originOf
-  (mkKey srcMod ns o))
-  Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
-  None => ()
+importNs ctx useEnv srcMod o l ns =
+  match hmGetC ctx ctx.originOf (mkKey srcMod ns o)
+    Some originKey => hmSetC ctx useEnv (ns ++ sep ++ l) originKey
+    None => ()
 
 importWild : Ctx -> HashMap String String -> String -> Unit
 importWild ctx useEnv srcMod = match hmGetC ctx ctx.modExp srcMod

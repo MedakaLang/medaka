@@ -1,5 +1,5 @@
 # META
-source_lines=4894
+source_lines=4891
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -956,11 +956,10 @@ haskellNote bad sug =
 -- mistyped local outranks an equidistant prelude name (a local typo most likely
 -- meant a local).
 suggestName : Env -> Scope -> String -> Option String
-suggestName env scope n = match (lookupAssoc
-  n
-  (haskellValueAliases ++ haskellCtorAliases))
-  Some sug => Some sug
-  None => suggestNameFuzzy env scope n
+suggestName env scope n =
+  match lookupAssoc n (haskellValueAliases ++ haskellCtorAliases)
+    Some sug => Some sug
+    None => suggestNameFuzzy env scope n
 
 suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestNameFuzzy env scope n
@@ -2590,11 +2589,10 @@ pubErrLoc exp (n, loc) =
 -- arms below refuse it explicitly rather than let it fall through to the
 -- generic paths, which would silently admit it exactly as #1311 found.
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
-expandMemberNames exp (m@(UseMember name False loc _)) = match (newtypeTypeOfCtor
-  name
-  exp)
-  Some _ => []  -- refused; see expandMemberErrs
-  None => [(name, useMemberLocal m, loc)]
+expandMemberNames exp (m@(UseMember name False loc _)) =
+  match newtypeTypeOfCtor name exp
+    Some _ => []  -- refused; see expandMemberErrs
+    None => [(name, useMemberLocal m, loc)]
 expandMemberNames exp (m@(UseMember name True loc _))
   | isNewtypeExport name exp =
     -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
@@ -2612,11 +2610,10 @@ pubErrExpanded : ModuleExports -> (String, String, Loc) -> List ResError
 pubErrExpanded exp (origin, _, loc) = pubErrLoc exp (origin, loc)
 
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
-expandMemberErrs exp (UseMember name False loc _) = match (newtypeTypeOfCtor
-  name
-  exp)
-  Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
-  None => []
+expandMemberErrs exp (UseMember name False loc _) =
+  match newtypeTypeOfCtor name exp
+    Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
+    None => []
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
     [NewtypeCtorNotExported name exp.modId (Some loc)]

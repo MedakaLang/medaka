@@ -1859,26 +1859,26 @@ checkJsonSingle : String ->
   String ->
   String ->
   (String, Bool)
-checkJsonSingle modName allowInternal rsrc csrc target src = match (parseResult
-  src)
-  Err e => (cjParseErrJson target src e, True)
-  Ok _ =>
-    let diags = analyzeLocatedG modName allowInternal rsrc csrc src
-    let hasErr = anyList diagIsError diags
-    -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
-    -- the SAME envelope `check --json` already builds, instead of leaving it
-    -- entirely absent from this channel. Only on a clean program (no type
-    -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and keeps
-    -- the warning from contradicting the errors already reported for an ill-typed
-    -- program.  (`mainShapeWarnings` itself is now free: it reads the `mainSchemeRef`
-    -- the `analyzeLocatedG` above already populated, rather than re-elaborating.)
-    let mainWarns =
-      if hasErr then
-        []
-      else
-        let entryRaw = parseLocated src
-        mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
-    (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
+checkJsonSingle modName allowInternal rsrc csrc target src =
+  match parseResult src
+    Err e => (cjParseErrJson target src e, True)
+    Ok _ =>
+      let diags = analyzeLocatedG modName allowInternal rsrc csrc src
+      let hasErr = anyList diagIsError diags
+      -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
+      -- the SAME envelope `check --json` already builds, instead of leaving it
+      -- entirely absent from this channel. Only on a clean program (no type
+      -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and keeps
+      -- the warning from contradicting the errors already reported for an ill-typed
+      -- program.  (`mainShapeWarnings` itself is now free: it reads the `mainSchemeRef`
+      -- the `analyzeLocatedG` above already populated, rather than re-elaborating.)
+      let mainWarns =
+        if hasErr then
+          []
+        else
+          let entryRaw = parseLocated src
+          mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
+      (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
 -- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the

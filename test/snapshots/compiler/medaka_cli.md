@@ -1,5 +1,5 @@
 # META
-source_lines=4842
+source_lines=4837
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -726,18 +726,18 @@ runCheckCmd argv =
 moduleLoadErrText : String -> String -> String -> LoadError -> <IO> String
 moduleLoadErrText _ _ _ (LoadParseFailed mpath msrc e) =
   ppParseError msrc mpath e
-moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) = match (unknownModuleIdOf
-  lmsg)
-  None => lmsg
-  Some mid =>
-    let msg = lmsg ++ availableModulesHint stdlibDir
-    match findImportLoc mid (parseLocated tsrc)
-      None => msg
-      Some loc =>
-        ppDiagCliSrc
-          tsrc
-          target
-          (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
+moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
+  match unknownModuleIdOf lmsg
+    None => lmsg
+    Some mid =>
+      let msg = lmsg ++ availableModulesHint stdlibDir
+      match findImportLoc mid (parseLocated tsrc)
+        None => msg
+        Some loc =>
+          ppDiagCliSrc
+            tsrc
+            target
+            (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
 
 -- Render every ERROR diagnostic across a loaded multi-module project as located
 -- human text (`file:L:C: msg` + caret), reusing the SAME `analyzeProject` the
@@ -904,20 +904,15 @@ locatedOrGeneric : Bool ->
   String ->
   String ->
   <IO> String
-locatedOrGeneric allowInternal trusted target roots rsrc csrc = match (locatedProjectErrors
-  allowInternal
-  trusted
-  target
-  roots
-  rsrc
-  csrc)
-  Some t => t
-  None =>
-    "error: type error in "
-      ++ target
-      ++ ", detected during elaboration (the run/build type pass); no located"
-      ++ " diagnostic is available for it, and `medaka check` may not report this"
-      ++ " program at all — see issue #1812"
+locatedOrGeneric allowInternal trusted target roots rsrc csrc =
+  match locatedProjectErrors allowInternal trusted target roots rsrc csrc
+    Some t => t
+    None =>
+      "error: type error in "
+        ++ target
+        ++ ", detected during elaboration (the run/build type pass); no located"
+        ++ " diagnostic is available for it, and `medaka check` may not report this"
+        ++ " program at all — see issue #1812"
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -1251,40 +1246,40 @@ runBuildJsonCmd : Args ->
   Option String ->
   BuildTarget ->
   <IO> Unit
-runBuildJsonCmd a allowInternal root stdlibDir input outOpt target = match (readFile
-  input)
-  Err e =>
-    let _ = println (cjFileNotFoundJson input e)
-    exit 1
-  Ok _ =>
-    let rtPath = root ++ "/stdlib/runtime.mdk"
-    let corePath = root ++ "/stdlib/core.mdk"
-    match readPreludeFile rtPath
-      Err msg =>
-        let _ = println (cjBuildFailedJson input msg)
-        exit 1
-      Ok rsrc => match readPreludeFile corePath
+runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
+  match readFile input
+    Err e =>
+      let _ = println (cjFileNotFoundJson input e)
+      exit 1
+    Ok _ =>
+      let rtPath = root ++ "/stdlib/runtime.mdk"
+      let corePath = root ++ "/stdlib/core.mdk"
+      match readPreludeFile rtPath
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           exit 1
-        Ok csrc =>
-          let (json, hasErr) =
-            checkJsonFile allowInternal rsrc csrc input stdlibDir
-          if hasErr then
-            let _ = println json
+        Ok rsrc => match readPreludeFile corePath
+          Err msg =>
+            let _ = println (cjBuildFailedJson input msg)
             exit 1
-          else
-            let medaka = envOr "MEDAKA" "medaka"
-            let cc = envOr "CC" "clang"
-            let keepIrCli = flag "--keep-ir" a
-            let outPath = match outOpt
-              Some o => o
-              None => defaultOutPath target input
-            match runBuild root medaka cc target input outPath keepIrCli
-              BuildOk _ => println json
-              BuildErr msg =>
-                let _ = println (cjBuildFailedJson input msg)
-                exit 1
+          Ok csrc =>
+            let (json, hasErr) =
+              checkJsonFile allowInternal rsrc csrc input stdlibDir
+            if hasErr then
+              let _ = println json
+              exit 1
+            else
+              let medaka = envOr "MEDAKA" "medaka"
+              let cc = envOr "CC" "clang"
+              let keepIrCli = flag "--keep-ir" a
+              let outPath = match outOpt
+                Some o => o
+                None => defaultOutPath target input
+              match runBuild root medaka cc target input outPath keepIrCli
+                BuildOk _ => println json
+                BuildErr msg =>
+                  let _ = println (cjBuildFailedJson input msg)
+                  exit 1
 
 -- The `{"files":[...]}` envelope for a target that could not be read at all —
 -- a file-not-found/unreadable-path diagnostic, unlocated (no source to point
@@ -2901,44 +2896,45 @@ runRunCmd argv =
                       -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
                       -- single `analyzeProject` pass, but keeping the WARNINGS the
                       -- errors-only accessor discarded (see its own note).
-                      "" => match (locatedProjectDiags
-                        allowInternal
-                        trusted
-                        target
-                        roots
-                        rsrc
-                        csrc)
-                        (Some errText, _, _) => runAbort errText
-                        (None, projWarns, _) =>
-                          let _ = resetTypeErrorsSticky ()
-                          let elaborated = elaborateRun rtD coreD modsD
-                          match hadTypeErrors ()
-                            True =>
-                              -- Belt-and-braces: anything only the emit/eval
-                              -- elaboration can see still aborts before eval.
-                              runAbort
-                                (locatedOrGeneric
-                                  allowInternal
-                                  trusted
+                      "" =>
+                        match (locatedProjectDiags
+                          allowInternal
+                          trusted
+                          target
+                          roots
+                          rsrc
+                          csrc)
+                          (Some errText, _, _) => runAbort errText
+                          (None, projWarns, _) =>
+                            let _ = resetTypeErrorsSticky ()
+                            let elaborated = elaborateRun rtD coreD modsD
+                            match hadTypeErrors ()
+                              True =>
+                                -- Belt-and-braces: anything only the emit/eval
+                                -- elaboration can see still aborts before eval.
+                                runAbort
+                                  (locatedOrGeneric
+                                    allowInternal
+                                    trusted
+                                    target
+                                    roots
+                                    rsrc
+                                    csrc)
+                              False =>
+                                let perfTCheck = now ()
+                                let _ =
+                                  emitPhase
+                                    perfOn
+                                    "check"
+                                    (perfTCheck - perfTLoad)
+                                    target
+                                finishRunEval
                                   target
-                                  roots
-                                  rsrc
-                                  csrc)
-                            False =>
-                              let perfTCheck = now ()
-                              let _ =
-                                emitPhase
-                                  perfOn
-                                  "check"
-                                  (perfTCheck - perfTLoad)
-                                  target
-                              finishRunEval
-                                target
-                                jsonMode
-                                elaborated
-                                mods
-                                projWarns
-                                (runEvalPerf perfOn target perfT0 perfTCheck)
+                                  jsonMode
+                                  elaborated
+                                  mods
+                                  projWarns
+                                  (runEvalPerf perfOn target perfT0 perfTCheck)
                       _ => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the
@@ -3646,13 +3642,12 @@ writeLibraryPages outDir (md :: rest) =
   writeLibraryPages outDir rest
 
 writeLibraryFile : String -> String -> String -> <IO> Unit
-writeLibraryFile outDir name contents = match (writeFile
-  (joinPath outDir name)
-  contents)
-  Ok _ => ()
-  Err msg =>
-    let _ = ePutStrLn msg
-    exit 1
+writeLibraryFile outDir name contents =
+  match writeFile (joinPath outDir name) contents
+    Ok _ => ()
+    Err msg =>
+      let _ = ePutStrLn msg
+      exit 1
 
 -- ── check-policy ───────────────────────────────────────────────────────────
 -- WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md.  Mirrors bin/main.ml's `check-policy`
@@ -4346,29 +4341,29 @@ lintOneFileReport : StdlibIndex ->
   Option (String, String) ->
   String ->
   <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileReport idx multiFile disableNames onlyNames denyNames cacheCtx target = match (readFile
-  target)
-  Err msg =>
-    let _ = ePutStrLn msg
-    (True, [], [])
-  Ok src =>
-    let (entry, parsed) = lintEntryOf idx cacheCtx target src
-    -- Suppress findings silenced by inline `-- lint-disable-*` directives before
-    -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
-    -- and uncached paths render from THIS one expression over the entry, so a
-    -- hit and a miss cannot print different things: the only difference between
-    -- them is where `entry` came from.
-    let allFindings = applySuppressionsDirs entry.directives entry.findings
-    let findings =
-      applyFindingFilters disableNames onlyNames denyNames allFindings
-    let srcLines = srcLinesArr src
-    let output =
-      joinNl
-        (map (f => ppDiagCliLines srcLines target (findingToDiag f)) findings)
-    let hasOutput = stringLength output > 0
-    let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
-    let _ = if hasOutput then putStrLn output
-    (anyList isFindingError findings, [entry], parsed)
+lintOneFileReport idx multiFile disableNames onlyNames denyNames cacheCtx target =
+  match readFile target
+    Err msg =>
+      let _ = ePutStrLn msg
+      (True, [], [])
+    Ok src =>
+      let (entry, parsed) = lintEntryOf idx cacheCtx target src
+      -- Suppress findings silenced by inline `-- lint-disable-*` directives before
+      -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
+      -- and uncached paths render from THIS one expression over the entry, so a
+      -- hit and a miss cannot print different things: the only difference between
+      -- them is where `entry` came from.
+      let allFindings = applySuppressionsDirs entry.directives entry.findings
+      let findings =
+        applyFindingFilters disableNames onlyNames denyNames allFindings
+      let srcLines = srcLinesArr src
+      let output =
+        joinNl
+          (map (f => ppDiagCliLines srcLines target (findingToDiag f)) findings)
+      let hasOutput = stringLength output > 0
+      let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
+      let _ = if hasOutput then putStrLn output
+      (anyList isFindingError findings, [entry], parsed)
 
 -- One file's lint result, from the cache when it can be trusted and from a real
 -- parse otherwise.  Also returns the parse for the #394 cross-file reuse — empty
