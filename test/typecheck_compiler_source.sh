@@ -1076,14 +1076,10 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # and method quantifier positions are fields of that slot, never parallel authorities.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
-data PredicateRequest =
-| PredicateRequest { prIface : IfaceRef, prArgs : PredicateSlotArgs }
-data PredicateSlot =
-| PredicateSlot {
-data MethodPredicateSlot =
-| MethodPredicateSlot {
-data PendingMethodDict =
-| PendingMethodDict {
+data PredicateRequest = PredicateRequest {
+data PredicateSlot = PredicateSlot {
+data MethodPredicateSlot = MethodPredicateSlot {
+data PendingMethodDict = PendingMethodDict {
 implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
@@ -1104,8 +1100,8 @@ activeDictVarOfEncl (Some request) m encl =
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
 enclSlotIndex (Some request) target encl =
-implReqPick : Int -> PredicateRequest -> String -> List (String, PredicateSlot) -> Option String
-entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf (PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m::rest) }) encl
+implReqPick : Int ->
+entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
 implReqPredicateSlots : Ref (List (String, PredicateSlot))
@@ -1119,22 +1115,22 @@ perRun.value.funPredicateSlotsRef :=
 perRun.value.implReqPredicateSlots :=
 perRun.value.methodPredicateSlotsRef :=
 crossRun.value.crossModuleFunPredicateSlotsRef :=
-let _ = setRef crossRun.value.crossModuleFunPredicateSlotsQualRef
+crossRun.value.crossModuleFunPredicateSlotsQualRef
 crossRun.value.crossModuleMethodPredicateSlotsRef :=
-let _ = setRef crossRun.value.crossModuleMethodPredicateSlotsQualRef
-registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -> List Int -> Unit
+crossRun.value.crossModuleMethodPredicateSlotsQualRef
+registerMethodConstraints : List String ->
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
 resolveMethodDicts : ImplBuckets -> List PendingMethodDict -> Unit
-pending.pmdRoutesRef := methodPredicateRoutes implTable pending.pmdEncl pending.pmdSlots
-methodPredicateRoutes : ImplBuckets -> String -> List PredicateSlot -> List Route
+pending.pmdRoutesRef :=
+methodPredicateRoutes : ImplBuckets ->
 methodPredicateRoute : ImplBuckets -> String -> PredicateSlot -> Route
 realizeRecDictApps : ImplBuckets -> List RecDictApp -> Unit
 recRoutes : ImplBuckets -> String -> Mono -> List PredicateSlot -> List Route
 recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
-scopePredicateSlots : List ((String, String), List PredicateSlot) -> OrdMap Unit -> List Decl -> List (String, List PredicateSlot)
-scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> OrdMap Unit -> List (String, List MethodPredicateSlot)
-attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)'
+scopePredicateSlots : List ((String, String), List PredicateSlot) ->
+scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
+attributeMethodModulePredicateSlots : String ->'
 
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1173,7 +1169,11 @@ printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
   echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
   exit 1
 }
-printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell => firstDictForEncl' || {
+printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {
+  echo "FAIL: activeDictVarForEncl must retain its type-variable lookup arm"
+  exit 1
+}
+printf '%s\n' "$lexical_dict_block" | grep -Fq 'firstDictForEncl' || {
   echo "FAIL: activeDictVarForEncl must reject an owner-prefix miss"
   exit 1
 }
@@ -1182,8 +1182,8 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
   exit 1
 fi
 
-operator_owner_required='stampOpRouteVal : Bool -> ImplBuckets -> String -> String -> Mono -> String -> Route
-let reqs = argImplDictRoutesForEncl implTable encl dictMethod tag operandMono [operandMono]
+operator_owner_required='stampOpRouteVal : Bool ->
+let reqs = argImplDictRoutesForEncl
 entailInst implTable name m encl tag (EKOp isBinop _) =
 (stampOpRouteVal isBinop implTable encl name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
