@@ -3950,7 +3950,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "dist_install_smoke"
 area = "infra"
-shard = "gates_1"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
