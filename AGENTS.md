@@ -809,6 +809,7 @@ The two that must reach you before you load it — both silent:
 | **extend-stdlib** | Pure-Medaka stdlib fn/impl/doctest/prop, not externs. User-reserved. |
 | **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
 | **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
+| **write-tests** | Asked to "write tests"/"add unit tests" for a module — picks the vehicle (doctest / prop / `*_test.mdk` sibling / gate) before you write one. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |
