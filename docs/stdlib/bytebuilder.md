@@ -1,151 +1,146 @@
 # bytebuilder
 
-bytebuilder — a byte-level output builder for Medaka.
+A buffer for building byte arrays.
 
-Symmetric inverse of `byteparser`: where `byteparser` DECODES byte arrays
-into values, `bytebuilder` ENCODES values INTO byte arrays.  Backed by a
-`Vector Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
-live range into a fixed-size `Array Int` in emission order — no reverse pass.
+A `Builder` collects bytes in emission order. Create one with
+`newBuilder`, append with the `emit` functions, and take the result with
+`buildArray`. Each `emit` function writes the byte order that
+`byteparser`'s matching reader expects, so a value written here and read
+there comes back unchanged.
 
-All `emit*` functions write bytes in the byte order that `byteparser`'s
-matching decoder expects, so a round-trip `encode → decode` reproduces the
-original value exactly.
+## The builder
 
-## `Builder`
+### `Builder`
 
 ```
 data Builder
   = Builder (Vector Int)
 ```
 
-A byte output buffer backed by a growable `Vector Int`.
-  Bytes are appended in O(1) (amortised); `buildArray` snapshots to a
-  fixed-size `Array Int` in emission order.
-  The constructor is not exported — use `newBuilder`/`emit*`/`buildArray`.
+A byte buffer. Build one with `newBuilder`.
 
-## `newBuilder`
+### `newBuilder`
 
 ```
 newBuilder : Unit -> Builder
 ```
 
-Create a new, empty builder.
+A new, empty builder.
 
-## `emitU8`
-
-```
-emitU8 : Int -> Builder -> Unit
-```
-
-Emit one byte (masked to low 8 bits).
-
-## `emitU16BE`
-
-```
-emitU16BE : Int -> Builder -> Unit
-```
-
-Emit a big-endian 2-byte unsigned integer.
-  Inverse of `beUint 2`.
-
-## `emitU24BE`
-
-```
-emitU24BE : Int -> Builder -> Unit
-```
-
-Emit a big-endian 3-byte unsigned integer.
-  Inverse of `beUint 3`.
-
-## `emitU32BE`
-
-```
-emitU32BE : Int -> Builder -> Unit
-```
-
-Emit a big-endian 4-byte unsigned integer.
-  Inverse of `beUint 4`.
-
-## `emitU16LE`
-
-```
-emitU16LE : Int -> Builder -> Unit
-```
-
-Emit a little-endian 2-byte unsigned integer.
-  Inverse of `leUint 2`.  Byte order is the reverse of `emitU16BE`.
-
-## `emitU24LE`
-
-```
-emitU24LE : Int -> Builder -> Unit
-```
-
-Emit a little-endian 3-byte unsigned integer.
-  Inverse of `leUint 3`.  Byte order is the reverse of `emitU24BE`.
-
-## `emitU32LE`
-
-```
-emitU32LE : Int -> Builder -> Unit
-```
-
-Emit a little-endian 4-byte unsigned integer.
-  Inverse of `leUint 4`.  Byte order is the reverse of `emitU32BE`.
-
-## `emitBytes`
-
-```
-emitBytes : List Int -> Builder -> Unit
-```
-
-Emit a list of byte values, each masked to low 8 bits.
-  Inverse of `takeBytes (length xs)`.
-
-## `emitBeSint`
-
-```
-emitBeSint : Int -> Int -> Builder -> Unit
-```
-
-Emit an `nbytes`-wide big-endian two's-complement signed integer.
-  Inverse of `beSint nbytes`.
-
-## `emitBeUint`
-
-```
-emitBeUint : Int -> Int -> Builder -> Unit
-```
-
-Emit exactly `nbytes` bytes of a non-negative integer in big-endian order.
-  Inverse of `beUint nbytes`.
-  The unsigned mirror of `emitBeSint`; useful when the value is always
-  non-negative and you want to choose the width dynamically at runtime.
-
-## `emitLeSint`
-
-```
-emitLeSint : Int -> Int -> Builder -> Unit
-```
-
-Emit an `nbytes`-wide little-endian two's-complement signed integer.
-  Inverse of `leSint nbytes`.
-
-## `emitLeUint`
-
-```
-emitLeUint : Int -> Int -> Builder -> Unit
-```
-
-Emit exactly `nbytes` bytes of a non-negative integer in little-endian
-  order.  Inverse of `leUint nbytes`.  The unsigned mirror of `emitLeSint`.
-
-## `buildArray`
+### `buildArray`
 
 ```
 buildArray : Builder -> Array Int
 ```
 
-Extract the accumulated bytes as a fixed-size `Array Int`.
-  Bytes are already in emission order (no reverse pass needed).
+The bytes emitted so far, as an array.
+
+## Emitting
+
+### `emitU8`
+
+```
+emitU8 : Int -> Builder -> Unit
+```
+
+Appends one byte. Only the low eight bits of the value are used.
+
+### `emitBytes`
+
+```
+emitBytes : List Int -> Builder -> Unit
+```
+
+Appends each value in the list as one byte. The inverse of
+`byteparser.takeBytes`.
+
+### `emitU16BE`
+
+```
+emitU16BE : Int -> Builder -> Unit
+```
+
+Appends a two-byte unsigned integer, most significant byte first. The
+inverse of `beUint 2`.
+
+### `emitU24BE`
+
+```
+emitU24BE : Int -> Builder -> Unit
+```
+
+Appends a three-byte unsigned integer, most significant byte first.
+The inverse of `beUint 3`.
+
+### `emitU32BE`
+
+```
+emitU32BE : Int -> Builder -> Unit
+```
+
+Appends a four-byte unsigned integer, most significant byte first. The
+inverse of `beUint 4`.
+
+### `emitU16LE`
+
+```
+emitU16LE : Int -> Builder -> Unit
+```
+
+Appends a two-byte unsigned integer, least significant byte first. The
+inverse of `leUint 2`.
+
+### `emitU24LE`
+
+```
+emitU24LE : Int -> Builder -> Unit
+```
+
+Appends a three-byte unsigned integer, least significant byte first.
+The inverse of `leUint 3`.
+
+### `emitU32LE`
+
+```
+emitU32LE : Int -> Builder -> Unit
+```
+
+Appends a four-byte unsigned integer, least significant byte first. The
+inverse of `leUint 4`.
+
+### `emitBeSint`
+
+```
+emitBeSint : Int -> Int -> Builder -> Unit
+```
+
+Appends a signed integer as `nbytes` bytes in two's complement, most
+significant byte first. The inverse of `beSint nbytes`.
+
+### `emitBeUint`
+
+```
+emitBeUint : Int -> Int -> Builder -> Unit
+```
+
+Appends a non-negative integer as `nbytes` bytes, most significant
+byte first. The inverse of `beUint nbytes`.
+
+### `emitLeSint`
+
+```
+emitLeSint : Int -> Int -> Builder -> Unit
+```
+
+Appends a signed integer as `nbytes` bytes in two's complement, least
+significant byte first. The inverse of `leSint nbytes`.
+
+### `emitLeUint`
+
+```
+emitLeUint : Int -> Int -> Builder -> Unit
+```
+
+Appends a non-negative integer as `nbytes` bytes, least significant
+byte first. The inverse of `leUint nbytes`.
 

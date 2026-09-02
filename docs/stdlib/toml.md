@@ -1,6 +1,22 @@
 # toml
 
-## `TomlValue`
+A reader for a subset of TOML.
+
+`parse` reads a document with `[section]` and `[[table]]` headers and
+keys whose values are double-quoted strings, arrays of strings,
+integers, or booleans, with `#` comments. Anything else (floats, dates,
+multi-line strings, inline tables, dotted keys, and escape sequences) is
+an error, never silently dropped.
+
+The parsed `Toml` is a flat list of keys and values, with every key
+qualified by its section: `name` under `[package]` is `"package.name"`,
+and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`. The
+`get` functions look a value up by that qualified key; `tableCount` and
+`tableEntry` work with array-of-table entries. There is no writer.
+
+## The document
+
+### `TomlValue`
 
 ```
 data TomlValue
@@ -10,237 +26,140 @@ data TomlValue
   | TBool Bool
 ```
 
+A value: a string, an array of strings, an integer, or a boolean.
+
 Instances: `Eq`, `Debug`, [`Display`](#display-tomlvalue)
 
-## `Toml`
+### `Toml`
 
 ```
 data Toml
   = Toml (List (String, TomlValue))
 ```
 
-A parsed TOML document: a flat list of (qualifiedKey, value) pairs.
+A parsed document: its keys, qualified by section, with their values.
 
 Instances: `Eq`, `Debug`, [`Display`](#display-toml)
 
-## `parse`
+## Parsing
+
+### `parse`
 
 ```
 parse : String -> Result String Toml
 ```
 
-Parse a TOML string (supported subset) into a `Toml` document, or an
-error message describing the first parse failure.
+The document written in a TOML string, or `Err` with a message for
+the first line that could not be read.
 
-A `[package]` section — note every key is qualified by its section:
-
-```medaka
-> parse "[package]\nname = \"hello\"\nversion = \"0.1.0\"" == Ok (Toml [("package.name", TStr "hello"), ("package.version", TStr "0.1.0")])
-True
-```
-
-A `[workspace]` section with a string array:
+Keys are qualified by their section. Comments and blank lines are
+ignored.
 
 ```medaka
-> parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArr ["pkg-a", "pkg-b"])])
-True
+> parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
+Ok Toml [("package.name", TStr "hello"), ("package.version", TStr "0.1.0")]
+> parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+Ok Toml [("gate.0.name", TStr "a"), ("gate.1.name", TStr "b")]
 ```
 
-Integer and boolean values:
+## Accessors
 
-```medaka
-> parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
-True
-```
-
-Repeated `[[gate]]` headers open successive indexed entries:
-
-```medaka
-> parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\"" == Ok (Toml [("gate.0.name", TStr "a"), ("gate.1.name", TStr "b")])
-True
-```
-
-Comments and blank lines are ignored:
-
-```medaka
-> parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TStr "x")])
-True
-```
-
-Inline `#` after a value is stripped:
-
-```medaka
-> parse "name = \"hello\" # a comment" == Ok (Toml [("name", TStr "hello")])
-True
-```
-
-## `getString`
+### `getString`
 
 ```
 getString : String -> Toml -> Option String
 ```
 
-Look up a string value by (qualified) key.  Returns `None` if the key is
-absent or holds an array.
+The string at a qualified key, or `None` when the key is absent or
+holds another kind of value.
 
 ```medaka
 > parseGetStr "package.name" "[package]\nname = \"medaka\"\nversion = \"1.0.0\"\nentry = \"main.mdk\""
 Some "medaka"
-```
-
-Returns `None` for an array-valued key:
-
-```medaka
-> parseGetStr "workspace.members" "[workspace]\nmembers = [\"a\"]"
-None
-```
-
-Returns `None` for an absent key:
-
-```medaka
 > parseGetStr "missing" "[package]\nname = \"x\""
 None
 ```
 
-Returns `None` when the table itself is absent:
-
-```medaka
-> parseGetStr "server.host" "[package]\nname = \"x\""
-None
-```
-
-## `getArray`
+### `getArray`
 
 ```
 getArray : String -> Toml -> Option (List String)
 ```
 
-Look up an array-of-strings value by (qualified) key.  Returns `None` if
-the key is absent or holds a string.
+The array of strings at a qualified key, or `None` when the key is
+absent or holds another kind of value.
 
 ```medaka
 > parseGetArr "workspace.members" "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]"
 Some ["pkg-a", "pkg-b"]
-```
-
-Returns `None` for a string-valued key:
-
-```medaka
-> parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
-None
-```
-
-Returns `None` for an absent key:
-
-```medaka
-> parseGetArr "workspace.members" "[package]\nname = \"x\""
-None
-```
-
-An empty array yields `Some []`:
-
-```medaka
 > parseGetArr "workspace.members" "[workspace]\nmembers = []"
 Some []
 ```
 
-## `getInt`
+### `getInt`
 
 ```
 getInt : String -> Toml -> Option Int
 ```
 
-Look up an integer value by (qualified) key.  `None` if the key is absent
-or holds another type.
+The integer at a qualified key, or `None` when the key is absent or
+holds another kind of value.
 
 ```medaka
 > parseGetInt "limits.retries" "[limits]\nretries = 3"
 Some 3
-```
-
-Negative integers parse:
-
-```medaka
-> parseGetInt "limits.offset" "[limits]\noffset = -7" == Some (0 - 7)
-True
-```
-
-`None` for a string-valued key:
-
-```medaka
 > parseGetInt "package.name" "[package]\nname = \"x\""
 None
 ```
 
-## `getBool`
+### `getBool`
 
 ```
 getBool : String -> Toml -> Option Bool
 ```
 
-Look up a boolean value by (qualified) key.  `None` if the key is absent
-or holds another type.
+The boolean at a qualified key, or `None` when the key is absent or
+holds another kind of value.
 
 ```medaka
 > parseGetBool "limits.verbose" "[limits]\nverbose = true"
 Some True
-```
-
-```medaka
-> parseGetBool "limits.verbose" "[limits]\nverbose = false"
-Some False
-```
-
-`None` for an integer-valued key:
-
-```medaka
 > parseGetBool "limits.retries" "[limits]\nretries = 3"
 None
 ```
 
-## `tableCount`
+## Arrays of tables
+
+### `tableCount`
 
 ```
 tableCount : String -> Toml -> Int
 ```
 
-How many `[[name]]` entries the document contains.
+The number of `[[name]]` entries in the document.
 
 ```medaka
 > parseTableCount "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
 2
-```
-
-Zero when the table is absent:
-
-```medaka
 > parseTableCount "gate" "[package]\nname = \"x\""
 0
 ```
 
-## `tableEntry`
+### `tableEntry`
 
 ```
 tableEntry : String -> Int -> Toml -> Option Toml
 ```
 
-The `i`-th (0-based) `[[name]]` entry, as a sub-document whose keys are
-bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
-`None` when `i` is out of range.
+The `i`-th `[[name]]` entry, counting from `0`, as a document of its
+own, or `None` when `i` is out of range.
 
-`Option`, not a bare `Toml`, for the same reason `path.stripPrefix` is
-(#2310's defect class): an out-of-range index used to come back as a
-document in which every lookup happens to be `None`, so "no such entry" and
-"an entry with no keys" were the same value.
+The entry's keys are unqualified, so the `get` functions apply to it
+directly.
 
 ```medaka
 > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
 Some "b"
-```
-
-An out-of-range index is `None`:
-
-```medaka
 > parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
 None
 ```
@@ -253,17 +172,14 @@ None
 impl Display TomlValue
 ```
 
-A `TomlValue` in TOML's own scalar spelling.
+`display` renders a value in TOML's own spelling: a string quoted, a
+boolean as `true` or `false`.
 
 ```medaka
 > display (TStr "hi")
 "\"hi\""
-> display (TInt 42)
-"42"
 > display (TBool True)
 "true"
-> display (TArr ["a", "b"])
-"[\"a\", \"b\"]"
 ```
 
 ### `Display Toml`
@@ -272,8 +188,9 @@ A `TomlValue` in TOML's own scalar spelling.
 impl Display Toml
 ```
 
-A whole document as `Toml { key = value, … }` (empty -> `Toml {}`),
-mirroring `Display (Map k v)`'s `Map { … }`.
+`display` renders a document as `Toml { key = value, ... }`.
+
+This is not TOML text; `parse` cannot read it back.
 
 ```medaka
 > display (Toml [("a.b", TInt 1), ("c", TBool False)])

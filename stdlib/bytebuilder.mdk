@@ -1,52 +1,60 @@
--- | bytebuilder — a byte-level output builder for Medaka.
---
--- Symmetric inverse of `byteparser`: where `byteparser` DECODES byte arrays
--- into values, `bytebuilder` ENCODES values INTO byte arrays.  Backed by a
--- `Vector Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
--- live range into a fixed-size `Array Int` in emission order — no reverse pass.
---
--- All `emit*` functions write bytes in the byte order that `byteparser`'s
--- matching decoder expects, so a round-trip `encode → decode` reproduces the
--- original value exactly.
+{- | A buffer for building byte arrays.
+
+   A `Builder` collects bytes in emission order. Create one with
+   `newBuilder`, append with the `emit` functions, and take the result with
+   `buildArray`. Each `emit` function writes the byte order that
+   `byteparser`'s matching reader expects, so a value written here and read
+   there comes back unchanged. -}
+
+-- Backed by a `Vector Int` (growable, amortized-O(1) `push`); `buildArray`
+-- freezes the live range into a fixed-size `Array Int` in emission order,
+-- with no reverse pass.
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
 import vector.{Vector, new, push, toArray}
 import list.{reverse}
 
--- ---------------------------------------------------------------------------
--- Builder type
--- ---------------------------------------------------------------------------
+-- # The builder
 
--- | A byte output buffer backed by a growable `Vector Int`.
---   Bytes are appended in O(1) (amortised); `buildArray` snapshots to a
---   fixed-size `Array Int` in emission order.
---   The constructor is not exported — use `newBuilder`/`emit*`/`buildArray`.
+-- | A byte buffer. Build one with `newBuilder`.
 export data Builder = Builder (Vector Int)
 
--- | Create a new, empty builder.
+-- | A new, empty builder.
 export
 newBuilder : Unit -> Builder
 newBuilder _ = Builder (new ())
 
--- ---------------------------------------------------------------------------
--- Emit primitives
--- ---------------------------------------------------------------------------
+-- | The bytes emitted so far, as an array.
+export
+buildArray : Builder -> Array Int
+buildArray (Builder a) = toArray a
 
--- | Emit one byte (masked to low 8 bits).
+-- # Emitting
+
+-- | Appends one byte. Only the low eight bits of the value are used.
 export
 emitU8 : Int -> Builder -> Unit
 emitU8 b (Builder a) = push (bitAnd b 255) a
 
--- | Emit a big-endian 2-byte unsigned integer.
---   Inverse of `beUint 2`.
+-- | Appends each value in the list as one byte. The inverse of
+-- `byteparser.takeBytes`.
+export
+emitBytes : List Int -> Builder -> Unit
+emitBytes [] _ = ()
+emitBytes (b::rest) buf =
+  emitU8 b buf
+  emitBytes rest buf
+
+-- | Appends a two-byte unsigned integer, most significant byte first. The
+-- inverse of `beUint 2`.
 export
 emitU16BE : Int -> Builder -> Unit
 emitU16BE v buf =
   emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
--- | Emit a big-endian 3-byte unsigned integer.
---   Inverse of `beUint 3`.
+-- | Appends a three-byte unsigned integer, most significant byte first.
+-- The inverse of `beUint 3`.
 export
 emitU24BE : Int -> Builder -> Unit
 emitU24BE v buf =
@@ -54,8 +62,8 @@ emitU24BE v buf =
   emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
--- | Emit a big-endian 4-byte unsigned integer.
---   Inverse of `beUint 4`.
+-- | Appends a four-byte unsigned integer, most significant byte first. The
+-- inverse of `beUint 4`.
 export
 emitU32BE : Int -> Builder -> Unit
 emitU32BE v buf =
@@ -64,16 +72,16 @@ emitU32BE v buf =
   emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
--- | Emit a little-endian 2-byte unsigned integer.
---   Inverse of `leUint 2`.  Byte order is the reverse of `emitU16BE`.
+-- | Appends a two-byte unsigned integer, least significant byte first. The
+-- inverse of `leUint 2`.
 export
 emitU16LE : Int -> Builder -> Unit
 emitU16LE v buf =
   emitU8 (bitAnd v 255) buf
   emitU8 (bitAnd (shiftRight v 8) 255) buf
 
--- | Emit a little-endian 3-byte unsigned integer.
---   Inverse of `leUint 3`.  Byte order is the reverse of `emitU24BE`.
+-- | Appends a three-byte unsigned integer, least significant byte first.
+-- The inverse of `leUint 3`.
 export
 emitU24LE : Int -> Builder -> Unit
 emitU24LE v buf =
@@ -81,8 +89,8 @@ emitU24LE v buf =
   emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd (shiftRight v 16) 255) buf
 
--- | Emit a little-endian 4-byte unsigned integer.
---   Inverse of `leUint 4`.  Byte order is the reverse of `emitU32BE`.
+-- | Appends a four-byte unsigned integer, least significant byte first. The
+-- inverse of `leUint 4`.
 export
 emitU32LE : Int -> Builder -> Unit
 emitU32LE v buf =
@@ -91,38 +99,21 @@ emitU32LE v buf =
   emitU8 (bitAnd (shiftRight v 16) 255) buf
   emitU8 (bitAnd (shiftRight v 24) 255) buf
 
--- | Emit a list of byte values, each masked to low 8 bits.
---   Inverse of `takeBytes (length xs)`.
-export
-emitBytes : List Int -> Builder -> Unit
-emitBytes [] _ = ()
-emitBytes (b::rest) buf =
-  emitU8 b buf
-  emitBytes rest buf
-
--- ---------------------------------------------------------------------------
--- Big-endian signed integer encoder
--- ---------------------------------------------------------------------------
---
 -- `beSint n` reads `n` bytes as unsigned, then if the value >= 2^(8n-1)
--- (sign bit set) subtracts 2^(8n) to get the negative.
---
--- Inverse: for v >= 0, emit as unsigned.
---          for v < 0, emit (v + 2^(8*nbytes)) as unsigned.
---          This is the standard two's-complement encoding.
+-- (sign bit set) subtracts 2^(8n) to get the negative.  Inverse: for v >= 0,
+-- emit as unsigned; for v < 0, emit (v + 2^(8*nbytes)) as unsigned.  This is
+-- the standard two's-complement encoding.
 
--- | Emit an `nbytes`-wide big-endian two's-complement signed integer.
---   Inverse of `beSint nbytes`.
+-- | Appends a signed integer as `nbytes` bytes in two's complement, most
+-- significant byte first. The inverse of `beSint nbytes`.
 export
 emitBeSint : Int -> Int -> Builder -> Unit
 emitBeSint nbytes v buf =
   let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
   emitBeUint nbytes unsigned buf
 
--- | Emit exactly `nbytes` bytes of a non-negative integer in big-endian order.
---   Inverse of `beUint nbytes`.
---   The unsigned mirror of `emitBeSint`; useful when the value is always
---   non-negative and you want to choose the width dynamically at runtime.
+-- | Appends a non-negative integer as `nbytes` bytes, most significant
+-- byte first. The inverse of `beUint nbytes`.
 export
 emitBeUint : Int -> Int -> Builder -> Unit
 emitBeUint 0 _ _ = ()
@@ -130,23 +121,16 @@ emitBeUint n v buf =
   emitBeUint (n - 1) (shiftRight v 8) buf
   emitU8 (bitAnd v 255) buf
 
--- ---------------------------------------------------------------------------
--- Little-endian signed integer encoder
--- ---------------------------------------------------------------------------
---
--- Mirror of `emitBeSint`/`emitBeUint`: same two's-complement masking, but
--- bytes are emitted least-significant-first.
-
--- | Emit an `nbytes`-wide little-endian two's-complement signed integer.
---   Inverse of `leSint nbytes`.
+-- | Appends a signed integer as `nbytes` bytes in two's complement, least
+-- significant byte first. The inverse of `leSint nbytes`.
 export
 emitLeSint : Int -> Int -> Builder -> Unit
 emitLeSint nbytes v buf =
   let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
   emitLeUint nbytes unsigned buf
 
--- | Emit exactly `nbytes` bytes of a non-negative integer in little-endian
---   order.  Inverse of `leUint nbytes`.  The unsigned mirror of `emitLeSint`.
+-- | Appends a non-negative integer as `nbytes` bytes, least significant
+-- byte first. The inverse of `leUint nbytes`.
 export
 emitLeUint : Int -> Int -> Builder -> Unit
 emitLeUint 0 _ _ = ()
@@ -155,21 +139,11 @@ emitLeUint n v buf =
   emitLeUint (n - 1) (shiftRight v 8) buf
 
 -- ---------------------------------------------------------------------------
--- Finalise
--- ---------------------------------------------------------------------------
-
--- | Extract the accumulated bytes as a fixed-size `Array Int`.
---   Bytes are already in emission order (no reverse pass needed).
-export
-buildArray : Builder -> Array Int
-buildArray (Builder a) = toArray a
-
--- ---------------------------------------------------------------------------
 -- Doctest helpers
 -- ---------------------------------------------------------------------------
 
--- | Build bytes by running an emit action on a fresh builder and return the
---   resulting `Array Int`.  Used in round-trip doctests below.
+-- Build bytes by running an emit action on a fresh builder and return the
+-- resulting `Array Int`.  Used in round-trip doctests below.
 build1 : (Builder -> Unit) -> Array Int
 build1 f =
   let buf = newBuilder ()
@@ -259,9 +233,6 @@ build1 f =
 -- > runByteParser (takeBytes 4) (build1 (emitBytes [0, 128, 255, 1]))
 -- Ok [0, 128, 255, 1]
 
--- The SQLite varint round-trip doctests moved to sqlite/lib/varint.mdk
--- (the SQLite varint codec is no longer part of the generic byteparser libs).
-
 -- emitBeSint ↔ beSint  (1-byte)
 -- > runByteParser (beSint 1) (build1 (emitBeSint 1 127))
 -- Ok 127
@@ -345,31 +316,31 @@ build1 f =
 -- Values are kept in-width (0..65535 for 16-bit, signed range for the signed
 -- prop) to avoid masking surprises from out-of-range inputs.
 
--- | emitU16LE → leUint 2 recovers the original value.
+-- emitU16LE → leUint 2 recovers the original value.
 prop "emitU16LE/leUint 2 round-trip" (v : Int) =
   let w = bitAnd v 65535
   match runByteParser (leUint 2) (build1 (emitU16LE w))
     Ok got => got == w
     Err _ => False
 
--- | emitU32LE → leUint 4 recovers the original value.
+-- emitU32LE → leUint 4 recovers the original value.
 prop "emitU32LE/leUint 4 round-trip" (v : Int) =
   let w = bitAnd v 4294967295
   match runByteParser (leUint 4) (build1 (emitU32LE w))
     Ok got => got == w
     Err _ => False
 
--- | emitLeSint 2 → leSint 2 recovers a value clamped to the 16-bit signed
---   two's-complement range.
+-- emitLeSint 2 → leSint 2 recovers a value clamped to the 16-bit signed
+-- two's-complement range.
 prop "emitLeSint 2/leSint 2 round-trip" (v : Int) =
   let w = bitAnd v 65535 - 32768
   match runByteParser (leSint 2) (build1 (emitLeSint 2 w))
     Ok got => got == w
     Err _ => False
 
--- | BE emit followed by byte-reversal then LE parse agrees with a direct BE
---   parse of the same bytes — i.e. reversing a BE encoding and reading it LE
---   reproduces the original value (16-bit width).
+-- BE emit followed by byte-reversal then LE parse agrees with a direct BE
+-- parse of the same bytes, i.e. reversing a BE encoding and reading it LE
+-- reproduces the original value (16-bit width).
 prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
   let w = bitAnd v 65535
   match runByteParser (takeBytes 2) (build1 (emitU16BE w))
