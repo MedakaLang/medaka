@@ -164,4 +164,70 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve2.err" 'resumed server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, malformed, over-cap, idle timeout, restart-and-resume'
+# ── third, independent --data dir: --init overwrite refusal (#2481) ────────
+
+# 10. `--init` against a directory that already holds a repository must
+#    refuse rather than silently overwriting `head` — even when the second
+#    `--init` is given a different (but still valid) --key, the exact
+#    misconfiguration #2481 showed used to be discriminated by whether
+#    `loadRepo` happened to succeed rather than by whether a head file
+#    exists. A second genesis under the wrong key must exit nonzero AND
+#    leave the first genesis's `head` file byte-identical.
+DATA10="$WORK/data10"
+mkdir -p "$DATA10"
+KEY10A_HEX='c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
+# A different, still-valid (64-hex-digit) secp256k1 scalar than KEY10A_HEX.
+KEY10B_HEX='29988895eae3bb77b1ec1be453a7168eba4422c3897bc846a168a1495a67fa99'
+printf '%s\n' "$KEY10A_HEX" > "$WORK/key10a.hex"
+printf '%s\n' "$KEY10B_HEX" > "$WORK/key10b.hex"
+
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key10a.hex" --data "$DATA10" --port 0 --init \
+  >"$WORK/serve10a.out" 2>"$WORK/serve10a.err" &
+SERVER_PID=$!
+PORT10A=$(wait_for_port "$WORK/serve10a.out") || {
+  cat "$WORK/serve10a.err" >&2
+  fail 'case 10: genesis server did not report readiness'
+}
+require_empty "$WORK/serve10a.err" 'case 10 genesis startup'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+
+[ -f "$DATA10/head" ] || fail 'case 10: genesis did not persist a head file'
+HEAD_BEFORE=$(cksum "$DATA10/head")
+
+# A pre-fix binary does not error out here at all: it silently treats the
+# unreadable-under-this-key head as "no repo yet" and starts a second,
+# real server. A plain synchronous invocation would then hang forever
+# rather than fail, so this bounds the wait the same way wait_for_port
+# does — refusing (fast exit) is the only outcome that must happen within
+# it, not "eventually exits or listens".
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key10b.hex" --data "$DATA10" --port 0 --init \
+  >"$WORK/serve10b.out" 2>"$WORK/serve10b.err" &
+SERVER_PID=$!
+i=0
+while [ "$i" -lt 100 ]; do
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+  i=$((i + 1))
+  sleep 0.1
+done
+if kill -0 "$SERVER_PID" 2>/dev/null; then
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+  SERVER_PID=""
+  fail 'case 10: second --init with a different key did not exit (still running — likely bound and serving)'
+fi
+RC10B=0
+wait "$SERVER_PID" 2>/dev/null || RC10B=$?
+SERVER_PID=""
+[ "$RC10B" -ne 0 ] || fail 'case 10: second --init with a different key exited 0'
+
+HEAD_AFTER=$(cksum "$DATA10/head")
+[ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
+  || fail 'case 10: second --init with a different key modified the existing head file'
+
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, malformed, over-cap, idle timeout, restart-and-resume, init-overwrite-refusal'
