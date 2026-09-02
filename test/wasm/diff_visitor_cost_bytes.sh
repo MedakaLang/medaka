@@ -32,7 +32,13 @@ DIST="$ROOT/playground/dist"
 
 # ── measured total (S4 landing, sprint-branch base 5854e2598) 5,348,553 bytes
 # — ~16% headroom so ordinary asset/guide-content growth doesn't flap.
-SITE_BYTES_CEIL=6200000
+# RETUNED post-resync (#2442 fix round, sprint-branch base 3aa08db95): merging
+# main's #2441 (stdlib-reference-published) added the /stdlib reference pages
+# to the assembled site — a whole new asset class this gate's original
+# measurement predates — pushing the real total to 6,558,645 bytes (CI run
+# 33572397373). Same ~16% headroom re-applied over the new total, not a
+# one-off bump to clear a red: 6,558,645 * 1.16 ≈ 7,608,000, rounded down.
+SITE_BYTES_CEIL=7600000
 
 NODE=node
 major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
