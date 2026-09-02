@@ -261,6 +261,11 @@ scripts/ci_shard_cost          derives ci.yml's per-job wall-clock table from re
                                Asserts nothing about the compiler; a `cost-status: findings`
                                line is data for that job, not a suite failure.
 scripts/docker-dev             runs the build inside a Linux container. A dev wrapper.
+scripts/make_dist              packages a relocatable install tree into a dist tarball
+                               (#74 D3, S-1-dist-tarball). A dev/release packaging tool, not
+                               a gate — the assertion that the tarball it produces actually
+                               works stands alone as test/dist_install_smoke.sh, which IS a
+                               gate (enrolled in test/gates.toml).
 scripts/medaka-mcp-wrapper     stdio launch shim that .mcp.json execs into `medaka mcp` — not a gate.
 scripts/pr                     the verified PR-lifecycle helper (#1414): `body`/`watch`/`enqueue`/
                                `complete` over gh — a dev tool, not a gate. Its test

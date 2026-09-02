@@ -284,6 +284,8 @@ pBitAnd : Value a -> Value a -> Value a
 pBitNot : Value a -> Value a
 pBitOr : Value a -> Value a -> Value a
 pBitXor : Value a -> Value a -> Value a
+pBuildCommit : Value a -> <Env> Value a
+pBuildDate : Value a -> <Env> Value a
 pBuildFingerprint : Value a -> <Env> Value a
 pBytesToFloat64 : Value a -> Value a -> Value a
 pCanonicalizePath : Value a -> <FileRead> Value a

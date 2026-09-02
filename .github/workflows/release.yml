@@ -1,0 +1,158 @@
+name: Release
+
+# #74 D4 (native distribution, release workflow; tracking #2514). Builds,
+# smoke-tests, and — on a real `v*` tag only — publishes S-1's dist tarball
+# (scripts/make_dist.sh) for linux-x86_64 and macos-arm64, with sha256
+# checksums, attached to a GitHub release.
+#
+# Hand-written, NOT generated. `ci.yml` is the ONLY generated workflow
+# (`make gen-ci` from `test/gates.toml`, S-2) — do not fold this file into
+# that generator or add its steps to `test/gates.toml`; this is release
+# packaging, not a compiler-correctness gate.
+#
+# ── two-arm design, load-bearing for how this file gets validated at all ────
+#
+# `workflow_dispatch` is UNAVAILABLE for a workflow that isn't already on the
+# default branch, so a brand-new release.yml cannot be manually triggered
+# until it merges. The only way to exercise build+smoke-test before that is
+# the `pull_request:` arm below, narrowly paths-filtered to this file plus
+# the two S-1 scripts it drives. That arm can build and smoke-test BOTH
+# platforms but can never reach the `publish` job — that job is guarded by a
+# REF check (`startsWith(github.ref, 'refs/tags/')`), not an input or
+# variable any workflow_call/manual trigger could flip, so a PR — even one
+# from a fork, which never has write access to secrets/GITHUB_TOKEN by
+# default — cannot publish anything under any circumstance.
+#
+# The `push: tags: ['v*']` arm is what actually builds AND publishes; it is
+# unexercised until a real tag is pushed, which is Val's call and out of
+# scope for this slice.
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/make_dist.sh'
+      - 'test/dist_install_smoke.sh'
+
+jobs:
+  # ── linux-x86_64 ─────────────────────────────────────────────────────────
+  linux:
+    name: build + smoke-test (linux-x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      - name: make dist
+        run: make dist
+
+      - name: Smoke-test the produced tarball
+        run: sh test/dist_install_smoke.sh dist/*.tar.gz
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-x86_64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── macos-arm64 ──────────────────────────────────────────────────────────
+  #
+  # `setup-medaka` is Linux/apt-only (grep -n apt-get finds it, no
+  # brew/Darwin branch) — it cannot be reused here. `macos-14` ships Xcode
+  # Command Line Tools (clang) preinstalled; libgc is the one dependency this
+  # job installs itself.
+  #
+  # Pre-licensed fallback: if `macos-14` proves unschedulable for this org
+  # (policy/billing), this job stays present and correct in the workflow — a
+  # green linux run alone discharges the acceptance criterion, and the
+  # runner-unavailability evidence goes in the slice report. Deleting this
+  # job to force green is NOT licensed.
+  macos:
+    name: build + smoke-test (macos-arm64)
+    runs-on: macos-14
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libgc (Xcode CLT already provides clang)
+        run: brew install bdw-gc
+
+      - name: Build medaka (cold bootstrap from seed)
+        run: make medaka
+
+      - name: make dist
+        run: make dist
+
+      - name: Smoke-test the produced tarball
+        run: sh test/dist_install_smoke.sh dist/*.tar.gz
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-arm64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── publish (tag-triggered only) ────────────────────────────────────────
+  #
+  # `needs: [linux, macos]` plus the ref guard below is the ONLY thing that
+  # can ever run this job's body. The `pull_request:` arm cannot satisfy the
+  # ref guard under any circumstance, so this job is written and reviewed
+  # here but genuinely unexercised by this slice — the PR arm proves build +
+  # smoke-test on both platforms; publishing itself is proven only when Val
+  # pushes a real `v*` tag.
+  publish:
+    name: publish GitHub release
+    needs: [linux, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download linux tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-linux-x86_64
+          path: dist
+
+      - name: Download macos tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-macos-arm64
+          path: dist
+
+      # Checksums computed over the exact files downloaded above (the same
+      # bytes each platform job uploaded, not a copy or an intermediate).
+      - name: Compute sha256 checksums
+        run: |
+          set -eu
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create/update GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

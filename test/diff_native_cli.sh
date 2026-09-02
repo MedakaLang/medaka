@@ -425,5 +425,52 @@ case "$dir_got" in
     printf '  got:  [%s]\n' "$dir_got" ;;
 esac
 
+# ── version provenance (issue #74 W8) ─────────────────────────────────────
+# `--version`/`version` must print version + commit + build date, all from
+# ONE definition (compiler/driver/medaka_cli.mdk's `medakaVersionString`).
+# Pin the SHAPE only — "medaka <ver> (<parenthesized commit+date group>)" —
+# never the literal commit/date, which would break on every future commit.
+# Both invocation forms must produce the SAME line.
+ver1="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" --version 2>/dev/null)"
+ver2="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" version 2>/dev/null)"
+case "$ver1" in
+  "medaka "*" ("*")")
+    if [ "$ver1" = "$ver2" ]; then
+      pass=$((pass+1)); printf 'ok   version/shape (--version == version, [%s])\n' "$ver1"
+    else
+      fail=$((fail+1)); printf 'FAIL version/shape (--version [%s] != version [%s])\n' "$ver1" "$ver2"
+    fi ;;
+  *)
+    fail=$((fail+1)); printf 'FAIL version/shape (want "medaka <ver> (...)", got [%s])\n' "$ver1" ;;
+esac
+
+# ── toolchain-missing messages (#2514 review F-4) ─────────────────────────
+# `medaka build` must name a missing clang/libgc and give the platform's
+# install command, never the raw "clang failed compiling ... / No such file
+# or directory" pair a bare exec failure prints (compiler/driver/build_cmd.mdk
+# probeClang/clangMissingError, libgcMissingError). Nothing previously
+# regression-gated this behavior — a revert was only caught by the source-
+# shape snapshot (test/snapshots/compiler/build_cmd.md), not a behavioral
+# assertion. `CC=<bogus>` and `GC_PREFIX=<bogus>` trigger the two failure
+# modes deterministically without touching PATH (which this script's own
+# tooling needs intact).
+tc_got="$(CC=/nonexistent-cc-binary-2514 MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$FIX/run/hello.mdk" -o /tmp/tc-clang-out 2>&1)"
+case "$tc_got" in
+  *"install clang"*)
+    pass=$((pass+1)); printf 'ok   toolchain/clang-missing\n' ;;
+  *)
+    fail=$((fail+1)); printf 'FAIL toolchain/clang-missing (want an "install clang" message)\n'
+    printf '  got:  [%s]\n' "$tc_got" ;;
+esac
+
+tc_got2="$(GC_PREFIX=/nonexistent-gc-prefix-2514 MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$FIX/run/hello.mdk" -o /tmp/tc-gc-out 2>&1)"
+case "$tc_got2" in
+  *"install bdw-gc"*|*"libgc-dev"*)
+    pass=$((pass+1)); printf 'ok   toolchain/libgc-missing\n' ;;
+  *)
+    fail=$((fail+1)); printf 'FAIL toolchain/libgc-missing (want an "install bdw-gc"/"libgc-dev" message)\n'
+    printf '  got:  [%s]\n' "$tc_got2" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

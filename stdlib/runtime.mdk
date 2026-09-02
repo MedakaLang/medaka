@@ -134,6 +134,16 @@ extern executablePath : Unit -> <Env> String
 -- sources and warns when they diverge (the staleness guard).  Native-only.
 extern buildFingerprint : Unit -> <Env> String
 
+-- Short commit hash this binary was built from, baked the same way as
+-- `buildFingerprint` (-DMEDAKA_SRC_COMMIT). "" when not baked, or when the
+-- build tree had no `.git` (e.g. a packaged dist tarball). Native-only.
+extern buildCommit : Unit -> <Env> String
+
+-- UTC build date (YYYY-MM-DD) this binary was built on, baked the same way
+-- as `buildFingerprint` (-DMEDAKA_SRC_BUILD_DATE). "" when not baked.
+-- Native-only.
+extern buildDate : Unit -> <Env> String
+
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit
 -- code, the captured standard output, and the captured standard error; a
 -- non-zero exit code is still `Ok`. `Err` carries the host's message when
