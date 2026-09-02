@@ -618,6 +618,8 @@ An immutable map from keys to values, ordered by key.
 
 ## [`set`](set.md)
 
+An immutable set of distinct elements, ordered by `Ord`.
+
 - [`Set`](set.md#set)
 - [`singleton`](set.md#singleton)
 - [`fromList`](set.md#fromlist)
