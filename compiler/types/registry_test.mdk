@@ -1,0 +1,37 @@
+-- Sibling test module for `compiler/types/registry.mdk`.
+--
+-- A `*_test.mdk` file lives beside its subject and is NOT compiler source: it
+-- is excluded from the two build fingerprints and from the snapshot corpus,
+-- so adding or editing one never makes `./medaka` report itself stale and
+-- never demands a golden. See AGENTS.md § "Compiler-internal tests".
+--
+-- What is pinned here: a `Registry` distinguishes two keys that differ ONLY
+-- in their namespace. `regKeyRender` reaches that answer through
+-- `identKey`'s leading namespace netstring, so a namespace dropped from the
+-- rendered key would silently merge a type and a constructor of the same
+-- spelling into one row — the collision class the module exists to prevent.
+
+import test.{expectEqual}
+import types.registry.{
+  RegKey,
+  Registry,
+  regEmpty,
+  regInsertK,
+  regLookupK,
+  regSize,
+  regKeyOfTab,
+}
+import frontend.ast.{Ns(..), TyConOrigin(..), tabKeyOf}
+
+typeFoo : RegKey
+typeFoo = regKeyOfTab (tabKeyOf NsType (OriginModule "m") "Foo")
+
+ctorFoo : RegKey
+ctorFoo = regKeyOfTab (tabKeyOf NsCtor (OriginModule "m") "Foo")
+
+bothFoos : Registry Int
+bothFoos = regInsertK ctorFoo 2 (regInsertK typeFoo 1 regEmpty)
+
+test "namespace separates two identically spelled registry keys" = expectEqual
+  (2, Some 1, Some 2)
+  (regSize bothFoos, regLookupK typeFoo bothFoos, regLookupK ctorFoo bothFoos)
