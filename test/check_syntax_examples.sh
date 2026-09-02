@@ -132,24 +132,6 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 check_fmt() {
   fmt_target="$1"
   fmt_label="$2"
-  # KNOWN `medaka fmt` DEFECT (found while adding this check, not yet filed
-  # as an issue): a bodyless `interface X a` (no `where`, no methods — a
-  # valid, documented marker-interface shape) is not round-tripped by fmt;
-  # it synthesizes a spurious `where` plus an empty/whitespace body line
-  # regardless of any trailing comment. SYNTAX.md's "Empty a" example exists
-  # specifically to demonstrate the where-less form and says so in its own
-  # comment ("no `where`") — canonicalizing it to fmt's output would delete
-  # the very construct the example teaches, which this gate must not do
-  # (it only enforces STYLE, never rewrites what an example demonstrates).
-  # Exempt by content, not path/line, so this cannot silently widen to cover
-  # an unrelated future block at the same spot — matches only the exact
-  # bodyless-interface header shape known to be unformattable. This skips
-  # the fmt check for the WHOLE containing file (the block this construct
-  # sits in is checked as one unit), not just this one line; the rest of
-  # that block was hand-verified canonical when this exemption was added.
-  if grep -q '^interface [A-Za-z_][A-Za-z0-9_]* [a-z][A-Za-z0-9_]*[[:space:]]*\(--.*\)\?$' "$fmt_target" 2>/dev/null; then
-    return 0
-  fi
   # A medaka-project block's per-file extraction (check_project_block) keeps
   # the blank line that separates one `-- file:` section from the next as
   # part of the extracted file — that separator is markdown structure, not
@@ -246,6 +228,47 @@ parse_fence_opener() {
   done
   OPEN_INFO=$open_text
   return 0
+}
+
+# #2404: a line that WANTED to be a Medaka fence opener but was rejected above.
+# CommonMark forbids backticks in a backtick fence's info string, so
+# "```medaka-nocheck: after a one-line `data` decl ..." is not an opener at all —
+# it is paragraph text, and the ``` meant to CLOSE it then reads as a fresh
+# opener that swallows the next real example up to the following closer. The
+# rejection is correct; the silence is the bug. Anything shaped like a Medaka
+# tag that did not parse as an opener is reported as a failure, so a doc that
+# renders wrongly on GitHub cannot also quietly shrink the checked corpus.
+# REJECT_INFO carries the offending text.
+looks_like_medaka_fence() {
+  reject_text="$1"
+  reject_indent=0
+  while [ "$reject_indent" -lt 3 ]; do
+    case "$reject_text" in
+      " "*) reject_text=${reject_text# }; reject_indent=$((reject_indent + 1)) ;;
+      *) break ;;
+    esac
+  done
+  case "$reject_text" in
+    \`\`\`*) ;;
+    *) return 1 ;;
+  esac
+  while :; do
+    case "$reject_text" in
+      \`*) reject_text=${reject_text#\`} ;;
+      *) break ;;
+    esac
+  done
+  while :; do
+    case "$reject_text" in
+      " "*) reject_text=${reject_text# } ;;
+      "	"*) reject_text=${reject_text#"	"} ;;
+      *) break ;;
+    esac
+  done
+  case "$reject_text" in
+    medaka*|mdk*) REJECT_INFO=$reject_text; return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # A closer uses the opener's character, is at least as long, permits at most
@@ -546,6 +569,11 @@ check_document() {
           medaka-expect) ;;
           *) flush_pending ;;
         esac
+      elif looks_like_medaka_fence "$line"; then
+        failed=$((failed + 1))
+        doc_failed=$((doc_failed + 1))
+        fail_report="$fail_report
+=== FAIL: $doc_label:$lineno (malformed Medaka fence opener '$REJECT_INFO'; CommonMark forbids backticks in a backtick fence's info string — remove them or use a ~~~ fence) ==="
       fi
     else
       if is_matching_fence_closer "$line"; then

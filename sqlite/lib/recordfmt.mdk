@@ -38,7 +38,7 @@ public export data Cell =
   | CText String
   | CBlob (Array Int)
   | CFloat Float
-deriving (Debug, Eq)
+  deriving (Debug, Eq)
 
 export impl Display Cell where
   display CNull = "NULL"

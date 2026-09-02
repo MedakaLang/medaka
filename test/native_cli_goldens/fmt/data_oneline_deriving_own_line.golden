@@ -1,0 +1,1 @@
+data Category = Food | Housing deriving (Eq)

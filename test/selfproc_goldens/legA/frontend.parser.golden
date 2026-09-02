@@ -226,6 +226,7 @@ indentedBody : ParserE <> Expr
 indexOrSlice : Expr -> ParserE <> Expr
 indexOrSliceRest : Expr -> Expr -> Token -> ParserE <> Expr
 inlineLetMissingInMsg : String
+inlineTrailingDerives : Token -> Parser (List DeriveRef)
 innerDeclOf : Decl -> Decl
 intBound : ParserE <> Lit
 intBoundFor : Token -> ParserE <> Lit

@@ -318,7 +318,7 @@ ordKey n = lenKey "\{n}"
 -- carries the rigid positions OUTSIDE this type — see `dispKeyRender` below.
 public export data RegKey =
   | RegKey (List TabKey) (List Int)
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- The one-identity case — by far the most common, and the shape the
 -- `Ident`-taking convenience wrappers below all go through.
@@ -805,7 +805,7 @@ public export data HeadKey =
   -- 🚨 NOT A DECLARATION: the parameter name of a rigid type variable, handed
   -- out as a dispatch key.  The §8 I6.1 residual, named rather than hidden.
   | HkRigid String
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- The ONE mint for a head that IS a declaration, and the ONE place `NsType` is
 -- supplied.  Argument order mirrors `tconFrom : TyConOrigin -> String -> Mono`

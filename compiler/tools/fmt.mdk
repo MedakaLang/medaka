@@ -592,11 +592,28 @@ stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1) srcLines chainOls d
 -- every decl WITHOUT an interior trailing comment (see stepDecl's safety-net).
 stepDeclNormal : FmtState -> List String -> Decl -> Int -> Int -> FmtState
 stepDeclNormal (FmtState pieces2 cs1 vlines1 cursor1 started1) srcLines decl line endLine =
-  -- A single-variant named-field data decl that carries field comments is
+  -- The variant's OWN source line (`| X {` of a two-line header, else the
+  -- decl's start line).  `vlines1`'s head is this decl's first variant line;
+  -- `renderNamedFieldMulti`/`declDoc` consume it below, so read it first.
+  let variantLine = match vlines1
+    (vl::_) => vl
+    [] => line
+  -- A single-variant named-field data decl that carries per-FIELD comments is
   -- rendered one-field-per-line and routed through the generic interior
   -- splice (the per-variant vcommentsFor path cannot attach per-field
   -- comments).  Other data decls keep the vcommentsFor path.
-  let nfMulti = isSingleNamedFieldData decl && isNonEmptyL (filterList (isInterior line endLine) cs1)
+  --
+  -- #2403: a comment on the variant's own line is a variant-TRAILING comment,
+  -- not a field comment, so it must NOT pull the decl onto this path — doing
+  -- so was a 2-cycle: `data X =\n  | { f : T }  -- c\n  deriving (D)` put the
+  -- comment on an interior line, routing to `printNamedFieldData`, whose
+  -- brace-on-header render put the comment back on the decl's FIRST line,
+  -- routing the next pass back to `printDecl`.  Excluding the variant line
+  -- makes the choice depend on where the comment sits relative to the
+  -- variant rather than relative to the decl, which is invariant under
+  -- either render.
+  let fieldComments = filterList (c => commentLine c /= variantLine) (filterList (isInterior line endLine) cs1)
+  let nfMulti = isSingleNamedFieldData decl && isNonEmptyL fieldComments
   -- #829 (two-line header): `printNamedFieldData` always renders the header as
   -- ONE output line (`data X = X {`), but a source header can be split across
   -- TWO lines (`data X =` / `  | X { ... }`, e.g. `DriverState`). `line` is the
@@ -604,16 +621,10 @@ stepDeclNormal (FmtState pieces2 cs1 vlines1 cursor1 started1) srcLines decl lin
   -- source→output base assumes the header is 1:1, so on a two-line header
   -- every field/comment index comes out one line short, shifting every
   -- interior comment onto the field after the one it describes. The variant's
-  -- OWN line (`| X {`, the head of `vlines1` before `renderNamedFieldMulti`
-  -- consumes it) is where the collapsed header line actually originated, so
-  -- use that as the base instead — it equals `line` on the (already-safe)
+  -- own line is where the collapsed header line actually originated, so use
+  -- that as the base instead — it equals `line` on the (already-safe)
   -- single-line header, where the ctor opens on the same line as `data X =`.
-  let headerLine = if nfMulti then
-      match vlines1
-        (vl::_) => vl
-        [] => line
-    else
-      line
+  let headerLine = if nfMulti then variantLine else line
   let st2 = FmtState pieces2 cs1 vlines1 cursor1 started1
   match (if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl)
     (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) =>

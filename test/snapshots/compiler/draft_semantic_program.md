@@ -46,7 +46,7 @@ public export data DraftProducer =
   | ProducerEvidence
   | ProducerMethodDispositions
   | ProducerCapabilityManifest
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 public export data DraftPopulation =
   | PopulationRuntimeDecls
@@ -56,7 +56,7 @@ public export data DraftPopulation =
   | PopulationElaboratedGraph
   | PopulationRuntimeAndGraph
   | PopulationEntryScheme
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 public export data DraftObservation a =
   | DraftObservation DraftProducer DraftPopulation a
@@ -86,14 +86,14 @@ public export data DraftFact =
   | FactEvidence
   | FactMethodDispositions
   | FactCapabilityManifest
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 public export data DraftPending = DraftPending DraftFact DraftProducer String
 
 public export data DraftComparison =
   | DraftMatch
   | DraftDifferent
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 public export data DraftReceipt =
   | DraftReceipt DraftFact DraftProducer DraftPopulation DraftComparison
