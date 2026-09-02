@@ -1460,7 +1460,6 @@ memberMethodRename : List String -> UseMember -> List (String, String)
 memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
 memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
-memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
 memberSuffix : String -> String
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)

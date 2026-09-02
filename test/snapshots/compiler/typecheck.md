@@ -1,5 +1,5 @@
 # META
-source_lines=42982
+source_lines=42979
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -34640,7 +34640,7 @@ buildAdj (n :: rest) nameSet cbn m =
   buildAdj rest nameSet cbn (omInsert n (depsOf n nameSet cbn) m)
 
 -- sig-name presence set (which top-level names carry a type signature), set once
--- per module in `processTopGroups` so `memberPeelSource`/`memberSigIsFun` do an
+-- per module in `processTopGroups` so `memberPeelSource` does an
 -- O(log n) presence check instead of an O(sigs) `lookupAssoc` scan per SCC member
 -- (was O(members·sigs) over the whole compiler). Module-level ref, matching the
 -- `currentFn`/`curEffect` idiom; processing is sequential per module.
@@ -35489,16 +35489,24 @@ renderDeclaredRow declared tails =
 -- already unified into the placeholder by preunifySigs, so generalizing the
 -- result respects it AND any further specialization the body forces (e.g.
 -- sum : t a -> a with body `fold (+) 0` reports a Int -> Int, not the raw sig).
--- Value restriction (T1): generalize a member only if it is a *value* —
---   plainVal = isLetrec (multi-member SCC, always a function group) OR every
---              clause has params / a non-expansive zero-arg RHS;
---   sigIsFun = the member is signed AND its (post-unify) type is an arrow
---              (Phase 89 point-free relaxation: a signed arrow-typed point-free
---              binding like `maximum = fold step None` stays generalizable even
---              though its RHS is an application);
---   isVal    = plainVal || sigIsFun.
--- A non-function expansive unsigned binding (`r = Ref []`) is value-restricted and
--- stays monomorphic.
+-- Value restriction (DICT-SEMANTICS §4.1 G2): generalize a member only if it is
+-- a syntactic *value* — every one of its clauses has params, or its zero-arg RHS
+-- is non-expansive (`isNonexpansive`).  The decision is per MEMBER and purely
+-- syntactic, on every group shape:
+--   * a multi-member SCC gets no exemption (#2554): a zero-arg expansive member
+--     such as `cell = Ref (helper 0)` inside a mutually-recursive group is a
+--     polymorphic reference if generalized, and its siblings with params are
+--     values on their own account, so "a group is always a function group" was
+--     never the premise that made generalizing it safe;
+--   * a signed binding gets no exemption from its type (#2556): the old
+--     "post-unify type is an arrow" reading admitted `weird : a -> a ;
+--     weird = mk ()`, whose RHS allocates a Ref before returning the arrow, so
+--     one cell was read at two types.  A point-free binding is a value only
+--     if G2 says so — write `maximum xs = fold step None xs`, not
+--     `maximum = fold step None`.
+-- A non-function expansive binding (`r = Ref []`) is value-restricted and stays
+-- monomorphic whether or not it is signed.  The `isLetrec` argument is retained
+-- for the (unchanged) caller signature; it no longer influences the decision.
 sccSchemes : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
@@ -35507,24 +35515,13 @@ sccSchemes : TcEnv ->
   List (String, Scheme)
 sccSchemes _ _ _ _ [] = []
 sccSchemes env sigs grouped isLetrec ((m, v) :: rest) =
-  let plainVal =
-    isLetrec || allList (memberClauseIsValue env) (clausesOf m grouped)
-  let sigIsFun = memberSigIsFun sigs m v
-  let isVal = plainVal || sigIsFun
+  let isVal = allList (memberClauseIsValue env) (clausesOf m grouped)
   (m, genRestricted isVal v) :: sccSchemes env sigs grouped isLetrec rest
 
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
 memberClauseIsValue _ (_, _) = True
-
--- Phase 89: a signed binding whose (post-unify) type is an arrow is generalizable
-memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
-memberSigIsFun sigs m v = match omLookup m driverState.value.sigNameSetRef.value
-  None => False
-  Some _ => match normalize v
-    TFun _ _ _ => True
-    _ => False
 
 -- ── signature-too-general check ──────────────────────────────────────────────
 -- After body inference, the declared signature's type variables must map to
@@ -48465,12 +48462,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "renderDeclaredRow" ((PVar "declared") (PVar "tails")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ">"))))
 (DTypeSig false "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "sccSchemes" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "plainVal") (EBinOp "||" (EVar "isLetrec") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (DoLet false false (PVar "sigIsFun") (EApp (EApp (EApp (EVar "memberSigIsFun") (EVar "sigs")) (EVar "m")) (EVar "v"))) (DoLet false false (PVar "isVal") (EBinOp "||" (EVar "plainVal") (EVar "sigIsFun"))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
+(DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "isVal") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped")))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))
 (DFunDef false "memberClauseIsValue" ((PVar "env") (PTuple (PList) (PVar "rhs"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "rhs")))
 (DFunDef false "memberClauseIsValue" (PWild (PTuple PWild PWild)) (EVar "True"))
-(DTypeSig false "memberSigIsFun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool")))))
-(DFunDef false "memberSigIsFun" ((PVar "sigs") (PVar "m") (PVar "v")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef") "value")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "normalize") (EVar "v")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DTypeSig false "checkSigsTooGeneral" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit")))
 (DFunDef false "checkSigsTooGeneral" ((PList)) (ELit LUnit))
 (DFunDef false "checkSigsTooGeneral" ((PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSigTooGeneral") (EVar "m")) (EVar "ty")) (EVar "tvs"))) (DoExpr (EApp (EVar "checkSigsTooGeneral") (EVar "rest")))))
@@ -54887,12 +54882,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "renderDeclaredRow" ((PVar "declared") (PVar "tails")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ">"))))
 (DTypeSig false "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "sccSchemes" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "plainVal") (EBinOp "||" (EVar "isLetrec") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (DoLet false false (PVar "sigIsFun") (EApp (EApp (EApp (EVar "memberSigIsFun") (EVar "sigs")) (EVar "m")) (EVar "v"))) (DoLet false false (PVar "isVal") (EBinOp "||" (EVar "plainVal") (EVar "sigIsFun"))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
+(DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "isVal") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped")))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))
 (DFunDef false "memberClauseIsValue" ((PVar "env") (PTuple (PList) (PVar "rhs"))) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "rhs")))
 (DFunDef false "memberClauseIsValue" (PWild (PTuple PWild PWild)) (EVar "True"))
-(DTypeSig false "memberSigIsFun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool")))))
-(DFunDef false "memberSigIsFun" ((PVar "sigs") (PVar "m") (PVar "v")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef") "value")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "normalize") (EVar "v")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DTypeSig false "checkSigsTooGeneral" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (TyCon "Unit")))
 (DFunDef false "checkSigsTooGeneral" ((PList)) (ELit LUnit))
 (DFunDef false "checkSigsTooGeneral" ((PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSigTooGeneral") (EVar "m")) (EVar "ty")) (EVar "tvs"))) (DoExpr (EApp (EVar "checkSigsTooGeneral") (EVar "rest")))))

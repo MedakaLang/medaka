@@ -1446,7 +1446,7 @@ notElem a xs = not (elem a xs)
    Some 3 -}
 export
 maximum : (Foldable t, Ord a) => t a -> Option a
-maximum = fold step None
+maximum xs = fold step None xs
   where
     step None x = Some x
     step (Some m) x = Some (max m x)
@@ -1460,7 +1460,7 @@ maximum = fold step None
    Some 1 -}
 export
 minimum : (Foldable t, Ord a) => t a -> Option a
-minimum = fold step None
+minimum xs = fold step None xs
   where
     step None x = Some x
     step (Some m) x = Some (min m x)
@@ -2229,9 +2229,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "notElem" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "notElem" ((PVar "a") (PVar "xs")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "a")) (EVar "xs"))))
 (DTypeSig true "maximum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "maximum" () (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EVar "max") (EVar "m")) (EVar "x")))))) (EApp (EApp (EVar "fold") (EVar "step")) (EVar "None"))))
+(DFunDef false "maximum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EVar "max") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EVar "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
 (DTypeSig true "minimum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "minimum" () (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EVar "min") (EVar "m")) (EVar "x")))))) (EApp (EApp (EVar "fold") (EVar "step")) (EVar "None"))))
+(DFunDef false "minimum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EVar "min") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EVar "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
 (DImpl true "Filterable" ((TyCon "List")) () ((im "filterMap" (PWild (PList)) (EListLit)) (im "filterMap" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EVar "f") (EVar "x")) (arm (PCon "Some" (PVar "y")) () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs")))) (arm (PCon "None") () (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs"))))) (im "filter" ((PVar "p")) (EApp (EVar "filterMap") (ELam ((PVar "x")) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))))))
 (DTypeSig true "otherwise" (TyCon "Bool"))
 (DFunDef false "otherwise" () (EVar "True"))
@@ -2610,9 +2610,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "notElem" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "notElem" ((PVar "a") (PVar "xs")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "a")) (EVar "xs"))))
 (DTypeSig true "maximum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "maximum" () (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "max") (EVar "m")) (EVar "x")))))) (EApp (EApp (EMethodRef "fold") (EVar "step")) (EVar "None"))))
+(DFunDef false "maximum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "max") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
 (DTypeSig true "minimum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "minimum" () (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "min") (EVar "m")) (EVar "x")))))) (EApp (EApp (EMethodRef "fold") (EVar "step")) (EVar "None"))))
+(DFunDef false "minimum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "min") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
 (DImpl true "Filterable" ((TyCon "List")) () ((im "filterMap" (PWild (PList)) (EListLit)) (im "filterMap" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EVar "f") (EVar "x")) (arm (PCon "Some" (PVar "y")) () (EBinOp "::" (EVar "y") (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "xs")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "xs"))))) (im "filter" ((PVar "p")) (EApp (EMethodRef "filterMap") (ELam ((PVar "x")) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))))))
 (DTypeSig true "otherwise" (TyCon "Bool"))
 (DFunDef false "otherwise" () (EVar "True"))
