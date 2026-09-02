@@ -367,7 +367,7 @@ IDENT "exit"
 COLON
 UPPER "Int"
 ARROW
-UPPER "Unit"
+IDENT "a"
 NEWLINE
 EXTERN
 IDENT "panic"

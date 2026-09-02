@@ -63,7 +63,8 @@ extern readExactly : Int -> <Stdin> Option String
 -- with `r := v`.
 extern Ref : a -> Ref a
 
--- | Replaces the value in a cell. The same as `r := v`.
+-- The primitive behind `r := v`; the operator is the surface form and this
+-- name is kept out of the reference.
 extern setRef : Ref a -> a -> Unit
 
 -- # Files
@@ -136,8 +137,9 @@ extern buildFingerprint : Unit -> <Env> String
 -- the program could not be started.
 extern runCommand : String -> List String -> <Exec "_"> Result String (Int, String, String)
 
--- | Ends the program with an exit code.
-extern exit : Int -> Unit
+-- | Ends the program with an exit code. Like `panic`, it never returns, so
+-- it fits any expression position.
+extern exit : Int -> a
 
 -- | Aborts the program with a message. Panics cannot be caught.
 extern panic : String -> a

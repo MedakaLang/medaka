@@ -3425,7 +3425,7 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "lookup"
+IDENT "get"
 COLON
 UPPER "String"
 ARROW
@@ -3434,7 +3434,7 @@ ARROW
 UPPER "Option"
 UPPER "Json"
 NEWLINE
-IDENT "lookup"
+IDENT "get"
 IDENT "key"
 LPAREN
 UPPER "JObject"
@@ -3450,7 +3450,7 @@ IDENT "arrayLength"
 IDENT "pairs"
 RPAREN
 NEWLINE
-IDENT "lookup"
+IDENT "get"
 UNDERSCORE
 UNDERSCORE
 EQUAL
@@ -4380,7 +4380,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "lookup finds an inserted key"
+STRING "get finds an inserted key"
 LPAREN
 IDENT "k"
 COLON
@@ -4393,7 +4393,7 @@ UPPER "Int"
 RPAREN
 EQUAL
 INDENT
-IDENT "lookup"
+IDENT "get"
 LPAREN
 IDENT "intToString"
 IDENT "k"

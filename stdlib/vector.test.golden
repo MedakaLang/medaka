@@ -1,37 +1,37 @@
 running doctests in stdlib/vector.mdk
-  ok   stdlib/vector.mdk:54: length (new () : Vector Int)
-  ok   stdlib/vector.mdk:64: length (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:76: toList (fromArray [|1, 2|])
-  ok   stdlib/vector.mdk:88: capacity (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:96: get 1 (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:98: get 5 (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:119: first (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:127: last (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:146: arrayLength (toArray (fromList [1, 2, 3]))
-  ok   stdlib/vector.mdk:160: let v = fromList [1, 2] in let _ = push 3 v in toList v
-  ok   stdlib/vector.mdk:182: pop (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:198: let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
-  ok   stdlib/vector.mdk:220: let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
-  ok   stdlib/vector.mdk:235: let v = fromList [1, 2, 3] in let _ = clear v in length v
-  ok   stdlib/vector.mdk:250: let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
-  ok   stdlib/vector.mdk:285: let v = fromList [1, 2, 3] in let _ = insertAt 1 9 v in toList v
-  ok   stdlib/vector.mdk:291: let v = fromList [1, 2] in let _ = insertAt 7 9 v in toList v
-  ok   stdlib/vector.mdk:298: let v = fromList [1, 2, 3] in let _ = removeAt 1 v in toList v
-  ok   stdlib/vector.mdk:304: let v = fromList [1, 2] in let _ = removeAt 7 v in toList v
-  ok   stdlib/vector.mdk:312: let v = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare v in toList v
-  ok   stdlib/vector.mdk:322: let v = fromList [3, 1, 2] in let _ = sort v in toList v
-  ok   stdlib/vector.mdk:345: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/vector.mdk:354: length (fromList [9, 8, 7])
-  ok   stdlib/vector.mdk:360: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:367: debug (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:375: display (fromList ["a", "b"])
+  ok   stdlib/vector.mdk:53: length (new () : Vector Int)
+  ok   stdlib/vector.mdk:63: length (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:75: toList (fromArray [|1, 2|])
+  ok   stdlib/vector.mdk:87: capacity (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:95: get 1 (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:97: get 5 (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:118: first (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:126: last (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:145: arrayLength (toArray (fromList [1, 2, 3]))
+  ok   stdlib/vector.mdk:159: let v = fromList [1, 2] in let _ = push 3 v in toList v
+  ok   stdlib/vector.mdk:181: pop (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:197: let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
+  ok   stdlib/vector.mdk:219: let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
+  ok   stdlib/vector.mdk:234: let v = fromList [1, 2, 3] in let _ = clear v in length v
+  ok   stdlib/vector.mdk:249: let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
+  ok   stdlib/vector.mdk:284: let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
+  ok   stdlib/vector.mdk:290: let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
+  ok   stdlib/vector.mdk:297: let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
+  ok   stdlib/vector.mdk:303: let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
+  ok   stdlib/vector.mdk:311: let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
+  ok   stdlib/vector.mdk:321: let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
+  ok   stdlib/vector.mdk:344: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/vector.mdk:353: length (fromList [9, 8, 7])
+  ok   stdlib/vector.mdk:359: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:366: debug (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:374: display (fromList ["a", "b"])
 
 stdlib/vector.mdk: 26/26 passed
-Testing "sort agrees with an independent insertion sort" ... OK (100 tests)
-Testing "sort is idempotent" ... OK (100 tests)
-Testing "sortBy is stable on ties" ... OK (100 tests)
-Testing "insertAt lands at the clamped index and removeAt undoes it" ... OK (100 tests)
-Testing "removeAt out of range is a no-op" ... OK (100 tests)
+Testing "sortInPlace agrees with an independent insertion sortInPlace" ... OK (100 tests)
+Testing "sortInPlace is idempotent" ... OK (100 tests)
+Testing "sortInPlaceBy is stable on ties" ... OK (100 tests)
+Testing "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ... OK (100 tests)
+Testing "removeAtInPlace out of range is a no-op" ... OK (100 tests)
 Testing "Display Vector shows only the live range and agrees with Eq" ... OK (100 tests)
 
 6 passed, 0 failed

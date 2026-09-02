@@ -35,6 +35,17 @@ data Listener
 
 A listening TCP socket, from `listen`.
 
+### `Shutdown`
+
+```
+data Shutdown
+  = ShutdownRead
+  | ShutdownWrite
+  | ShutdownBoth
+```
+
+Which direction of a connection `shutdown` closes.
+
 ## Clients
 
 ### `resolve`
@@ -179,11 +190,10 @@ so it suits small line-based messages, not bulk transfer.
 ### `shutdown`
 
 ```
-shutdown : Connection -> Int -> <Net _> Result String Unit
+shutdown : Connection -> Shutdown -> <Net _> Result String Unit
 ```
 
-Shuts down one or both directions of a connection without closing it:
-`0` for reading, `1` for writing, `2` for both.
+Shuts down one or both directions of a connection without closing it.
 
 ### `close`
 
@@ -206,13 +216,13 @@ Closes a listener.
 ### `setTimeout`
 
 ```
-setTimeout : Connection -> Int -> <Net _> Result String Unit
+setTimeout : Connection -> Duration -> <Net _> Result String Unit
 ```
 
-Sets a connection's send and receive timeout in milliseconds.
+Sets a connection's send and receive timeout.
 
-`0` means no timeout. Set one on any long-lived connection so a stalled
-peer cannot block forever.
+A zero duration means no timeout. Set one on any long-lived connection
+so a stalled peer cannot block forever.
 
 ### `withConnection`
 

@@ -1,5 +1,5 @@
 # META
-source_lines=585
+source_lines=587
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -67,7 +67,8 @@ extern readExactly : Int -> <Stdin> Option String
 -- with `r := v`.
 extern Ref : a -> Ref a
 
--- | Replaces the value in a cell. The same as `r := v`.
+-- The primitive behind `r := v`; the operator is the surface form and this
+-- name is kept out of the reference.
 extern setRef : Ref a -> a -> Unit
 
 -- # Files
@@ -140,8 +141,9 @@ extern buildFingerprint : Unit -> <Env> String
 -- the program could not be started.
 extern runCommand : String -> List String -> <Exec "_"> Result String (Int, String, String)
 
--- | Ends the program with an exit code.
-extern exit : Int -> Unit
+-- | Ends the program with an exit code. Like `panic`, it never returns, so
+-- it fits any expression position.
+extern exit : Int -> a
 
 -- | Aborts the program with a message. Panics cannot be caught.
 extern panic : String -> a
@@ -617,7 +619,7 @@ extern stringToLower : String -> String
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "runCommand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
-(DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
+(DExtern false "exit" (TyFun (TyCon "Int") (TyVar "a")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexErrorAt" (TyFun (TyCon "Int") (TyVar "a")))
@@ -756,7 +758,7 @@ extern stringToLower : String -> String
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "runCommand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
-(DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
+(DExtern false "exit" (TyFun (TyCon "Int") (TyVar "a")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexErrorAt" (TyFun (TyCon "Int") (TyVar "a")))

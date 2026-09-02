@@ -5,7 +5,7 @@ A list with at least one element.
 `NonEmpty a` is a first element and a tail, so it cannot be empty. That
 makes `head`, `maximum`, and `minimum` total: they return the element
 itself rather than an `Option`. Build one with `singleton`, `fromList`,
-or the `NECons` constructor.
+or the `NonEmpty` constructor.
 
 Import the module by name, `import nonempty`, and call `nonempty.head`
 and the rest qualified, since the names overlap with `list`'s.
@@ -14,7 +14,7 @@ and the rest qualified, since the names overlap with `list`'s.
 
 ```
 data NonEmpty a
-  = NECons a (List a)
+  = NonEmpty a (List a)
 ```
 
 A first element and the rest of the list.
@@ -65,7 +65,7 @@ head : NonEmpty a -> a
 The first element.
 
 ```medaka
-> head (NECons 7 [8, 9])
+> head (NonEmpty 7 [8, 9])
 7
 ```
 
@@ -78,7 +78,7 @@ maximum : Ord a => NonEmpty a -> a
 The largest element.
 
 ```medaka
-> maximum (NECons 3 [1, 4, 1, 5])
+> maximum (NonEmpty 3 [1, 4, 1, 5])
 5
 ```
 
@@ -91,7 +91,7 @@ minimum : Ord a => NonEmpty a -> a
 The smallest element.
 
 ```medaka
-> minimum (NECons 3 [1, 4, 1, 5])
+> minimum (NonEmpty 3 [1, 4, 1, 5])
 1
 ```
 
@@ -106,7 +106,7 @@ impl Mappable NonEmpty
 `map` applies a function to every element.
 
 ```medaka
-> toList (map (n => n * 2) (NECons 1 [2, 3]))
+> toList (map (n => n * 2) (NonEmpty 1 [2, 3]))
 [2, 4, 6]
 ```
 
@@ -120,7 +120,7 @@ The `Foldable` methods visit the elements in order, first element
 first. `toList` gives back the plain list.
 
 ```medaka
-> toList (NECons 1 [2, 3])
+> toList (NonEmpty 1 [2, 3])
 [1, 2, 3]
 ```
 
@@ -133,7 +133,7 @@ impl Semigroup (NonEmpty a)
 `++` concatenates two non-empty lists.
 
 ```medaka
-> toList (append (NECons 1 [2]) (NECons 3 [4]))
+> toList (append (NonEmpty 1 [2]) (NonEmpty 3 [4]))
 [1, 2, 3, 4]
 ```
 
@@ -146,7 +146,7 @@ impl Display (NonEmpty a) requires Display a
 `display` renders a non-empty list as `NonEmpty [x, ...]`.
 
 ```medaka
-> display (NECons 1 [2, 3])
+> display (NonEmpty 1 [2, 3])
 "NonEmpty [1, 2, 3]"
 ```
 

@@ -106,14 +106,6 @@ Ref : a -> Ref a
 A new mutable cell holding a value. Read it with `!r` and write it
 with `r := v`.
 
-### `setRef`
-
-```
-setRef : Ref a -> a -> Unit
-```
-
-Replaces the value in a cell. The same as `r := v`.
-
 ## Files
 
 ### `readFile`
@@ -265,10 +257,11 @@ the program could not be started.
 ### `exit`
 
 ```
-exit : Int -> Unit
+exit : Int -> a
 ```
 
-Ends the program with an exit code.
+Ends the program with an exit code. Like `panic`, it never returns, so
+it fits any expression position.
 
 ### `panic`
 
