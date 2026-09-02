@@ -1,5 +1,5 @@
 # META
-source_lines=4568
+source_lines=4580
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1183,6 +1183,18 @@ isDispatching _ = False
 -- Distinct CANONICAL KEYS, not distinct tags, is the collision test: a re-imported
 -- prelude impl appears twice under one key and is one impl, while `Wrap|(Pair Int)|`
 -- and `Wrap|(Pair String)|` are two.
+--
+-- ⚠️ COST: UNMEASURED, AND SAID SO ON PURPOSE.  This runs on EVERY `applyOpt (VMulti vs)`
+-- -- the hot dispatch path -- and its `twoDistinctKeys` scan is O(n^2) in the candidate
+-- list.  Nobody has measured what that costs; #2445's review round raised it and the fix
+-- packet (F-4) deliberately scoped measurement OUT rather than guess.  `n` is the number
+-- of candidates at one method, which is small in every program anyone has run, so the
+-- expectation is that this is noise -- but an expectation is not a measurement, and
+-- `check` is GC-bound ([T-PERF-HUNT]: profile ALLOCATION, not wall clock), so a cheap-
+-- looking scan that allocates per candidate is exactly the shape that has surprised this
+-- compiler before.  If a `check`-path regression is ever reported, start here:
+-- `compiler/PERF-SCOPE.md` ranks the hot paths and `test/bench.sh` is the per-stage
+-- harness; a memoised or key-sorted collision test is the obvious first move if it bites.
 checkArgTagDecidable : List (Value e) -> Value e -> Unit
 checkArgTagDecidable vs arg
   | not (anyList isDispatching vs) = ()

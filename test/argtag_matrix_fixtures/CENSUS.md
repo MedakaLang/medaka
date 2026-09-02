@@ -26,7 +26,7 @@ actually *does*.
 IS the evidence. A cell that goes red must be **re-classified**, not re-blessed — see the
 gate's header.
 
-## The axes, and why their product is complete
+## The axes, and how far their product is actually sampled
 
 A cell's outcome is decided at the one shared call site inside the pinned local, by
 `emitArgDispatchChain` (`compiler/backend/llvm_emit.mdk:6393`), which tests
@@ -34,9 +34,25 @@ A cell's outcome is decided at the one shared call site inside the pinned local,
 **two** inputs, so the matrix enumerates over exactly two axes:
 
 **Axis B — the group set** (`groupImpls` / `distinctImplKeys`, `llvm_emit.mdk:7350`; groups
-are keyed by `(method, canonical impl key)`). An impl either **defines the method** (B1) or
-**does not, and inherits the interface default** (B2). There is no third way for an impl to
-supply a method, so B is exhausted at two values.
+are keyed by `(method, canonical impl key)`). A single impl either **defines the method** or
+**does not, and inherits the interface default**; there is no third way for one impl to
+supply a method. But axis B is not a property of one impl — it is a property of the PAIR
+being discriminated, and a pair of two-valued impls has **three** shapes:
+
+| value | the pair |
+|---|---|
+| `B1_both_defined` | both impls define the method |
+| `B2_one_default` | one defines it, the other inherits the interface default |
+| `B3_both_inherit_default` | **neither** defines it; both inherit ONE interface default |
+
+🚨 **This census originally enumerated B at two values and argued that made it exhausted.**
+That argument was wrong, and wrong in the way that matters: it read the two-valuedness off a
+single impl and then used it as the arity of a pairwise axis. `B3` is not a relabelling of
+`B2` — it is the one shape in which *no* group in the method's group set carries a body of
+its own, so every arm of the chain routes to the same inherited default and the receiver
+identity has to survive *through* that default to reach the per-impl method it calls. That
+is a distinct mechanism with a distinct, and silently wrong, native answer (see
+`A1_distinct_user_heads__B3_both_inherit_default` below).
 
 **Axis A — the per-group constructor-cell-tag set**, `ctorsOfType e (groupTag g)`. A head
 type's ctor set is determined by its tycon, so for a *pair* of heads the only possible
@@ -58,14 +74,29 @@ changes what the selected arm *does* (it needs an inner dict), never how the arm
 *selected*. Recording that explicitly is what closes the axis rather than leaving it
 argued-by-omission.
 
-`A × B` is therefore the product, giving the **10 cells** below, plus **one control**
-(`CONTROL_toplevel_helper__not_pinned`) that is deliberately *outside* the region.
+**How much of `A × B` this corpus actually holds, stated plainly.** `A` has 5 values and
+`B` has 3, so the full product is 15 cells. This corpus holds **11** of them: the complete
+`A1…A5 × {B1, B2}` sub-product (10 cells), plus `A1 × B3`. The four remaining `B3` cells
+(`A2 × B3` … `A5 × B3`) are **not enumerated**, and this census does not claim they are.
 
-**Falsification test for this claim.** Exhibit a program in the masked region whose
+`A1 × B3` is the one that was added, and the choice is not arbitrary: `A1`'s heads are
+disjoint and both non-empty, so it is the only `A` value where the discrimination *ought*
+to succeed outright. A `B3`-only defect shows there uncontaminated by an A-axis collision
+(`A2`), by a missing cell tag (`A3`, `A4`), or by a `requires`-body failure (`A5`) — every
+one of which already fails for its own reason before `B` is consulted at all. So `A1 × B3`
+is where a B3 mechanism is *visible*, and it is the cell that makes the coverage claim
+above an honest one rather than a claim resting on an axis miscounted as two-valued.
+
+**Falsification test for what is claimed.** Exhibit a program in the masked region whose
 outcome differs from the cell with the same `(A, B)` coordinates. Since the outcome is a
 function of the two inputs above and nothing else, such a program would prove
 `emitArgDispatchChain` has a third input the matrix does not enumerate — and that is
-exactly the finding this census would want.
+exactly the finding this census would want. ⚠️ Note that the previous version of this
+paragraph made that falsification test the whole warrant for a completeness claim, and it
+did not catch `B3` — because a miscounted axis is not a third *input*, it is a missing
+*value* of an enumerated one, and no amount of probing at `(A, B1)`/`(A, B2)` reaches it.
+A reader auditing this corpus should re-derive each axis's arity from the mechanism before
+trusting a product argument built on it.
 
 ## 🚨 The headline result: the region is uniformly broken, and NOT for the reason on record
 
@@ -78,7 +109,7 @@ the conclusion standing for a broader reason.**
 `A1_distinct_user_heads__B1_both_defined` has **no method-less impl at all** — two ordinary
 impls at two distinct user tycons, the friendliest possible shape — and the native binary
 still prints `woof|woof` instead of `woof|meow`, **silently, at exit 0**, while `medaka run`
-prints the correct `woof|meow`. Zero of the ten masked cells produce the correct answer on
+prints the correct `woof|meow`. Zero of the eleven masked cells produce the correct answer on
 both engines. The `decidable` class is populated only by the control, which is not in the
 region.
 
@@ -126,10 +157,31 @@ this region, which is a stronger and simpler answer than the one on record.
 Every cell's `check` is `0`: under the hatch, the whole region typechecks. That is the
 hatch working, and it is why the region is observable at all.
 
+**Which regime each column observes — measured, not assumed.** All four graded columns
+(`check:`, `run:`, `build:`, `exec:`) are produced with `MEDAKA_ARGTAG_UNPIN=1` set, so all
+four observe the **unpinned** regime; the comparison across them is not confounded by the
+pin. `build` is not an exception to this, which is worth stating because a reader can
+reasonably assume the hatch is a `check`-only affordance — it is not, because `medaka build`
+runs the same typechecker, and the pin would reject these programs before any IR existed.
+The discriminating measurement, on `A1__B1`, with the hatch dropped from the build alone:
+
+```
+$ ./medaka build test/argtag_matrix_fixtures/A1_distinct_user_heads__B1_both_defined/main.mdk -o /tmp/x
+error: …main.mdk:15:6: local binding 'f' is used at two different types (Dog and Cat), but
+it cannot be polymorphic: its body calls something that needs a 'Speak' instance, and only
+top-level definitions can carry that constraint
+$ echo $?
+1
+```
+
+So a `build:` line reading `0 | built …` is itself evidence the hatch reached the build
+path; had it not, every `build:` in this table would read `1` with that diagnostic.
+
 | cell | class | correct | `run` (eval) | native binary |
 |---|---|---|---|---|
 | `A1…__B1_both_defined` | bug | `woof\|meow` | ✅ `woof\|meow` | 🚨 `woof\|woof` **silent, exit 0** |
 | `A1…__B2_one_default` | bug | `woof\|meow` | ✅ `woof\|meow` | 🚨 `woof\|woof` **silent, exit 0** |
+| `A1…__B3_both_inherit_default` | bug | `<dog>\|<cat>` | ✅ `<dog>\|<cat>` | 🚨 `<dog>\|<dog>` **silent, exit 0** |
 | `A2…__B1_both_defined` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | build aborts, exit 1 |
 | `A2…__B2_one_default` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | build aborts, exit 1 |
 | `A3…__B1_both_defined` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts, exit 1 |
@@ -158,6 +210,45 @@ supplies `speak`. This is #1046's named shape. Identical symptom to `A1__B1` —
 silent, exit 0 — which is precisely why #1046 cannot be the whole story: the shape with
 and the shape without the method-less impl fail the same way. Fixing #1046 drains this
 cell and leaves `A1__B1` standing.
+
+### A1_distinct_user_heads__B3_both_inherit_default
+
+**`bug`**, and the cell whose *absence* refuted this census's own completeness argument
+(#2445 review round, S-3's finding). `A1`'s two disjoint user heads, with `speak` left
+undefined on **both** impls so both inherit ONE interface default:
+
+```
+interface Speak a where
+  name  : a -> String
+  speak : a -> String
+  speak v = "<" ++ name v ++ ">"
+
+impl Speak Dog where
+  name _ = "dog"
+impl Speak Cat where
+  name _ = "cat"
+```
+
+The default is receiver-derived — it dispatches `name v` on the same receiver — so the two
+instances must print different strings even though they share one `speak` body. Correct is
+`<dog>|<cat>`; `medaka run` produces it, so the information is sufficient and this is a
+`bug`, not an `undecidable-by-construction` cell. The native binary answers
+**`<dog>|<dog>` at exit 0, silently.**
+
+**Why this is not just `A1__B2` with an extra impl left blank.** In `B2` exactly one group
+carries a body of its own, and the *defining* impl's body is what both receivers end up
+running — the collapse is visible as "the wrong impl won". In `B3` **no** group carries a
+body: every arm of the chain routes into the same inherited default, and the receiver
+identity has to survive *through* that default to reach the per-impl `name`. The observable
+symptom is the same one-route-ref collapse the § headline result describes — the pinned
+local lowers to one lifted lambda with one shared route ref, and the first instantiation
+wins the inner `name` dispatch too — but the shape reaching it is different, and nothing in
+the `B1`/`B2` pair exercises "the discriminating call is *inside* an inherited default."
+
+This is also why `B` had to be recounted. The old argument ("an impl either defines the
+method or inherits it, so B is exhausted at two") is true of one impl and false of a pair,
+and the cell it missed is a **silent-wrong** one — the most expensive class this corpus
+grades. See § "The axes, and how far their product is actually sampled".
 
 ### A2_same_head_diff_args__B1_both_defined
 
@@ -360,8 +451,8 @@ region** — do not read it as progress on #2032.
 
 ## Loud, but misleading: the emitter's `fromInt` panic
 
-Six of the ten cells (`A2`, `A3`, `A4`) fail `medaka build` at exit 1 with a message of the
-form:
+Six of the eleven masked cells (`A2`, `A3`, `A4`) fail `medaka build` at exit 1 with a
+message of the form:
 
 ```
 error: emitter failed compiling main.mdk
