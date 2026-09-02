@@ -78,7 +78,7 @@ magicBytes = [
 -- | Compare a parsed byte list with the expected magic; fail with a message.
 checkMagic : List Int -> ByteParser Unit
 checkMagic got =
-  unless
+  deferUnless
     (listIntEq got magicBytes)
     (failWith "not a SQLite database (bad magic string)")
 
@@ -104,7 +104,7 @@ listIntEq _ _ = False
 -- "Err: not a SQLite database (bad magic string) at byte 16"
 export
 parseHeader : ByteParser DbHeader
-parseHeader = do
+parseHeader = defer
   magic <- takeBytes 16
   _ <- checkMagic magic
   rawPageSize <- beUint 2
@@ -119,7 +119,7 @@ parseHeader = do
   encoding <- beUint 4  -- offset 56
   _ <- takeBytes 40  -- offsets 60..99: remainder of header
   let pageSize = if rawPageSize == 1 then 65536 else rawPageSize
-  pure DbHeader {
+  deferPure DbHeader {
     pageSize = pageSize,
     pageCount = pageCount,
     encoding = encoding,

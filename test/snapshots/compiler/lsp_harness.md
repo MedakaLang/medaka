@@ -32,7 +32,7 @@ import json.{
   jArray,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
 }
@@ -273,7 +273,7 @@ export
 responseById : Int -> List Frame -> Option Json
 responseById _ [] = None
 responseById idn ((Frame _ body _) :: rest) = match parse body
-  Ok j => match lookup "id" j
+  Ok j => match get "id" j
     Some v => match asInt v
       Some k => if k == idn then Some j else responseById idn rest
       None => responseById idn rest
@@ -286,9 +286,9 @@ export
 hoverValue : Int -> List Frame -> Option String
 hoverValue idn frames = do
   j <- responseById idn frames
-  res <- lookup "result" j
-  c <- lookup "contents" res
-  v <- lookup "value" c
+  res <- get "result" j
+  c <- get "contents" res
+  v <- get "value" c
   asString v
 
 -- Does completion response `idn` include a CompletionItem whose label == needle?
@@ -296,7 +296,7 @@ export
 completionHasLabel : Int -> List Frame -> String -> Bool
 completionHasLabel idn frames needle = match responseById idn frames
   None => False
-  Some j => match lookup "result" j
+  Some j => match get "result" j
     Some (JArray items) => anyLabelEq items 0 (arrayLength items) needle
     _ => False
 
@@ -307,7 +307,7 @@ anyLabelEq items i n needle
   | otherwise = anyLabelEq items (i + 1) n needle
 
 labelEq : Json -> String -> Bool
-labelEq it needle = match lookup "label" it
+labelEq it needle = match get "label" it
   Some v => match asString v
     Some s => s == needle
     None => False
@@ -338,9 +338,9 @@ export
 semanticData : Int -> List Frame -> Option (List Int)
 semanticData idn frames = match responseById idn frames
   None => None
-  Some j => match lookup "result" j
+  Some j => match get "result" j
     None => None
-    Some res => match lookup "data" res
+    Some res => match get "data" res
       Some (JArray a) => Some (jIntArrayToList a 0 (arrayLength a))
       _ => None
 
@@ -445,15 +445,15 @@ lastDiagGo uri ((Frame _ body _) :: rest) acc = match parse body
   Err _ => lastDiagGo uri rest acc
 
 methodEq : Json -> String -> Bool
-methodEq j m = match lookup "method" j
+methodEq j m = match get "method" j
   Some v => match asString v
     Some s => s == m
     None => False
   None => False
 
 paramUriEq : Json -> String -> Bool
-paramUriEq j uri = match lookup "params" j
-  Some p => match lookup "uri" p
+paramUriEq j uri = match get "params" j
+  Some p => match get "uri" p
     Some v => match asString v
       Some s => s == uri
       None => False
@@ -461,8 +461,8 @@ paramUriEq j uri = match lookup "params" j
   None => False
 
 jDiagLen : Json -> Int
-jDiagLen j = match lookup "params" j
-  Some p => match lookup "diagnostics" p
+jDiagLen j = match get "params" j
+  Some p => match get "diagnostics" p
     Some (JArray a) => arrayLength a
     _ => 0
   None => 0
@@ -496,7 +496,7 @@ summary total =
       " failed",
     ])
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "utf8CharWidth" false))))
 (DUse false (UseGroup ("string") ((mem "isDigit" false))))
 (DTypeSig true "initializeMsg" (TyFun (TyCon "Int") (TyCon "Json")))
@@ -549,21 +549,21 @@ summary total =
 (DFunDef false "allByteValid" ((PCons (PCon "Frame" PWild PWild (PVar "ok")) (PVar "rest"))) (EBinOp "&&" (EVar "ok") (EApp (EVar "allByteValid") (EVar "rest"))))
 (DTypeSig true "responseById" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyCon "Json")))))
 (DFunDef false "responseById" (PWild (PList)) (EVar "None"))
-(DFunDef false "responseById" ((PVar "idn") (PCons (PCon "Frame" PWild (PVar "body") PWild) (PVar "rest"))) (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "id"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asInt") (EVar "v")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "idn")) (EApp (EVar "Some") (EVar "j")) (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))))
+(DFunDef false "responseById" ((PVar "idn") (PCons (PCon "Frame" PWild (PVar "body") PWild) (PVar "rest"))) (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "id"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asInt") (EVar "v")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "idn")) (EApp (EVar "Some") (EVar "j")) (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))))
 (DTypeSig true "hoverValue" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "hoverValue" ((PVar "idn") (PVar "frames")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames"))) (ELam ((PVar "j")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookup") (ELit (LString "result"))) (EVar "j"))) (ELam ((PVar "res")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookup") (ELit (LString "contents"))) (EVar "res"))) (ELam ((PVar "c")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookup") (ELit (LString "value"))) (EVar "c"))) (ELam ((PVar "v")) (EApp (EVar "asString") (EVar "v")))))))))))
+(DFunDef false "hoverValue" ((PVar "idn") (PVar "frames")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames"))) (ELam ((PVar "j")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j"))) (ELam ((PVar "res")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "contents"))) (EVar "res"))) (ELam ((PVar "c")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "value"))) (EVar "c"))) (ELam ((PVar "v")) (EApp (EVar "asString") (EVar "v")))))))))))
 (DTypeSig true "completionHasLabel" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "completionHasLabel" ((PVar "idn") (PVar "frames") (PVar "needle")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "result"))) (EVar "j")) (arm (PCon "Some" (PCon "JArray" (PVar "items"))) () (EApp (EApp (EApp (EApp (EVar "anyLabelEq") (EVar "items")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "items"))) (EVar "needle"))) (arm PWild () (EVar "False"))))))
+(DFunDef false "completionHasLabel" ((PVar "idn") (PVar "frames") (PVar "needle")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j")) (arm (PCon "Some" (PCon "JArray" (PVar "items"))) () (EApp (EApp (EApp (EApp (EVar "anyLabelEq") (EVar "items")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "items"))) (EVar "needle"))) (arm PWild () (EVar "False"))))))
 (DTypeSig false "anyLabelEq" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "anyLabelEq" ((PVar "items") (PVar "i") (PVar "n") (PVar "needle")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "labelEq") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "items"))) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "anyLabelEq") (EVar "items")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "needle")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "labelEq" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "labelEq" ((PVar "it") (PVar "needle")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "label"))) (EVar "it")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "needle"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "labelEq" ((PVar "it") (PVar "needle")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "label"))) (EVar "it")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "needle"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "strContains" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "strContains" ((PVar "hay") (PVar "needle")) (EBlock (DoLet false false (PVar "h") (EApp (EVar "stringToChars") (EVar "hay"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "strContainsGo") (EVar "h")) (EApp (EVar "arrayLength") (EVar "h"))) (EVar "needle")) (ELit (LInt 0))))))
 (DTypeSig false "strContainsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "strContainsGo" ((PVar "h") (PVar "hlen") (PVar "needle") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "hlen")) (EVar "False") (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "h")) (EVar "hlen")) (EVar "i")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "strContainsGo") (EVar "h")) (EVar "hlen")) (EVar "needle")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "semanticData" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "result"))) (EVar "j")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "res")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
+(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "res")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "jIntArrayToList" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "jIntArrayToList" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "asInt") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (arm (PCon "Some" (PVar "k")) () (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Public "DecTok" () ((variant "DecTok" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
@@ -600,11 +600,11 @@ summary total =
 (DFunDef false "lastDiagGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "lastDiagGo" ((PVar "uri") (PCons (PCon "Frame" PWild (PVar "body") PWild) (PVar "rest")) (PVar "acc")) (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Ok" (PVar "j")) () (EIf (EApp (EApp (EVar "isPublishFor") (EVar "uri")) (EVar "j")) (EApp (EApp (EApp (EVar "lastDiagGo") (EVar "uri")) (EVar "rest")) (EApp (EVar "Some") (EApp (EVar "jDiagLen") (EVar "j")))) (EApp (EApp (EApp (EVar "lastDiagGo") (EVar "uri")) (EVar "rest")) (EVar "acc")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EVar "lastDiagGo") (EVar "uri")) (EVar "rest")) (EVar "acc")))))
 (DTypeSig false "methodEq" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "methodEq" ((PVar "j") (PVar "m")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "method"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "m"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "methodEq" ((PVar "j") (PVar "m")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "method"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "m"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "paramUriEq" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "paramUriEq" ((PVar "j") (PVar "uri")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "uri"))) (EVar "p")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "uri"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "paramUriEq" ((PVar "j") (PVar "uri")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "uri"))) (EVar "p")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "uri"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "jDiagLen" (TyFun (TyCon "Json") (TyCon "Int")))
-(DFunDef false "jDiagLen" ((PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "diagnostics"))) (EVar "p")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "arrayLength") (EVar "a"))) (arm PWild () (ELit (LInt 0))))) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "jDiagLen" ((PVar "j")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "diagnostics"))) (EVar "p")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "arrayLength") (EVar "a"))) (arm PWild () (ELit (LInt 0))))) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig true "failCount" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "failCount" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "check" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit")))))
@@ -612,7 +612,7 @@ summary total =
 (DTypeSig true "summary" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "summary" ((PVar "total")) (EBlock (DoLet false false (PVar "failed") (EUnOp "!" (EVar "failCount"))) (DoExpr (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "HARNESS: ")) (EApp (EVar "intToString") (EBinOp "-" (EVar "total") (EVar "failed"))) (ELit (LString " passed, ")) (EApp (EVar "intToString") (EVar "failed")) (ELit (LString " failed"))))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "utf8CharWidth" false))))
 (DUse false (UseGroup ("string") ((mem "isDigit" false))))
 (DTypeSig true "initializeMsg" (TyFun (TyCon "Int") (TyCon "Json")))
@@ -665,21 +665,21 @@ summary total =
 (DFunDef false "allByteValid" ((PCons (PCon "Frame" PWild PWild (PVar "ok")) (PVar "rest"))) (EBinOp "&&" (EVar "ok") (EApp (EVar "allByteValid") (EVar "rest"))))
 (DTypeSig true "responseById" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyCon "Json")))))
 (DFunDef false "responseById" (PWild (PList)) (EVar "None"))
-(DFunDef false "responseById" ((PVar "idn") (PCons (PCon "Frame" PWild (PVar "body") PWild) (PVar "rest"))) (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "id"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asInt") (EVar "v")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "idn")) (EApp (EVar "Some") (EVar "j")) (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))))
+(DFunDef false "responseById" ((PVar "idn") (PCons (PCon "Frame" PWild (PVar "body") PWild) (PVar "rest"))) (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "id"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asInt") (EVar "v")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "idn")) (EApp (EVar "Some") (EVar "j")) (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "None") () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest"))))) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "rest")))))
 (DTypeSig true "hoverValue" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "hoverValue" ((PVar "idn") (PVar "frames")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames"))) (ELam ((PVar "j")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookup") (ELit (LString "result"))) (EVar "j"))) (ELam ((PVar "res")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookup") (ELit (LString "contents"))) (EVar "res"))) (ELam ((PVar "c")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookup") (ELit (LString "value"))) (EVar "c"))) (ELam ((PVar "v")) (EApp (EVar "asString") (EVar "v")))))))))))
+(DFunDef false "hoverValue" ((PVar "idn") (PVar "frames")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames"))) (ELam ((PVar "j")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j"))) (ELam ((PVar "res")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "contents"))) (EVar "res"))) (ELam ((PVar "c")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "value"))) (EVar "c"))) (ELam ((PVar "v")) (EApp (EVar "asString") (EVar "v")))))))))))
 (DTypeSig true "completionHasLabel" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "completionHasLabel" ((PVar "idn") (PVar "frames") (PVar "needle")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "result"))) (EVar "j")) (arm (PCon "Some" (PCon "JArray" (PVar "items"))) () (EApp (EApp (EApp (EApp (EVar "anyLabelEq") (EVar "items")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "items"))) (EVar "needle"))) (arm PWild () (EVar "False"))))))
+(DFunDef false "completionHasLabel" ((PVar "idn") (PVar "frames") (PVar "needle")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j")) (arm (PCon "Some" (PCon "JArray" (PVar "items"))) () (EApp (EApp (EApp (EApp (EVar "anyLabelEq") (EVar "items")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "items"))) (EVar "needle"))) (arm PWild () (EVar "False"))))))
 (DTypeSig false "anyLabelEq" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "anyLabelEq" ((PVar "items") (PVar "i") (PVar "n") (PVar "needle")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "labelEq") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "items"))) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "anyLabelEq") (EVar "items")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "needle")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "labelEq" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "labelEq" ((PVar "it") (PVar "needle")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "label"))) (EVar "it")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "needle"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "labelEq" ((PVar "it") (PVar "needle")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "label"))) (EVar "it")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "needle"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "strContains" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "strContains" ((PVar "hay") (PVar "needle")) (EBlock (DoLet false false (PVar "h") (EApp (EVar "stringToChars") (EVar "hay"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "strContainsGo") (EVar "h")) (EApp (EVar "arrayLength") (EVar "h"))) (EVar "needle")) (ELit (LInt 0))))))
 (DTypeSig false "strContainsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "strContainsGo" ((PVar "h") (PVar "hlen") (PVar "needle") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "hlen")) (EVar "False") (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "h")) (EVar "hlen")) (EVar "i")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "strContainsGo") (EVar "h")) (EVar "hlen")) (EVar "needle")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "semanticData" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "result"))) (EVar "j")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "res")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
+(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "res")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "jIntArrayToList" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "jIntArrayToList" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "asInt") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (arm (PCon "Some" (PVar "k")) () (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Public "DecTok" () ((variant "DecTok" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
@@ -716,11 +716,11 @@ summary total =
 (DFunDef false "lastDiagGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "lastDiagGo" ((PVar "uri") (PCons (PCon "Frame" PWild (PVar "body") PWild) (PVar "rest")) (PVar "acc")) (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Ok" (PVar "j")) () (EIf (EApp (EApp (EVar "isPublishFor") (EVar "uri")) (EVar "j")) (EApp (EApp (EApp (EVar "lastDiagGo") (EVar "uri")) (EVar "rest")) (EApp (EVar "Some") (EApp (EVar "jDiagLen") (EVar "j")))) (EApp (EApp (EApp (EVar "lastDiagGo") (EVar "uri")) (EVar "rest")) (EVar "acc")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EVar "lastDiagGo") (EVar "uri")) (EVar "rest")) (EVar "acc")))))
 (DTypeSig false "methodEq" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "methodEq" ((PVar "j") (PVar "m")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "method"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "m"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "methodEq" ((PVar "j") (PVar "m")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "method"))) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "m"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "paramUriEq" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "paramUriEq" ((PVar "j") (PVar "uri")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "uri"))) (EVar "p")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "uri"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "paramUriEq" ((PVar "j") (PVar "uri")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "uri"))) (EVar "p")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asString") (EVar "v")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (EVar "uri"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "jDiagLen" (TyFun (TyCon "Json") (TyCon "Int")))
-(DFunDef false "jDiagLen" ((PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "diagnostics"))) (EVar "p")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "arrayLength") (EVar "a"))) (arm PWild () (ELit (LInt 0))))) (arm (PCon "None") () (ELit (LInt 0)))))
+(DFunDef false "jDiagLen" ((PVar "j")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "params"))) (EVar "j")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "diagnostics"))) (EVar "p")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "arrayLength") (EVar "a"))) (arm PWild () (ELit (LInt 0))))) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig true "failCount" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "failCount" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "check" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit")))))

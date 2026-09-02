@@ -29,7 +29,7 @@
    non-`other-job` entries' `run` fields is a bijection onto the baseline's 202
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
-import json.{JNull, Json, asArray, asBool, asInt, asString, lookup, parse}
+import json.{JNull, Json, asArray, asBool, asInt, asString, get, parse}
 import support.util.{joinWith, listLen, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
@@ -131,18 +131,18 @@ costSchema : String
 costSchema = "gate-cost-baseline/1"
 
 costEntry : Int -> Json -> Result String GateCost
-costEntry i e = match asString (orNull (lookup "name" e))
+costEntry i e = match asString (orNull (get "name" e))
   None =>
     Err
       "gate cost baseline: gates[\{intToString i}]: missing string field 'name'"
-  Some n => match asInt (orNull (lookup "medianMs" e))
+  Some n => match asInt (orNull (get "medianMs" e))
     None =>
       Err
         "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'medianMs'"
     Some ms if ms < 0 =>
       Err
         "gate cost baseline: gates[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
-    Some ms => match asInt (orNull (lookup "samples" e))
+    Some ms => match asInt (orNull (get "samples" e))
       None =>
         Err
           "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'samples'"
@@ -177,7 +177,7 @@ costEntry i e = match asString (orNull (lookup "name" e))
 -- gate has no evidence", which reads as a thin-evidence finding rather than
 -- as the schema error it is.
 costSamples : Int -> String -> Json -> Result String (List Int)
-costSamples i n e = match asArray (orNull (lookup "ms" e))
+costSamples i n e = match asArray (orNull (get "ms" e))
   None =>
     Err
       "gate cost baseline: gates[\{intToString i}] '\{n}': missing array field 'ms'"
@@ -215,7 +215,7 @@ costSampleInts i n arr k len acc
 -- reading, and silently truncating or padding it would put the alignment bug
 -- back in a new place.
 costSampleRuns : Int -> String -> Json -> Int -> Result String (List String)
-costSampleRuns i n e want = match lookup "sampleRuns" e
+costSampleRuns i n e want = match get "sampleRuns" e
   None => Ok (blankRuns want)
   Some JNull => Ok (blankRuns want)
   Some j => match asArray j
@@ -284,12 +284,12 @@ export
 parseCostBaseline : String -> Result String (List GateCost)
 parseCostBaseline src = match parse src
   Err m => Err "gate cost baseline: \{m}"
-  Ok doc => match asString (orNull (lookup "schema" doc))
+  Ok doc => match asString (orNull (get "schema" doc))
     None => Err "gate cost baseline: missing top-level string field 'schema'"
     Some sc if sc /= costSchema =>
       Err
         "gate cost baseline: unsupported schema '\{sc}' (this reader understands '\{costSchema}')"
-    Some _ => match asArray (orNull (lookup "gates" doc))
+    Some _ => match asArray (orNull (get "gates" doc))
       None => Err "gate cost baseline: missing top-level array field 'gates'"
       Some arr if arrayLength arr == 0 =>
         Err "gate cost baseline: 'gates' is empty"
@@ -476,14 +476,14 @@ public export data RunRecord = RunRecord {
 }
 
 runEntry : Int -> Json -> Result String RunRecord
-runEntry i e = match asString (orNull (lookup "key" e))
+runEntry i e = match asString (orNull (get "key" e))
   None =>
     Err "gate cost baseline: runs[\{intToString i}]: missing string field 'key'"
-  Some k => match asString (orNull (lookup "runId" e))
+  Some k => match asString (orNull (get "runId" e))
     None =>
       Err
         "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'runId'"
-    Some rid => match asString (orNull (lookup "shard" e))
+    Some rid => match asString (orNull (get "shard" e))
       None =>
         Err
           "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'shard'"
@@ -491,11 +491,11 @@ runEntry i e = match asString (orNull (lookup "key" e))
         key = k,
         runId = rid,
         shard = sh,
-        jobs = asInt (orNull (lookup "jobs" e)),
-        parallel = asBool (orNull (lookup "parallel" e)),
-        rowElapsedMs = asInt (orNull (lookup "rowElapsedMs" e)),
-        gates = asInt (orNull (lookup "gates" e)),
-        gatesDigest = asInt (orNull (lookup "gatesDigest" e)),
+        jobs = asInt (orNull (get "jobs" e)),
+        parallel = asBool (orNull (get "parallel" e)),
+        rowElapsedMs = asInt (orNull (get "rowElapsedMs" e)),
+        gates = asInt (orNull (get "gates" e)),
+        gatesDigest = asInt (orNull (get "gatesDigest" e)),
       }
 
 runEntries : Array Json ->
@@ -522,7 +522,7 @@ export
 parseCostRuns : String -> Result String (List RunRecord)
 parseCostRuns src = match parse src
   Err m => Err "gate cost baseline: \{m}"
-  Ok doc => match asArray (orNull (lookup "runs" doc))
+  Ok doc => match asArray (orNull (get "runs" doc))
     None => Err "gate cost baseline: missing top-level array field 'runs'"
     Some arr => runEntries arr 0 (arrayLength arr) []
 

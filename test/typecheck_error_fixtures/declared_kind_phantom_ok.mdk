@@ -1,0 +1,10 @@
+-- Declared-kind conformance (EFFECTS-SEMANTICS.md §6.4(b)): a DECLARED but
+-- unused (phantom) `Effect` parameter is a LEGAL declaration on its own --
+-- no field of `Box` mentions `e`, so nothing is stored under it and nothing
+-- can launder.  This is the direction declaration is NOT symmetric in: a
+-- contradicted declaration (see declared_kind_unannotated_row_param.mdk) is
+-- always an error, but declaring `Effect` on an unused slot is accepted.
+data Box (e : Effect) a = Mk a
+
+get : Box e a -> a
+get (Mk a) = a

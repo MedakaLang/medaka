@@ -20,8 +20,8 @@ running doctests in stdlib/json.mdk
   ok   stdlib/json.mdk:498: parse (stringify (JFloat 1000000000000.0)) == Ok (JFloat 1000000000000.0)
   ok   stdlib/json.mdk:500: parse "1e+"
   ok   stdlib/json.mdk:502: parse "1e"
-  ok   stdlib/json.mdk:522: lookup "b" (jObject [("a", JInt 1), ("b", JInt 2)])
-  ok   stdlib/json.mdk:524: lookup "z" (jObject [("a", JInt 1)])
+  ok   stdlib/json.mdk:522: get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
+  ok   stdlib/json.mdk:524: get "z" (jObject [("a", JInt 1)])
   ok   stdlib/json.mdk:540: at 1 (jArray [JInt 10, JInt 20, JInt 30])
   ok   stdlib/json.mdk:542: at 5 (jArray [JInt 10])
   ok   stdlib/json.mdk:551: at 0 (JInt 1)
@@ -55,6 +55,6 @@ Testing "asArray recovers a built JArray" ... OK (100 tests)
 Testing "asObject recovers a built JObject" ... OK (100 tests)
 Testing "asObject rejects every non-object variant" ... OK (100 tests)
 Testing "at k recovers the k-th element of a JArray" ... OK (100 tests)
-Testing "lookup finds an inserted key" ... OK (100 tests)
+Testing "get finds an inserted key" ... OK (100 tests)
 
 14 passed, 0 failed

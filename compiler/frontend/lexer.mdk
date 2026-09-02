@@ -77,6 +77,7 @@ public export data Token =
   | TOf
   | TRequires
   | TDo
+  | TDefer
   | TAs
   | TExtern
   | TDeriving
@@ -177,6 +178,7 @@ tokenToString TWhere = "WHERE"
 tokenToString TOf = "OF"
 tokenToString TRequires = "REQUIRES"
 tokenToString TDo = "DO"
+tokenToString TDefer = "DEFER"
 tokenToString TAs = "AS"
 tokenToString TExtern = "EXTERN"
 tokenToString TDeriving = "DERIVING"
@@ -280,6 +282,7 @@ describeToken TWhere = "`where`"
 describeToken TOf = "`of`"
 describeToken TRequires = "`requires`"
 describeToken TDo = "`do`"
+describeToken TDefer = "`defer`"
 describeToken TAs = "`as`"
 describeToken TExtern = "`extern`"
 describeToken TDeriving = "`deriving`"
@@ -475,6 +478,7 @@ keywordOrIdent "public" = TPublic
 keywordOrIdent "where" = TWhere
 keywordOrIdent "of" = TOf
 keywordOrIdent "do" = TDo
+keywordOrIdent "defer" = TDefer
 keywordOrIdent "as" = TAs
 keywordOrIdent "extern" = TExtern
 keywordOrIdent "requires" = TRequires
@@ -2150,6 +2154,7 @@ prevIsTrailingOp None = False
 -- without regressing free-form).
 armsHerald : Bool -> Option Token -> Bool
 armsHerald opener (Some TDo) = True
+armsHerald opener (Some TDefer) = True
 -- A line-final `=>` (a lambda head, `(x =>⏎  stmts)`) arms the lambda's block
 -- body — the bare-INDENT herald, keyed on the one token that always precedes it.
 armsHerald opener (Some TFatArrow) = True

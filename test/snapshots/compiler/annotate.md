@@ -160,7 +160,7 @@ annotateExpr fr (EIndex e0 i r) =
 annotateExpr fr (EAnnot e0 t) = EAnnot (annotateExpr fr e0) t
 annotateExpr fr (EHeadAnnot e0 t) = EHeadAnnot (annotateExpr fr e0) t
 annotateExpr fr (EBlock stmts) = EBlock (annotateStmts fr stmts)
-annotateExpr fr (EDo stmts) = EDo (annotateStmts fr stmts)
+annotateExpr fr (EDo d stmts) = EDo d (annotateStmts fr stmts)
 annotateExpr fr (EStringInterp parts) =
   EStringInterp (map (annotateInterp fr) parts)
 annotateExpr fr (EGuards arms) = EGuards (map (annotateGuardArm fr) arms)
@@ -387,7 +387,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
-(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "annotateInterp") (EVar "fr"))) (EVar "parts"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "annotateGuardArm") (EVar "fr"))) (EVar "arms"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "annotateFieldAssign") (EVar "fr"))) (EVar "fs"))))
@@ -515,7 +515,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
-(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateInterp") (EVar "fr"))) (EVar "parts"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateGuardArm") (EVar "fr"))) (EVar "arms"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateFieldAssign") (EVar "fr"))) (EVar "fs"))))

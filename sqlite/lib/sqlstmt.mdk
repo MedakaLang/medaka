@@ -102,6 +102,7 @@ import parsec.lib.parser.{
   attempt,
   label,
   digit,
+  orElse,
 }
 import lib.sqlparse.{
   sqlExpr,
@@ -269,13 +270,13 @@ parseSelect s = runParser statement s
 -- compound-query parser into lib.sqlparse's forward-reference hole so that a
 -- `WHERE col IN (SELECT …)` in the expression grammar can parse a subquery.
 statement : Parser Select
-statement = do
+statement = defer
   _ <- spaces
   _ <- setSubqueryParser compoundP
   sel <- selectStmt
   _ <- optional (symbol ";")
   _ <- endOfStatement
-  pure sel
+  deferPure sel
 
 -- Demand end of input; if something is left, name it.  `orElse` keeps the
 -- FARTHER failure, and `unsupportedTail` fails AFTER consuming the offending
@@ -287,7 +288,7 @@ endOfStatement : Parser Unit
 endOfStatement = orElse eof unsupportedTail
 
 unsupportedTail : Parser Unit
-unsupportedTail = do
+unsupportedTail = defer
   w <- lexeme word
   failWith "unsupported SQL: '\{w}'"
 
@@ -302,17 +303,17 @@ unsupportedTail = do
 -- is NOT consumed here, so `parseSelect "… UNION …"` still stops and
 -- `endOfStatement` reports the unsupported tail, exactly as before.
 selectStmt : Parser Select
-selectStmt = do
+selectStmt = defer
   core <- selectCore
   (ob, lm, off) <- orderLimitOffset
-  pure (applyTail core ob lm off)
+  deferPure (applyTail core ob lm off)
 
 -- `SELECT [DISTINCT] selList FROM tableRef join* [WHERE] [GROUP BY] [HAVING]` —
 -- one arm of a compound.  Deliberately EXCLUDES ORDER BY / LIMIT / OFFSET: in a
 -- compound those bind to the whole query and appear only after the last arm
 -- (SQLite's rule).
 selectCore : Parser Select
-selectCore = do
+selectCore = defer
   _ <- keyword "SELECT"
   dist <- optional (keyword "DISTINCT")
   cols <- selectList
@@ -322,16 +323,16 @@ selectCore = do
   w <- afterKeyword "WHERE" (predicate "WHERE")
   gb <- groupByClause
   h <- afterKeyword "HAVING" sqlExpr
-  pure (assemble tbl tblAlias js (isSome dist) cols w gb h)
+  deferPure (assemble tbl tblAlias js (isSome dist) cols w gb h)
 
 -- The compound-level trailing clauses (also a single SELECT's own tail):
 -- `[ORDER BY …] [LIMIT n] [OFFSET n]`, each optional, in this order.
 orderLimitOffset : Parser (List (SqlExpr, Bool), Option Int, Option Int)
-orderLimitOffset = do
+orderLimitOffset = defer
   ob <- orderByClause
   lm <- afterKeyword "LIMIT" intLit
   off <- afterKeyword "OFFSET" intLit
-  pure (ob, lm, off)
+  deferPure (ob, lm, off)
 
 -- Attach ORDER BY keys, LIMIT, and OFFSET to a `selectCore` — used both for a
 -- plain single SELECT and to fold a single-arm compound's trailing clauses back
@@ -388,36 +389,36 @@ parseQuery : String -> Result String Compound
 parseQuery s = runParser queryStatement s
 
 queryStatement : Parser Compound
-queryStatement = do
+queryStatement = defer
   _ <- spaces
   _ <- setSubqueryParser compoundP
   q <- compoundP
   _ <- optional (symbol ";")
   _ <- endOfStatement
-  pure q
+  deferPure q
 
 compoundP : Parser Compound
-compoundP = do
+compoundP = defer
   first <- selectCore
   arms <- setOpArms
   (ob, lm, off) <- orderLimitOffset
-  pure (Compound first arms ob lm off)
+  deferPure (Compound first arms ob lm off)
 
 -- A committed loop of `setOp selectCore` arms — "speculative HEAD, then
 -- MANDATORY tail", like every other clause loop in this module: once a set
 -- operator matched, the `selectCore` under it is non-optional, so a broken arm
 -- is a real error rather than a silent backtrack.
 setOpArms : Parser (List (SetOp, Select))
-setOpArms = do
+setOpArms = defer
   m <- optional setOpHead
   setOpArmsStep m
 
 setOpArmsStep : Option SetOp -> Parser (List (SetOp, Select))
-setOpArmsStep None = pure []
-setOpArmsStep (Some op) = do
+setOpArmsStep None = deferPure []
+setOpArmsStep (Some op) = defer
   sel <- selectCore
   rest <- setOpArms
-  pure ((op, sel) :: rest)
+  deferPure ((op, sel) :: rest)
 
 -- `UNION [ALL] | INTERSECT | EXCEPT`.  `keyword` is `attempt`-wrapped (fails
 -- without consuming), so `choice` and the enclosing `optional` decline cleanly
@@ -426,24 +427,24 @@ setOpHead : Parser SetOp
 setOpHead = choice [unionHead, intersectHead, exceptHead]
 
 unionHead : Parser SetOp
-unionHead = do
+unionHead = defer
   _ <- keyword "UNION"
   allKw <- optional (keyword "ALL")
-  pure (unionOp allKw)
+  deferPure (unionOp allKw)
 
 unionOp : Option Unit -> SetOp
 unionOp (Some _) = OpUnionAll
 unionOp None = OpUnion
 
 intersectHead : Parser SetOp
-intersectHead = do
+intersectHead = defer
   _ <- keyword "INTERSECT"
-  pure OpIntersect
+  deferPure OpIntersect
 
 exceptHead : Parser SetOp
-exceptHead = do
+exceptHead = defer
   _ <- keyword "EXCEPT"
-  pure OpExcept
+  deferPure OpExcept
 
 -- `SELECT *` (⇒ the empty projection list) or a comma-separated list of projection
 -- items, each an expression with an OPTIONAL output alias (`expr [AS] name`).
@@ -454,18 +455,18 @@ selectList : Parser (List (SqlExpr, Option String))
 selectList = orElse starList (commaSep1 selItem)
 
 starList : Parser (List (SqlExpr, Option String))
-starList = do
+starList = defer
   _ <- symbol "*"
-  pure []
+  deferPure []
 
 -- One projection item: an expression, then an optional output alias.  `AS` is
 -- optional — a bare identifier after the expression is the alias (`count(*) n`),
 -- exactly as in SQLite.
 selItem : Parser (SqlExpr, Option String)
-selItem = do
+selItem = defer
   e <- sqlExpr
   a <- aliasOpt
-  pure (e, a)
+  deferPure (e, a)
 
 -- ---------------------------------------------------------------------------
 -- Aliases (shared by projection items, the FROM table, and each JOIN table)
@@ -482,12 +483,12 @@ selItem = do
 -- ---------------------------------------------------------------------------
 
 aliasOpt : Parser (Option String)
-aliasOpt = do
+aliasOpt = defer
   hasAs <- optional (keyword "AS")
   aliasAfterAs hasAs
 
 aliasAfterAs : Option Unit -> Parser (Option String)
-aliasAfterAs (Some _) = map Some aliasWord
+aliasAfterAs (Some _) = deferMap Some aliasWord
 aliasAfterAs None = optional aliasWord
 
 -- A bare, unqualified, non-reserved identifier used as an alias.  `attempt` keeps
@@ -497,7 +498,7 @@ aliasWord =
   label
     "expected an alias name"
     (attempt
-      (lexeme (do
+      (lexeme (defer
         w <- word
         aliasCheck w)))
 
@@ -508,7 +509,7 @@ aliasCheck w =
   else if isNonAliasKeyword w then
     failWith "'\{w}' introduces an unsupported clause and cannot be an alias"
   else
-    pure w
+    deferPure w
 
 -- SQL keywords that `lib.sqlparse.isReserved` does NOT cover (they belong to
 -- constructs this engine rejects — set operators, unsupported join modifiers,
@@ -534,16 +535,16 @@ isNonAliasKeyword w = elem (toUpper w) [
 -- A table reference: a table name with an optional alias (`users`, `users u`,
 -- `users AS u`).
 tableRef : Parser (String, Option String)
-tableRef = do
+tableRef = defer
   tbl <- tableName
   a <- aliasOpt
-  pure (tbl, a)
+  deferPure (tbl, a)
 
 -- A table name: a bare, unqualified, non-reserved identifier.  A schema-qualified
 -- `main.users` is rejected — `Select.from` is a single table name and the engine
 -- has no schema concept, so accepting it would silently ignore the schema.
 tableName : Parser String
-tableName = do
+tableName = defer
   n <- sqlIdent
   tableNameCheck n
 
@@ -552,13 +553,13 @@ tableNameCheck n =
   if contains "." n then
     failWith "schema-qualified table name '\{n}' is not supported"
   else
-    pure n
+    deferPure n
 
 -- A predicate slot (WHERE / ON) — an expression that may NOT contain an
 -- aggregate.  SQL forbids it (an aggregate is not a per-row value), and catching
 -- it here beats letting the executor discover it three phases later.
 predicate : String -> Parser SqlExpr
-predicate slot = do
+predicate slot = defer
   e <- sqlExpr
   predicateCheck slot e
 
@@ -567,25 +568,25 @@ predicateCheck slot e =
   if hasAgg e then
     failWith "aggregate functions are not allowed in \{slot} — use HAVING"
   else
-    pure e
+    deferPure e
 
 -- ---------------------------------------------------------------------------
 -- JOIN clauses (a committed loop)
 -- ---------------------------------------------------------------------------
 
 joinClauses : Parser (List (JoinKind, String, Option String, SqlExpr))
-joinClauses = do
+joinClauses = defer
   k <- optional joinHead
   joinClausesStep k
 
 joinClausesStep : Option JoinKind ->
   Parser (List (JoinKind, String, Option String, SqlExpr))
-joinClausesStep None = pure []
-joinClausesStep (Some k) = do
+joinClausesStep None = deferPure []
+joinClausesStep (Some k) = defer
   (tbl, alias) <- tableRef
   e <- joinCondition k
   rest <- joinClauses
-  pure ((k, tbl, alias, e) :: rest)
+  deferPure ((k, tbl, alias, e) :: rest)
 
 -- A join's condition.  Every kind but CROSS requires an `ON` predicate; a CROSS
 -- join takes NONE (SQL's unconditional cartesian product), so it parses no `ON`
@@ -593,8 +594,8 @@ joinClausesStep (Some k) = do
 -- stray `ON` after `CROSS JOIN tbl` is then left unconsumed and surfaces as a
 -- loud parse error downstream, rather than being silently accepted.
 joinCondition : JoinKind -> Parser SqlExpr
-joinCondition JCross = pure (ELit (LInt 1))
-joinCondition _ = do
+joinCondition JCross = deferPure (ELit (LInt 1))
+joinCondition _ = defer
   _ <- joinOnKeyword
   predicate "a JOIN's ON"
 
@@ -606,7 +607,7 @@ joinOnKeyword : Parser Unit
 joinOnKeyword = orElse usingReject (keyword "ON")
 
 usingReject : Parser Unit
-usingReject = do
+usingReject = defer
   _ <- keyword "USING"
   failWith
     "JOIN ... USING (...) is not supported — use an explicit ON predicate"
@@ -622,94 +623,94 @@ joinHead =
     (choice [innerHead, leftHead, rightHead, fullHead, crossHead, plainHead])
 
 innerHead : Parser JoinKind
-innerHead = do
+innerHead = defer
   _ <- keyword "INNER"
   _ <- keyword "JOIN"
-  pure JInner
+  deferPure JInner
 
 leftHead : Parser JoinKind
-leftHead = do
+leftHead = defer
   _ <- keyword "LEFT"
   _ <- optional (keyword "OUTER")
   _ <- keyword "JOIN"
-  pure JLeft
+  deferPure JLeft
 
 rightHead : Parser JoinKind
-rightHead = do
+rightHead = defer
   _ <- keyword "RIGHT"
   _ <- optional (keyword "OUTER")
   _ <- keyword "JOIN"
-  pure JRight
+  deferPure JRight
 
 fullHead : Parser JoinKind
-fullHead = do
+fullHead = defer
   _ <- keyword "FULL"
   _ <- optional (keyword "OUTER")
   _ <- keyword "JOIN"
-  pure JFull
+  deferPure JFull
 
 crossHead : Parser JoinKind
-crossHead = do
+crossHead = defer
   _ <- keyword "CROSS"
   _ <- keyword "JOIN"
-  pure JCross
+  deferPure JCross
 
 plainHead : Parser JoinKind
-plainHead = do
+plainHead = defer
   _ <- keyword "JOIN"
-  pure JInner
+  deferPure JInner
 
 -- ---------------------------------------------------------------------------
 -- GROUP BY / ORDER BY / LIMIT / OFFSET
 -- ---------------------------------------------------------------------------
 
 groupByClause : Parser (List SqlExpr)
-groupByClause = do
+groupByClause = defer
   k <- optional groupByHead
   groupByStep k
 
 groupByHead : Parser Unit
-groupByHead = attempt (do
+groupByHead = attempt (defer
   _ <- keyword "GROUP"
   keyword "BY")
 
 groupByStep : Option Unit -> Parser (List SqlExpr)
-groupByStep None = pure []
+groupByStep None = deferPure []
 groupByStep (Some _) = commaSep1 sqlExpr
 
 orderByClause : Parser (List (SqlExpr, Bool))
-orderByClause = do
+orderByClause = defer
   k <- optional orderByHead
   orderByStep k
 
 orderByHead : Parser Unit
-orderByHead = attempt (do
+orderByHead = attempt (defer
   _ <- keyword "ORDER"
   keyword "BY")
 
 orderByStep : Option Unit -> Parser (List (SqlExpr, Bool))
-orderByStep None = pure []
+orderByStep None = deferPure []
 orderByStep (Some _) = commaSep1 orderKey
 
 -- `expr [ASC | DESC]`; the direction defaults to ASC, as in SQL.
 orderKey : Parser (SqlExpr, Bool)
-orderKey = do
+orderKey = defer
   e <- sqlExpr
   d <- optional sortDir
-  pure (e, ascOf d)
+  deferPure (e, ascOf d)
 
 sortDir : Parser Bool
 sortDir = orElse ascKw descKw
 
 ascKw : Parser Bool
-ascKw = do
+ascKw = defer
   _ <- keyword "ASC"
-  pure True
+  deferPure True
 
 descKw : Parser Bool
-descKw = do
+descKw = defer
   _ <- keyword "DESC"
-  pure False
+  deferPure False
 
 ascOf : Option Bool -> Bool
 ascOf None = True
@@ -722,13 +723,13 @@ intLit : Parser Int
 intLit = label "expected a non-negative integer" (attempt (lexeme intDigits))
 
 intDigits : Parser Int
-intDigits = do
+intDigits = defer
   ds <- many1 digit
   intOf (fromChars ds)
 
 intOf : String -> Parser Int
 intOf s = match toInt s
-  Some n => pure n
+  Some n => deferPure n
   None => failWith "malformed integer '\{s}'"
 
 -- ---------------------------------------------------------------------------
@@ -1065,13 +1066,13 @@ parseStmt : String -> Result String Stmt
 parseStmt s = runParser statementAny s
 
 statementAny : Parser Stmt
-statementAny = do
+statementAny = defer
   _ <- spaces
   _ <- setSubqueryParser compoundP
   st <- stmtBody
   _ <- optional (symbol ";")
   _ <- endOfStatement
-  pure st
+  deferPure st
 
 -- The dispatcher.  `label` only rewrites a failure that consumed NOTHING, so a
 -- statement that picked its branch and then failed deeper (a broken VALUES list,
@@ -1085,74 +1086,74 @@ stmtBody =
     ])
 
 selectBranch : Parser Stmt
-selectBranch = do
+selectBranch = defer
   sel <- selectStmt
-  pure (SSelect sel)
+  deferPure (SSelect sel)
 
 createBranch : Parser Stmt
-createBranch = do
+createBranch = defer
   ct <- createTableP
-  pure (SCreate ct)
+  deferPure (SCreate ct)
 
 -- ---------------------------------------------------------------------------
 -- INSERT
 -- ---------------------------------------------------------------------------
 
 insertBranch : Parser Stmt
-insertBranch = do
+insertBranch = defer
   _ <- keyword "INSERT"
   _ <- keyword "INTO"
   tbl <- tableName
   cols <- optional insertCols
   _ <- keyword "VALUES"
   rows <- commaSep1 valuesRow
-  pure (SInsert tbl cols rows)
+  deferPure (SInsert tbl cols rows)
 
 insertCols : Parser (List String)
-insertCols = do
+insertCols = defer
   _ <- symbol "("
   ns <- commaSep1 sqlIdent
   _ <- symbol ")"
-  pure ns
+  deferPure ns
 
 valuesRow : Parser (List SqlExpr)
-valuesRow = do
+valuesRow = defer
   _ <- symbol "("
   es <- commaSep1 sqlExpr
   _ <- symbol ")"
-  pure es
+  deferPure es
 
 -- ---------------------------------------------------------------------------
 -- UPDATE
 -- ---------------------------------------------------------------------------
 
 updateBranch : Parser Stmt
-updateBranch = do
+updateBranch = defer
   _ <- keyword "UPDATE"
   tbl <- tableName
   _ <- keyword "SET"
   asgs <- commaSep1 setAssign
   w <- afterKeyword "WHERE" (predicate "WHERE")
-  pure (SUpdate tbl asgs w)
+  deferPure (SUpdate tbl asgs w)
 
 setAssign : Parser (String, SqlExpr)
-setAssign = do
+setAssign = defer
   col <- sqlIdent
   _ <- symbol "="
   e <- sqlExpr
-  pure (col, e)
+  deferPure (col, e)
 
 -- ---------------------------------------------------------------------------
 -- DELETE
 -- ---------------------------------------------------------------------------
 
 deleteBranch : Parser Stmt
-deleteBranch = do
+deleteBranch = defer
   _ <- keyword "DELETE"
   _ <- keyword "FROM"
   tbl <- tableName
   w <- afterKeyword "WHERE" (predicate "WHERE")
-  pure (SDelete tbl w)
+  deferPure (SDelete tbl w)
 
 -- ---------------------------------------------------------------------------
 -- renderStmt — the inverse projection (literals INLINED), as `renderSelect` is

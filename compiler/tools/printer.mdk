@@ -38,6 +38,8 @@ import frontend.ast.{
   DeriveRef(..),
   deriveRefName,
   dDataUnresolved,
+  KindAnn(..),
+  tyParamSources,
   Loc(..),
   Lit(..),
   Ty(..),
@@ -501,6 +503,19 @@ anyWithin _ _ [] = False
 anyWithin lo hi (c :: rest) =
   pcLine c >= lo && pcLine c <= hi || anyWithin lo hi rest
 
+-- Any pending comment strictly inside the span (startLine, startCol) ..
+-- (endLine, endCol)?  A comment trailing the span on its last line is not
+-- inside it.
+pendingInside : Int -> Int -> Int -> Int -> Bool
+pendingInside sl sc el ec = anyInside sl sc el ec !commentsRef
+
+anyInside : Int -> Int -> Int -> Int -> List PComment -> Bool
+anyInside _ _ _ _ [] = False
+anyInside sl sc el ec ((PComment cl cc _ _) :: rest) =
+  let afterStart = cl > sl || cl == sl && cc >= sc
+  let beforeEnd = cl < el || cl == el && cc < ec
+  afterStart && beforeEnd || anyInside sl sc el ec rest
+
 -- ── Source spans ──────────────────────────────────
 -- (firstLine, firstCol, lastLine, lastCol) of a node, from the `ELoc`/pattern
 -- locations inside it; all zero when it carries none.
@@ -563,7 +578,7 @@ exprSpan (EIndex e i _) = mergeSpan (exprSpan e) (exprSpan i)
 exprSpan (EAnnot e _) = exprSpan e
 exprSpan (EHeadAnnot e _) = exprSpan e
 exprSpan (EBlock stmts) = spansOf stmtSpan stmts
-exprSpan (EDo stmts) = spansOf stmtSpan stmts
+exprSpan (EDo _ stmts) = spansOf stmtSpan stmts
 exprSpan (EStringInterp parts) = spansOf interpSpan parts
 exprSpan (EGuards arms) = spansOf guardArmSpan arms
 exprSpan (ERecordCreate _ fs) = spansOf fieldAssignSpan fs
@@ -941,6 +956,8 @@ printType (TyTuple ts) =
 printType (TyEffect es tail t) =
   let inside = effectInside es tail
   Cat (text "<") (Cat inside (Cat (text "> ") (printTypeAppLhs t)))
+printType (TyRow [] (a :: b :: rest) _) =
+  Cat (text "(") (Cat (text (joinWith " | " (a :: b :: rest))) (text ")"))
 printType (TyRow es tail _) =
   Cat (text "<") (Cat (effectInside es tail) (text ">"))
 printType (TyConstrained cs t) =
@@ -968,11 +985,13 @@ arrowChain (TyFun a b) =
   Cat (printTypeFunLhs a) (Cat (text " ->") (Cat Line (arrowChain b)))
 arrowChain t = printType t
 
-effectInside : List (String, Option String) -> Option String -> Doc
-effectInside es None = sepBy (text ", ") (map effAtomDoc es)
-effectInside [] (Some v) = text v
-effectInside es (Some v) =
-  Cat (sepBy (text ", ") (map effAtomDoc es)) (Cat (text " | ") (text v))
+effectInside : List (String, Option String) -> List String -> Doc
+effectInside es [] = sepBy (text ", ") (map effAtomDoc es)
+effectInside [] tails = text (joinWith " | " tails)
+effectInside es tails =
+  Cat
+    (sepBy (text ", ") (map effAtomDoc es))
+    (Cat (text " | ") (text (joinWith " | " tails)))
 
 -- one row atom as a Doc: the label, or label + space + quoted param.
 effAtomDoc : (String, Option String) -> Doc
@@ -1157,7 +1176,7 @@ exprPrec (ELetGroup _ _) = precTop
 exprPrec (EIf _ _ _) = precTop
 exprPrec (EMatch _ _) = precTop
 exprPrec (EBlock _) = precTop
-exprPrec (EDo _) = precTop
+exprPrec (EDo _ _) = precTop
 exprPrec (EAnnot _ _) = precTop
 exprPrec (EHeadAnnot _ _) = precTop
 exprPrec (EGuards _) = precTop
@@ -1179,7 +1198,7 @@ stripLocE e = e
 isKeywordBlock : Expr -> Bool
 isKeywordBlock e = match stripLocE e
   EMatch _ _ => True
-  EDo _ => True
+  EDo _ _ => True
   _ => False
 
 isBareBlock : Expr -> Bool
@@ -1218,7 +1237,7 @@ isHuggableArg : Expr -> Bool
 isHuggableArg e = match stripLocE e
   ELam _ _ => True
   EBlock _ => True
-  EDo _ => True
+  EDo _ _ => True
   EMatch _ _ => True
   EIf _ _ _ => True
   EListLit (_ :: _) => True
@@ -1285,6 +1304,10 @@ printExpr minPrec e =
 
 -- The raw form; `loc` is the outermost ELoc seen on the way down (a literal's
 -- own span, for the magic trailing comma).
+doKeyword : Bool -> String
+doKeyword True = "defer"
+doKeyword False = "do"
+
 printExprRaw : Option Loc -> Expr -> Doc
 printExprRaw _ (ELit l) = printLit l
 -- ENumLit renders the ORIGINAL SOURCE LEXEME so the author's radix and
@@ -1352,7 +1375,7 @@ printExprRaw _ (ESection (SecLeft e op)) =
 printExprRaw _ (EAsPat x e) =
   Cat (text x) (Cat (text "@") (printExpr precAtom e))
 printExprRaw _ (EBlock stmts) = printBlock stmts
-printExprRaw _ (EDo stmts) = Cat (text "do") (printBlock stmts)
+printExprRaw _ (EDo d stmts) = Cat (text (doKeyword d)) (printBlock stmts)
 printExprRaw _ (EAnnot e t) =
   Cat (printExpr precTop e) (Cat (text " : ") (printType t))
 printExprRaw _ (EHeadAnnot e _) = printExpr precTop e
@@ -1404,9 +1427,12 @@ fieldAssignPiece (FieldAssign k v) = match exprSpan v
 
 mapKvPiece : (Expr, Expr) -> Piece
 mapKvPiece (k, v) = match kvSpan (k, v)
-  (s, sc, en, ec) => Piece s sc en ec (_ =>
-    let kD = noClaimDoc (_ => printExpr precTop k)
-    Cat kD (Cat (text " => ") (printExpr precTop v)))
+  (s, sc, en, ec) => Piece s sc en ec (_ => mapKvDoc k v)
+
+mapKvDoc : Expr -> Expr -> Doc
+mapKvDoc k v =
+  let kD = noClaimDoc (_ => printExpr precTop k)
+  Cat kD (Cat (text " => ") (printExpr precTop v))
 
 -- An interpolated expression never breaks: a string literal is one line.
 interpPartDoc : InterpPart -> Doc
@@ -1585,8 +1611,8 @@ matchScrutineeDoc sc =
   if exprPrec sc >= precAtom then
     d
   else match exprSpan sc
-    (s, _, en, _) =>
-      if s > 0 && pendingWithin s en then
+    (s, sc, en, ec) =>
+      if s > 0 && pendingInside s sc en ec then
         Cat (text "(") (Cat d (text ")"))
       else
         Alt (text (renderFlat d)) (Cat (text "(") (Cat d (text ")")))
@@ -1962,21 +1988,18 @@ export
 printNamedFieldData : DataVis ->
   String ->
   List String ->
+  List (Option KindAnn) ->
   List Variant ->
   List DeriveRef ->
   Doc
-printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] derives =
+printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] derives =
   let eqPart =
     if nameOmitted then
       text " = {"
     else
       Cat (text " = ") (Cat (text cname) (text " {"))
   let head =
-    Cat
-      (text "data ")
-      (Cat
-        (text n)
-        (Cat (concatD (map (p => Cat (text " ") (text p)) params)) eqPart))
+    Cat (text "data ") (Cat (text n) (Cat (tyParamsDoc params kinds) eqPart))
   let body =
     Cat
       (Nest
@@ -1987,8 +2010,12 @@ printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] d
   let deriveDoc =
     if isEmptyL derives then Nil else indentBlock (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
-printNamedFieldData vis n params variants derives =
-  printDecl (dDataUnresolved vis n params variants derives)
+printNamedFieldData vis n params kinds variants derives =
+  printDecl (dDataUnresolved vis n params kinds variants derives)
+
+tyParamsDoc : List String -> List (Option KindAnn) -> Doc
+tyParamsDoc params kinds =
+  concatD (map (w => Cat (text " ") (text w)) (tyParamSources params kinds))
 
 printDerives : List DeriveRef -> Doc
 printDerives [] = Nil
@@ -2050,15 +2077,13 @@ export
 printDataDeclCommented : DataVis ->
   String ->
   List String ->
+  List (Option KindAnn) ->
   List Variant ->
   List DeriveRef ->
   List (List String, List String) ->
   Doc
-printDataDeclCommented vis n params variants derives vcomments =
-  let head =
-    Cat
-      (text "data ")
-      (Cat (text n) (concatD (map (p => Cat (text " ") (text p)) params)))
+printDataDeclCommented vis n params kinds variants derives vcomments =
+  let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   let variantDocs = dataVariantDocsCommented variants vcomments
   let deriveDoc =
     if isEmptyL derives then Nil else indentBlock (printDerives derives)
@@ -2129,33 +2154,25 @@ printDecl (DFunDef pub n pats body) =
     (Cat (defHeader n pats) (printDefRhs body))
 printDecl (DLetGroup pub bindings) =
   Cat (if pub then text "export " else Nil) (letGroupDecl bindings)
-printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives }) =
-  let head =
-    Cat
-      (text "data ")
-      (Cat (text n) (concatD (map (p => Cat (text " ") (text p)) params)))
+printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) =
+  let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   Cat (visPrefix vis) (Cat head (dataBodyDoc variants derives))
-printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = params, tyAliasRhs = rhs }) =
+printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = params, tyAliasParamKinds = kinds, tyAliasRhs = rhs }) =
   Cat
     (if pub then text "export " else Nil)
     (Cat
       (text "type ")
       (Cat
         (text n)
-        (Cat
-          (concatD (map (p => Cat (text " ") (text p)) params))
-          (Cat (text " = ") (printType rhs)))))
-printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) =
-  let head =
-    Cat
-      (text "newtype ")
-      (Cat (text n) (concatD (map (p => Cat (text " ") (text p)) params)))
+        (Cat (tyParamsDoc params kinds) (Cat (text " = ") (printType rhs)))))
+printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) =
+  let head = Cat (text "newtype ") (Cat (text n) (tyParamsDoc params kinds))
   let body =
     Cat (text " = ") (Cat (text con) (Cat (text " ") (printTypeAtom fty)))
   Cat
     (if pub then text "export " else Nil)
     (Cat head (Cat body (group (nest (derivesLineOrInline derives)))))
-printDecl (DInterface { pub, def, name, typarams, supers, methods }) =
+printDecl (DInterface { pub, def, name, typarams, typaramKinds, supers, methods }) =
   Cat
     (if pub then text "export " else Nil)
     (Cat
@@ -2165,7 +2182,7 @@ printDecl (DInterface { pub, def, name, typarams, supers, methods }) =
         (Cat
           (text name)
           (Cat
-            (concatD (map (p => Cat (text " ") (text p)) typarams))
+            (tyParamsDoc typarams typaramKinds)
             (Cat (superDoc supers) (if isEmptyL methods then
               Nil
             else
@@ -2325,6 +2342,8 @@ ppTyPrec p (TyEffect effs tail t) =
   let inside = ppEffInside effs tail
   let s = "<\{inside}> \{ppTyPrec 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
+  "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
@@ -2332,10 +2351,11 @@ ppTyPrec _ (TyConstrained cs t) =
     _ => "(" ++ joinWith ", " (map ppConstr cs) ++ ")"
   "\{csStr} => \{ppTyPrec 0 t}"
 
-ppEffInside : List (String, Option String) -> Option String -> String
-ppEffInside effs None = joinWith ", " (map ppEffAtom effs)
-ppEffInside [] (Some v) = v
-ppEffInside effs (Some v) = "\{joinWith ", " (map ppEffAtom effs)} | \{v}"
+ppEffInside : List (String, Option String) -> List String -> String
+ppEffInside effs [] = joinWith ", " (map ppEffAtom effs)
+ppEffInside [] tails = joinWith " | " tails
+ppEffInside effs tails =
+  "\{joinWith ", " (map ppEffAtom effs)} | \{joinWith " | " tails}"
 
 ppEffAtom : (String, Option String) -> String
 ppEffAtom (l, None) = l

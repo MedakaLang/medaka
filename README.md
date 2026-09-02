@@ -1,30 +1,52 @@
-# Medaka
+<p align="center">
+  <img src="playground/brand/logo.svg" width="96" alt="">
+</p>
 
-A pragmatic, modern functional programming language. Sits at the intersection of
-a cleaned-up OCaml, a practical Haskell, and a more functional, garbage-collected
-Rust. See [language-design.md](docs/spec/language-design.md) for the full design.
+<h1 align="center">Medaka</h1>
 
-The compiler is written in Medaka (`compiler/`) and a
-native **LLVM backend** compiles it — all seven pipeline stages are native-compiled
-and byte-identical to the interpreter, and the compiler reproduces itself
-byte-for-byte (the self-compile fixpoint). See [PLAN.md](./PLAN.md) and
-[compiler/BOOTSTRAP.md](./compiler/BOOTSTRAP.md). **As of 2026-06-26 the OCaml
-reference compiler (`lib/`+`bin/`) is REMOVED** (tag `oracle-frozen` preserves
-the last lib/-present commit); native is the sole compiler. **`make medaka`**
-builds it OCaml-free from a checked-in IR seed.
+<p align="center">A practical functional language with static types, interfaces, and effects.</p>
 
-## Status
+<p align="center">
+  <a href="https://medaka-lang.dev">Playground</a> ·
+  <a href="https://medaka-lang.dev/guide/">Guide</a> ·
+  <a href="https://medaka-lang.dev/stdlib/">Standard library</a> ·
+  <a href="docs/spec/language-design.md">Design</a>
+</p>
 
-Frontend, interpreter, and standard library complete; **self-hosting + native LLVM
-codegen done** (the native compiler self-hosts to a reproducing fixpoint — PLAN.md).
-**Native backend is canonical** (2026-06-12); **OCaml compiler removed** (2026-06-26,
-tag `oracle-frozen`): `make medaka` builds the compiler OCaml-free. Native dispatch
-gaps #55/#21 fixed; constructor-name collision fixed via universal ctor mangling;
-`argStampEnabled` eval-vs-emit dispatch unification complete; `Traversable t` typeclass
-shipped (2026-06-25); `sequence` default method landed (2026-06-26).
+Medaka sits between a cleaned-up OCaml, a practical Haskell, and a
+garbage-collected Rust: Hindley-Milner inference, interfaces for ad-hoc
+polymorphism, tracked effects, exhaustive pattern matching, and a small
+standard library written in the language itself.
 
-The compiler lives in `compiler/` (subfolders: `frontend/ types/ ir/ backend/ eval/
-driver/ tools/ support/ entries/ seed/`):
+```
+data Shape
+  = Circle Float
+  | Rect Float Float
+
+area : Shape -> Float
+area (Circle r) = 3.14159 * r * r
+area (Rect w h) = w * h
+
+main =
+  let shapes = [Circle 1.0, Rect 3.0 4.0]
+  println "areas: \{map area shapes}"
+```
+
+The quickest way to try it is the [playground](https://medaka-lang.dev), which
+runs the full compiler in your browser. The [guide](https://medaka-lang.dev/guide/)
+walks through the language from a first program to modules and tooling.
+
+## The compiler
+
+The compiler is written in Medaka (`compiler/`) and compiles itself through a
+native LLVM backend to a self-contained binary, reproducing its own output
+byte for byte. A second backend targets WasmGC and is what the playground
+runs. `make medaka` builds the compiler from a checked-in IR seed, so the only
+toolchain it needs is clang and the Boehm GC. See
+[compiler/BOOTSTRAP.md](compiler/BOOTSTRAP.md) for how the self-hosting works
+and [PLAN.md](PLAN.md) for the roadmap.
+
+Pipeline stages, in order:
 
 - **Lexer** — `compiler/frontend/lexer.mdk` (indentation-sensitive)
 - **Parser** — `compiler/frontend/parser.mdk` (recursive-descent)
@@ -39,14 +61,13 @@ driver/ tools/ support/ entries/ seed/`):
 - **WasmGC backend** — `compiler/backend/wasm_emit.mdk` (2nd backend, browser playground)
 - **Loader / CLI** — `compiler/driver/loader.mdk` + `compiler/driver/medaka_cli.mdk`
 - **Tools** — `compiler/tools/` (fmt, printer, LSP, doctest, doc, repl, new_cmd, test_cmd, check)
-- **Self-hosted compiler** — `compiler/*.mdk` (the whole pipeline), validated at a
-  byte-for-byte self-compile fixpoint (`test/selfcompile_fixpoint.sh`)
 
-The standard library is developed in Medaka itself on top of the `extern`
-primitives — see [STDLIB.md](docs/stdlib/STDLIB.md). Self-hosting + native LLVM codegen are
-done (the native compiler self-hosts to a reproducing fixpoint). See
-[PLAN.md](./PLAN.md) for the roadmap (and
-[PLAN-ARCHIVE.md](archive/PLAN-ARCHIVE.md) for the completed-phase history).
+## Status
+
+Pre-release. The language, compiler, standard library, formatter, linter,
+language server, and browser playground are all working; the surface syntax
+and library are still settling ahead of a first tagged release. Open work is
+tracked in [GitHub issues](https://github.com/MedakaLang/medaka/issues).
 
 ## Building
 
@@ -77,17 +98,14 @@ native emitter. (`make help` lists all targets.)
 ## Running tests
 
 ```sh
-sh test/run_gates.sh                # run the WHOLE diff_compiler_* suite in PARALLEL (~32s)
-bash test/diff_compiler_*.sh        # differential gates: native output vs goldens (~67 suites)
-bash test/selfcompile_fixpoint.sh   # emitter self-compile fixpoint
-bash test/bootstrap_*.sh            # each pipeline stage == interpreter
-FORCE=1 bash test/build_oracles.sh  # force-rebuild oracle goldens (parallel; always use FORCE=1)
+make preflight       # the gates relevant to your diff, derived from it
+make test            # the in-language suite: doctests, property tests, `test` blocks
+make gates           # the full differential suite (CI runs this; it is slow locally)
 ```
 
-The oracle build and gate suites parallelize across CPUs (cap with `JOBS=n`).
-Perf-tuning env knobs (`EMITTER_OPT` / `ORACLE_OPT` / `CLI_OPT` /
-`GC_INITIAL_HEAP_SIZE`) and the numbers are documented in `compiler/PERF-RESULTS.md`
-and `AGENTS.md` (Build & test).
+The gates compare the native compiler against captured goldens and against
+the interpreter, stage by stage, and check that the emitter reproduces
+itself. `AGENTS.md` describes the suite and its knobs.
 
 ## Using the compiler
 
@@ -256,19 +274,18 @@ val insert : a -> BTree a -> BTree a
 
 ## Standard library
 
-The stdlib lives in `stdlib/`. `stdlib/runtime.mdk` is the authoritative catalog
-of extern primitives — their type signatures are loaded at startup and available
-in all programs without an explicit import. See
-[stdlib/README.md](stdlib/README.md) for conventions on adding new primitives.
+The stdlib lives in `stdlib/` and is written in Medaka on top of the `extern`
+primitives cataloged in `stdlib/runtime.mdk`. `stdlib/core.mdk` is the prelude:
+its types (`Option`, `Result`, `Ordering`), interfaces (`Eq`, `Ord`, `Debug`,
+`Num`, `Mappable`, `Foldable`, `Applicative`, `Thenable`, `Semigroup`,
+`Monoid`, …), and helpers are available in every program without an import.
+The other modules (`list`, `string`, `array`, `map`, `set`, `json`, …) are
+imported by name.
 
-`stdlib/core.mdk` is automatically prepended (as a "prelude") to every user
-program at type-check and eval time, so its data types (`Option`, `Result`,
-`Ordering`), interfaces (`Eq`, `Ord`, `Debug`, `Num`, `Mappable`, `Foldable`,
-`Applicative`, `Thenable`, `Semigroup`, `Monoid`, …) and helpers (`identity`,
-`flip`, `compose`, `filter`, …) are available without an explicit import.
-The remaining stdlib modules (`list`, `string`, `array`, …) are written in
-Medaka itself and developed interactively via the REPL. See
-[STDLIB.md](docs/stdlib/STDLIB.md) for the module plan.
+The reference is generated from the source: browse it at
+[medaka-lang.dev/stdlib](https://medaka-lang.dev/stdlib/) or in
+[docs/stdlib/index.md](docs/stdlib/index.md). Conventions for adding
+primitives are in [stdlib/README.md](stdlib/README.md).
 
 ## Editor setup
 

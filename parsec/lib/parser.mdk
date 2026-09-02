@@ -5,9 +5,11 @@
 -- (message + position).  Position threading is EXPLICIT — there is no hidden
 -- state monad; every primitive returns the position it consumed up to.
 --
--- The type is given `Mappable` / `Applicative` / `Thenable` instances so that
--- `do`-notation sequences parsers, and an `Alternative` instance whose
--- `orElse` is LEFT-BIASED with FULL BACKTRACKING: `orElse p q` runs `p` at the
+-- The type is given `DeferredMappable` / `DeferredApplicative` /
+-- `DeferredThenable` instances so that
+-- `defer`-notation sequences parsers, and a plain `orElse`/`noMatch` pair
+-- (`Alternative` requires `Applicative`, which an `Effect`-indexed container
+-- cannot have) that is LEFT-BIASED with FULL BACKTRACKING: `orElse p q` runs `p` at the
 -- current position; if `p` fails it runs `q` at the SAME position (the input is
 -- immutable and we never mutate the position on failure, so backtracking is
 -- automatic).
@@ -20,44 +22,60 @@ import string.{toChars, isDigit, isAlpha, isSpace}
 --   consumed; failure carries a message and the position at which it occurred.
 export data PResult a = POk a Int | PErr String Int
 
--- | A parser is a function from (input, position) to a result.
-export data Parser a = Parser (Array Char -> Int -> PResult a)
+-- | A parser is a function from (input, position) to a result.  It STORES that
+--   function rather than running it, so the type indexes the container by the
+--   row the stored arrow performs (`Deferred*`, core.mdk / #825) instead of
+--   charging a callback's row on the combinator's own arrow — the latter would
+--   force the stored arrow pure and run an effectful callback inside a value
+--   typed `<>`.  Parsing this library's inputs performs nothing, so the exported
+--   `Parser a` alias pins the index to `<>`.
+export data ParserE (e : Effect) a =
+  | ParserE (Array Char -> Int -> <e> PResult a)
+
+export type Parser a = ParserE <> a
 
 -- Run the wrapped function.
 export
-runP : Parser a -> Array Char -> Int -> PResult a
-runP (Parser f) input pos = f input pos
+runP : ParserE e a -> Array Char -> Int -> <e> PResult a
+runP (ParserE f) input pos = f input pos
 
 -- ---------------------------------------------------------------------------
 -- Typeclass instances
 -- ---------------------------------------------------------------------------
 
--- Higher-kinded impls use the BARE constructor head: `Parser`, not `Parser a`.
+-- Higher-kinded impls use the BARE constructor head: `ParserE`, not
+-- `ParserE e a`.  Every body STORES its callback inside the `ParserE` arrow
+-- rather than applying it, which is what lets the callback's row ride the
+-- index (an eager application would perform `<e>` at construction and is
+-- rejected, `T-EFFECT-INDEX-EAGER`).
 --
 -- The match-over-result bodies sit directly inside `( ... )` using the
 -- bracketed-block-expression feature; the closing `)` lives on the last arm's
 -- line.  Guards-based helpers (`satisfyStep`, `eofStep`) stay as named
 -- top-level functions since multi-clause guard syntax can't be inlined.
 
-export impl Mappable Parser where
-  map g p = Parser (input pos => match runP p input pos
+export impl DeferredMappable ParserE where
+  deferMap g p = ParserE (input pos => match runP p input pos
     POk a pos2 => POk (g a) pos2
     PErr m ep => PErr m ep)
 
-export impl Applicative Parser where
-  pure a = Parser (_ pos => POk a pos)
-  ap pf pa = Parser (input pos => match runP pf input pos
+export impl DeferredApplicative ParserE where
+  deferPure a = ParserE (_ pos => POk a pos)
+  deferAp pf pa = ParserE (input pos => match runP pf input pos
     PErr m ep => PErr m ep
     POk f pos2 => match runP pa input pos2
       POk a pos3 => POk (f a) pos3
       PErr m2 ep2 => PErr m2 ep2)
 
-export impl Thenable Parser where
-  andThen p k = Parser (input pos => match runP p input pos
+export impl DeferredThenable ParserE where
+  deferThen p k = ParserE (input pos => match runP p input pos
     PErr m ep => PErr m ep
     POk a pos2 => runP (k a) input pos2)
 
--- Left-biased, full-backtracking alternative.  `noMatch` always fails;
+-- Left-biased, full-backtracking alternative.  Plain functions rather than an
+-- `Alternative` impl: that interface `requires Applicative f` at kind
+-- `Type -> Type`, which `ParserE : Effect -> Type -> Type` cannot satisfy.
+-- `noMatch` always fails;
 -- `orElse p q` tries `p`, and on failure re-runs `q` from the ORIGINAL pos.
 --
 -- ERROR SELECTION: when BOTH branches fail, we keep the failure that got
@@ -69,15 +87,19 @@ export impl Thenable Parser where
 -- Ties go to the LEFT branch, preserving left-bias.
 --
 -- Note the residual limitation this does NOT fix: an alternative that SUCCEEDS
--- discards any deeper failure explored underneath it (`orElse deepFailingP (pure
+-- discards any deeper failure explored underneath it (`orElse deepFailingP (deferPure
 -- x)` — the shape of `optional`/`many`/`chainl1`'s loop tail).  Fixing that needs
 -- the farthest-failure to be threaded through SUCCESS as well, i.e. carried in
 -- `POk` too.  See `sqlite/findings/sql-parser-expr.md` (F5).
-export impl Alternative Parser where
-  noMatch = Parser (_ pos => PErr "noMatch" pos)
-  orElse p q = Parser (input pos => match runP p input pos
-    POk a pos2 => POk a pos2
-    PErr m1 e1 => keepFarther m1 e1 (runP q input pos))
+export
+noMatch : ParserE e a
+noMatch = ParserE (_ pos => PErr "noMatch" pos)
+
+export
+orElse : ParserE e a -> ParserE e a -> ParserE e a
+orElse p q = ParserE (input pos => match runP p input pos
+  POk a pos2 => POk a pos2
+  PErr m1 e1 => keepFarther m1 e1 (runP q input pos))
 
 -- Keep whichever of the two failures reached farther into the input; a success
 -- from the right branch always wins outright.  Ties favour the LEFT branch.
@@ -92,13 +114,13 @@ keepFarther m1 e1 (PErr m2 e2) = if e1 >= e2 then PErr m1 e1 else PErr m2 e2
 -- | Fail unconditionally with a message.
 export
 failWith : String -> Parser a
-failWith msg = Parser (_ pos => PErr msg pos)
+failWith msg = ParserE (_ pos => PErr msg pos)
 
 -- ---------------------------------------------------------------------------
 -- Error-reporting combinators
 --
--- `orElse` picks the FARTHEST failure when both branches fail (see the
--- `Alternative` impl).  That heuristic is only as good as the positions the
+-- `orElse` picks the FARTHEST failure when both branches fail (see
+-- its definition above).  That heuristic is only as good as the positions the
 -- branches report, so two combinators exist to control them:
 --
 --   * `attempt` — rewind a failure's REPORTED position back to where the parser
@@ -121,7 +143,7 @@ failWith msg = Parser (_ pos => PErr msg pos)
 -- Ok "abd"
 export
 attempt : Parser a -> Parser a
-attempt p = Parser (input pos => rewindErr pos (runP p input pos))
+attempt p = ParserE (input pos => rewindErr pos (runP p input pos))
 
 rewindErr : Int -> PResult a -> PResult a
 rewindErr _ (POk a pos2) = POk a pos2
@@ -135,7 +157,7 @@ rewindErr pos (PErr m _) = PErr m pos
 -- Err "expected a digit at 0"
 export
 label : String -> Parser a -> Parser a
-label msg p = Parser (input pos => relabel msg pos (runP p input pos))
+label msg p = ParserE (input pos => relabel msg pos (runP p input pos))
 
 relabel : String -> Int -> PResult a -> PResult a
 relabel _ _ (POk a pos2) = POk a pos2
@@ -144,7 +166,7 @@ relabel msg pos (PErr m ep) = if ep == pos then PErr msg ep else PErr m ep
 -- | Consume one char if it satisfies the predicate.
 export
 satisfy : (Char -> Bool) -> Parser Char
-satisfy pred = Parser (satisfyStep pred)
+satisfy pred = ParserE (satisfyStep pred)
 
 satisfyStep : (Char -> Bool) -> Array Char -> Int -> PResult Char
 satisfyStep pred input pos
@@ -170,7 +192,7 @@ char c = satisfy (== c)
 -- | Match the empty input (end of input).  Yields Unit; consumes nothing.
 export
 eof : Parser Unit
-eof = Parser eofStep
+eof = ParserE eofStep
 
 eofStep : Array Char -> Int -> PResult Unit
 eofStep input pos
@@ -198,7 +220,7 @@ space = satisfy isSpace
 --   a parser that consumes nothing must terminate.
 export
 many : Parser a -> Parser (List a)
-many p = Parser (input pos => manyGo p input pos [])
+many p = ParserE (input pos => manyGo p input pos [])
 
 manyGo : Parser a -> Array Char -> Int -> List a -> PResult (List a)
 manyGo p input pos acc = match runP p input pos
@@ -212,10 +234,10 @@ manyGo p input pos acc = match runP p input pos
 -- | One-or-more.  Written with `do`-notation to EXERCISE Thenable Parser.
 export
 some : Parser a -> Parser (List a)
-some p = do
+some p = defer
   x <- p
   xs <- many p
-  pure (x :: xs)
+  deferPure (x :: xs)
 
 -- | Alias for `some`.
 export
@@ -225,31 +247,31 @@ many1 p = some p
 -- | One-or-more `p` separated by `sep`.
 export
 sepBy1 : Parser a -> Parser b -> Parser (List a)
-sepBy1 p sep = do
+sepBy1 p sep = defer
   x <- p
-  xs <- many (do
+  xs <- many (defer
     _ <- sep
     p)
-  pure (x :: xs)
+  deferPure (x :: xs)
 
 -- | Zero-or-more `p` separated by `sep`.
 export
 sepBy : Parser a -> Parser b -> Parser (List a)
-sepBy p sep = orElse (sepBy1 p sep) (pure [])
+sepBy p sep = orElse (sepBy1 p sep) (deferPure [])
 
 -- | Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
 export
 optional : Parser a -> Parser (Option a)
-optional p = orElse (map Some p) (pure None)
+optional p = orElse (deferMap Some p) (deferPure None)
 
 -- | `between open close p` parses `open`, then `p`, then `close`, yielding `p`.
 export
 between : Parser open -> Parser close -> Parser a -> Parser a
-between open close p = do
+between open close p = defer
   _ <- open
   x <- p
   _ <- close
-  pure x
+  deferPure x
 
 -- | First successful parser in the list; fails if all fail.
 export
@@ -260,7 +282,7 @@ choice (q :: rest) = orElse q (choice rest)
 -- | Match a literal string, yielding it back.
 export
 string : String -> Parser String
-string s = Parser (input pos => stringGo (toChars s) 0 input pos s)
+string s = ParserE (input pos => stringGo (toChars s) 0 input pos s)
 
 stringGo : Array Char -> Int -> Array Char -> Int -> String -> PResult String
 stringGo want wi input pos original =
@@ -285,18 +307,18 @@ stringGo want wi input pos original =
 --   classic Parsec's `chainl1`: there, `<|>` declines to backtrack once the left
 --   branch has CONSUMED input, so a matched operator already commits the parse.
 --   Our `orElse` backtracks unconditionally, so the naive transcription
---   (`orElse (do f <- op; y <- p; …) (pure acc)`) silently turns `1 +` into a
+--   (`orElse (defer f <- op; y <- p; …) (deferPure acc)`) silently turns `1 +` into a
 --   successful parse of `1` with `+` left over — and then the REAL error surfaces
 --   far away, as a bogus "expected end of input" pointing at the operator rather
 --   than at the missing operand.  Committing restores the intended behaviour.
 export
 chainl1 : Parser a -> Parser (a -> a -> a) -> Parser a
-chainl1 p op = do
+chainl1 p op = defer
   x <- p
   chainl1Rest p op x
 
 chainl1Rest : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1Rest p op acc = do
+chainl1Rest p op acc = defer
   f <- optional op
   chainl1Step p op acc f
 
@@ -305,15 +327,15 @@ chainl1Step : Parser a ->
   a ->
   Option (a -> a -> a) ->
   Parser a
-chainl1Step _ _ acc None = pure acc
-chainl1Step p op acc (Some f) = do
+chainl1Step _ _ acc None = deferPure acc
+chainl1Step p op acc (Some f) = defer
   y <- p
   chainl1Rest p op (f acc y)
 
 -- | Skip zero-or-more whitespace.
 export
 spaces : Parser Unit
-spaces = Parser (input pos => POk () (skipSpaces input pos))
+spaces = ParserE (input pos => POk () (skipSpaces input pos))
 
 skipSpaces : Array Char -> Int -> Int
 skipSpaces input pos =

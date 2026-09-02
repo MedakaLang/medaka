@@ -28,7 +28,7 @@ import json.{
   jArray,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
 }
@@ -269,7 +269,7 @@ export
 responseById : Int -> List Frame -> Option Json
 responseById _ [] = None
 responseById idn ((Frame _ body _) :: rest) = match parse body
-  Ok j => match lookup "id" j
+  Ok j => match get "id" j
     Some v => match asInt v
       Some k => if k == idn then Some j else responseById idn rest
       None => responseById idn rest
@@ -282,9 +282,9 @@ export
 hoverValue : Int -> List Frame -> Option String
 hoverValue idn frames = do
   j <- responseById idn frames
-  res <- lookup "result" j
-  c <- lookup "contents" res
-  v <- lookup "value" c
+  res <- get "result" j
+  c <- get "contents" res
+  v <- get "value" c
   asString v
 
 -- Does completion response `idn` include a CompletionItem whose label == needle?
@@ -292,7 +292,7 @@ export
 completionHasLabel : Int -> List Frame -> String -> Bool
 completionHasLabel idn frames needle = match responseById idn frames
   None => False
-  Some j => match lookup "result" j
+  Some j => match get "result" j
     Some (JArray items) => anyLabelEq items 0 (arrayLength items) needle
     _ => False
 
@@ -303,7 +303,7 @@ anyLabelEq items i n needle
   | otherwise = anyLabelEq items (i + 1) n needle
 
 labelEq : Json -> String -> Bool
-labelEq it needle = match lookup "label" it
+labelEq it needle = match get "label" it
   Some v => match asString v
     Some s => s == needle
     None => False
@@ -334,9 +334,9 @@ export
 semanticData : Int -> List Frame -> Option (List Int)
 semanticData idn frames = match responseById idn frames
   None => None
-  Some j => match lookup "result" j
+  Some j => match get "result" j
     None => None
-    Some res => match lookup "data" res
+    Some res => match get "data" res
       Some (JArray a) => Some (jIntArrayToList a 0 (arrayLength a))
       _ => None
 
@@ -441,15 +441,15 @@ lastDiagGo uri ((Frame _ body _) :: rest) acc = match parse body
   Err _ => lastDiagGo uri rest acc
 
 methodEq : Json -> String -> Bool
-methodEq j m = match lookup "method" j
+methodEq j m = match get "method" j
   Some v => match asString v
     Some s => s == m
     None => False
   None => False
 
 paramUriEq : Json -> String -> Bool
-paramUriEq j uri = match lookup "params" j
-  Some p => match lookup "uri" p
+paramUriEq j uri = match get "params" j
+  Some p => match get "uri" p
     Some v => match asString v
       Some s => s == uri
       None => False
@@ -457,8 +457,8 @@ paramUriEq j uri = match lookup "params" j
   None => False
 
 jDiagLen : Json -> Int
-jDiagLen j = match lookup "params" j
-  Some p => match lookup "diagnostics" p
+jDiagLen j = match get "params" j
+  Some p => match get "diagnostics" p
     Some (JArray a) => arrayLength a
     _ => 0
   None => 0

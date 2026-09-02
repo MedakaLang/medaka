@@ -10,9 +10,9 @@ stages=TOKENS,DESUGAR,MARK
 --   * `effect Net Prefix`     — domain-carrying effect decl (Prefix refinement)
 --   * `effect Stdout`         — plain (domainless) effect decl
 --   * `<Net "a.com/foo">`      — effect-row atom with a Prefix-pattern argument
---   * `data Async e a = … <e> …` — an effect-row PARAMETER on a data decl:
---       `e` is kind-inferred KRow from its use in the Suspend field's effect
---       tail, so `runAsync : Async e a -> <e> a` performs exactly the stored row
+--   * `data Async (e : Effect) a = … <e> …` — a declared-kind effect-row
+--       PARAMETER on a data decl: `e : Effect` is declared on the head, so
+--       `runAsync : Async e a -> <e> a` performs exactly the stored row
 effect Net Prefix
 effect Stdout
 
@@ -21,7 +21,7 @@ extern netGet : String -> <FFI, Net "a.com/foo"> String
 fetch : String -> <Net "a.com/foo", FFI> String
 fetch path = netGet path
 
-data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 
 runAsync : Async e a -> <e> a
 runAsync m = match m
@@ -98,7 +98,11 @@ IDENT "path"
 NEWLINE
 DATA
 UPPER "Async"
+LPAREN
 IDENT "e"
+COLON
+UPPER "Effect"
+RPAREN
 IDENT "a"
 EQUAL
 UPPER "Done"

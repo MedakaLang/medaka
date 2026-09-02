@@ -23,8 +23,8 @@ import core.{Display}
 
 -- | A value: a string, an array of strings, an integer, or a boolean.
 public export data TomlValue =
-  | TStr String
-  | TArr (List String)
+  | TString String
+  | TArray (List String)
   | TInt Int
   | TBool Bool
 
@@ -215,12 +215,12 @@ checkLineConsumed arr j key =
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
 parseKvStr arr i key = match parseQuotedStr arr i
   Err e => Err e
-  Ok (s, j) => map (_ => (key, TStr s)) (checkLineConsumed arr j key)
+  Ok (s, j) => map (_ => (key, TString s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
 parseKvArr arr i key = match parseArrayValue arr i
   Err e => Err e
-  Ok (xs, j) => map (_ => (key, TArr xs)) (checkLineConsumed arr j key)
+  Ok (xs, j) => map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
 
 -- The remaining characters of the line from `i`, trimmed.  Used for the
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
@@ -319,20 +319,20 @@ parseLinesAcc (l :: ls) section counts acc =
    ignored.
 
    > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
-   Ok Toml [("package.name", TStr "hello"), ("package.version", TStr "0.1.0")]
+   Ok Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")]
    > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-   Ok Toml [("gate.0.name", TStr "a"), ("gate.1.name", TStr "b")] -}
+   Ok Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")] -}
 export
 parse : String -> Result String Toml
 parse s = map Toml (parseLinesAcc (lines s) "" [] [])
 
--- > parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArr ["pkg-a", "pkg-b"])])
+-- > parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArray ["pkg-a", "pkg-b"])])
 -- True
 -- > parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
 -- True
--- > parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TStr "x")])
+-- > parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TString "x")])
 -- True
--- > parse "name = \"hello\" # a comment" == Ok (Toml [("name", TStr "hello")])
+-- > parse "name = \"hello\" # a comment" == Ok (Toml [("name", TString "hello")])
 -- True
 
 -- Parse-error cases.  An unmodelled construct is an `Err`, not a silent
@@ -360,7 +360,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "name = \"abc\""
-   Ok Toml [("name", TStr "abc")]
+   Ok Toml [("name", TString "abc")]
 
    Trailing garbage after a closed array value is rejected loudly:
 
@@ -377,7 +377,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "oracles = [\"x\", \"y\"]"
-   Ok Toml [("oracles", TArr ["x", "y"])]
+   Ok Toml [("oracles", TArray ["x", "y"])]
 
    A triple-quoted (multiline) string is rejected loudly rather than
    mis-parsing to a wrong value; this is the same "line fully consumed" check
@@ -395,7 +395,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "[foo]\nbar = \"zzz\""
-   Ok Toml [("foo.bar", TStr "zzz")] -}
+   Ok Toml [("foo.bar", TString "zzz")] -}
 
 -- # Accessors
 
@@ -448,7 +448,7 @@ parseTableEntryStr name i field src = match parse src
 export
 getString : String -> Toml -> Option String
 getString key (Toml kvs) = match lookupKvs key kvs
-  Some (TStr s) => Some s
+  Some (TString s) => Some s
   _ => None
 
 -- > parseGetStr "workspace.members" "[workspace]\nmembers = [\"a\"]"
@@ -466,7 +466,7 @@ getString key (Toml kvs) = match lookupKvs key kvs
 export
 getArray : String -> Toml -> Option (List String)
 getArray key (Toml kvs) = match lookupKvs key kvs
-  Some (TArr xs) => Some xs
+  Some (TArray xs) => Some xs
   _ => None
 
 -- > parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
@@ -568,19 +568,19 @@ tableEntry name i (Toml kvs) =
 
 {- Structural equality on `TomlValue`.
 
-   > eqTomlValue (TStr "a") (TStr "a")
+   > eqTomlValue (TString "a") (TString "a")
    True
 
-   > eqTomlValue (TArr ["a", "b"]) (TArr ["a", "b"])
+   > eqTomlValue (TArray ["a", "b"]) (TArray ["a", "b"])
    True
 
    Different constructors never compare equal:
 
-   > eqTomlValue (TStr "a") (TArr ["a"])
+   > eqTomlValue (TString "a") (TArray ["a"])
    False -}
 eqTomlValue : TomlValue -> TomlValue -> Bool
-eqTomlValue (TStr a) (TStr b) = a == b
-eqTomlValue (TArr a) (TArr b) = eqStrLists a b
+eqTomlValue (TString a) (TString b) = a == b
+eqTomlValue (TArray a) (TArray b) = eqStrLists a b
 eqTomlValue (TInt a) (TInt b) = a == b
 eqTomlValue (TBool a) (TBool b) = a == b
 eqTomlValue _ _ = False
@@ -604,11 +604,11 @@ export impl Eq Toml where
 
 {- Render a `TomlValue` for debugging.
 
-   > debugTomlValue (TStr "hi")
-   "TStr \"hi\""
+   > debugTomlValue (TString "hi")
+   "TString \"hi\""
 
-   > debugTomlValue (TArr ["a", "b"])
-   "TArr [\"a\", \"b\"]"
+   > debugTomlValue (TArray ["a", "b"])
+   "TArray [\"a\", \"b\"]"
 
    > debugTomlValue (TInt 42)
    "TInt 42"
@@ -616,8 +616,8 @@ export impl Eq Toml where
    > debugTomlValue (TBool True)
    "TBool True" -}
 debugTomlValue : TomlValue -> String
-debugTomlValue (TStr s) = stringConcat ["TStr ", debug s]
-debugTomlValue (TArr xs) = stringConcat ["TArr ", debugStrList xs]
+debugTomlValue (TString s) = stringConcat ["TString ", debug s]
+debugTomlValue (TArray xs) = stringConcat ["TArray ", debugStrList xs]
 debugTomlValue (TInt n) = stringConcat ["TInt ", intToString n]
 debugTomlValue (TBool b) =
   stringConcat ["TBool ", if b then "True" else "False"]
@@ -651,12 +651,12 @@ export impl Debug Toml where
 -- the value, in the same `T { … }` shape `Display (Map k v)` and
 -- `Display (Set a)` use.  Values keep TOML's own spelling for their scalars
 -- (a string is quoted, a bool is `true`/`false`) so that the four variants
--- stay distinguishable: an unquoted `TStr "1"` would render exactly like
+-- stay distinguishable: an unquoted `TString "1"` would render exactly like
 -- `TInt 1`.  That injectivity is the law under test.
 
 displayTomlValue : TomlValue -> String
-displayTomlValue (TStr s) = debug s
-displayTomlValue (TArr xs) = debugStrList xs
+displayTomlValue (TString s) = debug s
+displayTomlValue (TArray xs) = debugStrList xs
 displayTomlValue (TInt n) = intToString n
 displayTomlValue (TBool b) = if b then "true" else "false"
 
@@ -671,7 +671,7 @@ displayKvList (p :: ps) = stringConcat [displayKvPair p, ", ", displayKvList ps]
 {- | `display` renders a value in TOML's own spelling: a string quoted, a
    boolean as `true` or `false`.
 
-   > display (TStr "hi")
+   > display (TString "hi")
    "\"hi\""
    > display (TBool True)
    "true" -}
@@ -680,7 +680,7 @@ export impl Display TomlValue where
 
 -- > display (TInt 42)
 -- "42"
--- > display (TArr ["a", "b"])
+-- > display (TArray ["a", "b"])
 -- "[\"a\", \"b\"]"
 
 {- | `display` renders a document as `Toml { key = value, ... }`.
@@ -743,12 +743,12 @@ prop "array-of-tables entries stay separate" (k : Int) =
 -- ── Instance laws ───────────────────────────────────────────────────────
 
 -- LAW: `Display TomlValue` is INJECTIVE across the four variants -- a
--- rendering that cannot tell a quoted `TStr "1"` from an `TInt 1` is not a
+-- rendering that cannot tell a quoted `TString "1"` from an `TInt 1` is not a
 -- rendering of the value.  This is the clause that pins the TOML scalar
 -- spelling (quotes, lowercase bools) rather than the prelude's.
 prop "Display TomlValue separates the four variants" (n : Int) (b : Bool) =
   let s = intToString n
-  let vs = [TStr s, TArr [s], TInt n, TBool b]
+  let vs = [TString s, TArray [s], TInt n, TBool b]
   allDistinct (map display vs)
 
 allDistinct : List String -> Bool

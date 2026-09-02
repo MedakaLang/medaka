@@ -159,7 +159,15 @@ applyTo : (a -> <e> b) -> a -> b  -- effect variable
 applyTo g v = g v
 run : (Unit -> <IO | e> a) -> <IO | e> a  -- open tail row
 run g = g ()
+relay : (Unit -> <IO | e | e2> a) -> <IO | e | e2> a  -- a JOIN of tail vars
+relay g = g ()
 ```
+
+A row may name several tail variables (#821): `<IO | e | e2>` is the row of `IO`
+together with whatever either variable performs.  In an `Effect`-kinded type-
+ARGUMENT slot a label-free join is written with parentheses instead of angle
+brackets — `jmap : (a -> <e2> b) -> f e a -> f (e | e2) b` — and that is the
+spelling the formatter prints back.
 
 Effect-label declarations (Phase 146 gap 2 — builtins are
 `IO, Rand, Stdout, Stderr, Stdin, Clock, Env, Exec, Net,
@@ -454,6 +462,28 @@ result = do
 (lowers to `andThen`/`pure`). For imperative IO sequencing, use a **bare**
 indented block, not `do`.
 
+## defer blocks (`defer` keyword)
+
+```medaka
+import async.{Async, runAsync, liftIO}
+
+prog : Async <Stdout> Int
+prog = defer
+  x <- liftIO (u => 20)
+  y <- deferPure 22
+  deferPure (x + y)
+```
+
+`defer` is a `do` block over the graded `Deferred*` family in the prelude
+(`DeferredMappable.deferMap`, `DeferredApplicative.deferPure`/`deferAp`,
+`DeferredThenable.deferThen`) rather than `Mappable`/`Applicative`/`Thenable`.
+Every statement form (`x <- e`, a bare `e`, `let`), the refutable-pattern
+lowering, and the layout rules are identical to `do`; only the two methods the
+block lowers to differ — `deferThen`/`deferPure` instead of `andThen`/`pure`.
+It exists so an effect-indexed constructor such as `Async (e : Effect) a`, whose
+bind changes the effect index, can still be written in statement form. The
+keyword is unrelated to Go's or Zig's scope-exit `defer`.
+
 ## Data types
 
 ```medaka
@@ -567,6 +597,28 @@ newtype UserId = UserId Int
 newtype Age = Age Int deriving (Eq)
 ```
 
+## Declared parameter kinds (`(p : Kind)` on a head)
+
+A type parameter's kind is written on the declaration head; `Kind ::= Type | Effect
+| Kind -> Kind | ( Kind )`, arrow right-associative. `Type` and `Effect` are ordinary
+identifiers recognised only in kind position (not keywords). Partial annotation is the
+common case. An UNANNOTATED parameter is never `Effect`-kinded — a parameter used as an
+effect row (an arrow's `<e>` tail, or an `Effect` slot of another type) MUST be declared,
+or `T-EFFECT-KIND-MISMATCH` is reported at the field that demands it. `impl` heads take no
+annotation. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §6.1–§6.5.
+
+```medaka
+data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
+newtype Box (e : Effect) = MkBox (Unit -> <e> Unit)
+type LaterInt (e : Effect) = Async e Int
+interface Suspendable (f : Effect -> Type -> Type) where
+  suspendThen : f e a -> (a -> <e> f e b) -> f e b
+-- the prelude's `DeferredThenable` has this head
+
+data Wrap (g : (Type -> Type) -> Type) = W (g Option)  -- Effect-free arrow kinds may also be written
+data Phantom (e : Effect) a = Phantom a  -- legal: declared, never used
+```
+
 ## Interfaces & implementations
 
 ```medaka
@@ -638,35 +690,27 @@ A module lives in its own file; import paths are relative to the project root
 -- file: utils.mdk
 export greet = "hi"
 export helper = "help"
-
 -- file: colors.mdk
 public export data Color = Red | Green | Blue deriving (Debug)
-
 -- file: m.mdk
 export f = 1
 public export data T = TA | TB
 export g = 2
-
 -- file: main_single.mdk
 import utils.greet  -- single name
 main = println greet
-
 -- file: main_group.mdk
 import utils.{greet, helper}  -- group
 main = println (greet ++ helper)
-
 -- file: main_wildcard.mdk
 import utils.*  -- wildcard
 main = println greet
-
 -- file: main_type.mdk
 import colors.{Color(..)}  -- type + all its constructors
 main = println (debug Red)
-
 -- file: main_mixed.mdk
 import m.{f, T(..), g}  -- mixed
 main = println (f + g)
-
 -- file: main_reexport.mdk
 export import list.{reverse, take}  -- re-export
 main = println (reverse (take 2 [1, 2, 3]))
@@ -682,15 +726,14 @@ export foo x = x
 public export data Shade =
   | Light  -- export type + constructors
   | Dark
-export data Hidden =
-  | HiddenCtor  -- abstract export (type only)
-
+export data Hidden = HiddenCtor  -- abstract export (type only)
 -- file: main.mdk
 import exports_demo.{foo, Shade(..), Hidden}
-main = println (foo
-  (match Light
-    Light => "l"
-    Dark => "d"))
+main =
+  println
+    (foo (match Light
+      Light => "l"
+      Dark => "d"))
 ```
 
 **`public` only applies to `data`.** `public export data` (`VisPublic`) exports the type
@@ -726,10 +769,8 @@ Two forms, both of which make a name collision between modules resolvable. Lande
 ```medaka-project
 -- file: emit_a.mdk
 export emit = "A"
-
 -- file: emit_b.mdk
 export emit = "B"
-
 -- file: main.mdk
 import emit_a as EA  -- module alias: refer to EA.emit
 import emit_b.{emit as emitB}  -- member alias: rename one value
@@ -986,14 +1027,14 @@ your identifiers is on this list first** — that is the classic symptom of
 hitting a reserved word where the parser expected a name, and it is a much
 more common cause than an actual parser bug.
 
-As of 2026-08-09 that command yields 30 spellings:
+As of 2026-09-02 that command yields 31 spellings:
 
 ```
-as        bench     data      default   deriving  do        effect
-else      export    extern    function  if        impl      import
-in        interface let       match     mut       newtype   of
-prop      public    rec       requires  test      then      type
-where     with
+as        bench     data      default   defer     deriving  do
+effect    else      export    extern    function  if        impl
+import    in        interface let       match     mut       newtype
+of        prop      public    rec       requires  test      then
+type      where     with
 ```
 
 ⚠️ **`record` is NOT on this list.** It was, until #62; it is now an ordinary

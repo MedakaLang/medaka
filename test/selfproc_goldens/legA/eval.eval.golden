@@ -34,6 +34,10 @@ buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
 bytesBEToU64 : Array Int -> U64
+candIface : Value a -> String
+candIfaceKey : Value a -> (String, String)
+candKey : Value a -> String
+candMatches : String -> Value a -> Bool
 canonHashFloat : Float -> Float
 canonNaN : Float
 cellOf : (String, Value a) -> (String, Ref (Value a))
@@ -42,6 +46,7 @@ charFromCodeUnsafe : Int -> Char
 charPred : (Char -> Bool) -> Value a -> Value a
 charToVChar : Char -> Value a
 charUpper : String -> String -> Bool -> Bool
+checkArgTagDecidable : List (Value a) -> Value a -> Unit
 clauseClosure : EvalEnv (Value a) -> (List Pat, Expr) -> Value a
 clauseDef : String -> FunClause -> (String, (List Pat, Expr))
 clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Expr)
@@ -71,11 +76,13 @@ declImplEntries : EvalEnv (Value a) -> List ((String, String, String), List Int)
 declImplIfaceIdRow : Decl -> List (String, String, String)
 declImplIfaceIdTable : List Decl -> List (String, String, String)
 declImplIfaceIdsRef : Ref (List (String, String, String))
+defaultBodyKeyCell : String
 defaultCellName : String -> String -> String
 defaultCellOf : EvalEnv (Value a) -> String -> String -> List (Value a)
 defaultEntry : EvalEnv (Value a) -> String -> List String -> IfaceMethod -> List (String, (Int, Value a))
 defaultNamesOf : String -> IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> Value a
+dictShadows : EvalEnv (Value a) -> String -> String -> List Route -> List (String, Ref (Value a))
 dispatchPositionsOf : Ty -> List String -> List Int
 displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> Value a
@@ -154,6 +161,7 @@ groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsOf : List Decl -> List (String, List (List Pat, Expr))
+hasLaterSlot : Value a -> Bool
 hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
@@ -166,6 +174,7 @@ ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, S
 ifaceMethodNmE : IfaceMethod -> String
 ifaceOfMethod : String -> String
 ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
+ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 implDeclNames : Decl -> List String
 implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
@@ -241,12 +250,15 @@ moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
 modulePathMap : Ref (List (String, String))
+narrowByDefaultBodyKey : EvalEnv (Value a) -> List (Value a) -> Value a
 narrowMethod : EvalEnv (Value a) -> String -> Value a -> String -> Value a
+narrowUnrouted : EvalEnv (Value a) -> Value a -> Value a
 negFloatIEEE : Float -> Float
 noMainMsg : String
 oneOnly : List a -> Option a
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
+onlyCandFor : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
 ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
@@ -401,6 +413,7 @@ reTag : String -> String -> List Int -> Int -> Value a -> Value a
 receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
+reportIfUndecidable : String -> List (Value a) -> Unit
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 resultToValue : Result String (Value a) -> Value a
 rngDraw : Unit -> U64
@@ -439,6 +452,7 @@ takeN : Int -> List a -> List a
 testCapableExterns : Unit -> List (String, Value a)
 topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 tupleHeadTag : Int -> String
+twoDistinctKeys : List (Value a) -> List (String, String) -> Bool
 tyMentions : Ty -> List String -> Bool
 tyvarsInArgs : List Ty -> Int
 u64Bit63 : U64 -> Int
@@ -456,6 +470,7 @@ unChar : Value a -> Char
 unInt : Value a -> Int
 unIntArray : Value a -> Array Int
 unString : Value a -> String
+undecidableCand : String -> Value a -> Bool
 unitResultToValue : Result String Unit -> Value a
 updateEvalLoc : Loc -> Unit
 upperInitialName : String -> Bool

@@ -59,7 +59,7 @@ import json.{
   jObject,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
   asArray,
@@ -273,15 +273,15 @@ decodeEntry stamp path hash text = match parse text
           directives = dirs,
           dirty = False,
         })
-        (decList decFinding (lookup "findings" j))
-        (decList (decOcc path) (lookup "dupOccs" j))
-        (decList decDirective (lookup "directives" j))
+        (decList decFinding (get "findings" j))
+        (decList (decOcc path) (get "dupOccs" j))
+        (decList decDirective (get "directives" j))
 
 decStr : String -> Json -> Option String
-decStr k j = optBind (lookup k j) asString
+decStr k j = optBind (get k j) asString
 
 decInt : String -> Json -> Option Int
-decInt k j = optBind (lookup k j) asInt
+decInt k j = optBind (get k j) asInt
 
 -- A JArray of decodable elements → a List, all-or-nothing: one bad element
 -- fails the whole shard rather than silently yielding a SHORTER list, which
@@ -303,7 +303,7 @@ decFinding j =
     (decStr "rule" j)
     (decStr "message" j)
     (optBind (decStr "severity" j) decSeverity)
-    (decLoc (lookup "loc" j))
+    (decLoc (get "loc" j))
 
 decSeverity : String -> Option Severity
 decSeverity "error" = Some SevError
@@ -339,8 +339,8 @@ decDirective : Json -> Option Directive
 decDirective j =
   map2
     (scope names => Directive scope names)
-    (optBind (lookup "scope" j) decScope)
-    (decList asString (lookup "rules" j))
+    (optBind (get "scope" j) decScope)
+    (decList asString (get "rules" j))
 
 decScope : Json -> Option DirScope
 decScope (JString "file") = Some DScopeFile
@@ -488,7 +488,7 @@ makeStagingDir cacheDir = match (runCommand "mktemp" [
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
 (DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "findings" (TyApp (TyCon "List") (TyCon "Finding"))) (field "dupOccs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
 (DTypeSig false "cacheFormatVersion" (TyCon "Int"))
 (DFunDef false "cacheFormatVersion" () (ELit (LInt 1)))
@@ -532,18 +532,18 @@ makeStagingDir cacheDir = match (runCommand "mktemp" [
 (DFunDef false "encScope" ((PCon "DScopeFile")) (EApp (EVar "JString") (ELit (LString "file"))))
 (DFunDef false "encScope" ((PCon "DScopeLine" (PVar "l"))) (EApp (EVar "JInt") (EVar "l")))
 (DTypeSig true "decodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LintEntry")))))))
-(DFunDef false "decodeEntry" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "text")) (EMatch (EApp (EVar "parse") (EVar "text")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "j")) () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "decInt") (ELit (LString "version"))) (EVar "j")) (EApp (EVar "Some") (EVar "cacheFormatVersion"))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "stamp"))) (EVar "j")) (EApp (EVar "Some") (EVar "stamp")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "path"))) (EVar "j")) (EApp (EVar "Some") (EVar "path")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "hash"))) (EVar "j")) (EApp (EVar "Some") (EVar "hash")))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "map3") (ELam ((PVar "fs") (PVar "ds") (PVar "dirs")) (ERecordCreate "LintEntry" ((fa "path" (EVar "path")) (fa "contentHash" (EVar "hash")) (fa "findings" (EVar "fs")) (fa "dupOccs" (EVar "ds")) (fa "directives" (EVar "dirs")) (fa "dirty" (EVar "False")))))) (EApp (EApp (EVar "decList") (EVar "decFinding")) (EApp (EApp (EVar "lookup") (ELit (LString "findings"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EApp (EVar "decOcc") (EVar "path"))) (EApp (EApp (EVar "lookup") (ELit (LString "dupOccs"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EVar "decDirective")) (EApp (EApp (EVar "lookup") (ELit (LString "directives"))) (EVar "j"))))))))
+(DFunDef false "decodeEntry" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "text")) (EMatch (EApp (EVar "parse") (EVar "text")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "j")) () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "decInt") (ELit (LString "version"))) (EVar "j")) (EApp (EVar "Some") (EVar "cacheFormatVersion"))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "stamp"))) (EVar "j")) (EApp (EVar "Some") (EVar "stamp")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "path"))) (EVar "j")) (EApp (EVar "Some") (EVar "path")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "hash"))) (EVar "j")) (EApp (EVar "Some") (EVar "hash")))) (EVar "None") (EApp (EApp (EApp (EApp (EVar "map3") (ELam ((PVar "fs") (PVar "ds") (PVar "dirs")) (ERecordCreate "LintEntry" ((fa "path" (EVar "path")) (fa "contentHash" (EVar "hash")) (fa "findings" (EVar "fs")) (fa "dupOccs" (EVar "ds")) (fa "directives" (EVar "dirs")) (fa "dirty" (EVar "False")))))) (EApp (EApp (EVar "decList") (EVar "decFinding")) (EApp (EApp (EVar "get") (ELit (LString "findings"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EApp (EVar "decOcc") (EVar "path"))) (EApp (EApp (EVar "get") (ELit (LString "dupOccs"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EVar "decDirective")) (EApp (EApp (EVar "get") (ELit (LString "directives"))) (EVar "j"))))))))
 (DTypeSig false "decStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "decStr" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "lookup") (EVar "k")) (EVar "j"))) (EVar "asString")))
+(DFunDef false "decStr" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "get") (EVar "k")) (EVar "j"))) (EVar "asString")))
 (DTypeSig false "decInt" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "decInt" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "lookup") (EVar "k")) (EVar "j"))) (EVar "asInt")))
+(DFunDef false "decInt" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "get") (EVar "k")) (EVar "j"))) (EVar "asInt")))
 (DTypeSig false "decList" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyCon "Json")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "decList" ((PVar "f") (PCon "Some" (PVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EVar "asArray") (EVar "j"))) (ELam ((PVar "arr")) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
 (DFunDef false "decList" (PWild (PCon "None")) (EVar "None"))
 (DTypeSig false "decListGo" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "decListGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EListLit)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "map2") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "decFinding" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Finding"))))
-(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "lookup") (ELit (LString "loc"))) (EVar "j")))))
+(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
 (DTypeSig false "decSeverity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Severity"))))
 (DFunDef false "decSeverity" ((PLit (LString "error"))) (EApp (EVar "Some") (EVar "SevError")))
 (DFunDef false "decSeverity" ((PLit (LString "warning"))) (EApp (EVar "Some") (EVar "SevWarning")))
@@ -555,7 +555,7 @@ makeStagingDir cacheDir = match (runCommand "mktemp" [
 (DTypeSig false "decOcc" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "decOcc" ((PVar "path") (PVar "j")) (EApp (EApp (EApp (EApp (EVar "map3") (ELam ((PVar "line") (PVar "name") (PVar "key")) (ETuple (EVar "path") (EVar "line") (EVar "name") (EVar "key")))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "at") (ELit (LInt 0))) (EVar "j"))) (EVar "asInt"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "at") (ELit (LInt 1))) (EVar "j"))) (EVar "asString"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "at") (ELit (LInt 2))) (EVar "j"))) (EVar "asString"))))
 (DTypeSig false "decDirective" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Directive"))))
-(DFunDef false "decDirective" ((PVar "j")) (EApp (EApp (EApp (EVar "map2") (ELam ((PVar "scope") (PVar "names")) (EApp (EApp (EVar "Directive") (EVar "scope")) (EVar "names")))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "lookup") (ELit (LString "scope"))) (EVar "j"))) (EVar "decScope"))) (EApp (EApp (EVar "decList") (EVar "asString")) (EApp (EApp (EVar "lookup") (ELit (LString "rules"))) (EVar "j")))))
+(DFunDef false "decDirective" ((PVar "j")) (EApp (EApp (EApp (EVar "map2") (ELam ((PVar "scope") (PVar "names")) (EApp (EApp (EVar "Directive") (EVar "scope")) (EVar "names")))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "get") (ELit (LString "scope"))) (EVar "j"))) (EVar "decScope"))) (EApp (EApp (EVar "decList") (EVar "asString")) (EApp (EApp (EVar "get") (ELit (LString "rules"))) (EVar "j")))))
 (DTypeSig false "decScope" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "DirScope"))))
 (DFunDef false "decScope" ((PCon "JString" (PLit (LString "file")))) (EApp (EVar "Some") (EVar "DScopeFile")))
 (DFunDef false "decScope" ((PCon "JInt" (PVar "l"))) (EApp (EVar "Some") (EApp (EVar "DScopeLine") (EVar "l"))))
@@ -602,7 +602,7 @@ makeStagingDir cacheDir = match (runCommand "mktemp" [
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false) (mem "at" false))))
 (DData Public "LintEntry" () ((variant "LintEntry" (ConNamed (field "path" (TyCon "String")) (field "contentHash" (TyCon "String")) (field "findings" (TyApp (TyCon "List") (TyCon "Finding"))) (field "dupOccs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (field "directives" (TyApp (TyCon "List") (TyCon "Directive"))) (field "dirty" (TyCon "Bool"))))) ())
 (DTypeSig false "cacheFormatVersion" (TyCon "Int"))
 (DFunDef false "cacheFormatVersion" () (ELit (LInt 1)))
@@ -646,18 +646,18 @@ makeStagingDir cacheDir = match (runCommand "mktemp" [
 (DFunDef false "encScope" ((PCon "DScopeFile")) (EApp (EVar "JString") (ELit (LString "file"))))
 (DFunDef false "encScope" ((PCon "DScopeLine" (PVar "l"))) (EApp (EVar "JInt") (EVar "l")))
 (DTypeSig true "decodeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LintEntry")))))))
-(DFunDef false "decodeEntry" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "text")) (EMatch (EApp (EVar "parse") (EVar "text")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "j")) () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "decInt") (ELit (LString "version"))) (EVar "j")) (EApp (EVar "Some") (EVar "cacheFormatVersion"))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "stamp"))) (EVar "j")) (EApp (EVar "Some") (EVar "stamp")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "path"))) (EVar "j")) (EApp (EVar "Some") (EVar "path")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "hash"))) (EVar "j")) (EApp (EVar "Some") (EMethodRef "hash")))) (EVar "None") (EApp (EApp (EApp (EApp (EDictApp "map3") (ELam ((PVar "fs") (PVar "ds") (PVar "dirs")) (ERecordCreate "LintEntry" ((fa "path" (EVar "path")) (fa "contentHash" (EMethodRef "hash")) (fa "findings" (EVar "fs")) (fa "dupOccs" (EVar "ds")) (fa "directives" (EVar "dirs")) (fa "dirty" (EVar "False")))))) (EApp (EApp (EVar "decList") (EVar "decFinding")) (EApp (EApp (EVar "lookup") (ELit (LString "findings"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EApp (EVar "decOcc") (EVar "path"))) (EApp (EApp (EVar "lookup") (ELit (LString "dupOccs"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EVar "decDirective")) (EApp (EApp (EVar "lookup") (ELit (LString "directives"))) (EVar "j"))))))))
+(DFunDef false "decodeEntry" ((PVar "stamp") (PVar "path") (PVar "hash") (PVar "text")) (EMatch (EApp (EVar "parse") (EVar "text")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "j")) () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "decInt") (ELit (LString "version"))) (EVar "j")) (EApp (EVar "Some") (EVar "cacheFormatVersion"))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "stamp"))) (EVar "j")) (EApp (EVar "Some") (EVar "stamp")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "path"))) (EVar "j")) (EApp (EVar "Some") (EVar "path")))) (EBinOp "/=" (EApp (EApp (EVar "decStr") (ELit (LString "hash"))) (EVar "j")) (EApp (EVar "Some") (EMethodRef "hash")))) (EVar "None") (EApp (EApp (EApp (EApp (EDictApp "map3") (ELam ((PVar "fs") (PVar "ds") (PVar "dirs")) (ERecordCreate "LintEntry" ((fa "path" (EVar "path")) (fa "contentHash" (EMethodRef "hash")) (fa "findings" (EVar "fs")) (fa "dupOccs" (EVar "ds")) (fa "directives" (EVar "dirs")) (fa "dirty" (EVar "False")))))) (EApp (EApp (EVar "decList") (EVar "decFinding")) (EApp (EApp (EVar "get") (ELit (LString "findings"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EApp (EVar "decOcc") (EVar "path"))) (EApp (EApp (EVar "get") (ELit (LString "dupOccs"))) (EVar "j")))) (EApp (EApp (EVar "decList") (EVar "decDirective")) (EApp (EApp (EVar "get") (ELit (LString "directives"))) (EVar "j"))))))))
 (DTypeSig false "decStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "decStr" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "lookup") (EVar "k")) (EVar "j"))) (EVar "asString")))
+(DFunDef false "decStr" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "get") (EVar "k")) (EVar "j"))) (EVar "asString")))
 (DTypeSig false "decInt" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "decInt" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "lookup") (EVar "k")) (EVar "j"))) (EVar "asInt")))
+(DFunDef false "decInt" ((PVar "k") (PVar "j")) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "get") (EVar "k")) (EVar "j"))) (EVar "asInt")))
 (DTypeSig false "decList" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyCon "Json")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "decList" ((PVar "f") (PCon "Some" (PVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EVar "asArray") (EVar "j"))) (ELam ((PVar "arr")) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
 (DFunDef false "decList" (PWild (PCon "None")) (EVar "None"))
 (DTypeSig false "decListGo" (TyFun (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "decListGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EListLit)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EDictApp "map2") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EApp (EApp (EVar "decListGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "decFinding" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Finding"))))
-(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "lookup") (ELit (LString "loc"))) (EVar "j")))))
+(DFunDef false "decFinding" ((PVar "j")) (EApp (EApp (EApp (EApp (EApp (EVar "map4") (ELam ((PVar "r") (PVar "m") (PVar "s") (PVar "l")) (ERecordCreate "Finding" ((fa "rule" (EVar "r")) (fa "message" (EVar "m")) (fa "severity" (EVar "s")) (fa "loc" (EVar "l")))))) (EApp (EApp (EVar "decStr") (ELit (LString "rule"))) (EVar "j"))) (EApp (EApp (EVar "decStr") (ELit (LString "message"))) (EVar "j"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "decStr") (ELit (LString "severity"))) (EVar "j"))) (EVar "decSeverity"))) (EApp (EVar "decLoc") (EApp (EApp (EVar "get") (ELit (LString "loc"))) (EVar "j")))))
 (DTypeSig false "decSeverity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Severity"))))
 (DFunDef false "decSeverity" ((PLit (LString "error"))) (EApp (EVar "Some") (EVar "SevError")))
 (DFunDef false "decSeverity" ((PLit (LString "warning"))) (EApp (EVar "Some") (EVar "SevWarning")))
@@ -669,7 +669,7 @@ makeStagingDir cacheDir = match (runCommand "mktemp" [
 (DTypeSig false "decOcc" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "decOcc" ((PVar "path") (PVar "j")) (EApp (EApp (EApp (EApp (EDictApp "map3") (ELam ((PVar "line") (PVar "name") (PVar "key")) (ETuple (EVar "path") (EVar "line") (EVar "name") (EVar "key")))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "at") (ELit (LInt 0))) (EVar "j"))) (EVar "asInt"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "at") (ELit (LInt 1))) (EVar "j"))) (EVar "asString"))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "at") (ELit (LInt 2))) (EVar "j"))) (EVar "asString"))))
 (DTypeSig false "decDirective" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Directive"))))
-(DFunDef false "decDirective" ((PVar "j")) (EApp (EApp (EApp (EDictApp "map2") (ELam ((PVar "scope") (PVar "names")) (EApp (EApp (EVar "Directive") (EVar "scope")) (EVar "names")))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "lookup") (ELit (LString "scope"))) (EVar "j"))) (EVar "decScope"))) (EApp (EApp (EVar "decList") (EVar "asString")) (EApp (EApp (EVar "lookup") (ELit (LString "rules"))) (EVar "j")))))
+(DFunDef false "decDirective" ((PVar "j")) (EApp (EApp (EApp (EDictApp "map2") (ELam ((PVar "scope") (PVar "names")) (EApp (EApp (EVar "Directive") (EVar "scope")) (EVar "names")))) (EApp (EApp (EVar "optBind") (EApp (EApp (EVar "get") (ELit (LString "scope"))) (EVar "j"))) (EVar "decScope"))) (EApp (EApp (EVar "decList") (EVar "asString")) (EApp (EApp (EVar "get") (ELit (LString "rules"))) (EVar "j")))))
 (DTypeSig false "decScope" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "DirScope"))))
 (DFunDef false "decScope" ((PCon "JString" (PLit (LString "file")))) (EApp (EVar "Some") (EVar "DScopeFile")))
 (DFunDef false "decScope" ((PCon "JInt" (PVar "l"))) (EApp (EVar "Some") (EApp (EVar "DScopeLine") (EVar "l"))))

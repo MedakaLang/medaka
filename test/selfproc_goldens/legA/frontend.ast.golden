@@ -1,9 +1,9 @@
 constraintUnresolved : String -> List Ty -> Constraint
-dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
+dDataUnresolved : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List DeriveRef -> Decl
 dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
-dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
-dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
-dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
+dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List (Option KindAnn) -> List Super -> List IfaceMethod -> Decl
+dNewtypeUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> String -> Ty -> List DeriveRef -> Decl
+dTypeAliasUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Ty -> Decl
 deriveRefName : DeriveRef -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
@@ -12,6 +12,8 @@ identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginOf : TyConOrigin -> Option IdentOrigin
 ifaceIdMatches : String -> String -> Bool
 ifaceIdentity : TyConOrigin -> String -> String
+kindAnnArg : KindAnn -> String
+kindAnnSource : KindAnn -> String
 lookupTab : TabKey -> List (TabKey, a) -> Option a
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
@@ -51,6 +53,8 @@ tabKeyOf : Ns -> TyConOrigin -> String -> TabKey
 tyConBuiltin : String -> Option Loc -> Ty
 tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
 tyConUnresolved : String -> Option Loc -> Ty
+tyParamSource : String -> Option KindAnn -> String
+tyParamSources : List String -> List (Option KindAnn) -> List String
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String
 useMemberOrigin : UseMember -> String

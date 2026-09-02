@@ -156,7 +156,7 @@ annotateExpr fr (EIndex e0 i r) =
 annotateExpr fr (EAnnot e0 t) = EAnnot (annotateExpr fr e0) t
 annotateExpr fr (EHeadAnnot e0 t) = EHeadAnnot (annotateExpr fr e0) t
 annotateExpr fr (EBlock stmts) = EBlock (annotateStmts fr stmts)
-annotateExpr fr (EDo stmts) = EDo (annotateStmts fr stmts)
+annotateExpr fr (EDo d stmts) = EDo d (annotateStmts fr stmts)
 annotateExpr fr (EStringInterp parts) =
   EStringInterp (map (annotateInterp fr) parts)
 annotateExpr fr (EGuards arms) = EGuards (map (annotateGuardArm fr) arms)

@@ -16,7 +16,7 @@ export interface Speak s where
 -- imported param kinds `fromAstTypeApp` fell through to `appFallback` instead of
 -- `foldAppKinds`/`kindArgMono`.  Through THIS probe that failed SILENTLY — the golden
 -- below read `Asy Unit Int` with nothing on stderr at all.  (On the `check`/`run`/`build`
--- CLI paths the same line instead drew a false-positive T-ROW-KIND-MISMATCH claiming the
+-- CLI paths the same line instead drew a false-positive T-EFFECT-KIND-MISMATCH claiming the
 -- slot "isn't row-kinded"; that is the loud face of this identical defect.)
 wrote : Asy <Stdout> Int
 wrote = wrote

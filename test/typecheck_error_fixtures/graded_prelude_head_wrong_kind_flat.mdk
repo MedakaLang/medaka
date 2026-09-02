@@ -1,0 +1,15 @@
+-- #1594 closed by measurement: the FLAT (single-file, no import) path judges an
+-- impl of a graded PRELUDE interface.  #1594 predicted that once core.mdk held
+-- a graded interface, `medaka check <one file>` would silently stop kind-
+-- checking impls of it (prelude rows keyed TkBare on the flat arm).  With
+-- `DeferredThenable` in the prelude (#823) this is the discriminating probe:
+-- a `Type -> Type -> Type` head at an `Effect -> Type -> Type` slot MUST draw
+-- T-IMPL-KIND-MISMATCH here, on the flat path.  (The body is deliberately
+-- ill-typed only through the kind; the two follow-on diagnostics are the
+-- ordinary consequences of that mismatch.)
+data Q a b = MkQ a b
+
+impl DeferredThenable Q where
+  deferThen q k = q
+
+main = println 1

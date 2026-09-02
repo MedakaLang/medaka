@@ -1,0 +1,34 @@
+-- Effect-row JOINS written in a signature (#821,
+-- docs/spec/EFFECTS-SEMANTICS.md §6): a row may name SEVERAL tail variables,
+-- meaning "everything any of them performs".  Enrolled in diff_compiler_fmt.sh
+-- via test/parse_fixtures/*.mdk, so row_join.fmt.golden pins the byte-for-byte
+-- round trip of both spellings: a LABELLED join keeps the angle brackets
+-- (`<Stdout | e | e2>`), a label-free one in an Effect-kinded type-ARGUMENT
+-- slot is written with parentheses (`f (e | e2) b`).
+
+data Later (e : Effect) a = Now a | Wait (Unit -> <e> Later e a)
+
+-- the parenthesised spelling, in the result index of a method
+interface JMap (f : Effect -> Type -> Type) where
+  jmap : (a -> <e2> b) -> f e a -> f (e | e2) b
+
+impl JMap Later where
+  jmap g (Now a) = Wait (u => Now (g a))
+  jmap g (Wait t) = Wait (u => jmap g (t u))
+
+-- a labelled join, in both an argument row and the return row
+relay : (Unit -> <Stdout | e | e2> Unit) -> <Stdout | e | e2> Unit
+relay k = k ()
+
+-- three tail variables, in a type-argument slot
+wide : Later (e | e2 | e3) Int -> Later (e | e2 | e3) Int
+wide l = l
+
+-- the pre-#821 single-tail and closed spellings are unchanged
+single : Later e Int -> <Stdout | e> Int
+single (Now n) = n
+single (Wait t) = single (t ())
+
+closed : Later <> Int -> <Stdout> Int
+closed (Now n) = n
+closed (Wait t) = closed (t ())

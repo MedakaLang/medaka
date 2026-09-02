@@ -72,6 +72,7 @@ import parsec.lib.parser.{
   label,
   many1,
   digit,
+  orElse,
 }
 import lib.sqlparse.{sqlIdent, keyword, symbol, lexeme, word}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat}
@@ -403,18 +404,18 @@ parseCreateTable : String -> Result String CreateTable
 parseCreateTable s = runParser createStatement s
 
 createStatement : Parser CreateTable
-createStatement = do
+createStatement = defer
   _ <- spaces
   ct <- createTableP
   _ <- optional (symbol ";")
   _ <- endOfCreate
-  pure ct
+  deferPure ct
 
 endOfCreate : Parser Unit
 endOfCreate = orElse eof createTail
 
 createTail : Parser Unit
-createTail = do
+createTail = defer
   w <- lexeme word
   failWith "unsupported SQL after CREATE TABLE: '\{w}'"
 
@@ -425,7 +426,7 @@ createTail = do
 -- Ok "t"
 export
 createTableP : Parser CreateTable
-createTableP = do
+createTableP = defer
   _ <- keyword "CREATE"
   _ <- keyword "TABLE"
   name <- sqlIdent
@@ -437,7 +438,7 @@ createTableP = do
 
 tableNameOk : String -> Parser Unit
 tableNameOk n =
-  when
+  deferWhen
     (contains "." n)
     (failWith "schema-qualified table name '\{n}' is not supported")
 
@@ -465,7 +466,7 @@ dupCheck name cols None npk =
 -- cannot emit (and `lib.mutate` refuses to touch any database that has one).
 -- Accepting it would produce a table with no uniqueness constraint at all.
 pkTypeCheck : String -> List ColDef -> Option String -> Parser CreateTable
-pkTypeCheck name cols None = pure (CreateTable name cols)
+pkTypeCheck name cols None = deferPure (CreateTable name cols)
 pkTypeCheck _ _ (Some c) =
   failWith
     "PRIMARY KEY on column '\{c}' is supported only when its declared type is INTEGER (the rowid alias) — any other PRIMARY KEY needs a UNIQUE index, which this writer cannot emit"
@@ -490,14 +491,14 @@ dupName (x :: rest) = if elem x rest then Some x else dupName rest
 -- else.  Any other trailing word (DEFAULT, UNIQUE, COLLATE, CHECK, REFERENCES,
 -- AUTOINCREMENT, …) is named and refused.
 colDefP : Parser ColDef
-colDefP = do
+colDefP = defer
   n <- sqlIdent
   _ <- notATableConstraint n
   t <- optional typeNameP
   pk <- optional primaryKeyP
   nn <- optional notNullP
   _ <- noMoreConstraints n
-  pure (ColDef n (optOr "" t) (isSome pk) (isSome nn))
+  deferPure (ColDef n (optOr "" t) (isSome pk) (isSome nn))
 
 -- A column-list entry that STARTS with a table-constraint keyword is a
 -- table-level constraint (`PRIMARY KEY (a, b)`, `UNIQUE(a)`, `CHECK(…)`,
@@ -505,7 +506,7 @@ colDefP = do
 -- column called `UNIQUE` and then blamed on the stray `(`.
 notATableConstraint : String -> Parser Unit
 notATableConstraint n =
-  when
+  deferWhen
     (elem (toUpper n) tableConstraintWords)
     (failWith
       "table-level constraint '\{toUpper n}' is not supported — only per-column PRIMARY KEY and NOT NULL are")
@@ -522,15 +523,15 @@ optOr _ (Some s) = s
 -- affinity.  `attempt` makes the whole thing rewind, so `a PRIMARY KEY` (a
 -- typeless PK column) parses as "no type".
 typeNameP : Parser String
-typeNameP = attempt (do
+typeNameP = attempt (defer
   w <- lexeme word
   _ <- notAConstraint w
   sz <- optional typeSizeP
-  pure "\{toUpper w}\{optOr "" sz}")
+  deferPure "\{toUpper w}\{optOr "" sz}")
 
 notAConstraint : String -> Parser Unit
 notAConstraint w =
-  when
+  deferWhen
     (elem (toUpper w) constraintWords)
     (failWith "'\{w}' is a constraint keyword, not a type name")
 
@@ -555,41 +556,42 @@ constraintWords = [
 ]
 
 typeSizeP : Parser String
-typeSizeP = do
+typeSizeP = defer
   _ <- symbol "("
   a <- intDigits
   b <- optional secondSize
   _ <- symbol ")"
-  pure "(\{a}\{optOr "" b})"
+  deferPure "(\{a}\{optOr "" b})"
 
 secondSize : Parser String
-secondSize = do
+secondSize = defer
   _ <- symbol ","
   d <- intDigits
-  pure ", \{d}"
+  deferPure ", \{d}"
 
 intDigits : Parser String
-intDigits = label "expected a number" (lexeme (map fromChars (many1 digit)))
+intDigits =
+  label "expected a number" (lexeme (deferMap fromChars (many1 digit)))
 
 primaryKeyP : Parser Unit
-primaryKeyP = attempt (do
+primaryKeyP = attempt (defer
   _ <- keyword "PRIMARY"
   keyword "KEY")
 
 notNullP : Parser Unit
-notNullP = attempt (do
+notNullP = attempt (defer
   _ <- keyword "NOT"
   keyword "NULL")
 
 -- After `[PRIMARY KEY] [NOT NULL]` the only legal next tokens are `,` and `)`.
 -- Anything word-shaped is an unsupported constraint — named, never dropped.
 noMoreConstraints : String -> Parser Unit
-noMoreConstraints col = do
+noMoreConstraints col = defer
   w <- optional (attempt (lexeme word))
   constraintReject col w
 
 constraintReject : String -> Option String -> Parser Unit
-constraintReject _ None = pure ()
+constraintReject _ None = deferPure ()
 constraintReject col (Some w) =
   failWith
     "unsupported column constraint '\{toUpper w}' on column '\{col}' — only PRIMARY KEY and NOT NULL are supported"
@@ -704,12 +706,12 @@ parseCreateIndex : String -> Result String CreateIndex
 parseCreateIndex s = runParser createIndexStatement s
 
 createIndexStatement : Parser CreateIndex
-createIndexStatement = do
+createIndexStatement = defer
   _ <- spaces
   ci <- createIndexP
   _ <- optional (symbol ";")
   _ <- eof
-  pure ci
+  deferPure ci
 
 -- | The `CREATE INDEX` parser WITHOUT the end-of-input demand.
 --
@@ -717,7 +719,7 @@ createIndexStatement = do
 -- Ok "i"
 export
 createIndexP : Parser CreateIndex
-createIndexP = do
+createIndexP = defer
   _ <- keyword "CREATE"
   _ <- rejectUniqueIndex
   _ <- keyword "INDEX"
@@ -732,20 +734,20 @@ createIndexP = do
   _ <- rejectColSuffix col
   _ <- symbol ")"
   _ <- rejectPartial
-  pure (CreateIndex name table col)
+  deferPure (CreateIndex name table col)
 
 -- `UNIQUE` before `INDEX` needs an enforced uniqueness constraint v1 cannot
 -- provide, so it is refused rather than silently emitted as a plain index.
 rejectUniqueIndex : Parser Unit
-rejectUniqueIndex = do
+rejectUniqueIndex = defer
   u <- optional (keyword "UNIQUE")
-  when
+  deferWhen
     (isSome u)
     (failWith
       "UNIQUE indexes are not supported — v1 emits a plain (non-unique) secondary index")
 
 ifNotExistsP : Parser Unit
-ifNotExistsP = attempt (do
+ifNotExistsP = attempt (defer
   _ <- keyword "IF"
   _ <- keyword "NOT"
   keyword "EXISTS")
@@ -753,18 +755,18 @@ ifNotExistsP = attempt (do
 -- An indexed column immediately followed by `(` is a function/expression index
 -- (`lower(a)`, `substr(a,1)`), which v1 does not support.
 rejectFuncIndex : Parser Unit
-rejectFuncIndex = do
+rejectFuncIndex = defer
   p <- optional (symbol "(")
-  when
+  deferWhen
     (isSome p)
     (failWith
       "expression / function indexes are not supported — v1 indexes a single bare column name")
 
 -- A `,` after the first column is a multi-column index.
 rejectExtraColumn : Parser Unit
-rejectExtraColumn = do
+rejectExtraColumn = defer
   c <- optional (symbol ",")
-  when
+  deferWhen
     (isSome c)
     (failWith
       "multi-column indexes are not supported — v1 indexes a single column")
@@ -772,12 +774,12 @@ rejectExtraColumn = do
 -- After the column, the only legal token is `)`.  `DESC`/`ASC` (ordering) and
 -- `COLLATE` are named explicitly; any other trailing word is an expression index.
 rejectColSuffix : String -> Parser Unit
-rejectColSuffix col = do
+rejectColSuffix col = defer
   w <- optional (attempt (lexeme word))
   rejectColSuffixWord col w
 
 rejectColSuffixWord : String -> Option String -> Parser Unit
-rejectColSuffixWord _ None = pure ()
+rejectColSuffixWord _ None = deferPure ()
 rejectColSuffixWord col (Some w) = colSuffixReject col (toUpper w) w
 
 colSuffixReject : String -> String -> String -> Parser Unit
@@ -796,12 +798,12 @@ colSuffixReject _ _ w =
 
 -- A `WHERE` after the `)` is a partial index.
 rejectPartial : Parser Unit
-rejectPartial = do
+rejectPartial = defer
   w <- optional (attempt (lexeme word))
   rejectPartialWord w
 
 rejectPartialWord : Option String -> Parser Unit
-rejectPartialWord None = pure ()
+rejectPartialWord None = deferPure ()
 rejectPartialWord (Some w) = partialReject (toUpper w) w
 
 partialReject : String -> String -> Parser Unit
@@ -826,13 +828,13 @@ partialReject _ w = failWith "unsupported SQL after CREATE INDEX: '\{w}'"
 -- Err "expected a number at 6"
 export
 afterKeyword : String -> Parser a -> Parser (Option a)
-afterKeyword kw p = do
+afterKeyword kw p = defer
   k <- optional (keyword kw)
   afterKeywordStep k p
 
 afterKeywordStep : Option Unit -> Parser a -> Parser (Option a)
-afterKeywordStep None _ = pure None
-afterKeywordStep (Some _) p = map Some p
+afterKeywordStep None _ = deferPure None
+afterKeywordStep (Some _) p = deferMap Some p
 
 -- | One-or-more `p`, comma separated, COMMITTED: a `,` obliges another `p`.
 --   (parsec's `sepBy1` uses `many`, which swallows the failure after a trailing
@@ -844,19 +846,19 @@ afterKeywordStep (Some _) p = map Some p
 -- Err "expected a number at 2"
 export
 commaSep1 : Parser a -> Parser (List a)
-commaSep1 p = do
+commaSep1 p = defer
   x <- p
   xs <- commaSepRest p
-  pure (x :: xs)
+  deferPure (x :: xs)
 
 commaSepRest : Parser a -> Parser (List a)
-commaSepRest p = do
+commaSepRest p = defer
   c <- optional (symbol ",")
   commaSepStep p c
 
 commaSepStep : Parser a -> Option String -> Parser (List a)
-commaSepStep _ None = pure []
-commaSepStep p (Some _) = do
+commaSepStep _ None = deferPure []
+commaSepStep p (Some _) = defer
   x <- p
   xs <- commaSepRest p
-  pure (x :: xs)
+  deferPure (x :: xs)

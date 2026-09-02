@@ -14,6 +14,7 @@
 
 import byteparser.{
   ByteParser,
+  ByteParserE,
   BResult,
   BOk,
   BErr,
@@ -109,7 +110,7 @@ serialOf n
 -- "1.5"
 export
 parseRecord : ByteParser (List Cell)
-parseRecord = ByteParser parseRecordGo
+parseRecord = ByteParserE parseRecordGo
 
 -- | Render a decoded record (or a parse error) to a compact "|"-joined string.
 --   Used by the doctests above to print results without a Debug instance.

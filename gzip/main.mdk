@@ -39,31 +39,8 @@ import lib.bitio.{newBitReader, getBits}
 -- `printf 'hello' | gzip -n -c`, byte for byte.
 helloGz : Array Int
 helloGz = fromList [
-  31,
-  139,
-  8,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  3,
-  203,
-  72,
-  205,
-  201,
-  201,
-  7,
-  0,
-  134,
-  166,
-  16,
-  54,
-  5,
-  0,
-  0,
-  0,
+  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
+  54, 5, 0, 0, 0
 ]
 
 -- The uncompressed payload those bytes encode: "hello".

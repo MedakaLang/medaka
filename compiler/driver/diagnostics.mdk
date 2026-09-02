@@ -26,6 +26,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.parse_cache.{takeFirstN}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
@@ -48,7 +49,7 @@ import frontend.marker.{
 }
 import types.typecheck.{
   checkOneDiagsK,
-  checkModulesDiagsK,
+  checkModulesDiagsChain,
   checkModules,
   entryOwnSchemes,
   Scheme(..),
@@ -64,6 +65,7 @@ import driver.loader.{
   LoadParseFailed,
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
+  loadedSourceOf,
   loadProgramE,
   projectTrustedMods,
   stdlibOwnership,
@@ -83,6 +85,7 @@ import driver.main_autoprint.{
 import support.util.{
   joinNl,
   lookupAssoc,
+  dropAssoc,
   startsWith,
   anyList,
   filterList,
@@ -1087,7 +1090,14 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
       let seeded = seedAll (map midPath mods) []
       let afterRes =
         resolvePass allowInternal trustedMods runtimeP coreP omEmpty mods seeded
-      let afterTc = typecheckPass runtimeP coreP preludeKey mods afterRes
+      let afterTc =
+        typecheckPass
+          runtimeP
+          coreP
+          preludeKey
+          (chainKeyOf entry roots)
+          mods
+          afterRes
       appendStale staleRef afterTc
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
@@ -1209,12 +1219,22 @@ resolvePass allowInternal trustedMods rt core known ((mid, path, prog) :: rest) 
 typecheckPass : List Decl ->
   List Decl ->
   Option (Int, Int) ->
+  String ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   List (String, List Diag)
-typecheckPass runtimeP coreP preludeKey mods buckets =
+typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
   let modPairs = map midToDesugaredPair mods
-  let tcByMid = checkModulesDiagsK preludeKey runtimeP coreP modPairs
+  -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
+  -- resumed from its snapshot, so only the modules after it are re-checked.
+  let tcByMid =
+    checkModulesDiagsChain
+      preludeKey
+      chainKey
+      (map moduleStepKey mods)
+      runtimeP
+      coreP
+      modPairs
   -- Oracle superset = prelude + EVERY loaded module's decls, so a multi-clause
   -- function over an imported ADT isn't false-flagged as non-exhaustive.
   let oracleDecls = runtimeP ++ coreP ++ flatMap rawDeclsOfMod mods
@@ -1231,7 +1251,42 @@ rawDeclsOfMod (_, _, prog) = prog
 
 -- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiags.
 midToDesugaredPair : (String, String, List Decl) -> (String, List Decl)
-midToDesugaredPair (mid, _, prog) = (mid, desugar prog)
+midToDesugaredPair (mid, path, prog) = (mid, desugarModule path prog)
+
+-- The chain-level memo key: the entry and its roots fix how the loader resolves
+-- and rewrites every module in the graph.
+chainKeyOf : String -> List String -> String
+chainKeyOf entry roots = joinNl (entry :: roots)
+
+-- One step key per module: id + path + the EXACT source the loader parsed for
+-- that path (`loadedSourceOf`); None when the loader has no record, which
+-- simply keeps that module (and those after it) out of the memo.
+moduleStepKey : (String, String, List Decl) -> Option String
+moduleStepKey (mid, path, _) =
+  map (src => joinNl [mid, path, src]) (loadedSourceOf path)
+
+-- `desugar prog`, memoized by the module's loaded source: the desugared tree is
+-- what the typechecker stamps and checks, and re-deriving it per call was the
+-- other per-import cost besides the check itself.  Falls back to a plain desugar
+-- when the loader has no source record for the path.  Bounded MRU.
+desugarModule : String -> List Decl -> List Decl
+desugarModule path prog = match loadedSourceOf path
+  None => desugar prog
+  Some src => match lookupAssoc src !moduleDesugarCacheRef
+    Some decls => decls
+    None =>
+      let decls = desugar prog
+      moduleDesugarCacheRef :=
+        takeFirstN
+          moduleDesugarCacheLimit
+          ((src, decls) :: dropAssoc src !moduleDesugarCacheRef)
+      decls
+
+moduleDesugarCacheLimit : Int
+moduleDesugarCacheLimit = 24
+
+moduleDesugarCacheRef : Ref (List (String, List Decl))
+moduleDesugarCacheRef = Ref []
 
 -- Whenever `import` is present the multi-module path runs BOTH resolve and
 -- typecheck over the same file, and an unbound name is a resolve-phase fact —

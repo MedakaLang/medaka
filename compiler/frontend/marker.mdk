@@ -350,7 +350,7 @@ collectVars (ERangeArray lo hi _) = collectVars lo ++ collectVars hi
 collectVars (ESlice e0 lo hi _ _) =
   collectVars e0 ++ collectVars lo ++ collectVars hi
 collectVars (EBlock stmts) = flatMap doStmtVars stmts
-collectVars (EDo stmts) = flatMap doStmtVars stmts
+collectVars (EDo _ stmts) = flatMap doStmtVars stmts
 collectVars (EAnnot e0 _) = collectVars e0
 collectVars (EStringInterp parts) = flatMap interpVars parts
 collectVars (EGuards arms) = flatMap guardArmVars arms
@@ -477,7 +477,7 @@ localBoundExpr (ERangeArray lo hi _) = localBoundExpr lo ++ localBoundExpr hi
 localBoundExpr (ESlice e0 lo hi _ _) =
   localBoundExpr e0 ++ localBoundExpr lo ++ localBoundExpr hi
 localBoundExpr (EBlock stmts) = flatMap doStmtBound stmts
-localBoundExpr (EDo stmts) = flatMap doStmtBound stmts
+localBoundExpr (EDo _ stmts) = flatMap doStmtBound stmts
 localBoundExpr (EAnnot e0 _) = localBoundExpr e0
 localBoundExpr (EStringInterp parts) = flatMap interpBound parts
 localBoundExpr (EGuards arms) = flatMap guardArmBound arms

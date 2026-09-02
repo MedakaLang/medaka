@@ -160,6 +160,9 @@ PIPE
 UPPER "TDo"
 NEWLINE
 PIPE
+UPPER "TDefer"
+NEWLINE
+PIPE
 UPPER "TAs"
 NEWLINE
 PIPE
@@ -587,6 +590,11 @@ IDENT "tokenToString"
 UPPER "TDo"
 EQUAL
 STRING "DO"
+NEWLINE
+IDENT "tokenToString"
+UPPER "TDefer"
+EQUAL
+STRING "DEFER"
 NEWLINE
 IDENT "tokenToString"
 UPPER "TAs"
@@ -1120,6 +1128,11 @@ IDENT "describeToken"
 UPPER "TDo"
 EQUAL
 STRING "`do`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDefer"
+EQUAL
+STRING "`defer`"
 NEWLINE
 IDENT "describeToken"
 UPPER "TAs"
@@ -1906,6 +1919,11 @@ IDENT "keywordOrIdent"
 STRING "do"
 EQUAL
 UPPER "TDo"
+NEWLINE
+IDENT "keywordOrIdent"
+STRING "defer"
+EQUAL
+UPPER "TDefer"
 NEWLINE
 IDENT "keywordOrIdent"
 STRING "as"
@@ -12740,6 +12758,15 @@ IDENT "opener"
 LPAREN
 UPPER "Some"
 UPPER "TDo"
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHerald"
+IDENT "opener"
+LPAREN
+UPPER "Some"
+UPPER "TDefer"
 RPAREN
 EQUAL
 UPPER "True"

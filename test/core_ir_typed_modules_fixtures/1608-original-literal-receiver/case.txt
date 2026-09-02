@@ -104,3 +104,48 @@ stay honest: any movement is red, including the day the arm becomes correct (at
 which point delete the pin and let expected.txt grade all five arms). Both entries
 are pinned, where a ledger could only carry permA — so the arm is MORE graded than
 before, not less.
+
+── RE-DERIVED 2026-09-02: THE PIN MOVED, AND IT MOVED FROM A VALUE TO A REFUSAL ──
+
+WHAT CHANGED, AND WHY IT IS NOT A BUMP. Sprint `argtag-decidability` (#2445)
+gave the interpreter the eval-side twin of `emitArgTagRoute`'s native guard:
+`checkArgTagDecidable` (`compiler/eval/eval.mdk`) REFUSES an arg-tag dispatch
+whose surviving candidates are two impls OF ONE INTERFACE with distinct
+canonical keys and no later dispatching slot — precisely "the runtime tag was
+asked a question it cannot answer". This case's untyped arms are exactly that
+shape, so they no longer print a value:
+
+  MEASURED 2026-09-02, both untyped drivers, byte-identical to each other:
+    :0:0: runtime error [E-AMBIGUOUS-DISPATCH]: arg-tag dispatch on a receiver
+    of type 'Box' is undecidable: more than one impl is declared at that type
+    head and the runtime tag cannot choose between them
+  exit 1, stdout EMPTY. The tier-2 lockstep between `evalModules` and
+  `cevalModules` is intact — both refuse, at the same point.
+
+DECISION: A DELIBERATE IMPROVEMENT, and the pin is re-derived to match. The
+value these arms used to print was, in this file's own words, "the coin landing
+the right way, not the arm being right" — a first-impl-wins pick that depends on
+import order and not on the program. Trading a silent coin flip for a loud,
+coded refusal is the direction AGENTS.md's [W-QUIETER] names (loud→silent is a
+regression; silent→loud is not), and it is the whole point of #2445. The pin
+therefore stays a PIN — no ledger row, because there is still no OPEN issue and
+nothing here to fix — and now records the refusal.
+
+⚠️ WHAT THE RE-DERIVED PIN COSTS, STATED RATHER THAN GLOSSED. Tier 3 grades
+STDOUT ONLY (`2>/dev/null`, exit code unread), so a refusal pins as the EMPTY
+STRING. That is a WEAKER pin than the one it replaces: it reds if the arm starts
+printing something again, but it cannot tell E-AMBIGUOUS-DISPATCH from any other
+way of producing no output — a different panic, a crash, an early exit. The
+information needed to make it strong again (the diagnostic code, the exit
+status) is observable and simply not captured by this gate's tier 3. Making tier
+3 grade `<exit>|<stdout>` and, for a refusal, the diagnostic CODE, is the fix;
+it is a change to `test/diff_compiler_core_ir_typed_modules.sh` and was out of
+the licensed scope of the fix packet that re-derived this pin (#2445 F-2, which
+was licensed to `compiler/eval/eval.mdk`). Whoever next touches this gate should
+do it — until then, read an `ok` on this entry as "still not printing a value",
+not as "still refusing for the right reason".
+
+WHAT DID NOT MOVE: the TYPED arms (tier 1) are untouched and still print the
+hand-derived value on all three of `medaka run`, `medaka build`+exec, and the
+typed Core-IR driver. Those are the shipping arms, and they are what makes this
+entry's green fail-capable; the untyped arms never were a supported mode.

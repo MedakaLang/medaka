@@ -45,6 +45,7 @@ import lib.parser.{
   sepBy1,
   choice,
   failWith,
+  orElse,
 }
 import list.{reverse}
 import string.{fromChars}
@@ -112,44 +113,44 @@ showTable (TomlTable name pairs) =
 
 -- Skip a single-line comment: '#' through end of line.
 skipComment : Parser Unit
-skipComment = do
+skipComment = defer
   _ <- char '#'
   _ <- many (satisfy (/= '\n'))
-  pure ()
+  deferPure ()
 
 -- Skip whitespace that is NOT a newline (inline spaces/tabs).
 inlineSpace : Parser Unit
-inlineSpace = do
+inlineSpace = defer
   _ <- many (satisfy (c => c == ' ' || c == '\t'))
-  pure ()
+  deferPure ()
 
 -- Parse a newline (accept \r\n or \n).
 newline : Parser Unit
 newline = orElse parseCRLF parseLF
 
 parseCRLF : Parser Unit
-parseCRLF = do
+parseCRLF = defer
   _ <- char '\r'
   _ <- char '\n'
-  pure ()
+  deferPure ()
 
 parseLF : Parser Unit
-parseLF = do
+parseLF = defer
   _ <- char '\n'
-  pure ()
+  deferPure ()
 
 -- A blank or comment-only line: optional spaces/comment then newline.
 blankOrComment : Parser Unit
-blankOrComment = do
+blankOrComment = defer
   _ <- inlineSpace
-  _ <- orElse skipComment (pure ())
+  _ <- orElse skipComment (deferPure ())
   newline
 
 -- Skip any number of blank/comment lines.
 skipBlankLines : Parser Unit
-skipBlankLines = do
+skipBlankLines = defer
   _ <- many blankOrComment
-  pure ()
+  deferPure ()
 
 -- ---------------------------------------------------------------------------
 -- Key parser
@@ -169,7 +170,7 @@ bareKeyChar : Parser Char
 bareKeyChar = satisfy isBareKeyChar
 
 bareKey : Parser String
-bareKey = map fromChars (some bareKeyChar)
+bareKey = deferMap fromChars (some bareKeyChar)
 
 -- ---------------------------------------------------------------------------
 -- String value parser
@@ -180,24 +181,25 @@ stringChar : Parser Char
 stringChar = orElse escapedChar regularStringChar
 
 escapedChar : Parser Char
-escapedChar = do
+escapedChar = defer
   _ <- char '\\'
   c <- anyChar
   interpretEscape c
 
 interpretEscape : Char -> Parser Char
-interpretEscape '"' = pure '"'
-interpretEscape '\\' = pure '\\'
-interpretEscape 'n' = pure '\n'
-interpretEscape 't' = pure '\t'
-interpretEscape 'r' = pure '\r'
+interpretEscape '"' = deferPure '"'
+interpretEscape '\\' = deferPure '\\'
+interpretEscape 'n' = deferPure '\n'
+interpretEscape 't' = deferPure '\t'
+interpretEscape 'r' = deferPure '\r'
 interpretEscape _ = failWith "unknown escape sequence"
 
 regularStringChar : Parser Char
 regularStringChar = satisfy (c => c /= '"' && c /= '\\' && c /= '\n')
 
 quotedString : Parser String
-quotedString = map fromChars (between (char '"') (char '"') (many stringChar))
+quotedString =
+  deferMap fromChars (between (char '"') (char '"') (many stringChar))
 
 -- ---------------------------------------------------------------------------
 -- Integer parser
@@ -209,11 +211,11 @@ quotedString = map fromChars (between (char '"') (char '"') (many stringChar))
 -- See the parseToml doctest below for a working test.)
 export
 parseInt : Parser Int
-parseInt = do
+parseInt = defer
   neg <- optional (char '-')
   ds <- some digit
   let n = foldDigits ds 0
-  pure (applySign neg n)
+  deferPure (applySign neg n)
 
 applySign : Option Char -> Int -> Int
 applySign None n = n
@@ -231,7 +233,9 @@ foldDigits (d :: rest) acc = foldDigits rest (acc * 10 + (charCode d - 48))
 export
 parseBool : Parser Bool
 parseBool =
-  orElse (map (_ => True) (string "true")) (map (_ => False) (string "false"))
+  orElse
+    (deferMap (_ => True) (string "true"))
+    (deferMap (_ => False) (string "false"))
 
 -- ---------------------------------------------------------------------------
 -- Array parser (forward-declared via mutual helpers)
@@ -241,15 +245,15 @@ parseBool =
 
 -- Forward-reference trampoline: parse a value inside an array element.
 parseArrayElement : Parser TomlValue
-parseArrayElement = do
+parseArrayElement = defer
   _ <- spaces
   v <- parseValue
   _ <- spaces
-  pure v
+  deferPure v
 
 parseArray : Parser TomlValue
 parseArray =
-  map
+  deferMap
     TArray
     (between (char '[') (char ']') (sepBy parseArrayElement (char ',')))
 
@@ -263,9 +267,9 @@ parseArray =
 parseValue : Parser TomlValue
 parseValue = choice [
   parseArray,
-  map TStr quotedString,
-  map TBool parseBool,
-  map TInt parseInt,
+  deferMap TStr quotedString,
+  deferMap TBool parseBool,
+  deferMap TInt parseInt,
 ]
 
 -- ---------------------------------------------------------------------------
@@ -275,13 +279,13 @@ parseValue = choice [
 -- `key = value` on one line (inline spaces around `=` stripped).
 export
 keyValue : Parser (String, TomlValue)
-keyValue = do
+keyValue = defer
   k <- bareKey
   _ <- inlineSpace
   _ <- char '='
   _ <- inlineSpace
   v <- parseValue
-  pure (k, v)
+  deferPure (k, v)
 
 -- ---------------------------------------------------------------------------
 -- Table header
@@ -302,36 +306,36 @@ parseKeyValueLines = many parseOneKvLine
 
 -- One key-value line: optional leading blanks, then the pair, then newline/eof.
 parseOneKvLine : Parser (String, TomlValue)
-parseOneKvLine = do
+parseOneKvLine = defer
   _ <- skipBlankLines
   pair <- keyValue
   _ <- inlineSpace
-  _ <- orElse (map (_ => ()) newline) (map (_ => ()) eof)
-  pure pair
+  _ <- orElse (deferMap (_ => ()) newline) (deferMap (_ => ()) eof)
+  deferPure pair
 
 -- Parse zero-or-more sections after the initial top-level block.
 parseSections : Parser (List TomlTable)
 parseSections = many parseOneSection
 
 parseOneSection : Parser TomlTable
-parseOneSection = do
+parseOneSection = defer
   _ <- skipBlankLines
   name <- tableHeader
   _ <- inlineSpace
-  _ <- orElse (map (_ => ()) newline) (map (_ => ()) eof)
+  _ <- orElse (deferMap (_ => ()) newline) (deferMap (_ => ()) eof)
   pairs <- parseKeyValueLines
-  pure (TomlTable name pairs)
+  deferPure (TomlTable name pairs)
 
 -- The full document: top-level pairs, then sections.
 tomlDoc : Parser TomlDoc
-tomlDoc = do
+tomlDoc = defer
   _ <- skipBlankLines
   topPairs <- parseKeyValueLines
   sections <- parseSections
   _ <- skipBlankLines
   _ <- eof
   let topTable = TomlTable "" topPairs
-  pure (TomlDoc (topTable :: sections))
+  deferPure (TomlDoc (topTable :: sections))
 
 -- ---------------------------------------------------------------------------
 -- Public entry point

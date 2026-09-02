@@ -30,6 +30,7 @@ preambleLines = [
   "declare void @mdk_mod_zero() noreturn",
   "declare void @mdk_nonexhaustive_match() noreturn",
   "declare void @mdk_dispatch_no_impl() noreturn",
+  "declare void @mdk_dispatch_ambiguous() noreturn",
   "declare void @mdk_let_refute() noreturn",
   "declare void @mdk_print_int(i64)",
   "declare void @mdk_print_bool(i64)",

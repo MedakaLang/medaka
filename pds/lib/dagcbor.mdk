@@ -19,7 +19,15 @@ import bytebuilder.{
   emitU8,
   newBuilder,
 }
-import byteparser.{BErr, BOk, BResult, ByteParser, runBP, takeSlice}
+import byteparser.{
+  BErr,
+  BOk,
+  BResult,
+  ByteParser,
+  ByteParserE,
+  runBP,
+  takeSlice,
+}
 import list.{reverse, sortBy}
 import string.{fromUtf8, toUtf8}
 import lib.cid.{Cid, cidFromBytes, cidToBytes}
@@ -388,7 +396,7 @@ parseLink input pos =
             Ok cid => BOk (DcLink cid) finalPos
 
 dagParser : ByteParser DagCbor
-dagParser = ByteParser (input pos => parseValueAt input pos 0)
+dagParser = ByteParserE (input pos => parseValueAt input pos 0)
 
 {- | Strictly decode exactly one canonical value. Trailing bytes are an
    error; no relaxed historical mode is provided. -}

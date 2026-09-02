@@ -113,6 +113,7 @@ import parsec.lib.parser.{
   label,
   digit,
   sepBy1,
+  orElse,
 }
 import lib.select.{
   SqlExpr,
@@ -205,7 +206,7 @@ subqueryRenderHole = Ref (_ => "<IN-subquery renderer not installed>")
 --   (which would re-enter the parse cycle).
 export
 setSubqueryParser : Parser Compound -> Parser Unit
-setSubqueryParser p = map (_ => subqueryParserHole := p) (pure ())
+setSubqueryParser p = deferMap (_ => subqueryParserHole := p) (deferPure ())
 
 -- | Install the compound-query INLINE renderer used by `renderSqlExpr` for an
 --   `EInSubquery` node.  Called (via a strict `let`) at each lib.sqlstmt render
@@ -217,8 +218,8 @@ setSubqueryRenderer f = subqueryRenderHole := f
 -- A parser that DEFERS to the installed compound-query parser at RUN time: the
 -- hole read sits inside `map`'s continuation, so it reflects the latest install.
 subqueryParser : Parser Compound
-subqueryParser = do
-  p <- map (_ => subqueryParserHole.value) (pure ())
+subqueryParser = defer
+  p <- deferMap (_ => subqueryParserHole.value) (deferPure ())
   p
 
 -- ---------------------------------------------------------------------------
@@ -253,11 +254,11 @@ parseSqlExpr s = runParser topLevel s
 
 -- The whole-input parser: skip leading space, parse an expression, demand EOF.
 topLevel : Parser SqlExpr
-topLevel = do
+topLevel = defer
   _ <- spaces
   e <- sqlExpr
   _ <- eof
-  pure e
+  deferPure e
 
 -- ---------------------------------------------------------------------------
 -- Token helpers (a `lexeme` discipline: every token eats its TRAILING space,
@@ -269,10 +270,10 @@ topLevel = do
 --   on the next non-space character.
 export
 lexeme : Parser a -> Parser a
-lexeme p = do
+lexeme p = defer
   x <- p
   _ <- spaces
-  pure x
+  deferPure x
 
 -- | Match an exact punctuation token (`(`, `<=`, `+`, …), then trailing space.
 --
@@ -313,10 +314,10 @@ identChar c = isAlphaNum c || c == '_'
 -- Ok "SELECT"
 export
 word : Parser String
-word = do
+word = defer
   c <- satisfy identStart
   cs <- many (satisfy identChar)
-  pure (fromChars (c :: cs))
+  deferPure (fromChars (c :: cs))
 
 -- ---------------------------------------------------------------------------
 -- Keywords
@@ -404,13 +405,13 @@ keyword : String -> Parser Unit
 keyword kw =
   label
     "expected keyword '\{kw}'"
-    (attempt (do
+    (attempt (defer
       w <- lexeme word
       keywordCheck kw w))
 
 keywordCheck : String -> String -> Parser Unit
 keywordCheck kw w =
-  unless (toUpper w == kw) (failWith "expected keyword '\{kw}'")
+  deferUnless (toUpper w == kw) (failWith "expected keyword '\{kw}'")
 
 -- ---------------------------------------------------------------------------
 -- Identifiers / columns
@@ -432,19 +433,19 @@ sqlIdent =
   label
     "expected a column name"
     (attempt
-      (lexeme (do
+      (lexeme (defer
         w <- qualWord
         identCheck w)))
 
 -- `word` optionally followed by `.word`, rejoined with the dot.
 qualWord : Parser String
-qualWord = do
+qualWord = defer
   a <- word
   rest <- optional dotWord
-  pure (joinQual a rest)
+  deferPure (joinQual a rest)
 
 dotWord : Parser String
-dotWord = do
+dotWord = defer
   _ <- char '.'
   word
 
@@ -457,7 +458,7 @@ identCheck w =
   if isReserved w then
     failWith "'\{w}' is a reserved word and cannot be a column name"
   else
-    pure w
+    deferPure w
 
 -- | A column reference — an identifier NOT followed by `(`.
 --
@@ -483,7 +484,7 @@ identCheck w =
 -- Err "unsupported function 'foo' — only count/sum/avg/min/max/length/upper/lower/substr/trim/ltrim/rtrim/replace/coalesce/ifnull are supported at 4"
 export
 column : Parser SqlExpr
-column = do
+column = defer
   name <- sqlIdent
   paren <- optional (char '(')
   notCall name paren
@@ -493,7 +494,7 @@ column = do
 -- either way, and failing one character deeper is exactly what makes this message
 -- outrank the sibling `choice` branches' shallower ones.
 notCall : String -> Option Char -> Parser SqlExpr
-notCall name None = pure (ECol name)
+notCall name None = deferPure (ECol name)
 notCall name (Some _) =
   failWith
     "unsupported function '\{name}' — only count/sum/avg/min/max/length/upper/lower/substr/trim/ltrim/rtrim/replace/coalesce/ifnull are supported"
@@ -546,24 +547,24 @@ literal =
 
 -- NULL.  `keyword` gives word-granularity, so a column `nullable` is safe.
 nullLit : Parser Literal
-nullLit = do
+nullLit = defer
   _ <- keyword "NULL"
-  pure LNull
+  deferPure LNull
 
 -- TRUE / FALSE, mapped to the integer literals SQLite itself uses under the
 -- hood (`typeof(TRUE)` is `"integer"`, `TRUE = 1` is true, verified).
 boolLit : Parser Literal
 boolLit =
   orElse
-    (map (_ => LInt 1) (keyword "TRUE"))
-    (map (_ => LInt 0) (keyword "FALSE"))
+    (deferMap (_ => LInt 1) (keyword "TRUE"))
+    (deferMap (_ => LInt 0) (keyword "FALSE"))
 
 -- An integer or float: [-] digits [ . digits ] [ (e|E) [+|-] digits ].
 -- Presence of a fraction or an exponent makes it a Float, otherwise an Int.
 numLit : Parser Literal
 numLit =
   attempt
-    (lexeme (do
+    (lexeme (defer
       sgn <- optional (char '-')
       ds <- many1 digit
       fr <- optional fracPart
@@ -575,17 +576,17 @@ signText None = ""
 signText (Some _) = "-"
 
 fracPart : Parser String
-fracPart = do
+fracPart = defer
   _ <- char '.'
   ds <- many1 digit
-  pure ".\{fromChars ds}"
+  deferPure ".\{fromChars ds}"
 
 expPart : Parser String
-expPart = do
+expPart = defer
   _ <- satisfy (c => c == 'e' || c == 'E')
   sgn <- optional (satisfy (c => c == '+' || c == '-'))
   ds <- many1 digit
-  pure "e\{expSign sgn}\{fromChars ds}"
+  deferPure "e\{expSign sgn}\{fromChars ds}"
 
 expSign : Option Char -> String
 expSign None = ""
@@ -602,21 +603,21 @@ numFrom sgn ds fr ex = floatFrom "\{sgn}\{ds}\{optText fr}\{optText ex}"
 
 intFrom : String -> Parser Literal
 intFrom s = match toInt s
-  Some n => pure (LInt n)
+  Some n => deferPure (LInt n)
   None => failWith "malformed integer literal '\{s}'"
 
 floatFrom : String -> Parser Literal
 floatFrom s = match toFloat s
-  Some f => pure (LFloat f)
+  Some f => deferPure (LFloat f)
   None => failWith "malformed float literal '\{s}'"
 
 -- A single-quoted string; `''` is an escaped single quote.
 textLit : Parser Literal
-textLit = lexeme (do
+textLit = lexeme (defer
   _ <- char '\''
   cs <- many strChar
   _ <- char '\''
-  pure (LText (fromChars cs)))
+  deferPure (LText (fromChars cs)))
 
 -- Inside a string: an escaped `''` (yielding one quote), else any non-quote char.
 -- Order matters — `escapedQuote` must be tried first, or the closing quote would
@@ -625,16 +626,16 @@ strChar : Parser Char
 strChar = orElse escapedQuote (satisfy (/= '\''))
 
 escapedQuote : Parser Char
-escapedQuote = attempt (do
+escapedQuote = attempt (defer
   _ <- char '\''
   _ <- char '\''
-  pure '\'')
+  deferPure '\'')
 
 -- A hex blob literal: X'48656C6C6F' (or lowercase x).
 blobLit : Parser Literal
 blobLit =
   attempt
-    (lexeme (do
+    (lexeme (defer
       _ <- satisfy (c => c == 'x' || c == 'X')
       _ <- char '\''
       cs <- many (satisfy isHexDigit)
@@ -647,7 +648,7 @@ isHexDigit c =
 
 blobFrom : String -> Parser Literal
 blobFrom s = match decode s
-  Ok bytes => pure (LBlob bytes)
+  Ok bytes => deferPure (LBlob bytes)
   Err e => failWith "malformed blob literal: \{e}"
 
 -- ---------------------------------------------------------------------------
@@ -668,18 +669,18 @@ orExpr : Parser SqlExpr
 orExpr = chainl1 andExpr orOp
 
 orOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
-orOp = do
+orOp = defer
   _ <- keyword "OR"
-  pure EOr
+  deferPure EOr
 
 -- AND — binds tighter than OR, left-associative.
 andExpr : Parser SqlExpr
 andExpr = chainl1 notExpr andOp
 
 andOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
-andOp = do
+andOp = defer
   _ <- keyword "AND"
-  pure EAnd
+  deferPure EAnd
 
 -- NOT — binds tighter than AND but LOOSER than a comparison, so `NOT a = 1`
 -- parses as `NOT (a = 1)`.  Right-recursive (`NOT NOT x` is legal).
@@ -699,16 +700,16 @@ notExpr = label "expected an expression" (orElse notPrefix cmpExpr)
 -- argument position), so this is productive — see the header note on
 -- E-CYCLIC-VALUE.
 notPrefix : Parser SqlExpr
-notPrefix = do
+notPrefix = defer
   _ <- keyword "NOT"
   e <- notExpr
-  pure (ENot e)
+  deferPure (ENot e)
 
 -- Comparison / null-test level: an additive expression followed by zero or more
 -- suffixes.  Written as an explicit left-fold loop rather than `chainl1` because
 -- the two suffix shapes are not both infix (`IS NULL` is postfix).
 cmpExpr : Parser SqlExpr
-cmpExpr = do
+cmpExpr = defer
   l <- addExpr
   cmpSuffixes l
 
@@ -732,18 +733,18 @@ data SuffixHead = HIs | HCmp CmpOp | HLike Bool | HIn Bool | HBetween Bool
 -- (findings F5), so the fix is to not offer the fallback once we know an operand
 -- is required.
 cmpSuffixes : SqlExpr -> Parser SqlExpr
-cmpSuffixes l = do
+cmpSuffixes l = defer
   h <- optional cmpSuffixHead
   cmpSuffixTail l h
 
 cmpSuffixHead : Parser SuffixHead
 cmpSuffixHead = choice [
-  map (_ => HIs) (keyword "IS"),
+  deferMap (_ => HIs) (keyword "IS"),
   negatedSuffixHead,
-  map (_ => HLike False) (keyword "LIKE"),
-  map (_ => HIn False) (keyword "IN"),
-  map (_ => HBetween False) (keyword "BETWEEN"),
-  map HCmp cmpOp,
+  deferMap (_ => HLike False) (keyword "LIKE"),
+  deferMap (_ => HIn False) (keyword "IN"),
+  deferMap (_ => HBetween False) (keyword "BETWEEN"),
+  deferMap HCmp cmpOp,
 ]
 
 -- `NOT LIKE` / `NOT IN` / `NOT BETWEEN`.  Once `NOT` itself matches (a clean,
@@ -751,27 +752,27 @@ cmpSuffixHead = choice [
 -- so a plain `x = 1` never even tries this branch), one of the three keywords
 -- is MANDATORY: `x NOT foo` is a real error, not a silent fallback.
 negatedSuffixHead : Parser SuffixHead
-negatedSuffixHead = do
+negatedSuffixHead = defer
   _ <- keyword "NOT"
   negatedSuffixTail
 
 negatedSuffixTail : Parser SuffixHead
 negatedSuffixTail = choice [
-  map (_ => HLike True) (keyword "LIKE"),
-  map (_ => HIn True) (keyword "IN"),
-  map (_ => HBetween True) (keyword "BETWEEN"),
+  deferMap (_ => HLike True) (keyword "LIKE"),
+  deferMap (_ => HIn True) (keyword "IN"),
+  deferMap (_ => HBetween True) (keyword "BETWEEN"),
 ]
 
 cmpSuffixTail : SqlExpr -> Option SuffixHead -> Parser SqlExpr
-cmpSuffixTail l None = pure l
-cmpSuffixTail l (Some HIs) = do
+cmpSuffixTail l None = deferPure l
+cmpSuffixTail l (Some HIs) = defer
   n <- optional (keyword "NOT")
   _ <- keyword "NULL"
   cmpSuffixes (nullTest n l)
-cmpSuffixTail l (Some (HCmp op)) = do
+cmpSuffixTail l (Some (HCmp op)) = defer
   r <- addExpr
   cmpSuffixes (EBin op l r)
-cmpSuffixTail l (Some (HLike neg)) = do
+cmpSuffixTail l (Some (HLike neg)) = defer
   p <- addExpr
   cmpSuffixes (negateIf neg (ELike l p))
 -- After `IN (` the tail is EITHER a subquery (`SELECT …`, possibly a compound) or
@@ -780,7 +781,7 @@ cmpSuffixTail l (Some (HLike neg)) = do
 -- value list it fails WITHOUT consuming and `orElse` falls cleanly to
 -- `inValuesTail`.  A `SELECT` present-but-broken commits and its deeper failure
 -- wins parsec's farthest-failure race.
-cmpSuffixTail l (Some (HIn neg)) = do
+cmpSuffixTail l (Some (HIn neg)) = defer
   _ <- symbol "("
   node <- orElse (inSubqueryTail l) (inValuesTail l)
   cmpSuffixes (negateIf neg node)
@@ -788,7 +789,7 @@ cmpSuffixTail l (Some (HIn neg)) = do
 -- own definition — see the `SqlExpr` doc comment in `lib.select`), so no
 -- `EBetween` node exists and the rest of the pipeline (render/eval/rewrite)
 -- needs no new cases for it.
-cmpSuffixTail l (Some (HBetween neg)) = do
+cmpSuffixTail l (Some (HBetween neg)) = defer
   lo <- addExpr
   _ <- keyword "AND"
   hi <- addExpr
@@ -798,17 +799,17 @@ cmpSuffixTail l (Some (HBetween neg)) = do
 -- statement parser's compound-query grammar (installed via `setSubqueryParser`),
 -- so `IN (SELECT … UNION SELECT …)` works too.
 inSubqueryTail : SqlExpr -> Parser SqlExpr
-inSubqueryTail l = do
+inSubqueryTail l = defer
   q <- subqueryParser
   _ <- symbol ")"
-  pure (EInSubquery l q)
+  deferPure (EInSubquery l q)
 
 -- `IN ( v1, .., vn )` — the existing value-list form.
 inValuesTail : SqlExpr -> Parser SqlExpr
-inValuesTail l = do
+inValuesTail l = defer
   vs <- sepBy1 sqlExpr (symbol ",")
   _ <- symbol ")"
-  pure (EIn l vs)
+  deferPure (EIn l vs)
 
 negateIf : Bool -> SqlExpr -> SqlExpr
 negateIf True e = ENot e
@@ -833,9 +834,9 @@ cmpOp = choice [
 ]
 
 cmpTok : String -> CmpOp -> Parser CmpOp
-cmpTok s op = do
+cmpTok s op = defer
   _ <- symbol s
-  pure op
+  deferPure op
 
 -- Additive — left-associative.
 addExpr : Parser SqlExpr
@@ -857,20 +858,20 @@ concatExpr : Parser SqlExpr
 concatExpr = chainl1 atom concatOp
 
 concatOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
-concatOp = do
+concatOp = defer
   _ <- symbol "||"
   -- WORKAROUND(B1w): eta-expanded, NOT bare `EConcat`. The partially-applied-
   -- constructor miscompile was fixed in the LLVM backend (main `ced6342d`) but
   -- NOT in the WasmGC one — point-free here makes `--target wasm` fail to emit.
   -- Revert only when B1 is fixed in BOTH backends.
-  pure (l r => EConcat l r)
+  deferPure (l r => EConcat l r)
 
 arithTok : String -> ArithOp -> Parser (SqlExpr -> SqlExpr -> SqlExpr)
-arithTok s op = do
+arithTok s op = defer
   _ <- symbol s
   -- WORKAROUND(B1w): eta-expanded, NOT bare `EArith op`. See above — native is
   -- fixed, WasmGC is not. Revert only when B1 is fixed in BOTH backends.
-  pure (l r => EArith op l r)
+  deferPure (l r => EArith op l r)
 
 -- An atom: a parenthesized expression, a literal, a unary minus, a CASE
 -- expression, an aggregate call, a scalar function call, or a column.
@@ -895,22 +896,22 @@ atom =
 -- position.  Writing this as `between (symbol "(") (symbol ")") sqlExpr` would
 -- make `atom` a non-productive cyclic value (E-CYCLIC-VALUE) — see header.
 parens : Parser SqlExpr
-parens = do
+parens = defer
   _ <- symbol "("
   e <- sqlExpr
   _ <- symbol ")"
-  pure e
+  deferPure e
 
 litAtom : Parser SqlExpr
-litAtom = map ELit literal
+litAtom = deferMap ELit literal
 
 -- Unary minus on a non-literal (a negative NUMBER is handled by `numLit`, which
 -- is tried first).  `SqlExpr` has no negation node, so `-x` becomes `0 - x`.
 negAtom : Parser SqlExpr
-negAtom = do
+negAtom = defer
   _ <- symbol "-"
   e <- atom
-  pure (EArith ASub (ELit (LInt 0)) e)
+  deferPure (EArith ASub (ELit (LInt 0)) e)
 
 -- ---------------------------------------------------------------------------
 -- CASE expressions
@@ -937,7 +938,7 @@ negAtom = do
 -- Ok "ECase [((EBin OpEq (ECol a) (ELit (LInt 1))), (ELit (LText 'one'))), ((EBin OpEq (ECol a) (ELit (LInt 2))), (ELit (LText 'two')))] None"
 export
 caseExpr : Parser SqlExpr
-caseExpr = do
+caseExpr = defer
   _ <- keyword "CASE"
   subj <- optional addExpr
   whens <- many1 whenThen
@@ -946,15 +947,15 @@ caseExpr = do
   buildCase subj whens els
 
 whenThen : Parser (SqlExpr, SqlExpr)
-whenThen = do
+whenThen = defer
   _ <- keyword "WHEN"
   c <- sqlExpr
   _ <- keyword "THEN"
   r <- sqlExpr
-  pure (c, r)
+  deferPure (c, r)
 
 elseClause : Parser SqlExpr
-elseClause = do
+elseClause = defer
   _ <- keyword "ELSE"
   sqlExpr
 
@@ -962,8 +963,9 @@ buildCase : Option SqlExpr ->
   List (SqlExpr, SqlExpr) ->
   Option SqlExpr ->
   Parser SqlExpr
-buildCase None whens els = pure (ECase whens els)
-buildCase (Some subj) whens els = pure (ECase (map (simpleWhen subj) whens) els)
+buildCase None whens els = deferPure (ECase whens els)
+buildCase (Some subj) whens els =
+  deferPure (ECase (map (simpleWhen subj) whens) els)
 
 simpleWhen : SqlExpr -> (SqlExpr, SqlExpr) -> (SqlExpr, SqlExpr)
 simpleWhen subj (v, r) = (EBin OpEq subj v, r)
@@ -995,7 +997,7 @@ simpleWhen subj (v, r) = (EBin OpEq subj v, r)
 -- `notCall`) with the FULL list of what IS supported.
 export
 fnCall : Parser SqlExpr
-fnCall = do
+fnCall = defer
   name <- fnHead
   args <- sepBy1 sqlExpr (symbol ",")
   _ <- symbol ")"
@@ -1005,16 +1007,16 @@ fnCall = do
 -- `(`.  Wrapped in `attempt`, exactly like `aggHead` — an unknown name (or a
 -- known one used bare) rewinds cleanly to position 0.
 fnHead : Parser String
-fnHead = attempt (do
+fnHead = attempt (defer
   w <- lexeme word
   name <- scalarFnName w
   _ <- symbol "("
-  pure name)
+  deferPure name)
 
 scalarFnName : String -> Parser String
 scalarFnName w =
   if isScalarFnName (toUpper w) then
-    pure (toUpper w)
+    deferPure (toUpper w)
   else
     failWith "not a scalar function"
 
@@ -1033,25 +1035,25 @@ isScalarFnName name = elem name [
 ]
 
 fnFromArgs : String -> List SqlExpr -> Parser SqlExpr
-fnFromArgs "LENGTH" [a] = pure (EFn "LENGTH" [a])
+fnFromArgs "LENGTH" [a] = deferPure (EFn "LENGTH" [a])
 fnFromArgs "LENGTH" _ = failWith "LENGTH(...) expects exactly 1 argument"
-fnFromArgs "UPPER" [a] = pure (EFn "UPPER" [a])
+fnFromArgs "UPPER" [a] = deferPure (EFn "UPPER" [a])
 fnFromArgs "UPPER" _ = failWith "UPPER(...) expects exactly 1 argument"
-fnFromArgs "LOWER" [a] = pure (EFn "LOWER" [a])
+fnFromArgs "LOWER" [a] = deferPure (EFn "LOWER" [a])
 fnFromArgs "LOWER" _ = failWith "LOWER(...) expects exactly 1 argument"
-fnFromArgs "TRIM" [a] = pure (EFn "TRIM" [a])
+fnFromArgs "TRIM" [a] = deferPure (EFn "TRIM" [a])
 fnFromArgs "TRIM" _ = failWith "TRIM(...) expects exactly 1 argument"
-fnFromArgs "LTRIM" [a] = pure (EFn "LTRIM" [a])
+fnFromArgs "LTRIM" [a] = deferPure (EFn "LTRIM" [a])
 fnFromArgs "LTRIM" _ = failWith "LTRIM(...) expects exactly 1 argument"
-fnFromArgs "RTRIM" [a] = pure (EFn "RTRIM" [a])
+fnFromArgs "RTRIM" [a] = deferPure (EFn "RTRIM" [a])
 fnFromArgs "RTRIM" _ = failWith "RTRIM(...) expects exactly 1 argument"
-fnFromArgs "REPLACE" [a, b, c] = pure (EFn "REPLACE" [a, b, c])
+fnFromArgs "REPLACE" [a, b, c] = deferPure (EFn "REPLACE" [a, b, c])
 fnFromArgs "REPLACE" _ = failWith "REPLACE(...) expects exactly 3 arguments"
-fnFromArgs "SUBSTR" [a, b] = pure (EFn "SUBSTR" [a, b])
-fnFromArgs "SUBSTR" [a, b, c] = pure (EFn "SUBSTR" [a, b, c])
+fnFromArgs "SUBSTR" [a, b] = deferPure (EFn "SUBSTR" [a, b])
+fnFromArgs "SUBSTR" [a, b, c] = deferPure (EFn "SUBSTR" [a, b, c])
 fnFromArgs "SUBSTR" _ = failWith "SUBSTR(...) expects 2 or 3 arguments"
-fnFromArgs "COALESCE" args = pure (ECoalesce args)
-fnFromArgs "IFNULL" [a, b] = pure (ECoalesce [a, b])
+fnFromArgs "COALESCE" args = deferPure (ECoalesce args)
+fnFromArgs "IFNULL" [a, b] = deferPure (ECoalesce [a, b])
 fnFromArgs "IFNULL" _ = failWith "IFNULL(...) expects exactly 2 arguments"
 -- Unreachable: `fnHead` only accepts names in `isScalarFnName`.
 fnFromArgs name _ = failWith "internal: unknown scalar function '\{name}'"
@@ -1081,11 +1083,11 @@ fnFromArgs name _ = failWith "internal: unknown scalar function '\{name}'"
 -- Err "expected an expression at 4"
 export
 aggCall : Parser SqlExpr
-aggCall = do
+aggCall = defer
   fn <- aggHead
   operand <- aggOperand fn
   _ <- symbol ")"
-  pure (EAgg fn operand)
+  deferPure (EAgg fn operand)
 
 -- The COMMITTING head: an aggregate name IMMEDIATELY followed by `(`.  Wrapped
 -- in `attempt`, so `count` used as an ordinary column name rewinds to position 0
@@ -1093,15 +1095,15 @@ aggCall = do
 -- the operand and the `)` are mandatory and their failures propagate (they are
 -- deeper than `column`'s, so parsec's farthest-failure rule keeps them).
 aggHead : Parser AggFn
-aggHead = attempt (do
+aggHead = attempt (defer
   w <- lexeme word
   fn <- aggFnOf w
   _ <- symbol "("
-  pure fn)
+  deferPure fn)
 
 aggFnOf : String -> Parser AggFn
 aggFnOf w = match lookupAggFn (toUpper w)
-  Some fn => pure fn
+  Some fn => deferPure fn
   None => failWith "expected an aggregate function name"
 
 -- | The `AggFn` an (already upper-cased) word names, if any.
@@ -1122,13 +1124,13 @@ lookupAggFn _ = None
 -- `count` accepts `*` (⇒ `None`, the COUNT(*) encoding) or an expression; every
 -- other aggregate demands an expression, so `sum(*)` fails inside the parens.
 aggOperand : AggFn -> Parser (Option SqlExpr)
-aggOperand FnCount = orElse starOperand (map Some sqlExpr)
-aggOperand _ = map Some sqlExpr
+aggOperand FnCount = orElse starOperand (deferMap Some sqlExpr)
+aggOperand _ = deferMap Some sqlExpr
 
 starOperand : Parser (Option SqlExpr)
-starOperand = do
+starOperand = defer
   _ <- symbol "*"
-  pure None
+  deferPure None
 
 -- | Does this expression contain an aggregate anywhere?  Used by the statement
 --   parser to reject an aggregate in WHERE / a JOIN's ON at PARSE time (the

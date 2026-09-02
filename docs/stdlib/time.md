@@ -307,14 +307,6 @@ Pauses the program for a duration.
 
 `sleep (seconds 5)` and `sleep (millis 5)` say their unit.
 
-### `sleepSeconds`
-
-```
-sleepSeconds : Int -> <Clock> Unit
-```
-
-Pauses the program for `s` seconds. The same as `sleep (seconds s)`.
-
 ## Instances
 
 ### `Display Duration`

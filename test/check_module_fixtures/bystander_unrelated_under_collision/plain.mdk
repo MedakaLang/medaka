@@ -4,11 +4,11 @@
 -- and the entry's golden is an assertion about THIS module's types only.
 --
 -- It deliberately covers both halves of the re-keyed pair:
---   * a row-kinded DATA head (`dataParamKindsRef`) — slot 0 of `Widget` is KRow
---     because a ctor field puts `r` in an effect-tail position;
+--   * a row-kinded DATA head (`dataParamKindsRef`) — slot 0 of `Widget` is
+--     declared `(r : Effect)` because a ctor field puts `r` in an effect tail;
 --   * a nullary ALIAS, an alias-OF-an-alias, and a saturated PARAMETERIZED
 --     alias (`aliasTableRef`, all three of its reader arms).
-public export data Widget r b = MkWidget (Unit -> <r> b)
+public export data Widget (r : Effect) b = MkWidget (Unit -> <r> b)
 
 public export data Pair x y = MkPair x y
 

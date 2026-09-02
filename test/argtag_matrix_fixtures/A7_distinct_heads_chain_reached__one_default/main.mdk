@@ -1,0 +1,29 @@
+-- A7/B2 — the NEGATIVE control for A6/B2's raw leg: one impl defines the method, a
+-- sibling at a DIFFERENT head inherits the interface default, and the call reaches the
+-- native arg-tag CHAIN (higher-kinded `Wrap f`, top-level `go`, no pinned local).
+-- See CENSUS.md.
+--
+-- Every ingredient of A6/B2 is present — a non-empty `raw` leg, an inheriting declared
+-- impl, the chain route — except the collision. Nothing here is undecidable: `Solo` and
+-- `Pair` are different runtime constructor tags, so the receiver's tag DOES choose. A
+-- guard that reported a collision on the mere presence of a raw entry, or that compared
+-- raw's route words to head tags by the wrong ruler, would trap this cell loudly and be
+-- wrong to.
+interface Wrap f where
+  wsize : f a -> Int
+  wsize _ = 9
+
+data Pair a b = Pair a b
+
+data Solo a = Solo a
+
+impl Wrap Solo where
+
+impl Wrap (Pair Int) where
+  wsize _ = 2
+
+go xs = wsize xs
+
+main =
+  let _ = println (go (Solo True))
+  println (go (Pair 1 True))

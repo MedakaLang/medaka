@@ -27,7 +27,7 @@
    every read's unconfigured-store refusal — is graded on all three engines by
    `pds/test/read_routes_all_engines.sh` instead. -}
 
-import json.{Json(..), jObject, lookup, parse, stringify}
+import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
 import string.{fromUtf8, join, split, startsWith, toUtf8}
@@ -127,7 +127,7 @@ responseJson bytes = match parse (responseBodyText bytes)
   Err message => panic "read_handlers: response body is not JSON: \{message}"
 
 fieldText : String -> Json -> String
-fieldText name value = match lookup name value
+fieldText name value = match get name value
   Some (JString text) => text
   _ => "<missing:\{name}>"
 
@@ -135,7 +135,7 @@ errorCode : Array Int -> String
 errorCode bytes = fieldText "error" (responseJson bytes)
 
 recordsOf : Json -> List Json
-recordsOf value = match lookup "records" value
+recordsOf value = match get "records" value
   Some (JArray items) => arrayEntries items 0 (arrayLength items)
   _ => []
 

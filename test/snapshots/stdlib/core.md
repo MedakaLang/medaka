@@ -1,5 +1,5 @@
 # META
-source_lines=1937
+source_lines=1983
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -913,6 +913,52 @@ when b m = if b then m else pure ()
 export
 unless : Thenable m => Bool -> m Unit -> m Unit
 unless b m = if b then pure () else m
+
+{- | The DEFERRED family (EFFECTS-SEMANTICS §6, "graded interfaces").  `Mappable`
+   / `Applicative` / `Thenable` above charge the callback's effect row on the
+   method's own arrow: the effect happens NOW, at the call, which is right for a
+   strict container.  The `Deferred*` family instead records the effect in the
+   container's `Effect`-kinded INDEX: nothing happens at `deferMap`/`deferThen`;
+   the registered effects fire later, at the container's own eliminator
+   (`runAsync` for `Async`).  Construction is therefore genuinely pure — a
+   `Async <IO> Int` can be built inside a function typed `<>`.
+
+   The two families are peers, not a general and a special case (§6.6), so the
+   method names are distinct on purpose: sharing `map`/`andThen` would make
+   `do`-notation pick one interface for both.  `defer` blocks desugar to
+   `deferThen`/`deferPure` the way `do` blocks desugar to `andThen`/`pure`.
+
+   The grade is graded-lite: one shared effect variable per signature.  An
+   impl MUST store its callback under the container's own `<e>` thunk rather
+   than apply it (`deferMap g (Done a) = Suspend (u => Done (g a))`, never
+   `Done (g a)`); applying it eagerly performs `<e>` on an arrow the signature
+   declares pure and is rejected (`T-EFFECT-INDEX-EAGER`). -}
+export interface DeferredMappable (f : Effect -> Type -> Type) where
+  deferMap : (a -> <e> b) -> f e a -> f e b
+
+export interface DeferredApplicative (f : Effect -> Type -> Type) requires DeferredMappable f where
+  deferPure : a -> f e a
+  deferAp : f e (a -> b) -> f e a -> f e b
+
+export interface DeferredThenable (f : Effect -> Type -> Type) requires DeferredApplicative f where
+  deferThen : f e a -> (a -> <e> f e b) -> f e b
+
+-- | `deferThen` with arguments flipped.
+export
+deferFlatMap : DeferredThenable m => (a -> <e> m e b) -> m e a -> m e b
+deferFlatMap f ma = deferThen ma f
+
+-- | `when` for the deferred family: run the action only when the condition
+-- holds.  A distinct name because `when`'s `Thenable m => m Unit` cannot
+-- describe an `Effect`-indexed container.
+export
+deferWhen : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferWhen b m = if b then m else deferPure ()
+
+-- | `unless` for the deferred family.  Dual of `deferWhen`.
+export
+deferUnless : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferUnless b m = if b then deferPure () else m
 
 {- | A left fold whose step is an action, run in order over the list.
 
@@ -2108,6 +2154,15 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "when" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EVar "m") (EApp (EVar "pure") (ELit LUnit))))
 (DTypeSig true "unless" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyVar "m") (TyCon "Unit")) (TyApp (TyVar "m") (TyCon "Unit"))))))
 (DFunDef false "unless" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EApp (EVar "pure") (ELit LUnit)) (EVar "m")))
+(DInterface true false "DeferredMappable" ("f") () ((imethod "deferMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) None)))
+(DInterface true false "DeferredApplicative" ("f") ((super "DeferredMappable" ("f"))) ((imethod "deferPure" (TyFun (TyVar "a") (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))) None) (imethod "deferAp" (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyFun (TyVar "a") (TyVar "b"))) (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) None)))
+(DInterface true false "DeferredThenable" ("f") ((super "DeferredApplicative" ("f"))) ((imethod "deferThen" (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) None)))
+(DTypeSig true "deferFlatMap" (TyConstrained ((cstr "DeferredThenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyVar "b")))) (TyFun (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyVar "b"))))))
+(DFunDef false "deferFlatMap" ((PVar "f") (PVar "ma")) (EApp (EApp (EVar "deferThen") (EVar "ma")) (EVar "f")))
+(DTypeSig true "deferWhen" (TyConstrained ((cstr "DeferredApplicative" (TyVar "m"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit")) (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit"))))))
+(DFunDef false "deferWhen" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EVar "m") (EApp (EVar "deferPure") (ELit LUnit))))
+(DTypeSig true "deferUnless" (TyConstrained ((cstr "DeferredApplicative" (TyVar "m"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit")) (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit"))))))
+(DFunDef false "deferUnless" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EApp (EVar "deferPure") (ELit LUnit)) (EVar "m")))
 (DTypeSig true "foldThen" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b"))))))))
 (DFunDef false "foldThen" (PWild (PVar "z") (PList)) (EApp (EVar "pure") (EVar "z")))
 (DFunDef false "foldThen" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (ELam ((PVar "z2")) (EApp (EApp (EApp (EVar "foldThen") (EVar "f")) (EVar "z2")) (EVar "xs")))))
@@ -2480,6 +2535,15 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "when" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EVar "m") (EApp (EMethodRef "pure") (ELit LUnit))))
 (DTypeSig true "unless" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyVar "m") (TyCon "Unit")) (TyApp (TyVar "m") (TyCon "Unit"))))))
 (DFunDef false "unless" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EApp (EMethodRef "pure") (ELit LUnit)) (EVar "m")))
+(DInterface true false "DeferredMappable" ("f") () ((imethod "deferMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) None)))
+(DInterface true false "DeferredApplicative" ("f") ((super "DeferredMappable" ("f"))) ((imethod "deferPure" (TyFun (TyVar "a") (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))) None) (imethod "deferAp" (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyFun (TyVar "a") (TyVar "b"))) (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) None)))
+(DInterface true false "DeferredThenable" ("f") ((super "DeferredApplicative" ("f"))) ((imethod "deferThen" (TyFun (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "b")))) None)))
+(DTypeSig true "deferFlatMap" (TyConstrained ((cstr "DeferredThenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyVar "b")))) (TyFun (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyVar "b"))))))
+(DFunDef false "deferFlatMap" ((PVar "f") (PVar "ma")) (EApp (EApp (EMethodRef "deferThen") (EVar "ma")) (EVar "f")))
+(DTypeSig true "deferWhen" (TyConstrained ((cstr "DeferredApplicative" (TyVar "m"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit")) (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit"))))))
+(DFunDef false "deferWhen" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EVar "m") (EApp (EMethodRef "deferPure") (ELit LUnit))))
+(DTypeSig true "deferUnless" (TyConstrained ((cstr "DeferredApplicative" (TyVar "m"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit")) (TyApp (TyApp (TyVar "m") (TyVar "e")) (TyCon "Unit"))))))
+(DFunDef false "deferUnless" ((PVar "b") (PVar "m")) (EIf (EVar "b") (EApp (EMethodRef "deferPure") (ELit LUnit)) (EVar "m")))
 (DTypeSig true "foldThen" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b"))))))))
 (DFunDef false "foldThen" (PWild (PVar "z") (PList)) (EApp (EMethodRef "pure") (EVar "z")))
 (DFunDef false "foldThen" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (ELam ((PVar "z2")) (EApp (EApp (EApp (EDictApp "foldThen") (EVar "f")) (EVar "z2")) (EVar "xs")))))

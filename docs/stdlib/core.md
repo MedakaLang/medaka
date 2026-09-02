@@ -409,6 +409,74 @@ unless : Thenable m => Bool -> m Unit -> m Unit
 
 Runs an action only when the condition does not hold.
 
+### `DeferredMappable`
+
+```
+interface DeferredMappable (f : Effect -> Type -> Type)
+  deferMap : (a -> <e> b) -> f e a -> f e b
+```
+
+The DEFERRED family (EFFECTS-SEMANTICS §6, "graded interfaces").  `Mappable`
+/ `Applicative` / `Thenable` above charge the callback's effect row on the
+method's own arrow: the effect happens NOW, at the call, which is right for a
+strict container.  The `Deferred*` family instead records the effect in the
+container's `Effect`-kinded INDEX: nothing happens at `deferMap`/`deferThen`;
+the registered effects fire later, at the container's own eliminator
+(`runAsync` for `Async`).  Construction is therefore genuinely pure — a
+`Async <IO> Int` can be built inside a function typed `<>`.
+
+The two families are peers, not a general and a special case (§6.6), so the
+method names are distinct on purpose: sharing `map`/`andThen` would make
+`do`-notation pick one interface for both.  `defer` blocks desugar to
+`deferThen`/`deferPure` the way `do` blocks desugar to `andThen`/`pure`.
+
+The grade is graded-lite: one shared effect variable per signature.  An
+impl MUST store its callback under the container's own `<e>` thunk rather
+than apply it (`deferMap g (Done a) = Suspend (u => Done (g a))`, never
+`Done (g a)`); applying it eagerly performs `<e>` on an arrow the signature
+declares pure and is rejected (`T-EFFECT-INDEX-EAGER`).
+
+### `DeferredApplicative`
+
+```
+interface DeferredApplicative (f : Effect -> Type -> Type)
+  deferPure : a -> f e a
+  deferAp : f e (a -> b) -> f e a -> f e b
+```
+
+### `DeferredThenable`
+
+```
+interface DeferredThenable (f : Effect -> Type -> Type)
+  deferThen : f e a -> (a -> <e> f e b) -> f e b
+```
+
+### `deferFlatMap`
+
+```
+deferFlatMap : DeferredThenable m => (a -> <e> m e b) -> m e a -> m e b
+```
+
+`deferThen` with arguments flipped.
+
+### `deferWhen`
+
+```
+deferWhen : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+```
+
+`when` for the deferred family: run the action only when the condition
+holds.  A distinct name because `when`'s `Thenable m => m Unit` cannot
+describe an `Effect`-indexed container.
+
+### `deferUnless`
+
+```
+deferUnless : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+```
+
+`unless` for the deferred family.  Dual of `deferWhen`.
+
 ### `foldThen`
 
 ```

@@ -21,7 +21,7 @@
    No cell may change the `Store`: every one of them asserts the successor is
    still the empty, unconfigured store. -}
 
-import json.{Json(..), jObject, lookup, parse}
+import json.{Json(..), jObject, get, parse}
 import string.{contains, fromUtf8, split, toUtf8}
 import lib.handlers.{pdsServer}
 import lib.server_core.{Account, Server, handleBytes, makeAccount}
@@ -99,7 +99,7 @@ hasContentType value bytes =
 
 errorCode : Array Int -> String
 errorCode bytes = match parse (bodyText bytes)
-  Ok value => match lookup "error" value
+  Ok value => match get "error" value
     Some (JString code) => code
     _ => "<no-error-field>"
   Err _ => "<unparseable-body>"

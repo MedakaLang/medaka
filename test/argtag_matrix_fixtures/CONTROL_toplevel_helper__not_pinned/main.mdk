@@ -1,0 +1,29 @@
+-- CONTROL — deliberately OUTSIDE the masked region. See CENSUS.md.
+--
+-- Identical interface, impls and use sites to
+-- A1_distinct_user_heads__B1_both_defined, with ONE difference: the helper is a
+-- TOP-LEVEL definition instead of a `let`-local. A top-level definition IS
+-- dict-abstracted (dict_pass prepends `$dict_…` params to top-level defs and impl
+-- methods only), so each call site gets its own instantiation.
+--
+-- This cell must stay GREEN and CORRECT. It is what makes the A1 rows' silent wrong
+-- answer a finding about LOCALS rather than about this interface, these impls, or
+-- these two head constructors — if this cell breaks, the environment broke, not the
+-- region.
+interface Speak a where
+  speak : a -> String
+
+data Dog = Dog
+
+data Cat = Cat
+
+impl Speak Dog where
+  speak _ = "woof"
+
+impl Speak Cat where
+  speak _ = "meow"
+
+topF : Speak a => a -> String
+topF v = speak v
+
+main = println (speak Dog ++ "|" ++ speak Cat ++ "//" ++ topF Dog ++ "|" ++ topF Cat)

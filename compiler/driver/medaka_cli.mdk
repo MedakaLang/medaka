@@ -178,6 +178,7 @@ import types.typecheck.{
   mainTypeIsAsync,
   mainTypeIsUnit,
   setStdlibOwnership,
+  setLocalPinDisabled,
 }
 import eval.eval.{
   evalModulesOutputRun,
@@ -408,9 +409,26 @@ runAbort msg =
   let _ = ePutStrLn msg
   exit 1
 
+-- #2445 S-1: the env half of the TEST-ONLY unpin hatch.  The whole argument for the
+-- hatch — and for why it must NOT be set by a user — lives on `localPinPairs`
+-- (`types/typecheck.mdk`), the one site that reads the flag.  Here only because
+-- `getEnv` performs `<Env …>` and every generalization site is pure.
+--
+-- ⚠️ EMPTY IS OFF, matching `support/timer`'s `perfWasmEnabled` and for its measured
+-- reason: `getEnv` is C `getenv`, so `MEDAKA_ARGTAG_UNPIN=` reads `Some ""`.  An
+-- "any value" rule would arm the hatch on `MEDAKA_ARGTAG_UNPIN="$flag"` with an unset
+-- flag, i.e. the off-switch would fail OPEN into accepting programs the emitter cannot
+-- dispatch.
+argtagUnpinRequested : Unit -> <IO> Bool
+argtagUnpinRequested () = match getEnv "MEDAKA_ARGTAG_UNPIN"
+  Some "" => False
+  Some _ => True
+  None => False
+
 main : <IO> Unit
 main =
   let _ = checkSourceStaleness (args ())
+  let _ = setLocalPinDisabled (argtagUnpinRequested ())
   runCli ()
 
 runCli : Unit -> <IO> Unit

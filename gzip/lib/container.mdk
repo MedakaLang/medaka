@@ -108,12 +108,12 @@ hasFlag flg mask = bitAnd flg mask /= 0
 
 checkMagic : List Int -> ByteParser Unit
 checkMagic [m0, m1]
-  | m0 == gzipMagic0 && m1 == gzipMagic1 = pure ()
+  | m0 == gzipMagic0 && m1 == gzipMagic1 = deferPure ()
 checkMagic _ = failWith "not a gzip stream (bad magic)"
 
 checkCm : Int -> ByteParser Unit
 checkCm cm
-  | cm == cmDeflate = pure ()
+  | cm == cmDeflate = deferPure ()
   | otherwise =
     failWith
       "unsupported compression method (CM=\{cm}); only 8 (deflate) is supported"
@@ -122,47 +122,47 @@ checkReserved : Int -> ByteParser Unit
 checkReserved flg
   | hasFlag flg flagReservedMask =
     failWith "reserved FLG bits (5,6,7) must be 0, got FLG=\{flg}"
-  | otherwise = pure ()
+  | otherwise = deferPure ()
 
 -- One NUL-terminated byte run (FNAME / FCOMMENT payload, NUL not included).
 nulTerminated : ByteParser (List Int)
-nulTerminated = do
+nulTerminated = defer
   bs <- many (satisfy (/= 0))
   _ <- byte 0
-  pure bs
+  deferPure bs
 
 -- FEXTRA: 2-byte LE length, then that many bytes, discarded (no extra-field
 -- registry is modeled here).
 skipExtra : Int -> ByteParser Unit
-skipExtra flg = when (hasFlag flg flagFextra) (do
+skipExtra flg = deferWhen (hasFlag flg flagFextra) (defer
   len <- leUint 2
   _ <- takeBytes len
-  pure ())
+  deferPure ())
 
 parseName : Int -> ByteParser (Option String)
 parseName flg =
-  if hasFlag flg flagFname then do
+  if hasFlag flg flagFname then defer
     bs <- nulTerminated
-    pure (Some (fromUtf8 (arrayFromList bs)))
+    deferPure (Some (fromUtf8 (arrayFromList bs)))
   else
-    pure None
+    deferPure None
 
 parseComment : Int -> ByteParser (Option String)
 parseComment flg =
-  if hasFlag flg flagFcomment then do
+  if hasFlag flg flagFcomment then defer
     bs <- nulTerminated
-    pure (Some (fromUtf8 (arrayFromList bs)))
+    deferPure (Some (fromUtf8 (arrayFromList bs)))
   else
-    pure None
+    deferPure None
 
 -- FHCRC: 2 bytes, consumed but NOT validated — see the module comment.
 skipFhcrc : Int -> ByteParser Unit
-skipFhcrc flg = when (hasFlag flg flagFhcrc) (do
+skipFhcrc flg = deferWhen (hasFlag flg flagFhcrc) (defer
   _ <- takeBytes 2
-  pure ())
+  deferPure ())
 
 gzipHeaderParser : ByteParser GzipHeader
-gzipHeaderParser = do
+gzipHeaderParser = defer
   magic <- takeBytes 2
   _ <- checkMagic magic
   cm <- anyByte
@@ -176,7 +176,7 @@ gzipHeaderParser = do
   nameVal <- parseName flg
   commentVal <- parseComment flg
   _ <- skipFhcrc flg
-  pure GzipHeader {
+  deferPure GzipHeader {
     mtime = mtimeVal,
     name = nameVal,
     comment = commentVal,
@@ -204,10 +204,10 @@ parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0
 -- ---------------------------------------------------------------------------
 
 trailerParser : ByteParser (Int, Int)
-trailerParser = do
+trailerParser = defer
   crc <- leUint 4
   isize <- leUint 4
-  pure (crc, isize)
+  deferPure (crc, isize)
 
 {- | Read `(crc32, isize)` from the LAST 8 bytes of `bytes`. Both are checked
    on inflate against the actual decompressed data by the module that owns

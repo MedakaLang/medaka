@@ -106,14 +106,6 @@ Ref : a -> Ref a
 A new mutable cell holding a value. Read it with `!r` and write it
 with `r := v`.
 
-### `setRef`
-
-```
-setRef : Ref a -> a -> Unit
-```
-
-Replaces the value in a cell. The same as `r := v`.
-
 ## Files
 
 ### `readFile`
@@ -854,7 +846,7 @@ A new array of `n` copies of a value.
 ### `arrayMakeWith`
 
 ```
-arrayMakeWith : Int -> (Int -> a) -> Array a
+arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 ```
 
 A new array of length `n` whose element at each index `i` is `f i`.

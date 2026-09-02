@@ -1,5 +1,5 @@
 # META
-source_lines=442
+source_lines=437
 stages=DESUGAR,MARK
 # SOURCE
 {- | Durations, a UTC calendar, and the clock.
@@ -366,11 +366,6 @@ export
 sleep : Duration -> <Clock> Unit
 sleep d = sleepMs (toMillis d)
 
--- | Pauses the program for `s` seconds. The same as `sleep (seconds s)`.
-export
-sleepSeconds : Int -> <Clock> Unit
-sleepSeconds s = sleepMs (s * 1000)
-
 -- Round-trip: epoch → civil → epoch is the identity (n constrained ≥ 0 to a
 -- sane band; negatives are supported too, see the `fromEpochSeconds (0 - 1)`
 -- doctest).
@@ -512,8 +507,6 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DFunDef false "elapsedSince" ((PVar "start")) (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "start")))
 (DTypeSig true "sleep" (TyFun (TyCon "Duration") (TyEffect ("Clock") None (TyCon "Unit"))))
 (DFunDef false "sleep" ((PVar "d")) (EApp (EVar "sleepMs") (EApp (EVar "toMillis") (EVar "d"))))
-(DTypeSig true "sleepSeconds" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
-(DFunDef false "sleepSeconds" ((PVar "s")) (EApp (EVar "sleepMs") (EBinOp "*" (EVar "s") (ELit (LInt 1000)))))
 (DProp false "epoch round-trips through the civil calendar" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000))))) (DoExpr (EBinOp "==" (EApp (EVar "toEpochSeconds") (EApp (EVar "fromEpochSeconds") (EVar "s"))) (EVar "s")))))
 (DTypeSig false "sane" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "sane" ((PVar "n")) (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000)))))
@@ -595,8 +588,6 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DFunDef false "elapsedSince" ((PVar "start")) (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "start")))
 (DTypeSig true "sleep" (TyFun (TyCon "Duration") (TyEffect ("Clock") None (TyCon "Unit"))))
 (DFunDef false "sleep" ((PVar "d")) (EApp (EVar "sleepMs") (EApp (EVar "toMillis") (EVar "d"))))
-(DTypeSig true "sleepSeconds" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
-(DFunDef false "sleepSeconds" ((PVar "s")) (EApp (EVar "sleepMs") (EBinOp "*" (EVar "s") (ELit (LInt 1000)))))
 (DProp false "epoch round-trips through the civil calendar" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000))))) (DoExpr (EBinOp "==" (EApp (EVar "toEpochSeconds") (EApp (EVar "fromEpochSeconds") (EVar "s"))) (EVar "s")))))
 (DTypeSig false "sane" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "sane" ((PVar "n")) (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000)))))

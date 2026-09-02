@@ -1,10 +1,10 @@
 running doctests in stdlib/toml.mdk
   ok   stdlib/toml.mdk:282: parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
   ok   stdlib/toml.mdk:284: parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-  ok   stdlib/toml.mdk:290: parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArr ["pkg-a", "pkg-b"])])
+  ok   stdlib/toml.mdk:290: parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArray ["pkg-a", "pkg-b"])])
   ok   stdlib/toml.mdk:292: parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
-  ok   stdlib/toml.mdk:294: parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TStr "x")])
-  ok   stdlib/toml.mdk:296: parse "name = \"hello\" # a comment" == Ok (Toml [("name", TStr "hello")])
+  ok   stdlib/toml.mdk:294: parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TString "x")])
+  ok   stdlib/toml.mdk:296: parse "name = \"hello\" # a comment" == Ok (Toml [("name", TString "hello")])
   ok   stdlib/toml.mdk:303: parse "bad line no equals"
   ok   stdlib/toml.mdk:306: parse "[package]\nname = unterminated"
   ok   stdlib/toml.mdk:311: parse "[server]\naddr = {host = \"h\", port = 1}"
@@ -34,17 +34,17 @@ running doctests in stdlib/toml.mdk
   ok   stdlib/toml.mdk:492: parseTableCount "gate" "[package]\nname = \"x\""
   ok   stdlib/toml.mdk:511: parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
   ok   stdlib/toml.mdk:513: parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
-  ok   stdlib/toml.mdk:527: eqTomlValue (TStr "a") (TStr "a")
-  ok   stdlib/toml.mdk:530: eqTomlValue (TArr ["a", "b"]) (TArr ["a", "b"])
-  ok   stdlib/toml.mdk:535: eqTomlValue (TStr "a") (TArr ["a"])
-  ok   stdlib/toml.mdk:564: debugTomlValue (TStr "hi")
-  ok   stdlib/toml.mdk:567: debugTomlValue (TArr ["a", "b"])
+  ok   stdlib/toml.mdk:527: eqTomlValue (TString "a") (TString "a")
+  ok   stdlib/toml.mdk:530: eqTomlValue (TArray ["a", "b"]) (TArray ["a", "b"])
+  ok   stdlib/toml.mdk:535: eqTomlValue (TString "a") (TArray ["a"])
+  ok   stdlib/toml.mdk:564: debugTomlValue (TString "hi")
+  ok   stdlib/toml.mdk:567: debugTomlValue (TArray ["a", "b"])
   ok   stdlib/toml.mdk:570: debugTomlValue (TInt 42)
   ok   stdlib/toml.mdk:573: debugTomlValue (TBool True)
-  ok   stdlib/toml.mdk:631: display (TStr "hi")
+  ok   stdlib/toml.mdk:631: display (TString "hi")
   ok   stdlib/toml.mdk:633: display (TBool True)
   ok   stdlib/toml.mdk:638: display (TInt 42)
-  ok   stdlib/toml.mdk:640: display (TArr ["a", "b"])
+  ok   stdlib/toml.mdk:640: display (TArray ["a", "b"])
   ok   stdlib/toml.mdk:647: display (Toml [("a.b", TInt 1), ("c", TBool False)])
   ok   stdlib/toml.mdk:649: display (Toml [])
 

@@ -468,7 +468,7 @@ adtToDecl a =
   let names = if adtDerives a then ["Eq", "Ord", "Debug"] else ["Debug"]
   -- Synthesized AST: there is no source span to point at, so the loc is None.
   let derives = map (n => DeriveRef n None) names
-  dDataUnresolved VisPrivate (adtName a) [] variants derives
+  dDataUnresolved VisPrivate (adtName a) [] [] variants derives
 
 -- ── monomorphic helper function: f : A -> B ─────────────────────────────────
 genFunDecl : Ctx -> <Rand> Decl

@@ -1,5 +1,5 @@
 # META
-source_lines=2507
+source_lines=2530
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1921,6 +1921,32 @@ ifaceRouteKeysGo heads iface ((_, i, tag, key) :: rest)
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
 
+-- #2445: the HEAD TYCON tag of the declared impl a route WORD names.  The word is
+-- whatever `declRouteKey` minted — the bare head tag when the head is unique, the
+-- canonical key when it is NOT — so a caller holding a list of route words cannot
+-- compare them to head tags by string equality: at exactly the collision this maps
+-- back for, the word is the key and never string-equals the bare tag.  (That is the
+-- fail-OPEN a naive duplicate test over `map groupTag groups ++ raw` walks into: the
+-- "one impl defines, sibling at the same head inherits the default" shape is the one
+-- where the two spellings differ.)  Empty when no declared impl of [iface] answers to
+-- the word, which an EMPTY table also gives — the same degrade-to-today's-output
+-- direction `ifaceDeclHeadUnique` already takes.
+export
+declHeadOfRouteWord : List (String, String, String, String) ->
+  String ->
+  String ->
+  String
+declHeadOfRouteWord heads iface word = declHeadOfRouteWordGo iface word heads
+
+declHeadOfRouteWordGo : String ->
+  String ->
+  List (String, String, String, String) ->
+  String
+declHeadOfRouteWordGo _ _ [] = ""
+declHeadOfRouteWordGo iface word ((_, i, t, k) :: rest)
+  | i == iface && (t == word || k == word) = t
+  | otherwise = declHeadOfRouteWordGo iface word rest
+
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
@@ -2086,9 +2112,7 @@ tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- typed-core-IR pair — same precedent as typecheck.mdk's and doc.mdk's
 -- ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentionsParams (TyRow _ tail _) params = match tail
-  Some v => contains v params
-  None => False
+tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
@@ -2245,9 +2269,8 @@ tyMentionsNonParam (TyTuple ts) params =
   anyList (t => tyMentionsNonParam t params) ts
 tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
 -- Mirror of the `tyMentionsParams` arm above.
-tyMentionsNonParam (TyRow _ tail _) params = match tail
-  Some v => not (contains v params)
-  None => False
+tyMentionsNonParam (TyRow _ tail _) params =
+  anyList (v => not (contains v params)) tail
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
@@ -2500,7 +2523,7 @@ payloadArityL (ConNamed fs _) = listLen fs
 nodeTag : Expr -> String
 nodeTag (ESection _) = "ESection"
 nodeTag (EGuards _) = "EGuards"
-nodeTag (EDo _) = "EDo"
+nodeTag (EDo _ _) = "EDo"
 nodeTag (EStringInterp _) = "EStringInterp"
 nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"
@@ -3044,6 +3067,11 @@ nodeTag _ = "?"
 (DFunDef false "ifaceRouteKeysGo" ((PVar "heads") (PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "heads")) (EVar "i")) (EVar "tag"))) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
+(DTypeSig true "declHeadOfRouteWord" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWord" ((PVar "heads") (PVar "iface") (PVar "word")) (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "heads")))
+(DTypeSig false "declHeadOfRouteWordGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWordGo" (PWild PWild (PList)) (ELit (LString "")))
+(DFunDef false "declHeadOfRouteWordGo" ((PVar "iface") (PVar "word") (PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "word")) (EBinOp "==" (EVar "k") (EVar "word")))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ifaceDeclHeadUnique" ((PVar "heads") (PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "heads")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -3084,7 +3112,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsParams" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DTypeSig true "selfFnParamTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnParamTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceSelfFnParamEntries")) (EVar "prog")))
@@ -3134,7 +3162,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))))) (EVar "tail")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
@@ -3219,7 +3247,7 @@ nodeTag _ = "?"
 (DTypeSig false "nodeTag" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "nodeTag" ((PCon "ESection" PWild)) (ELit (LString "ESection")))
 (DFunDef false "nodeTag" ((PCon "EGuards" PWild)) (ELit (LString "EGuards")))
-(DFunDef false "nodeTag" ((PCon "EDo" PWild)) (ELit (LString "EDo")))
+(DFunDef false "nodeTag" ((PCon "EDo" PWild PWild)) (ELit (LString "EDo")))
 (DFunDef false "nodeTag" ((PCon "EStringInterp" PWild)) (ELit (LString "EStringInterp")))
 (DFunDef false "nodeTag" ((PCon "EVariantUpdate" PWild PWild PWild)) (ELit (LString "EVariantUpdate")))
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))
@@ -3763,6 +3791,11 @@ nodeTag _ = "?"
 (DFunDef false "ifaceRouteKeysGo" ((PVar "heads") (PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "heads")) (EVar "i")) (EVar "tag"))) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
+(DTypeSig true "declHeadOfRouteWord" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWord" ((PVar "heads") (PVar "iface") (PVar "word")) (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "heads")))
+(DTypeSig false "declHeadOfRouteWordGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "String")))))
+(DFunDef false "declHeadOfRouteWordGo" (PWild PWild (PList)) (ELit (LString "")))
+(DFunDef false "declHeadOfRouteWordGo" ((PVar "iface") (PVar "word") (PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "word")) (EBinOp "==" (EVar "k") (EVar "word")))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "declHeadOfRouteWordGo") (EVar "iface")) (EVar "word")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ifaceDeclHeadUnique" ((PVar "heads") (PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "heads")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -3803,7 +3836,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsParams" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DTypeSig true "selfFnParamTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnParamTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceSelfFnParamEntries")) (EVar "prog")))
@@ -3853,7 +3886,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))))) (EVar "tail")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
@@ -3938,7 +3971,7 @@ nodeTag _ = "?"
 (DTypeSig false "nodeTag" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "nodeTag" ((PCon "ESection" PWild)) (ELit (LString "ESection")))
 (DFunDef false "nodeTag" ((PCon "EGuards" PWild)) (ELit (LString "EGuards")))
-(DFunDef false "nodeTag" ((PCon "EDo" PWild)) (ELit (LString "EDo")))
+(DFunDef false "nodeTag" ((PCon "EDo" PWild PWild)) (ELit (LString "EDo")))
 (DFunDef false "nodeTag" ((PCon "EStringInterp" PWild)) (ELit (LString "EStringInterp")))
 (DFunDef false "nodeTag" ((PCon "EVariantUpdate" PWild PWild PWild)) (ELit (LString "EVariantUpdate")))
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))

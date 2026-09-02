@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
    `parse` turns JSON text into a `Json` value and `stringify` turns a value
    back into compact text. Arrays and objects are stored in arrays, so
    indexing is `O(1)` and an object keeps its keys in source order. The
-   accessors (`lookup`, `at`, `asString`, and the rest) take a value apart
+   accessors (`get`, `at`, `asString`, and the rest) take a value apart
    without pattern matching.
 
    Integers and floats are kept apart, so `3` parses as `JInt 3` and
@@ -577,14 +577,14 @@ ensureEnd arr j v
 
    The lookup scans the members in order.
 
-   > lookup "b" (jObject [("a", JInt 1), ("b", JInt 2)])
+   > get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
    Some 2
-   > lookup "z" (jObject [("a", JInt 1)])
+   > get "z" (jObject [("a", JInt 1)])
    None -}
 export
-lookup : String -> Json -> Option Json
-lookup key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
-lookup _ _ = None
+get : String -> Json -> Option Json
+get key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
+get _ _ = None
 
 lookupGo : String -> Array (String, Json) -> Int -> Int -> Option Json
 lookupGo key pairs i n
@@ -775,8 +775,8 @@ prop "at k recovers the k-th element of a JArray" (n : Int) =
   let k = if n < 0 then 0 - n else n
   at k (jArray (map JInt [0..=k])) == Some (JInt k)
 
-prop "lookup finds an inserted key" (k : Int) (v : Int) =
-  lookup (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
+prop "get finds an inserted key" (k : Int) (v : Int) =
+  get (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
@@ -918,9 +918,9 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "parseTop" ((PVar "arr")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "parseValue") (EVar "arr")) (ELit (LInt 0)))) (ELam ((PTuple (PVar "v") (PVar "j"))) (EApp (EApp (EApp (EVar "ensureEnd") (EVar "arr")) (EApp (EApp (EVar "skipWs") (EVar "arr")) (EVar "j"))) (EVar "v")))))
 (DTypeSig false "ensureEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Json"))))))
 (DFunDef false "ensureEnd" ((PVar "arr") (PVar "j") (PVar "v")) (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Ok") (EVar "v")) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "trailing characters after JSON value"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "lookup" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
-(DFunDef false "lookup" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
-(DFunDef false "lookup" (PWild PWild) (EVar "None"))
+(DTypeSig true "get" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
+(DFunDef false "get" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
+(DFunDef false "get" (PWild PWild) (EVar "None"))
 (DTypeSig false "lookupGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Json")))))))
 (DFunDef false "lookupGo" ((PVar "key") (PVar "pairs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (EVar "key")) (EApp (EVar "Some") (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "at" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
@@ -964,7 +964,7 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DProp false "asObject recovers a built JObject" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "j") (EApp (EVar "jObject") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EApp (EVar "intToString") (EVar "n")) (EApp (EVar "JInt") (EVar "n"))))) (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "map") (EVar "JObject")) (EApp (EVar "asObject") (EVar "j"))) (EApp (EVar "Some") (EVar "j"))))))
 (DProp false "asObject rejects every non-object variant" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JInt") (EVar "n"))) (EVar "None")) (EBinOp "==" (EApp (EVar "asObject") (EVar "JNull")) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "n")))) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (EVar "n"))))) (EVar "None"))))
 (DProp false "at k recovers the k-th element of a JArray" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "at") (EVar "k")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JInt")) (ERangeList (ELit (LInt 0)) (EVar "k") true)))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "k")))))))
-(DProp false "lookup finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "lookup") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
+(DProp false "get finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "get") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
@@ -1106,9 +1106,9 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "parseTop" ((PVar "arr")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "parseValue") (EVar "arr")) (ELit (LInt 0)))) (ELam ((PTuple (PVar "v") (PVar "j"))) (EApp (EApp (EApp (EVar "ensureEnd") (EVar "arr")) (EApp (EApp (EVar "skipWs") (EVar "arr")) (EVar "j"))) (EVar "v")))))
 (DTypeSig false "ensureEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Json"))))))
 (DFunDef false "ensureEnd" ((PVar "arr") (PVar "j") (PVar "v")) (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Ok") (EVar "v")) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "trailing characters after JSON value"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "lookup" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
-(DFunDef false "lookup" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
-(DFunDef false "lookup" (PWild PWild) (EVar "None"))
+(DTypeSig true "get" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
+(DFunDef false "get" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
+(DFunDef false "get" (PWild PWild) (EVar "None"))
 (DTypeSig false "lookupGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Json")))))))
 (DFunDef false "lookupGo" ((PVar "key") (PVar "pairs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (EVar "key")) (EApp (EVar "Some") (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "at" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
@@ -1152,4 +1152,4 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DProp false "asObject recovers a built JObject" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "j") (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EApp (EVar "intToString") (EVar "n")) (EApp (EVar "JInt") (EVar "n"))))) (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "JObject")) (EApp (EVar "asObject") (EVar "j"))) (EApp (EVar "Some") (EVar "j"))))))
 (DProp false "asObject rejects every non-object variant" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JInt") (EVar "n"))) (EVar "None")) (EBinOp "==" (EApp (EVar "asObject") (EVar "JNull")) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "n")))) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (EVar "n"))))) (EVar "None"))))
 (DProp false "at k recovers the k-th element of a JArray" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "at") (EVar "k")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JInt")) (ERangeList (ELit (LInt 0)) (EVar "k") true)))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "k")))))))
-(DProp false "lookup finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "lookup") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
+(DProp false "get finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "get") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))

@@ -1917,6 +1917,32 @@ ifaceRouteKeysGo heads iface ((_, i, tag, key) :: rest)
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
 
+-- #2445: the HEAD TYCON tag of the declared impl a route WORD names.  The word is
+-- whatever `declRouteKey` minted — the bare head tag when the head is unique, the
+-- canonical key when it is NOT — so a caller holding a list of route words cannot
+-- compare them to head tags by string equality: at exactly the collision this maps
+-- back for, the word is the key and never string-equals the bare tag.  (That is the
+-- fail-OPEN a naive duplicate test over `map groupTag groups ++ raw` walks into: the
+-- "one impl defines, sibling at the same head inherits the default" shape is the one
+-- where the two spellings differ.)  Empty when no declared impl of [iface] answers to
+-- the word, which an EMPTY table also gives — the same degrade-to-today's-output
+-- direction `ifaceDeclHeadUnique` already takes.
+export
+declHeadOfRouteWord : List (String, String, String, String) ->
+  String ->
+  String ->
+  String
+declHeadOfRouteWord heads iface word = declHeadOfRouteWordGo iface word heads
+
+declHeadOfRouteWordGo : String ->
+  String ->
+  List (String, String, String, String) ->
+  String
+declHeadOfRouteWordGo _ _ [] = ""
+declHeadOfRouteWordGo iface word ((_, i, t, k) :: rest)
+  | i == iface && (t == word || k == word) = t
+  | otherwise = declHeadOfRouteWordGo iface word rest
+
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
@@ -2082,9 +2108,7 @@ tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- typed-core-IR pair — same precedent as typecheck.mdk's and doc.mdk's
 -- ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentionsParams (TyRow _ tail _) params = match tail
-  Some v => contains v params
-  None => False
+tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
@@ -2241,9 +2265,8 @@ tyMentionsNonParam (TyTuple ts) params =
   anyList (t => tyMentionsNonParam t params) ts
 tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
 -- Mirror of the `tyMentionsParams` arm above.
-tyMentionsNonParam (TyRow _ tail _) params = match tail
-  Some v => not (contains v params)
-  None => False
+tyMentionsNonParam (TyRow _ tail _) params =
+  anyList (v => not (contains v params)) tail
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
@@ -2496,7 +2519,7 @@ payloadArityL (ConNamed fs _) = listLen fs
 nodeTag : Expr -> String
 nodeTag (ESection _) = "ESection"
 nodeTag (EGuards _) = "EGuards"
-nodeTag (EDo _) = "EDo"
+nodeTag (EDo _ _) = "EDo"
 nodeTag (EStringInterp _) = "EStringInterp"
 nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"

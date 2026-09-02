@@ -17,7 +17,7 @@
 -- something that builds a `Q`: a constructed body drags in an unrelated second
 -- diagnostic (a `Num` constraint on the method's quantified `b`), which would let the
 -- fixture keep passing on the wrong diagnostic if the kind check ever went quiet.
-interface Graded f where
+interface Graded (f : Effect -> Type -> Type) where
   gthen : f e a -> (a -> <e> f e b) -> f e b
 
 data Q a b = MkQ a b

@@ -1,5 +1,5 @@
 # META
-source_lines=590
+source_lines=591
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -67,7 +67,8 @@ extern readExactly : Int -> <Stdin> Option String
 -- with `r := v`.
 extern Ref : a -> Ref a
 
--- | Replaces the value in a cell. The same as `r := v`.
+-- The primitive behind `r := v`; the operator is the surface form and this
+-- name is kept out of the reference.
 extern setRef : Ref a -> a -> Unit
 
 -- # Files
@@ -481,7 +482,7 @@ extern arrayLength : Array a -> Int
 extern arrayMake : Int -> a -> Array a
 
 -- | A new array of length `n` whose element at each index `i` is `f i`.
-extern arrayMakeWith : Int -> (Int -> a) -> Array a
+extern arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 
 -- | The element at an index, with no bounds check. For library internals
 -- that have already checked the index.
@@ -702,7 +703,7 @@ extern stringToLower : String -> String
 (DExtern false "debugCharLit" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern false "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
 (DExtern false "arrayMake" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
-(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a")))))
+(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "a"))))))
 (DExtern false "arrayGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyVar "a"))))
 (DExtern false "arraySetUnsafe" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
 (DExtern false "arrayCopy" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
@@ -841,7 +842,7 @@ extern stringToLower : String -> String
 (DExtern false "debugCharLit" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern false "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
 (DExtern false "arrayMake" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
-(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a")))))
+(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "a"))))))
 (DExtern false "arrayGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyVar "a"))))
 (DExtern false "arraySetUnsafe" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
 (DExtern false "arrayCopy" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))

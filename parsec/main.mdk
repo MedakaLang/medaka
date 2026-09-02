@@ -16,12 +16,13 @@ import lib.parser.{
   spaces,
   between,
   string,
+  orElse,
 }
 -- `intToString` is a global builtin (not a `string` export) — used unqualified below.
 
 -- A natural number: one-or-more digits, folded into an Int.
 number : Parser Int
-number = map (digits => foldDigits digits 0) (some digit)
+number = deferMap (digits => foldDigits digits 0) (some digit)
 
 foldDigits : List Char -> Int -> Int
 foldDigits [] acc = acc
@@ -29,10 +30,10 @@ foldDigits (c :: rest) acc = foldDigits rest (acc * 10 + (charCode c - 48))
 
 -- '+' and '-' as operator parsers yielding the binary function.
 addOp : Parser (Int -> Int -> Int)
-addOp = map (_ => x y => x + y) (char '+')
+addOp = deferMap (_ => (+)) (char '+')
 
 subOp : Parser (Int -> Int -> Int)
-subOp = map (_ => x y => x - y) (char '-')
+subOp = deferMap (_ => (-)) (char '-')
 
 -- A left-associative sum/difference of numbers.
 expr : Parser Int

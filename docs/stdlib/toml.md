@@ -20,8 +20,8 @@ and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`. The
 
 ```
 data TomlValue
-  = TStr String
-  | TArr (List String)
+  = TString String
+  | TArray (List String)
   | TInt Int
   | TBool Bool
 ```
@@ -57,9 +57,9 @@ ignored.
 
 ```medaka
 > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
-Ok Toml [("package.name", TStr "hello"), ("package.version", TStr "0.1.0")]
+Ok Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")]
 > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-Ok Toml [("gate.0.name", TStr "a"), ("gate.1.name", TStr "b")]
+Ok Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]
 ```
 
 ## Accessors
@@ -176,7 +176,7 @@ impl Display TomlValue
 boolean as `true` or `false`.
 
 ```medaka
-> display (TStr "hi")
+> display (TString "hi")
 "\"hi\""
 > display (TBool True)
 "true"

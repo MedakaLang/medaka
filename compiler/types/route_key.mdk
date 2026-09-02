@@ -260,10 +260,11 @@ rkTyAtom (TyApp a b) = "(" ++ rkTy (TyApp a b) ++ ")"
 rkTyAtom t = rkTy t
 
 -- shared `<…>` row-body renderer for the `TyEffect`/`TyRow` arms above.
-rkRowBody : List (String, Option String) -> Option String -> String
-rkRowBody effs None = joinWith ", " (map rkEffAtom effs)
-rkRowBody [] (Some v) = v
-rkRowBody effs (Some v) = "\{joinWith ", " (map rkEffAtom effs)} | \{v}"
+rkRowBody : List (String, Option String) -> List String -> String
+rkRowBody effs [] = joinWith ", " (map rkEffAtom effs)
+rkRowBody [] tails = joinWith " | " tails
+rkRowBody effs tails =
+  "\{joinWith ", " (map rkEffAtom effs)} | \{joinWith " | " tails}"
 
 -- One effect atom, with its optional domain parameter. The domain IS part of
 -- what a written row means, so it is kept: dropping it would collide
@@ -434,22 +435,22 @@ rkTyList =
 -- The three arms where this printer is the COMPLETE one and `eval`'s
 -- `ppTyAtomK` is not (see the header). These assertions are the record of what
 -- a later bite's caller collapse would change on the eval side.
--- > rkTy (TyEffect [("Stdout", None)] None rkTyInt)
+-- > rkTy (TyEffect [("Stdout", None)] [] rkTyInt)
 -- "<Stdout> Int"
--- > rkTy (TyRow [("Stdout", None)] None None)
+-- > rkTy (TyRow [("Stdout", None)] [] None)
 -- "<Stdout>"
--- > rkTy (TyRow [("Stdout", None), ("Rand", None)] None None)
+-- > rkTy (TyRow [("Stdout", None), ("Rand", None)] [] None)
 -- "<Stdout, Rand>"
--- > rkTy (TyRow [] (Some "e") None)
+-- > rkTy (TyRow [] ["e"] None)
 -- "<e>"
--- > rkTy (TyRow [("Stdout", None)] (Some "e") None)
+-- > rkTy (TyRow [("Stdout", None)] ["e"] None)
 -- "<Stdout | e>"
 
 -- A domain parameter is kept, so two rows differing only by domain do not
 -- collide onto one word.
--- > rkTy (TyRow [("Net", Some "a/*")] None None) == rkTy (TyRow [("Net", Some "b/*")] None None)
+-- > rkTy (TyRow [("Net", Some "a/*")] [] None) == rkTy (TyRow [("Net", Some "b/*")] [] None)
 -- False
--- > rkTy (TyRow [("Net", Some "_")] None None)
+-- > rkTy (TyRow [("Net", Some "_")] [] None)
 -- "<Net _>"
 
 -- A constraint prefix: bare for one, parenthesised for two.
@@ -460,5 +461,5 @@ rkTyList =
 
 -- Two impls differing ONLY in an effect row get distinct words here — the
 -- property eval's printer does not have today.
--- > implRouteKeyWord OriginUnresolved "A" [TyEffect [("Stdout", None)] None rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [("Rand", None)] None rkTyInt] None
+-- > implRouteKeyWord OriginUnresolved "A" [TyEffect [("Stdout", None)] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [("Rand", None)] [] rkTyInt] None
 -- False

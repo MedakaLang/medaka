@@ -1,1 +1,2 @@
-getInner : D a b -> b a Int
+TYPE ERROR: Type parameter `e` of `D` is declared `(e : Effect)` but is used as an ordinary type. An Effect-kinded parameter may occur only as an arrow's effect row (`Unit -> <e> a`) or in an Effect-kinded argument slot (`Async e a`). Drop the annotation, or move the parameter into an effect position.
+TYPE ERROR: Type parameter `f` of `D` is declared with kind `Effect -> Type -> Type`. An arrow kind containing `Effect` is supported on interface heads only; a data, newtype, or type-alias parameter may be `Effect` or an ordinary (Effect-free) kind.
