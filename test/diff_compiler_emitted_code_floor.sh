@@ -90,7 +90,7 @@ measure() {
   _bin="$WORK/$_name.bin"
   M_BYTES=""
   M_IR=""
-  if ! "$MEDAKA" build "$_src" -o "$_bin" >/dev/null 2>"$WORK/build.$_name.err"; then
+  if ! MEDAKA_STRICT=1 "$MEDAKA" build "$_src" -o "$_bin" >/dev/null 2>"$WORK/build.$_name.err"; then
     printf 'measure: `medaka build %s` failed — not grading a fixture that will not build.\n' "$_src" >&2
     cat "$WORK/build.$_name.err" >&2
     return 1
