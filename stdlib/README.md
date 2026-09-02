@@ -2,6 +2,103 @@
 
 <!-- Verified against native compiler, 2026-07-16 -->
 
+## Writing documentation
+
+`medaka doc` renders `stdlib/*.mdk` into the published reference
+(`docs/stdlib/`, served at `medaka-lang.dev/stdlib`). The reference is
+generated from the source, so the doc comments *are* the documentation.
+These rules say what a doc comment is, what goes in it, and how it should
+read.
+
+### What renders
+
+- **A doc comment is a `{- | ... -}` block, or a run of `-- |` lines, directly
+  above a declaration.** Only marked comments render. An unmarked `--`
+  comment is a note to maintainers and never reaches the reference, wherever
+  it sits. A note may sit directly above or below a `{- | -}` block; a
+  `-- |` run must start its own comment run, so separate it from a note with
+  a blank line.
+- **A module header is a `{- | ... -}` block at the top of the file.** Its
+  first sentence is the module's one-line summary in the library index.
+- **A section heading is a standalone `-- # Title` comment** between
+  declarations. Sections group a page and appear in its table of contents.
+  Use them on any module with more than a screenful of entries.
+- **An example is a `> expr` line followed by its result** inside a doc
+  comment. `medaka test` runs every example, so a rendered example is a
+  verified one. The same `-- > expr` form in an unmarked comment is still run
+  by `medaka test` but not rendered: put edge-case checks there, or in a
+  `prop`, and keep the doc comment's examples illustrative.
+- Instances (`impl`) need no doc comment. The generator lists them under
+  their type. Give an instance its own doc comment only when it has
+  behaviour a reader must know about, such as `Ord Float`'s treatment of NaN.
+
+### What a doc comment contains
+
+The signature is printed above the prose, so the prose never restates the
+type. It says what the signature cannot.
+
+1. **A first sentence that stands alone.** It is the summary a reader skims,
+   and it must make sense with nothing after it. Write it as a statement
+   about the result, in the form "Returns the list in reverse order" or "The
+   first element, or `None` when the list is empty". Do not start with the
+   function's name.
+2. **A short paragraph for behaviour the signature does not show**, only
+   when there is some: what happens at the boundaries (empty input, negative
+   count, out-of-range index), which occurrence wins, whether order is
+   preserved, what is clamped and what panics. One paragraph is the usual
+   maximum.
+3. **One or two examples** that show the typical call. An example is not a
+   test; the boundary cases that only prove a claim in point 2 go in an
+   unmarked comment or a `prop`.
+4. **For container modules only, the cost**, as `O(log n)` in the paragraph,
+   when it is what a reader chooses the operation by.
+
+Everything else stays out. In particular:
+
+- **No history.** Issue numbers, PR numbers, what a function used to do, who
+  decided what, and why a name was chosen belong in git and the issue
+  tracker. A doc comment describes the function as it is.
+- **No implementation notes.** How a function is built (doubling, an
+  accumulator, a merge sort) is a maintainer's concern. If it matters to the
+  caller, state the consequence (`O(log n)` call depth, stable, tail-recursive
+  and safe on long lists) not the mechanism. Mechanism goes in an unmarked
+  comment beside the code.
+- **No warnings to maintainers.** "Do not delete", "load-bearing", and their
+  relatives are maintainer notes; write them as unmarked comments.
+- **No comparisons to other languages** and no rationale. The reference says
+  what a function does, not why it is not Haskell's.
+
+### How it reads
+
+- Plain, direct sentences. One idea per sentence.
+- No em-dashes. Use a comma, a full stop, or parentheses.
+- No emphasis for warning: no capitals, no bold, no emoji. If a fact matters,
+  say it in a sentence.
+- Name arguments in backticks when the prose refers to them (`n`, `sep`,
+  `xs`). Name other functions the same way, and qualify them with the module
+  when they live elsewhere (`string.split`, `map.Map`).
+- Prefer "when" to "if" for conditions on values: "empty when `n <= 0`".
+- Say `None`, `Some`, `Ok`, `Err` for results; say "panics" only for
+  operations that actually panic, and say what panics.
+
+A finished entry looks like this:
+
+```
+{- | The elements at indices `[lo, hi)`.
+
+   Indices are clamped to the list, so an out-of-range slice is shorter
+   rather than a panic. `xs.[lo..hi]` is the panicking form.
+
+   > sliceClamped 1 3 [10, 20, 30, 40]
+   [20, 30] -}
+export
+sliceClamped : Int -> Int -> List a -> List a
+sliceClamped lo hi xs = drop lo (take hi xs)
+
+-- > sliceClamped 5 9 [1, 2]
+-- []
+```
+
 ## `runtime.mdk` — built-in extern catalog
 
 `stdlib/runtime.mdk` is the authoritative source of type signatures for all

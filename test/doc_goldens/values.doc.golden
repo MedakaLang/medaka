@@ -6,13 +6,9 @@
 id : a -> a
 ```
 
-The identity function.
-
 ## `addOne`
 
 ```
 addOne : Int -> Int
 ```
-
-Adds one to its argument.
 

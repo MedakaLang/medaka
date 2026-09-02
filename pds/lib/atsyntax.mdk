@@ -1,0 +1,232 @@
+{- | Pure atproto identifier and URI syntax validators.
+
+   Covers AT-URI, at-identifier (handle or DID), DID, handle, and record key —
+   graded against the official atproto interop syntax corpora
+   (`pds/test/vectors/interop_{aturi,atidentifier,did,handle,recordkey}_{valid,invalid}.txt`,
+   `pds/test/atsyntax_vectors.sh`). NSID and TID have their own modules
+   (`lib.nsid`, `lib.tid`) and are graded there. -}
+
+import string.{contains, split, toUtf8, utf8ByteLength}
+import lib.nsid.{nsidErrorMessage, validateNsid}
+
+-- byte classes ----------------------------------------------------------------
+
+lowerByte : Int -> Bool
+lowerByte byte = byte >= 97 && byte <= 122
+
+upperByte : Int -> Bool
+upperByte byte = byte >= 65 && byte <= 90
+
+digitByte : Int -> Bool
+digitByte byte = byte >= 48 && byte <= 57
+
+alphaByte : Int -> Bool
+alphaByte byte = lowerByte byte || upperByte byte
+
+alphaNumericByte : Int -> Bool
+alphaNumericByte byte = alphaByte byte || digitByte byte
+
+-- handle ------------------------------------------------------------------------
+
+handleLabelByte : Int -> Bool
+handleLabelByte byte = alphaNumericByte byte || byte == 45
+
+validHandleLabelBytes : Array Int -> Int -> Int -> Bool
+validHandleLabelBytes bytes i end =
+  if i >= end then
+    True
+  else
+    handleLabelByte bytes[i] && validHandleLabelBytes bytes (i + 1) end
+
+validateHandleLabel : Array Int -> Int -> Int -> Bool -> Result String Unit
+validateHandleLabel bytes start end isFinal =
+  let size = end - start
+  if size < 1 || size > 63 then
+    Err "handle: label length must be 1..63 characters"
+  else if bytes[start] == 45 || bytes[end - 1] == 45 then
+    Err "handle: label must not start or end with a hyphen"
+  else if not (validHandleLabelBytes bytes start end) then
+    Err "handle: label contains invalid characters"
+  else if isFinal && not (alphaByte bytes[start]) then
+    Err "handle: final label must start with an ASCII letter"
+  else
+    Ok ()
+
+validateHandleLabels : Array Int -> Int -> Int -> Int -> Int -> Result String Int
+validateHandleLabels bytes i end labelStart labelCount =
+  if i >= end then do
+    () <- validateHandleLabel bytes labelStart end True
+    Ok (labelCount + 1)
+  else
+    if bytes[i] == 46 then do
+      () <- validateHandleLabel bytes labelStart i False
+      validateHandleLabels bytes (i + 1) end (i + 1) (labelCount + 1)
+    else validateHandleLabels bytes (i + 1) end labelStart labelCount
+
+{- | Validate an atproto handle: an ASCII domain name of 1..253 bytes, 2+
+   dot-separated labels each 1..63 bytes of `[a-zA-Z0-9-]` not starting or
+   ending with a hyphen, with the final label (TLD) starting with a letter. -}
+export
+validateHandle : String -> Result String Unit
+validateHandle handle =
+  let bytes = toUtf8 handle
+  let len = arrayLength bytes
+  if len < 1 || len > 253 then Err "handle: length must be 1..253 characters"
+  else match validateHandleLabels bytes 0 len 0 0
+    Err message => Err message
+    Ok labelCount =>
+      if labelCount < 2 then
+        Err "handle: needs at least two labels"
+      else
+        Ok ()
+
+-- did ---------------------------------------------------------------------------
+
+didMiddleByte : Int -> Bool
+didMiddleByte byte = alphaNumericByte byte
+  || byte == 46
+  || byte == 95
+  || byte == 58
+  || byte == 37
+  || byte == 45
+
+didLastByte : Int -> Bool
+didLastByte byte = alphaNumericByte byte
+  || byte == 46
+  || byte == 95
+  || byte == 45
+
+validDidMiddleBytes : Array Int -> Int -> Int -> Bool
+validDidMiddleBytes bytes i end =
+  if i >= end then
+    True
+  else
+    didMiddleByte bytes[i] && validDidMiddleBytes bytes (i + 1) end
+
+hasDidPrefix : Array Int -> Bool
+hasDidPrefix bytes = arrayLength bytes >= 4
+  && bytes[0] == 100
+  && bytes[1] == 105
+  && bytes[2] == 100
+  && bytes[3] == 58
+
+didMethodEnd : Array Int -> Int -> Int -> Option Int
+didMethodEnd bytes i end =
+  if i >= end then
+    None
+  else if bytes[i] == 58 then
+    Some i
+  else if lowerByte bytes[i] then
+    didMethodEnd bytes (i + 1) end
+  else
+    None
+
+{- | Validate an atproto DID: `did:` + one or more lowercase-letter method
+   bytes + `:` + a non-empty method-specific identifier
+   (`[a-zA-Z0-9._:%-]*` not ending in `:` or `%`), at most 2048 bytes total. -}
+export
+validateDid : String -> Result String Unit
+validateDid did =
+  let bytes = toUtf8 did
+  let len = arrayLength bytes
+  if len > 2048 then Err "did: exceeds 2048 characters"
+  else
+    if not (hasDidPrefix bytes) then Err "did: must start with \"did:\""
+    else match didMethodEnd bytes 4 len
+      None => Err "did: method must be one or more lowercase ASCII letters"
+      Some methodEnd => if methodEnd == 4 then Err "did: method must be non-empty"
+      else
+        let idStart = methodEnd + 1
+        if idStart >= len then
+          Err "did: identifier must be non-empty"
+        else if not (validDidMiddleBytes bytes idStart (len - 1)) then
+          Err "did: identifier contains invalid characters"
+        else if not (didLastByte bytes[len - 1]) then
+          Err "did: identifier must not end with \":\" or \"%\""
+        else
+          Ok ()
+
+-- at-identifier -------------------------------------------------------------
+
+-- | Validate an at-identifier: a DID (`did:` prefix) or else a handle.
+export
+validateAtIdentifier : String -> Result String Unit
+validateAtIdentifier id =
+  if hasDidPrefix (toUtf8 id) then
+    validateDid id
+  else
+    validateHandle id
+
+-- record key ------------------------------------------------------------------
+
+recordKeyByte : Int -> Bool
+recordKeyByte byte = alphaNumericByte byte
+  || byte == 95
+  || byte == 126
+  || byte == 46
+  || byte == 58
+  || byte == 45
+
+validRecordKeyBytes : Array Int -> Int -> Int -> Bool
+validRecordKeyBytes bytes i end =
+  if i >= end then
+    True
+  else
+    recordKeyByte bytes[i] && validRecordKeyBytes bytes (i + 1) end
+
+{- | Validate a record key: 1..512 bytes of `[a-zA-Z0-9_~.:-]`, excluding the
+   literal values `.` and `..`. -}
+export
+validateRecordKey : String -> Result String Unit
+validateRecordKey key =
+  let bytes = toUtf8 key
+  let len = arrayLength bytes
+  if len < 1 || len > 512 then
+    Err "record key: length must be 1..512 characters"
+  else if len == 1 && bytes[0] == 46 then
+    Err "record key: must not be \".\" or \"..\""
+  else if len == 2 && bytes[0] == 46 && bytes[1] == 46 then
+    Err "record key: must not be \".\" or \"..\""
+  else if not (validRecordKeyBytes bytes 0 len) then
+    Err "record key: invalid characters"
+  else
+    Ok ()
+
+-- at-uri --------------------------------------------------------------------------
+
+validateAtUriTail : List String -> Result String Unit
+validateAtUriTail [] = Ok ()
+validateAtUriTail (collection::rest) =
+  if collection == "" then Err "at-uri: empty collection segment"
+  else match validateNsid collection
+    Err cause => Err "at-uri: invalid collection; \{nsidErrorMessage cause}"
+    Ok () => match rest
+      [] => Ok ()
+      rkey::rest2 => if rkey == "" then Err "at-uri: empty record key segment"
+      else match validateRecordKey rkey
+        Err message => Err "at-uri: invalid record key; \{message}"
+        Ok () => match rest2
+          [] => Ok ()
+          _ => Err "at-uri: path can have at most two segments"
+
+validateAtUriParts : List String -> Result String Unit
+validateAtUriParts (scheme::sep::authority::rest) =
+  if scheme /= "at:" || sep /= "" then Err "at-uri: must start with \"at://\""
+  else
+    if authority == "" then Err "at-uri: authority must not be empty"
+    else match validateAtIdentifier authority
+      Err message => Err "at-uri: invalid authority; \{message}"
+      Ok () => validateAtUriTail rest
+validateAtUriParts _ = Err "at-uri: must start with \"at://\""
+
+{- | Validate an AT-URI: `at://<authority>[/<collection>[/<record-key>]]`.
+   Fragments are not supported; the total length is capped at 8192 bytes. -}
+export
+validateAtUri : String -> Result String Unit
+validateAtUri uri =
+  if contains "#" uri then
+    Err "at-uri: fragments are not supported"
+  else if utf8ByteLength uri > 8192 then
+    Err "at-uri: exceeds 8192 bytes"
+  else
+    validateAtUriParts (split "/" uri)

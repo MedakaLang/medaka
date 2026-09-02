@@ -297,6 +297,10 @@ pds/tools/check_pds_phase1_image
                                repo/crypto libraries installed inside the pinned official-PDS image.
                                It never starts the service or performs XRPC; Docker is a manual
                                provenance prerequisite, so the offline gates grade the artifacts.
+pds/tools/gen_lexjson_corpus   regenerates the P4-B lexicon-JSON<->DAG-CBOR round-trip corpus
+                               with the pinned official @atproto/lex-cbor + @atproto/lex-json +
+                               @atproto/lex-data packages from that same exact lock graph; the
+                               offline lexjson_vectors and vector_provenance gates grade it.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

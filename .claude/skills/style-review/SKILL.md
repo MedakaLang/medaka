@@ -97,7 +97,13 @@ reading messages by eye.
 
 ### 6. Doc register — is new prose live-and-gated, or is it new rot?
 
-Source today: **`make docs-links`** (every cited path must exist),
+For a `stdlib/*.mdk` doc comment the source is **`stdlib/README.md` §
+"Writing documentation"**: a marked `{- | -}` block whose first sentence
+stands alone, no history/issue numbers/implementation notes/maintainer
+warnings inside the block, no em-dashes, one or two examples. A finding
+against a stdlib doc comment cites that section or it is not a finding.
+
+For every other markdown file the source today is: **`make docs-links`** (every cited path must exist),
 **`make agent-doc-symbols`** (every backticked symbol must resolve), and
 **`make docs-index`** (`docs/README.md` is GENERATED — never hand-edited).
 A number hand-typed into prose that the repo can derive is the failure mode

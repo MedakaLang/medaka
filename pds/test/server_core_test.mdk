@@ -15,7 +15,15 @@ import lib.http.{
   serializeResponse,
 }
 import lib.resource_limits.{maxHttpRequestLineBytes}
-import lib.server_core.{Handler, Server, handle, handleBytes, makeServer}
+import lib.server_core.{
+  Account,
+  Handler,
+  Server,
+  handle,
+  handleBytes,
+  makeAccount,
+  makeServer,
+}
 import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
 import lib.xrpc.{
   Endpoint,
@@ -63,8 +71,13 @@ handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match stor
   Ok next => (next, mustResponse 201 "Created" "stored")
 handler _ _ = panic "server_core_test: unexpected routed call"
 
+account : Account
+account = match makeAccount "did:plc:medakaservertest" "server.example" "pds.example"
+  Ok value => value
+  Err message => panic "server_core_test: account setup failed: \{message}"
+
 server : Server
-server = makeServer registry handler
+server = makeServer account registry handler
 
 seedBytes : Array Int
 seedBytes = toUtf8 "seed"
