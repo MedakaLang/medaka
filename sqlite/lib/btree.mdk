@@ -40,9 +40,9 @@
 import array.{make, blit}
 import byteparser.{BOk, BErr, BResult, runBP}
 import lib.varint.{sqVarint}
-import lib.overflow.{localPayloadSize, overflowCapacity}
+import lib.overflow.{localPayloadSize, localPayloadSizeIndex, overflowCapacity}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, parseRecord}
-import list.{reverse}
+import list.{reverse, init, last}
 import string.{join}
 
 -- ---------------------------------------------------------------------------
@@ -116,6 +116,14 @@ pageTableLeaf = 13
 export
 pageTableInterior : Int
 pageTableInterior = 5
+
+export
+pageIndexInterior : Int
+pageIndexInterior = 2
+
+export
+pageIndexLeaf : Int
+pageIndexLeaf = 10
 
 -- | Read the page-type byte of the page whose B-tree header starts at
 --   `hdrOffset` in the whole-file byte array.
@@ -324,6 +332,235 @@ requireBytes bytes need what =
       "\{what}: file truncated (need \{intToString need} bytes, have \{intToString (arrayLength bytes)})"
   else
     Ok ()
+
+-- ---------------------------------------------------------------------------
+-- Index pages (leaf 0x0A, interior 0x02)
+-- ---------------------------------------------------------------------------
+--
+-- An index cell carries no separate rowid varint — the rowid rides inside the
+-- record as its trailing column (`lib.dbwriter.encodeIndexLeafCell`).  So a
+-- decoded index entry is `(key cells, rowid)`: every cell but the last from
+-- `parseRecord`'s result is the indexed key, and the last is always the
+-- rowid `lib.dbwriter.encodeIndexCells` appended.
+--
+-- Unlike a table B-tree (a B+tree: only leaves hold data), an index B-tree
+-- keeps a real entry at whatever level it lands on — an index-interior cell's
+-- own record is itself part of the index, not just a routing separator. So
+-- `scanIndexInteriorCells` below must emit each interior cell's own entry, in
+-- key order between its left subtree and the next cell.
+
+-- Split a decoded index record into its key cells and trailing rowid.  The
+-- record's LAST cell is always the appended rowid (the inverse of
+-- `lib.dbwriter.encodeIndexCells`, which appends `CInt rowid`); everything
+-- before it is the indexed key.
+splitIndexRecord : List Cell -> Result String (List Cell, Int)
+splitIndexRecord cells = match (init cells, last cells)
+  (Some ks, Some (CInt rid)) => Ok (ks, rid)
+  (Some _, Some other) =>
+    Err "index record: trailing rowid cell is not an integer (\{display other})"
+  _ => Err "index record: empty record has no rowid column"
+
+-- Reassemble an index cell's payload (following the overflow chain when it
+-- spills, using the INDEX local-size formula — different from a table-leaf
+-- cell's), parse its record, then split off the trailing rowid.
+decodeIndexCellPayload : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (List Cell, Int)
+decodeIndexCellPayload bytes pageSize usable payloadLen pos =
+  let local = localPayloadSizeIndex usable payloadLen
+  if local >= payloadLen then
+    bStep "record" (runBP parseRecord bytes pos) (cells _ =>
+      splitIndexRecord cells)
+  else do
+    payload <- gatherPayload bytes pageSize usable payloadLen local pos
+    bStep "overflow record" (runBP parseRecord payload 0) (cells _ =>
+      splitIndexRecord cells)
+
+-- | Decode one index-leaf cell at absolute byte offset `off`:
+--   `[payload-len varint][record]` — no rowid varint, unlike a table-leaf cell.
+export
+decodeIndexLeafCell : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (List Cell, Int)
+decodeIndexLeafCell bytes pageSize usable off = bStep
+  "payload-length varint"
+  (runBP sqVarint bytes off)
+  (payloadLen pos1 =>
+    decodeIndexCellPayload bytes pageSize usable payloadLen pos1)
+
+-- Iterate the cell-pointer array, decoding each index-leaf cell.
+decodeIndexCells : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List (List Cell, Int) ->
+  Result String (List (List Cell, Int))
+decodeIndexCells bytes pageSize usable pageBase cpArrayStart nCells i acc
+  | i >= nCells = Ok (reverse acc)
+  | otherwise = do
+    cellPtr <- beU16 bytes (cpArrayStart + i * 2)
+    let cellOffset = pageBase + cellPtr
+    entry <- decodeIndexLeafCell bytes pageSize usable cellOffset
+    decodeIndexCells
+      bytes
+      pageSize
+      usable
+      pageBase
+      cpArrayStart
+      nCells
+      (i + 1)
+      (entry :: acc)
+
+-- | Decode all entries of an INDEX-LEAF page.  Returns Err if the page is not
+--   an index-leaf page.
+export
+decodeIndexLeafPage : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (List (List Cell, Int))
+decodeIndexLeafPage bytes pageSize usable pageBase hdrOffset = do
+  pt <- pageType bytes hdrOffset
+  if pt /= pageIndexLeaf then
+    Err
+      "decodeIndexLeafPage: page type \{intToString pt} is not an index-leaf page (0x0A)"
+  else do
+    nc <- pageCellCount bytes hdrOffset
+    decodeIndexCells
+      bytes
+      pageSize
+      usable
+      pageBase
+      (hdrOffset + leafHeaderSize)
+      nc
+      0
+      []
+
+-- Decode one index-interior cell at absolute offset `off`:
+--   `[4-byte BE left-child][payload-len varint][record]` — the reverse field
+-- order from a table-interior cell, because the key (unlike a bare rowid) is
+-- variable-length and must be length-prefixed like any other record.
+-- Returns the left-child page number plus the entry this cell itself carries.
+decodeIndexInteriorCell : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Int, (List Cell, Int))
+decodeIndexInteriorCell bytes pageSize usable off = do
+  leftChild <- beU32 bytes off
+  bStep "payload-length varint" (runBP
+    sqVarint
+    bytes
+    (off + 4)) (payloadLen pos1 =>
+    decodeIndexInteriorPayload bytes pageSize usable leftChild payloadLen pos1)
+
+decodeIndexInteriorPayload : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Int, (List Cell, Int))
+decodeIndexInteriorPayload bytes pageSize usable leftChild payloadLen pos = do
+  entry <- decodeIndexCellPayload bytes pageSize usable payloadLen pos
+  Ok (leftChild, entry)
+
+-- | Scan all entries reachable from index page `pageNum`, handling both
+--   index-leaf (0x0A) and index-interior (0x02) pages.  Entries come back in
+--   key order.
+export
+scanIndexPage : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (List (List Cell, Int))
+scanIndexPage bytes pageSize usable pageNum hdrOffset = do
+  ptype <- pageType bytes hdrOffset
+  if ptype == pageIndexLeaf then do
+    let pageBase = (pageNum - 1) * pageSize
+    nc <- pageCellCount bytes hdrOffset
+    decodeIndexCells
+      bytes
+      pageSize
+      usable
+      pageBase
+      (hdrOffset + leafHeaderSize)
+      nc
+      0
+      []
+  else if ptype == pageIndexInterior then
+    scanIndexInteriorPage bytes pageSize usable pageNum hdrOffset
+  else
+    Err
+      "scanIndexPage: unexpected page type \{intToString ptype} on page \{intToString pageNum}"
+
+-- Scan an index-interior page: for each cell, recurse into its left-child
+-- subtree, then emit the cell's OWN entry (an index-interior cell is a real
+-- entry, not just a routing separator), then move on; finally recurse into
+-- the rightmost child.
+scanIndexInteriorPage : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (List (List Cell, Int))
+scanIndexInteriorPage bytes pageSize usable pageNum hdrOffset = do
+  let pageBase = (pageNum - 1) * pageSize
+  nCells <- pageCellCount bytes hdrOffset
+  rightmost <- beU32 bytes (hdrOffset + leafHeaderSize)
+  let cpArrayStart = hdrOffset + interiorHeaderSize
+  scanIndexInteriorCells
+    bytes
+    pageSize
+    usable
+    cpArrayStart
+    pageBase
+    nCells
+    0
+    rightmost
+    []
+
+scanIndexInteriorCells : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List (List Cell, Int) ->
+  Result String (List (List Cell, Int))
+scanIndexInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost acc
+  | i >= nCells = do
+    let rmHdr = pageHdrOffset pageSize rightmost
+    rows <- scanIndexPage bytes pageSize usable rightmost rmHdr
+    Ok (acc ++ rows)
+  | otherwise = do
+    cellPtr <- beU16 bytes (cpArrayStart + i * 2)
+    let cellOff = pageBase + cellPtr
+    (leftChild, entry) <- decodeIndexInteriorCell bytes pageSize usable cellOff
+    let childHdr = pageHdrOffset pageSize leftChild
+    leftRows <- scanIndexPage bytes pageSize usable leftChild childHdr
+    scanIndexInteriorCells
+      bytes
+      pageSize
+      usable
+      cpArrayStart
+      pageBase
+      nCells
+      (i + 1)
+      rightmost
+      (acc ++ leftRows ++ [entry])
 
 -- ---------------------------------------------------------------------------
 -- Multi-page recursive B-tree scan

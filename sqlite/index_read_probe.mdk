@@ -1,0 +1,38 @@
+-- Real-sqlite3 differential probe for the index-page decoders
+-- (`lib.btree.scanIndexPage`/`decodeIndexLeafPage`/interior family, driven via
+-- `lib.sqlite.scanIndexRows`).
+--
+-- Usage: medaka build sqlite/index_read_probe.mdk -o index_read_probe
+--        ./index_read_probe <db> <index-name>
+--
+-- Opens `<db>` (built by the REAL sqlite3 CLI, not the Medaka writer) and
+-- prints every decoded `(key, rowid)` entry of the named single-column index,
+-- one per line as `<key>|<rowid>`, in the index's own key order — the same
+-- shape as `sqlite3 <db> "SELECT <col>, rowid FROM <table> ORDER BY <col>,
+-- rowid"`, so the two listings can be diffed byte-for-byte
+-- (`sqlite/test/index_write_oracle.sh`).
+
+import lib.sqlite.{Db, openDb, scanIndexRows}
+import lib.recordfmt.{Cell, cellToString}
+import string.{join}
+
+main : <IO, FileRead> Unit
+main = match args ()
+  [db, idx] => run db idx
+  _ => println "usage: index_read_probe <db> <index-name>"
+
+run : String -> String -> <IO, FileRead> Unit
+run db idx = match openDb db
+  Err e => println "Error opening \{db}: \{e}"
+  Ok d => runOpened d idx
+
+runOpened : Db -> String -> <IO> Unit
+runOpened d idx = match scanIndexRows d idx
+  Err e => println "Error: \{e}"
+  Ok entries => printEntries entries
+
+printEntries : List (List Cell, Int) -> <IO> Unit
+printEntries [] = ()
+printEntries ((keyCells, rowid) :: rest) =
+  println "\{join "|" (map cellToString keyCells)}|\{intToString rowid}"
+  printEntries rest

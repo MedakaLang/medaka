@@ -99,7 +99,12 @@ import list.{reverse, get, sortBy}
 import string.{toUtf8}
 import lib.header.{magicBytes}
 import lib.varint.{sqVarintBytes}
-import lib.overflow.{localPayloadSize, overflowCapacity, overflowPageCount}
+import lib.overflow.{
+  localPayloadSize,
+  overflowCapacity,
+  overflowPageCount,
+  indexMaxLocalPayload as ovflIndexMaxLocalPayload,
+}
 import lib.recordenc.{encodeRecord}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat}
 
@@ -147,12 +152,13 @@ leafCapacity : Int
 leafCapacity = pageSize - leafHeaderSize  -- 4088
 
 -- The largest index-record payload that fits entirely in an index-leaf cell
--- (SQLite's index max-local-payload: `((U - 12) * 64 / 255) - 23`; for U=4096
--- this is 1002).  A key record larger than this would need an overflow chain,
--- which v1 does not emit for indexes — `encodeIndexLeafCell` refuses it cleanly
--- rather than emit a truncated (corrupt) index key.
+-- (for U=4096 this is 1002).  A key record larger than this would need an
+-- overflow chain, which v1 does not emit for indexes — `encodeIndexLeafCell`
+-- refuses it cleanly rather than emit a truncated (corrupt) index key.
+-- Delegates to `lib.overflow` (imported as `ovflIndexMaxLocalPayload`), the
+-- single source of split-threshold truth shared with the read path.
 indexMaxLocalPayload : Int -> Int
-indexMaxLocalPayload usable = (usable - 12) * 64 / 255 - 23
+indexMaxLocalPayload usable = ovflIndexMaxLocalPayload usable
 
 -- A valid sqlite-version-number constant (integrity_check ignores it).
 sqliteVersionNumber : Int
