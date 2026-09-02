@@ -292,6 +292,8 @@ A mutable set of distinct elements, keyed by hash.
 
 ## [`io`](io.md)
 
+Output to standard error, debug printing, and helpers for files and the environment.
+
 - [`eprint`](io.md#eprint)
 - [`eprintln`](io.md#eprintln)
 - [`inspect`](io.md#inspect)
