@@ -1,5 +1,5 @@
 # META
-source_lines=5244
+source_lines=5259
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -3273,7 +3273,22 @@ dataAfterEq tyName TIndent = do
   pure (vs, derives)
 dataAfterEq tyName _ = do
   vs <- dataVariantsN tyName
-  pure (vs, [])
+  t <- peekP
+  derives <- inlineTrailingDerives t
+  pure (vs, derives)
+
+-- A one-line `data X = A | B` may still carry `deriving (…)` on its own,
+-- more-indented, next line — the lexer wraps that as an INDENT/DEDENT span
+-- (mirroring the block form's own-line deriving) even though the header
+-- itself never opened a block.
+inlineTrailingDerives : Token -> Parser (List DeriveRef)
+inlineTrailingDerives TIndent = do
+  advance
+  derives <- derivingClause
+  skipNewlines
+  expectTok TDedent
+  pure derives
+inlineTrailingDerives _ = pure []
 
 -- Consume a leading `|` if present (the new multiline form's per-variant pipe
 -- also prefixes the first variant); a no-op otherwise.
@@ -6292,7 +6307,10 @@ parseResultWith src tokList offList =
 (DFunDef false "dataBodyFor" (PWild PWild) (EApp (EVar "pure") (ETuple (EListLit) (EListLit))))
 (DTypeSig false "dataAfterEq" (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyTuple (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "DeriveRef")))))))
 (DFunDef false "dataAfterEq" ((PVar "tyName") (PCon "TIndent")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "optPipe")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "dataVariantsN") (EVar "tyName"))) (ELam ((PVar "vs")) (EApp (EApp (EVar "andThen") (EVar "derivingClause")) (ELam ((PVar "derives")) (EApp (EApp (EVar "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "pure") (ETuple (EVar "vs") (EVar "derives"))))))))))))))))))
-(DFunDef false "dataAfterEq" ((PVar "tyName") PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "dataVariantsN") (EVar "tyName"))) (ELam ((PVar "vs")) (EApp (EVar "pure") (ETuple (EVar "vs") (EListLit))))))
+(DFunDef false "dataAfterEq" ((PVar "tyName") PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "dataVariantsN") (EVar "tyName"))) (ELam ((PVar "vs")) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "andThen") (EApp (EVar "inlineTrailingDerives") (EVar "t"))) (ELam ((PVar "derives")) (EApp (EVar "pure") (ETuple (EVar "vs") (EVar "derives"))))))))))
+(DTypeSig false "inlineTrailingDerives" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DeriveRef")))))
+(DFunDef false "inlineTrailingDerives" ((PCon "TIndent")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "derivingClause")) (ELam ((PVar "derives")) (EApp (EApp (EVar "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "pure") (EVar "derives")))))))))))
+(DFunDef false "inlineTrailingDerives" (PWild) (EApp (EVar "pure") (EListLit)))
 (DTypeSig false "optPipe" (TyApp (TyCon "Parser") (TyCon "Unit")))
 (DFunDef false "optPipe" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "optPipeFor") (EVar "t")))))
 (DTypeSig false "optPipeFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
@@ -7861,7 +7879,10 @@ parseResultWith src tokList offList =
 (DFunDef false "dataBodyFor" (PWild PWild) (EApp (EMethodRef "pure") (ETuple (EListLit) (EListLit))))
 (DTypeSig false "dataAfterEq" (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyTuple (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "DeriveRef")))))))
 (DFunDef false "dataAfterEq" ((PVar "tyName") (PCon "TIndent")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "optPipe")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "dataVariantsN") (EVar "tyName"))) (ELam ((PVar "vs")) (EApp (EApp (EMethodRef "andThen") (EVar "derivingClause")) (ELam ((PVar "derives")) (EApp (EApp (EMethodRef "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "pure") (ETuple (EVar "vs") (EVar "derives"))))))))))))))))))
-(DFunDef false "dataAfterEq" ((PVar "tyName") PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "dataVariantsN") (EVar "tyName"))) (ELam ((PVar "vs")) (EApp (EMethodRef "pure") (ETuple (EVar "vs") (EListLit))))))
+(DFunDef false "dataAfterEq" ((PVar "tyName") PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "dataVariantsN") (EVar "tyName"))) (ELam ((PVar "vs")) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "inlineTrailingDerives") (EVar "t"))) (ELam ((PVar "derives")) (EApp (EMethodRef "pure") (ETuple (EVar "vs") (EVar "derives"))))))))))
+(DTypeSig false "inlineTrailingDerives" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DeriveRef")))))
+(DFunDef false "inlineTrailingDerives" ((PCon "TIndent")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "derivingClause")) (ELam ((PVar "derives")) (EApp (EApp (EMethodRef "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "pure") (EVar "derives")))))))))))
+(DFunDef false "inlineTrailingDerives" (PWild) (EApp (EMethodRef "pure") (EListLit)))
 (DTypeSig false "optPipe" (TyApp (TyCon "Parser") (TyCon "Unit")))
 (DFunDef false "optPipe" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "optPipeFor") (EVar "t")))))
 (DTypeSig false "optPipeFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))

@@ -485,26 +485,35 @@ data MyColor =
   deriving (Debug)
 
 data Multi =
-  -- deriving MAY sit on its own indented
-  | Foo  -- line — but only because this `data`
-  | Bar  -- decl itself is multi-line (see below)
+  -- deriving MAY sit on its own
+  | Foo  -- indented line
+  | Bar
   deriving (Debug)
+
+-- one-line decl, deriving inline
+data Flag = On | Off deriving (Eq)
 
 p = Pt { x = 1, y = 2 }
 p2 = Pt { p | y = 9 }  -- variant functional update
 -- (copy p, override y; p must be a Pt)
 ```
 
-**`deriving` on its own line depends on whether the `data` decl is multi-line.** After a
-multi-line `data` decl (like `Multi` above), an own-line `deriving` works. After a
-**one-line** `data` decl, `deriving` must stay inline (as `MyColor` above) — on its own
-line it is a parse error that blames indentation, not `deriving` itself:
+**`deriving` may sit inline or on its own indented line, after either decl shape.** A
+one-line decl accepts both `data Flag = On | Off deriving (Eq)` and
 
-```medaka-nocheck: parse error — after a one-line data decl, deriving must be inline, not on its own line
-data C = A | B
-  deriving (Eq)                -- unexpected `deriving`. Indentation (column 2)
-                                -- doesn't match the enclosing block
+```medaka-nocheck: accepted, but not fmt's canonical rendering — see the paragraph below
+data Flag = On | Off
+  deriving (Eq)
 ```
+
+The two placements parse to the same declaration: the AST records only the derived
+names, not where the source put them. That is why the example blocks here only ever
+show one of the two — every one is canonically `medaka fmt`-formatted, and `fmt`
+resolves the choice by width alone. It renders the whole decl (header, variants,
+`deriving`) as one group: on a single line when it fits (`Flag` above), and otherwise
+fully broken, variants to a `|` block AND `deriving` to its own indented line
+(`MyColor`/`Multi` above). A one-line variant list with an own-line `deriving` is
+therefore legal input that `fmt` never emits.
 
 ## Records
 

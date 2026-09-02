@@ -160,16 +160,6 @@ Landlord
 The `deriving (Eq, Debug)` clauses ask the compiler to generate equality and a
 debug printer for the type. `deriving` gets its own section below.
 
-> ⚠️ **`deriving` goes on the same line as a one-line `data` declaration.** It can
-> move to its own line only when the declaration spans several lines, as it does for
-> `Expense` above. Put it on its own line after a one-line declaration and the error
-> blames the indentation rather than `deriving`:
->
-> ```
-> error: deriv.mdk:2:2: unexpected `deriving`. Indentation (column 2) doesn't match
-> the enclosing block
-> ```
-
 > **Coming from Haskell?** Field names belong to their type, not to the module. Two
 > record types in one file can both have an `amount` field, and `e.amount` reads the
 > field directly rather than through a generated accessor function. The field pun
