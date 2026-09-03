@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # playground/e2e/run.sh — run the Playwright e2e harness against the CM6
 # playground, driving the SYSTEM Google Chrome (no Playwright browser
 # download — TLS-blocked on this machine). See README.md for the full story.

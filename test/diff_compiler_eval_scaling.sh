@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_eval_scaling.sh — the O(n^2) detector for the two INTERPRETERS
 # (issue #887, epic #880, PERF-CI-COVERAGE.md §4 P3). NIGHTLY.
 #

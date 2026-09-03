@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # SELF-COMPILE C1 — prove the NATIVE-compiled emitter reproduces the INTERPRETED
 # emitter's LLVM IR, byte-for-byte.
 #

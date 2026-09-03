@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # SELF-COMPILE C2 — the NATIVE compiler compiles a REAL program.
 #
 # C1 (test/selfcompile_emit.sh) proved a NATIVE-compiled emitter reproduces the

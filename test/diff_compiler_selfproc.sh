@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # THE SELF-PROCESSING CLOSURE — the decisive self-hosting milestone
 # (compiler/README.md §"The bootstrap (#3)" -> "Self-processing target").
 #

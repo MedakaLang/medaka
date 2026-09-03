@@ -1,0 +1,43 @@
+# test/gate_registry_fixtures/invalid_migration.toml — SYNTHETIC, hand-written.
+#
+# Check 10's red fixture (#2591): `migration = "banana"` is not one of the eight
+# destinations. valid_cost.toml is the control — the two differ in exactly the
+# `migration` line, so a green control proves this red is about `migration` and
+# nothing else.
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "banana"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "anchored"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:instrumentation"
+run = "test/anchored.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

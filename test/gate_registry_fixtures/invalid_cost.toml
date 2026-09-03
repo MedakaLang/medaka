@@ -22,7 +22,23 @@ project = "compiler"
 tiers = ["merge"]
 cost = "banana"
 kind = "exec"
+migration = "native-wrap"
 run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "anchored"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:instrumentation"
+run = "test/anchored.sh"
 oracles = []
 sources = []
 corpus = []

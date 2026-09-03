@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_visitor_analyze_latency.sh — S4 gate (#2442, epic #2036 visitor-wait-time
 # arm). Asserts an ABSOLUTE CEILING on `analyze()` (playground/compile.mjs,
 # landed by S1) latency for a fixed clean program, driven the SAME way

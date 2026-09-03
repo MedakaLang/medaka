@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # SELF-COMPILE C3 for the BUILD DRIVER — verify the STRICT multi-module emit driver
 # (compiler/entries/llvm_emit_modules_main.mdk, the one `medaka build` actually shells out to)
 # fixpoints, not just the gap-tolerant bootstrap driver.

@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_fixture_corpus_coverage.sh — every fixture/golden corpus must be
 # CONSUMED by at least one gate.
 #

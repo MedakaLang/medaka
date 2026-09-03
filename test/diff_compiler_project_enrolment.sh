@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_project_enrolment.sh — a monorepo project must be CI'd, and the
 # THREE independent consumers of "what is a project" must agree about it.
 #

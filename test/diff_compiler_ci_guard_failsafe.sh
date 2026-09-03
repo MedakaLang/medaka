@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — subject IS a verbatim chunk of ci.yml shell; nothing to migrate
 # diff_compiler_ci_guard_failsafe.sh — every required job's step-level `if:` must not
 # go green-by-skip when its upstream classifier job fails outright.
 #
