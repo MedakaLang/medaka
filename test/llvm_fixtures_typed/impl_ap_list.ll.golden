@@ -171,34 +171,10 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 1, ptr %t0
-  %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @mdk_lam0 to i64), ptr %t1
-  %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call ptr @mdk_alloc(i64 16)
-  store i64 1, ptr %t3
-  %t4 = getelementptr i8, ptr %t3, i64 8
-  store i64 ptrtoint (ptr @mdk_lam1 to i64), ptr %t4
-  %t5 = ptrtoint ptr %t3 to i64
-  %t6 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t6
-  %t7 = getelementptr i8, ptr %t6, i64 8
-  store i64 %t5, ptr %t7
-  %t8 = getelementptr i8, ptr %t6, i64 16
-  store i64 562949953421315, ptr %t8
-  %t9 = ptrtoint ptr %t6 to i64
-  %t10 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t10
-  %t11 = getelementptr i8, ptr %t10, i64 8
-  store i64 %t2, ptr %t11
-  %t12 = getelementptr i8, ptr %t10, i64 16
-  store i64 %t9, ptr %t12
-  %t13 = ptrtoint ptr %t10 to i64
-  %t14 = call i64 @mdk_impl_List_ap(i64 %t13, i64 ptrtoint (ptr @mdk_dc_3 to i64))
-  %t15 = call i64 @mdk_sumList(i64 %t14)
-  %t16 = ashr i64 %t15, 1
-  call void @mdk_print_int(i64 %t16)
+  %t0 = call i64 @mdk_impl_List_ap(i64 ptrtoint (ptr @mdk_dc_5 to i64), i64 ptrtoint (ptr @mdk_dc_7 to i64))
+  %t1 = call i64 @mdk_sumList(i64 %t0)
+  %t2 = ashr i64 %t1, 1
+  call void @mdk_print_int(i64 %t2)
   ret i32 0
 }
 define i64 @mdk_sumList(i64 %arg0) {
@@ -444,7 +420,8 @@ entry:
   ret i64 %t4
 }
 
-define i64 @mdk_lam1(i64 %clos, i64 %arg0) {
+@mdk_cc_1 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam0 to i64)]
+define i64 @mdk_lam2(i64 %clos, i64 %arg0) {
 entry:
   %t0 = ashr i64 %arg0, 1
   %t1 = ashr i64 41, 1
@@ -454,5 +431,8 @@ entry:
   ret i64 %t4
 }
 
-@mdk_dc_2 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 562949953421315]
-@mdk_dc_3 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc_2 to i64)]
+@mdk_cc_3 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam2 to i64)]
+@mdk_dc_4 = internal constant [3 x i64] [i64 281474976710656, i64 ptrtoint (ptr @mdk_cc_3 to i64), i64 562949953421315]
+@mdk_dc_5 = internal constant [3 x i64] [i64 281474976710656, i64 ptrtoint (ptr @mdk_cc_1 to i64), i64 ptrtoint (ptr @mdk_dc_4 to i64)]
+@mdk_dc_6 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 562949953421315]
+@mdk_dc_7 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc_6 to i64)]

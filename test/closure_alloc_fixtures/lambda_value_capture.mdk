@@ -1,0 +1,19 @@
+-- BARE LAMBDA, WITH CAPTURE: an anonymous `x => ...` lambda literal that DOES
+-- close over a value from its enclosing scope (`k`), passed as a first-class
+-- VALUE on every iteration. Parity pin for the S-3 hoist above: a capturing
+-- lambda's `captureWords` is non-empty, so it must still allocate a FRESH
+-- cell every call -- this path is untouched by the hoist.
+apply1 : (Int -> Int) -> Int -> Int
+apply1 f x = f x
+
+loop : Int -> Int -> Int -> Int
+loop n k acc
+  | n <= 0 = acc
+  | otherwise = loop (n - 1) (k + 1) (apply1 (x => x + k) acc)
+
+main =
+  let a0 = allocBytes ()
+  let r = loop 2000000 0 0
+  let a1 = allocBytes ()
+  println "lambda-capture result=\{debug r}"
+  println "lambda-capture allocBytes=\{debug (a1 - a0)}"

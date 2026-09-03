@@ -1,0 +1,15 @@
+-- ESCAPE (b) — #2241 end-of-sprint review finding. A `where`-bound helper
+-- (`add1`) is RETURNED from its enclosing function as a bare value and is
+-- never called at all inside its own scope. A return-position occurrence is
+-- a bare `CVar` equal to the binding's name, which `satOnlyUses` answers
+-- False for, so #2241's direct-call optimization (`e.directFn`) must not
+-- fire — the caller's later application of the returned closure must stay on
+-- the historical indirect path.
+mkAdder : Int -> Int -> Int
+mkAdder n = add1
+  where
+    add1 x = x + n
+
+main =
+  let f = mkAdder 3
+  println "escape-returned result=\{debug (f 4)}"

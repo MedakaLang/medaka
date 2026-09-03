@@ -120,6 +120,28 @@ RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
         msg="$(printf '%s\nRETCALL-ASSERT FAIL %s: plain-call=%s return_call=%s (expected 0 / >=1)' "$msg" "$name" "$plain" "$rc")"; st=1
       fi
     fi
+    # S-wasm-rebuild-hoist re-pin (#2255 item 1 / #2256, 4b91ef988): a capture-free
+    # lifted let-group member's `$clos` must be read from the hoisted `constLgClosure`
+    # global, never re-rebuilt on a tail-recursive re-entry. A reverted hoist re-emits
+    # a `ref.func $mdk_lgN_<name>` immediately followed by the
+    # `i32.const`/`array.new_fixed $argarr 0`/`struct.new $clos` rebuild sequence, at
+    # `$mdk_lg0_dbl`'s use site (emitSelfRecLocalBind) and/or `$mdk_lg2_sumTo`'s
+    # prologue (emitLgLifted) — every OTHER `ref.func` targeting a lifted let-group
+    # member is the two hoisted `(global $mdk_cc_*` initializers, which read it once.
+    # So `ref.func $mdk_lg` must occur ONLY on a `(global $mdk_cc_*` line, never inside
+    # a function body — unlike `struct.new $clos` alone, which also legitimately
+    # appears in the unrelated `$mdk_pap` partial-application closure builder and so
+    # can't be used as the discriminator by itself.
+    if [ "$st" = 0 ] && [ "$name" = "w13_lg_capture_free_tailrec.mdk" ]; then
+      total="$(grep -c 'ref\.func \$mdk_lg' "$wat")"
+      hoisted="$(grep -c '(global \$mdk_cc_.*ref\.func \$mdk_lg' "$wat")"
+      if [ "$hoisted" -ge 1 ] && [ "$total" -eq "$hoisted" ]; then
+        msg="$msg
+HOIST-ASSERT ok   $name: ref.func \$mdk_lg only in hoisted globals ($hoisted), 0 in function bodies"
+      else
+        msg="$(printf '%s\nHOIST-ASSERT FAIL %s: ref.func \\$mdk_lg total=%s hoisted-global=%s (expected equal, >=1)' "$msg" "$name" "$total" "$hoisted")"; st=1
+      fi
+    fi
   fi
   echo "$st" > "$RESULTDIR/$name.status"
   printf '%s\n' "$msg"

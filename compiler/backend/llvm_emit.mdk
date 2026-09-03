@@ -295,21 +295,29 @@ data GapMode = Strict | Record
 
 -- The CTFail target for a multi-clause function emitted as a CHAIN of single-clause
 
--- compile-time closure-arity table, keyed by the closure cell's SSA register
--- (`%tN`).  ⚠️ `%tN` is only unique WITHIN a define (issue #118 restarts the
--- register counter at each one), so this table is PER-DEFINE: `beginDefine`
--- clears it and `endDefine` restores the enclosing define's — otherwise `%t5` in
--- one function would answer a lookup for `%t5` in another and the indirect call
--- would saturate with the WRONG arity.  Sound because an entry can only be read
--- in the define that wrote it (the key is used verbatim as an SSA operand of the
--- emitted `call`, which LLVM requires to be defined in the same function).
+-- compile-time closure-arity table, keyed by the closure cell's WORD — either a
+-- per-define `%tN` SSA register (the heap-alloc path, `emitClosureAllocA`) or a
+-- `ptrtoint (ptr @mdk_cc_N to i64)` constant naming a module-level global (the
+-- capture-free path, `emitConstClosureA` — what `emitLamGo`/`emitLamPat` now use
+-- for most user lambdas, since they have no captures to force a heap cell).
+-- ⚠️ `%tN` is only unique WITHIN a define (issue #118 restarts the register
+-- counter at each one), so this table is PER-DEFINE: `beginDefine` clears it and
+-- `endDefine` restores the enclosing define's — otherwise `%t5` in one function
+-- would answer a lookup for `%t5` in another and the indirect call would
+-- saturate with the WRONG arity.  That per-define clearing is what keeps the
+-- SSA-register-keyed entries sound.  The constant-global-keyed entries need no
+-- such protection on their own: `@mdk_cc_N`'s `N` comes from `freshId`, a
+-- counter that is never reset (unlike the per-define `%tN` one), so no two
+-- closure-construction sites can ever mint the same word regardless of which
+-- define reads it — the per-define clearing is redundant safety for this
+-- subset, not the reason it's sound.
 --   Recorded when a user lambda's closure cell is allocated
--- (emitClosureAllocA); read at an INDIRECT call site (emitIndirect) so a let-bound
--- closure applied to MORE args than its arity (`(g 7) 9` where `g = (x => (y => …))`)
+-- (emitClosureAllocA / emitConstClosureA); read at an INDIRECT call site (emitIndirect) so a
+-- let-bound closure applied to MORE args than its arity (`(g 7) 9` where `g = (x => (y => …))`)
 -- saturates with the first `arity` args then applies the surplus to the returned
 -- closure (emitApplyAny) — mirroring emitOverApp for known fns.  Without this the
 -- indirect call passed ALL args to the arity-1 lifted code → arity mismatch →
--- garbage.  A miss (closure word not a recorded `%tN` — e.g. a captured/param
+-- garbage.  A miss (closure word not a recorded key — e.g. a captured/param
 -- closure) falls to emitApplyAny, which reads the closure's RUNTIME arity from the
 -- cell header (field 0) and dispatches exact / partial (PAP) / over application via
 -- the runtime @mdk_apply — so an opaque under-application no longer miscompiles.
@@ -324,6 +332,28 @@ data GapMode = Strict | Record
 -- pointers → garbage).  Only LTFloat is ever recorded, so non-float closures keep
 -- the historical LTInt default → zero blast radius for them.
 
+-- compile-time DIRECT-CALL table for let-group local functions, keyed by the
+-- closure cell's word — the same mixed key domain as `e.closureArity` above
+-- (`emitGroupBind` calls the very same `emitConstClosureA` / `emitClosureAllocA`
+-- to build the cell and reuses the resulting word `w` as this table's key too),
+-- so the same split applies: entries keyed by a `ptrtoint (ptr @mdk_cc_N to i64)`
+-- constant can never collide, `N` coming from `freshId`'s never-reset counter,
+-- while entries keyed by a raw `%tN` SSA register still depend on the
+-- PER-DEFINE scoping — `beginDefine` clears it, `endDefine` restores it.
+-- The value is the lifted define's symbol and its arity.  An entry is written by
+-- `emitGroupBind` ONLY when `satOnlyUses` has proved that, over the rest of the
+-- group and its body, the bound name occurs exclusively as the head of an
+-- application of exactly that arity; it is read by `emitIndirect`, which then
+-- emits `call i64 @mdk_lamN(<cell>, args…)` instead of loading the cell's
+-- code_ptr and calling through it.
+--
+-- Keying by the CELL WORD rather than the source name is what makes the
+-- optimization shadow-proof: an inner binding of the same name allocates its own
+-- cell, so its call sites can never resolve to an outer entry.  The cell itself is
+-- still built exactly as before, so any occurrence that does NOT take this path —
+-- an escaping occurrence, a partial or over-application — reads an unchanged
+-- closure value.
+--
 -- is this CVar name the fall-through sentinel — either BARE (`__fallthrough__`, no
 -- enclosing clause chain) or LABELLED by emit_support's `labelFallthrough`
 -- (`__ft__<block>`, "resume at that clause's block")?
@@ -928,6 +958,7 @@ data Emit = Emit {
   defineCounter : Ref Int,
   closureArity : Ref (List (String, Int)),
   closureRetTy : Ref (List (String, LTy)),
+  directFn : Ref (List (String, (String, Int))),
   trmcCtx : Ref TrmcCtx,
   gDispCtx : Ref GDispCtx,
   gDispGroups : Ref (List DispGroup),
@@ -1004,34 +1035,40 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 
 -- ── the per-define gensym scope (issue #118) ────────────────────────────────
 -- Everything keyed on, or counting, a FUNCTION-SCOPED name: the `%tN`/label
--- counter plus the two tables keyed BY a `%tN` register — `e.closureArity` and
--- `e.closureRetTy`.  Once `%tN` restarts per define, a register name is only
--- unique WITHIN a define, so those tables must be scoped the same way or `%t5` in
--- one function would answer a lookup for `%t5` in another (a wrong closure arity
--- at an indirect call = silent miscompile).  Scoping them per define is sound
--- because a table entry can only ever be READ inside the define that WROTE it:
--- the key is used verbatim as an SSA operand of the emitted `call`, and LLVM
--- requires an operand to be defined in the same function.
+-- counter plus the three tables keyed BY the closure cell's word —
+-- `e.closureArity`, `e.closureRetTy` and `e.directFn` (full account: their own
+-- doc comments above).  Once `%tN` restarts per define, a register name is only
+-- unique WITHIN a define, so a table entry keyed by one must be scoped the same
+-- way or `%t5` in one function would answer a lookup for `%t5` in another (a
+-- wrong closure arity at an indirect call = silent miscompile).  Not every entry
+-- needs this protection — a `ptrtoint (ptr @mdk_cc_N to i64)` constant key is
+-- already globally unique (`N` from the never-reset `freshId`) regardless of
+-- scoping — but clearing per define costs nothing on that subset and is load-
+-- bearing on the `%tN`-keyed one, so all three tables are scoped uniformly.
 --
 -- It also fixes a latent leak — both tables previously grew for the whole program.
-data DefScope = DefScope Int (List (String, Int)) (List (String, LTy))
+data DefScope =
+  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int)))
 
 -- start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 beginDefine : Emit -> DefScope
 beginDefine e =
-  let saved = DefScope !e.defineCounter !e.closureArity !e.closureRetTy
+  let saved =
+    DefScope !e.defineCounter !e.closureArity !e.closureRetTy !e.directFn
   e.defineCounter := 0
   e.closureArity := []
   e.closureRetTy := []
+  e.directFn := []
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n ar rt) =
+endDefine e (DefScope n ar rt df) =
   e.defineCounter := n
   e.closureArity := ar
   e.closureRetTy := rt
+  e.directFn := df
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in buf := line :: !buf
@@ -4584,7 +4621,12 @@ emitLetGroup e env ((CBind name clauses) :: rest) body
   | refsLater name clauses (bindNames rest) =
     emitKnotRun e env (CBind name clauses :: rest) body
   | otherwise =
-    let (w, ty) = emitGroupBind e env (CBind name clauses)
+    -- The region this binding is in scope over is exactly the rest of the group
+    -- plus the body, i.e. `CLetGroup rest body`.  When every occurrence of `name`
+    -- there is the head of an application of exactly its arity, its call sites
+    -- may skip the closure's code_ptr load (`e.directFn`).
+    let direct = satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
+    let (w, ty) = emitGroupBind e env (CBind name clauses) direct
     emitLetGroup e (omInsert name (w, ty) env) rest body
 
 -- knot-tie the maximal leading run of function bindings of `binds`, then continue
@@ -4653,15 +4695,18 @@ anyInList (x :: xs) ys = if contains x ys then True else anyInList xs ys
 -- itself, bound to `%clos` inside the lift — a self-call re-enters the same cell).
 -- The lifted body reuses the E1a decision-tree path (`emitClauseTree`), so a
 -- multi-clause worker or a patterned param lowers exactly as a top-level fn does.
-emitGroupBind : Emit -> OrdMap (String, LTy) -> CBind -> (String, LTy)
-emitGroupBind e env (CBind name clauses) =
+-- `direct` says the caller's use analysis proved every occurrence of `name` in
+-- the binding's scope is a saturated application head; the cell is built either
+-- way, and the flag only registers it as a direct-call target (`e.directFn`).
+emitGroupBind : Emit -> OrdMap (String, LTy) -> CBind -> Bool -> (String, LTy)
+emitGroupBind e env (CBind name clauses) direct =
   let lamName = "mdk_lam" ++ intToString (freshId e)
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv env (removeStr name (dedupS (clausesFreeVars name clauses)))
   let captureWords = capWords e env captured
   let _ = emitGroupBindDefine e env lamName name arity clauses captured
-  match captureWords
+  let (w, ty) = match captureWords
     -- S-1: capture-free ⇒ every cell field is a compile-time constant, so hoist the
     -- cell to an `internal constant` module global instead of allocating a fresh one
     -- on every entry to the enclosing function (emitConstClosureA).  This is the
@@ -4669,6 +4714,151 @@ emitGroupBind e env (CBind name clauses) =
     -- `emitLetGroupKnot`, whose cells are back-patched and must stay heap cells (F9).
     [] => emitConstClosureA e lamName arity
     _ => emitClosureAllocA e lamName arity captureWords
+  let _ = if direct then e.directFn := (w, (lamName, arity)) :: !e.directFn
+  (w, ty)
+
+-- ── the direct-call use analysis (`e.directFn`'s admission test) ────────────
+-- True when EVERY free occurrence of `name` in `ex` is the head of an application
+-- spine applied to exactly `arity` arguments.  A bare occurrence in ANY other
+-- position — passed as an argument, returned, stored in a data structure, the
+-- scrutinee of a match, partially applied, over-applied — is a first-class use of
+-- the closure VALUE and answers False, which keeps that binding's call sites on
+-- the unchanged indirect path.
+--
+-- Every binder that rebinds `name` (a lambda/let/clause/arm/statement pattern, a
+-- nested group binding) makes the subtree it covers irrelevant to THIS binding, so
+-- the walk answers True for it rather than descending.  That is a convenience,
+-- not the shadow-safety argument: safety comes from `e.directFn` being keyed by
+-- the closure cell word, so a shadowed call site cannot reach an outer entry
+-- whatever this walk concludes.
+--
+-- The catch-all answers False, so a CExpr constructor added later disables the
+-- optimization inside it rather than silently claiming the name does not escape
+-- there.
+satOnlyUses : String -> Int -> CExpr -> Bool
+satOnlyUses _ _ (CLit _) = True
+satOnlyUses name _ (CVar x _) = x /= name
+satOnlyUses name arity (CApp f a) =
+  let (hd, args) = flattenApp (CApp f a) []
+  match hd
+    CVar n _ =>
+      if n == name && lengthS args /= arity then
+        False
+      else
+        satOnlyList name arity args
+    _ => satOnlyUses name arity hd && satOnlyList name arity args
+satOnlyUses name arity (CLam ps b) =
+  contains name (patVarNames ps) || satOnlyUses name arity b
+satOnlyUses name arity (CLet recF pat e1 e2) =
+  let shadow = contains name (patVars pat)
+  let ok1 =
+    if recF then
+      shadow || satOnlyUses name arity e1
+    else
+      satOnlyUses name arity e1
+  ok1 && (shadow || satOnlyUses name arity e2)
+satOnlyUses name arity (CLetGroup binds b) =
+  contains name (bindNames binds)
+    || satOnlyBinds name arity binds && satOnlyUses name arity b
+satOnlyUses name arity (CMatch scrut arms) =
+  satOnlyUses name arity scrut && satOnlyArms name arity arms
+satOnlyUses name arity (CDecision scrut arms _) =
+  satOnlyUses name arity scrut && satOnlyArms name arity arms
+satOnlyUses name arity (CIf c t f) =
+  satOnlyUses name arity c
+    && satOnlyUses name arity t
+    && satOnlyUses name arity f
+satOnlyUses name arity (CBinPrim _ l r _) =
+  satOnlyUses name arity l && satOnlyUses name arity r
+satOnlyUses name arity (CUnOp _ x) = satOnlyUses name arity x
+satOnlyUses name arity (CTuple es) = satOnlyList name arity es
+satOnlyUses name arity (CList es) = satOnlyList name arity es
+satOnlyUses name arity (CArray es) = satOnlyList name arity es
+satOnlyUses name arity (CRangeList lo hi _) =
+  satOnlyUses name arity lo && satOnlyUses name arity hi
+satOnlyUses name arity (CRangeArray lo hi _) =
+  satOnlyUses name arity lo && satOnlyUses name arity hi
+satOnlyUses name arity (CRecord _ fields) = satOnlyFields name arity fields
+satOnlyUses name arity (CFieldAccess ex _ _) = satOnlyUses name arity ex
+satOnlyUses name arity (CRecordUpdate _ base updates) =
+  satOnlyUses name arity base && satOnlyFields name arity updates
+satOnlyUses name arity (CVariantUpdate _ base updates) =
+  satOnlyUses name arity base && satOnlyFields name arity updates
+satOnlyUses name arity (CIndex a i) =
+  satOnlyUses name arity a && satOnlyUses name arity i
+satOnlyUses name arity (CStringIndex a i) =
+  satOnlyUses name arity a && satOnlyUses name arity i
+satOnlyUses name arity (CListIndex a i) =
+  satOnlyUses name arity a && satOnlyUses name arity i
+satOnlyUses name arity (CSlice a lo hi _) =
+  satOnlyUses name arity a
+    && satOnlyUses name arity lo
+    && satOnlyUses name arity hi
+satOnlyUses name arity (CStringSlice a lo hi _) =
+  satOnlyUses name arity a
+    && satOnlyUses name arity lo
+    && satOnlyUses name arity hi
+satOnlyUses name arity (CListSlice a lo hi _) =
+  satOnlyUses name arity a
+    && satOnlyUses name arity lo
+    && satOnlyUses name arity hi
+satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
+-- a dict/method occurrence names its captured dict PARAMS, never a local
+-- function binding — but read them anyway rather than assume it.
+satOnlyUses name _ (CMethod _ route implRoutes methRoutes) =
+  not (contains name (routeDictNames [] (route :: implRoutes ++ methRoutes)))
+satOnlyUses name _ (CDict _ routes) =
+  not (contains name (routeDictNames [] routes))
+satOnlyUses _ _ _ = False
+
+satOnlyList : String -> Int -> List CExpr -> Bool
+satOnlyList _ _ [] = True
+satOnlyList name arity (x :: rest) =
+  satOnlyUses name arity x && satOnlyList name arity rest
+
+satOnlyFields : String -> Int -> List CField -> Bool
+satOnlyFields _ _ [] = True
+satOnlyFields name arity ((CField _ ex) :: rest) =
+  satOnlyUses name arity ex && satOnlyFields name arity rest
+
+satOnlyArms : String -> Int -> List CArm -> Bool
+satOnlyArms _ _ [] = True
+satOnlyArms name arity ((CArm pat guards b) :: rest) =
+  let shadow = contains name (patVars pat)
+  satOnlyGuards name arity guards
+    && (shadow || satOnlyUses name arity b)
+    && satOnlyArms name arity rest
+
+satOnlyGuards : String -> Int -> List CGuard -> Bool
+satOnlyGuards _ _ [] = True
+satOnlyGuards name arity ((CGBool ex) :: rest) =
+  satOnlyUses name arity ex && satOnlyGuards name arity rest
+satOnlyGuards name arity ((CGBind _ ex) :: rest) =
+  satOnlyUses name arity ex && satOnlyGuards name arity rest
+
+satOnlyStmts : String -> Int -> List CStmt -> Bool
+satOnlyStmts _ _ [] = True
+satOnlyStmts name arity ((CSExpr ex) :: rest) =
+  satOnlyUses name arity ex && satOnlyStmts name arity rest
+satOnlyStmts name arity ((CSLet _ pat ex) :: rest) =
+  satOnlyUses name arity ex
+    && (contains name (patVars pat) || satOnlyStmts name arity rest)
+-- an assignment TO the name would replace the value its call sites resolve to.
+satOnlyStmts name arity ((CSAssign target ex) :: rest) =
+  target /= name && satOnlyUses name arity ex && satOnlyStmts name arity rest
+
+-- every clause body of a nested group's bindings, with that clause's parameter
+-- patterns treated as shadowing binders.
+satOnlyBinds : String -> Int -> List CBind -> Bool
+satOnlyBinds _ _ [] = True
+satOnlyBinds name arity ((CBind _ clauses) :: rest) =
+  satOnlyClauses name arity clauses && satOnlyBinds name arity rest
+
+satOnlyClauses : String -> Int -> List CClause -> Bool
+satOnlyClauses _ _ [] = True
+satOnlyClauses name arity ((CClause pats b) :: rest) =
+  (contains name (patVarNames pats) || satOnlyUses name arity b)
+    && satOnlyClauses name arity rest
 
 -- emit the lifted multi-clause `define` for a let-group local function into the
 -- SIDE buffer (same swap discipline as emitPatLamDefine).  Captures load from
@@ -5070,24 +5260,51 @@ emitIndirect : Emit ->
 emitIndirect e env hd args =
   let (cw, _) = emitExpr e env hd
   let argOps = emitArgs e env args
-  match lookupAssoc cw !e.closureArity
-    Some n =>
-      if n > 0 && lengthS argOps > n then
-        -- OVER-APPLICATION of a let-bound closure (`(g 7) 9`): saturate with the
-        -- first `n` args, then apply the surplus to the returned (opaque) value.
-        let r0 = emitIndirectCallWords e cw (takeS n argOps)
-        (emitApplyAny e r0 (dropS n argOps), LTInt)
-      else if n > 0 && lengthS argOps < n then
-        -- UNDER-APPLICATION (`let h = g 7` for arity-2 g): build a residual
-        -- partial-application closure over the inner closure value + supplied args.
-        emitPapClosureIndirect e cw argOps n
-      else
-        (emitIndirectCallWords e cw argOps, indirectRetTy e cw hd)
-    -- OPAQUE head (arity unknown at compile time — e.g. a closure PARAM `f` in
-    -- `map f`, or a closure pulled from a container).  The supplied count may not
-    -- match the closure's runtime arity, so dispatch arity-aware (emitApplyAny):
-    -- exact ⇒ inline call; partial ⇒ runtime PAP; over ⇒ saturate + reapply.
-    None => (emitApplyAny e cw argOps, indirectRetTy e cw hd)
+  match directLamOf e cw (lengthS argOps)
+    -- KNOWN-AT-EMIT head: this closure word is the cell of a let-group local
+    -- function that `satOnlyUses` proved is only ever applied to exactly its
+    -- arity, and this application supplies exactly that many args.  The cell's
+    -- code_ptr therefore cannot be anything but `@mdk_lamN`, so call it directly
+    -- and skip the load + inttoptr the indirect shape needs.  The cell word is
+    -- still passed as the leading argument (the lifted define reads its captures
+    -- and its self-reference out of `%clos`), and the result type comes from the
+    -- same `indirectRetTy` the exact-arity indirect branch below uses — so a
+    -- float-returning local function keeps its LTFloat result.
+    Some lam =>
+      let r = freshReg e
+      let _ = emit e "  \{r} = call i64 @\{lam}(\{argDecls (cw :: argOps)})"
+      (r, indirectRetTy e cw hd)
+    None => emitIndirectArity e cw argOps hd
+
+-- the lifted symbol a saturated call through closure word `cw` may target
+-- DIRECTLY: an `e.directFn` entry whose recorded arity is exactly `nargs`.  A
+-- surplus or shortfall is deliberately NOT a hit — over- and under-application
+-- must keep flowing through `emitIndirectArity`'s split/PAP paths unchanged.
+directLamOf : Emit -> String -> Int -> Option String
+directLamOf e cw nargs = match lookupAssoc cw !e.directFn
+  Some (lam, arity) => if arity == nargs then Some lam else None
+  None => None
+
+-- the historical indirect-call shape: split on the closure's compile-time arity.
+emitIndirectArity : Emit -> String -> List String -> CExpr -> (String, LTy)
+emitIndirectArity e cw argOps hd = match lookupAssoc cw !e.closureArity
+  Some n =>
+    if n > 0 && lengthS argOps > n then
+      -- OVER-APPLICATION of a let-bound closure (`(g 7) 9`): saturate with the
+      -- first `n` args, then apply the surplus to the returned (opaque) value.
+      let r0 = emitIndirectCallWords e cw (takeS n argOps)
+      (emitApplyAny e r0 (dropS n argOps), LTInt)
+    else if n > 0 && lengthS argOps < n then
+      -- UNDER-APPLICATION (`let h = g 7` for arity-2 g): build a residual
+      -- partial-application closure over the inner closure value + supplied args.
+      emitPapClosureIndirect e cw argOps n
+    else
+      (emitIndirectCallWords e cw argOps, indirectRetTy e cw hd)
+  -- OPAQUE head (arity unknown at compile time — e.g. a closure PARAM `f` in
+  -- `map f`, or a closure pulled from a container).  The supplied count may not
+  -- match the closure's runtime arity, so dispatch arity-aware (emitApplyAny):
+  -- exact ⇒ inline call; partial ⇒ runtime PAP; over ⇒ saturate + reapply.
+  None => (emitApplyAny e cw argOps, indirectRetTy e cw hd)
 
 -- the raw indirect call: load the closure's code_ptr (cell field 0) and `call` it
 -- with the closure word as the leading argument followed by `argOps`.
@@ -8617,12 +8834,17 @@ emitClosureAllocA e lamName arity captureWords =
 -- Cached by initializer content in its own cache (NOT `dictConstCache` — different
 -- value domain, and sharing it would let a dict and a closure alias one global).
 -- ⚠️ In practice this cache can never HIT: `lamName` is always minted from
--- `freshId` at the call site (`emitGroupBind`'s `mdk_lam<id>`, each eta-wrapper's
--- `mdk_eta_<name>_<id>` / `mdk_etac_<name>_<id>`), so `initBody`'s `ptrtoint`
--- operand is globally unique per closure and no two initializers can ever match.
--- Measured cost of the miss-only lookups: negligible (~159 `@mdk_cc_` globals,
--- ~12k string comparisons in a full `llvm_emit_main` build) — not worth removing
--- or restructuring, but the cache is dead weight, not working dedup.
+-- `freshId` at the call site (`emitGroupBind`'s `mdk_lam<id>`, `emitLamGo`'s and
+-- `emitLamPat`'s own `mdk_lam<id>` for a capture-free user lambda, each
+-- eta-wrapper's `mdk_eta_<name>_<id>` / `mdk_etac_<name>_<id>`), so `initBody`'s
+-- `ptrtoint` operand is globally unique per closure and no two initializers can
+-- ever match.  Measured cost of the miss-only lookups (re-measured after S-1
+-- routed capture-free user lambdas through this path too, not just eta-wrappers):
+-- 902 `@mdk_cc_` globals in a full self-hosting `llvm_emit_modules_main` build of
+-- this compiler, so up to ~406K miss comparisons (a linear scan against an
+-- ever-growing list before each miss) — still a linear list scan per call, not
+-- worth removing or restructuring, but the cache is dead weight, not working
+-- dedup.
 emitConstClosureCell : Emit -> String -> Int -> String
 emitConstClosureCell e lamName arity =
   let codePtr = "ptrtoint (ptr @" ++ lamName ++ " to i64)"
@@ -8675,7 +8897,17 @@ emitLamGo e env pats body =
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
   let _ = emitLamDefine e env lamName pats captured body
-  let (cw, clty) = emitClosureAllocA e lamName (listLen pats) captureWords
+  -- S-1-style hoist (mirrors `emitGroupBind`): capture-free ⇒ every cell field
+  -- is a compile-time constant, so hoist to an `internal constant` module
+  -- global via `emitConstClosureA` instead of allocating a fresh cell on every
+  -- entry to the enclosing function. `emitConstClosureA` is the documented
+  -- drop-in for `emitClosureAllocA e lam arity []` — it keeps the
+  -- `e.closureArity` registration this call already relies on for static
+  -- over/under-application splitting, unlike the bookkeeping-free
+  -- `emitConstClosure` used by the eta-closure sites.
+  let (cw, clty) = match captureWords
+    [] => emitConstClosureA e lamName (listLen pats)
+    _ => emitClosureAllocA e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
@@ -8686,7 +8918,10 @@ emitLamPat e env pats body =
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
   let _ = emitPatLamDefine e env lamName omEmpty pats captured body
-  let (cw, clty) = emitClosureAllocA e lamName (listLen pats) captureWords
+  -- Same S-1-style hoist as `emitLamGo` above; see that comment.
+  let (cw, clty) = match captureWords
+    [] => emitConstClosureA e lamName (listLen pats)
+    _ => emitClosureAllocA e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
@@ -13620,6 +13855,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     defineCounter = Ref 0,
     closureArity = Ref [],
     closureRetTy = Ref [],
+    directFn = Ref [],
     trmcCtx = Ref TrmcOff,
     gDispCtx = Ref GDispOff,
     gDispGroups = Ref [],

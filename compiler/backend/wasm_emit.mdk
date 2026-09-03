@@ -9864,7 +9864,10 @@ emitSelfRecLocalBind prog env x pats body =
       (c => contains c env)
       (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
   let _ = emitLgLifted prog gid [x] groupCaps [bind] bind
-  rebuildLgClosure prog gid groupCaps bind
+  -- one-member group: `useSiteRebuilds`'s later-sibling guard is vacuous here, so a
+  -- capture-free `go` reaches the hoisted-global branch.  Self-reference is not a
+  -- forward reference — the knot is tied inside the lifted prologue, not here.
+  useSiteRebuilds prog gid groupCaps [bind]
 
 emitLetGroupRef : Prog ->
   List String ->
@@ -9930,6 +9933,20 @@ useSiteRebuilds prog gid groupCaps (b :: rest) =
       rebuildLgClosure prog gid groupCaps b
   here ++ useSiteRebuilds prog gid groupCaps rest
 
+-- S-4 (prologue half): the member-closure rebuilds a LIFTED member runs on every
+-- entry, including a tail self-call's re-entry.  Its hoist condition is weaker than
+-- the use site's: this materializes the group's ENTIRE member set before any body
+-- line runs, so there is no later sibling to forward-reference — a member naming any
+-- other member finds it in a local whichever order the rebuilds emitted in.  What is
+-- left is the condition that makes a `$clos` constant at all, an empty `groupCaps`,
+-- which is a property of the GROUP — so the group hoists whole or not at all.
+liftedMemberRebuilds : Prog -> Int -> List String -> List CBind -> List String
+liftedMemberRebuilds prog gid groupCaps binds =
+  if listLen groupCaps == 0 then
+    flatMap (b => constLgClosure prog gid b) binds
+  else
+    flatMap (b => rebuildLgClosure prog gid groupCaps b) binds
+
 -- the hoisted-global form of rebuildLgClosure: same lifted code function, same arity,
 -- an empty env — read from one module global and stored into the member's local.
 constLgClosure : Prog -> Int -> CBind -> List String
@@ -9985,8 +10002,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let arity = clauseArityOf clauses
   let params = synthParams arity
   let capPrologue = flatMap capLoadAt (zipIdx groupCaps 0)
-  let memberRebuilds =
-    flatMap (b => rebuildLgClosure prog gid groupCaps b) binds
+  let memberRebuilds = liftedMemberRebuilds prog gid groupCaps binds
   let argPrologue = flatMap argLoadAt (zipIdx params 0)
   -- a lifted letgroup member is an independent function: clear any live TMC /
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
