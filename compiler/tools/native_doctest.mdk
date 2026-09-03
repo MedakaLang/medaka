@@ -65,7 +65,15 @@ import driver.build_cmd.{
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
-import support.util.{joinNl, splitNl, reverseL, startsWith, stringTrim}
+import support.util.{joinNl, splitNl}
+import tools.probe_transcript.{
+  Chunk(..),
+  chunksOf,
+  endTag,
+  firstNonEmptyLine,
+  lookupChunk,
+  sentinelLine,
+}
 import tools.doctest.{
   Example,
   RunResult,
@@ -76,29 +84,16 @@ import tools.doctest.{
 }
 
 -- ── sentinels ───────────────────────────────────────────────────────────────
--- A doctest's rendered value can span MANY lines (an expected block is
--- `joinNl`ed), so the split point cannot be "one line per example".  The probe
--- prints a sentinel line BEFORE each value; a value is every line up to the next
--- sentinel.  A trailing `END` sentinel closes the last value — which is also
--- what makes "complete" decidable: an example's value is complete iff ANOTHER
--- sentinel followed it.  Without the terminator, a probe killed immediately
--- after printing the final value would be indistinguishable from a clean run.
+-- The transcript format itself — how a sentinel delimits a value and what makes
+-- one complete — lives in `tools/probe_transcript.mdk`, shared with the
+-- `test "…"` engine.  What is per-engine is the PREFIX, so neither engine can
+-- read the other's transcript.
 
 sentinelPrefix : String
 sentinelPrefix = "@@__mdk_native_doctest__@@ "
 
 sentinelFor : String -> String
-sentinelFor tag = sentinelPrefix ++ tag
-
-endTag : String
-endTag = "END"
-
--- The tag of a sentinel line, or None for an ordinary output line.
-sentTag : String -> Option String
-sentTag line
-  | startsWith sentinelPrefix line =
-    Some (stringSlice (stringLength sentinelPrefix) (stringLength line) line)
-  | otherwise = None
+sentinelFor tag = sentinelLine sentinelPrefix tag
 
 -- ── skips that must be LOUD ─────────────────────────────────────────────────
 -- Two shapes cannot run natively.  Both return a whole-file error, so every
@@ -270,7 +265,7 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
       Ok (code, out, errOut) =>
         Ok
           (renderAll
-            (chunksOf (splitNl out))
+            (chunksOf sentinelPrefix (splitNl out))
             (abortNote code errOut)
             0
             examples
@@ -338,38 +333,6 @@ valueLine i ex = match exampleExpected ex
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 
--- tag, the value's lines, and whether ANOTHER sentinel followed (i.e. the value
--- is complete rather than truncated by an abort).
-data Chunk = Chunk String (List String) Bool
-
-chunksOf : List String -> List Chunk
-chunksOf lines = reverseL (chunkScan [] None [] lines)
-
--- Lines before the FIRST sentinel are dropped: they are whatever the module's
--- own top-level effects printed, not part of any example's value.
-chunkScan : List Chunk ->
-  Option String ->
-  List String ->
-  List String ->
-  List Chunk
-chunkScan acc cur curLines [] = closeChunk acc cur curLines False
-chunkScan acc cur curLines (l :: rest) = match sentTag l
-  Some t => chunkScan (closeChunk acc cur curLines True) (Some t) [] rest
-  None => match cur
-    None => chunkScan acc cur curLines rest
-    Some _ => chunkScan acc cur (l :: curLines) rest
-
-closeChunk : List Chunk -> Option String -> List String -> Bool -> List Chunk
-closeChunk acc None _ _ = acc
-closeChunk acc (Some t) curLines terminated =
-  Chunk t (reverseL curLines) terminated :: acc
-
-lookupChunk : String -> List Chunk -> Option Chunk
-lookupChunk _ [] = None
-lookupChunk tag ((Chunk t ls done) :: rest)
-  | t == tag = Some (Chunk t ls done)
-  | otherwise = lookupChunk tag rest
-
 -- ⚠️ THE ABORT RULE.  An example whose chunk is missing, or present but not
 -- closed by a following sentinel, is `Errored` NAMING the abort.  It is never
 -- dropped and never treated as a pass: a mid-run panic leaving later examples
@@ -381,12 +344,6 @@ abortNote code errOut =
   let detail = firstNonEmptyLine (splitNl errOut)
   let suffix = if detail == "" then "" else " — " ++ detail
   "native doctest run ended (probe exit \{intToString code}) before this example was reported\{suffix}"
-
-firstNonEmptyLine : List String -> String
-firstNonEmptyLine [] = ""
-firstNonEmptyLine (l :: rest)
-  | stringTrim l == "" = firstNonEmptyLine rest
-  | otherwise = stringTrim l
 
 renderAll : List Chunk ->
   String ->

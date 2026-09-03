@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # check_build_oracles_for_consistency.sh — assert build_oracles.sh --for's broad
 # wildcard derivation is the UNION of its own narrower per-gate derivations (#832).
 #

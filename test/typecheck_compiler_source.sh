@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # test/typecheck_compiler_source.sh — strict-typecheck gate over the COMPILER'S
 # OWN SOURCE.
 #

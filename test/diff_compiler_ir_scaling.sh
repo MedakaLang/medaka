@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_ir_scaling.sh — the DETERMINISTIC superlinearity detector for
 # `medaka check`, measured in Cachegrind INSTRUCTION COUNTS (`Ir`).
 #

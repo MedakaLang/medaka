@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # Focused behavior and interruption checks for scripts/mutation_transaction.sh.
 set -u
 

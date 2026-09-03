@@ -1,5 +1,5 @@
 # META
-source_lines=5272
+source_lines=5454
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -17,14 +17,18 @@ stages=DESUGAR,MARK
    registry-level fail-open policy says about it —
    `docs/ops/GATE-REGISTRY-DESIGN.md` §2/§3).
 
-   ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
-   to behave.  Every gate script, every assertion in it, and the meaning of
-   every exit code it returns are untouched, and `sh test/run_gates.sh` remains
-   authoritative.  What `gate run` adds is the SERVICES around the script —
-   scratch-dir lifecycle, the stale-oracle refusal, a timeout, separated
-   stdout/stderr capture, and a machine-readable timing report — provided once,
-   natively, instead of re-hand-rolled per gate.  See the `gate run` section
-   below.
+   ⚠️ For a `kind = "exec"` entry, `gate run` is a NEW WAY TO INVOKE a gate
+   script, not a new way for a gate to behave: every assertion in the script
+   and the meaning of every exit code it returns are untouched, and
+   `sh test/run_gates.sh` remains authoritative.  A `kind = "native"` entry has
+   no script at all — `gate run` compiles and runs its `_test.mdk` module
+   directly (`medaka test --native --json`) and grades the JSON envelope, so
+   for THAT kind `gate run` is the gate's only way to run, not a wrapper around
+   one.  Either way, what `gate run` adds around the underlying execution is the
+   SAME set of SERVICES — scratch-dir lifecycle, the stale-oracle refusal (exec
+   only), a timeout, separated stdout/stderr capture, and a machine-readable
+   timing report — provided once, natively, instead of re-hand-rolled per gate.
+   See the `gate run` section below.
 
    **Selector language** (design doc §3, "keep it boring"): a selector is a
    `field:pattern` token, where `field` is one of `name`/`area`/`project`/
@@ -101,6 +105,59 @@ import support.util.{
 -- (`Shard`, below), not on the entry — they are per-ROW facts, and putting
 -- them on 227 entries would be 227 chances for a row to disagree with itself.
 --
+-- ── `migration` (#2591) ─────────────────────────────────────────────────────
+--
+-- `migration` is this gate's DESTINATION under the testing-architecture epic
+-- (#2600): where the check ends up, or the named prerequisite that has to be
+-- discharged before a destination can be picked.  It is a required string on
+-- every entry, one of eight values (checked below):
+--
+--   native-wrap            a native gate module invokes the existing script and
+--                          asserts on it; the script's LOGIC survives verbatim.
+--                          The release valve — it needs nothing built first.
+--   native-rewrite         the check becomes Medaka code; the script's probes
+--                          and static text become library calls, so its logic
+--                          does NOT survive as an invocation.
+--   shell:trust-anchor     stays shell forever.  It checks the machinery a
+--                          native gate would run INSIDE, so a native rewrite
+--                          would assert on itself.
+--   shell:instrumentation  stays shell.  It drives valgrind/cachegrind/wall
+--                          clock and does statistics over the result; a wrapper
+--                          adds a layer and proves nothing new.
+--   shell:external-harness stays shell.  Its SUBJECT is a shell/python/browser
+--                          harness or live `gh` state, not Medaka code.
+--   split-first            one script holding two things — a check and a shared
+--                          helper, or several unrelated sections.  The
+--                          editorial split is the prerequisite, not the port.
+--   inverted-polarity      a pinning gate whose RED is the healthy state
+--                          (`test/diff_compiler_must_fail.sh` and kin).  Needs a
+--                          per-pin drain field before any destination is safe.
+--   done                   already migrated.  Nothing carries it yet.
+--
+-- The three `shell:*` values are claims about a SCRIPT, so they are checked
+-- against that script rather than taken on the registry's word: the `run`
+-- target must carry a `shell-because: <class> …` header line naming the same
+-- class (verify check 11).  Without that pairing, "stays shell" is a value one
+-- side asserts and nothing reads — and a script that later stops being a trust
+-- anchor would keep its exemption silently.
+--
+-- ── `kind` (#2591, epic #2600) ──────────────────────────────────────────────
+--
+-- HOW the `run` target is executed, and therefore what shape `run` has:
+--
+--   exec    a script.  `run` is its repo-relative path; the interpreter comes
+--           from its shebang, not from this field.
+--   native  a Medaka test module.  `run` is a repo-relative `*_test.mdk` path,
+--           executed by `medaka test --native --json`.
+--
+-- The suffix is the pairing that keeps the two halves from disagreeing —
+-- `test/diff_compiler_ci_shard_coverage.sh` reds an entry whose `kind` and
+-- `run` suffix do not match, the same way check 11 pairs `shell:*` with a
+-- `shell-because:` header.  Every pattern-to-gate resolver in the tree
+-- (`test/run_gates.sh`, `test/preflight.sh`, `test/build_oracles.sh --for`,
+-- `.github/workflows/ci.yml`'s `plan` step) resolves a `native` entry by
+-- registry NAME, since there is no `.sh` for its glob to find.
+--
 -- ── `tiers` (S-tier-is-data, #2181) ─────────────────────────────────────────
 --
 -- `tiers` is the SET OF RUNS this gate has: not one string, because "when does
@@ -138,6 +195,7 @@ public export data Gate = Gate {
   tiers : List String,
   cost : String,
   kind : String,
+  migration : String,
   run : String,
   oracles : List String,
   sources : List String,
@@ -178,6 +236,7 @@ readGateEntry i e = do
   tiers <- reqArr i "tiers" e
   cost <- reqStr i "cost" e
   kind <- reqStr i "kind" e
+  migration <- reqStr i "migration" e
   run <- reqStr i "run" e
   oracles <- reqArr i "oracles" e
   sources <- reqArr i "sources" e
@@ -191,6 +250,7 @@ readGateEntry i e = do
     tiers = tiers,
     cost = cost,
     kind = kind,
+    migration = migration,
     run = run,
     oracles = oracles,
     sources = sources,
@@ -521,6 +581,7 @@ gateJson g = jObject [
   ("tiers", jArray (map JString g.tiers)),
   ("cost", JString g.cost),
   ("kind", JString g.kind),
+  ("migration", JString g.migration),
   ("run", JString g.run),
   ("oracles", jArray (map JString g.oracles)),
   ("sources", jArray (map JString g.sources)),
@@ -1133,21 +1194,34 @@ substrAt needle hay i last
 -- SIGTERM path and 137 when the -k grace period had to escalate to SIGKILL;
 -- both are reported as a timeout, with the raw code still printed so a genuine
 -- 137 from elsewhere (an OOM kill, say) is not hidden by the label.
-gateArgs : RunEnv -> String -> Int -> String -> String -> List String
-gateArgs env scratch secs sh script = [
-  "MEDAKA_ROOT=\{env.root}",
-  "MEDAKA=\{env.medaka}",
-  "MEDAKA_EMITTER=\{env.emitter}",
-  "TMPDIR=\{scratch}",
-  "MEDAKA_SCRATCH=\{scratch}",
-  "JOBS=1",
-  "timeout",
-  "-k",
-  "5s",
-  "\{intToString secs}s",
-  sh,
-  script,
-]
+gateArgs : RunEnv -> String -> Int -> List String -> List String
+gateArgs env scratch secs cmd =
+  "MEDAKA_ROOT=\{env.root}"
+    :: "MEDAKA=\{env.medaka}"
+    :: "MEDAKA_EMITTER=\{env.emitter}"
+    :: "TMPDIR=\{scratch}"
+    :: "MEDAKA_SCRATCH=\{scratch}"
+    :: "JOBS=1"
+    :: "timeout"
+    :: "-k"
+    :: "5s"
+    :: "\{intToString secs}s"
+    :: cmd
+
+-- What runs a gate, and the label its result lines carry.
+--
+-- `kind = "exec"` is a script, so the interpreter comes from its shebang
+-- (shellFor).  `kind = "native"` is a `*_test.mdk` module run by the compiler's
+-- own test runner: `medaka test --native --json` exits 0 when every `test`
+-- declaration passed and 1 when any failed, which is already the contract
+-- `gateOk` reads off the exit code, so nothing downstream needs a second shape.
+gateInvocation : RunEnv -> Gate -> String -> <IO> (String, List String)
+gateInvocation env g script =
+  if g.kind == "native" then
+    ("medaka test --native", [env.medaka, "test", "--native", "--json", script])
+  else
+    let sh = shellFor script
+    (sh, [sh, script])
 
 spawnFailure : Gate -> String -> String -> Float -> GateResult
 spawnFailure g script msg dt = GateResult {
@@ -1172,13 +1246,13 @@ runOneGate env g =
       "gate script not found (registry `run` field): \{g.run}"
       0.0
   else
-    let sh = shellFor script
+    let (sh, cmd) = gateInvocation env g script
     let secs = timeoutFor env.timeoutOverride g.cost
     match makeGateScratch env.scratchRoot
       Err e => spawnFailure g script "could not create a scratch dir: \{e}" 0.0
       Ok scratch =>
         let t0 = monotonicSec ()
-        let res = runCommand "env" (gateArgs env scratch secs sh script)
+        let res = runCommand "env" (gateArgs env scratch secs cmd)
         let dt = monotonicSec () - t0
         let _ = cleanupScratch scratch
         match res
@@ -1337,7 +1411,8 @@ runReportJson jobs rs =
 dryLine : RunEnv -> Gate -> <IO> String
 dryLine env g =
   let script = "\{env.root}/\{g.run}"
-  let sh = if fileExists script then shellFor script else "sh"
+  let (sh, _cmd) =
+    if fileExists script then gateInvocation env g script else ("sh", [])
   let orc = if isEmptyStrs g.oracles then "-" else joinWith "," g.oracles
   "\{g.name}\t\{sh}\t\{script}\ttimeout=\{intToString (timeoutFor env.timeoutOverride g.cost)}s\toracles=\{orc}\n"
 
@@ -1513,8 +1588,7 @@ runRunCmdBody argv = match parseRunArgs argv
 -- ── `gate verify` ───────────────────────────────────────────────────────────
 --
 -- The drift gate (#2176 S-4, docs/ops/GATE-REGISTRY-DESIGN.md §3).  TEXT-ONLY,
--- no build — runs everywhere, cheap.  Four checks, each its own violation
--- class:
+-- no build — runs everywhere, cheap.  Each check is its own violation class:
 --
 --   1. every gate CANDIDATE — test/preflight.sh's own `_gate_candidates`
 --      (tracked-or-untracked `*.sh`, MINUS every name in
@@ -1539,6 +1613,10 @@ runRunCmdBody argv = match parseRunArgs argv
 --      and it is the one that catches bulk data rot: a fixture directory
 --      renamed out from under the registry silently stops selecting its
 --      consumers, which is a QUIETER failure than a red gate.
+--   6-11. entry names are unique, safe to interpolate into ci.yml and a shell
+--      word, and `cost`, `tiers` and `migration` carry declared values; a
+--      `shell:*` migration is paired with its run script's own
+--      `shell-because:` header.  Each is written up at its definition below.
 --
 -- `sources` is deliberately NOT checked the same way, and that is not an
 -- oversight: a `sources` value is a GLOB (`compiler/*/*.mdk`, `stdlib/*`),
@@ -1898,7 +1976,109 @@ gateTiersErrors g
   ]
   | otherwise = tierTokensErrors g.name g.tiers
 
--- ── assembling and rendering the nine classes ───────────────────────────────
+-- Check 10 (#2591): every entry's `migration` is one of the eight destinations
+-- the schema comment above defines.  `migration` is a required TOML string with
+-- no enum check at parse time, exactly like `cost` before check 8 — and a
+-- migration value nothing recognizes is worse than a typo'd cost, because the
+-- whole point of the field is that a wave of the epic can select on it.  A
+-- misspelled destination selects into no wave and reads as "already handled".
+migrationClassOk : String -> Bool
+migrationClassOk m =
+  m == "native-wrap"
+    || m == "native-rewrite"
+    || m == "shell:trust-anchor"
+    || m == "shell:instrumentation"
+    || m == "shell:external-harness"
+    || m == "split-first"
+    || m == "inverted-polarity"
+    || m == "done"
+
+migrationClassNames : String
+migrationClassNames =
+  "native-wrap/native-rewrite/shell:trust-anchor/shell:instrumentation/shell:external-harness/split-first/inverted-polarity/done"
+
+invalidMigrationViolations : List Gate -> List String
+invalidMigrationViolations [] = []
+invalidMigrationViolations (g :: gs)
+  | migrationClassOk g.migration = invalidMigrationViolations gs
+  | otherwise =
+    "\{g.name}: migration '\{g.migration}' is not one of \{migrationClassNames}"
+      :: invalidMigrationViolations gs
+
+-- Check 11 (#2591): the `shell-because:` pairing.  A `shell:*` migration is an
+-- EXEMPTION — this gate is never going native — and an exemption one side
+-- grants itself is not reviewable.  So the reason has to be stated where the
+-- reader of the exempted thing will see it: the `run` script carries a
+-- `shell-because: <class> …` header line, and it must name the SAME class the
+-- registry does.  A mismatch is the interesting failure — a script that stops
+-- being a trust anchor and becomes ordinary would otherwise keep its exemption
+-- with nothing anywhere disagreeing.
+shellBecauseTag : String
+shellBecauseTag = "shell-because:"
+
+-- The class a `shell:*` value names (`trust-anchor`), or `""` for every other
+-- migration value — the "this entry needs no header" answer.
+shellClassOf : String -> String
+shellClassOf m =
+  if startsWith "shell:" m then
+    stringSlice (stringLength "shell:") (stringLength m) m
+  else
+    ""
+
+-- A comment line's text with its leading `#`s and spaces removed.  The header
+-- is a shell comment, so the tag never starts the raw line.
+stripHash : String -> String
+stripHash s =
+  let t = stringTrim s
+  if startsWith "#" t then stripHash (stringSlice 1 (stringLength t) t) else t
+
+-- The class token of a `shell-because:` line, or `None` if the line is not one.
+-- `firstToken` (check 1's helper) takes the first whitespace-separated word, so
+-- the rest of the line is free prose.
+becauseClassOf : String -> Option String
+becauseClassOf line =
+  let t = stripHash line
+  if startsWith shellBecauseTag t then
+    Some
+      (firstToken
+        (stringTrim
+          (stringSlice (stringLength shellBecauseTag) (stringLength t) t)))
+  else
+    None
+
+becauseClasses : List String -> List String
+becauseClasses [] = []
+becauseClasses (l :: ls) = match becauseClassOf l
+  Some c => c :: becauseClasses ls
+  None => becauseClasses ls
+
+shellBecauseErrors : String -> Gate -> <IO> List String
+shellBecauseErrors root g =
+  let want = shellClassOf g.migration
+  if want == "" then
+    []
+  else match readFile (joinPath root g.run)
+    Err m => [
+      "\{g.name}: migration '\{g.migration}' but its run script cannot be read to confirm the reason: \{g.run}: \{m}",
+    ]
+    Ok src => match becauseClasses (splitNl src)
+      [] => [
+        "\{g.name}: migration '\{g.migration}' but \{g.run} carries no 'shell-because: \{want}' header line — a stays-shell exemption the script itself never states",
+      ]
+      c :: _ =>
+        if c == want then
+          []
+        else
+          [
+            "\{g.name}: migration '\{g.migration}' but \{g.run} states 'shell-because: \{c}' — registry and script name different reason classes",
+          ]
+
+shellBecauseViolations : String -> List Gate -> <IO> List String
+shellBecauseViolations _ [] = []
+shellBecauseViolations root (g :: gs) =
+  shellBecauseErrors root g ++ shellBecauseViolations root gs
+
+-- ── assembling and rendering the violation classes ──────────────────────────
 
 verifyClasses : String ->
   List Gate ->
@@ -1920,6 +2100,8 @@ verifyClasses root gates shs = match gateCandidates root
       ("unsafe entry names", unsafeNameViolations gates shs),
       ("invalid cost class", invalidCostViolations gates),
       ("invalid tiers", invalidTiersViolations gates),
+      ("invalid migration class", invalidMigrationViolations gates),
+      ("unpaired shell-because", shellBecauseViolations root gates),
     ]
 
 renderClass : (String, List String) -> String
@@ -5284,7 +5466,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "maxI" false) (mem "minI" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
-(DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "shard" (TyCon "String")) (field "project" (TyCon "String")) (field "tiers" (TyApp (TyCon "List") (TyCon "String"))) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "shard" (TyCon "String")) (field "project" (TyCon "String")) (field "tiers" (TyApp (TyCon "List") (TyCon "String"))) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "migration" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "reqStr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "reqStr" ((PVar "i") (PVar "field") (PVar "entry")) (EMatch (EApp (EApp (EVar "getString") (EVar "field")) (EVar "entry")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Ok") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gates.toml: [[gate]] #")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ": missing required string field '"))) (EApp (EVar "display") (EVar "field"))) (ELit (LString "'")))))))
 (DTypeSig false "reqArr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -5292,7 +5474,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "readGate" (TyFun (TyCon "Toml") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Gate")))))
 (DFunDef false "readGate" ((PVar "doc") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gates.toml: [[gate]] #")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ": no such entry"))))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "readGateEntry") (EVar "i")) (EVar "e")))))
 (DTypeSig false "readGateEntry" (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Gate")))))
-(DFunDef false "readGateEntry" ((PVar "i") (PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "name"))) (EVar "e"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "area"))) (EVar "e"))) (ELam ((PVar "area")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "shard"))) (EVar "e"))) (ELam ((PVar "shard")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "project"))) (EVar "e"))) (ELam ((PVar "project")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "tiers"))) (EVar "e"))) (ELam ((PVar "tiers")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "cost"))) (EVar "e"))) (ELam ((PVar "cost")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "kind"))) (EVar "e"))) (ELam ((PVar "kind")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "run"))) (EVar "e"))) (ELam ((PVar "run")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "oracles"))) (EVar "e"))) (ELam ((PVar "oracles")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "sources"))) (EVar "e"))) (ELam ((PVar "sources")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "corpus"))) (EVar "e"))) (ELam ((PVar "corpus")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "toolchain"))) (EVar "e"))) (ELam ((PVar "toolchain")) (EApp (EVar "Ok") (ERecordCreate "Gate" ((fa "name" (EVar "name")) (fa "area" (EVar "area")) (fa "shard" (EVar "shard")) (fa "project" (EVar "project")) (fa "tiers" (EVar "tiers")) (fa "cost" (EVar "cost")) (fa "kind" (EVar "kind")) (fa "run" (EVar "run")) (fa "oracles" (EVar "oracles")) (fa "sources" (EVar "sources")) (fa "corpus" (EVar "corpus")) (fa "toolchain" (EVar "toolchain"))))))))))))))))))))))))))))))
+(DFunDef false "readGateEntry" ((PVar "i") (PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "name"))) (EVar "e"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "area"))) (EVar "e"))) (ELam ((PVar "area")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "shard"))) (EVar "e"))) (ELam ((PVar "shard")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "project"))) (EVar "e"))) (ELam ((PVar "project")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "tiers"))) (EVar "e"))) (ELam ((PVar "tiers")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "cost"))) (EVar "e"))) (ELam ((PVar "cost")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "kind"))) (EVar "e"))) (ELam ((PVar "kind")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "migration"))) (EVar "e"))) (ELam ((PVar "migration")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "run"))) (EVar "e"))) (ELam ((PVar "run")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "oracles"))) (EVar "e"))) (ELam ((PVar "oracles")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "sources"))) (EVar "e"))) (ELam ((PVar "sources")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "corpus"))) (EVar "e"))) (ELam ((PVar "corpus")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "toolchain"))) (EVar "e"))) (ELam ((PVar "toolchain")) (EApp (EVar "Ok") (ERecordCreate "Gate" ((fa "name" (EVar "name")) (fa "area" (EVar "area")) (fa "shard" (EVar "shard")) (fa "project" (EVar "project")) (fa "tiers" (EVar "tiers")) (fa "cost" (EVar "cost")) (fa "kind" (EVar "kind")) (fa "migration" (EVar "migration")) (fa "run" (EVar "run")) (fa "oracles" (EVar "oracles")) (fa "sources" (EVar "sources")) (fa "corpus" (EVar "corpus")) (fa "toolchain" (EVar "toolchain"))))))))))))))))))))))))))))))))
 (DTypeSig false "readGatesFrom" (TyFun (TyCon "Toml") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Gate"))))))))
 (DFunDef false "readGatesFrom" ((PVar "doc") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EApp (EVar "reverseGates") (EVar "acc")) (EListLit))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "readGate") (EVar "doc")) (EVar "i")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "g")) () (EApp (EApp (EApp (EApp (EVar "readGatesFrom") (EVar "doc")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EVar "g") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "reverseGates" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "Gate")))))
@@ -5357,7 +5539,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "renderNames" ((PList)) (ELit (LString "")))
 (DFunDef false "renderNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "\n"))) (EApp (EVar "renderNames") (EVar "gs"))))
 (DTypeSig false "gateJson" (TyFun (TyCon "Gate") (TyCon "Json")))
-(DFunDef false "gateJson" ((PVar "g")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "name"))) (ETuple (ELit (LString "baselineKey")) (EApp (EVar "JString") (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (ETuple (ELit (LString "area")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "area"))) (ETuple (ELit (LString "shard")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "shard"))) (ETuple (ELit (LString "project")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "project"))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "tiers")))) (ETuple (ELit (LString "cost")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "cost"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "kind"))) (ETuple (ELit (LString "run")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "run"))) (ETuple (ELit (LString "oracles")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "oracles")))) (ETuple (ELit (LString "sources")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "sources")))) (ETuple (ELit (LString "corpus")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "corpus")))) (ETuple (ELit (LString "toolchain")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "toolchain")))))))
+(DFunDef false "gateJson" ((PVar "g")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "name"))) (ETuple (ELit (LString "baselineKey")) (EApp (EVar "JString") (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (ETuple (ELit (LString "area")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "area"))) (ETuple (ELit (LString "shard")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "shard"))) (ETuple (ELit (LString "project")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "project"))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "tiers")))) (ETuple (ELit (LString "cost")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "cost"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "kind"))) (ETuple (ELit (LString "migration")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "migration"))) (ETuple (ELit (LString "run")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "run"))) (ETuple (ELit (LString "oracles")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "oracles")))) (ETuple (ELit (LString "sources")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "sources")))) (ETuple (ELit (LString "corpus")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "corpus")))) (ETuple (ELit (LString "toolchain")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EFieldAccess (EVar "g") "toolchain")))))))
 (DTypeSig true "renderJson" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String")))
 (DFunDef false "renderJson" ((PVar "gs")) (EApp (EVar "stringify") (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "gateJson")) (EVar "gs")))))
 (DTypeSig false "shardJson" (TyFun (TyCon "Shard") (TyCon "Json")))
@@ -5477,12 +5659,14 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "substrIn" ((PVar "needle") (PVar "hay")) (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "hay")) (EApp (EVar "stringLength") (EVar "needle")))))
 (DTypeSig false "substrAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "substrAt" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "last")) (EIf (EBinOp ">" (EVar "i") (EVar "last")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "last")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "gateArgs" (TyFun (TyCon "RunEnv") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "gateArgs" ((PVar "env") (PVar "scratch") (PVar "secs") (PVar "sh") (PVar "script")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "medaka"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "emitter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "TMPDIR=")) (EApp (EVar "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SCRATCH=")) (EApp (EVar "display") (EVar "scratch"))) (ELit (LString ""))) (ELit (LString "JOBS=1")) (ELit (LString "timeout")) (ELit (LString "-k")) (ELit (LString "5s")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "s"))) (EVar "sh") (EVar "script")))
+(DTypeSig false "gateArgs" (TyFun (TyCon "RunEnv") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "gateArgs" ((PVar "env") (PVar "scratch") (PVar "secs") (PVar "cmd")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "medaka"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "emitter"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "TMPDIR=")) (EApp (EVar "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SCRATCH=")) (EApp (EVar "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (ELit (LString "JOBS=1")) (EBinOp "::" (ELit (LString "timeout")) (EBinOp "::" (ELit (LString "-k")) (EBinOp "::" (ELit (LString "5s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "s"))) (EVar "cmd"))))))))))))
+(DTypeSig false "gateInvocation" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "gateInvocation" ((PVar "env") (PVar "g") (PVar "script")) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (ETuple (ELit (LString "medaka test --native")) (EListLit (EFieldAccess (EVar "env") "medaka") (ELit (LString "test")) (ELit (LString "--native")) (ELit (LString "--json")) (EVar "script"))) (EBlock (DoLet false false (PVar "sh") (EApp (EVar "shellFor") (EVar "script"))) (DoExpr (ETuple (EVar "sh") (EListLit (EVar "sh") (EVar "script")))))))
 (DTypeSig false "spawnFailure" (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyCon "GateResult"))))))
 (DFunDef false "spawnFailure" ((PVar "g") (PVar "script") (PVar "msg") (PVar "dt")) (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (ELit (LString "sh"))) (fa "exitCode" (ELit (LInt 127))) (fa "timedOut" (EVar "False")) (fa "spawnError" (EVar "msg")) (fa "seconds" (EVar "dt")) (fa "out" (ELit (LString ""))) (fa "err" (ELit (LString ""))))))
 (DTypeSig false "runOneGate" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "GateResult")))))
-(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PVar "sh") (EApp (EVar "shellFor") (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "sh")) (EVar "script")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut"))))))))))))))))
+(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PTuple (PVar "sh") (PVar "cmd")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "cmd")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut"))))))))))))))))
 (DTypeSig false "gateOk" (TyFun (TyCon "GateResult") (TyCon "Bool")))
 (DFunDef false "gateOk" ((PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0)))))
 (DTypeSig false "msOf" (TyFun (TyCon "GateResult") (TyCon "Int")))
@@ -5512,7 +5696,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig true "runReportJson" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "GateResult")) (TyCon "String"))))
 (DFunDef false "runReportJson" ((PVar "jobs") (PVar "rs")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jobs")) (EApp (EVar "JInt") (EVar "jobs"))) (ETuple (ELit (LString "parallel")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JInt") (EApp (EVar "countOk") (EVar "rs")))) (ETuple (ELit (LString "failing")) (EApp (EVar "JInt") (EBinOp "-" (EApp (EVar "listLen") (EVar "rs")) (EApp (EVar "countOk") (EVar "rs"))))) (ETuple (ELit (LString "gates")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "resultJson")) (EVar "rs"))))))))
 (DTypeSig false "dryLine" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "dryLine" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoLet false false (PVar "sh") (EIf (EApp (EVar "fileExists") (EVar "script")) (EApp (EVar "shellFor") (EVar "script")) (ELit (LString "sh")))) (DoLet false false (PVar "orc") (EIf (EApp (EVar "isEmptyStrs") (EFieldAccess (EVar "g") "oracles")) (ELit (LString "-")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "g") "oracles")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "\t"))) (EApp (EVar "display") (EVar "sh"))) (ELit (LString "\t"))) (EApp (EVar "display") (EVar "script"))) (ELit (LString "\ttimeout="))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))))) (ELit (LString "s\toracles="))) (EApp (EVar "display") (EVar "orc"))) (ELit (LString "\n"))))))
+(DFunDef false "dryLine" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoLet false false (PTuple (PVar "sh") (PVar "_cmd")) (EIf (EApp (EVar "fileExists") (EVar "script")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script")) (ETuple (ELit (LString "sh")) (EListLit)))) (DoLet false false (PVar "orc") (EIf (EApp (EVar "isEmptyStrs") (EFieldAccess (EVar "g") "oracles")) (ELit (LString "-")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "g") "oracles")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "\t"))) (EApp (EVar "display") (EVar "sh"))) (ELit (LString "\t"))) (EApp (EVar "display") (EVar "script"))) (ELit (LString "\ttimeout="))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))))) (ELit (LString "s\toracles="))) (EApp (EVar "display") (EVar "orc"))) (ELit (LString "\n"))))))
 (DTypeSig false "dryLines" (TyFun (TyCon "RunEnv") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "dryLines" (PWild (PList)) (ELit (LString "")))
 (DFunDef false "dryLines" ((PVar "env") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "dryLine") (EVar "env")) (EVar "g")) (EApp (EApp (EVar "dryLines") (EVar "env")) (EVar "gs"))))
@@ -5649,8 +5833,31 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "invalidTiersViolations" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EVar "gateTiersErrors") (EVar "g")) (EApp (EVar "invalidTiersViolations") (EVar "gs"))))
 (DTypeSig false "gateTiersErrors" (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "gateTiersErrors" ((PVar "g")) (EIf (EApp (EVar "isEmptyStrs") (EFieldAccess (EVar "g") "tiers")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": tiers is empty — every gate has at least one run; a gate nothing invokes is tiers = [\"ondemand\"]")))) (EIf (EApp (EVar "not") (EApp (EVar "strictlyAscending") (EFieldAccess (EVar "g") "tiers"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": tiers "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EFieldAccess (EVar "g") "tiers")))) (ELit (LString " is not sorted and unique")))) (EIf (EBinOp "&&" (EApp (EVar "hasOndemand") (EFieldAccess (EVar "g") "tiers")) (EBinOp ">" (EApp (EVar "listLen") (EFieldAccess (EVar "g") "tiers")) (ELit (LInt 1)))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": tiers "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EFieldAccess (EVar "g") "tiers")))) (ELit (LString " mixes 'ondemand' with a real run — 'ondemand' means nothing invokes this gate, so it appears alone or not at all")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "tierTokensErrors") (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "tiers")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "migrationClassOk" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "migrationClassOk" ((PVar "m")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "m") (ELit (LString "native-wrap"))) (EBinOp "==" (EVar "m") (ELit (LString "native-rewrite")))) (EBinOp "==" (EVar "m") (ELit (LString "shell:trust-anchor")))) (EBinOp "==" (EVar "m") (ELit (LString "shell:instrumentation")))) (EBinOp "==" (EVar "m") (ELit (LString "shell:external-harness")))) (EBinOp "==" (EVar "m") (ELit (LString "split-first")))) (EBinOp "==" (EVar "m") (ELit (LString "inverted-polarity")))) (EBinOp "==" (EVar "m") (ELit (LString "done")))))
+(DTypeSig false "migrationClassNames" (TyCon "String"))
+(DFunDef false "migrationClassNames" () (ELit (LString "native-wrap/native-rewrite/shell:trust-anchor/shell:instrumentation/shell:external-harness/split-first/inverted-polarity/done")))
+(DTypeSig false "invalidMigrationViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "invalidMigrationViolations" ((PList)) (EListLit))
+(DFunDef false "invalidMigrationViolations" ((PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EVar "migrationClassOk") (EFieldAccess (EVar "g") "migration")) (EApp (EVar "invalidMigrationViolations") (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' is not one of "))) (EApp (EVar "display") (EVar "migrationClassNames"))) (ELit (LString ""))) (EApp (EVar "invalidMigrationViolations") (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "shellBecauseTag" (TyCon "String"))
+(DFunDef false "shellBecauseTag" () (ELit (LString "shell-because:")))
+(DTypeSig false "shellClassOf" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "shellClassOf" ((PVar "m")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "shell:"))) (EVar "m")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (ELit (LString "shell:")))) (EApp (EVar "stringLength") (EVar "m"))) (EVar "m")) (ELit (LString ""))))
+(DTypeSig false "stripHash" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripHash" ((PVar "s")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "s"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EVar "t")) (EApp (EVar "stripHash") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))) (EVar "t")))))
+(DTypeSig false "becauseClassOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "becauseClassOf" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stripHash") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "shellBecauseTag")) (EVar "t")) (EApp (EVar "Some") (EApp (EVar "firstToken") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "shellBecauseTag"))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))))) (EVar "None")))))
+(DTypeSig false "becauseClasses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "becauseClasses" ((PList)) (EListLit))
+(DFunDef false "becauseClasses" ((PCons (PVar "l") (PVar "ls"))) (EMatch (EApp (EVar "becauseClassOf") (EVar "l")) (arm (PCon "Some" (PVar "c")) () (EBinOp "::" (EVar "c") (EApp (EVar "becauseClasses") (EVar "ls")))) (arm (PCon "None") () (EApp (EVar "becauseClasses") (EVar "ls")))))
+(DTypeSig false "shellBecauseErrors" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "shellBecauseErrors" ((PVar "root") (PVar "g")) (EBlock (DoLet false false (PVar "want") (EApp (EVar "shellClassOf") (EFieldAccess (EVar "g") "migration"))) (DoExpr (EIf (EBinOp "==" (EVar "want") (ELit (LString ""))) (EListLit) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "g") "run"))) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' but its run script cannot be read to confirm the reason: "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "becauseClasses") (EApp (EVar "splitNl") (EVar "src"))) (arm (PList) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' but "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString " carries no 'shell-because: "))) (EApp (EVar "display") (EVar "want"))) (ELit (LString "' header line — a stays-shell exemption the script itself never states"))))) (arm (PCons (PVar "c") PWild) () (EIf (EBinOp "==" (EVar "c") (EVar "want")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' but "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString " states 'shell-because: "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString "' — registry and script name different reason classes")))))))))))))
+(DTypeSig false "shellBecauseViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "shellBecauseViolations" (PWild (PList)) (EListLit))
+(DFunDef false "shellBecauseViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "shellBecauseErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "shellBecauseViolations") (EVar "root")) (EVar "gs"))))
 (DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EVar "shellBecauseViolations") (EVar "root")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "names"))) (ELit (LString "\n"))))))
@@ -6305,7 +6512,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "maxI" false) (mem "minI" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
-(DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "shard" (TyCon "String")) (field "project" (TyCon "String")) (field "tiers" (TyApp (TyCon "List") (TyCon "String"))) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "shard" (TyCon "String")) (field "project" (TyCon "String")) (field "tiers" (TyApp (TyCon "List") (TyCon "String"))) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "migration" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "reqStr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "reqStr" ((PVar "i") (PVar "field") (PVar "entry")) (EMatch (EApp (EApp (EVar "getString") (EVar "field")) (EVar "entry")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Ok") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gates.toml: [[gate]] #")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ": missing required string field '"))) (EApp (EMethodRef "display") (EVar "field"))) (ELit (LString "'")))))))
 (DTypeSig false "reqArr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -6313,7 +6520,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "readGate" (TyFun (TyCon "Toml") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Gate")))))
 (DFunDef false "readGate" ((PVar "doc") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gates.toml: [[gate]] #")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ": no such entry"))))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "readGateEntry") (EVar "i")) (EVar "e")))))
 (DTypeSig false "readGateEntry" (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Gate")))))
-(DFunDef false "readGateEntry" ((PVar "i") (PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "name"))) (EVar "e"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "area"))) (EVar "e"))) (ELam ((PVar "area")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "shard"))) (EVar "e"))) (ELam ((PVar "shard")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "project"))) (EVar "e"))) (ELam ((PVar "project")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "tiers"))) (EVar "e"))) (ELam ((PVar "tiers")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "cost"))) (EVar "e"))) (ELam ((PVar "cost")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "kind"))) (EVar "e"))) (ELam ((PVar "kind")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "run"))) (EVar "e"))) (ELam ((PVar "run")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "oracles"))) (EVar "e"))) (ELam ((PVar "oracles")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "sources"))) (EVar "e"))) (ELam ((PVar "sources")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "corpus"))) (EVar "e"))) (ELam ((PVar "corpus")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "toolchain"))) (EVar "e"))) (ELam ((PVar "toolchain")) (EApp (EVar "Ok") (ERecordCreate "Gate" ((fa "name" (EVar "name")) (fa "area" (EVar "area")) (fa "shard" (EVar "shard")) (fa "project" (EVar "project")) (fa "tiers" (EVar "tiers")) (fa "cost" (EVar "cost")) (fa "kind" (EVar "kind")) (fa "run" (EVar "run")) (fa "oracles" (EVar "oracles")) (fa "sources" (EVar "sources")) (fa "corpus" (EVar "corpus")) (fa "toolchain" (EVar "toolchain"))))))))))))))))))))))))))))))
+(DFunDef false "readGateEntry" ((PVar "i") (PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "name"))) (EVar "e"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "area"))) (EVar "e"))) (ELam ((PVar "area")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "shard"))) (EVar "e"))) (ELam ((PVar "shard")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "project"))) (EVar "e"))) (ELam ((PVar "project")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "tiers"))) (EVar "e"))) (ELam ((PVar "tiers")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "cost"))) (EVar "e"))) (ELam ((PVar "cost")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "kind"))) (EVar "e"))) (ELam ((PVar "kind")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "migration"))) (EVar "e"))) (ELam ((PVar "migration")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqStr") (EVar "i")) (ELit (LString "run"))) (EVar "e"))) (ELam ((PVar "run")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "oracles"))) (EVar "e"))) (ELam ((PVar "oracles")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "sources"))) (EVar "e"))) (ELam ((PVar "sources")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "corpus"))) (EVar "e"))) (ELam ((PVar "corpus")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "reqArr") (EVar "i")) (ELit (LString "toolchain"))) (EVar "e"))) (ELam ((PVar "toolchain")) (EApp (EVar "Ok") (ERecordCreate "Gate" ((fa "name" (EVar "name")) (fa "area" (EVar "area")) (fa "shard" (EVar "shard")) (fa "project" (EVar "project")) (fa "tiers" (EVar "tiers")) (fa "cost" (EVar "cost")) (fa "kind" (EVar "kind")) (fa "migration" (EVar "migration")) (fa "run" (EVar "run")) (fa "oracles" (EVar "oracles")) (fa "sources" (EVar "sources")) (fa "corpus" (EVar "corpus")) (fa "toolchain" (EVar "toolchain"))))))))))))))))))))))))))))))))
 (DTypeSig false "readGatesFrom" (TyFun (TyCon "Toml") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Gate"))))))))
 (DFunDef false "readGatesFrom" ((PVar "doc") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EApp (EVar "reverseGates") (EVar "acc")) (EListLit))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "readGate") (EVar "doc")) (EVar "i")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "g")) () (EApp (EApp (EApp (EApp (EVar "readGatesFrom") (EVar "doc")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EVar "g") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "reverseGates" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "Gate")))))
@@ -6378,7 +6585,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "renderNames" ((PList)) (ELit (LString "")))
 (DFunDef false "renderNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "\n"))) (EApp (EVar "renderNames") (EVar "gs"))))
 (DTypeSig false "gateJson" (TyFun (TyCon "Gate") (TyCon "Json")))
-(DFunDef false "gateJson" ((PVar "g")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "name"))) (ETuple (ELit (LString "baselineKey")) (EApp (EVar "JString") (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (ETuple (ELit (LString "area")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "area"))) (ETuple (ELit (LString "shard")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "shard"))) (ETuple (ELit (LString "project")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "project"))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "tiers")))) (ETuple (ELit (LString "cost")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "cost"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "kind"))) (ETuple (ELit (LString "run")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "run"))) (ETuple (ELit (LString "oracles")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "oracles")))) (ETuple (ELit (LString "sources")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "sources")))) (ETuple (ELit (LString "corpus")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "corpus")))) (ETuple (ELit (LString "toolchain")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "toolchain")))))))
+(DFunDef false "gateJson" ((PVar "g")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "name"))) (ETuple (ELit (LString "baselineKey")) (EApp (EVar "JString") (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (ETuple (ELit (LString "area")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "area"))) (ETuple (ELit (LString "shard")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "shard"))) (ETuple (ELit (LString "project")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "project"))) (ETuple (ELit (LString "tiers")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "tiers")))) (ETuple (ELit (LString "cost")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "cost"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "kind"))) (ETuple (ELit (LString "migration")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "migration"))) (ETuple (ELit (LString "run")) (EApp (EVar "JString") (EFieldAccess (EVar "g") "run"))) (ETuple (ELit (LString "oracles")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "oracles")))) (ETuple (ELit (LString "sources")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "sources")))) (ETuple (ELit (LString "corpus")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "corpus")))) (ETuple (ELit (LString "toolchain")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EFieldAccess (EVar "g") "toolchain")))))))
 (DTypeSig true "renderJson" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String")))
 (DFunDef false "renderJson" ((PVar "gs")) (EApp (EVar "stringify") (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "gateJson")) (EVar "gs")))))
 (DTypeSig false "shardJson" (TyFun (TyCon "Shard") (TyCon "Json")))
@@ -6498,12 +6705,14 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "substrIn" ((PVar "needle") (PVar "hay")) (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "hay")) (EApp (EVar "stringLength") (EVar "needle")))))
 (DTypeSig false "substrAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "substrAt" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "last")) (EIf (EBinOp ">" (EVar "i") (EVar "last")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "last")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "gateArgs" (TyFun (TyCon "RunEnv") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "gateArgs" ((PVar "env") (PVar "scratch") (PVar "secs") (PVar "sh") (PVar "script")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "medaka"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "emitter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "TMPDIR=")) (EApp (EMethodRef "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SCRATCH=")) (EApp (EMethodRef "display") (EVar "scratch"))) (ELit (LString ""))) (ELit (LString "JOBS=1")) (ELit (LString "timeout")) (ELit (LString "-k")) (ELit (LString "5s")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "s"))) (EVar "sh") (EVar "script")))
+(DTypeSig false "gateArgs" (TyFun (TyCon "RunEnv") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "gateArgs" ((PVar "env") (PVar "scratch") (PVar "secs") (PVar "cmd")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "medaka"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "emitter"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "TMPDIR=")) (EApp (EMethodRef "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SCRATCH=")) (EApp (EMethodRef "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (ELit (LString "JOBS=1")) (EBinOp "::" (ELit (LString "timeout")) (EBinOp "::" (ELit (LString "-k")) (EBinOp "::" (ELit (LString "5s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "s"))) (EVar "cmd"))))))))))))
+(DTypeSig false "gateInvocation" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "gateInvocation" ((PVar "env") (PVar "g") (PVar "script")) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (ETuple (ELit (LString "medaka test --native")) (EListLit (EFieldAccess (EVar "env") "medaka") (ELit (LString "test")) (ELit (LString "--native")) (ELit (LString "--json")) (EVar "script"))) (EBlock (DoLet false false (PVar "sh") (EApp (EVar "shellFor") (EVar "script"))) (DoExpr (ETuple (EVar "sh") (EListLit (EVar "sh") (EVar "script")))))))
 (DTypeSig false "spawnFailure" (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyCon "GateResult"))))))
 (DFunDef false "spawnFailure" ((PVar "g") (PVar "script") (PVar "msg") (PVar "dt")) (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (ELit (LString "sh"))) (fa "exitCode" (ELit (LInt 127))) (fa "timedOut" (EVar "False")) (fa "spawnError" (EVar "msg")) (fa "seconds" (EVar "dt")) (fa "out" (ELit (LString ""))) (fa "err" (ELit (LString ""))))))
 (DTypeSig false "runOneGate" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "GateResult")))))
-(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PVar "sh") (EApp (EVar "shellFor") (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "sh")) (EVar "script")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut"))))))))))))))))
+(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PTuple (PVar "sh") (PVar "cmd")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "cmd")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut"))))))))))))))))
 (DTypeSig false "gateOk" (TyFun (TyCon "GateResult") (TyCon "Bool")))
 (DFunDef false "gateOk" ((PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0)))))
 (DTypeSig false "msOf" (TyFun (TyCon "GateResult") (TyCon "Int")))
@@ -6533,7 +6742,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig true "runReportJson" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "GateResult")) (TyCon "String"))))
 (DFunDef false "runReportJson" ((PVar "jobs") (PVar "rs")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jobs")) (EApp (EVar "JInt") (EVar "jobs"))) (ETuple (ELit (LString "parallel")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JInt") (EApp (EVar "countOk") (EVar "rs")))) (ETuple (ELit (LString "failing")) (EApp (EVar "JInt") (EBinOp "-" (EApp (EVar "listLen") (EVar "rs")) (EApp (EVar "countOk") (EVar "rs"))))) (ETuple (ELit (LString "gates")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "resultJson")) (EVar "rs"))))))))
 (DTypeSig false "dryLine" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "dryLine" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoLet false false (PVar "sh") (EIf (EApp (EVar "fileExists") (EVar "script")) (EApp (EVar "shellFor") (EVar "script")) (ELit (LString "sh")))) (DoLet false false (PVar "orc") (EIf (EApp (EVar "isEmptyStrs") (EFieldAccess (EVar "g") "oracles")) (ELit (LString "-")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "g") "oracles")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EVar "sh"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EVar "script"))) (ELit (LString "\ttimeout="))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))))) (ELit (LString "s\toracles="))) (EApp (EMethodRef "display") (EVar "orc"))) (ELit (LString "\n"))))))
+(DFunDef false "dryLine" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoLet false false (PTuple (PVar "sh") (PVar "_cmd")) (EIf (EApp (EVar "fileExists") (EVar "script")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script")) (ETuple (ELit (LString "sh")) (EListLit)))) (DoLet false false (PVar "orc") (EIf (EApp (EVar "isEmptyStrs") (EFieldAccess (EVar "g") "oracles")) (ELit (LString "-")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "g") "oracles")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EVar "sh"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EVar "script"))) (ELit (LString "\ttimeout="))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))))) (ELit (LString "s\toracles="))) (EApp (EMethodRef "display") (EVar "orc"))) (ELit (LString "\n"))))))
 (DTypeSig false "dryLines" (TyFun (TyCon "RunEnv") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "dryLines" (PWild (PList)) (ELit (LString "")))
 (DFunDef false "dryLines" ((PVar "env") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "dryLine") (EVar "env")) (EVar "g")) (EApp (EApp (EVar "dryLines") (EVar "env")) (EVar "gs"))))
@@ -6670,8 +6879,31 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "invalidTiersViolations" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EVar "gateTiersErrors") (EVar "g")) (EApp (EVar "invalidTiersViolations") (EVar "gs"))))
 (DTypeSig false "gateTiersErrors" (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "gateTiersErrors" ((PVar "g")) (EIf (EApp (EVar "isEmptyStrs") (EFieldAccess (EVar "g") "tiers")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": tiers is empty — every gate has at least one run; a gate nothing invokes is tiers = [\"ondemand\"]")))) (EIf (EApp (EVar "not") (EApp (EVar "strictlyAscending") (EFieldAccess (EVar "g") "tiers"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": tiers "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EFieldAccess (EVar "g") "tiers")))) (ELit (LString " is not sorted and unique")))) (EIf (EBinOp "&&" (EApp (EVar "hasOndemand") (EFieldAccess (EVar "g") "tiers")) (EBinOp ">" (EApp (EVar "listLen") (EFieldAccess (EVar "g") "tiers")) (ELit (LInt 1)))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": tiers "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EFieldAccess (EVar "g") "tiers")))) (ELit (LString " mixes 'ondemand' with a real run — 'ondemand' means nothing invokes this gate, so it appears alone or not at all")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "tierTokensErrors") (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "tiers")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "migrationClassOk" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "migrationClassOk" ((PVar "m")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "m") (ELit (LString "native-wrap"))) (EBinOp "==" (EVar "m") (ELit (LString "native-rewrite")))) (EBinOp "==" (EVar "m") (ELit (LString "shell:trust-anchor")))) (EBinOp "==" (EVar "m") (ELit (LString "shell:instrumentation")))) (EBinOp "==" (EVar "m") (ELit (LString "shell:external-harness")))) (EBinOp "==" (EVar "m") (ELit (LString "split-first")))) (EBinOp "==" (EVar "m") (ELit (LString "inverted-polarity")))) (EBinOp "==" (EVar "m") (ELit (LString "done")))))
+(DTypeSig false "migrationClassNames" (TyCon "String"))
+(DFunDef false "migrationClassNames" () (ELit (LString "native-wrap/native-rewrite/shell:trust-anchor/shell:instrumentation/shell:external-harness/split-first/inverted-polarity/done")))
+(DTypeSig false "invalidMigrationViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "invalidMigrationViolations" ((PList)) (EListLit))
+(DFunDef false "invalidMigrationViolations" ((PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EVar "migrationClassOk") (EFieldAccess (EVar "g") "migration")) (EApp (EVar "invalidMigrationViolations") (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' is not one of "))) (EApp (EMethodRef "display") (EVar "migrationClassNames"))) (ELit (LString ""))) (EApp (EVar "invalidMigrationViolations") (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "shellBecauseTag" (TyCon "String"))
+(DFunDef false "shellBecauseTag" () (ELit (LString "shell-because:")))
+(DTypeSig false "shellClassOf" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "shellClassOf" ((PVar "m")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "shell:"))) (EVar "m")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (ELit (LString "shell:")))) (EApp (EVar "stringLength") (EVar "m"))) (EVar "m")) (ELit (LString ""))))
+(DTypeSig false "stripHash" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripHash" ((PVar "s")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "s"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EVar "t")) (EApp (EVar "stripHash") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))) (EVar "t")))))
+(DTypeSig false "becauseClassOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "becauseClassOf" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stripHash") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "shellBecauseTag")) (EVar "t")) (EApp (EVar "Some") (EApp (EVar "firstToken") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "shellBecauseTag"))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))))) (EVar "None")))))
+(DTypeSig false "becauseClasses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "becauseClasses" ((PList)) (EListLit))
+(DFunDef false "becauseClasses" ((PCons (PVar "l") (PVar "ls"))) (EMatch (EApp (EVar "becauseClassOf") (EVar "l")) (arm (PCon "Some" (PVar "c")) () (EBinOp "::" (EVar "c") (EApp (EVar "becauseClasses") (EVar "ls")))) (arm (PCon "None") () (EApp (EVar "becauseClasses") (EVar "ls")))))
+(DTypeSig false "shellBecauseErrors" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "shellBecauseErrors" ((PVar "root") (PVar "g")) (EBlock (DoLet false false (PVar "want") (EApp (EVar "shellClassOf") (EFieldAccess (EVar "g") "migration"))) (DoExpr (EIf (EBinOp "==" (EVar "want") (ELit (LString ""))) (EListLit) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "g") "run"))) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' but its run script cannot be read to confirm the reason: "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "becauseClasses") (EApp (EVar "splitNl") (EVar "src"))) (arm (PList) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' but "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString " carries no 'shell-because: "))) (EApp (EMethodRef "display") (EVar "want"))) (ELit (LString "' header line — a stays-shell exemption the script itself never states"))))) (arm (PCons (PVar "c") PWild) () (EIf (EBinOp "==" (EVar "c") (EVar "want")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": migration '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "migration"))) (ELit (LString "' but "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString " states 'shell-because: "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString "' — registry and script name different reason classes")))))))))))))
+(DTypeSig false "shellBecauseViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "shellBecauseViolations" (PWild (PList)) (EListLit))
+(DFunDef false "shellBecauseViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "shellBecauseErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "shellBecauseViolations") (EVar "root")) (EVar "gs"))))
 (DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EVar "shellBecauseViolations") (EVar "root")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "names"))) (ELit (LString "\n"))))))

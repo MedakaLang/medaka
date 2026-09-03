@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # BOOTSTRAP (B1) — the FIRST native self-compile slice: prove the natively
 # compiled self-hosted LEXER stage reproduces the reference lexer over real
 # fixtures.  This is the milestone the whole emitter effort drove toward: a REAL

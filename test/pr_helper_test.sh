@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # pr_helper_test.sh — exercises scripts/pr.sh by mocking `gh` (never touches a
 # real repository) plus one local throwaway git repo for the `complete` command.
 # POSIX sh, runs on Linux and macOS.

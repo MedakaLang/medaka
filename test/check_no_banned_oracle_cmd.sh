@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # banned-oracle-cmd: self-referential
 # check_no_banned_oracle_cmd.sh — no script may PRESCRIBE the bare `build_oracles.sh`.
 #

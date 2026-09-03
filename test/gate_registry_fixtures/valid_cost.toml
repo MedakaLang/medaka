@@ -3,7 +3,15 @@
 # The control for invalid_cost.toml: byte-identical except `cost = "cheap"`,
 # a valid class. `medaka gate verify` must report 0 violations against this
 # one — otherwise the new check in invalid_cost.toml would be proving nothing
-# (a check that reds everything is as useless as one that reds nothing).
+# (a check that reds everything is as useless as one that reds nothing). It is
+# the shared control for invalid_tiers.toml, invalid_migration.toml and the two
+# shell-because fixtures too; each of those differs from this file in exactly
+# one line.
+#
+# Its `anchored` entry also carries the only POSITIVE check-11 case: a
+# `shell:instrumentation` migration whose run script states that same class, so
+# a green here is evidence the pairing accepts a correct pair rather than never
+# firing at all.
 
 [[gate]]
 name = "tidy"
@@ -13,7 +21,23 @@ project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "exec"
+migration = "native-wrap"
 run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "anchored"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:instrumentation"
+run = "test/anchored.sh"
 oracles = []
 sources = []
 corpus = []

@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_emitted_code_floor.sh — the FIRST absolute gate on what the
 # native backend actually EMITS: binary size (bytes) and running-time
 # cachegrind Ir, per fixture. Epic #2036 G1 (constant-factor axis) / G2

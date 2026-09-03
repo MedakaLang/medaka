@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_ci_shard_coverage.sh — every gate must be REACHABLE IN CI.
 #
 # CI runs the 200+ gate scripts SHARDED across parallel hosted runners. A gate
@@ -259,14 +260,41 @@ if not tracked:
     sys.exit(1)
 
 # ── classify every registry entry. ───────────────────────────────────────────
+#
+# A gate is keyed by the STEM of its `run` target — the repo-relative path minus
+# the suffix that says how it is executed. `kind = "exec"` strips `.sh`;
+# `kind = "native"` (#2591) strips `_test.mdk`, so `test/foo.sh` and its migrated
+# `test/foo_test.mdk` produce the SAME stem and every keyed comparison below —
+# the exceptions ledger, the tools ledger, the by-name invocation scan — keeps
+# describing the same gate across the migration instead of reporting the old
+# entry stale and the new one unclassified on the same run.
+#
+# The suffix is also the PAIRING between `kind` and `run`: a mismatch is a
+# bad_run, the same way check 11 of `gate verify` pairs a `shell:*` migration
+# with a `shell-because:` header rather than taking the registry's word.
+NATIVE_SUFFIX = '_test.mdk'
 by_stem = {}
 bad_run = []
+native_stems = set()
 for e in entries:
     run = e.get('run', '')
+    if e.get('kind', '') == 'native':
+        if not run.endswith(NATIVE_SUFFIX):
+            bad_run.append((e['name'], run))
+            continue
+        stem = run[:-len(NATIVE_SUFFIX)]
+        native_stems.add(stem)
+        by_stem[stem] = e
+        continue
     if not run.endswith('.sh'):
         bad_run.append((e['name'], run))
         continue
     by_stem[run[:-3]] = e
+
+# "This gate exists" for the ledger-rot check below. A native gate has no
+# tracked `.sh`, so `tracked` alone would report its ledger entry — and only
+# its ledger entry — as naming a gate that does not exist.
+existing = tracked | native_stems
 
 sharded, named, excepted, unreachable = {}, [], [], []
 bad_shard, both_shard_and_excepted = [], []
@@ -294,7 +322,10 @@ both_registry_and_tool = sorted(set(by_stem) & set(tools))
 # nobody can interrogate is a classification nobody can check. ───────────────
 if queries:
     for q in queries:
-        q = q[:-3] if q.endswith('.sh') else q
+        if q.endswith('.sh'):
+            q = q[:-3]
+        elif q.endswith(NATIVE_SUFFIX):
+            q = q[:-len(NATIVE_SUFFIX)]
         if q in sharded:
             print(f"  SHARD:{sharded[q]:<12} {q}  (gates matrix row, from test/gates.toml's `shard`)")
         elif q in excepted:
@@ -344,12 +375,12 @@ if exc:
     print()
     print("  CI-COVERAGE-EXCEPTIONS.txt — these gates do NOT run in CI:")
     for stem, reason in sorted(exc.items()):
-        live = " (ledger entry is STALE — this gate no longer exists)" if stem not in tracked else ""
+        live = " (ledger entry is STALE — this gate no longer exists)" if stem not in existing else ""
         print(f"       {stem}: {reason}{live}")
     # A ledger entry for a gate that no longer exists is rot — the exact failure
     # mode a plain skip-list has. Fail on it, so the ledger cannot quietly
     # outlive its gate.
-    stale = sorted(set(exc) - tracked)
+    stale = sorted(set(exc) - existing)
     if stale:
         print()
         print("FAIL: the exceptions ledger names gates that DO NOT EXIST:")
@@ -404,7 +435,8 @@ if both_registry_and_tool:
 
 if bad_run:
     print()
-    print("FAIL: these registry entries have a `run` target that is not a `.sh` script:")
+    print("FAIL: these registry entries have a `run` target whose suffix does not match")
+    print("      their `kind` (`exec` runs a `.sh`; `native` runs a `_test.mdk` module):")
     for name, run in bad_run:
         print(f"       {name}: run = \"{run}\"")
     rc = 1

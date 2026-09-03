@@ -1,0 +1,8 @@
+-- The file `native_test_exec.mdk`'s test runs `medaka check` on.  It has to
+-- type-check cleanly and stay boring: what is under test is the runner's
+-- ability to spawn a process at all, not anything about this program.
+
+double : Int -> Int
+double n = n * 2
+
+main = println (double 21)

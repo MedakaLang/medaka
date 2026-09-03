@@ -95,5 +95,27 @@ first.
 Each result is the full path, joined onto `root`. `Err` on the first
 directory that cannot be read or entry that cannot be examined.
 
+### `fixtureFiles`
+
+```
+fixtureFiles : String -> <FileRead _> Result String (List String)
+```
+
+Every regular file under `root`, depth first: `walkDir` with
+directories filtered out and an anti-vacuity floor. A directory that
+reads cleanly but holds zero files is still `Err`, since a fixture-file
+gate iterating zero fixtures would otherwise report success having
+tested nothing.
+
+```medaka
+> fixtureFiles "stdlib/no-such-fixture-doctest-dir"
+Err "No such file or directory"
+```
+
+```medaka
+> map length (fixtureFiles "test/effect_set_fixtures")
+Ok 5
+```
+
 ## Instances
 

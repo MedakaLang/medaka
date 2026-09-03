@@ -13,14 +13,18 @@
    registry-level fail-open policy says about it —
    `docs/ops/GATE-REGISTRY-DESIGN.md` §2/§3).
 
-   ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
-   to behave.  Every gate script, every assertion in it, and the meaning of
-   every exit code it returns are untouched, and `sh test/run_gates.sh` remains
-   authoritative.  What `gate run` adds is the SERVICES around the script —
-   scratch-dir lifecycle, the stale-oracle refusal, a timeout, separated
-   stdout/stderr capture, and a machine-readable timing report — provided once,
-   natively, instead of re-hand-rolled per gate.  See the `gate run` section
-   below.
+   ⚠️ For a `kind = "exec"` entry, `gate run` is a NEW WAY TO INVOKE a gate
+   script, not a new way for a gate to behave: every assertion in the script
+   and the meaning of every exit code it returns are untouched, and
+   `sh test/run_gates.sh` remains authoritative.  A `kind = "native"` entry has
+   no script at all — `gate run` compiles and runs its `_test.mdk` module
+   directly (`medaka test --native --json`) and grades the JSON envelope, so
+   for THAT kind `gate run` is the gate's only way to run, not a wrapper around
+   one.  Either way, what `gate run` adds around the underlying execution is the
+   SAME set of SERVICES — scratch-dir lifecycle, the stale-oracle refusal (exec
+   only), a timeout, separated stdout/stderr capture, and a machine-readable
+   timing report — provided once, natively, instead of re-hand-rolled per gate.
+   See the `gate run` section below.
 
    **Selector language** (design doc §3, "keep it boring"): a selector is a
    `field:pattern` token, where `field` is one of `name`/`area`/`project`/
@@ -97,6 +101,59 @@ import support.util.{
 -- (`Shard`, below), not on the entry — they are per-ROW facts, and putting
 -- them on 227 entries would be 227 chances for a row to disagree with itself.
 --
+-- ── `migration` (#2591) ─────────────────────────────────────────────────────
+--
+-- `migration` is this gate's DESTINATION under the testing-architecture epic
+-- (#2600): where the check ends up, or the named prerequisite that has to be
+-- discharged before a destination can be picked.  It is a required string on
+-- every entry, one of eight values (checked below):
+--
+--   native-wrap            a native gate module invokes the existing script and
+--                          asserts on it; the script's LOGIC survives verbatim.
+--                          The release valve — it needs nothing built first.
+--   native-rewrite         the check becomes Medaka code; the script's probes
+--                          and static text become library calls, so its logic
+--                          does NOT survive as an invocation.
+--   shell:trust-anchor     stays shell forever.  It checks the machinery a
+--                          native gate would run INSIDE, so a native rewrite
+--                          would assert on itself.
+--   shell:instrumentation  stays shell.  It drives valgrind/cachegrind/wall
+--                          clock and does statistics over the result; a wrapper
+--                          adds a layer and proves nothing new.
+--   shell:external-harness stays shell.  Its SUBJECT is a shell/python/browser
+--                          harness or live `gh` state, not Medaka code.
+--   split-first            one script holding two things — a check and a shared
+--                          helper, or several unrelated sections.  The
+--                          editorial split is the prerequisite, not the port.
+--   inverted-polarity      a pinning gate whose RED is the healthy state
+--                          (`test/diff_compiler_must_fail.sh` and kin).  Needs a
+--                          per-pin drain field before any destination is safe.
+--   done                   already migrated.  Nothing carries it yet.
+--
+-- The three `shell:*` values are claims about a SCRIPT, so they are checked
+-- against that script rather than taken on the registry's word: the `run`
+-- target must carry a `shell-because: <class> …` header line naming the same
+-- class (verify check 11).  Without that pairing, "stays shell" is a value one
+-- side asserts and nothing reads — and a script that later stops being a trust
+-- anchor would keep its exemption silently.
+--
+-- ── `kind` (#2591, epic #2600) ──────────────────────────────────────────────
+--
+-- HOW the `run` target is executed, and therefore what shape `run` has:
+--
+--   exec    a script.  `run` is its repo-relative path; the interpreter comes
+--           from its shebang, not from this field.
+--   native  a Medaka test module.  `run` is a repo-relative `*_test.mdk` path,
+--           executed by `medaka test --native --json`.
+--
+-- The suffix is the pairing that keeps the two halves from disagreeing —
+-- `test/diff_compiler_ci_shard_coverage.sh` reds an entry whose `kind` and
+-- `run` suffix do not match, the same way check 11 pairs `shell:*` with a
+-- `shell-because:` header.  Every pattern-to-gate resolver in the tree
+-- (`test/run_gates.sh`, `test/preflight.sh`, `test/build_oracles.sh --for`,
+-- `.github/workflows/ci.yml`'s `plan` step) resolves a `native` entry by
+-- registry NAME, since there is no `.sh` for its glob to find.
+--
 -- ── `tiers` (S-tier-is-data, #2181) ─────────────────────────────────────────
 --
 -- `tiers` is the SET OF RUNS this gate has: not one string, because "when does
@@ -134,6 +191,7 @@ public export data Gate = Gate {
   tiers : List String,
   cost : String,
   kind : String,
+  migration : String,
   run : String,
   oracles : List String,
   sources : List String,
@@ -174,6 +232,7 @@ readGateEntry i e = do
   tiers <- reqArr i "tiers" e
   cost <- reqStr i "cost" e
   kind <- reqStr i "kind" e
+  migration <- reqStr i "migration" e
   run <- reqStr i "run" e
   oracles <- reqArr i "oracles" e
   sources <- reqArr i "sources" e
@@ -187,6 +246,7 @@ readGateEntry i e = do
     tiers = tiers,
     cost = cost,
     kind = kind,
+    migration = migration,
     run = run,
     oracles = oracles,
     sources = sources,
@@ -517,6 +577,7 @@ gateJson g = jObject [
   ("tiers", jArray (map JString g.tiers)),
   ("cost", JString g.cost),
   ("kind", JString g.kind),
+  ("migration", JString g.migration),
   ("run", JString g.run),
   ("oracles", jArray (map JString g.oracles)),
   ("sources", jArray (map JString g.sources)),
@@ -1129,21 +1190,34 @@ substrAt needle hay i last
 -- SIGTERM path and 137 when the -k grace period had to escalate to SIGKILL;
 -- both are reported as a timeout, with the raw code still printed so a genuine
 -- 137 from elsewhere (an OOM kill, say) is not hidden by the label.
-gateArgs : RunEnv -> String -> Int -> String -> String -> List String
-gateArgs env scratch secs sh script = [
-  "MEDAKA_ROOT=\{env.root}",
-  "MEDAKA=\{env.medaka}",
-  "MEDAKA_EMITTER=\{env.emitter}",
-  "TMPDIR=\{scratch}",
-  "MEDAKA_SCRATCH=\{scratch}",
-  "JOBS=1",
-  "timeout",
-  "-k",
-  "5s",
-  "\{intToString secs}s",
-  sh,
-  script,
-]
+gateArgs : RunEnv -> String -> Int -> List String -> List String
+gateArgs env scratch secs cmd =
+  "MEDAKA_ROOT=\{env.root}"
+    :: "MEDAKA=\{env.medaka}"
+    :: "MEDAKA_EMITTER=\{env.emitter}"
+    :: "TMPDIR=\{scratch}"
+    :: "MEDAKA_SCRATCH=\{scratch}"
+    :: "JOBS=1"
+    :: "timeout"
+    :: "-k"
+    :: "5s"
+    :: "\{intToString secs}s"
+    :: cmd
+
+-- What runs a gate, and the label its result lines carry.
+--
+-- `kind = "exec"` is a script, so the interpreter comes from its shebang
+-- (shellFor).  `kind = "native"` is a `*_test.mdk` module run by the compiler's
+-- own test runner: `medaka test --native --json` exits 0 when every `test`
+-- declaration passed and 1 when any failed, which is already the contract
+-- `gateOk` reads off the exit code, so nothing downstream needs a second shape.
+gateInvocation : RunEnv -> Gate -> String -> <IO> (String, List String)
+gateInvocation env g script =
+  if g.kind == "native" then
+    ("medaka test --native", [env.medaka, "test", "--native", "--json", script])
+  else
+    let sh = shellFor script
+    (sh, [sh, script])
 
 spawnFailure : Gate -> String -> String -> Float -> GateResult
 spawnFailure g script msg dt = GateResult {
@@ -1168,13 +1242,13 @@ runOneGate env g =
       "gate script not found (registry `run` field): \{g.run}"
       0.0
   else
-    let sh = shellFor script
+    let (sh, cmd) = gateInvocation env g script
     let secs = timeoutFor env.timeoutOverride g.cost
     match makeGateScratch env.scratchRoot
       Err e => spawnFailure g script "could not create a scratch dir: \{e}" 0.0
       Ok scratch =>
         let t0 = monotonicSec ()
-        let res = runCommand "env" (gateArgs env scratch secs sh script)
+        let res = runCommand "env" (gateArgs env scratch secs cmd)
         let dt = monotonicSec () - t0
         let _ = cleanupScratch scratch
         match res
@@ -1333,7 +1407,8 @@ runReportJson jobs rs =
 dryLine : RunEnv -> Gate -> <IO> String
 dryLine env g =
   let script = "\{env.root}/\{g.run}"
-  let sh = if fileExists script then shellFor script else "sh"
+  let (sh, _cmd) =
+    if fileExists script then gateInvocation env g script else ("sh", [])
   let orc = if isEmptyStrs g.oracles then "-" else joinWith "," g.oracles
   "\{g.name}\t\{sh}\t\{script}\ttimeout=\{intToString (timeoutFor env.timeoutOverride g.cost)}s\toracles=\{orc}\n"
 
@@ -1509,8 +1584,7 @@ runRunCmdBody argv = match parseRunArgs argv
 -- ── `gate verify` ───────────────────────────────────────────────────────────
 --
 -- The drift gate (#2176 S-4, docs/ops/GATE-REGISTRY-DESIGN.md §3).  TEXT-ONLY,
--- no build — runs everywhere, cheap.  Four checks, each its own violation
--- class:
+-- no build — runs everywhere, cheap.  Each check is its own violation class:
 --
 --   1. every gate CANDIDATE — test/preflight.sh's own `_gate_candidates`
 --      (tracked-or-untracked `*.sh`, MINUS every name in
@@ -1535,6 +1609,10 @@ runRunCmdBody argv = match parseRunArgs argv
 --      and it is the one that catches bulk data rot: a fixture directory
 --      renamed out from under the registry silently stops selecting its
 --      consumers, which is a QUIETER failure than a red gate.
+--   6-11. entry names are unique, safe to interpolate into ci.yml and a shell
+--      word, and `cost`, `tiers` and `migration` carry declared values; a
+--      `shell:*` migration is paired with its run script's own
+--      `shell-because:` header.  Each is written up at its definition below.
 --
 -- `sources` is deliberately NOT checked the same way, and that is not an
 -- oversight: a `sources` value is a GLOB (`compiler/*/*.mdk`, `stdlib/*`),
@@ -1894,7 +1972,109 @@ gateTiersErrors g
   ]
   | otherwise = tierTokensErrors g.name g.tiers
 
--- ── assembling and rendering the nine classes ───────────────────────────────
+-- Check 10 (#2591): every entry's `migration` is one of the eight destinations
+-- the schema comment above defines.  `migration` is a required TOML string with
+-- no enum check at parse time, exactly like `cost` before check 8 — and a
+-- migration value nothing recognizes is worse than a typo'd cost, because the
+-- whole point of the field is that a wave of the epic can select on it.  A
+-- misspelled destination selects into no wave and reads as "already handled".
+migrationClassOk : String -> Bool
+migrationClassOk m =
+  m == "native-wrap"
+    || m == "native-rewrite"
+    || m == "shell:trust-anchor"
+    || m == "shell:instrumentation"
+    || m == "shell:external-harness"
+    || m == "split-first"
+    || m == "inverted-polarity"
+    || m == "done"
+
+migrationClassNames : String
+migrationClassNames =
+  "native-wrap/native-rewrite/shell:trust-anchor/shell:instrumentation/shell:external-harness/split-first/inverted-polarity/done"
+
+invalidMigrationViolations : List Gate -> List String
+invalidMigrationViolations [] = []
+invalidMigrationViolations (g :: gs)
+  | migrationClassOk g.migration = invalidMigrationViolations gs
+  | otherwise =
+    "\{g.name}: migration '\{g.migration}' is not one of \{migrationClassNames}"
+      :: invalidMigrationViolations gs
+
+-- Check 11 (#2591): the `shell-because:` pairing.  A `shell:*` migration is an
+-- EXEMPTION — this gate is never going native — and an exemption one side
+-- grants itself is not reviewable.  So the reason has to be stated where the
+-- reader of the exempted thing will see it: the `run` script carries a
+-- `shell-because: <class> …` header line, and it must name the SAME class the
+-- registry does.  A mismatch is the interesting failure — a script that stops
+-- being a trust anchor and becomes ordinary would otherwise keep its exemption
+-- with nothing anywhere disagreeing.
+shellBecauseTag : String
+shellBecauseTag = "shell-because:"
+
+-- The class a `shell:*` value names (`trust-anchor`), or `""` for every other
+-- migration value — the "this entry needs no header" answer.
+shellClassOf : String -> String
+shellClassOf m =
+  if startsWith "shell:" m then
+    stringSlice (stringLength "shell:") (stringLength m) m
+  else
+    ""
+
+-- A comment line's text with its leading `#`s and spaces removed.  The header
+-- is a shell comment, so the tag never starts the raw line.
+stripHash : String -> String
+stripHash s =
+  let t = stringTrim s
+  if startsWith "#" t then stripHash (stringSlice 1 (stringLength t) t) else t
+
+-- The class token of a `shell-because:` line, or `None` if the line is not one.
+-- `firstToken` (check 1's helper) takes the first whitespace-separated word, so
+-- the rest of the line is free prose.
+becauseClassOf : String -> Option String
+becauseClassOf line =
+  let t = stripHash line
+  if startsWith shellBecauseTag t then
+    Some
+      (firstToken
+        (stringTrim
+          (stringSlice (stringLength shellBecauseTag) (stringLength t) t)))
+  else
+    None
+
+becauseClasses : List String -> List String
+becauseClasses [] = []
+becauseClasses (l :: ls) = match becauseClassOf l
+  Some c => c :: becauseClasses ls
+  None => becauseClasses ls
+
+shellBecauseErrors : String -> Gate -> <IO> List String
+shellBecauseErrors root g =
+  let want = shellClassOf g.migration
+  if want == "" then
+    []
+  else match readFile (joinPath root g.run)
+    Err m => [
+      "\{g.name}: migration '\{g.migration}' but its run script cannot be read to confirm the reason: \{g.run}: \{m}",
+    ]
+    Ok src => match becauseClasses (splitNl src)
+      [] => [
+        "\{g.name}: migration '\{g.migration}' but \{g.run} carries no 'shell-because: \{want}' header line — a stays-shell exemption the script itself never states",
+      ]
+      c :: _ =>
+        if c == want then
+          []
+        else
+          [
+            "\{g.name}: migration '\{g.migration}' but \{g.run} states 'shell-because: \{c}' — registry and script name different reason classes",
+          ]
+
+shellBecauseViolations : String -> List Gate -> <IO> List String
+shellBecauseViolations _ [] = []
+shellBecauseViolations root (g :: gs) =
+  shellBecauseErrors root g ++ shellBecauseViolations root gs
+
+-- ── assembling and rendering the violation classes ──────────────────────────
 
 verifyClasses : String ->
   List Gate ->
@@ -1916,6 +2096,8 @@ verifyClasses root gates shs = match gateCandidates root
       ("unsafe entry names", unsafeNameViolations gates shs),
       ("invalid cost class", invalidCostViolations gates),
       ("invalid tiers", invalidTiersViolations gates),
+      ("invalid migration class", invalidMigrationViolations gates),
+      ("unpaired shell-because", shellBecauseViolations root gates),
     ]
 
 renderClass : (String, List String) -> String

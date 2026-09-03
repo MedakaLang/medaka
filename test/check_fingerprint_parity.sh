@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # check_fingerprint_parity.sh — proves the source-staleness fingerprint mirror
 # still agrees with itself (issue #267).
 #

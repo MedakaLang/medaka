@@ -23,6 +23,7 @@ import frontend.ast.{Decl, DUse}
 import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
+import json.{Json, JString}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -49,9 +50,10 @@ exampleLine (Example _ _ l) = l
 
 -- The outcome of running one example.
 public export data ExResult =
-  | Pass
-  | Fail String String
+  | Pass String String
   -- expected, actual
+  | Fail String String String
+  -- message, expected, actual
   | Errored String  -- message
 
 public export data RunResult =
@@ -117,8 +119,8 @@ printDoctestOne : String -> Example -> ExResult -> <IO> Unit
 printDoctestOne target ex res =
   let loc = "\{target}:\{intToString (exampleLine ex)}"
   match res
-    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
-    Fail expected actual =>
+    Pass _ _ => putStrLn "  ok   \{loc}: \{exampleInput ex}"
+    Fail _ expected actual =>
       let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
       let _ = putStrLn ("       expected: " ++ expected)
       putStrLn ("         actual: " ++ actual)
@@ -409,17 +411,45 @@ oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
 oneResultOk (Err msg) (Ok _) ex = Errored msg
 oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
 
+-- The doctest arm has no message of its own: the two operands ARE the
+-- report, so `Fail`'s message slot stays empty here and the `test` arm
+-- (`tools/test_runner.mdk`) is the one that fills it.
 compareValue : Example -> String -> ExResult
 compareValue ex actual = match exampleExpected ex
-  None => Pass
-  Some exp => if actual == exp then Pass else Fail exp actual
+  None => Pass "" actual
+  Some exp => if actual == exp then Pass exp actual else Fail "" exp actual
+
+-- The `--json` fields for one result, keyed by outcome.  BOTH `medaka test
+-- --json` (driver/medaka_cli.mdk) and `medaka mcp`'s medaka_test render an
+-- `ExResult` through this one function, so the two envelopes cannot drift.
+-- Both outcomes carry the rendered operands, so a passing example reports the
+-- value it produced and a smoke example (no expected line) reports an empty
+-- `expected`.  A `Fail` message — which only the `test` arm sets — rides under
+-- the same `detail` key an `Errored` uses.
+export
+exResultJsonFields : ExResult -> List (String, Json)
+exResultJsonFields (Pass expected actual) = [
+  ("status", JString "pass"),
+  ("expected", JString expected),
+  ("actual", JString actual),
+]
+exResultJsonFields (Fail msg expected actual) =
+  let detail = if msg == "" then [] else [("detail", JString msg)]
+  [
+      ("status", JString "fail"),
+      ("expected", JString expected),
+      ("actual", JString actual),
+    ]
+    ++ detail
+exResultJsonFields (Errored msg) =
+  [("status", JString "error"), ("detail", JString msg)]
 
 isPass : ExResult -> Bool
-isPass Pass = True
+isPass (Pass _ _) = True
 isPass _ = False
 
 isFail : ExResult -> Bool
-isFail (Fail _ _) = True
+isFail (Fail _ _ _) = True
 isFail _ = False
 
 isErr : ExResult -> Bool

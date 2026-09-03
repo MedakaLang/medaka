@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_tier_drift.sh — a registry entry's `tiers` must be what the
 # workflows actually do (#2181, epic #2182).
 #
@@ -129,20 +130,26 @@ if not entries:
     sys.exit(1)
 
 by_stem = {}
-non_sh = []
+native_stems = set()
 dup_stem = []
 for e in entries:
-    if not e['run'].endswith('.sh'):
-        non_sh.append(e['name'])
-        continue
-    stem = e['run'][:-3]
+    if e['run'].endswith('.sh'):
+        stem = e['run'][:-3]
+    else:
+        # `kind = "native"` (#2591): no `.sh` script to strip a stem from —
+        # the gate IS its `run` module. Keyed by the FULL run path (left
+        # `.mdk`-suffixed) so it stays distinguishable from a `.sh` stem
+        # everywhere below: `RES`/`runs_in()` skip it (no shell text to grep
+        # for a `.sh` invocation — its only tier source is the matrix/`shard`
+        # field, handled identically to a `.sh` entry) and the gate-script
+        # closure walk (below) skips it too (no `.sh` file to open).
+        stem = e['run']
+        native_stems.add(stem)
     if stem in by_stem:
         dup_stem.append((stem, by_stem[stem]['name'], e['name']))
     by_stem[stem] = e
-if non_sh or dup_stem:
+if dup_stem:
     print("FAIL: the registry has entries this gate's stem index would silently drop or clobber.")
-    for name in non_sh:
-        print(f"       {name}: `run` is not a `.sh` path — excluded from by_stem with no diagnostic")
     for stem, first, second in dup_stem:
         print(f"       {first!r} and {second!r} share stem {stem!r} — {second!r} silently clobbers {first!r}")
     print("      Refusing to certify tiers from a partial view.")
@@ -196,7 +203,7 @@ def invocation_re(stem):
         + re.escape(stem) + r'\.sh["\']?(?P<args>[^\n;&|]*)')
 
 
-RES = {s: invocation_re(s) for s in by_stem}
+RES = {s: invocation_re(s) for s in by_stem if s not in native_stems}
 
 # An inline `VAR=value` command prefix (the same shape `PRE` already
 # recognizes and steps past to find the `sh`/`bash`/`dash`) is an env
@@ -299,6 +306,11 @@ for _, tier in WORKFLOWS:
     seen = set(frontier)
     while frontier:
         stem = frontier.pop()
+        if stem in native_stems:
+            # No `.sh` script to open for its own invocations — a native
+            # gate's tier source is the matrix/`shard` field alone (source 1
+            # above), already captured before this closure walk runs.
+            continue
         p = pathlib.Path(root) / f'{stem}.sh'
         if not p.exists():
             print(f"FAIL: {by_stem[stem]['name']}'s `run` ({stem}.sh) does not exist on disk.")
