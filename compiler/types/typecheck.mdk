@@ -29003,17 +29003,21 @@ checkBodyImpl seed mode prog0 =
       ()
     Module _ _ implDecls =>
       let bodyEnv = extendVars env1 topSchemes
-      -- #760: EMIT path infers all impl bodies (inferModuleImplBodiesIfEnabled, gated ON);
-      -- CHECK path (implInferEnabled OFF, where that call is a no-op) infers THIS module's
-      -- GROUND user impl bodies so a cross-module `deriving (Eq)`/`(Debug)` over an imported
-      -- field type lacking the instance is rejected at check — closing the multi-module half
-      -- of #760 (it reproduced through the loader while single-file check already caught it).
-      -- allProg = implDecls (interfaces + accumulated impls) grounds the field types.  Linear:
-      -- inferUserImplBodies routes the method-type lookup through the O(log) registered table.
-      let _ = inferModuleImplBodiesIfEnabled bodyEnv implDecls progS
-      let _ =
-        if not driverState.value.implInferEnabled.value then
-          inferUserImplBodies bodyEnv implDecls progS
+      -- #2546 (ARCH Q3a): ONE impl-body inference form on the Module arm, both drivers.
+      -- The emit path used to keep the full source-order `inferImplBodies` walk
+      -- (`inferModuleImplBodiesIfEnabled`) while the check path ran
+      -- `inferUserImplBodies` — ground impls first through the O(log) registered
+      -- method-type table, then the parametric impls under an obligation window that
+      -- keeps only the decidable-now goals (#760 closed the check-side half of "no path
+      -- both inferred an impl body AND checked its obligations").  The recorded reason
+      -- for keeping the emit path on the old form (a ground-only, error-suppressing
+      -- filter that moved the Flat-arm typed-IR goldens) described a function that no
+      -- longer exists: `inferUserImplBodies` infers parametric heads and keeps its
+      -- diagnostics.  Measured before unifying (the production instrument —
+      -- run_check_agreement, dict_semantics, engines, argtag_matrix, the LEG A golden —
+      -- driven through `medaka build`): no golden moved.  allProg = implDecls
+      -- (interfaces + accumulated impls) grounds the field types.
+      let _ = inferUserImplBodies bodyEnv implDecls progS
       let _ = inferDefaultBodiesIfEnabled bodyEnv progS
       let _ = inferPropBodies bodyEnv progS
       let _ = inferTestBodies bodyEnv progS
@@ -37439,16 +37443,6 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
 -- the unique impl's method type, so this module's pending sites/arg-stamps resolve
 -- against the GROUNDED element (Set Int, not Set _a).  [implDecls] is the full impl
 -- universe (core ++ earlier modules ++ prog), so the Set/Map impls are visible.
-
--- gate: per-module impl-body inference runs only on the emit path (implInferEnabled).
--- allProg = [implDecls] (interfaces + accumulated impls); rpNames computed over it.
--- #760: see checkModuleFullImpl for the check-path USER-impl inference (inferUserImplBodies)
--- that closes the missing-instance hole on the multi-module path without re-inferring core.
-inferModuleImplBodiesIfEnabled : TcEnv -> List Decl -> List Decl -> Unit
-inferModuleImplBodiesIfEnabled env implDecls prog
-  | driverState.value.implInferEnabled.value =
-    inferImplBodies env implDecls (returnPosMethodNames implDecls) prog
-  | otherwise = ()
 
 -- public top-level value names (the pub flag may sit on the sig, def, or extern).
 -- C8(a): a PUBLIC interface ALSO exports its method names so an importer can see
