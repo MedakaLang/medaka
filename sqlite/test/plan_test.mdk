@@ -17,7 +17,7 @@
 --
 -- Run: `medaka test sqlite/test/plan_test.mdk` from the sqlite root.
 
-import test.{Expectation, Fail, expectEqual}
+import test.{Expectation, expectEqual, fail}
 import lib.writer.{
   TableSchema,
   Column,
@@ -167,7 +167,7 @@ whereRaw e sel = withWhere (mkE e) sel
 -- ---------------------------------------------------------------------------
 
 agrees : Result String Db -> Select -> Expectation
-agrees (Err e) _ = Fail "fixture failed to build: \{e}"
+agrees (Err e) _ = fail "fixture failed to build: \{e}"
 agrees (Ok db) sel =
   expectEqual
     (runPipelineWithPlan db PlanScan sel)

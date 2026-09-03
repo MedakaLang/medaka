@@ -208,6 +208,7 @@ import tools.doctest.{
   Engine(..),
   Example,
   ExResult(..),
+  exResultJsonFields,
   RunResult,
   runPassed,
   runFailed,
@@ -3272,7 +3273,7 @@ cliAllPropsPass (p :: rest) = propResultPassed p && cliAllPropsPass rest
 
 cliAllTestsPass : List (String, Int, ExResult) -> Bool
 cliAllTestsPass [] = True
-cliAllTestsPass ((_, _, Pass) :: rest) = cliAllTestsPass rest
+cliAllTestsPass ((_, _, Pass _ _) :: rest) = cliAllTestsPass rest
 cliAllTestsPass (_ :: _) = False
 
 cliPrimaryDoctestRun : List (Engine, RunResult) -> RunResult
@@ -3291,29 +3292,24 @@ cliCountFailProps (p :: rest) =
 
 cliCountPassTests : List (String, Int, ExResult) -> Int
 cliCountPassTests [] = 0
-cliCountPassTests ((_, _, Pass) :: rest) = 1 + cliCountPassTests rest
+cliCountPassTests ((_, _, Pass _ _) :: rest) = 1 + cliCountPassTests rest
 cliCountPassTests (_ :: rest) = cliCountPassTests rest
 
 cliCountFailTests : List (String, Int, ExResult) -> Int
 cliCountFailTests [] = 0
-cliCountFailTests ((_, _, Pass) :: rest) = cliCountFailTests rest
+cliCountFailTests ((_, _, Pass _ _) :: rest) = cliCountFailTests rest
 cliCountFailTests (_ :: rest) = 1 + cliCountFailTests rest
 
-cliExResultFields : ExResult -> List (String, Json)
-cliExResultFields Pass = [("status", JString "pass")]
-cliExResultFields (Fail expected actual) = [
-  ("status", JString "fail"),
-  ("expected", JString expected),
-  ("actual", JString actual),
-]
-cliExResultFields (Errored msg) =
-  [("status", JString "error"), ("detail", JString msg)]
-
 cliExampleJson : (Example, ExResult) -> Json
+-- Structurally identical to mcp.mdk's `exampleJson` now that both render an
+-- `ExResult` through the shared `exResultJsonFields`; the part worth sharing
+-- already lives in tools/doctest.mdk, and each module owns its own `--json`
+-- envelope.
+-- lint-disable-next-line rule-duplicate-body
 cliExampleJson (ex, res) =
   jObject
     ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))]
-      ++ cliExResultFields res)
+      ++ exResultJsonFields res)
 
 cliDoctestsJson : RunResult -> Json
 cliDoctestsJson run = jObject [
@@ -3339,7 +3335,7 @@ cliPropJson p = jObject [
 cliTestJson : (String, Int, ExResult) -> Json
 cliTestJson (name, line, result) =
   jObject
-    ([("name", JString name), ("line", JInt line)] ++ cliExResultFields result)
+    ([("name", JString name), ("line", JInt line)] ++ exResultJsonFields result)
 
 cliTypeErrorField : Option String -> List (String, Json)
 cliTypeErrorField None = []

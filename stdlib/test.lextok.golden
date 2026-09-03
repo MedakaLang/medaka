@@ -4,10 +4,18 @@ EXPORT
 DATA
 UPPER "Expectation"
 EQUAL
+INDENT
+PIPE
 UPPER "Pass"
+UPPER "String"
+UPPER "String"
+NEWLINE
 PIPE
 UPPER "Fail"
 UPPER "String"
+UPPER "String"
+UPPER "String"
+NEWLINE
 DERIVING
 LPAREN
 UPPER "Eq"
@@ -15,6 +23,8 @@ COMMA
 UPPER "Debug"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 EXPORT
 NEWLINE
 IDENT "pass"
@@ -24,6 +34,8 @@ NEWLINE
 IDENT "pass"
 EQUAL
 UPPER "Pass"
+STRING ""
+STRING ""
 NEWLINE
 EXPORT
 NEWLINE
@@ -38,6 +50,8 @@ IDENT "msg"
 EQUAL
 UPPER "Fail"
 IDENT "msg"
+STRING ""
+STRING ""
 NEWLINE
 EXPORT
 NEWLINE
@@ -51,12 +65,16 @@ IDENT "expectTrue"
 UPPER "True"
 EQUAL
 UPPER "Pass"
+STRING "True"
+STRING "True"
 NEWLINE
 IDENT "expectTrue"
 UPPER "False"
 EQUAL
 UPPER "Fail"
 STRING "expected True but got False"
+STRING "True"
+STRING "False"
 NEWLINE
 EXPORT
 NEWLINE
@@ -70,12 +88,16 @@ IDENT "expectFalse"
 UPPER "False"
 EQUAL
 UPPER "Pass"
+STRING "False"
+STRING "False"
 NEWLINE
 IDENT "expectFalse"
 UPPER "True"
 EQUAL
 UPPER "Fail"
 STRING "expected False but got True"
+STRING "False"
+STRING "True"
 NEWLINE
 EXPORT
 NEWLINE
@@ -100,27 +122,35 @@ IDENT "expected"
 IDENT "actual"
 EQUAL
 INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "debug"
+IDENT "expected"
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "actual"
+NEWLINE
 IF
 IDENT "eq"
 IDENT "expected"
 IDENT "actual"
 THEN
-INDENT
 UPPER "Pass"
-NEWLINE
-DEDENT
+IDENT "e"
+IDENT "a"
 ELSE
-INDENT
 UPPER "Fail"
 INTERP_OPEN "expected "
-IDENT "debug"
-IDENT "expected"
+IDENT "e"
 INTERP_MID " but got "
-IDENT "debug"
-IDENT "actual"
+IDENT "a"
 INTERP_END ""
-NEWLINE
-DEDENT
+IDENT "e"
+IDENT "a"
 NEWLINE
 DEDENT
 NEWLINE
@@ -147,6 +177,18 @@ IDENT "expected"
 IDENT "actual"
 EQUAL
 INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "debug"
+IDENT "expected"
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "actual"
+NEWLINE
 IF
 IDENT "neq"
 IDENT "expected"
@@ -154,6 +196,8 @@ IDENT "actual"
 THEN
 INDENT
 UPPER "Pass"
+IDENT "e"
+IDENT "a"
 NEWLINE
 DEDENT
 ELSE
@@ -162,9 +206,10 @@ UPPER "Fail"
 LPAREN
 STRING "expected values to differ but both were "
 PLUSPLUS
-IDENT "debug"
-IDENT "actual"
+IDENT "a"
 RPAREN
+IDENT "e"
+IDENT "a"
 NEWLINE
 DEDENT
 NEWLINE
@@ -193,27 +238,35 @@ IDENT "expected"
 IDENT "actual"
 EQUAL
 INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "debug"
+IDENT "expected"
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "actual"
+NEWLINE
 IF
 IDENT "lt"
 IDENT "actual"
 IDENT "expected"
 THEN
-INDENT
 UPPER "Pass"
-NEWLINE
-DEDENT
+IDENT "e"
+IDENT "a"
 ELSE
-INDENT
 UPPER "Fail"
 INTERP_OPEN "expected "
-IDENT "debug"
-IDENT "actual"
+IDENT "a"
 INTERP_MID " < "
-IDENT "debug"
-IDENT "expected"
+IDENT "e"
 INTERP_END ""
-NEWLINE
-DEDENT
+IDENT "e"
+IDENT "a"
 NEWLINE
 DEDENT
 NEWLINE
@@ -240,27 +293,35 @@ IDENT "expected"
 IDENT "actual"
 EQUAL
 INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "debug"
+IDENT "expected"
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "actual"
+NEWLINE
 IF
 IDENT "gt"
 IDENT "actual"
 IDENT "expected"
 THEN
-INDENT
 UPPER "Pass"
-NEWLINE
-DEDENT
+IDENT "e"
+IDENT "a"
 ELSE
-INDENT
 UPPER "Fail"
 INTERP_OPEN "expected "
-IDENT "debug"
-IDENT "actual"
+IDENT "a"
 INTERP_MID " > "
-IDENT "debug"
-IDENT "expected"
+IDENT "e"
 INTERP_END ""
-NEWLINE
-DEDENT
+IDENT "e"
+IDENT "a"
 NEWLINE
 DEDENT
 NEWLINE
@@ -276,17 +337,47 @@ IDENT "expectAllStep"
 LPAREN
 UPPER "Fail"
 IDENT "msg"
+IDENT "e"
+IDENT "a"
 RPAREN
 UNDERSCORE
 EQUAL
 UPPER "Fail"
 IDENT "msg"
+IDENT "e"
+IDENT "a"
 NEWLINE
 IDENT "expectAllStep"
+LPAREN
 UPPER "Pass"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+LPAREN
+UPPER "Fail"
+IDENT "msg"
 IDENT "e"
+IDENT "a"
+RPAREN
 EQUAL
+UPPER "Fail"
+IDENT "msg"
 IDENT "e"
+IDENT "a"
+NEWLINE
+IDENT "expectAllStep"
+LPAREN
+UPPER "Pass"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+LPAREN
+UPPER "Pass"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+EQUAL
+IDENT "pass"
 NEWLINE
 EXPORT
 NEWLINE
@@ -302,7 +393,7 @@ IDENT "es"
 EQUAL
 IDENT "fold"
 IDENT "expectAllStep"
-UPPER "Pass"
+IDENT "pass"
 IDENT "es"
 NEWLINE
 IDENT "goTests"
@@ -366,6 +457,8 @@ LPAREN
 RPAREN
 INDENT
 UPPER "Pass"
+UNDERSCORE
+UNDERSCORE
 FAT_ARROW
 INDENT
 IDENT "println"
@@ -388,6 +481,8 @@ DEDENT
 NEWLINE
 UPPER "Fail"
 IDENT "msg"
+UNDERSCORE
+UNDERSCORE
 FAT_ARROW
 INDENT
 IDENT "println"
@@ -473,6 +568,31 @@ STRING "!"
 RPAREN
 EQ_EQ
 UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "a passing expectEqual carries both rendered operands"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+IDENT "expectEqual"
+IDENT "n"
+IDENT "n"
+EQ_EQ
+UPPER "Pass"
+LPAREN
+IDENT "debug"
+IDENT "n"
+RPAREN
+LPAREN
+IDENT "debug"
+IDENT "n"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE

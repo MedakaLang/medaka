@@ -1191,10 +1191,10 @@ runTestLoop target env ((name, line, body) :: rest) passed failed errors =
   -- than mysterious.
   let _ = putStrLn "  running \{loc}: \{name}"
   match runOneTest env body
-    Pass =>
+    Pass _ _ =>
       let _ = putStrLn "  ok   \{loc}: \{name}"
       runTestLoop target env rest (passed + 1) failed errors
-    Fail msg _ =>
+    Fail msg _ _ =>
       let _ = putStrLn "  FAIL \{loc}: \{name}"
       let _ = putStrLn ("       " ++ msg)
       runTestLoop target env rest passed (failed + 1) errors
