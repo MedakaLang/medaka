@@ -1,0 +1,14 @@
+-- #1343 (drained by #2543): `lib.w.bump` is module-private and not bound by
+-- this wildcard import; this file's OWN unrelated, SIGNATURED `bump : a -> a`
+-- is never called by `main`, which only forces `used 1`.  The joint-flattened
+-- Flat-arm promotion discovery keyed the private helper and this binding by
+-- BARE NAME, so `run` panicked with the internal `$dict_bump_0`; per-module
+-- discovery keeps them apart.  Correct: 2.
+import lib.w.*
+
+data NoNum = NoNum
+
+bump : a -> a
+bump x = x
+
+main = println (used 1)

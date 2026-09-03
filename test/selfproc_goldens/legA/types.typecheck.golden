@@ -698,10 +698,7 @@ discardedValueFix : Option Loc -> Option (Loc, String)
 discardedValueMsg : Mono -> String
 discoverAll : List Decl -> List Decl -> List String -> List String -> List String
 discoverNext : List Decl -> List Decl -> List String -> List String -> List String
-discoverNextJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String -> List String
 discoverPromoted : List Decl -> List Decl -> List String -> List String
-discoverPromotedJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String
-discoverPromotedModules : List Decl -> List Decl -> List (String, List Decl) -> List String -> List String -> List String
 dispHeadTab : HeadKey -> TabKey
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
@@ -728,7 +725,6 @@ dropMethodIdentCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (St
 dropN : Int -> List a -> List a
 dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
 dropSchemesNamed : Map String Unit -> List (String, Scheme) -> List (String, Scheme)
-dropShadowedCore : List String -> List Decl -> List Decl
 dsub : Param -> Param -> Bool
 dsubN : Param -> Param -> Bool
 dtopFor : String -> Param
@@ -768,6 +764,8 @@ effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabHarvestWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> List (String, Scheme)
+elabPromotionFixpoint : ElabSweep -> List String -> (List Decl, List (String, List Decl))
+elabSweep : ElabSweep -> List String -> (List String, List Decl, List (String, List Decl))
 elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
@@ -1757,7 +1755,6 @@ processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) ->
 processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (List String) -> List (String, Scheme)
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> List (String, Scheme)
 productNorm : List (String, Param) -> Param
-promotedConstraints : List String -> List (String, a) -> List (String, a)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 pubTopFnNames : List Decl -> List String
