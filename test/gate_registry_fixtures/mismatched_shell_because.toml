@@ -1,0 +1,46 @@
+# test/gate_registry_fixtures/mismatched_shell_because.toml — SYNTHETIC,
+# hand-written.
+#
+# Check 11's MISMATCH fixture (#2591), the more interesting half: the script DOES
+# state a reason, and it is the wrong one. `run` points at test/anchored.sh, which
+# the gate writes into the throwaway root carrying `# shell-because: instrumentation`,
+# while the entry declares `shell:trust-anchor`. Both sides are well-formed; only
+# the comparison catches it. This is the shape a script that stopped being a trust
+# anchor would take, and the reason "missing header" alone is not enough.
+
+[[gate]]
+name = "anchored"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:trust-anchor"
+run = "test/anchored.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-wrap"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

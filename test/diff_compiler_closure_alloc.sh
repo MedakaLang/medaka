@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # #2237: regression pin for capture-free closure allocation (S-1 static-cell
 # hoisting + S-2 eta-closure sweep).
 #

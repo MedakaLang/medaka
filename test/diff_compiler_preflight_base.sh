@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_preflight_base.sh — preflight must not blame other people's commits on you.
 #
 # THE BUG THIS PINS (#560)

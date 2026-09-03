@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — subject IS a verbatim chunk of ci.yml shell; nothing to migrate
 # diff_compiler_prose_classifier.sh — the prose allowlist has TWO copies; this
 # gate is the check tying them together (#2200).
 #

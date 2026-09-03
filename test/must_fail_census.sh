@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # must_fail_census.sh — the OTHER half of the must-fail ratchet (#569).
 #
 # test/diff_compiler_must_fail.sh (the gate) drains one direction: a fix lands, the pin

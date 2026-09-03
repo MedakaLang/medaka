@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_gate_cost.sh — the per-gate cost transport's own gate (#2178,
 # S-1-S-cost-record).
 #

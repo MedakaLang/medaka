@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_check_ir_floor.sh — the constant-factor floor gate in the perf suite:
 # a deterministic cachegrind-`Ir` ABSOLUTE CEILING per CLI verb on a hello-world
 # workload. Introduced by S-5-floor-ratchet (epic #2036 Wave 2) covering `check` only;

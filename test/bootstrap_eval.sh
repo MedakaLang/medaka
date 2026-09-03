@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # BOOTSTRAP (B7) — natively compiled self-hosted EVAL stage == reference over
 # eval_fixtures.  OCaml-free (REROOT-PLAN §2e): reference = committed golden
 # captured from `main.exe run compiler/entries/eval_main.mdk <fixture>`

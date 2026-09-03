@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — subject IS a verbatim chunk of ci.yml shell; nothing to migrate
 # diff_compiler_reach_fail_open.sh — a broken project-reach selector must run
 # EVERYTHING, never silently skip.
 #

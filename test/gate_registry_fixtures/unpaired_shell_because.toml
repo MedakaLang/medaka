@@ -1,0 +1,44 @@
+# test/gate_registry_fixtures/unpaired_shell_because.toml — SYNTHETIC,
+# hand-written.
+#
+# Check 11's MISSING-header fixture (#2591): the entry claims `shell:trust-anchor`
+# — a permanent exemption from the migration — while its `run` script
+# (test/tidy.sh, written by the gate into the throwaway root) states no reason at
+# all. An exemption one side grants itself is what the pairing exists to catch.
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:trust-anchor"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "anchored"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:instrumentation"
+run = "test/anchored.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

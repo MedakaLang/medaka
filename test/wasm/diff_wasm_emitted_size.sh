@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_wasm_emitted_size.sh — Slice S5 gate (#2359 closure, epic #2036 G1/G2,
 # #2377).  Asserts ABSOLUTE CEILINGS on what the WasmGC backend actually
 # EMITS, on all three wasm corpora (modules / plain / typed):

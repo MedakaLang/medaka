@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_gate_balance.sh — the shard balancer's own gate (#2178,
 # S-3-S-balancer, epic #2182).
 #

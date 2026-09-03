@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # Offline S3-A signing/Wycheproof semantic gate. No expected value comes from Medaka.
 set -eu
 

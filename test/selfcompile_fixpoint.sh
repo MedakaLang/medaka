@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # SELF-COMPILE C3 — TRUE SELF-HOSTING FIXPOINT.  The native emitter compiles the
 # EMITTER ITSELF and reproduces its own output byte-for-byte.
 #

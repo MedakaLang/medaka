@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_ci_shard_coverage.sh — every gate must be REACHABLE IN CI.
 #
 # CI runs the 200+ gate scripts SHARDED across parallel hosted runners. A gate

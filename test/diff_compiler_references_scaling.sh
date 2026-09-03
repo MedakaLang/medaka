@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # test/diff_compiler_references_scaling.sh — the LINEARITY detector for the
 # cross-file reference index (compiler/tools/refindex.mdk, #254 Stage 0).
 #
