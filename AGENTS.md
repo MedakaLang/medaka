@@ -172,10 +172,21 @@ but `medaka gate balance` — not you — decides where it lands, from the measu
 `test/gate_cost_baseline.json`. A hand-edited `shard` reds the REQUIRED `ci-gen-drift`
 context, and it reds even if you also ran `make gen-ci` to keep `ci.yml` consistent with it.
 🚨 A brand-new gate has NO row yet in the cost baseline, so `medaka gate balance` HARD-
-REFUSES to run in the same commit that adds it — enrol with a guessed `shard`, accept that
-`ci-gen-drift` reds until the next baseline re-ingest, then run `medaka gate balance && make
-gen-ci` as a follow-up commit (or trigger `gh workflow run ci.yml --ref <branch>` first to
-get a real sample before merging). Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
+REFUSES to run in the same commit that adds it. ⚠️ **You cannot defer this: `ci-gen-drift`
+is a REQUIRED context and its script runs `medaka gate balance --check`
+(`test/diff_compiler_ci_gen_drift.sh:80`), so the refusal reds a required check and the PR
+cannot merge** — "enrol now, discharge in a follow-up" is not available, and three sprints
+lost a cycle discovering that. Derive the required set rather than trusting this list
+([W-REQUIRED-CHECKS]); `gate-balance` and `gate-budget` are separate, currently ADVISORY
+jobs, so their reds are not what blocks you. The discharge, before merge: enrol with a
+guessed `shard`, get a real cost sample, then `medaka gate balance && make gen-ci` and
+commit both. Two traps in getting that sample, each paid for twice: a guessed `shard` can
+name a CLOSED packing row the balancer can never assign into (read the refusal text and
+repoint to an open row), and `gh workflow run ci.yml --ref <branch>` yields a run whose
+overall conclusion is `failure` — precisely because the new gate is unbalanced — which
+`test/gate_cost_collect.sh`'s success-only filter then refuses to ingest even though the
+timing shards each succeeded. Download the shard's timing artifact and run
+`test/gate_cost_ingest.sh` on it directly. (#2602 tracks fixing both.) Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
 escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
 skill. 🚨 **[W-MODULE-BLIND] A module outside every entry's import closure is invisible to
 `make medaka`, `make check-self`, and `test/typecheck_compiler_source.sh`** — none of those
@@ -441,7 +452,11 @@ preflight` IS the full gate suite — don't trust a count in this file, derive i
 **NOTHING** by design. Prefer: push, let CI run it.
 
 ⚠️ **[L-NO-FULL-NOT-FIXPOINT]** `PREFLIGHT_NO_FULL` does NOT skip L-FOREGROUND-CEILING's
-fixpoint — background it instead (#520,#545): `grep -n need_fixpoint test/preflight.sh`.
+fixpoint — run it detached from the ceiling instead (#520,#545): `grep -n need_fixpoint
+test/preflight.sh`. ⚠️ **If you are a SUBAGENT, "background it" means a script or poll loop
+that you wait on within the turn** — a background task's completion notification goes to
+the session that dispatched you, not to you, so ending your turn to await one stalls
+indefinitely (seven recorded dispatches, one stalled four times).
 
 **Full local run justified when:** `compiler/backend/*` changed (`selfcompile_fixpoint.sh`);
 `compiler/support/*`/`stdlib/core.mdk` changed; merging branches on the same subsystem; CI shows

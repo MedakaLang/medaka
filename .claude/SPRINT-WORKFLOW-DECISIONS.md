@@ -241,3 +241,102 @@ A retro proposes AT MOST three changes, deletion-biased; a new rule is
 proposable only for a failure that occurred in that sprint, cost something
 real, and cannot live in an existing gate or checklist line. This ledger
 remains the place a declined proposal goes to die visibly.
+
+---
+
+## v8.1 — 2026-09-03, from the 71-retro corpus (not a single sprint's round)
+
+The first adoption round drawn from the WHOLE post-reset record rather than one
+sprint's retro: 71 `RETRO.md` files, 2026-08-22 → 2026-09-03. Two consults
+audited the conclusions before anything was written — one attacking the resync
+mechanism claim first-hand in a scratch repo, one re-deriving the counts and
+checking each proposal against what had already landed. Both changed the
+outcome: two of five proposals were withdrawn, and the admitted ones amended.
+
+Standing read of the corpus: **the v8 shape needs no change.** 42 of 71 retros
+record the review round catching an S0/S1 that per-slice checks structurally
+could not see; refusals are graded correct and self-paying throughout. What HAD
+re-accreted was packet-authoring weight — `sprint-packet` had grown three
+per-gate reminder blocks, each bought by one sprint's incident, with a fourth
+proposed three times. That is the v7 failure restarting, so this round is a net
+deletion.
+
+### Adopted
+
+| # | Change | Where | Evidence |
+|---|---|---|---|
+| 1 | Packet §2 CHECKS OUT the sprint base (`checkout --detach`) instead of `merge --ff-only`, and asserts `FETCH_HEAD` = the base SHA | `sprint-packet` §2, `sprint-reviewer` Setup 1 | The harness mints every dispatched tree at `origin/main`'s tip (corroborated first-hand: implementer `git log` transcripts, and 337 of 338 live agent worktrees at `origin/main` rather than the stale local checkout). `merge --ff-only <base>` therefore succeeds only while `main` has not moved — verified in a scratch repo, exit 0 vs `fatal: Not possible to fast-forward` exit 128. Twelve recorded BLOCKED round-trips are this and nothing else, several on docs-only, CI-only or stdlib-only landings that could not touch the slice. The `rev-parse` assertion is NEW coverage: ff-only caught a stale base only when `main` had also moved (`capture-free-closures`); when it had not, both forms accept a stale SHA silently |
+| 2 | The pre-dispatch resync MANDATE becomes a pre-dispatch CHECK (fetch + log/diff, no merge), with four named merge triggers | `sprint-orchestrator` loop 2 | ~21 of 71 retros name resync the biggest or second-biggest time sink; 47 mention it. No retro cites a defect a mid-sprint resync prevented. `prelude-shadow-build-agreement` measured the elective case: a resync that cost a rebuild and a re-bless, prevented nothing, and the branch was `CONFLICTING` at land anyway. [W-MERGE-QUEUE] means branch currency is never required. The check survives because `comment-register`'s fetch-and-diff — not its merge — found a sibling sprint shipping the same tool and let a doomed slice be dropped before review |
+| 3 | `scripts/sprint-resync.sh` — the resync battery mechanized; refuses off-branch or dirty, re-derives goldens via the gates' own capture paths, exits non-zero if re-derived artifacts are uncommitted | new script, ledgered in `test/CI-COVERAGE-TOOLS.txt` | Three orchestrator git slips from hand-running the sequence: a bare merge pushed without its blessed goldens (cost part of a fix dispatch), a `git checkout <stale-sha> --` over an already-verified bless (full rebuild+rebless+preflight redo), a merge into the wrong branch. Ranked the #1 item the proposal set had missed |
+| 4 | ONE unnarrowed `gh workflow run ci.yml --ref sprint/<stage>` at last-slice-landed, read into the fix-now triage | `sprint-orchestrator` end-of-sprint 1b | It is the only pre-queue execution of the full suite, and the sole pre-queue run of `registry_keying_ratchet.sh` (inside `compiler-soundness`, invisible to `make preflight`) — which is why that reminder was proposed three times and the gap hit six. ~40 min wall-clock in parallel with a ~1h14 review round, so off the critical path; runner-minutes are free on this repo; the concurrency group keys on `github.ref` so PR runs are not cancelled. Already practiced ad hoc by one orchestrator, where it independently found 3 golden-family misses plus a 4th class before the reviewer reported |
+| 5 | DELETE the three per-gate §6 reminder blocks (snapshot/LEG-A bless, `backend/*`→fixpoint, cross-module acceptance) and the orchestrator's duplicate | `sprint-packet` §6, `sprint-orchestrator` fix round | The list does not converge — unnamed gate was a golden bless ×10, ratchet ×6, fixpoint ×3, docs-index ×4, plus lextok, doctest goldens, cross-backend parity. And the reminders do not work: the snapshot line entered the skill after `selector-identity-2` and was omitted in ≥5 later sprints, one report calling it "the line the skill already mandates". Superseded by 4, which is mechanical. The cross-module block is separately redundant with `sprint-reviewer` and [T-GLOBAL-TABLE] |
+| 6 | A one-line fix a previous fixer already located is folded into the packet in flight or done orchestrator-direct — never its own dispatch | `sprint-orchestrator` fix round | Nine sprints spun a full worktree+build+report cycle for a change the prior packet's own report had already named and located; one chain burned 1h10 for a ~10-min packet. Orchestrator-direct fixes measured at ~10 min against 18–36 min per dispatch. Proposed in identical words by two retros independently |
+| 7 | Subagents finish every build/gate run INSIDE the turn; the contradictory "background it" advice corrected at both sites | `sprint-implementer` loop 3, `AGENTS.md` [L-NO-FULL-NOT-FIXPOINT] | Seven dispatches stalled backgrounding a step and ending the turn to await a notification a subagent never receives; one stalled four times in a row; one stalled with the warning already in its packet. ⚠️ The FOREGROUND line had been in the implementer definition since 2026-08-16 and ALL of those stalls happened with it present — so deleting the contradictory parenthetical was not enough, and the fix states the mechanism that worked instead |
+
+### Declined, with the reason (do not re-propose without new evidence)
+
+- **"A packet may not assert a site it hasn't measured" / drop line-column
+  citations / state the property not the literal check** (proposed off ~31
+  falsified-premise sprints). Two-thirds is ALREADY THE RULE: §4 requires "each
+  with the command that proved it" (v5 adoption #14), and unknown-site→SPIKE-
+  FIRST is `sprint-plan` step 3. Of the ~31, only **3** are citation failures,
+  and in the worst the expensive miss was a wrong FUNCTION NAME, which "state
+  the property" would not have prevented. The corpus grades these refusals as
+  the system working at one sonnet dispatch each, and two retros declined this
+  exact rule as taxing the ~90% of packets whose claims hold. The remedy the
+  corpus does validate — a cheap pre-dispatch grep before asserting a site — is
+  §4's existing rule, applied. A compliance matter, not a missing rule.
+- **"Enrol a new gate, accept the `ci-gen-drift` red, discharge in a
+  follow-up"** (proposed off 14 sprints). **Structurally impossible, and
+  AGENTS.md said it anyway** — `ci-gen-drift` is a REQUIRED context (ruleset
+  18885875) and its script runs `medaka gate balance --check`
+  (`test/diff_compiler_ci_gen_drift.sh:80`), so the refusal blocks the merge
+  queue. Three sprints hit that wall. The AGENTS.md text is corrected and the
+  real defect — the collector's success-only filter, and closed packing rows —
+  re-filed as tooling issue #2602. The five hand-run steps were already
+  scripted in `test/gate_cost_collect.sh`.
+- **"Every closed issue owes a regression fixture in the same commit"** (6
+  sprints, each caught by the review round at one fix dispatch). Covered by
+  [W-QUIETER], and all six occurrences PREDATE the packet self-check Q5 ("which
+  test vehicle carries the new behaviour"), which is the covering line and has
+  not yet been tested by a sprint. Revisit only if a fixture-less close reaches
+  `main`.
+- **A fourth per-gate reminder for `registry_keying_ratchet.sh`** (proposed
+  three times, gap hit six). Superseded by adoption 4 — the reminder is the
+  thing that keeps failing; the unnarrowed run is the thing that catches it.
+- **Single-occurrence items:** `ENTRIES.log` ruling authorship, `Agent(to:)`
+  spawn semantics, `pkill` scoping, `gh` auth in implementer worktrees, "one
+  `Closes #N` per line" (`scripts/pr.sh` has no `Closes` rendering at all — a
+  convention for `docs/ops/PR-HELPER.md`, not a sprint skill), `MEDAKA_EMITTER`
+  in [D-TWO-ARM-STDLIB].
+- **Anything altering the review/fix-round split, the refusal license, or the
+  packet size ceiling.** 42 retros' worth of evidence that these are
+  load-bearing. Several retros proposed STRENGTHENING per-slice checks; every
+  one self-declined on the grounds that the finding was structurally invisible
+  to a single slice. That is the design working, not a gap.
+
+### Corrections to the record
+
+- **A phantom rule:** `entailment-verdict`'s retro justified a resync by citing
+  a "[W-PR-FLOW] descendant-of-main requirement". No such requirement exists —
+  [W-MERGE-QUEUE] states the opposite. Killed here so it stops propagating.
+- "Resync costs 3-7 cycles per sprint" overstates it: of 78 sprints with
+  NOTES.md, 9 never resync and 76 resync lines describe a clean, file-disjoint
+  merge. Adoption 2 cuts the COUNT (~2.5/sprint → ~1); adoption 3 cuts the
+  per-resync battery.
+- `argtag-decidability`'s `copyDriverState` non-compiling clean auto-merge is
+  cited in places as an argument FOR mid-sprint resync. It is not: it happened
+  at LAND time, after four mid-sprint resyncs had already run and prevented
+  nothing, and [T-LEGA-REBASE]'s rebuild is what caught it.
+
+### Open, for a later round
+
+Two costs the corpus names that this round does not address, both CI-
+infrastructure rather than sprint workflow. **Known-flake merge-queue
+round-trips**: 12 retros name a rerun or re-enqueue, and the reverse hazard
+fired once — a real regression pattern-matched away as the known flake. The
+remedy is tier-3 demotion of the wall-clock arm (`docs/ops/CI-ARCHITECTURE.md`
+§3.6). And **fix-round regressions reach the queue unreviewed** (5 sprints):
+the review round runs before the fix round by construction, so anything the fix
+round breaks gets only CI. Adoption 4's run fires at last-slice-landed and does
+not see it either.
