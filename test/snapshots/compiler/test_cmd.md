@@ -1,5 +1,5 @@
 # META
-source_lines=1924
+source_lines=1925
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -462,6 +462,7 @@ skipReasonDecls userDecls
 -- given but every phase was already empty) stays the existing vacuous pass
 -- (P0-212, `test_cmd.mdk`'s zero-doctest note above) — this only fires when a
 -- filter was GIVEN and matched nothing anywhere.
+export
 filterMatchedNothing : Option String -> String -> List Decl -> Bool
 filterMatchedNothing None _ _ = False
 filterMatchedNothing (Some sub) tsrc userDecls =
@@ -1976,7 +1977,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "typecheckSkipNotice" ((PVar "target") (PVar "userDecls")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "note: typechecking was skipped for ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "\n  reason: the module declares "))) (EApp (EVar "display") (EApp (EVar "skipReasonDecls") (EVar "userDecls")))) (ELit (LString " and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))
 (DTypeSig false "skipReasonDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "skipReasonDecls" ((PVar "userDecls")) (EIf (EBinOp "&&" (EApp (EVar "hasTests") (EVar "userDecls")) (EApp (EVar "hasProps") (EVar "userDecls"))) (ELit (LString "`test \"…\"` and `prop \"…\"` decls")) (EIf (EApp (EVar "hasTests") (EVar "userDecls")) (ELit (LString "`test \"…\"` decls")) (EIf (EVar "otherwise") (ELit (LString "`prop \"…\"` decls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DTypeSig true "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "filterMatchedNothing" ((PCon "None") PWild PWild) (EVar "False"))
 (DFunDef false "filterMatchedNothing" ((PCon "Some" (PVar "sub")) (PVar "tsrc") (PVar "userDecls")) (EApp (EVar "not") (EBinOp "||" (EBinOp "||" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterExamplesByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterPropsByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "filterProps") (EVar "userDecls"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterTestsByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "nativeRawTests") (EVar "tsrc")))))))
 (DTypeSig false "driveAll" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
@@ -2216,7 +2217,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "typecheckSkipNotice" ((PVar "target") (PVar "userDecls")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "note: typechecking was skipped for ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "\n  reason: the module declares "))) (EApp (EMethodRef "display") (EApp (EVar "skipReasonDecls") (EVar "userDecls")))) (ELit (LString " and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check "))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ""))))
 (DTypeSig false "skipReasonDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "skipReasonDecls" ((PVar "userDecls")) (EIf (EBinOp "&&" (EApp (EVar "hasTests") (EVar "userDecls")) (EApp (EVar "hasProps") (EVar "userDecls"))) (ELit (LString "`test \"…\"` and `prop \"…\"` decls")) (EIf (EApp (EVar "hasTests") (EVar "userDecls")) (ELit (LString "`test \"…\"` decls")) (EIf (EVar "otherwise") (ELit (LString "`prop \"…\"` decls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DTypeSig true "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "filterMatchedNothing" ((PCon "None") PWild PWild) (EVar "False"))
 (DFunDef false "filterMatchedNothing" ((PCon "Some" (PVar "sub")) (PVar "tsrc") (PVar "userDecls")) (EApp (EVar "not") (EBinOp "||" (EBinOp "||" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterExamplesByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterPropsByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "filterProps") (EVar "userDecls"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterTestsByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "nativeRawTests") (EVar "tsrc")))))))
 (DTypeSig false "driveAll" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))

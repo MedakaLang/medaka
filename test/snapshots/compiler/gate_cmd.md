@@ -1,5 +1,5 @@
 # META
-source_lines=5455
+source_lines=5542
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -42,7 +42,19 @@ stages=DESUGAR,MARK
    shard certifies coverage of a gate that never ran. -}
 
 import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
-import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
+import json.{
+  Json,
+  JString,
+  JInt,
+  JFloat,
+  JBool,
+  jArray,
+  jObject,
+  stringify,
+  parse as parseJson,
+  get as jsonGet,
+  asInt as jsonAsInt,
+}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import driver.loader.{readDeps}
 import support.path.{joinPath}
@@ -924,6 +936,11 @@ runGateCmd (sub :: _) =
 -- started at all (a missing script, a failed `mktemp`, an ENOENT on `env`) —
 -- which is a DIFFERENT fact from "the gate ran and exited non-zero", and the
 -- two must not be blurred into one failure count without saying which.
+-- `vacuous` is set only for a `kind = "native"` gate whose `--json` summary
+-- shows zero assertions of any kind (no doctests, no props, no `test "…"`
+-- decls matched) — the exit-code-only contract this record used to carry
+-- cannot distinguish that from "ran and passed", so `medaka test --native
+-- --json`'s own summary is parsed to tell the two apart (#2633).
 public export data GateResult = GateResult {
   name : String,
   script : String,
@@ -934,6 +951,7 @@ public export data GateResult = GateResult {
   seconds : Float,
   out : String,
   err : String,
+  vacuous : Bool,
 }
 
 -- Everything a gate invocation needs that is the same for every gate in a run.
@@ -1212,9 +1230,11 @@ gateArgs env scratch secs cmd =
 --
 -- `kind = "exec"` is a script, so the interpreter comes from its shebang
 -- (shellFor).  `kind = "native"` is a `*_test.mdk` module run by the compiler's
--- own test runner: `medaka test --native --json` exits 0 when every `test`
--- declaration passed and 1 when any failed, which is already the contract
--- `gateOk` reads off the exit code, so nothing downstream needs a second shape.
+-- own test runner: `medaka test --native --json` exits 0 both when every
+-- `test`/doctest/prop declaration passed AND when the module has none to run
+-- at all (or `--filter` matched nothing) — exit code alone cannot tell those
+-- two apart, so `runOneGate` also parses the `--json` summary to set
+-- `GateResult.vacuous`, and `gateOk` reads both (#2633).
 gateInvocation : RunEnv -> Gate -> String -> <IO> (String, List String)
 gateInvocation env g script =
   if g.kind == "native" then
@@ -1234,7 +1254,40 @@ spawnFailure g script msg dt = GateResult {
   seconds = dt,
   out = "",
   err = "",
+  vacuous = False,
 }
+
+-- The `passed`/`failed` counts from a `medaka test --native --json`
+-- envelope's `summary` object, or `None` when the output isn't that shape
+-- (not JSON, or missing either field) — which this treats as "can't tell",
+-- never as vacuous, so a native gate that fails before it can print a
+-- summary is reported through its exit code exactly as before, not
+-- misreported as vacuous.
+nativeSummaryCounts : String -> Option (Int, Int)
+nativeSummaryCounts out = match parseJson (stringTrim out)
+  Err _ => None
+  Ok j => summaryPassFail j
+
+summaryPassFail : Json -> Option (Int, Int)
+summaryPassFail j = do
+  summary <- jsonGet "summary" j
+  pj <- jsonGet "passed" summary
+  fj <- jsonGet "failed" summary
+  p <- jsonAsInt pj
+  f <- jsonAsInt fj
+  Some (p, f)
+
+-- A `kind = "native"` gate is vacuous when it exited 0 (so `gateInvocation`'s
+-- exit-code contract is satisfied) but its own `--json` summary shows zero
+-- assertions ran — the case `--filter`-matched-nothing and the zero-`test`-decl
+-- case both collapse into (#2633).
+nativeVacuous : Gate -> Int -> String -> Bool
+nativeVacuous g code out =
+  g.kind == "native"
+    && code == 0
+    && (match nativeSummaryCounts out
+      Some (0, 0) => True
+      _ => False)
 
 runOneGate : RunEnv -> Gate -> <IO> GateResult
 runOneGate env g =
@@ -1267,10 +1320,11 @@ runOneGate env g =
             seconds = dt,
             out = out,
             err = errOut,
+            vacuous = nativeVacuous g code out,
           }
 
 gateOk : GateResult -> Bool
-gateOk r = r.spawnError == "" && r.exitCode == 0
+gateOk r = r.spawnError == "" && r.exitCode == 0 && not r.vacuous
 
 msOf : GateResult -> Int
 msOf r = floatToInt (r.seconds * 1000.0)
@@ -1280,6 +1334,8 @@ resultLine r
   | r.spawnError /= "" = "ERROR \{r.name}  (\{r.spawnError})\n"
   | r.timedOut =
     "TIMEOUT \{r.name}  (exit \{intToString r.exitCode} after \{intToString (msOf r)}ms)\n"
+  | r.vacuous =
+    "FAIL  \{r.name}  (vacuous: no doctests/props/`test \"…\"` ran, \{intToString (msOf r)}ms)\n"
   | r.exitCode == 0 = "PASS  \{r.name}  (\{intToString (msOf r)}ms)\n"
   | otherwise =
     "FAIL  \{r.name}  (exit \{intToString r.exitCode}, \{intToString (msOf r)}ms)\n"
@@ -1381,6 +1437,7 @@ resultJson r = jObject [
   ("ms", JInt (msOf r)),
   ("seconds", JFloat r.seconds),
   ("ok", JBool (gateOk r)),
+  ("vacuous", JBool r.vacuous),
   ("spawnError", JString r.spawnError),
   ("stdout", JString r.out),
   ("stderr", JString r.err),
@@ -1640,19 +1697,49 @@ nonBlank s = stringTrim s /= ""
 -- (every ledgered tool/oracle reports as *missing*, which reds loud) — but an
 -- empty candidate list can't itself say "verify couldn't check anything," so
 -- this one needs an explicit top-level error instead.
-gitLsFilesSh : String -> List String -> <IO> Result String (List String)
-gitLsFilesSh root args =
-  match runCommandOk "git" (["-C", root] ++ args ++ ["*.sh"])
+gitLsFilesSh : String ->
+  List String ->
+  String ->
+  <IO> Result String (List String)
+gitLsFilesSh root args pattern =
+  match runCommandOk "git" (["-C", root] ++ args ++ [pattern])
     Err e => Err "git ls-files failed: \{e}"
     Ok (out, _) => Ok (filterList nonBlank (splitNl out))
 
-gateCandidates : String -> <IO> Result String (List String)
-gateCandidates root = match gitLsFilesSh root ["ls-files"]
+-- Every candidate for ONE glob pattern, tracked or untracked.
+candidatesFor : String -> String -> <IO> Result String (List String)
+candidatesFor root pattern = match gitLsFilesSh root ["ls-files"] pattern
   Err m => Err m
   Ok tracked =>
     map
-      (untracked => sortUniqS (tracked ++ untracked))
-      (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"])
+      (tracked ++ _)
+      (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"] pattern)
+
+-- Check 1's candidate universe: every `.sh` (the original corpus) PLUS every
+-- `test/*_test.mdk` — the [P-TEST-SIBLING] native-gate naming convention
+-- (`compiler/types/registry_test.mdk` tests `registry.mdk`; a gate's own
+-- `run` module lives at `test/<name>_test.mdk`, e.g.
+-- `test/effect_set_domain_test.mdk`) — so a native test module nobody
+-- enrolled is flagged exactly like an unenrolled `.sh` script, rather than
+-- silently invisible to `gate verify` the way check 1 used to be (#2633).
+-- git's pathspec glob does NOT stop `*` at `/` (`test/*_test.mdk` matches
+-- `test/construct_fixtures/prop_test.mdk`, a data fixture some OTHER gate
+-- reads, not a gate module of its own) — measured:
+-- `git ls-files 'test/*_test.mdk'`. A native gate's own `run` module lives
+-- directly under `test/` (`test/effect_set_domain_test.mdk`), never nested,
+-- so the glob's matches are narrowed to exactly that shape before joining the
+-- `.sh` candidates.
+directlyUnderTest : String -> Bool
+directlyUnderTest p = listLen (splitOnChar '/' p) == 2
+
+gateCandidates : String -> <IO> Result String (List String)
+gateCandidates root = match candidatesFor root "*.sh"
+  Err m => Err m
+  Ok shScripts =>
+    map
+      (nativeTests =>
+        sortUniqS (shScripts ++ filterList directlyUnderTest nativeTests))
+      (candidatesFor root "test/*_test.mdk")
 
 -- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
 -- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
@@ -5459,7 +5546,7 @@ prop "a trailing * matches any suffix" (n : Int) =
   globMatch "g*" ("g" ++ intToString n)
 # DESUGAR
 (DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getArray" false) (mem "getBool" false) (mem "tableCount" false) (mem "tableEntry" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "readDeps" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
@@ -5601,7 +5688,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "balance")) (PVar "rest"))) (EApp (EVar "balCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "budget")) (PVar "rest"))) (EApp (EVar "budgetCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EVar "display") (EVar "sub"))) (ELit (LString "' (expected: list, run, verify, explain, reach, ci, balance, budget)"))))))
-(DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String"))))) ())
+(DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String")) (field "vacuous" (TyCon "Bool"))))) ())
 (DData Private "RunEnv" () ((variant "RunEnv" (ConNamed (field "root" (TyCon "String")) (field "medaka" (TyCon "String")) (field "emitter" (TyCon "String")) (field "scratchRoot" (TyCon "String")) (field "timeoutOverride" (TyCon "Int"))))) ())
 (DTypeSig false "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "timeoutFor" ((PVar "override") (PVar "cost")) (EIf (EBinOp ">" (EVar "override") (ELit (LInt 0))) (EVar "override") (EIf (EBinOp "==" (EVar "cost") (ELit (LString "cheap"))) (ELit (LInt 300)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "medium"))) (ELit (LInt 900)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "heavy"))) (ELit (LInt 3600)) (EIf (EVar "otherwise") (ELit (LInt 900)) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
@@ -5665,15 +5752,21 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "gateInvocation" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "gateInvocation" ((PVar "env") (PVar "g") (PVar "script")) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (ETuple (ELit (LString "medaka test --native")) (EListLit (EFieldAccess (EVar "env") "medaka") (ELit (LString "test")) (ELit (LString "--native")) (ELit (LString "--json")) (EVar "script"))) (EBlock (DoLet false false (PVar "sh") (EApp (EVar "shellFor") (EVar "script"))) (DoExpr (ETuple (EVar "sh") (EListLit (EVar "sh") (EVar "script")))))))
 (DTypeSig false "spawnFailure" (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyCon "GateResult"))))))
-(DFunDef false "spawnFailure" ((PVar "g") (PVar "script") (PVar "msg") (PVar "dt")) (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (ELit (LString "sh"))) (fa "exitCode" (ELit (LInt 127))) (fa "timedOut" (EVar "False")) (fa "spawnError" (EVar "msg")) (fa "seconds" (EVar "dt")) (fa "out" (ELit (LString ""))) (fa "err" (ELit (LString ""))))))
+(DFunDef false "spawnFailure" ((PVar "g") (PVar "script") (PVar "msg") (PVar "dt")) (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (ELit (LString "sh"))) (fa "exitCode" (ELit (LInt 127))) (fa "timedOut" (EVar "False")) (fa "spawnError" (EVar "msg")) (fa "seconds" (EVar "dt")) (fa "out" (ELit (LString ""))) (fa "err" (ELit (LString ""))) (fa "vacuous" (EVar "False")))))
+(DTypeSig false "nativeSummaryCounts" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "nativeSummaryCounts" ((PVar "out")) (EMatch (EApp (EVar "parseJson") (EApp (EVar "stringTrim") (EVar "out"))) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "j")) () (EApp (EVar "summaryPassFail") (EVar "j")))))
+(DTypeSig false "summaryPassFail" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "summaryPassFail" ((PVar "j")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "jsonGet") (ELit (LString "summary"))) (EVar "j"))) (ELam ((PVar "summary")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "jsonGet") (ELit (LString "passed"))) (EVar "summary"))) (ELam ((PVar "pj")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "jsonGet") (ELit (LString "failed"))) (EVar "summary"))) (ELam ((PVar "fj")) (EApp (EApp (EVar "andThen") (EApp (EVar "jsonAsInt") (EVar "pj"))) (ELam ((PVar "p")) (EApp (EApp (EVar "andThen") (EApp (EVar "jsonAsInt") (EVar "fj"))) (ELam ((PVar "f")) (EApp (EVar "Some") (ETuple (EVar "p") (EVar "f"))))))))))))))
+(DTypeSig false "nativeVacuous" (TyFun (TyCon "Gate") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "nativeVacuous" ((PVar "g") (PVar "code") (PVar "out")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EBinOp "==" (EVar "code") (ELit (LInt 0)))) (EMatch (EApp (EVar "nativeSummaryCounts") (EVar "out")) (arm (PCon "Some" (PTuple (PLit (LInt 0)) (PLit (LInt 0)))) () (EVar "True")) (arm PWild () (EVar "False")))))
 (DTypeSig false "runOneGate" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "GateResult")))))
-(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PTuple (PVar "sh") (PVar "cmd")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "cmd")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut"))))))))))))))))
+(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PTuple (PVar "sh") (PVar "cmd")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "cmd")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut")) (fa "vacuous" (EApp (EApp (EApp (EVar "nativeVacuous") (EVar "g")) (EVar "code")) (EVar "out")))))))))))))))))
 (DTypeSig false "gateOk" (TyFun (TyCon "GateResult") (TyCon "Bool")))
-(DFunDef false "gateOk" ((PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0)))))
+(DFunDef false "gateOk" ((PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0)))) (EApp (EVar "not") (EFieldAccess (EVar "r") "vacuous"))))
 (DTypeSig false "msOf" (TyFun (TyCon "GateResult") (TyCon "Int")))
 (DFunDef false "msOf" ((PVar "r")) (EApp (EVar "floatToInt") (EBinOp "*" (EFieldAccess (EVar "r") "seconds") (ELit (LFloat 1000.0)))))
 (DTypeSig false "resultLine" (TyFun (TyCon "GateResult") (TyCon "String")))
-(DFunDef false "resultLine" ((PVar "r")) (EIf (EBinOp "/=" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EVar "display") (EFieldAccess (EVar "r") "spawnError"))) (ELit (LString ")\n"))) (EIf (EFieldAccess (EVar "r") "timedOut") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "TIMEOUT ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString " after "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PASS  ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resultLine" ((PVar "r")) (EIf (EBinOp "/=" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EVar "display") (EFieldAccess (EVar "r") "spawnError"))) (ELit (LString ")\n"))) (EIf (EFieldAccess (EVar "r") "timedOut") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "TIMEOUT ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString " after "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EFieldAccess (EVar "r") "vacuous") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (vacuous: no doctests/props/`test \"…\"` ran, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PASS  ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "runGatesLoop" (TyFun (TyCon "RunEnv") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "GateResult")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "GateResult")))))))
 (DFunDef false "runGatesLoop" (PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "runGatesLoop" ((PVar "env") (PCons (PVar "g") (PVar "gs")) (PVar "acc")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "runOneGate") (EVar "env")) (EVar "g"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "resultLine") (EVar "r")))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "runGatesLoop") (EVar "env")) (EVar "gs")) (EBinOp "::" (EVar "r") (EVar "acc"))))))
@@ -5693,7 +5786,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "failingNames" ((PList)) (EListLit))
 (DFunDef false "failingNames" ((PCons (PVar "r") (PVar "rs"))) (EIf (EApp (EVar "gateOk") (EVar "r")) (EApp (EVar "failingNames") (EVar "rs")) (EIf (EVar "otherwise") (EBinOp "::" (EFieldAccess (EVar "r") "name") (EApp (EVar "failingNames") (EVar "rs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resultJson" (TyFun (TyCon "GateResult") (TyCon "Json")))
-(DFunDef false "resultJson" ((PVar "r")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "name"))) (ETuple (ELit (LString "script")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "script"))) (ETuple (ELit (LString "shell")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "shell"))) (ETuple (ELit (LString "exit")) (EApp (EVar "JInt") (EFieldAccess (EVar "r") "exitCode"))) (ETuple (ELit (LString "timedOut")) (EApp (EVar "JBool") (EFieldAccess (EVar "r") "timedOut"))) (ETuple (ELit (LString "ms")) (EApp (EVar "JInt") (EApp (EVar "msOf") (EVar "r")))) (ETuple (ELit (LString "seconds")) (EApp (EVar "JFloat") (EFieldAccess (EVar "r") "seconds"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EVar "gateOk") (EVar "r")))) (ETuple (ELit (LString "spawnError")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "spawnError"))) (ETuple (ELit (LString "stdout")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "out"))) (ETuple (ELit (LString "stderr")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "err"))))))
+(DFunDef false "resultJson" ((PVar "r")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "name"))) (ETuple (ELit (LString "script")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "script"))) (ETuple (ELit (LString "shell")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "shell"))) (ETuple (ELit (LString "exit")) (EApp (EVar "JInt") (EFieldAccess (EVar "r") "exitCode"))) (ETuple (ELit (LString "timedOut")) (EApp (EVar "JBool") (EFieldAccess (EVar "r") "timedOut"))) (ETuple (ELit (LString "ms")) (EApp (EVar "JInt") (EApp (EVar "msOf") (EVar "r")))) (ETuple (ELit (LString "seconds")) (EApp (EVar "JFloat") (EFieldAccess (EVar "r") "seconds"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EVar "gateOk") (EVar "r")))) (ETuple (ELit (LString "vacuous")) (EApp (EVar "JBool") (EFieldAccess (EVar "r") "vacuous"))) (ETuple (ELit (LString "spawnError")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "spawnError"))) (ETuple (ELit (LString "stdout")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "out"))) (ETuple (ELit (LString "stderr")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "err"))))))
 (DTypeSig true "runReportJson" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "GateResult")) (TyCon "String"))))
 (DFunDef false "runReportJson" ((PVar "jobs") (PVar "rs")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jobs")) (EApp (EVar "JInt") (EVar "jobs"))) (ETuple (ELit (LString "parallel")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JInt") (EApp (EVar "countOk") (EVar "rs")))) (ETuple (ELit (LString "failing")) (EApp (EVar "JInt") (EBinOp "-" (EApp (EVar "listLen") (EVar "rs")) (EApp (EVar "countOk") (EVar "rs"))))) (ETuple (ELit (LString "gates")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "resultJson")) (EVar "rs"))))))))
 (DTypeSig false "dryLine" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "String")))))
@@ -5729,10 +5822,14 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runRunCmdBody" ((PVar "argv")) (EMatch (EApp (EVar "parseRunArgs") (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EApp (EApp (EVar "parseSelectors") (EFieldAccess (EVar "a") "selectors")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "sels")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EApp (EApp (EVar "selectFor") (EVar "path")) (EFieldAccess (EVar "a") "selectors")) (EVar "sels")) (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "gs")) () (EApp (EApp (EVar "runSelected") (EVar "a")) (EVar "gs")))))))))))))
 (DTypeSig false "nonBlank" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonBlank" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
-(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files failed: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out")))))))
+(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args") (PVar "pattern")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (EVar "pattern")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files failed: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out")))))))
+(DTypeSig false "candidatesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "candidatesFor" ((PVar "root") (PVar "pattern")) (EMatch (EApp (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")))) (EVar "pattern")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "tracked")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "tracked") (EVar "_s")))) (EApp (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard")))) (EVar "pattern"))))))
+(DTypeSig false "directlyUnderTest" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "directlyUnderTest" ((PVar "p")) (EBinOp "==" (EApp (EVar "listLen") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "p"))) (ELit (LInt 2))))
 (DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "gateCandidates" ((PVar "root")) (EMatch (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "tracked")) () (EApp (EApp (EVar "map") (ELam ((PVar "untracked")) (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))) (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))))))
+(DFunDef false "gateCandidates" ((PVar "root")) (EMatch (EApp (EApp (EVar "candidatesFor") (EVar "root")) (ELit (LString "*.sh"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "shScripts")) () (EApp (EApp (EVar "map") (ELam ((PVar "nativeTests")) (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "shScripts") (EApp (EApp (EVar "filterList") (EVar "directlyUnderTest")) (EVar "nativeTests")))))) (EApp (EApp (EVar "candidatesFor") (EVar "root")) (ELit (LString "test/*_test.mdk")))))))
 (DTypeSig false "liveLine" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "liveLine" ((PVar "l")) (EBinOp "&&" (EApp (EVar "nonBlank") (EVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EApp (EVar "stringTrim") (EVar "l"))))))
 (DTypeSig false "firstToken" (TyFun (TyCon "String") (TyCon "String")))
@@ -6505,7 +6602,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DProp false "a trailing * matches any suffix" ((pp "n" (TyCon "Int"))) (EApp (EApp (EVar "globMatch") (ELit (LString "g*"))) (EBinOp "++" (ELit (LString "g")) (EApp (EVar "intToString") (EVar "n")))))
 # MARK
 (DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getArray" false) (mem "getBool" false) (mem "tableCount" false) (mem "tableEntry" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "readDeps" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
@@ -6647,7 +6744,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "balance")) (PVar "rest"))) (EApp (EVar "balCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "budget")) (PVar "rest"))) (EApp (EVar "budgetCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EMethodRef "display") (EMethodRef "sub"))) (ELit (LString "' (expected: list, run, verify, explain, reach, ci, balance, budget)"))))))
-(DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String"))))) ())
+(DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String")) (field "vacuous" (TyCon "Bool"))))) ())
 (DData Private "RunEnv" () ((variant "RunEnv" (ConNamed (field "root" (TyCon "String")) (field "medaka" (TyCon "String")) (field "emitter" (TyCon "String")) (field "scratchRoot" (TyCon "String")) (field "timeoutOverride" (TyCon "Int"))))) ())
 (DTypeSig false "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "timeoutFor" ((PVar "override") (PVar "cost")) (EIf (EBinOp ">" (EVar "override") (ELit (LInt 0))) (EVar "override") (EIf (EBinOp "==" (EVar "cost") (ELit (LString "cheap"))) (ELit (LInt 300)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "medium"))) (ELit (LInt 900)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "heavy"))) (ELit (LInt 3600)) (EIf (EVar "otherwise") (ELit (LInt 900)) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
@@ -6711,15 +6808,21 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "gateInvocation" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "gateInvocation" ((PVar "env") (PVar "g") (PVar "script")) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (ETuple (ELit (LString "medaka test --native")) (EListLit (EFieldAccess (EVar "env") "medaka") (ELit (LString "test")) (ELit (LString "--native")) (ELit (LString "--json")) (EVar "script"))) (EBlock (DoLet false false (PVar "sh") (EApp (EVar "shellFor") (EVar "script"))) (DoExpr (ETuple (EVar "sh") (EListLit (EVar "sh") (EVar "script")))))))
 (DTypeSig false "spawnFailure" (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyCon "GateResult"))))))
-(DFunDef false "spawnFailure" ((PVar "g") (PVar "script") (PVar "msg") (PVar "dt")) (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (ELit (LString "sh"))) (fa "exitCode" (ELit (LInt 127))) (fa "timedOut" (EVar "False")) (fa "spawnError" (EVar "msg")) (fa "seconds" (EVar "dt")) (fa "out" (ELit (LString ""))) (fa "err" (ELit (LString ""))))))
+(DFunDef false "spawnFailure" ((PVar "g") (PVar "script") (PVar "msg") (PVar "dt")) (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (ELit (LString "sh"))) (fa "exitCode" (ELit (LInt 127))) (fa "timedOut" (EVar "False")) (fa "spawnError" (EVar "msg")) (fa "seconds" (EVar "dt")) (fa "out" (ELit (LString ""))) (fa "err" (ELit (LString ""))) (fa "vacuous" (EVar "False")))))
+(DTypeSig false "nativeSummaryCounts" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "nativeSummaryCounts" ((PVar "out")) (EMatch (EApp (EVar "parseJson") (EApp (EVar "stringTrim") (EVar "out"))) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "j")) () (EApp (EVar "summaryPassFail") (EVar "j")))))
+(DTypeSig false "summaryPassFail" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "summaryPassFail" ((PVar "j")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "jsonGet") (ELit (LString "summary"))) (EVar "j"))) (ELam ((PVar "summary")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "jsonGet") (ELit (LString "passed"))) (EVar "summary"))) (ELam ((PVar "pj")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "jsonGet") (ELit (LString "failed"))) (EVar "summary"))) (ELam ((PVar "fj")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "jsonAsInt") (EVar "pj"))) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "jsonAsInt") (EVar "fj"))) (ELam ((PVar "f")) (EApp (EVar "Some") (ETuple (EVar "p") (EVar "f"))))))))))))))
+(DTypeSig false "nativeVacuous" (TyFun (TyCon "Gate") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "nativeVacuous" ((PVar "g") (PVar "code") (PVar "out")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EBinOp "==" (EVar "code") (ELit (LInt 0)))) (EMatch (EApp (EVar "nativeSummaryCounts") (EVar "out")) (arm (PCon "Some" (PTuple (PLit (LInt 0)) (PLit (LInt 0)))) () (EVar "True")) (arm PWild () (EVar "False")))))
 (DTypeSig false "runOneGate" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "GateResult")))))
-(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PTuple (PVar "sh") (PVar "cmd")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "cmd")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut"))))))))))))))))
+(DFunDef false "runOneGate" ((PVar "env") (PVar "g")) (EBlock (DoLet false false (PVar "script") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "script"))) (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "gate script not found (registry `run` field): ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (ELit (LFloat 0.0))) (EBlock (DoLet false false (PTuple (PVar "sh") (PVar "cmd")) (EApp (EApp (EApp (EVar "gateInvocation") (EVar "env")) (EVar "g")) (EVar "script"))) (DoLet false false (PVar "secs") (EApp (EApp (EVar "timeoutFor") (EFieldAccess (EVar "env") "timeoutOverride")) (EFieldAccess (EVar "g") "cost"))) (DoExpr (EMatch (EApp (EVar "makeGateScratch") (EFieldAccess (EVar "env") "scratchRoot")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not create a scratch dir: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LFloat 0.0)))) (arm (PCon "Ok" (PVar "scratch")) () (EBlock (DoLet false false (PVar "t0") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EApp (EApp (EApp (EApp (EVar "gateArgs") (EVar "env")) (EVar "scratch")) (EVar "secs")) (EVar "cmd")))) (DoLet false false (PVar "dt") (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "t0"))) (DoLet false false PWild (EApp (EVar "cleanupScratch") (EVar "scratch"))) (DoExpr (EMatch (EVar "res") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EApp (EVar "spawnFailure") (EVar "g")) (EVar "script")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not spawn the gate: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "dt"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (ERecordCreate "GateResult" ((fa "name" (EFieldAccess (EVar "g") "name")) (fa "script" (EVar "script")) (fa "shell" (EVar "sh")) (fa "exitCode" (EVar "code")) (fa "timedOut" (EBinOp "||" (EBinOp "==" (EVar "code") (ELit (LInt 124))) (EBinOp "==" (EVar "code") (ELit (LInt 137))))) (fa "spawnError" (ELit (LString ""))) (fa "seconds" (EVar "dt")) (fa "out" (EVar "out")) (fa "err" (EVar "errOut")) (fa "vacuous" (EApp (EApp (EApp (EVar "nativeVacuous") (EVar "g")) (EVar "code")) (EVar "out")))))))))))))))))
 (DTypeSig false "gateOk" (TyFun (TyCon "GateResult") (TyCon "Bool")))
-(DFunDef false "gateOk" ((PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0)))))
+(DFunDef false "gateOk" ((PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0)))) (EApp (EVar "not") (EFieldAccess (EVar "r") "vacuous"))))
 (DTypeSig false "msOf" (TyFun (TyCon "GateResult") (TyCon "Int")))
 (DFunDef false "msOf" ((PVar "r")) (EApp (EVar "floatToInt") (EBinOp "*" (EFieldAccess (EVar "r") "seconds") (ELit (LFloat 1000.0)))))
 (DTypeSig false "resultLine" (TyFun (TyCon "GateResult") (TyCon "String")))
-(DFunDef false "resultLine" ((PVar "r")) (EIf (EBinOp "/=" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "spawnError"))) (ELit (LString ")\n"))) (EIf (EFieldAccess (EVar "r") "timedOut") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "TIMEOUT ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString " after "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PASS  ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resultLine" ((PVar "r")) (EIf (EBinOp "/=" (EFieldAccess (EVar "r") "spawnError") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "spawnError"))) (ELit (LString ")\n"))) (EIf (EFieldAccess (EVar "r") "timedOut") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "TIMEOUT ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString " after "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EFieldAccess (EVar "r") "vacuous") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (vacuous: no doctests/props/`test \"…\"` ran, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "exitCode") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "PASS  ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  ("))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "  (exit "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "exitCode")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "msOf") (EVar "r"))))) (ELit (LString "ms)\n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "runGatesLoop" (TyFun (TyCon "RunEnv") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "GateResult")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "GateResult")))))))
 (DFunDef false "runGatesLoop" (PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "runGatesLoop" ((PVar "env") (PCons (PVar "g") (PVar "gs")) (PVar "acc")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "runOneGate") (EVar "env")) (EVar "g"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "resultLine") (EVar "r")))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "runGatesLoop") (EVar "env")) (EVar "gs")) (EBinOp "::" (EVar "r") (EVar "acc"))))))
@@ -6739,7 +6842,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "failingNames" ((PList)) (EListLit))
 (DFunDef false "failingNames" ((PCons (PVar "r") (PVar "rs"))) (EIf (EApp (EVar "gateOk") (EVar "r")) (EApp (EVar "failingNames") (EVar "rs")) (EIf (EVar "otherwise") (EBinOp "::" (EFieldAccess (EVar "r") "name") (EApp (EVar "failingNames") (EVar "rs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resultJson" (TyFun (TyCon "GateResult") (TyCon "Json")))
-(DFunDef false "resultJson" ((PVar "r")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "name"))) (ETuple (ELit (LString "script")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "script"))) (ETuple (ELit (LString "shell")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "shell"))) (ETuple (ELit (LString "exit")) (EApp (EVar "JInt") (EFieldAccess (EVar "r") "exitCode"))) (ETuple (ELit (LString "timedOut")) (EApp (EVar "JBool") (EFieldAccess (EVar "r") "timedOut"))) (ETuple (ELit (LString "ms")) (EApp (EVar "JInt") (EApp (EVar "msOf") (EVar "r")))) (ETuple (ELit (LString "seconds")) (EApp (EVar "JFloat") (EFieldAccess (EVar "r") "seconds"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EVar "gateOk") (EVar "r")))) (ETuple (ELit (LString "spawnError")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "spawnError"))) (ETuple (ELit (LString "stdout")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "out"))) (ETuple (ELit (LString "stderr")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "err"))))))
+(DFunDef false "resultJson" ((PVar "r")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "name"))) (ETuple (ELit (LString "script")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "script"))) (ETuple (ELit (LString "shell")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "shell"))) (ETuple (ELit (LString "exit")) (EApp (EVar "JInt") (EFieldAccess (EVar "r") "exitCode"))) (ETuple (ELit (LString "timedOut")) (EApp (EVar "JBool") (EFieldAccess (EVar "r") "timedOut"))) (ETuple (ELit (LString "ms")) (EApp (EVar "JInt") (EApp (EVar "msOf") (EVar "r")))) (ETuple (ELit (LString "seconds")) (EApp (EVar "JFloat") (EFieldAccess (EVar "r") "seconds"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EVar "gateOk") (EVar "r")))) (ETuple (ELit (LString "vacuous")) (EApp (EVar "JBool") (EFieldAccess (EVar "r") "vacuous"))) (ETuple (ELit (LString "spawnError")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "spawnError"))) (ETuple (ELit (LString "stdout")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "out"))) (ETuple (ELit (LString "stderr")) (EApp (EVar "JString") (EFieldAccess (EVar "r") "err"))))))
 (DTypeSig true "runReportJson" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "GateResult")) (TyCon "String"))))
 (DFunDef false "runReportJson" ((PVar "jobs") (PVar "rs")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jobs")) (EApp (EVar "JInt") (EVar "jobs"))) (ETuple (ELit (LString "parallel")) (EApp (EVar "JBool") (EVar "False"))) (ETuple (ELit (LString "ok")) (EApp (EVar "JInt") (EApp (EVar "countOk") (EVar "rs")))) (ETuple (ELit (LString "failing")) (EApp (EVar "JInt") (EBinOp "-" (EApp (EVar "listLen") (EVar "rs")) (EApp (EVar "countOk") (EVar "rs"))))) (ETuple (ELit (LString "gates")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "resultJson")) (EVar "rs"))))))))
 (DTypeSig false "dryLine" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyCon "String")))))
@@ -6775,10 +6878,14 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runRunCmdBody" ((PVar "argv")) (EMatch (EApp (EVar "parseRunArgs") (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EApp (EApp (EVar "parseSelectors") (EFieldAccess (EVar "a") "selectors")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "sels")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EApp (EApp (EVar "selectFor") (EVar "path")) (EFieldAccess (EVar "a") "selectors")) (EVar "sels")) (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "gs")) () (EApp (EApp (EVar "runSelected") (EVar "a")) (EVar "gs")))))))))))))
 (DTypeSig false "nonBlank" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonBlank" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
-(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files failed: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out")))))))
+(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args") (PVar "pattern")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (EVar "pattern")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files failed: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out")))))))
+(DTypeSig false "candidatesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "candidatesFor" ((PVar "root") (PVar "pattern")) (EMatch (EApp (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")))) (EVar "pattern")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "tracked")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (EVar "tracked") (EVar "_s")))) (EApp (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard")))) (EVar "pattern"))))))
+(DTypeSig false "directlyUnderTest" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "directlyUnderTest" ((PVar "p")) (EBinOp "==" (EApp (EVar "listLen") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "p"))) (ELit (LInt 2))))
 (DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "gateCandidates" ((PVar "root")) (EMatch (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "tracked")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "untracked")) (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))) (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))))))
+(DFunDef false "gateCandidates" ((PVar "root")) (EMatch (EApp (EApp (EVar "candidatesFor") (EVar "root")) (ELit (LString "*.sh"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "shScripts")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "nativeTests")) (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "shScripts") (EApp (EApp (EVar "filterList") (EVar "directlyUnderTest")) (EVar "nativeTests")))))) (EApp (EApp (EVar "candidatesFor") (EVar "root")) (ELit (LString "test/*_test.mdk")))))))
 (DTypeSig false "liveLine" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "liveLine" ((PVar "l")) (EBinOp "&&" (EApp (EVar "nonBlank") (EVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EApp (EVar "stringTrim") (EVar "l"))))))
 (DTypeSig false "firstToken" (TyFun (TyCon "String") (TyCon "String")))

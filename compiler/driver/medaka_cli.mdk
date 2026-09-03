@@ -199,7 +199,7 @@ import eval.eval.{
   pendingRunDiags,
   progArgsRef,
 }
-import tools.test_cmd.{runTest, runTestReport}
+import tools.test_cmd.{runTest, runTestReport, filterMatchedNothing}
 import tools.prop_runner.{
   seedPropRng,
   PropResult,
@@ -3262,28 +3262,33 @@ runTestJsonCmd engines cases filterOpt target =
       Ok csrc => match readFile target
         Err e => dieMsg e
         Ok tsrc =>
-          let (typeError, runs, props, tests, typecheckSkipped) =
-            runTestReport
-              engines
-              rsrc
-              csrc
-              target
-              tsrc
-              stdlibDir
-              cases
-              filterOpt
-              True
-          let _ =
-            putStrLn
-              (stringify
-                (cliTestReportJson
-                  target
-                  typeError
-                  runs
-                  props
-                  tests
-                  typecheckSkipped))
-          if cliTestReportOk typeError runs props tests then () else exit 1
+          let userDecls = desugar (parse tsrc)
+          if filterMatchedNothing filterOpt tsrc userDecls then
+            dieMsg
+              "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
+          else
+            let (typeError, runs, props, tests, typecheckSkipped) =
+              runTestReport
+                engines
+                rsrc
+                csrc
+                target
+                tsrc
+                stdlibDir
+                cases
+                filterOpt
+                True
+            let _ =
+              putStrLn
+                (stringify
+                  (cliTestReportJson
+                    target
+                    typeError
+                    runs
+                    props
+                    tests
+                    typecheckSkipped))
+            if cliTestReportOk typeError runs props tests then () else exit 1
 
 cliTestReportOk : Option String ->
   List (Engine, RunResult) ->

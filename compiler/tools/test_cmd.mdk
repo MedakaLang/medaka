@@ -458,6 +458,7 @@ skipReasonDecls userDecls
 -- given but every phase was already empty) stays the existing vacuous pass
 -- (P0-212, `test_cmd.mdk`'s zero-doctest note above) — this only fires when a
 -- filter was GIVEN and matched nothing anywhere.
+export
 filterMatchedNothing : Option String -> String -> List Decl -> Bool
 filterMatchedNothing None _ _ = False
 filterMatchedNothing (Some sub) tsrc userDecls =
