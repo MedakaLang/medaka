@@ -93,5 +93,33 @@ EOF
 printf '%s\n' 1 > "$WORK/expected"
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-declared-unit-panic.wat" 2>"$WORK/modules-declared-unit-panic.emit.err"; then check_wat modules-declared-unit-panic "$WORK/modules-declared-unit-panic.wat"; else bad "Declared-Unit-panic modules emitter failed"; cat "$WORK/modules-declared-unit-panic.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-declared-unit-panic.wat" 2>"$WORK/playground-declared-unit-panic.emit.err"; then check_wat playground-declared-unit-panic "$WORK/playground-declared-unit-panic.wat"; else bad "Declared-Unit-panic playground compiler failed"; cat "$WORK/playground-declared-unit-panic.emit.err"; fi
+# Product-input parity, FFI extern table: the modules entry passes the validated
+# FFI extern table into WasmEmitInput; the playground entry passed `[]` until
+# 2026-09-03, so the emitter fell through to its generic unbound-variable gap
+# instead of the named native-only refusal (#2129's message, which
+# test/wasm/diff_wasm_ffi_wall.sh pins on the modules path) — and compile.mjs
+# dropped the guest's stderr on the trap path, so the browser showed a bare
+# "compiler trap: unreachable" either way.  Both products must refuse, and refuse
+# by name; the second grep is the fall-through control.
+cat > "$WORK/input.mdk" <<'EOF2'
+extern cNegate : Int -> <FFI "x"> Int
+
+main : <FFI> Int
+main = cNegate 5
+EOF2
+FFI_WANT="FFI extern 'cNegate' is native-only"
+check_ffi_wall() {
+  label="$1"; outf="$2"; errf="$3"; checks=$((checks + 1))
+  if grep -qF "$FFI_WANT" "$outf" "$errf"; then :; else bad "$label did not refuse the FFI extern by name"; cat "$outf" "$errf"; fi
+  if grep -qi "unbound variable" "$outf" "$errf"; then bad "$label fell through to the generic unbound-variable panic"; fi
+}
+if [ -x "$MODULES" ]; then
+  "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-ffi.out" 2>"$WORK/modules-ffi.err" && bad "modules emitter accepted an FFI extern"
+  check_ffi_wall modules-ffi "$WORK/modules-ffi.out" "$WORK/modules-ffi.err"
+else bad "modules emitter missing for the FFI-wall case"; fi
+if [ -f "$PLAYGROUND" ]; then
+  node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-ffi.out" 2>"$WORK/playground-ffi.err" && bad "playground compiler accepted an FFI extern"
+  check_ffi_wall playground-ffi "$WORK/playground-ffi.out" "$WORK/playground-ffi.err"
+else bad "playground compiler missing for the FFI-wall case"; fi
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]
