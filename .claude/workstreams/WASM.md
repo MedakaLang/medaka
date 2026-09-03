@@ -395,8 +395,10 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   byte-file controls separate read and write producers and use only a gate-owned temporary
   path. The typed entry pins top-level,
   nested-lift, fresh no-writer, post-lift attribution, and trap-import isolation across
-  strict, record, and census routes; `diff_wasm_typed.sh` ratchets the normalized ambient
-  15-member top-level `Ref` set. H2b and #1407 stay open.
+  strict, record, and census routes; the last fifteen cells were lifted in PR #1947
+  (2026-08-25), so `diff_wasm_typed.sh` now pins the ambient set at EMPTY. X-W.H is
+  complete; #1407's residual scope is scalar mode, host-ABI derivation, and playground
+  input parity (`compiler/EMITTER-TARGET-ARCHITECTURE.md` R7).
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,
   `nan`, `nan`, `1.0`, `1.0`, probe-run) — the N6 interim bar holds there. The HOF-routed

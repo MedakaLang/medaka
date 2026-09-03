@@ -2148,6 +2148,13 @@ whole arc.
   upstream of every route word — no engine participates — which is why cutting
   the engine leg defers no S0. #1621/#1265 route to X-E; #1068 stays co-owned
   (B-2 supplies, X-E cuts over, X-W owns any physical residual).
+  **2026-09-03:** the emitter arc replaced its V/ANF/AP plan with a Core-IR
+  fact ledger (`compiler/EMITTER-TARGET-ARCHITECTURE.md`, REVISION block). Its
+  R8 records what this plan does and does not publish downstream: F6
+  (evidence, dispositions) waits on #2549 and #993; every other fact is
+  produced by lowering from the elaborated AST and needs nothing from steps
+  1-8. Ruling 3 (does the emitter run resolve) and ruling 4 (`RNone` stays)
+  are carried there as constraints, not re-litigated.
 - **Not in scope:** engine-realization bugs (#1034/#826/#1101/#1020, the
   emitter E-PANIC halves, and — since the 2026-08-14 ruling above — the whole
   engine word-set leg, wasm parity included), the graded arc's own design forks

@@ -150,10 +150,10 @@ What's in the standard library, what's planned, module-by-module status.
 | [`DISPATCH-INVENTORY.md`](../compiler/DISPATCH-INVENTORY.md) | DISPATCH-INVENTORY.md | PARTIAL |
 | [`DRIVER-COLLAPSE-PLAN.md`](../compiler/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
 | [`EAGER-INIT-DESIGN.md`](../compiler/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
-| [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | CURRENT - S0/S1 fit at `f4fbcd0a` |
-| [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map through H2b leaf-runtime demand migration. |
+| [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | RE-DERIVED 2026-09-03 |
+| [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map, re-derived 2026-09-03 at `7132909b7` |
 | [`EMITTER-GAPS.md`](../compiler/EMITTER-GAPS.md) | EMITTER-GAPS.md | PARTIAL |
-| [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | PROPOSAL - one semantic plan, separate LLVM/Wasm physical plans. |
+| [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | REVISED 2026-09-03 |
 | [`EQ-DISPATCH-DESIGN.md`](../compiler/EQ-DISPATCH-DESIGN.md) | `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |
 | [`ERROR-QUALITY.md`](../compiler/ERROR-QUALITY.md) | ERROR-QUALITY.md | IMPLEMENTED |
 | [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | — |
