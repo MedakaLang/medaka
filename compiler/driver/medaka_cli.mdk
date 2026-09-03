@@ -442,6 +442,7 @@ flushStaleNoticeProse _ = match !pendingStaleNotice
 -- to import the whole compiler, which `medaka_cli.mdk` — compiled into the
 -- shipped binary and part of the emitter seed graph — cannot do.
 dieMsg : String -> <IO> Unit
+-- lint-disable-next-line rule-duplicate-body
 dieMsg msg =
   let _ = ePutStrLn msg
   exit 1

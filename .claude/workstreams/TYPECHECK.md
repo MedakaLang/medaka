@@ -158,7 +158,7 @@ documents, in gate-verified steps.
 | Family | Members |
 |---|---|
 | Orchestration bodies | `checkProgramSeededSplit` ∥ `checkModuleFullImpl` (#80) |
-| Final-check tails ×5 | `checkToLines` / `checkToLinesWithRuntime` / `checkErrorsWithRuntime` / `checkProgramDiags` / `checkModuleFullDiags` (#152) |
+| Final-check tails ×3 | `checkToLines` / `checkProgramDiags` / `checkModuleFullDiags` (#152; the two runtime-seeded flat tails were deleted as consumer-less in #2552) |
 | Module fold loops ×4 | ✅ LANDED (#151): unified into one `foldModules` (worker + isLast-aware collector) — the four drivers are now thin worker/collector pairs (`cmCheckWorker`/`cmDiagsWorker`/`cmEntryWorker`+`cmEntryCollect`/`elabWorker`); the three `check*` preambles share `checkModulesPreamble` |
 | Impl resolution ×6 | `resolveSite`, `resolveOpSite` (the #145-unified binop/unop resolver), `routeOf` (already unifies what were three separate routeOfMono/routeOfMonoTop/routeOfMonoEncl arms), `findImplEntry`, arg-position mirrors (#156) |
 | Structural matchers ×4 | `cohOverlap`'s unifier, `cohSubsumes`, `tySubsumesV`, `matchTyMono` (#156 stage 1) |

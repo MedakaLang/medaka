@@ -154,7 +154,10 @@ mangleUnits : List Decl ->
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let _ = symbolInjectivityGuard allUnits
-  let exportsPerUnit = buildExportsPerUnit [] allUnits
+  let exportsPerUnit =
+    withPreludeDefs
+      (dedup (unitDefNames ("", coreDecls)))
+      (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = map unitCtorExportEntry allUnits
   let coreOut =
     mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
@@ -845,7 +848,24 @@ importRenameEntries _ exportsPerUnit decls =
       (notIfaceMethodKey (omFromNames (unitIfaceMethodNames decls) omEmpty))
       (coreImportEntries exportsPerUnit)
 
--- core's exports as implicit-prelude entries (`name → core__name`), excluding
+-- #2089: the implicit prelude is EVERY top-level binding of core, not only its
+-- exports.  `check` binds a user occurrence of a private core helper (measured:
+-- `main = println (derivedArgNeedsParens "a b")` typechecks from a user file),
+-- desugar's `deriving` code references the private `derivedShowWrap`, and the
+-- emitter's own `canonFnName` fallback already resolves such a bare name to
+-- `core__<n>`.  Mapping every core binding here makes the emit-path typecheck bind
+-- the same symbol the emitted code calls, instead of recording an unbound-variable
+-- error that nothing read.  Only the "core" row is widened; sibling imports stay
+-- export-scoped.
+withPreludeDefs : List String ->
+  List (String, List (String, String)) ->
+  List (String, List (String, String))
+withPreludeDefs names entries =
+  map
+    (e => if fst e == "core" then ("core", map (n => (n, "core")) names) else e)
+    entries
+
+-- core's bindings as implicit-prelude entries (`name → core__name`), excluding
 -- `main` (core has none, but be safe).
 coreImportEntries : List (String, List (String, String)) ->
   List (String, String)

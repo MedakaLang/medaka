@@ -311,7 +311,6 @@ checkEffectParams : List Decl -> Unit
 checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTys : List Ty -> Unit
-checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHeadCon : String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
 checkGradedImplHeadDecl : ClassEnv -> Int -> Decl -> Unit
@@ -343,7 +342,6 @@ checkModuleFullDiags : String -> List (String, Scheme) -> List Decl -> List Decl
 checkModuleFullImpl : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> List (String, Scheme)
 checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, Scheme))
 checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
 checkModulesDiagsChain : Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
 checkModulesDiagsK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
@@ -392,7 +390,6 @@ checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (St
 checkSurvivorDispatchMonos : String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
 checkSurvivorObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List UObligation -> Option Loc -> Unit
 checkToLines : List Decl -> String
-checkToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> Unit
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
@@ -519,7 +516,7 @@ cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
 ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
-ctorHeadIsUpper : String -> Bool
+ctorHeadShaped : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
 ctorOracleKeyOf : Option HeadKey -> Option TabKey
 ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
@@ -1438,6 +1435,7 @@ mainAsyncPayloadIsUnit : Unit -> Bool
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsFloat : Unit -> Bool
 mainTypeIsUnit : Unit -> Bool
+mangledCtorShaped : Array Char -> Int -> Int -> Bool
 mangledHeadCandidates : String -> String -> List (String, RecordInfo)
 mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
 mapLocalSchemes : List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
@@ -2116,6 +2114,7 @@ standaloneShadowScheme : String -> Option Mono
 standaloneShadowSigTy : String -> String -> Option Ty
 standaloneShadowsFromSet : Map String Unit -> Map String Unit -> List Decl -> List String
 standaloneValuePinned : String -> Bool
+stickyTypeErrorMessages : Unit -> List String
 stmtCalleeName : Expr -> Option String
 storeDataUniverse : Unit -> Unit
 strHasSlash : String -> Bool
@@ -2163,11 +2162,7 @@ takeFirst : Int -> List a -> List a
 takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tcCode : TcDiag -> String
-tcFix : TcDiag -> Option (Loc, String)
-tcHelp : TcDiag -> Option String
-tcLoc : TcDiag -> Option Loc
 tcMsg : TcDiag -> String
-tcSeverity : TcDiag -> Int
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
 tconTupleHead : Int -> Mono
@@ -2209,6 +2204,7 @@ tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
 typeErrorLines : List String -> List String
 typeErrorsSticky : Ref Bool
+typeErrorsStickyMsgs : Ref (List String)
 typeInRowSlotMsg : Ty -> String
 typeMismatch : Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit

@@ -1,6 +1,6 @@
-class: bug
+class: decidable
 correct: woof|meow
 check: 0
 run: 0 | woof|meow
 build: 0 | built main.mdk -> <BIN>
-exec: 0 | woof|woof
+exec: 0 | woof|meow

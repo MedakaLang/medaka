@@ -157,7 +157,7 @@ diagOfResError e =
 -- side-channel lookup.
 --
 -- ⚠️ `SevError` is HARDCODED here ON PURPOSE, and the TcDiag's own `severity` field
--- is deliberately NOT consulted — do not "fix" this to read `tcSeverity`.  The
+-- is deliberately NOT consulted — do not "fix" this to read that field.  The
 -- `typeErrors` channel this converts is not a pure report: every push funnels
 -- through `recordTypeError` (`compiler/types/typecheck.mdk`), which also arms
 -- `typeErrorsSticky` — the gate `hadTypeErrors` uses to ABORT `build`/`run` — and
