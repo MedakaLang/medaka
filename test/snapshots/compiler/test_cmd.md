@@ -1,5 +1,5 @@
 # META
-source_lines=1925
+source_lines=1906
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -127,7 +127,6 @@ import support.util.{
   isNonEmptyL,
   filterList,
   endsWith,
-  splitOnChar,
 }
 import support.path.{dirOf}
 
@@ -276,7 +275,7 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- run proceeds: which module was not type-checked, which disjunct of the
 -- predicate exempted it, and the `medaka check` command that WILL type-check it.
 -- This is deliberately a note, not a failure — exit codes are unchanged, because
--- test/ported/*.mdk and sqlite/test/*_test.mdk must keep exiting 0.
+-- test/ported/*.mdk must keep exiting 0.
 -- ⚠️ It goes to STDERR, not stdout: the doctest/prop/test reports on stdout are
 -- parsed for counts by `sqlite/test/inlang_test_oracle.sh` (`grep -c '^  ok   '`)
 -- and by `test/diff_compiler_ported.sh`, and a line injected into that stream
@@ -288,55 +287,37 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- presence still wins over the `test`/`prop` exemption (same precedence as
 -- before the factor-out).
 --
--- #1445/#2513: the exemption is narrowed by PATH, not just by decl shape —
+-- #1445/#2513: the exemption is narrowed by SUFFIX, not just by decl shape —
 -- `isNewVehiclePath` below excludes the `[P-TEST-SIBLING]` `*_test.mdk`
--- convention (AGENTS.md) so a compiler-/stdlib-internal test sibling is always
--- type-checked, never silently swallowed the way `test/ported/*.mdk` and
--- `sqlite/test/*_test.mdk` deliberately still are.
+-- convention (AGENTS.md) so a test sibling is always type-checked, never
+-- silently swallowed the way `test/ported/*.mdk` deliberately still is.
 typecheckExempt : String -> List Decl -> String -> <IO> Bool
 typecheckExempt target userDecls tsrc
   | isNonEmptyL (extractExamples (collectComments tsrc)) = False
   | isNewVehiclePath target = False
   | otherwise = hasProps userDecls || hasTests userDecls
 
--- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling under
--- `compiler/` or `stdlib/` is the new in-tree test vehicle (S-2), and must not
--- inherit the `test`/`prop` exemption meant for the eval-vs-check divergence
--- corpus (`test/ported/*.mdk`, `sqlite/test/*_test.mdk`) — those predate this
--- convention, share only the suffix, and keep the exemption unchanged.  Scoped
--- by PATH so the two `_test.mdk` families stay distinguishable: suffix alone
--- cannot tell them apart.
+-- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling is the
+-- in-tree test vehicle (S-2), and must not inherit the `test`/`prop` exemption
+-- meant for the eval-vs-check divergence corpus (`test/ported/*.mdk`) — that
+-- corpus predates the convention and keeps the exemption unchanged, which it
+-- does for free: not one of its files carries the `_test.mdk` suffix
+-- (`git ls-files 'test/ported/*_test.mdk'` is empty), so the suffix alone
+-- already separates the two families.
 --
--- The path test is a `/`-delimited SEGMENT match over the CANONICALIZED target,
--- not a substring test over the string the CLI was handed.  Both halves are
--- load-bearing, and a bare `substringMatch "compiler/"` got each one wrong in
--- the opposite direction:
---   • canonicalization, because the classification must not depend on the
---     invocation FORM.  `medaka test compiler/types/x_test.mdk` and, from
---     inside that directory, `medaka test x_test.mdk` name the same module; the
---     second carries no `compiler/` substring, so the substring form silently
---     re-exempted the file the convention exists to guard.
---   • segment matching, because `compiler`/`stdlib` must be real path
---     components.  A tree under `…/mycompiler/…` or `…/newstdlib/…` contains
---     the substring without containing the directory, and the substring form
---     newly type-checked files (the sqlite corpus among them) that are
---     deliberately exempt.
--- `canonicalizePath` returns its input unchanged on an unresolvable path, so an
--- already-relative, already-`compiler/`-rooted target still classifies the same.
-isNewVehiclePath : String -> <IO> Bool
-isNewVehiclePath target =
-  if endsWith "_test.mdk" target then
-    hasVehicleSegment (canonicalizePath target)
-  else
-    False
-
--- Is `compiler` or `stdlib` a whole `/`-delimited component of `path`?
-hasVehicleSegment : String -> Bool
-hasVehicleSegment path =
-  isNonEmptyL
-    (filterList
-      (seg => seg == "compiler" || seg == "stdlib")
-      (splitOnChar '/' path))
+-- The classification is the SUFFIX and nothing else.  It used to be narrowed
+-- further, to a `compiler`/`stdlib` path segment, so that `pds/test/` and
+-- `sqlite/test/` stayed exempt on the belief that they too traded on
+-- eval-vs-check divergence.  They do not: gating all 26 tracked `*_test.mdk`
+-- files outside `compiler/`/`stdlib/` surfaced four type errors, every one of
+-- them ordinary (a missing `deriving`, an unimported type name, an
+-- under-general signature, an unannotated ambiguous literal) and none a
+-- construct eval accepts and `check` rejects.  A segment roster is also the
+-- wrong shape for the convention it guards: the convention is a sibling BESIDE
+-- its subject, in whatever directory that subject lives in, so a roster can
+-- only ever be as complete as whoever last remembered to edit it.
+isNewVehiclePath : String -> Bool
+isNewVehiclePath target = endsWith "_test.mdk" target
 
 doctestGate : String ->
   List String ->
@@ -1944,7 +1925,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
@@ -1955,10 +1936,8 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "runTest" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimeP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "coreP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestGate") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (arm (PCon "Some" (PVar "errText")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "errText")))) (DoExpr (EVar "False")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")))))))))))))))
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EVar "False")))
-(DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
+(DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")))
 (DTypeSig false "doctestGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls")))) (DoExpr (EVar "None"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "typecheckGateResult" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
@@ -2184,7 +2163,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
@@ -2195,10 +2174,8 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "runTest" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimeP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "coreP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestGate") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (arm (PCon "Some" (PVar "errText")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "errText")))) (DoExpr (EVar "False")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")))))))))))))))
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EVar "False")))
-(DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
+(DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")))
 (DTypeSig false "doctestGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls")))) (DoExpr (EVar "None"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "typecheckGateResult" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))

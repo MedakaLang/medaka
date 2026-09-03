@@ -123,7 +123,6 @@ import support.util.{
   isNonEmptyL,
   filterList,
   endsWith,
-  splitOnChar,
 }
 import support.path.{dirOf}
 
@@ -272,7 +271,7 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- run proceeds: which module was not type-checked, which disjunct of the
 -- predicate exempted it, and the `medaka check` command that WILL type-check it.
 -- This is deliberately a note, not a failure — exit codes are unchanged, because
--- test/ported/*.mdk and sqlite/test/*_test.mdk must keep exiting 0.
+-- test/ported/*.mdk must keep exiting 0.
 -- ⚠️ It goes to STDERR, not stdout: the doctest/prop/test reports on stdout are
 -- parsed for counts by `sqlite/test/inlang_test_oracle.sh` (`grep -c '^  ok   '`)
 -- and by `test/diff_compiler_ported.sh`, and a line injected into that stream
@@ -284,55 +283,37 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- presence still wins over the `test`/`prop` exemption (same precedence as
 -- before the factor-out).
 --
--- #1445/#2513: the exemption is narrowed by PATH, not just by decl shape —
+-- #1445/#2513: the exemption is narrowed by SUFFIX, not just by decl shape —
 -- `isNewVehiclePath` below excludes the `[P-TEST-SIBLING]` `*_test.mdk`
--- convention (AGENTS.md) so a compiler-/stdlib-internal test sibling is always
--- type-checked, never silently swallowed the way `test/ported/*.mdk` and
--- `sqlite/test/*_test.mdk` deliberately still are.
+-- convention (AGENTS.md) so a test sibling is always type-checked, never
+-- silently swallowed the way `test/ported/*.mdk` deliberately still is.
 typecheckExempt : String -> List Decl -> String -> <IO> Bool
 typecheckExempt target userDecls tsrc
   | isNonEmptyL (extractExamples (collectComments tsrc)) = False
   | isNewVehiclePath target = False
   | otherwise = hasProps userDecls || hasTests userDecls
 
--- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling under
--- `compiler/` or `stdlib/` is the new in-tree test vehicle (S-2), and must not
--- inherit the `test`/`prop` exemption meant for the eval-vs-check divergence
--- corpus (`test/ported/*.mdk`, `sqlite/test/*_test.mdk`) — those predate this
--- convention, share only the suffix, and keep the exemption unchanged.  Scoped
--- by PATH so the two `_test.mdk` families stay distinguishable: suffix alone
--- cannot tell them apart.
+-- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling is the
+-- in-tree test vehicle (S-2), and must not inherit the `test`/`prop` exemption
+-- meant for the eval-vs-check divergence corpus (`test/ported/*.mdk`) — that
+-- corpus predates the convention and keeps the exemption unchanged, which it
+-- does for free: not one of its files carries the `_test.mdk` suffix
+-- (`git ls-files 'test/ported/*_test.mdk'` is empty), so the suffix alone
+-- already separates the two families.
 --
--- The path test is a `/`-delimited SEGMENT match over the CANONICALIZED target,
--- not a substring test over the string the CLI was handed.  Both halves are
--- load-bearing, and a bare `substringMatch "compiler/"` got each one wrong in
--- the opposite direction:
---   • canonicalization, because the classification must not depend on the
---     invocation FORM.  `medaka test compiler/types/x_test.mdk` and, from
---     inside that directory, `medaka test x_test.mdk` name the same module; the
---     second carries no `compiler/` substring, so the substring form silently
---     re-exempted the file the convention exists to guard.
---   • segment matching, because `compiler`/`stdlib` must be real path
---     components.  A tree under `…/mycompiler/…` or `…/newstdlib/…` contains
---     the substring without containing the directory, and the substring form
---     newly type-checked files (the sqlite corpus among them) that are
---     deliberately exempt.
--- `canonicalizePath` returns its input unchanged on an unresolvable path, so an
--- already-relative, already-`compiler/`-rooted target still classifies the same.
-isNewVehiclePath : String -> <IO> Bool
-isNewVehiclePath target =
-  if endsWith "_test.mdk" target then
-    hasVehicleSegment (canonicalizePath target)
-  else
-    False
-
--- Is `compiler` or `stdlib` a whole `/`-delimited component of `path`?
-hasVehicleSegment : String -> Bool
-hasVehicleSegment path =
-  isNonEmptyL
-    (filterList
-      (seg => seg == "compiler" || seg == "stdlib")
-      (splitOnChar '/' path))
+-- The classification is the SUFFIX and nothing else.  It used to be narrowed
+-- further, to a `compiler`/`stdlib` path segment, so that `pds/test/` and
+-- `sqlite/test/` stayed exempt on the belief that they too traded on
+-- eval-vs-check divergence.  They do not: gating all 26 tracked `*_test.mdk`
+-- files outside `compiler/`/`stdlib/` surfaced four type errors, every one of
+-- them ordinary (a missing `deriving`, an unimported type name, an
+-- under-general signature, an unannotated ambiguous literal) and none a
+-- construct eval accepts and `check` rejects.  A segment roster is also the
+-- wrong shape for the convention it guards: the convention is a sibling BESIDE
+-- its subject, in whatever directory that subject lives in, so a roster can
+-- only ever be as complete as whoever last remembered to edit it.
+isNewVehiclePath : String -> Bool
+isNewVehiclePath target = endsWith "_test.mdk" target
 
 doctestGate : String ->
   List String ->
