@@ -137,6 +137,7 @@ import types.typecheck.{
   preludeArgPosDictNames,
   mainTypeIsFloat,
   mainTypeIsUnit,
+  checkedFfiExternTypeNamesModules,
   Scheme,
   ppSchemeNamedFull,
   checkOneSchemeFullK,
@@ -144,6 +145,7 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   lowerProgramEmit,
+  validateFfiExternTypeNames,
   EmitTarget(..),
   methodIfaceTable,
   declSigTypeNames,
@@ -577,7 +579,7 @@ runEmit runtimeDecls coreDecls modules =
       (ctorFieldTypeNames allDecls)
       (mainTypeIsFloat ())
       (declaredRecordFieldOrders allDecls)
-      []
+      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
       (ifaceImplHeadTable allDecls)
   -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they

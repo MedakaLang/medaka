@@ -273,7 +273,7 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
       } catch (e) {
         if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
         _session = null;
-        reject(e);
+        reject(withGuestStderr(e, host));
       }
       return;
     }
@@ -292,9 +292,26 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
         // A guest that ended through mdk_exit inside `start` never yields its
         // instance, so it cannot be cached either — the next call instantiates.
         if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
-        reject(e);
+        reject(withGuestStderr(e, host));
       });
   });
+}
+
+// A guest that traps has usually already written WHY to stderr — the emitter's
+// coded refusals (`runtime error [E-…]: …`, e.g. the WasmGC FFI wall) print
+// their message and then hit `unreachable`.  The trap's own message is just
+// "unreachable", so carry the guest's stderr on the rejection and let
+// trapDiagnostic() surface it; without this the browser reported a bare
+// "compiler trap: unreachable" for a refusal the CLI states by name.
+function withGuestStderr(e, host) {
+  try { if (e && typeof e === 'object') e.guestStderr = dec(host.eacc); } catch (_) { /* leave e as-is */ }
+  return e;
+}
+
+function trapDiagnostic(e) {
+  const msg = 'compiler trap: ' + (e && e.message || e);
+  const err = e && e.guestStderr ? String(e.guestStderr).trim() : '';
+  return synthErr(err ? msg + '\n' + err : msg);
 }
 
 // True for a stack-overflow thrown out of the guest.  The compiler's front end
@@ -362,7 +379,7 @@ export async function compile(source, opts = {}) {
   try {
     res = await runGuestRetry(wasm, vfsMap, argv);
   } catch (e) {
-    return { ok: false, diagnostics: synthErr('compiler trap: ' + (e && e.message || e)) };
+    return { ok: false, diagnostics: trapDiagnostic(e) };
   }
 
   const out = res.out;
@@ -424,7 +441,7 @@ export async function analyze(source, opts = {}) {
   try {
     res = await runGuestRetry(wasm, vfsMap, argv);
   } catch (e) {
-    return { ok: false, diagnostics: synthErr('compiler trap: ' + (e && e.message || e)) };
+    return { ok: false, diagnostics: trapDiagnostic(e) };
   }
 
   const out = res.out;
