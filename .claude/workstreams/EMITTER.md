@@ -111,9 +111,12 @@ ownership-only. X-W.H2b.11 moves `charFromCode` runtime demand into `WasmEmit`; 
 ownership-only. CharClass, FloatRng, StrCodec, Math-import, value-comparison,
 String-to-Float, process-argument, and byte-file demand use the same fresh carrier;
 byte-file read and write producers have separate controls using a gate-owned temporary
-path. `diff_wasm_typed.sh` ratchets the 15-member normalized ambient top-level `Ref` set.
-H2b/#1407 stay open. Do not add new ambient semantic-input or
-gap-lifecycle siblings.
+path. The last fifteen cells were lifted in PR #1947 (2026-08-25): both emitters now
+hold ZERO module-level `Ref`s and `diff_wasm_typed.sh` pins the Wasm set at EMPTY.
+X-N.H and X-W.H are complete. Do not add new ambient semantic-input or
+gap-lifecycle siblings. The plan from here is `compiler/EMITTER-TARGET-ARCHITECTURE.md`'s
+REVISION block (2026-09-03): facts on Core IR nodes, one shared plan record, a Core
+validator; no V, no ANF, no AP.
 
 ### 8. Probes: `main` must be a zero-arg Unit value, and `do` is monadic
 `main () = …` is a silent no-op; `medaka run` rejects non-Unit value-mains with a diagnostic

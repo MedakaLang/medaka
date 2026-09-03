@@ -1,6 +1,7 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through H2b leaf-runtime demand migration.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map, re-derived 2026-09-03 at `7132909b7`
+(zero ambient state on both backends; `wasm_reach`; `EmitTarget`; the playground divergence).
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -28,10 +29,11 @@ loader module graph
   -> resolve / mark / typecheck / dictionary elaboration
   -> backend-specific emitTail
        -> dce.dceFilter (except native half modes that deliberately retain all)
-       -> core_ir_lower.lowerProgramEmit
+       -> core_ir_lower.lowerProgramEmit <EmitTarget>   (TargetNative | TargetWasm | TargetBothUnknown)
        -> CProgram
             -> llvm_emit.emitProgram -> LLVM text -> clang -> native binary
-            -> wasm_emit.emitProgram -> WAT -> wasm-tools -> WasmGC module
+            -> wasm_reach.wasmReachFilter (Wasm product paths only, post-lower)
+               -> wasm_emit.emitProgram -> WAT -> wasm-tools -> WasmGC module
 ```
 
 `compiler/entries/entry_support.mdk` owns the common command-line module driver.
@@ -59,7 +61,23 @@ for itself; an unset/missing path is an actionable error.
 mangle -> elaborate -> DCE -> input construction -> `lowerProgramEmit` -> `emitProgram`
 sequence instead of using `entry_support.runEmitWith`. It is built by the
 playground Wasm build scripts. Any contract migration that updates only
-`wasm_emit_modules_main` leaves the browser compiler on the old seam.
+`wasm_emit_modules_main` leaves the browser compiler on the old seam. The
+duplication is deliberate for the wrap glue (the browser reports elaboration
+failures as JSON diagnostics, not `failWith`), but the two `emitTail` bodies
+had already diverged by 2026-09-03: `playground_main` passed `[]` where the
+product entry passes the validated FFI extern table, so a user FFI extern in
+the browser died as an unbound variable instead of the named WasmGC rejection.
+Fixed by the 2026-09-03 parity change; the shape remains a trap.
+
+Two things entered this pipeline after the 2026-08-07 map without a doc row.
+`backend/wasm_reach.mdk` (#2359/#2377) is a second, dispatch-rooted
+reachability pass over the lowered `CProgram`, on both Wasm product paths and
+on neither native path: a whole-program analysis that exists on one backend.
+`lowerProgramEmit` takes an `EmitTarget` first parameter (#1970): only
+`TargetNative` narrows anything (it relaxes the 30-bit Wasm `dictTag`
+collision check), so a physical fact is threaded up into the shared lowering
+seam. Both are absorbed by the shared plan record in
+`EMITTER-TARGET-ARCHITECTURE.md` R5.
 
 The canonical `run` path is not a Core-IR consumer. It evaluates the elaborated
 AST through `compiler/eval/eval.mdk`. `compiler/ir/core_ir_eval.mdk` is a
@@ -164,15 +182,24 @@ runtime demand into `WasmEmit`; census coverage is ownership-only. CharClass, Fl
 StrCodec, and Math-import demand follow the same per-emission ownership. Value comparison,
 String-to-Float, process-argument, and byte-file runtime demand now use that carrier too;
 the byte-file controls separate read and write producers and execute only against a
-gate-owned temporary path. Fifteen normalized ambient top-level `Ref` authorities remain,
-so H2b and #1407 remain open.
+gate-owned temporary path. The remaining fifteen ambient cells were lifted onto
+`WasmEmit` in one commit (`d0217232e`, PR #1947, 2026-08-25); `wasm_emit.mdk`
+has held zero module-level `Ref` cells since, and
+`test/wasm/diff_wasm_typed.sh` pins the set at empty. X-W.H is complete.
 
 ### 3.3 Per-program derived indexes
 
 `llvm_emit.emitProgram` also builds indexes in its per-emission `Emit` context,
 including `knownFnMap`, `lazyGlobalMap`, `ctorMap`, `sigMap`, `defArityMap`,
 `ctorTypeMap`, `recByName`, `recByLabel`, and implementation-group indexes.
-Wasm builds a parallel `Prog` value plus module-level indexes and feature flags.
+Wasm builds a parallel `Prog` value plus a per-emission `WasmEmit` context
+holding its indexes and feature flags. Neither backend has module-level state
+left; `Emit` carries 42 `Ref` fields and `WasmEmit` 54 (derive:
+`sed -n '/^data EmitData/,/^}/p' compiler/backend/llvm_emit.mdk | grep -c ': Ref '`
+and the `WasmEmit` peer). The two records are disjoint: `WasmEmitInput` is a
+13-field positional constructor carrying four fewer semantic facts than
+`EmitInput` (`returnsSelf`, `selfFnParams`, `methodConstraintIfaces`,
+`mainIsUnit`), so the two backends do not receive the same semantic program.
 
 These indexes improve asymptotic behavior when they are caches of authoritative
 data. They become semantic authorities when the underlying fact was absent from
@@ -183,9 +210,9 @@ Core. That distinction is not represented in their types.
 | Judgment | LLVM implementation | Wasm implementation | Shared/upstream fragment |
 |---|---|---|---|
 | Scalar/runtime type | `LTy`, `inferSigs`, `typeOf`, `paramUseTy`, inline `emitExpr` recovery | `WTy`, `cexprIsFloat`, `refMainKind`, Float registries | partial `CBinPrim` stamp |
-| Method/source arity | `methodArityOf`, definition/call helpers | `methodArityOfW`, closure eta/application helpers | arrow-spine table from `core_ir_lower` |
+| Method/source arity | the `methodArityOfInput`/`Iface`/`Entry`/`Tag`/`Route` family (split from one function 2026-08-21 to 08-27) | the `methodArityOfW`/`InputW`/`IfaceW`/`EntryW`/`TagW` family | arrow-spine table from `core_ir_lower` plus the impl clause's own pattern count (#1034) |
 | Exact/PAP/over-application | `emitApp`/`emitOverApp` plus `emitPapClosure`/`emitMethodPap`/`emitCtorPap` families | closure arity plus `$mdk_apply` branches | none |
-| Record field slot | bare-name record and label indexes | `recFieldsRef` and record-name lookup | record-name strings on some nodes |
+| Record field slot | `Emit.recByName`/`recByLabel`/`recFields` | record-name and label indexes built into `WasmEmitInput` | record-name strings on some nodes; ordinals nowhere |
 | Dispatch arm/default | `implEntryRouteWords`, dispatch/default chain synthesis | `implEntryRouteKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
 | Closure captures/layout | LLVM free-variable and allocation paths | Wasm closure-use scan and lifted functions | none |
 | Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_support.eagerReachMap` / `lazyGlobalNames` |
@@ -195,7 +222,10 @@ Core. That distinction is not represented in their types.
 
 The table is the central current-state finding. Core is a shared syntax, but the
 backends remain partial typecheckers, linkers, closure converters, and runtime
-planners.
+planners. Measured 2026-09-03: 767 top-level signatures in `llvm_emit.mdk`, 667
+in `wasm_emit.mdk`, 89 named twins (31 identical names, 58 `W`-suffixed), 40
+of them in dispatch/defaults, evidence rewriting, arity/eta/PAP, and impl
+indexing. Derive with a signature grep on each file and `comm -12`.
 
 ## 5. Shared architecture that already works
 
@@ -240,29 +270,20 @@ preserved merely because it exists or removed merely because it duplicates code.
 
 ## 7. State lifecycle and determinism
 
-Both emitters rely on module-level `Ref`s. Some are ordinary local mutation
-(output buffers, counters) and some are scoped emission contexts. Wasm
-declaration-derived semantic input is no longer installed through Refs (X-W.H1);
-H2b has moved its gap lifecycle, string, impl-self, TRMC, lifting, function-reference,
-and coded-trap-import plus selected feature/runtime/import-demand lifecycle into fresh `WasmEmit` contexts. The
-normalized ambient top-level `Ref` set remains ratcheted.
+Neither emitter has module-level `Ref`s (since PR #1947, 2026-08-25; the
+lowering stage followed in PR #2457, 2026-09-01). LLVM constructs a fresh
+`Emit` per emission; Wasm constructs a fresh `WasmEmit` for strict, record, and
+gap-census calls; both take their semantic input as an explicit immutable
+argument. Same-process re-emission isolation is gated on the Wasm side
+(`test/wasm/diff_wasm_typed.sh`, P -> U -> P) and structurally on the LLVM side
+(`test/diff_compiler_llvm_typed_ir.sh`'s X-N.H2 ratchet).
 
-The product driver shells out to a fresh emitter process specifically to obtain
-pristine state. Within one process:
-
-- LLVM constructs a fresh `Emit` record but also resets/installs external refs;
-- Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls; gap
-  lifecycle, passive string segments, impl-self scope, Stage-1 TRMC context,
-  lambda/lifted-definition/function-reference state, coded-trap-import state, selected
-  feature/runtime/import demand, and synthesized-default membership/definition buffers belong there; the
-  normalized ambient top-level `Ref` set remains ratcheted;
-- gap-census paths own a separate gap lifecycle but still duplicate the remaining
-  physical setup;
-- X-W.H2 still owns the remaining physical-state lifecycle.
-
-Fresh-process isolation is a useful defense, not proof that emission is a pure
-function. The current architecture cannot express `emit : Program -> Output`
-without ambient prerequisites.
+The product driver still shells out to a fresh emitter process. That is now a
+defense in depth rather than the only source of pristine state. What remains
+impure is not ambience: it is that 96 mutable cells across two disjoint
+per-emission records are where semantic decisions are still made, and their
+types do not distinguish a cache of an authoritative fact from the authority
+itself (section 3.3).
 
 Determinism is nevertheless strongly enforced on the native path by the
 self-compile fixpoint. `prelude.o` also requires program-independent prelude
@@ -335,3 +356,12 @@ implementation:
 6. Serializers must consume complete plans without ambient semantic state.
 7. Conformance must include malformed-plan rejection, unrelated-code controls,
    and hand-derived expected behavior, not parity alone.
+8. (added 2026-09-03) A physical fact must not travel up into the shared
+   lowering seam. `EmitTarget` on `lowerProgramEmit` is the live instance.
+9. (added 2026-09-03) A whole-program analysis that exists on one backend only
+   (`wasm_reach`) is a divergence, not a feature; it becomes shared or it is
+   named as a Wasm physical choice.
+
+How these are met is `EMITTER-TARGET-ARCHITECTURE.md`'s REVISION block
+(R3-R9): Core IR grown one fact at a time, one shared plan record, a Core
+validator, no new intermediate representations.

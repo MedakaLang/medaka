@@ -1,8 +1,10 @@
 # Emitter target architecture - per-bug fit ledger
 
-**Status:** CURRENT - S0/S1 fit at `f4fbcd0a` (2026-08-07).
-Fit is against [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md),
-derived from the GitHub S0/S1 population and current source. This ledger
+**Status:** RE-DERIVED 2026-09-03 (section 0) over the 2026-08-07 ledger at
+`f4fbcd0a` (sections 1-10, retained as history). Fit is now against the
+REVISION block (R4 fact ledger) of
+[`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), not against
+X-stages; the population is the GitHub S0/S1 labels and current source. This ledger
 separates direct backend defects from upstream defects whose consequence is a
 bad executable. A stage is credited only when its mechanism reaches the cause,
 not because the issue mentions `build`, LLVM, Wasm, a segfault, or a wrong
@@ -27,6 +29,69 @@ panic was verified on unmerged PR #1074. An attributed pinning-agent report
 observes current `main` falling back to #1046's `meow|meow`; this planning pass
 did not independently rerun that arm. #1075 is not silently dropped from the
 open-issue population or reported as a branch behavior already on `main`.
+
+## 0. Re-derivation, 2026-09-03
+
+Derived against the live tracker on 2026-09-03 (`gh issue view` per cited
+number; the open population from the two severity-label queries in section 1).
+Sections 1-10 below are the 2026-08-07 ledger, kept as the record of what was
+predicted. This section is what is true now.
+
+### 0.1 What happened to the 2026-08-07 rows
+
+Of the 105 issue numbers the ledger cites, 69 are closed. Of the roughly
+seventy rows in sections 3-7 that the ledger treated as open architecture
+dependents, at least 45 are closed. The mechanism, where a closing comment
+states one:
+
+| Issue | Ledger verdict | How it actually closed |
+|---|---|---|
+| #1306 | DRAINED-BY X-I | PR #1516, a targeted emitter fix found while fixing #1513 |
+| #1216 | NOT-ESTABLISHED, fresh trace owed | sprint `ctor-identity`, PR #1695 |
+| #1305 | CONTRACT-DEPENDENCY on a newtype-export decision | PR #1887, a resolve-side refusal of the import (fix for #1311) |
+| #1396 | EVAL-RESIDUAL | sprint `unmask-arg-tag-dispatch`, "landed incidentally" in a sibling slice |
+| #1072 | targeted identity-safe fix may precede #1113 | PR #1605, exactly that carve-out |
+| #1127 | DRAINED-BY #993 + #1113 | sprint `predicate-slots`, PR #1862, "an unplanned drain"; #993 still open |
+| #1034 | DRAINED-BY #1318 -> #1137 -> X-C | sprint `call-arity-conformance`, PR #2061; pre-excluded from the traceability matrix as ENGINE-REALIZATION |
+| #1101 | CONTRACT-DEPENDENCY on X-C | same sprint, slice `S-caf-closure-apply` |
+| #826 | CONTRACT-DEPENDENCY on #1137/X-C | same sprint, secondary drain |
+| #1043 | CONTRACT-DEPENDENCY on #1082 | rung 1 of #1986, a split-off of #1082 (#1082 still open) |
+| #1376, #1377, #1353, #1351, #1330, #1369, #1182, #1180, #1154, #1174, #1161, #1177, #1169, #1052, #1040, #1150, #1276, #1386 | upstream contract tests | closed by typechecker sprints without any X-stage |
+| #1292, #1071, #1062 | EVAL-RESIDUAL | closed by targeted eval work |
+| #347, #348, #357, #358, #377 | architectural debt (section 8) | closed: injectivity guards, explicit inputs, extern index |
+
+One row closed through its predicted mechanism (#1072). The rest closed
+through issue-specific work while the named stage, and usually the named
+upstream issue, stayed open. The stage predictions were bypassed, not tested.
+
+### 0.2 The open population the ledger never saw
+
+On 2026-09-03 there are 30 open S0 and 42 open S1 issues. Fifty of the 72 are
+not cited anywhere in sections 1-10. The emitter-owned or emitter-adjacent
+ones, mapped to the target document's R4 fact ledger:
+
+| Fact | Open issues it owns |
+|---|---|
+| F1 record ordinals and update order | #1518 |
+| F2 call mode | #2078; #2396 (garbage pointer through a constrained generic wrapper); #2425's Wasm realization (invalid module for a point-free partial application of an interface method) |
+| F3 identity on dispatch nodes | emitted-symbol half of #1397; #1619; #2055; #1852; #1973; the symbol-keying half of #1265; #2575/#2576 (where-bound local shadowing a prelude or top-level name, native only: `CVar` local-versus-global identity, same family) |
+| F4 tail sites | #1349, #2577 |
+| F5 runtime types | #2545 (`paramUseTy` ignores shadowed binders, native segfault) |
+| F6 evidence and dispositions (blocked on #2549, #993) | #1068, #1020, #1046, the route half of #1265 |
+| F7 capability manifest | #2426 (`sleepMs` has no WasmGC host import, bare trap) |
+| R5 plan record | #2312 (needs-repro; the two topo-sort dedups), #1030/#1061-class reach and index duplication |
+| Physical residual, no fact | #1469 (WasmGC illegal cast through a multi-constructor record field; the interpreter is correct, both backends are not: #1465), #1359 (mangler has no re-export arm; a `private_mangle` fix pending ruling 3) |
+| Upstream, out of arc | #2397 (mismatched clause arity accepted by typecheck), #1560, #1575, #1579, #1904, #1944, #1956, #1981, #2028, #2049, #2052, #2054, #2056, #2557 and the rest of the `ws:typecheck` population |
+
+### 0.3 What this ledger is for now
+
+A row in R4 is credited when its fact lands with its validator arm and its
+hand-derived fixture and the named consumers are deleted, and the issues in
+its column drain as a consequence. A targeted fix that lands first is a good
+outcome and is recorded here as such; it does not earn the row credit, and it
+must not add a spelling-keyed table, ambient state, or a quieter answer
+(section 12's clause). Re-derive this section whenever a fact lands; do not
+extend sections 1-10.
 
 ## 1. Inclusion and verdicts
 

@@ -1,6 +1,8 @@
 # Emitter Target Architecture - one semantic plan, two physical lowerings
 
-**Status:** PROPOSAL - one semantic plan, separate LLVM/Wasm physical plans.
+**Status:** REVISED 2026-09-03. The design laws (section 1) are in force; the
+V/ANF/AP migration plan is SUPERSEDED by the REVISION block below (R1-R10),
+which grows Core IR into the contract one fact at a time.
 Designed from `docs/spec/EMITTER-SEMANTICS.md`,
 `docs/spec/WASM-SEMANTICS.md`, `docs/spec/DICT-SEMANTICS.md`,
 `docs/spec/EFFECTS-SEMANTICS.md`, and `docs/spec/SHADOW-SEMANTICS.md`, informed
@@ -31,6 +33,267 @@ typechecker arc. Development, review, and non-conflicting design/test work can
 proceed in parallel; compiler-source landing is serialized through the repo's
 one-PR golden lane. Semantic consumers wait only for their specific upstream
 facts, not for the entire typechecker epic.
+
+## REVISION (2026-09-03) - laws kept, migration plan replaced
+
+**Adopted (Val, 2026-09-03, on the review's recommendation).** The eight design laws in section 1 stand. The
+migration plan that was meant to reach them (sections 2, 4-8, and 12: an opaque
+`ValidSemanticProgram`, a canonical ANF, a validated ANF plan, two physical
+plans, two pure renderers, all gated on typechecker producers) is replaced by
+the plan in R3-R9 below. Sections marked SUPERSEDED are retained as the record
+of what was proposed and why; they are not the plan. Section 3's producer
+table is amended in place by R8. This revision was prepared by the 2026-09-03
+review of the epic against the source tree at `7132909b7`, the live tracker,
+and the revised typechecker plan (`TYPECHECK-TARGET-ARCHITECTURE.md` SURVEY
+AMENDMENT and RULED blocks, rulings 1-8).
+
+### R1. Why the plan changed
+
+Every claim below was re-derived on 2026-09-03; the commands are the evidence.
+
+- **The hygiene band is finished; the architecture band never started.** Both
+  emitters and the lowering stage hold zero module-level `Ref` cells
+  (`grep -c "^[a-zA-Z_][A-Za-z0-9_']* *: *Ref " compiler/backend/llvm_emit.mdk
+  compiler/backend/wasm_emit.mdk compiler/ir/core_ir_lower.mdk` reads `0 0 0`),
+  and `test/wasm/diff_wasm_typed.sh` pins the Wasm set at empty. Roughly twenty
+  merged PRs did that (X-N.H, X-W.H1-H2b, `emit-inputs`,
+  `emit-state-injectivity`, `lowering-stage-hygiene`). Nothing else exists:
+  `grep -rn "ValidSemanticProgram\|CallableId\|CallShape\|LinkId" compiler/`
+  finds only comments saying "deliberately not this" and the draft's own
+  pending-fact markers.
+- **The producers X-0V waited on are gone or unscheduled.** #1113 closed with
+  its emitter-facing leg (B-2.4) cut back to X-E by owner ruling. #1137's named
+  class was drained by an emitter sprint (`call-arity-conformance`, PR #2061)
+  and its owner recommends routing the residual to this arc. #1318 was folded
+  into #2547 unit 3. #1112 (A-3 dispositions), #993 (B-1), #1082 (F-1), and
+  #353 have no step in the revised typechecker order. See R8.
+- **Two typechecker rulings contradict the old stage design.** Ruling 4 keeps
+  `RNone` runtime narrowing as a pinned optimization, which section 4.3's
+  `MethodDisposition` and section 4.6 item 7 cannot represent; ruling 3 defers
+  whether the emitter process runs resolve at all, while X-I assumed
+  `private_mangle` renders resolver decisions. Neither doc knew about the
+  other's change.
+- **The seam the typechecker plan declares invariant is Core IR, not V.** The
+  largest typechecker move (#2549, evidence as bindings) leaves the emitters
+  alone because they read `Route` as data on `CMethod`/`CDict`
+  (`TYPECHECK-TARGET-ARCHITECTURE.md`, SA-4 step 7). That seam is stable across
+  all eight typechecker steps and is the one this arc builds on.
+- **Bugs drained without the stages.** Of the roughly seventy open S0/S1 rows
+  `EMITTER-ARCH-BUG-FIT.md` classified on 2026-08-07, at least forty-five have
+  closed, almost all through targeted sprints (`call-arity-conformance`,
+  `predicate-slots`, `ctor-identity`, `unmask-arg-tag-dispatch`), one through
+  the ledger's own carve-out (#1072). Fifty of the seventy-two S0/S1 issues open
+  today postdate the ledger. The stage predictions were bypassed, not tested.
+- **Reconstruction below Core kept growing while the epic waited.**
+  `methodArityOf` became a five-function family on each backend between
+  2026-08-21 and 2026-08-27; `backend/wasm_reach.mdk` added a second
+  whole-program reachability pass on one backend; `lowerProgramEmit` grew an
+  `EmitTarget` parameter that threads a physical fact (tag width) up into the
+  shared seam, against L4. Eighty-nine named LLVM/Wasm twin functions exist,
+  forty of them in dispatch, evidence rewriting, arity, and impl indexing.
+- **Cost.** Three new representations (V, ANF, AP) plus an ANF interpreter, a
+  second S-expression form, an equivalence chain, and a plan-and-renderer split
+  of 26,000 lines of emitter, in a self-hosted compiler where every new module
+  perturbs the seed and the fixpoint, with no open issue drained by any of it
+  before the last stage.
+
+### R2. What is kept
+
+- Laws L1-L8 (section 1), unchanged.
+- Separate physical backends (L4, section 6.1, section 9): the boundary is
+  semantic versus physical, and no shared physical representation is proposed.
+- Per-emission state (`Emit`, `WasmEmit`, `EmitInput`, `WasmEmitInput`) and the
+  ratchets that pin it. This is done; do not reopen it.
+- The collision validators landed under X-L.H (`symbolInjectivityGuard`,
+  `implSymbolCollisionGuard`, `dictWitnessTagGuard`).
+- The verification doctrine (section 13), with 13.3's malformed-plan tests
+  re-pointed at the Core validator in R6.
+- `draft_semantic_program.mdk`'s `pendingFacts` list as the inventory of what
+  Core still lacks (R4 is that list, re-ordered by open-bug pressure). The
+  module itself is subject to R9's consumer-or-delete rule.
+
+### R3. Replacement component model
+
+```text
+  R/E   resolved typed elaboration (upstream; publishes the route-stamped AST)
+    |
+    v
+  Core  CProgram: the contract. Typed and fact-carrying, grown one fact at a
+        time (R4), checked by coreValidate (R6) before any emitter runs.
+    |
+    v
+  Plan  one immutable shared-analysis record built once by lowerProgramEmit
+        (R5): reachability, lazy globals, TRMC groups, linkage, extern
+        requirements, target choice.
+    |                         |
+    v                         v
+  llvm_emit                 wasm_emit
+  consumes Core + Plan;     consumes Core + Plan;
+  physical only             physical only
+```
+
+There is no V, no ANF, no AP, and no plan-and-renderer split. Each fact the old
+V carried becomes a field on an existing Core node, with a producer in
+lowering, a validator arm, and a deletion of the per-backend reconstruction in
+the same PR. That is the pattern `RScalar` on `CBinPrim`, `CDecision`,
+`labelFallthrough`, and the `Route` payloads already follow; this revision makes
+it the whole plan.
+
+### R4. The fact ledger
+
+One row per fact. A row lands as one compiler-source PR (or a short series)
+that adds the carrier, the producer, the validator arm, and the hand-derived
+fixture, and deletes the named consumers. Both backends switch in the same PR
+([T-EVAL-LOCKSTEP] for the interpreters; #59 for the backends). Order is by
+open-bug pressure, not by layer.
+
+| # | Fact | Carrier | Producer | Deletes | Drains / owns | Prerequisite |
+|---|---|---|---|---|---|---|
+| F1 | Record field ordinals, and update evaluation order | ordinal on `CRecord`, `CFieldAccess`, `CRecordUpdate`, `CVariantUpdate` fields; update overrides canonicalized at lower time (bind in written order, store by ordinal) | `core_ir_lower` from `declaredRecordFieldOrders` (already an emit input) | LLVM `Emit.recByName`/`recByLabel`/`recFields`, Wasm record-name and label indexes in `WasmEmitInput` | #1518 (update order diverges across engines); the residual of the #1306 family | none |
+| F2 | Call mode | `CApp` stamped exact / partial / over with the residual arity (a new `CCall`/`CPap` pair is acceptable if the stamp reads worse) | `core_ir_lower` from the one arity table both backends already share plus the impl clause's own pattern count (the #1034 rule) | the ten `methodArityOf*` functions, `emitApp`/`emitOverApp` classification, Wasm `$mdk_apply` arity branches | #2078; the #1034/#1101/#826 family stays drained by construction | none now; consumes the typechecker's per-binding arity when M2 (#2549) publishes it (E-5) |
+| F3 | Interface and type identity on dispatch nodes | the existing `ifaceIdentity` string (`module::Iface`) on `CImplDefault`, extended to `CMethod`, `CDict`, `CImplEntry`, `CImplTagged`; the head type carries its owner module the same way | `core_ir_lower` from declaration identity (`Ident` is already in the AST) | bare-spelling keys in `defaultFnName`/`defaultFnNameW`, `implFnSym`, `distinctKeysAtHead`, `headTagUniqueW` | emitted-symbol half of #1397; #1619; #2055; #1973; the symbol-keying half of #1265 | none for the string form; SC-1 (#2563) upgrades it to the typed key |
+| F4 | Semantic tail sites | tail flag on `CApp`/`CMethod` in tail position, computed once | `core_ir_lower` (the position is syntactic) | per-backend tail rediscovery in `emitAppTail` and its Wasm peer | #1349, #2577 | none |
+| F5 | Runtime types on binders, parameters, and returns | `RTInt`/`RTFloat`/`RTValue` (never `LTy`, never `(ref eq)`) on `CLam` params, `CLet` binders, `CBind` clauses | the #353 plan, unchanged: stamp what typecheck knew at lower time | `inferSigs`, `typeOf`, `paramUseTy`, `staticIsFloat`, `bodyFloatRet`, Wasm `cexprIsFloat`/`refMainKind` | #2545 and the N8 family (EMITTER-SEMANTICS section 9) | none; #353 is adopted as written |
+| F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | typechecker M2 (#2549) for evidence; B-1 (#993) for default-body evidence | route-word hedges, `emitDefaultRKey`, Wasm `implEntryRouteKeyW` recomputation, default synthesis | #1068, #1020, the route half of #1265, #1046 | BLOCKED on M2 and #993. `RNone` stays until #993 lands (ruling 4). X-E (#1403) is the consumer issue and does nothing before M2 |
+| F7 | Capability manifest | a Core-level manifest field extracted before row erasure | effects checker | the reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | the effects manifest producer (EFFECTS sections 7-8) |
+
+Every row owes the L7 fixture: centralizing a fact makes all engines agree, so a
+wrong centralized fact is a unanimity no differential can see. The fixture is
+derived from the spec before the PR is cut, never captured from an engine.
+
+### R5. The shared plan record
+
+`lowerProgramEmit` builds one immutable record beside `CProgram` and both
+emitters take it as an argument. It holds what is already computed today in
+scattered places, moved rather than reinvented:
+
+| Field | Today |
+|---|---|
+| reachability roots and edges | `ir/dce.mdk` (pre-lower) and `backend/wasm_reach.mdk` (post-lower, Wasm only) |
+| lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed per backend |
+| TRMC eligibility and groups | `backend/trmc_analysis.mdk`, computed per backend |
+| linkage map and injectivity | `private_mangle` and the three X-L.H guards, run inside lowering |
+| reachable extern requirements | per-backend extern ladders |
+| target | the `EmitTarget` parameter of `lowerProgramEmit`, which moves here so lowering itself is target-neutral again (L4) |
+
+The two emit-input records converge into this one over time; the four facts
+`WasmEmitInput` lacks relative to `EmitInput` (`returnsSelf`, `selfFnParams`,
+`methodConstraintIfaces`, `mainIsUnit`) are the first to move. This unit has no
+upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
+becomes the shared reachability pass once F3 gives it identity-keyed dispatch
+edges; until then it stays a Wasm-only field, named as such.
+
+### R6. The Core validator
+
+`coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every
+build entry between lowering and emission. It rejects, before any text is
+produced: a record operation without an ordinal once F1 has landed, an
+application without a call mode once F2 has landed, a dispatch node without
+identity once F3 has landed, a binder without a runtime type once F5 has
+landed, a reachable extern without a requirement row, a duplicate or
+non-injective link symbol (#748), and a direct call whose argument count
+disagrees with the callee's definition arity (#1101's class). An internal
+defect is a compiler bug and fails hard; it is not subject to ruling 2's
+warn-first policy, which governs user-program type errors reaching
+`runEmitWith` (#2089). Section 13.3's malformed-plan tests mutate a lowered
+`CProgram` and assert the validator fires.
+
+### R7. Stage dispositions
+
+| Stage | Issue | Disposition |
+|---|---|---|
+| X-0 | #1399 | X-0V retired. X-0D (`ir/draft_semantic_program.mdk`) has one consumer, its own probe; it either gains a product consumer within one sprint or is deleted with its probe and gate (R9). |
+| X-A | #1400 | Retired. No ANF, no AP. `ir/anf_identity.mdk` and its probe follow the same consumer-or-delete rule. Generated-callable identity, if ever needed, is a Core fact, not a new IR. |
+| X-I | #1401 | Re-scoped to F1 and F3. `private_mangle` keeps its binding-set responsibility until ruling 3 decides whether the emitter process runs resolve. |
+| X-T | #353 | Adopted unchanged as F5. |
+| X-C | #1402 | Re-scoped to F2. |
+| X-E | #1403 | Kept as the consumer of F6, blocked on #2549 and #993. Its charter also absorbs the reconciliation of `RNone` (ruling 4) with L1: `RNone` is a validated, pinned optimization datum until #993, and a fresh site that reaches it is a bug. |
+| X-G | #1404 | Re-scoped to F4 plus the globals and TRMC fields of R5. |
+| X-L | #1405 | X-L.H landed (injectivity guards). Abstract `LinkId` retired; the linkage field of R5 and the validator arms in R6 are what remains. |
+| X-N | #1406 | X-N.H complete. X-N.C (validated LLVM plan plus pure renderer) retired; the prototype check and duplicate-define refusal it promised move into R6. |
+| X-W | #1407 | X-W.H complete. X-W.C retired. Residual scope: the scalar-mode decision (section 8.1, unchanged), host-ABI requirement derivation from R5's extern field, and product-input parity with `playground_main` (R9). |
+| X-X | #1408 | Kept, with the deletion set reduced to what R4 rows delete plus the two consumer-or-delete modules; the ratchet requirement is unchanged. |
+
+### R8. Reconciliation with the revised typechecker plan
+
+Section 3's producer table, re-derived 2026-09-03 against the live tracker and
+`TYPECHECK-TARGET-ARCHITECTURE.md`'s amended DAG:
+
+| Section 3 row | Named producer | Live state | Where it sits now |
+|---|---|---|---|
+| Qualified `Ident` everywhere | #1110-#1112, #1115 | #1110, #1115 closed; #1112 open | cross-module half is SC-1 (#2563), step 8 of the typechecker order |
+| Whole-graph declaration/instance environments | #1112 (K/A-3) | open | no step; SA-2/SA-3 measured the route table as topological-prefix scoped, widening at #2548 with an acceptance delta |
+| Structured superclass evidence | #993 (B-1) | open | no step; ruling 4 defers it |
+| Evidence references, frozen admissibility | #1113 (B-2) | closed | B-2.4 cut to X-E.C by the 2026-08-14 ruling; B-2 delivered conjunct 2 only |
+| One slot per predicate | #1318 (G-10) | open | folded into #2547 unit 3 |
+| Dict abstraction at local binders | #1082 (F-1) | open | no step; #1986 is its 0.1.0-sized half |
+| Source arity and call convention | #1137 after #1318 | open | class drained by PR #2061 (emitter arc); falls out of M2 (#2549) as E-5 |
+| Complete method disposition | #1112/A-3 with #993 | open | no step |
+| Semantic runtime types | #353 | open | not in the typechecker plan; owned here as F5 |
+| Capability manifest | effects sections 7-8 | - | unchanged |
+
+Three facts this arc must carry that the old sections did not know:
+
+1. **The emitter binary does not run resolve.** `medaka build` shells out to
+   `medaka_emitter`, whose pipeline is `driveModules -> runEmitWith ->
+   mangleUnits -> elaborateModules`; resolve's resolution pass is DCE'd out of
+   that binary (`compiler/frontend/resolve.mdk`, SA-1). Whether that changes is
+   ruling 3, deferred until after M2. Until then every identity fact in R4 is
+   produced by lowering from the elaborated AST, which is what both build
+   processes have.
+2. **`RNone` is a ruled-in optimization** (ruling 4), realized as
+   `narrowUnrouted` in `eval.mdk` and `emitDefaultRKey` in `llvm_emit.mdk`. L1
+   still holds for every other missing fact; F6 records the one sanctioned
+   exception and its expiry (#993).
+3. **Route answers and build-path acceptance move under the typechecker plan**
+   (#2546 acceptance delta, #2548 route-table widening, #2549 node-arity change
+   on `EMethodAt`). No comparison carrier in this arc may certify a fact against
+   that moving baseline; R4 rows are graded by hand-derived fixtures and the
+   engines gate, dated per typechecker step.
+
+The reciprocal pointer this doc owed is now in place:
+`TYPECHECK-TARGET-ARCHITECTURE.md` section 8's emitter-coordination bullet
+links back here.
+
+### R9. Order of work
+
+1. **Now, no dependency:** `playground_main.runEmit` passes the validated FFI
+   extern table exactly as `wasm_emit_modules_main.emitTail` does (the browser
+   compiler passes `[]` today, so a user FFI extern dies as an unbound variable
+   instead of the named WasmGC rejection). Re-derive `EMITTER-ARCHITECTURE.md`
+   and `EMITTER-ARCH-BUG-FIT.md` (done in the same PR as this revision).
+2. **Consumer-or-delete, one sprint:** `ir/draft_semantic_program.mdk`,
+   `ir/anf_identity.mdk`, `ir/anf_identity_sexp.mdk`, their two probe entries,
+   and gates `diff_compiler_draft_semantic.sh` / `diff_compiler_anf_identity.sh`.
+   Default outcome is deletion; a product consumer is the only thing that keeps
+   them.
+3. **R5 plan record** (no dependency; can run beside F1).
+4. **F1, F3, F2, F4, F5** in that order, one row per PR series, each with its
+   R6 validator arm and L7 fixture.
+5. **F6** when #2549 lands; **F7** when the manifest producer exists.
+
+Compiler-source landing stays serialized through the one-PR golden lane and
+interleaves with the typechecker's steps; high-severity fixes keep priority
+(section 12's "High-severity work during migration" still applies).
+
+### R10. Supersession map
+
+| Section | Status after this revision |
+|---|---|
+| 1 Design laws | in force |
+| 2 Component model | SUPERSEDED by R3 |
+| 3 Upstream contract | amended by R8 (table states); the "consumes, does not own" principle stands |
+| 4 V | SUPERSEDED by R4 (facts) and R6 (validation) |
+| 5 A canonical ANF | SUPERSEDED; no ANF |
+| 6 AP | SUPERSEDED by R5; 6.1's shared-versus-physical table stands |
+| 7 N, 8 W | SUPERSEDED as stages; the ownership lists remain the description of what is physical; 8.1 stands |
+| 9 Runtime and host | in force |
+| 10 Traceability | historical; `EMITTER-ARCH-BUG-FIT.md` section 0 is the current map |
+| 11 Decisions | in force, with "current Core's sufficiency" now answered: insufficient as-is, grown rather than replaced |
+| 12 Migration DAG | SUPERSEDED by R7 and R9; its high-severity clause stands |
+| 13 Verification | in force, 13.3 re-pointed at R6 |
+| 14 Risks | in force; the "two permanent authorities" risk is what R9 step 2 discharges |
+| 15 Tracker | in force |
 
 ## 1. Design laws
 
@@ -115,6 +378,8 @@ is measured for allocation and emit-stage time before a performance claim.
 
 ## 2. Component model
 
+> **SUPERSEDED 2026-09-03** by R3. Retained as the record of the proposal.
+
 ```text
   R/E  resolved typed elaboration (upstream contract)
     |
@@ -142,6 +407,10 @@ in existing modules. End-state constructors for validated artifacts are private
 to their validator modules.
 
 ## 3. R/E - upstream elaboration contract
+
+> **AMENDED 2026-09-03**: the table below records the producers as named on
+> 2026-08-07; their live state and current owner are in R8. The principle
+> (this arc consumes, it does not own) stands.
 
 The backend arc consumes, but does not own, these facts:
 
@@ -172,6 +441,10 @@ evidence; an adapter may copy a legacy producer's answer only to compare
 behavior while the producer is being replaced.
 
 ## 4. V - Validated Semantic Program
+
+> **SUPERSEDED 2026-09-03** by R4 (the facts become Core fields) and R6 (the
+> validator). The fact inventory in 4.1-4.5 remains the reference for what
+> each R4 row must carry; the opaque record and its minting rule are gone.
 
 Validated Semantic Program (V) is the last representation whose fields describe
 language meaning rather than an execution target.
@@ -370,6 +643,10 @@ Validation rejects:
 
 ## 5. A - canonical ANF Core
 
+> **SUPERSEDED 2026-09-03**: there is no ANF. The properties this section
+> wanted (evaluation order explicit, call mode decided once, captures and
+> tail sites computed once) are R4 rows F1, F2, and F4 on existing Core nodes.
+
 ANF makes evaluation order and call categories structural without introducing a
 machine CFG.
 
@@ -430,6 +707,9 @@ classification branch.
 
 ## 6. AP - validated ANF Plan
 
+> **SUPERSEDED 2026-09-03** by R5, the shared plan record built by
+> `lowerProgramEmit`. Section 6.1's shared-versus-physical table stands.
+
 The Validated ANF Plan is one immutable value containing ANF bodies plus
 separately validated whole-program analyses, manifests, and indexes. It is not
 a low-level instruction IR and does not duplicate semantic decisions already
@@ -475,6 +755,10 @@ casts, allocation sizes, and instruction text never enter AP.
 
 ## 7. N - LLVM Physical Plan
 
+> **SUPERSEDED 2026-09-03 as a stage** (R7, X-N). The ownership list below
+> remains the description of what is physical on the native side; the
+> validator items move to R6. No plan-and-renderer split is planned.
+
 The LLVM plan owns:
 
 - native tagged-word and boxed-cell layouts;
@@ -503,6 +787,9 @@ It may allocate local registers/labels and append text. It does not inspect
 source declarations or infer semantic facts.
 
 ## 8. W - Wasm Physical Plan
+
+> **SUPERSEDED 2026-09-03 as a stage** (R7, X-W). The ownership list stands
+> as the physical description; 8.1's scalar-mode decision rule stands.
 
 The Wasm plan owns:
 
@@ -603,6 +890,10 @@ claim is deliberately narrower than "this plan fixes every backend symptom".
   semantic carrier).
 
 ## 12. Migration DAG
+
+> **SUPERSEDED 2026-09-03** by R7 (stage dispositions) and R9 (order of
+> work). The "High-severity work during migration" clause at the end of this
+> section stands.
 
 Stage handles and owners are stable. Existing issues are adopted rather than
 duplicated:
@@ -870,6 +1161,10 @@ plan reduced cost.
 | Migration leaves two permanent authorities | X-X exit criterion and structural ratchets |
 
 ## 15. Tracker relationship
+
+The revised typechecker plan is `TYPECHECK-TARGET-ARCHITECTURE.md` (SURVEY
+AMENDMENT and RULED blocks); its section 8 emitter-coordination bullet links
+back to R8 of this document.
 
 The cross-backend epic #1398 is the architecture router. Existing #362 remains the
 native conformance/performance router and #384 remains the Wasm physical/host
