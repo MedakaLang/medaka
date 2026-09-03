@@ -209,6 +209,7 @@ import tools.doctest.{
   Example,
   ExResult(..),
   exResultJsonFields,
+  engineName,
   RunResult,
   runPassed,
   runFailed,
@@ -3424,19 +3425,78 @@ runTestManyTargets engines cases filterOpt targets =
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
-      if testFilesGo
-        engines
-        rtPath
-        corePath
-        stdlibDir
-        cases
-        filterOpt
-        files
-        False then
-        exit 1
+      let rosterOk = checkTestMdkRoster targets files
+      let anyFailed =
+        testFilesGo
+          engines
+          rtPath
+          corePath
+          stdlibDir
+          cases
+          filterOpt
+          files
+          False
+      if anyFailed || not rosterOk then exit 1
 
--- Fold `runTest` over an expanded file list, aggregating whether ANY file
--- failed (tests failed, or the file itself couldn't be read/parsed).
+-- #2589 item 2: roster-completeness for `*_test.mdk` discovery. The recursive
+-- walk (`expandLintTarget`/`collectMdkFiles`, above) already finds every
+-- `_test.mdk` sibling on disk by extension alone — it cannot structurally
+-- miss one (§4's "already walks `_test.mdk` siblings like any other .mdk").
+-- What it CAN miss is a file that is git-TRACKED but absent from the walked
+-- `files` set for some other reason (a stray symlink, a target typo, a path
+-- the walk's dot-entry skip swallowed). Ported from
+-- `pds/test/inlang_test_oracle.sh`'s pattern — enumerate, require each
+-- accounted for, fail named on a gap — WITHOUT that gate's hand-maintained
+-- roster: the "expected" side here is `git ls-files` itself, so a new
+-- `foo_test.mdk` needs no roster edit to be covered (#2589 item 2's
+-- acceptance shape). Not a new gate script: this runs INSIDE `medaka test
+-- <dir>` itself, so no new CI enrollment is needed either.
+checkTestMdkRoster : List String -> List String -> <IO> Bool
+checkTestMdkRoster targets files =
+  match runCommand "git" (["ls-files", "--"] ++ targets)
+    Err _ => True
+    Ok (0, out, _) =>
+      let tracked =
+        filterList (endsWith "_test.mdk") (filterList (/= "") (splitNl out))
+      let missing = filterList (t => not (contains t files)) tracked
+      match missing
+        [] => True
+        _ =>
+          let _ =
+            ePutStrLn
+              "medaka test: git-tracked but not discovered: \{joinWith ", " missing}"
+          False
+    Ok (_, _, _) => True
+
+-- Reconstructs the argv for a per-file CHILD `medaka test` invocation
+-- (containment, below) from the already-resolved engine list/case
+-- count/filter — the same three knobs `runTestCmd` read from its OWN argv,
+-- round-tripped rather than re-parsed by the child.
+testChildArgs : List Engine -> Int -> Option String -> String -> List String
+testChildArgs engines cases filterOpt f =
+  [
+      "test",
+      f,
+      "--engines",
+      joinWith "," (map engineName engines),
+      "--cases",
+      intToString cases,
+    ]
+    ++ (match filterOpt
+      Some s => ["--filter", s]
+      None => [])
+
+-- Fold over an expanded file list, aggregating whether ANY file failed
+-- (tests failed, the file itself couldn't be read/parsed, or the child
+-- process died). Each file runs `runTest` in its OWN child process — a
+-- panic in file 3 of 20 used to abort the whole in-process loop, so files
+-- 4-20 never printed anything (#2589 item 1). Spawning per file means a
+-- dead file is contained to its own `runCommand` result: its stdout up to
+-- the crash still prints, it is named DEAD in the aggregate, and the walk
+-- continues. `envOr "MEDAKA" (executablePath ())` mirrors
+-- `native_doctest.mdk`'s spawn precedent but defaults to the RUNNING
+-- binary's own absolute path rather than a bare "medaka" that a bare `PATH`
+-- lookup might resolve to a different, stale binary.
 testFilesGo : List Engine ->
   String ->
   String ->
@@ -3448,8 +3508,21 @@ testFilesGo : List Engine ->
   <IO> Bool
 testFilesGo _ _ _ _ _ _ [] acc = acc
 testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
-  let roots = entrySearchRoots (dirOf2 f) ++ [stdlibDir]
-  let ok = runTest engines rtPath corePath f roots cases filterOpt
+  let medaka = envOr "MEDAKA" (executablePath ())
+  let args = testChildArgs engines cases filterOpt f
+  let ok = match runCommand medaka args
+    Err e =>
+      let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
+      False
+    Ok (code, out, err) =>
+      let _ = putStr out
+      if code == 0 then
+        True
+      else
+        let _ = ePutStr err
+        let _ =
+          ePutStrLn "medaka test: \{f}: DEAD (child exited \{intToString code})"
+        False
   testFilesGo
     engines
     rtPath

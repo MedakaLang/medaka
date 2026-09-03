@@ -1,5 +1,5 @@
 # META
-source_lines=1870
+source_lines=1923
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -101,7 +101,14 @@ import tools.doctest.{
 }
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
-import tools.prop_runner.{runAllProps, hasProps, runAllPropsResults, PropResult}
+import tools.prop_runner.{
+  runAllProps,
+  hasProps,
+  runAllPropsResults,
+  PropResult,
+  filterProps,
+  filterPropsByName,
+}
 import tools.test_runner.{collectTests, runOneTest, hasTests, uncapableExterns}
 import driver.diagnostics.{
   analyzeProject,
@@ -448,6 +455,24 @@ skipReasonDecls userDecls
   | hasTests userDecls = "`test \"…\"` decls"
   | otherwise = "`prop \"…\"` decls"
 
+-- #2340: `--filter <sub>` matching NOTHING across all three phases (doctests,
+-- props, `test "…"`) used to report `0/0 passed` and exit 0 — a filter typo
+-- looked identical to a genuinely clean run. A module that declares zero
+-- doctests/props/tests to begin with (no `--filter` involved, or `--filter`
+-- given but every phase was already empty) stays the existing vacuous pass
+-- (P0-212, `test_cmd.mdk`'s zero-doctest note above) — this only fires when a
+-- filter was GIVEN and matched nothing anywhere.
+filterMatchedNothing : Option String -> String -> List Decl -> Bool
+filterMatchedNothing None _ _ = False
+filterMatchedNothing (Some sub) tsrc userDecls =
+  not
+    (isNonEmptyL
+        (filterExamplesByName
+          (Some sub)
+          (extractExamples (collectComments tsrc)))
+      || isNonEmptyL (filterPropsByName (Some sub) (filterProps userDecls))
+      || isNonEmptyL (filterTestsByName (Some sub) (nativeRawTests tsrc)))
+
 driveAll : List Engine ->
   List Decl ->
   List Decl ->
@@ -459,6 +484,34 @@ driveAll : List Engine ->
   <IO> Bool
 driveAll engines runtimeDecls coreDecls target tsrc roots cases filterOpt =
   let userDecls = desugar (parse tsrc)
+  if filterMatchedNothing filterOpt tsrc userDecls then
+    let _ =
+      ePutStrLn
+        "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
+    False
+  else
+    driveAllRun
+      engines
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      roots
+      cases
+      filterOpt
+      userDecls
+
+driveAllRun : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List String ->
+  Int ->
+  Option String ->
+  List Decl ->
+  <IO> Bool
+driveAllRun engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls =
   let doctestsOk =
     runDoctests
       engines
@@ -1886,7 +1939,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
@@ -1922,8 +1975,13 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "typecheckSkipNotice" ((PVar "target") (PVar "userDecls")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "note: typechecking was skipped for ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "\n  reason: the module declares "))) (EApp (EVar "display") (EApp (EVar "skipReasonDecls") (EVar "userDecls")))) (ELit (LString " and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))
 (DTypeSig false "skipReasonDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "skipReasonDecls" ((PVar "userDecls")) (EIf (EBinOp "&&" (EApp (EVar "hasTests") (EVar "userDecls")) (EApp (EVar "hasProps") (EVar "userDecls"))) (ELit (LString "`test \"…\"` and `prop \"…\"` decls")) (EIf (EApp (EVar "hasTests") (EVar "userDecls")) (ELit (LString "`test \"…\"` decls")) (EIf (EVar "otherwise") (ELit (LString "`prop \"…\"` decls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DFunDef false "filterMatchedNothing" ((PCon "None") PWild PWild) (EVar "False"))
+(DFunDef false "filterMatchedNothing" ((PCon "Some" (PVar "sub")) (PVar "tsrc") (PVar "userDecls")) (EApp (EVar "not") (EBinOp "||" (EBinOp "||" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterExamplesByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterPropsByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "filterProps") (EVar "userDecls"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterTestsByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "nativeRawTests") (EVar "tsrc")))))))
 (DTypeSig false "driveAll" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
-(DFunDef false "driveAll" ((PVar "engines") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoLet false false (PVar "doctestsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runDoctests") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoLet false false (PVar "propsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runProps") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoLet false false (PVar "testsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestDecls") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "doctestsOk") (EVar "propsOk")) (EVar "testsOk")))))
+(DFunDef false "driveAll" ((PVar "engines") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls"))))) (DoExpr (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAllRun") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EVar "userDecls"))))))
+(DTypeSig false "driveAllRun" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool"))))))))))))
+(DFunDef false "driveAllRun" ((PVar "engines") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "cases") (PVar "filterOpt") (PVar "userDecls")) (EBlock (DoLet false false (PVar "doctestsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runDoctests") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoLet false false (PVar "propsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runProps") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoLet false false (PVar "testsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestDecls") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "doctestsOk") (EVar "propsOk")) (EVar "testsOk")))))
 (DTypeSig false "filterExamplesByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyCon "Example")))))
 (DFunDef false "filterExamplesByName" ((PCon "None") (PVar "examples")) (EVar "examples"))
 (DFunDef false "filterExamplesByName" ((PCon "Some" (PVar "sub")) (PVar "examples")) (EApp (EApp (EVar "filterList") (ELam ((PVar "ex")) (EApp (EApp (EVar "substringMatch") (EVar "sub")) (EApp (EVar "exampleInput") (EVar "ex"))))) (EVar "examples")))
@@ -2121,7 +2179,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
@@ -2157,8 +2215,13 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "typecheckSkipNotice" ((PVar "target") (PVar "userDecls")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "note: typechecking was skipped for ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "\n  reason: the module declares "))) (EApp (EMethodRef "display") (EApp (EVar "skipReasonDecls") (EVar "userDecls")))) (ELit (LString " and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check "))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ""))))
 (DTypeSig false "skipReasonDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "skipReasonDecls" ((PVar "userDecls")) (EIf (EBinOp "&&" (EApp (EVar "hasTests") (EVar "userDecls")) (EApp (EVar "hasProps") (EVar "userDecls"))) (ELit (LString "`test \"…\"` and `prop \"…\"` decls")) (EIf (EApp (EVar "hasTests") (EVar "userDecls")) (ELit (LString "`test \"…\"` decls")) (EIf (EVar "otherwise") (ELit (LString "`prop \"…\"` decls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DFunDef false "filterMatchedNothing" ((PCon "None") PWild PWild) (EVar "False"))
+(DFunDef false "filterMatchedNothing" ((PCon "Some" (PVar "sub")) (PVar "tsrc") (PVar "userDecls")) (EApp (EVar "not") (EBinOp "||" (EBinOp "||" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterExamplesByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterPropsByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "filterProps") (EVar "userDecls"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterTestsByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "nativeRawTests") (EVar "tsrc")))))))
 (DTypeSig false "driveAll" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
-(DFunDef false "driveAll" ((PVar "engines") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoLet false false (PVar "doctestsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runDoctests") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoLet false false (PVar "propsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runProps") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoLet false false (PVar "testsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestDecls") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "doctestsOk") (EVar "propsOk")) (EVar "testsOk")))))
+(DFunDef false "driveAll" ((PVar "engines") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls"))))) (DoExpr (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAllRun") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EVar "userDecls"))))))
+(DTypeSig false "driveAllRun" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool"))))))))))))
+(DFunDef false "driveAllRun" ((PVar "engines") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "cases") (PVar "filterOpt") (PVar "userDecls")) (EBlock (DoLet false false (PVar "doctestsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runDoctests") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoLet false false (PVar "propsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runProps") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoLet false false (PVar "testsOk") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestDecls") (EVar "engines")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "filterOpt"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "doctestsOk") (EVar "propsOk")) (EVar "testsOk")))))
 (DTypeSig false "filterExamplesByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyCon "Example")))))
 (DFunDef false "filterExamplesByName" ((PCon "None") (PVar "examples")) (EVar "examples"))
 (DFunDef false "filterExamplesByName" ((PCon "Some" (PVar "sub")) (PVar "examples")) (EApp (EApp (EVar "filterList") (ELam ((PVar "ex")) (EApp (EApp (EVar "substringMatch") (EMethodRef "sub")) (EApp (EVar "exampleInput") (EVar "ex"))))) (EVar "examples")))

@@ -97,7 +97,14 @@ import tools.doctest.{
 }
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
-import tools.prop_runner.{runAllProps, hasProps, runAllPropsResults, PropResult}
+import tools.prop_runner.{
+  runAllProps,
+  hasProps,
+  runAllPropsResults,
+  PropResult,
+  filterProps,
+  filterPropsByName,
+}
 import tools.test_runner.{collectTests, runOneTest, hasTests, uncapableExterns}
 import driver.diagnostics.{
   analyzeProject,
@@ -444,6 +451,24 @@ skipReasonDecls userDecls
   | hasTests userDecls = "`test \"…\"` decls"
   | otherwise = "`prop \"…\"` decls"
 
+-- #2340: `--filter <sub>` matching NOTHING across all three phases (doctests,
+-- props, `test "…"`) used to report `0/0 passed` and exit 0 — a filter typo
+-- looked identical to a genuinely clean run. A module that declares zero
+-- doctests/props/tests to begin with (no `--filter` involved, or `--filter`
+-- given but every phase was already empty) stays the existing vacuous pass
+-- (P0-212, `test_cmd.mdk`'s zero-doctest note above) — this only fires when a
+-- filter was GIVEN and matched nothing anywhere.
+filterMatchedNothing : Option String -> String -> List Decl -> Bool
+filterMatchedNothing None _ _ = False
+filterMatchedNothing (Some sub) tsrc userDecls =
+  not
+    (isNonEmptyL
+        (filterExamplesByName
+          (Some sub)
+          (extractExamples (collectComments tsrc)))
+      || isNonEmptyL (filterPropsByName (Some sub) (filterProps userDecls))
+      || isNonEmptyL (filterTestsByName (Some sub) (nativeRawTests tsrc)))
+
 driveAll : List Engine ->
   List Decl ->
   List Decl ->
@@ -455,6 +480,34 @@ driveAll : List Engine ->
   <IO> Bool
 driveAll engines runtimeDecls coreDecls target tsrc roots cases filterOpt =
   let userDecls = desugar (parse tsrc)
+  if filterMatchedNothing filterOpt tsrc userDecls then
+    let _ =
+      ePutStrLn
+        "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
+    False
+  else
+    driveAllRun
+      engines
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      roots
+      cases
+      filterOpt
+      userDecls
+
+driveAllRun : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List String ->
+  Int ->
+  Option String ->
+  List Decl ->
+  <IO> Bool
+driveAllRun engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls =
   let doctestsOk =
     runDoctests
       engines
