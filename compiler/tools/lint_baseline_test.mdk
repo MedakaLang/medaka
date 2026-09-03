@@ -1,0 +1,88 @@
+-- Sibling test module for `compiler/tools/lint_baseline.mdk`.
+--
+-- A `*_test.mdk` file lives beside its subject and is NOT compiler source: it
+-- is excluded from the two build fingerprints and from the snapshot corpus,
+-- so adding or editing one never makes `./medaka` report itself stale and
+-- never demands a golden. See AGENTS.md's `[P-TEST-SIBLING]`.
+--
+-- WHAT LIVES HERE: the six fail-closed shapes named in
+-- `lint_baseline.mdk`'s own header comment (THE INVARIANT) — a missing file,
+-- malformed TOML, a duplicate row, a negative count, a missing `count` field,
+-- and a file with findings but no row for that (file, rule) — exercised
+-- directly against the pure, already-exported parse/validation functions.
+-- None of these six had any fixture/doctest/test coverage before this file;
+-- all six were previously demonstrated only by hand, in a sprint report.
+--
+-- `readLintBaseline` itself is `<IO>` (it calls `readFile`), and `test`
+-- bodies must reduce to a pure `Expectation` — so the "missing file" case
+-- below exercises `missingBaselineErr`, the pure message-formatting helper
+-- `readLintBaseline` delegates to on its `Err` arm, rather than calling
+-- `readLintBaseline` on a real path.
+
+import test.{expectEqual, expectTrue}
+import tools.lint_baseline.{
+  baselineAllowed,
+  baselineViolations,
+  missingBaselineErr,
+  parseLintBaseline,
+}
+import support.util.{startsWith}
+
+-- ── missing file ─────────────────────────────────────────────────────────────
+test "a missing baseline file's message names the path and the read error" =
+  expectEqual
+    "cannot read lint baseline 'nope.toml': no such file"
+    (missingBaselineErr "nope.toml" "no such file")
+
+-- ── malformed TOML ───────────────────────────────────────────────────────────
+test "malformed TOML fails closed, prefixed with the origin" = expectTrue
+  (match parseLintBaseline "origin.toml" "[[entry\nfile = \n"
+    Err msg => startsWith "origin.toml: not valid TOML:" msg
+    Ok _ => False)
+
+-- ── duplicate row ────────────────────────────────────────────────────────────
+duplicateRowSrc : String
+duplicateRowSrc =
+  "[[entry]]\nfile = \"a.mdk\"\nrule = \"rule-x\"\ncount = 1\n\n[[entry]]\nfile = \"a.mdk\"\nrule = \"rule-x\"\ncount = 2\n"
+
+test "a duplicate (file, rule) row fails closed rather than picking one" = expectEqual
+  "origin.toml: duplicate row for 'a.mdk' / rule-x"
+  (match parseLintBaseline "origin.toml" duplicateRowSrc
+    Err msg => msg
+    Ok _ => "unexpectedly parsed")
+
+-- ── negative count ───────────────────────────────────────────────────────────
+negativeCountSrc : String
+negativeCountSrc =
+  "[[entry]]\nfile = \"a.mdk\"\nrule = \"rule-x\"\ncount = -1\n"
+
+test "a negative count fails closed rather than being clamped" = expectEqual
+  "origin.toml: [[entry]] #0 has a negative count"
+  (match parseLintBaseline "origin.toml" negativeCountSrc
+    Err msg => msg
+    Ok _ => "unexpectedly parsed")
+
+-- ── missing `count` field ────────────────────────────────────────────────────
+missingCountSrc : String
+missingCountSrc = "[[entry]]\nfile = \"a.mdk\"\nrule = \"rule-x\"\n"
+
+test "an entry missing the count field fails closed rather than assuming 0" = expectEqual
+  "origin.toml: [[entry]] #0 needs file, rule and count"
+  (match parseLintBaseline "origin.toml" missingCountSrc
+    Err msg => msg
+    Ok _ => "unexpectedly parsed")
+
+-- ── findings but no row ──────────────────────────────────────────────────────
+-- The invariant that matters most: a file that HAS findings for a rule but no
+-- baseline row for that (file, rule) is a violation, never an "assume clean".
+test "findings for a rule with no baseline row is a violation, not a pass" = expectEqual
+  (Some [("rule-x", 1, None)])
+  (match parseLintBaseline "origin.toml" ""
+    Err _ => None
+    Ok base => Some (baselineViolations base "a.mdk" ["rule-x"]))
+
+test "a rule the baseline never mentions has no allowance" = expectEqual
+  None
+  (match parseLintBaseline "origin.toml" ""
+    Err _ => Some 999  -- unreachable: proves the Err branch wasn't taken
+    Ok base => baselineAllowed base "a.mdk" "rule-x")

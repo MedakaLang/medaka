@@ -1,0 +1,10 @@
+-- POSITIVE fixture for rule-stdlib-reimpl's delegation exemption (S2-1): a
+-- wildcard PARAMETER matched against a hardcoded LITERAL argument is not a
+-- delegation -- both `paramNameOf _` and `argNameOf "x"` read `None` at the
+-- same position, and comparing the raw `Option String` lists directly would
+-- coincidentally "match" on that shared `None`. The rule must keep firing.
+import string.{startsWith}
+
+export
+startsWithP : String -> String -> Bool
+startsWithP _ s = startsWith "x" s
