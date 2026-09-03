@@ -3425,7 +3425,7 @@ runTestManyTargets engines cases filterOpt targets =
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
-      let rosterOk = checkTestMdkRoster targets files
+      let rosterOk = checkTestMdkRoster root targets files
       let anyFailed =
         testFilesGo
           engines
@@ -3451,14 +3451,28 @@ runTestManyTargets engines cases filterOpt targets =
 -- `foo_test.mdk` needs no roster edit to be covered (#2589 item 2's
 -- acceptance shape). Not a new gate script: this runs INSIDE `medaka test
 -- <dir>` itself, so no new CI enrollment is needed either.
-checkTestMdkRoster : List String -> List String -> <IO> Bool
-checkTestMdkRoster targets files =
-  match runCommand "git" (["ls-files", "--"] ++ targets)
+--
+-- Both sides MUST be in the same path form, or every entry looks "missing"
+-- on a false positive. `git ls-files` alone prints paths relative to the
+-- process's CWD (not the repo root) unless told otherwise, while `files`
+-- carries whatever form the CALLER's target argument was in — [T-WORKTREE-
+-- PATHS] tells every agent to pass ABSOLUTE paths in a worktree, since cwd
+-- resets between calls there, and `medaka test <absolute dir>` reported a
+-- FALSE roster failure on an all-green run before this fix (every file
+-- "git-tracked but not discovered" despite each one having just run).
+-- `--full-name` makes `git ls-files` always print repo-root-relative paths
+-- regardless of cwd (a pathspec can still be absolute; only the OUTPUT form
+-- changes), and `stripRootPrefix` puts `files` into that same root-relative
+-- form before comparing.
+checkTestMdkRoster : String -> List String -> List String -> <IO> Bool
+checkTestMdkRoster root targets files =
+  match runCommand "git" (["ls-files", "--full-name", "--"] ++ targets)
     Err _ => True
     Ok (0, out, _) =>
       let tracked =
         filterList (endsWith "_test.mdk") (filterList (/= "") (splitNl out))
-      let missing = filterList (t => not (contains t files)) tracked
+      let relFiles = map (stripRootPrefix root) files
+      let missing = filterList (t => not (contains t relFiles)) tracked
       match missing
         [] => True
         _ =>
@@ -3467,6 +3481,16 @@ checkTestMdkRoster targets files =
               "medaka test: git-tracked but not discovered: \{joinWith ", " missing}"
           False
     Ok (_, _, _) => True
+
+-- Drops a `root ++ "/"` prefix if `p` carries one, otherwise `p` unchanged
+-- (already root-relative, e.g. when the caller's target was relative).
+stripRootPrefix : String -> String -> String
+stripRootPrefix root p =
+  let prefix = root ++ "/"
+  if startsWith prefix p then
+    stringSlice (stringLength prefix) (stringLength p) p
+  else
+    p
 
 -- Reconstructs the argv for a per-file CHILD `medaka test` invocation
 -- (containment, below) from the already-resolved engine list/case
