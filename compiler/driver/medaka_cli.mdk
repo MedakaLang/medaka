@@ -3161,12 +3161,20 @@ runTestCmd argv0 =
                 ePutStrLn
                   "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
               exit 1
-            [target] =>
-              if jsonMode then
-                runTestJsonCmd engines cases filterOpt target
-              else match listDir target
-                Err _ => runTestOne engines cases filterOpt target
-                Ok _ => runTestManyTargets engines cases filterOpt [target]
+            [target] => match listDir target
+              Err _ =>
+                if jsonMode then
+                  runTestJsonCmd engines cases filterOpt target
+                else
+                  runTestOne engines cases filterOpt target
+              Ok _ =>
+                if jsonMode then
+                  let _ =
+                    ePutStrLn
+                      "medaka test --json: directory targets are not supported; pass a single file.mdk target"
+                  exit 1
+                else
+                  runTestManyTargets engines cases filterOpt [target]
             targets =>
               if jsonMode then
                 let _ =
@@ -3578,6 +3586,14 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
       False
     Ok (code, out, err) =>
       let _ = putStr out
+      -- `putStr` writes to buffered <Stdout>; `ePutStr`/`ePutStrLn` below write
+      -- straight through to unbuffered <Stderr>. Under a merged capture
+      -- (`2>&1`), the stderr write can hit disk before this file's still-
+      -- buffered stdout content flushes, splicing this file's DEAD notice
+      -- into the MIDDLE of an earlier or later file's own output. Flushing
+      -- here pins the ordering: this file's captured stdout is fully on disk
+      -- before any stderr write for it (or the next file) can occur.
+      let _ = flushStdout ()
       if code == 0 then
         True
       else
