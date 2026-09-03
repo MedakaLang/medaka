@@ -1,5 +1,5 @@
 # META
-source_lines=989
+source_lines=985
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -8,19 +8,15 @@ stages=DESUGAR,MARK
 -- and the vector obligation `VecObl` — and every pretty-printer over them
 -- (`ppMono`, `ppScheme`, `ppTy`, …) plus `normalize`, the union-find dereference.
 --
--- Split out of `compiler/types/typecheck.mdk` (#2586, the first extraction ruling 8
--- sanctions).  What lives here reads NO typechecker state cell — nothing in this
--- module touches `perRun`, `crossRun`, `driverState` or `graphRun`, which is the
--- criterion that made it a file rather than a gateway-owned region: the survey's
--- boundary measurement (2026-09-03, after #2547 unit 1) found every other candidate
--- boundary reaching into inference state, and this closure — the TYPES-REP tag plus
--- the renderers' helpers — the only one closed under its own references.  The two
--- scheme printers that DO read state (`ppSchemeNamed`, `ppSchemeNamedFull`, which
--- consult the scheme-obligation tables) stay in `typecheck.mdk`.
+-- What lives here reads NO typechecker state cell — nothing in this module touches
+-- `perRun`, `crossRun`, `driverState` or `graphRun` — and is closed under its own
+-- references.  That is the criterion for a file of its own rather than a region of
+-- `typecheck.mdk` (#2586); the two scheme printers that DO read state
+-- (`ppSchemeNamed`, `ppSchemeNamedFull`, which consult the scheme-obligation tables)
+-- stay there.
 --
--- Consumers that used to take these names from `types.typecheck` (the CLI's
--- diagnostics/doc/repl/lsp/check_policy and two entries) import them from here now;
--- `export import` re-exports values but not types, so the old path is not kept.
+-- `export import` re-exports values but not types, so consumers import these names
+-- from here directly.
 
 import frontend.ast.{Ty(..), Constraint(..), TyConOrigin(..)}
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}

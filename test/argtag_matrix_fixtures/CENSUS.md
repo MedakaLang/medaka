@@ -137,7 +137,8 @@ predicts:
   type that owns no constructors`) instead of the `fromInt` panic.
 - **`A5__B1` stays a `bug`**: the `requires`-carrying arm's body still has no route to its
   inner dict; the native failure moved from `E-NONEXHAUSTIVE-MATCH` to a memory fault (exit
-  139), loud on both engines.
+  139 — the shell's 128+SIGSEGV convention, not a code the binary chose), loud on both
+  engines.
 
 The control is unchanged. So the information needed to dispatch is present, the group/tag
 machinery handles it, and the ONLY shapes the arg-tag route cannot decide are the ones

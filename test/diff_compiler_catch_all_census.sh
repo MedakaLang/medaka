@@ -1,8 +1,8 @@
 #!/bin/sh
 # test/diff_compiler_catch_all_census.sh — catch-all clause RATCHET over
-# compiler/types/typecheck.mdk (#2551).
+# compiler/types/typecheck.mdk and compiler/types/repr.mdk (#2551).
 #
-# WHAT IT PINS. Every top-level multi-clause function in typecheck.mdk that
+# WHAT IT PINS. Every top-level multi-clause function in those two files that
 # dispatches on an `Expr` or `Decl` constructor at some parameter position
 # while its FINAL clause is a catch-all (`_` or a bare variable) there, and the
 # constructors it names do not cover the whole sum. Such a clause silently
@@ -61,14 +61,14 @@ fi
 [ -f "$LEDGER" ] || { echo "catch_all_census: missing ledger $LEDGER (run with --update)"; exit 1; }
 
 if diff -u "$LEDGER" "$TMP/now" > "$TMP/diff"; then
-  echo "catch_all_census: $(wc -l < "$LEDGER" | tr -d ' ') catch-all sites over Expr/Decl in typecheck.mdk, ledger unchanged"
+  echo "catch_all_census: $(wc -l < "$LEDGER" | tr -d ' ') catch-all sites over Expr/Decl in the typechecker, ledger unchanged"
   exit 0
 fi
 
 added="$(grep -c '^+[^+]' "$TMP/diff")"
 gone="$(grep -c '^-[^-]' "$TMP/diff")"
 echo "catch_all_census: FAIL — ledger drift ($added new site(s), $gone retired)"
-echo "  a NEW site is a catch-all clause over Expr/Decl added to typecheck.mdk: add the"
+echo "  a NEW site is a catch-all clause over Expr/Decl added to the typechecker: add the"
 echo "  missing arms, or justify it in a comment and re-derive the ledger;"
 echo "  a RETIRED site owes the re-derivation in the same diff:"
 echo "    sh test/diff_compiler_catch_all_census.sh --update"

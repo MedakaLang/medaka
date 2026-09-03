@@ -1,0 +1,4 @@
+-- #1343 control: identical to the collision fixture's `lib/w.mdk`.
+bump x = x + 1
+
+export used y = bump y

@@ -2877,7 +2877,10 @@ goalKindTag GKMethodDict = 7
 goalKindTag GKRecDictApp = 8
 
 pushGoal : Obligation -> Unit
-pushGoal o = graphRun.value.goals := o :: graphRun.value.goals.value
+pushGoal o =
+  let g = graphRun.value
+  g.goals := o :: g.goals.value
+  g.goalsN := g.goalsN.value + 1
 
 siteObligation : GoalKind -> PendingEntry -> Obligation
 siteObligation k (PendingEntry name tagRef m encl site loc) = Obligation {
@@ -2985,20 +2988,22 @@ recDictAppEntry o = match o.oPayload
 
 -- a bracket's mark: the channel's length now (what `wMark` was for `dictApps`)
 goalsMark : Unit -> Int
-goalsMark _ = listLen graphRun.value.goals.value
+goalsMark _ = graphRun.value.goalsN.value
 
 -- drop the goals of `kinds` recorded since `mark`, keeping every other goal
 -- (`inferPropBodies`' bracket: a prop body's operator sites must not be stamped)
 dropGoalsSince : Int -> List GoalKind -> Unit
 dropGoalsSince mark kinds =
-  let now = graphRun.value.goals.value
-  let n = listLen now - mark
+  let g = graphRun.value
+  let now = g.goals.value
+  let n = g.goalsN.value - mark
   let tags = map goalKindTag kinds
-  graphRun.value.goals :=
+  let kept =
     filterList
-        (o => not (containsI (goalKindTag o.oKind) tags))
-        (takeFirst n now)
-      ++ dropFirst n now
+      (o => not (containsI (goalKindTag o.oKind) tags))
+      (takeFirst n now)
+  g.goals := kept ++ dropFirst n now
+  g.goalsN := mark + listLen kept
 
 -- return-position method sites discovered during inference: (method name, the
 -- EMethodAt route ref to fill, the EMethodAt impl-dicts ref to fill, the method's
@@ -7460,15 +7465,15 @@ recordLocalBind name loc v =
 -- the invariant cannot drift; wMark/wWindow replace the `N0 = …N.value` snapshot +
 -- `takeFirst (…N.value - N0) …value` bracket pattern every channel repeats.  #838 I1
 -- ports `pendingCallObligations`/`pendingCallObligationsN` onto this — see
--- `compiler/types/typecheck.mdk`'s `obls` field below.  #841 ports the remaining two
--- channels, `pendingImplObligations` and `pendingDictApps`, onto it too — see the
--- `implObls`/`dictApps` fields below.
+-- `compiler/types/typecheck.mdk`'s `obls` field below.  #841 ported
+-- `pendingImplObligations` onto it too (the `implObls` field); the dictionary
+-- application channel lives on `GraphRun.goals` since #2547 unit 2.
 data Windowed a = Windowed { items : Ref (List a), n : Ref Int }
 
 wNew : Unit -> Windowed a
 wNew _ = Windowed { items = Ref [], n = Ref 0 }
 
--- the ONLY reset.  Unused — `freshPerRun` re-mints `obls`/`implObls`/`dictApps` via
+-- the ONLY reset.  Unused — `freshPerRun` re-mints `obls`/`implObls` via
 -- `wNew` rather than resetting an existing one (per-module reset is a whole-PerRun
 -- re-mint here, not a per-field reset), so none of these channels ever needs a
 -- reset-in-place.  Kept as part of the `Windowed` API surface for a future channel
@@ -8231,12 +8236,13 @@ consSiteFn fn x idx = omInsert fn (x :: sitesFor fn idx) idx
 sitesFor : String -> OrdMap (List a) -> List a
 sitesFor fn idx = optionOr [] (omLookup fn idx)
 
--- #194: cross-module accumulator for the FIRST (bare-dict) elaboration sweep's
--- direct promotions.  resetState clears promotedRef per module, so elabHarvestWorker
--- unions each module's promotedRef.value into here right after that module's
--- elabModuleStamp (before the next module's resetState wipes it).  elaborateModules
--- reads it to decide the empty-case short-circuit vs the discard-and-fallback.  Set
--- to [] by elaborateModules before the sweep; NOT touched by resetState.
+-- #194: cross-module accumulator for one elaboration sweep's direct promotions.
+-- resetState clears promotedRef per module, so elabHarvestWorker unions each
+-- module's promotedRef.value into here right after that module's elabModuleStamp
+-- (before the next module's resetState wipes it).  `elabPromotionFixpoint` reads it
+-- after each sweep: an empty delta over the grown set ends the fixpoint, anything
+-- else discards the sweep and re-runs with the union.  Set to [] by `elabSweep`
+-- before each sweep; NOT touched by resetState.
 
 -- O(log n) membership index of dictEligibleRef.  #415 item 3: DERIVED from the list by
 -- `setDictEligible`, the single writer of both — not mirrored at each set site, so the
@@ -8276,11 +8282,12 @@ sitesFor fn idx = optionOr [] (omLookup fn idx)
 
 -- the route refs awaiting an arg-position stamp + their discriminating-argument
 -- mono (captured during inference, resolved by resolveArgStamps while the tyvar
--- cells are still bound).  Reset per pass by resetState, like pendingSites.
+-- cells are still bound).  Recorded as `GKArgStamp` goals on `GraphRun.goals`,
+-- drained per module like the return-position sites.
 -- D3b-1: also carries the method name + the EMethodAt impl-dicts ref, so a
 -- concrete site whose head names a parametric `requires` impl can thread the
 -- element dict (resolveArgStamp → argImplDictRoutesForEncl), exactly as the
--- return-position pendingSites carry implRef for resolveSite.
+-- return-position sites carry implRef for resolveSite.
 -- #156 S3a: entries are `PendingEntry`s of kind `SKArg`.
 
 -- the dispatch-index registry: each interface method → index of its first arg
@@ -9005,10 +9012,13 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- Deliberately still per-module: `funPredicateSlotsRef` (keyed by bare binding NAME —
 -- graph-global it would collide across modules; it is seeded from and written back to
 -- crossRun's tables per module already) and the impl-`requires` given table.
--- `activeDictVars` / `activeDictPreds` ARE here: both are keyed by tyvar ids, which the
--- graph counter keeps unique, so an entry can only ever match its own module's sites.
--- Their lookups became whole-graph linear scans (`diff_compiler_perf_scaling` is the
--- gate on that), which unit 3's re-keying (`gGiven`) retires.
+-- `activeDictVars` IS here: keyed by tyvar id, which the graph counter keeps unique, so
+-- an entry can only ever match its own module's sites.  Its lookups became whole-graph
+-- linear scans (`diff_compiler_perf_scaling` is the gate on that), which unit 3's
+-- re-keying (`gGiven`) retires.  `activeDictPreds` is NOT here: a `PSArgsKnown` slot
+-- over concrete monos (`Show Int`) carries no tyvar id, and `activeDictPredOf`'s
+-- unscoped fallback (empty owner prefix) would match such an entry from an earlier
+-- module — so it stays per-module on `PerRun` until unit 3 keys givens by module.
 data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 
 data GraphRun = GraphRun {
@@ -9022,12 +9032,10 @@ data GraphRun = GraphRun {
   -- deliberately NOT ported onto `UObligation` like `implObls` was.
   numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
   activeDictVars : Ref (List (Int, String)),
-  -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
-  -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
-  -- same predicate as another iff they have equal length and `monoSameGiven` holds at
-  -- every position, in order — see `monoVecSameGiven`.
-  activeDictPreds : Ref (List (PredicateSlot, String)),
   moduleRanges : Ref (List (String, GraphMarks)),
+  -- the channel's length, maintained by `pushGoal` / `dropGoalsSince`, so a mark is
+  -- O(1) — `goalsMark` is taken at every `let` and SCC bracket
+  goalsN : Ref Int,
 }
 
 freshGraphRun : Unit -> GraphRun
@@ -9037,8 +9045,8 @@ freshGraphRun _ = GraphRun {
   goals = Ref [],
   numlitRefs = Ref [],
   activeDictVars = Ref [],
-  activeDictPreds = Ref [],
   moduleRanges = Ref [],
+  goalsN = Ref 0,
 }
 
 graphRun : Ref GraphRun
@@ -9056,14 +9064,14 @@ copyGraphRun g = GraphRun {
   goals = Ref g.goals.value,
   numlitRefs = Ref g.numlitRefs.value,
   activeDictVars = Ref g.activeDictVars.value,
-  activeDictPreds = Ref g.activeDictPreds.value,
   moduleRanges = Ref g.moduleRanges.value,
+  goalsN = Ref g.goalsN.value,
 }
 
 -- Each channel's length as this module begins.
 graphMarksNow : Unit -> GraphMarks
 graphMarksNow _ = GraphMarks {
-  mGoals = listLen graphRun.value.goals.value,
+  mGoals = graphRun.value.goalsN.value,
   mNumlit = listLen graphRun.value.numlitRefs.value,
 }
 
@@ -9104,6 +9112,12 @@ data PerRun = PerRun {
   -- True while an IMPL or DEFAULT method body is being inferred — the scope in
   -- which registerLocalScheme records obligations (see its comment).
   inRigidityBodyRef : Ref Bool,
+  -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
+  -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
+  -- same predicate as another iff they have equal length and `monoSameGiven` holds at
+  -- every position, in order — see `monoVecSameGiven`.  Per-module, not on
+  -- `GraphRun`: see the note above `data GraphMarks`.
+  activeDictPreds : Ref (List (PredicateSlot, String)),
   curEffect : Ref EffRow,
   rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
   recordByNameRef : Ref (OrdMap RecordInfo),
@@ -9208,6 +9222,7 @@ data PerRun = PerRun {
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
+  activeDictPreds = Ref [],
   curEffect = Ref (EffRow [] None),
   rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -9963,10 +9978,10 @@ isDeclaredCtorHead : TcEnv -> String -> Bool
 isDeclaredCtorHead env name =
   name /= "Ref" && ctorHeadShaped name && isSome (lookupCtor env name)
 
--- True iff the first character of a name is an ASCII uppercase letter,
--- i.e. the name looks like a data constructor or type name.
--- Uppercase-initial, or a mangled `<mid>__<Ctor>` whose segment after the LAST
--- `__` is uppercase-initial.  A spelling pre-filter only; `lookupCtor` decides.
+-- Spelled like a data constructor: uppercase-initial, or a mangled `<mid>__<Ctor>`
+-- whose segment after the FIRST `__` is uppercase-initial (`private_mangle` joins
+-- with one `__`, and a module id never contains one).  A spelling pre-filter only;
+-- `lookupCtor` decides.
 ctorHeadShaped : String -> Bool
 ctorHeadShaped name =
   let cs = stringToChars name
@@ -28714,13 +28729,13 @@ checkBodyImpl seed mode prog0 =
 -- operators must stay PRIMITIVE EBinOps the eval builtin handles structurally, not
 -- get stamped and rewritten to eq/lt method apps (whose dict route would then be
 -- applied to a non-dict-passed comparison, panic: applied non-function).  So
--- snapshot pendingBinopSites around prop inference and restore it after: the routes
--- the prop body NEEDS (EDictAt for the file's promoted constrained fns, via
--- pendingDictApps/pendingSites) are still collected; only the binop-rewrite sites
--- the prop body would otherwise contribute are dropped.
+-- bracket the goal channel around prop inference (`dropGoalsSince`): the routes
+-- the prop body NEEDS (EDictAt for the file's promoted constrained fns, via the
+-- dictionary-application and return-site goals) are still collected; only the
+-- operator-rewrite goals the prop body would otherwise contribute are dropped.
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodies env prog =
-  let mark = listLen graphRun.value.goals.value
+  let mark = goalsMark ()
   let _ = inferPropBodiesGo env prog
   dropGoalsSince mark [GKBinopSite, GKUnopSite, GKArithSite]
 
@@ -32394,8 +32409,8 @@ registerPredGiven iface args dname
       psArgs = PSArgsKnown args,
       psBoundIds = dedupI (flatMap monoTyvarIds args),
     }
-    graphRun.value.activeDictPreds :=
-      (slot, dname) :: graphRun.value.activeDictPreds.value
+    perRun.value.activeDictPreds :=
+      (slot, dname) :: perRun.value.activeDictPreds.value
 
 monoIsBareTyvar : Mono -> Bool
 monoIsBareTyvar m = match normalize m
@@ -32450,7 +32465,7 @@ monoVecSameGiven _ _ = False
 -- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does.
 activeDictPredOf : PredicateRequest -> Mono -> String -> Option String
 activeDictPredOf request targetMono encl =
-  let preds = graphRun.value.activeDictPreds.value
+  let preds = perRun.value.activeDictPreds.value
   let local =
     if encl == "" then
       None
@@ -32482,7 +32497,7 @@ activeFunDictPredOf request encl =
   firstPredForEncl
     request
     ("$dict_" ++ encl ++ "_")
-    graphRun.value.activeDictPreds.value
+    perRun.value.activeDictPreds.value
 
 firstPredForEncl : PredicateRequest ->
   String ->
@@ -32516,7 +32531,7 @@ activeFunDictPredOfResidual iface args encl =
     iface
     args
     ("$dict_" ++ encl ++ "_")
-    graphRun.value.activeDictPreds.value
+    perRun.value.activeDictPreds.value
 
 firstPredForEnclResidual : String ->
   List Mono ->
@@ -34655,8 +34670,8 @@ registerFunPredGiven slot dname
 registerFunPredGivenSlots : List PredicateSlot -> String -> Unit
 registerFunPredGivenSlots [] _ = ()
 registerFunPredGivenSlots (slot :: rest) dname =
-  graphRun.value.activeDictPreds :=
-    (slot, dname) :: graphRun.value.activeDictPreds.value
+  perRun.value.activeDictPreds :=
+    (slot, dname) :: perRun.value.activeDictPreds.value
   registerFunPredGivenSlots rest dname
 
 -- A dictionary supplied for one predicate also supplies every transitive
@@ -35892,7 +35907,7 @@ goalMatchesGiven _ [] = False
 goalMatchesGiven iface args =
   anyGivenMatches
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-    graphRun.value.activeDictPreds.value
+    perRun.value.activeDictPreds.value
 
 anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
 anyGivenMatches _ [] = False
@@ -36466,8 +36481,8 @@ registerInferredFor m ids vecs =
   -- that is stored and cannot differ from it in length or order.  ⚠️ This moves
   -- `ifaceForInferredId`'s evaluation BEFORE the `funConstraintsRef` write (it used to
   -- sit in the second `setRef`'s argument, i.e. after it); that is sound only because it
-  -- reads `implObls` / `schemeObligationsRef` / `dictApps` and NEITHER fn-constraint
-  -- table — checked, since a recovery that consulted them would change answers here.
+  -- reads `implObls` / `schemeObligationsRef` / the dictionary-application goals and
+  -- NEITHER fn-constraint table — checked, since a recovery that consulted them would change answers here.
   let slots = inferredPredicateSlots m ids vecs
   let _ = setFunConstraintEntry m slots
   let _ = registerActiveDictVars m 0 slots
@@ -36526,8 +36541,10 @@ inferredPredicateSlots m (id :: rest) vecs =
 -- U1b (#1482): returns an `IfaceRef`, since `funConstraintIfacesRef` now stores one.
 -- Fallbacks (1) and (2) carry a real occurrence identity — `implObls` and
 -- `schemeObligationsRef` both hold one.  Fallback (3) CANNOT and does not pretend to:
--- `pendingDictApps` stores a route WORD (see `resolveDictApps` / `dispHeadTab`), so its
--- recovery is bare by construction.  `ifaceRefNone` is the "no interface here" sentinel,
+-- a `GKDictApp` goal stores a route WORD (see `resolveDictApps` / `dispHeadTab`), so
+-- its recovery is bare by construction.  The scan is over the CURRENT module's goals
+-- only: an earlier module's application of the same scheme var id would be a stale
+-- read under the graph-wide counter.  `ifaceRefNone` is the "no interface here" sentinel,
 -- which is a different fact from "identity unrecoverable".
 ifaceForInferredId : String -> Int -> IfaceRef
 ifaceForInferredId m id =
@@ -36536,9 +36553,10 @@ ifaceForInferredId m id =
     direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
     Some ir => ir
-    None => match ifaceFromDictApps id (dictAppsSince 0)
-      "" => ifaceRefNone
-      n => ifaceRefBare n
+    None =>
+      match ifaceFromDictApps id (dictAppsSince (currentModuleMarks ()).mGoals)
+        "" => ifaceRefNone
+        n => ifaceRefBare n
 
 -- #837: keyed by member NAME only (the id here is a SCHEME-VAR id, not a binding
 -- id) — match the name component of the (name, binding-id) key, first match wins.
@@ -41074,10 +41092,10 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- `checkModulesPreamble` carries, for the one Module-mode driver that does not use
   -- that preamble.  See `graphMethodExports`.
   --
-  -- This driver runs the `Module` arm on TWO paths — the bare sweep below and, when
-  -- `promotionHarvestRef` is non-empty, the second sweep in the `_ =>` arm that begins
-  -- with another `resetCrossModuleState ()`.  This one write covers both ONLY because
-  -- the ref is on `driverState`, which that reset does not touch (F1).
+  -- This driver runs the `Module` arm once per sweep of `elabPromotionFixpoint`, and
+  -- every sweep after the first begins with another `resetCrossModuleState ()`.  This
+  -- one write covers all of them ONLY because the ref is on `driverState`, which that
+  -- reset does not touch (F1).
   driverState.value.graphMethodExportsRef :=
     graphMethodExports coreDecls modules
   -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
@@ -42039,12 +42057,12 @@ markModules coreDecls modules =
   (core2, modules2)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
--- EMethodAt route refs it just recorded.  checkModuleFull's resetState clears
--- pendingSites before inference, so on return pendingSites holds exactly THIS
--- module's sites; the tyvar cells are still bound (the next module's resetState
--- hasn't run yet), so resolveSites reads each site's resolved result type.
+-- EMethodAt route refs it just recorded.  `recordModuleStart` marks the goal channel
+-- before inference, so on return the module's window holds exactly THIS module's
+-- sites; the tyvar cells are still bound (the next module's resetState hasn't run
+-- yet), so resolveSites reads each site's resolved result type.
 -- E4: ALSO stamp this module's ARG-position sites
--- (pendingArgStamps, likewise this-module-only after resetState) from their now-
+-- (the `GKArgStamp` goals in the same window) from their now-
 -- resolved discriminating-argument monos — the multi-module analogue of
 -- elaborateDict's resolveArgStamps.  [implDecls] is core + every EARLIER module +
 -- this module, so a cross-module parametric `requires` element dict resolves; a
@@ -42287,10 +42305,37 @@ elabPromotionFixpoint es grown =
     typeErrorsSticky := savedSticky
     typeErrorsStickyDiags := savedStickyDiags
     driverState.value.matchWarnings := savedMatchWarnings
+    let _ = clearSweepCells ()
     let _ = resetCrossModuleState ()
     driverState.value.mainSchemeRef := None
     driverState.value.superDeclsRef := es.esAllDecls
     elabPromotionFixpoint es next
+
+-- A discarded sweep stamped route cells that live in the AST the next sweep
+-- re-infers over.  Clear every cell the sweep recorded a goal or numeric literal
+-- for, so a site the next sweep does not re-record (or records but cannot resolve)
+-- cannot keep a route derived from the discarded promotion set.  Runs before
+-- `resetGraphState` drops the channel that names those cells.
+clearSweepCells : Unit -> Unit
+clearSweepCells _ =
+  let g = graphRun.value
+  let _ = clearGoalCells g.goals.value
+  clearNumlitCells g.numlitRefs.value
+
+clearGoalCells : List Obligation -> Unit
+clearGoalCells [] = ()
+clearGoalCells (o :: rest) =
+  let _ = match o.oDest
+    EvRoute r => r := RNone
+    EvRoutes rs => rs := []
+  clearGoalCells rest
+
+clearNumlitCells : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+clearNumlitCells [] = ()
+clearNumlitCells ((_, fref, _, dref) :: rest) =
+  fref := None
+  dref := RNone
+  clearNumlitCells rest
 
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []

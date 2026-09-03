@@ -180,7 +180,7 @@ import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
   hadTypeErrors,
-  stickyTypeErrorDiags,
+  TcDiag,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
@@ -942,11 +942,12 @@ renderTripleWarnings (path, src, diags) =
 -- `medaka check` on this program exits 0 and reports success.  The old text read
 -- "Run `medaka check` for details" and so named the one command guaranteed to
 -- confirm the wrong thing.  #2544 (M4): the elaborate pass's residual IS reachable
--- now — `stickyTypeErrorDiags` holds every diagnostic the elaboration that just ran
--- left standing, each with its own `Loc` — so the arm renders it located, through
--- the same face `check` uses.  The generic text survives only for a residual that
--- carries nothing (a `hadTypeErrors` armed by a push this channel does not see),
--- and it still says WHERE the error was detected and that `check` may not show it.
+-- now — `elaborateModules` returns every diagnostic the elaboration left standing,
+-- each with its own `Loc`, and the caller hands that list here — so the arm renders
+-- it located, through the same face `check` uses.  The generic text survives only
+-- for a residual that carries nothing (a `hadTypeErrors` armed by a push this
+-- channel does not see), and it still says WHERE the error was detected and that
+-- `check` may not show it.
 locatedOrGeneric : Bool ->
   List String ->
   List (String, String) ->
@@ -954,11 +955,12 @@ locatedOrGeneric : Bool ->
   List String ->
   String ->
   String ->
+  List (String, TcDiag) ->
   <IO> String
-locatedOrGeneric allowInternal trusted pathMap target roots rsrc csrc =
+locatedOrGeneric allowInternal trusted pathMap target roots rsrc csrc residual =
   match locatedProjectErrors allowInternal trusted target roots rsrc csrc
     Some t => t
-    None => match renderTcDiags pathMap (stickyTypeErrorDiags ())
+    None => match renderTcDiags pathMap residual
       [] =>
         "error: type error in "
           ++ target
@@ -2506,7 +2508,7 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
       (Some errText, _, _) => TGErr errText
       (None, projWarns, _) =>
         let _ = resetTypeErrorsSticky ()
-        let _ = elaborateModules rtD coreD modsD
+        let (_, _, residual) = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
           True =>
             TGErr
@@ -2517,7 +2519,8 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
                 target
                 roots
                 rsrc
-                csrc)
+                csrc
+                residual)
           -- #1236: same main-shape fold as the single-module arm above.
           -- `elaborateModules` just ran over the WHOLE graph (line above), so
           -- mainSchemeRef is already populated — no second typecheck pass.
@@ -2868,7 +2871,7 @@ runRunCmd argv =
           match errs
             [] =>
               let _ = resetTypeErrorsSticky ()
-              let elaborated = elaborateRun rtD coreD modsD
+              let (coreE, modsE, _) = elaborateRun rtD coreD modsD
               let perfTCheck = now ()
               let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
               -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
@@ -2881,7 +2884,7 @@ runRunCmd argv =
               finishRunEval
                 target
                 jsonMode
-                elaborated
+                (coreE, modsE)
                 mods
                 (allWarnTriples tsrc target diags)
                 (runEvalPerf perfOn target perfT0 perfTCheck)
@@ -2928,7 +2931,7 @@ runRunCmd argv =
                 (Some errText, _, _) => runAbort errText
                 (None, projWarns, _) =>
                   let _ = resetTypeErrorsSticky ()
-                  let elaborated = elaborateRun rtD coreD modsD
+                  let (coreE, modsE, residual) = elaborateRun rtD coreD modsD
                   match hadTypeErrors ()
                     True =>
                       -- Belt-and-braces: anything only the emit/eval
@@ -2941,7 +2944,8 @@ runRunCmd argv =
                           target
                           roots
                           rsrc
-                          csrc)
+                          csrc
+                          residual)
                     False =>
                       let perfTCheck = now ()
                       let _ =
@@ -2949,7 +2953,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        elaborated
+                        (coreE, modsE)
                         mods
                         projWarns
                         (runEvalPerf perfOn target perfT0 perfTCheck)
@@ -2988,23 +2992,18 @@ modIdToPath (mid, path, _) = (mid, path)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (List Decl, List (String, List Decl))
+  <IO> (List Decl, List (String, List Decl), List (String, TcDiag))
 elaborateRun rtD coreD modsD =
-  let (coreE, modulesE, _) = elaborateModules rtD coreD modsD
+  let plain = elaborateModules rtD coreD modsD
   match asyncMainShapeError modsD
     Some msg =>
       let _ = runAbort msg
-      (coreE, modulesE)
+      plain
     None =>
-      if shouldAsyncWrapMain
-        "runAsyncIOMain"
-        modsD then match (elaborateModules
-        rtD
-        coreD
-        (asyncWrapModules "runAsyncIOMain" modsD))
-        (coreW, modulesW, _) => (coreW, modulesW)
+      if shouldAsyncWrapMain "runAsyncIOMain" modsD then
+        elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
       else
-        (coreE, modulesE)
+        plain
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main

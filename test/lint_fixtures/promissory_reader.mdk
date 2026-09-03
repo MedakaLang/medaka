@@ -27,6 +27,23 @@ export data Cell = Cell {
 export slotOf : Cell -> Int
 slotOf c = c.slot
 
+-- FIRES: the claim is wrapped across two comment lines; the block is read as one.
+-- The channel is recorded here but nothing reads
+-- `wrapped` yet.
+export wrapped : Int
+wrapped = 11
+
+export readsWrapped : Int
+readsWrapped = wrapped + 1
+
+-- FIRES: "no consumer yet" is the same claim in other words.
+-- no consumer yet; `producer` is written for the next slice
+export producer : Int
+producer = 5
+
+export consumer : Int
+consumer = producer * 3
+
 -- does NOT fire: the claim is true — nothing reads `unusedTable`.
 -- nothing reads `unusedTable` yet
 export unusedTable : List Int
@@ -45,7 +62,14 @@ writeSink = sink := 1
 export twice : Int
 twice = readsCounter * 2
 
--- does NOT fire: the backward-looking form carries its own evidence.
+-- does NOT fire: the subject is not declared in this file (`listLen` is the
+-- stdlib's), so the claim is that file's to bear out, not this one's.
+-- nothing reads `listLen` yet
+export usesLen : Int
+usesLen = listLen [1, 2]
+
+-- does NOT fire: the backward-looking form makes no "yet" claim, so the block is
+-- not a claim at all (and its subject, `inertFlag`, has no reader either).
 -- inert BECAUSE the caller was reverted — MEASURED constant-True; nothing reads
 -- the mis-bound word in between.
 export inertFlag : Bool

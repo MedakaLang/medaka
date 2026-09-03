@@ -580,8 +580,10 @@ renderTcDiagsGo pathMap ((mid, d) :: rest) cache = match lookupAssoc mid pathMap
     let (lines, cache2) = srcLinesCached file cache
     ppDiagCliLines lines file (diagOfTypeError d)
       :: renderTcDiagsGo pathMap rest cache2
+  -- no path for this module id (the prelude, or a caller that passed no map):
+  -- the id stands in for the file, marked so it is not read as one
   None =>
-    ppDiagCliLines (arrayFromList []) mid (diagOfTypeError d)
+    ppDiagCliLines (arrayFromList []) "(module \{mid})" (diagOfTypeError d)
       :: renderTcDiagsGo pathMap rest cache
 
 -- one read per file, however many diagnostics land in it

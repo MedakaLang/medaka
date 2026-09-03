@@ -1,5 +1,5 @@
 # META
-source_lines=5474
+source_lines=5502
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -4505,7 +4505,13 @@ promissoryClaimOf : CommentBlock -> List (Int, String, CommentBlock)
 promissoryClaimOf (b@(CommentBlock first _ _ text)) =
   match promissoryLine (splitNl text) 0
     Some (i, l) => [(first + i, l, b)]
-    None => []
+    None =>
+      -- a claim wrapped across lines: test the block as one line
+      let joined = joinWith " " (splitNl text)
+      if isPromissoryText (stringToLower (stripQuoted joined)) then
+        [(first, joined, b)]
+      else
+        []
 
 promissoryLine : List String -> Int -> Option (Int, String)
 promissoryLine [] _ = None
@@ -4519,6 +4525,8 @@ isPromissoryText t =
   has "nothing reads" && has "yet"
     || has "no reader yet"
     || has "no readers yet"
+    || has "no consumer yet"
+    || has "no consumers yet"
     || has "do not add a reader"
     || has "don't add a reader"
 
@@ -4609,19 +4617,39 @@ promissoryFinding : String ->
   List Finding
 promissoryFinding path codeLines claim = match claimSubject codeLines claim
   None => []
-  Some subject => match readerLines subject codeLines
-    [] => []
-    firstReader :: more =>
-      let (line, _, _) = claim
-      [
-        Finding {
-          rule = ruleNamePromissoryReader,
-          message =
-            "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
-          severity = SevWarning,
-          loc = Some (Loc path line 1 line 1),
-        },
-      ]
+  Some subject =>
+    -- a claim about a name this file does not declare is another file's to bear
+    -- out (and a bare word from the prose would otherwise match any use of it)
+    if declaredInFile subject codeLines then
+      readerFinding path subject claim (readerLines subject codeLines)
+    else
+      []
+
+readerFinding : String ->
+  String ->
+  (Int, String, CommentBlock) ->
+  List Int ->
+  List Finding
+readerFinding _ _ _ [] = []
+readerFinding path subject (line, _, _) (firstReader :: more) = [
+  Finding {
+    rule = ruleNamePromissoryReader,
+    message =
+      "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
+    severity = SevWarning,
+    loc = Some (Loc path line 1 line 1),
+  },
+]
+
+declaredInFile : String -> Array String -> Bool
+declaredInFile subject codeLines =
+  declaredInFileGo subject codeLines (arrayLength codeLines) 1
+
+declaredInFileGo : String -> Array String -> Int -> Int -> Bool
+declaredInFileGo subject codeLines n line
+  | line > n = False
+  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+  | otherwise = declaredInFileGo subject codeLines n (line + 1)
 
 readerCountSuffix : Int -> String
 readerCountSuffix 0 = ""
@@ -6898,12 +6926,12 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "promissoryClaims" (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
 (DFunDef false "promissoryClaims" ((PVar "blocks")) (EApp (EApp (EVar "flatMap") (EVar "promissoryClaimOf")) (EVar "blocks")))
 (DTypeSig false "promissoryClaimOf" (TyFun (TyCon "CommentBlock") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
-(DFunDef false "promissoryClaimOf" ((PAs "b" (PCon "CommentBlock" (PVar "first") PWild PWild (PVar "text")))) (EMatch (EApp (EApp (EVar "promissoryLine") (EApp (EVar "splitNl") (EVar "text"))) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "i") (PVar "l"))) () (EListLit (ETuple (EBinOp "+" (EVar "first") (EVar "i")) (EVar "l") (EVar "b")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "promissoryClaimOf" ((PAs "b" (PCon "CommentBlock" (PVar "first") PWild PWild (PVar "text")))) (EMatch (EApp (EApp (EVar "promissoryLine") (EApp (EVar "splitNl") (EVar "text"))) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "i") (PVar "l"))) () (EListLit (ETuple (EBinOp "+" (EVar "first") (EVar "i")) (EVar "l") (EVar "b")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EVar "text")))) (DoExpr (EIf (EApp (EVar "isPromissoryText") (EApp (EVar "stringToLower") (EApp (EVar "stripQuoted") (EVar "joined")))) (EListLit (ETuple (EVar "first") (EVar "joined") (EVar "b"))) (EListLit)))))))
 (DTypeSig false "promissoryLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "promissoryLine" ((PList) PWild) (EVar "None"))
 (DFunDef false "promissoryLine" ((PCons (PVar "l") (PVar "rest")) (PVar "i")) (EIf (EApp (EVar "isPromissoryText") (EApp (EVar "stringToLower") (EApp (EVar "stripQuoted") (EVar "l")))) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "promissoryLine") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isPromissoryText" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isPromissoryText" ((PVar "t")) (EBlock (DoLet false false (PVar "has") (ELam ((PVar "needle")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "t"))))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EApp (EVar "has") (ELit (LString "nothing reads"))) (EApp (EVar "has") (ELit (LString "yet")))) (EApp (EVar "has") (ELit (LString "no reader yet")))) (EApp (EVar "has") (ELit (LString "no readers yet")))) (EApp (EVar "has") (ELit (LString "do not add a reader")))) (EApp (EVar "has") (ELit (LString "don't add a reader")))))))
+(DFunDef false "isPromissoryText" ((PVar "t")) (EBlock (DoLet false false (PVar "has") (ELam ((PVar "needle")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "t"))))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EApp (EVar "has") (ELit (LString "nothing reads"))) (EApp (EVar "has") (ELit (LString "yet")))) (EApp (EVar "has") (ELit (LString "no reader yet")))) (EApp (EVar "has") (ELit (LString "no readers yet")))) (EApp (EVar "has") (ELit (LString "no consumer yet")))) (EApp (EVar "has") (ELit (LString "no consumers yet")))) (EApp (EVar "has") (ELit (LString "do not add a reader")))) (EApp (EVar "has") (ELit (LString "don't add a reader")))))))
 (DTypeSig false "stripQuoted" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripQuoted" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "after")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (arm (PCon "Some" (PVar "j")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "stripQuoted") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "after"))) (EVar "after"))))) (ELit (LString ""))))))))))
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
@@ -6923,7 +6951,14 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "ch")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlnum") (EVar "ch")) (EBinOp "==" (EVar "ch") (ELit (LChar "_")))) (EBinOp "==" (EVar "ch") (ELit (LChar "'")))))
 (DTypeSig false "promissoryFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EMatch (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines")) (arm (PList) () (EListLit)) (arm (PCons (PVar "firstReader") (PVar "more")) () (EBlock (DoLet false false (PTuple (PVar "line") PWild PWild) (EVar "claim")) (DoExpr (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1)))))))))))))))
+(DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EIf (EApp (EApp (EVar "declaredInFile") (EVar "subject")) (EVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "readerFinding") (EVar "path")) (EVar "subject")) (EVar "claim")) (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines"))) (EListLit)))))
+(DTypeSig false "readerFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "readerFinding" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1)))))))))
+(DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
+(DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EVar "n")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readerCountSuffix" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "readerCountSuffix" ((PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "readerCountSuffix" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString " and ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " more line(s)"))))
@@ -8564,12 +8599,12 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "promissoryClaims" (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
 (DFunDef false "promissoryClaims" ((PVar "blocks")) (EApp (EApp (EDictApp "flatMap") (EVar "promissoryClaimOf")) (EVar "blocks")))
 (DTypeSig false "promissoryClaimOf" (TyFun (TyCon "CommentBlock") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
-(DFunDef false "promissoryClaimOf" ((PAs "b" (PCon "CommentBlock" (PVar "first") PWild PWild (PVar "text")))) (EMatch (EApp (EApp (EVar "promissoryLine") (EApp (EVar "splitNl") (EVar "text"))) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "i") (PVar "l"))) () (EListLit (ETuple (EBinOp "+" (EVar "first") (EVar "i")) (EVar "l") (EVar "b")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "promissoryClaimOf" ((PAs "b" (PCon "CommentBlock" (PVar "first") PWild PWild (PVar "text")))) (EMatch (EApp (EApp (EVar "promissoryLine") (EApp (EVar "splitNl") (EVar "text"))) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "i") (PVar "l"))) () (EListLit (ETuple (EBinOp "+" (EVar "first") (EVar "i")) (EVar "l") (EVar "b")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EVar "text")))) (DoExpr (EIf (EApp (EVar "isPromissoryText") (EApp (EVar "stringToLower") (EApp (EVar "stripQuoted") (EVar "joined")))) (EListLit (ETuple (EVar "first") (EVar "joined") (EVar "b"))) (EListLit)))))))
 (DTypeSig false "promissoryLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "promissoryLine" ((PList) PWild) (EVar "None"))
 (DFunDef false "promissoryLine" ((PCons (PVar "l") (PVar "rest")) (PVar "i")) (EIf (EApp (EVar "isPromissoryText") (EApp (EVar "stringToLower") (EApp (EVar "stripQuoted") (EVar "l")))) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "promissoryLine") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isPromissoryText" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isPromissoryText" ((PVar "t")) (EBlock (DoLet false false (PVar "has") (ELam ((PVar "needle")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "t"))))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EApp (EVar "has") (ELit (LString "nothing reads"))) (EApp (EVar "has") (ELit (LString "yet")))) (EApp (EVar "has") (ELit (LString "no reader yet")))) (EApp (EVar "has") (ELit (LString "no readers yet")))) (EApp (EVar "has") (ELit (LString "do not add a reader")))) (EApp (EVar "has") (ELit (LString "don't add a reader")))))))
+(DFunDef false "isPromissoryText" ((PVar "t")) (EBlock (DoLet false false (PVar "has") (ELam ((PVar "needle")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "t"))))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EApp (EVar "has") (ELit (LString "nothing reads"))) (EApp (EVar "has") (ELit (LString "yet")))) (EApp (EVar "has") (ELit (LString "no reader yet")))) (EApp (EVar "has") (ELit (LString "no readers yet")))) (EApp (EVar "has") (ELit (LString "no consumer yet")))) (EApp (EVar "has") (ELit (LString "no consumers yet")))) (EApp (EVar "has") (ELit (LString "do not add a reader")))) (EApp (EVar "has") (ELit (LString "don't add a reader")))))))
 (DTypeSig false "stripQuoted" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripQuoted" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "after")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (arm (PCon "Some" (PVar "j")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "stripQuoted") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "after"))) (EVar "after"))))) (ELit (LString ""))))))))))
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
@@ -8589,7 +8624,14 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "ch")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlnum") (EVar "ch")) (EBinOp "==" (EVar "ch") (ELit (LChar "_")))) (EBinOp "==" (EVar "ch") (ELit (LChar "'")))))
 (DTypeSig false "promissoryFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EMatch (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines")) (arm (PList) () (EListLit)) (arm (PCons (PVar "firstReader") (PVar "more")) () (EBlock (DoLet false false (PTuple (PVar "line") PWild PWild) (EVar "claim")) (DoExpr (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EMethodRef "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1)))))))))))))))
+(DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EIf (EApp (EApp (EVar "declaredInFile") (EVar "subject")) (EVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "readerFinding") (EVar "path")) (EVar "subject")) (EVar "claim")) (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines"))) (EListLit)))))
+(DTypeSig false "readerFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "readerFinding" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EMethodRef "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1)))))))))
+(DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
+(DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EVar "n")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readerCountSuffix" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "readerCountSuffix" ((PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "readerCountSuffix" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString " and ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " more line(s)"))))

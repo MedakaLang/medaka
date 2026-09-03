@@ -1,0 +1,9 @@
+-- Control for `priv_helper_name_collision_1343`: the same import and the same
+-- call, with NO same-named binding in this file.  Both fixtures print 2, so a
+-- failure of the collision fixture alone is about the collision — not about the
+-- wildcard import, the private helper's inferred constraint, or `used` itself.
+import lib.w.*
+
+data NoNum = NoNum
+
+main = println (used 1)

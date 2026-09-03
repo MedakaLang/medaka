@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Catch-all clause census over compiler/types/typecheck.mdk (#2551).
+"""Catch-all clause census over the typechecker (`compiler/types/typecheck.mdk` and `compiler/types/repr.mdk`, #2551).
 
 Enumerates every top-level multi-clause function whose clauses dispatch on an
 `Expr` or `Decl` constructor at some parameter position while the FINAL clause
@@ -23,7 +23,7 @@ import sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "."
 AST = f"{ROOT}/compiler/frontend/ast.mdk"
-SRC = f"{ROOT}/compiler/types/typecheck.mdk"
+SRCS = [f"{ROOT}/compiler/types/typecheck.mdk", f"{ROOT}/compiler/types/repr.mdk"]
 SUMS = ("Expr", "Decl")
 
 
@@ -108,7 +108,7 @@ def clause_positions(params):
 def main():
     try:
         ast = open(AST).read()
-        src = open(SRC).read()
+        src = "\n".join(open(p).read() for p in SRCS)
     except OSError as e:
         print(f"MISSING: {e}", file=sys.stderr)
         return 3
@@ -148,7 +148,7 @@ def main():
         prev = name
 
     if not groups:
-        print(f"MISSING: no clause groups found in {SRC}", file=sys.stderr)
+        print(f"MISSING: no clause groups found in {SRCS}", file=sys.stderr)
         return 3
 
     sites = []

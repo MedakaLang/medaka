@@ -460,14 +460,19 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
    path's `inferUserImplBodies`); the corpus's acceptance delta is empty. The Flat arm's
    gate stays (E-2b's business); the impl-obligation gate on the emit path is untouched.
 6. **Step 5 unit 1 done** (#2547): `GraphRun` — the deferred channels, the two counters and
-   the id-keyed given tables are graph-lifetime; per-module drains take their slices from
-   `GraphMarks` recorded at module start (`moduleRanges` is the substrate step 6 reads).
-   `funPredicateSlotsRef` and the impl-`requires` givens stay per-module (bare-name keyed).
+   the tyvar-id-keyed given table (`activeDictVars`) are graph-lifetime; per-module drains
+   take their slices from `GraphMarks` recorded at module start (`moduleRanges` is the
+   substrate step 6 reads). `funPredicateSlotsRef`, the impl-`requires` givens (bare-name
+   keyed) and the predicate-keyed `activeDictPreds` stay per-module — the last went to
+   `GraphRun` in the first cut and came back in review: a `PSArgsKnown` slot over concrete
+   monos carries no id the graph counter could scope, and `activeDictPredOf`'s unscoped
+   fallback would match an earlier module's given (unit 3's re-keying is the fix).
 7. **Ruling 8's measurement, re-run after unit 1** with the survey's per-binding tags on
    the branch's tree: every candidate boundary (K, HM core, I, E, Sh, D) still references
    every other and reads state cells, so all stay gateway-owned regions — except that the
    closure of the renderers over their own references (the TYPES-REP tag plus helpers, 82
-   definitions, 909 lines) is closed and reads no cell. That is `compiler/types/repr.mdk`,
+   definitions — 9 types and 73 exported functions — about 990 lines with comments) is
+   closed and reads no cell. That is `compiler/types/repr.mdk`,
    the first extraction (#2586). The state records were in the closed set too and are
    deliberately left in `typecheck.mdk` until a second half needs them importable.
 

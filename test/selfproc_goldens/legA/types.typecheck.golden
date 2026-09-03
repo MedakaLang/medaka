@@ -405,6 +405,9 @@ clausesAreValue : TcEnv -> List FunClause -> Bool
 clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
 clausesLoc : List FunClause -> Option Loc
 clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
+clearGoalCells : List Obligation -> Unit
+clearNumlitCells : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+clearSweepCells : Unit -> Unit
 cmCheckWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List (String, Scheme))
 cmDiagsCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))

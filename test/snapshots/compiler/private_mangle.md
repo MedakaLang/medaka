@@ -1,5 +1,5 @@
 # META
-source_lines=1523
+source_lines=1525
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -860,7 +860,9 @@ importRenameEntries _ exportsPerUnit decls =
 -- `core__<n>`.  Mapping every core binding here makes the emit-path typecheck bind
 -- the same symbol the emitted code calls, instead of recording an unbound-variable
 -- error that nothing read.  Only the "core" row is widened; sibling imports stay
--- export-scoped.
+-- export-scoped.  This mirrors `check`'s visibility rule; whether that rule is
+-- right (core's private helpers reachable from user code) is #2640's question, and
+-- this row must keep every binding until it is answered.
 withPreludeDefs : List String ->
   List (String, List (String, String)) ->
   List (String, List (String, String))

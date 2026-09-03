@@ -390,12 +390,11 @@ blast radius of a wrong verdict is **which** diagnostic the reader sees, not whe
 program compiles.
 
 ⚠️ **That argument is scoped to the ordinary path, and there is exactly one place it does
-not hold.** `discoverPromotedModules` (`compiler/types/typecheck.mdk`) runs a
-**speculative joint typecheck whose diagnostics are deliberately thrown away**: it
-snapshots the channel, the sticky flag and the counter, and afterwards restores all three
-— `resetState ()` → `setRef typeErrorsSticky savedSticky` → `wRestore … savedErrSnap` →
-`setRef … errorsDetected savedDetected`. All three gates above run *inside* that window,
-so a detection there is un-stored, un-armed and un-counted, and **the program is not
+not hold.** `elabPromotionFixpoint` (`compiler/types/typecheck.mdk`; before #2543,
+`discoverPromotedModules`) discards a **non-final sweep's diagnostics**: it restores the
+sticky flag, the sticky residual and the match warnings before re-sweeping. All three
+gates above run *inside* a discarded sweep, so a detection there is un-stored,
+un-armed and un-counted — the final sweep re-detects it — and **the program is not
 rejected on account of it.** What survives the window is the discovery result — `promoted`
 plus the two `crossRun` constraint snapshots — not a diagnostic. So inside the speculative
 pass a gate that fires changes what discovery concludes, and the "rejected either way"

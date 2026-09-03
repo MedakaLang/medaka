@@ -4501,7 +4501,13 @@ promissoryClaimOf : CommentBlock -> List (Int, String, CommentBlock)
 promissoryClaimOf (b@(CommentBlock first _ _ text)) =
   match promissoryLine (splitNl text) 0
     Some (i, l) => [(first + i, l, b)]
-    None => []
+    None =>
+      -- a claim wrapped across lines: test the block as one line
+      let joined = joinWith " " (splitNl text)
+      if isPromissoryText (stringToLower (stripQuoted joined)) then
+        [(first, joined, b)]
+      else
+        []
 
 promissoryLine : List String -> Int -> Option (Int, String)
 promissoryLine [] _ = None
@@ -4515,6 +4521,8 @@ isPromissoryText t =
   has "nothing reads" && has "yet"
     || has "no reader yet"
     || has "no readers yet"
+    || has "no consumer yet"
+    || has "no consumers yet"
     || has "do not add a reader"
     || has "don't add a reader"
 
@@ -4605,19 +4613,39 @@ promissoryFinding : String ->
   List Finding
 promissoryFinding path codeLines claim = match claimSubject codeLines claim
   None => []
-  Some subject => match readerLines subject codeLines
-    [] => []
-    firstReader :: more =>
-      let (line, _, _) = claim
-      [
-        Finding {
-          rule = ruleNamePromissoryReader,
-          message =
-            "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
-          severity = SevWarning,
-          loc = Some (Loc path line 1 line 1),
-        },
-      ]
+  Some subject =>
+    -- a claim about a name this file does not declare is another file's to bear
+    -- out (and a bare word from the prose would otherwise match any use of it)
+    if declaredInFile subject codeLines then
+      readerFinding path subject claim (readerLines subject codeLines)
+    else
+      []
+
+readerFinding : String ->
+  String ->
+  (Int, String, CommentBlock) ->
+  List Int ->
+  List Finding
+readerFinding _ _ _ [] = []
+readerFinding path subject (line, _, _) (firstReader :: more) = [
+  Finding {
+    rule = ruleNamePromissoryReader,
+    message =
+      "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
+    severity = SevWarning,
+    loc = Some (Loc path line 1 line 1),
+  },
+]
+
+declaredInFile : String -> Array String -> Bool
+declaredInFile subject codeLines =
+  declaredInFileGo subject codeLines (arrayLength codeLines) 1
+
+declaredInFileGo : String -> Array String -> Int -> Int -> Bool
+declaredInFileGo subject codeLines n line
+  | line > n = False
+  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+  | otherwise = declaredInFileGo subject codeLines n (line + 1)
 
 readerCountSuffix : Int -> String
 readerCountSuffix 0 = ""
