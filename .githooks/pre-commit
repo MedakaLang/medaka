@@ -114,7 +114,11 @@ GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-
 # thin-wrapper duplication ([T-STDLIB-IMPORT]). Putting it in GATED_LINT_RULES
 # would be #1214's max-ratchet trap (a rule gated before the tree is clean of it);
 # leaving it nowhere left its count free to grow, which is what #2619 fixes.
-BASELINED_LINT_RULES="rule-stdlib-reimpl"
+# rule-orelse-staircase (#2565) ships here for the same reason: it reaches 7
+# pre-existing first-match probe staircases across 6 files, and converting them to
+# orElse/findMap changes evaluation order (Medaka is strict, so a rewritten chain
+# runs every probe), which is a judgement call per site, not this rule's job.
+BASELINED_LINT_RULES="rule-stdlib-reimpl,rule-orelse-staircase"
 LINT_BASELINE_FILE="test/lint_baseline.toml"
 # Cross-file rules, checked project-wide (not per staged file).
 GATED_CROSSFILE_RULES="rule-duplicate-body"

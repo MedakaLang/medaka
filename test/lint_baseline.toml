@@ -18,12 +18,22 @@
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
+rule = "rule-orelse-staircase"
+count = 1
+
+[[entry]]
+file = "compiler/backend/llvm_emit.mdk"
 rule = "rule-stdlib-reimpl"
 count = 3
 
 [[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
 rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/backend/wasm_emit.mdk"
+rule = "rule-orelse-staircase"
 count = 1
 
 [[entry]]
@@ -49,6 +59,11 @@ count = 2
 [[entry]]
 file = "compiler/eval/eval.mdk"
 rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/exhaust.mdk"
+rule = "rule-orelse-staircase"
 count = 1
 
 [[entry]]
@@ -87,8 +102,18 @@ rule = "rule-stdlib-reimpl"
 count = 5
 
 [[entry]]
+file = "compiler/tools/lint.mdk"
+rule = "rule-orelse-staircase"
+count = 1
+
+[[entry]]
 file = "compiler/tools/lsp_harness.mdk"
 rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/tools/refindex.mdk"
+rule = "rule-orelse-staircase"
 count = 1
 
 [[entry]]
@@ -104,6 +129,11 @@ count = 2
 [[entry]]
 file = "compiler/tools/snapshot.mdk"
 rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/types/typecheck.mdk"
+rule = "rule-orelse-staircase"
 count = 2
 
 [[entry]]
