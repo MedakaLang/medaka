@@ -260,7 +260,7 @@ evalMangleCandidate n = not (evalMangleExemptCtor n)
 -- Constructors the INTERPRETER ITSELF matches by bare spelling, on top of the
 -- emitter's fixed-tag set.  A tree-wide `grep -n 'VCon "' compiler/ --include=*.mdk`
 -- finds exactly one such pair beyond `isReservedCtor`'s list: `tools/test_runner.mdk`
--- reads a `test "…"` body's result as `VCon "Pass" []` / `VCon "Fail" [_]`
+-- reads a `test "…"` body's result as `VCon "Pass" [_, _]` / `VCon "Fail" [_, _, _]`
 -- (stdlib `test.mdk`'s `Expectation`).  Renaming those would send every test in a
 -- program that happens to declare a colliding `Pass`/`Fail` down `runOneTest`'s
 -- `other => Errored` arm.

@@ -288,6 +288,7 @@ Filesystem helpers built on the host file primitives.
 - [`copyFile`](fs.md#copyfile)
 - [`mkdirAll`](fs.md#mkdirall)
 - [`walkDir`](fs.md#walkdir)
+- [`fixtureFiles`](fs.md#fixturefiles)
 
 ## [`hash_map`](hash_map.md)
 
@@ -338,6 +339,7 @@ Output to standard error, debug printing, and helpers for files and the environm
 - [`inspect`](io.md#inspect)
 - [`readLines`](io.md#readlines)
 - [`runCommandOk`](io.md#runcommandok)
+- [`runVerb`](io.md#runverb)
 - [`getEnvOr`](io.md#getenvor)
 
 ## [`json`](json.md)
@@ -787,8 +789,15 @@ Assertions for unit tests.
 - [`expectNotEqual`](test.md#expectnotequal)
 - [`expectLessThan`](test.md#expectlessthan)
 - [`expectGreaterThan`](test.md#expectgreaterthan)
+- [`expectOk`](test.md#expectok)
+- [`expectErr`](test.md#expecterr)
+- [`expectSome`](test.md#expectsome)
+- [`expectNone`](test.md#expectnone)
+- [`expectWithin`](test.md#expectwithin)
+- [`expectEqualText`](test.md#expectequaltext)
 - [`expectAll`](test.md#expectall)
 - [`runTests`](test.md#runtests)
+- [`expectGolden`](test.md#expectgolden)
 
 ## [`time`](time.md)
 

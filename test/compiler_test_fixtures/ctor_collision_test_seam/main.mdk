@@ -5,9 +5,9 @@
 --
 -- Also pins the `Pass`/`Fail` EXEMPTION.  `verdict.mdk` declares constructors
 -- spelled `Pass`/`Fail`, colliding with stdlib `test.mdk`'s `Expectation` -- and
--- `tools/test_runner.mdk` reads a test body's result as a BARE `VCon "Pass" []` /
--- `VCon "Fail" [_]`.  Renaming those would send every test in this file down
--- `runOneTest`'s `other => Errored` arm, so all three cases below would report
+-- `tools/test_runner.mdk` reads a test body's result as a BARE `VCon "Pass"` /
+-- `VCon "Fail"` by spelling.  Renaming those would send every test in this file
+-- down `runOneTest`'s `other => Errored` arm, so all three below would report
 -- `ERROR` rather than `ok`.
 --
 -- 🚨 EXPECTED REPORT HAND-DERIVED, held INLINE in test/diff_compiler_test.sh (no

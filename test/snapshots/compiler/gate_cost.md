@@ -1,5 +1,5 @@
 # META
-source_lines=603
+source_lines=628
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cost.mdk — the per-gate cost baseline reader (#2178, epic #2182).
@@ -88,8 +88,14 @@ public export data GateCost = GateCost {
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
-   Mirrors `gate_name` in `test/run_gates.sh` exactly: strip the `.sh`
-   extension, replace every `/` with `_`, then strip one leading `test_`.
+   Mirrors `gate_name` in `test/run_gates.sh` exactly: strip a trailing
+   `_test.mdk` (a `kind = "native"` gate's module) OR a trailing `.sh` (a
+   `kind = "exec"` gate's script), replace every `/` with `_`, then strip one
+   leading `test_`. A `kind = "native"` gate's `run` is `test/<name>_test.mdk`,
+   so stripping the `_test.mdk` suffix yields the SAME key its `.sh` carried
+   before a migration — not cosmetic: `test/gate_cost_baseline.json` is keyed
+   by this label, so a migrated gate keeps its cost history instead of
+   arriving uncosted and hard-refusing `medaka gate balance`.
 
    > baselineKey "test/diff_compiler_lexer.sh"
    "diff_compiler_lexer"
@@ -101,11 +107,14 @@ public export data GateCost = GateCost {
    "native_fixtures_run"
 
    > baselineKey "pds/test/repo_vectors.sh"
-   "pds_test_repo_vectors" -}
+   "pds_test_repo_vectors"
+
+   > baselineKey "test/effect_set_domain_test.mdk"
+   "effect_set_domain" -}
 export
 baselineKey : String -> String
 baselineKey run =
-  let noExt = dropDotSh run
+  let noExt = dropDotSh (dropTestMdk run)
   let flat = joinWith "_" (splitOnChar '/' noExt)
   dropTestPrefix flat
 
@@ -116,6 +125,16 @@ dropDotSh s
   | stringLength s > 3
     && stringSlice (stringLength s - 3) (stringLength s) s == ".sh" =
     stringSlice 0 (stringLength s - 3) s
+  | otherwise = s
+
+-- A `kind = "native"` gate's `run` ends `_test.mdk`, not `.sh`; strip that
+-- suffix FIRST (mirrors `gate_name`'s sed order) so a native gate's key
+-- collapses onto the same label its pre-migration `.sh` used.
+dropTestMdk : String -> String
+dropTestMdk s
+  | stringLength s > 9
+    && stringSlice (stringLength s - 9) (stringLength s) s == "_test.mdk" =
+    stringSlice 0 (stringLength s - 9) s
   | otherwise = s
 
 dropTestPrefix : String -> String
@@ -585,6 +604,12 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
   baselineKey (baselineKey "test/g\{intToString n}.sh")
     == baselineKey "test/g\{intToString n}.sh"
 
+-- LAW: a `kind = "native"` gate's key must survive its own migration — the
+-- SAME stem, whether the gate is still `.sh` or has become `_test.mdk`.
+prop "baselineKey agrees across a native migration" (n : Int) =
+  baselineKey "test/g\{intToString n}_test.mdk"
+    == baselineKey "test/g\{intToString n}.sh"
+
 prop "packStat of one sample is that sample" (n : Int) = packStat (n :: []) == n
 
 -- The robustness property the whole choice of statistic rests on: a single
@@ -610,9 +635,11 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EVar "run"))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EVar "flat")))))
+(DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EApp (EVar "dropTestMdk") (EVar "run")))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EVar "flat")))))
 (DTypeSig false "dropDotSh" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropDotSh" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString ".sh")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dropTestMdk" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "dropTestMdk" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString "_test.mdk")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dropTestPrefix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropTestPrefix" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test_"))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 5))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "costSchema" (TyCon "String"))
@@ -696,6 +723,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DProp false "baselineKey leaves a test/ gate's stem alone" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey flattens every separator" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "a/b/c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "a_b_c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey is idempotent on an already-flat key" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))
+(DProp false "baselineKey agrees across a native migration" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "_test.mdk")))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))
 (DProp false "packStat of one sample is that sample" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "packStat") (EBinOp "::" (EVar "n") (EListLit))) (EVar "n")))
 (DProp false "one wild sample among three does not move packStat" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "packStat") (EBinOp "::" (EVar "n") (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1))) (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1000000))) (EListLit))))) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "==" (EApp (EVar "packStat") (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1000000))) (EBinOp "::" (EVar "n") (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1))) (EListLit))))) (EBinOp "+" (EVar "n") (ELit (LInt 1))))))
 (DProp false "gateSetDigest ignores order" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit)))) (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit))))))
@@ -705,9 +733,11 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EVar "run"))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EDictApp "flat")))))
+(DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EApp (EVar "dropTestMdk") (EVar "run")))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EDictApp "flat")))))
 (DTypeSig false "dropDotSh" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropDotSh" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString ".sh")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 3)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dropTestMdk" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "dropTestMdk" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (ELit (LString "_test.mdk")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 9)))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dropTestPrefix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropTestPrefix" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "test_"))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 5))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "costSchema" (TyCon "String"))
@@ -791,6 +821,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DProp false "baselineKey leaves a test/ gate's stem alone" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey flattens every separator" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "a/b/c")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "a_b_c")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey is idempotent on an already-flat key" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))
+(DProp false "baselineKey agrees across a native migration" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "_test.mdk")))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))
 (DProp false "packStat of one sample is that sample" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "packStat") (EBinOp "::" (EVar "n") (EListLit))) (EVar "n")))
 (DProp false "one wild sample among three does not move packStat" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "packStat") (EBinOp "::" (EVar "n") (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1))) (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1000000))) (EListLit))))) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "==" (EApp (EVar "packStat") (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1000000))) (EBinOp "::" (EVar "n") (EBinOp "::" (EBinOp "+" (EVar "n") (ELit (LInt 1))) (EListLit))))) (EBinOp "+" (EVar "n") (ELit (LInt 1))))))
 (DProp false "gateSetDigest ignores order" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit)))) (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit))))))

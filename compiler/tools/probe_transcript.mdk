@@ -1,0 +1,84 @@
+-- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
+-- the native execution engines read back.
+--
+-- Both native engines — `native_doctest.mdk` (doctests) and
+-- `native_test_decls.mdk` (`test "…"` decls) — compile ONE probe binary per
+-- file and recover the values it printed.  What they compile is genuinely
+-- different (a doctest owns a source expression, a `test "…"` decl owns an
+-- `Expr`), which is why neither generates the other's probe.  What they READ is
+-- the same thing twice, and that half lives here.
+--
+-- ── the format ──────────────────────────────────────────────────────────────
+-- A printed value can span MANY lines, so the split point cannot be "one line
+-- per value".  The probe prints a sentinel line BEFORE each value; a value is
+-- every line up to the next sentinel.  A trailing sentinel closes the last
+-- value — which is also what makes "complete" decidable: a value is complete
+-- iff ANOTHER sentinel followed it.  Without the terminator, a probe killed
+-- immediately after printing the final value would be indistinguishable from a
+-- clean run, and "this didn't run" would look exactly like "this passed".
+--
+-- The sentinel PREFIX is per-engine (so one engine's transcript can never be
+-- mistaken for the other's) and therefore a parameter here, not a constant.
+
+import support.util.{reverseL, startsWith, stringTrim}
+
+-- The tag of a sentinel line under `prefix`, or None for an ordinary output
+-- line.
+export
+sentTagOf : String -> String -> Option String
+sentTagOf prefix line
+  | startsWith prefix line =
+    Some (stringSlice (stringLength prefix) (stringLength line) line)
+  | otherwise = None
+
+export
+sentinelLine : String -> String -> String
+sentinelLine prefix tag = prefix ++ tag
+
+-- The tag of the terminator both engines print last.
+export
+endTag : String
+endTag = "END"
+
+-- tag, the value's lines, and whether ANOTHER sentinel followed (i.e. the value
+-- is complete rather than truncated by an abort).
+public export data Chunk = Chunk String (List String) Bool
+
+export
+chunksOf : String -> List String -> List Chunk
+chunksOf prefix lines = reverseL (chunkScan prefix [] None [] lines)
+
+-- Lines before the FIRST sentinel are dropped: they are whatever the module's
+-- own top-level effects printed, not part of any value.
+chunkScan : String ->
+  List Chunk ->
+  Option String ->
+  List String ->
+  List String ->
+  List Chunk
+chunkScan _ acc cur curLines [] = closeChunk acc cur curLines False
+chunkScan prefix acc cur curLines (l :: rest) = match sentTagOf prefix l
+  Some t => chunkScan prefix (closeChunk acc cur curLines True) (Some t) [] rest
+  None => match cur
+    None => chunkScan prefix acc cur curLines rest
+    Some _ => chunkScan prefix acc cur (l :: curLines) rest
+
+closeChunk : List Chunk -> Option String -> List String -> Bool -> List Chunk
+closeChunk acc None _ _ = acc
+closeChunk acc (Some t) curLines terminated =
+  Chunk t (reverseL curLines) terminated :: acc
+
+export
+lookupChunk : String -> List Chunk -> Option Chunk
+lookupChunk _ [] = None
+lookupChunk tag ((Chunk t ls done) :: rest)
+  | t == tag = Some (Chunk t ls done)
+  | otherwise = lookupChunk tag rest
+
+-- The probe's stderr, reduced to the one line worth quoting in an abort note.
+export
+firstNonEmptyLine : List String -> String
+firstNonEmptyLine [] = ""
+firstNonEmptyLine (l :: rest)
+  | stringTrim l == "" = firstNonEmptyLine rest
+  | otherwise = stringTrim l

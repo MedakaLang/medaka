@@ -14,8 +14,9 @@
 # NATIVE-ONLY: the frozen OCaml oracle classifies both `Env` and `Exec` as ATOMIC
 # security labels (PUnit) and has no Set domain, so it cannot parse `<Env _>` /
 # `<Exec _>` nor `<Env {…}>`.  This gate therefore exercises `./medaka check`
-# ALONE (no differential oracle), exactly like effect_set_domain.sh.  These
-# fixtures DECLARE their domains per-program (`effect Env Set` / `effect Exec
+# ALONE (no differential oracle), exactly like the effect_set_domain gate
+# (test/effect_set_domain_test.mdk).  These fixtures DECLARE their domains
+# per-program (`effect Env Set` / `effect Exec
 # Prefix`) and use LOCAL externs, so the shared stdlib/runtime.mdk is untouched —
 # this keeps the oracle-gated check-policy/typecheck diffs green.
 #

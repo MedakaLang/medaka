@@ -394,12 +394,39 @@ if [ "${1:-}" = "--for" ]; then
   # backwards-compatible. (Gates outside test/ read no test/bin oracle, so they
   # simply contribute none — but they must still RESOLVE, or --for would report
   # "matched no gates" for a shard whose patterns are all outside test/.)
+  #
+  # A `kind = "native"` registry entry (#2591) has no `.sh` for those globs to
+  # find, so it resolves by registry NAME and the gate IS its `run` module. Such
+  # a gate reads no test/bin oracle, so it contributes none below — but it must
+  # still RESOLVE, or `--for` would report "matched no gates" for a diff whose
+  # whole derived pattern set is native, and preflight would abort on it.
+  #
+  # Read straight out of test/gates.toml, the same line-scan run_gates.sh,
+  # test/preflight.sh and ci.yml's `plan` step use — this script also runs
+  # before any binary exists.
+  _native_pairs="$(awk -F'"' '
+    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n ":" r; n=""; k=""; r="" }
+    /^name = "/       { n = $2 }
+    /^kind = "/       { k = $2 }
+    /^run = "/        { r = $2 }
+    END               { if (k == "native" && n != "" && r != "") print n ":" r }
+  ' "$ROOT/test/gates.toml" 2>/dev/null)"
   _gates=""
   for _pat in "$@"; do
     for _g in "$ROOT"/test/$_pat.sh "$ROOT"/$_pat.sh; do
       [ -f "$_g" ] || continue
       case " $_gates " in *" $_g "*) ;; *) _gates="$_gates $_g" ;; esac
     done
+    set -f          # a registry row must not be pathname-expanded on the split
+    for _row in $_native_pairs; do
+      case "${_row%%:*}" in
+        $_pat)
+          _ng="$ROOT/${_row#*:}"
+          [ -f "$_ng" ] || continue
+          case " $_gates " in *" $_ng "*) ;; *) _gates="$_gates $_ng" ;; esac ;;
+      esac
+    done
+    set +f
   done
   if [ -z "$_gates" ]; then
     echo "FAIL: --for matched no gates: $*" >&2

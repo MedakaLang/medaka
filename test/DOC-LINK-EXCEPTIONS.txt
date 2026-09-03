@@ -171,6 +171,7 @@ REF	test/argstamp_parity_probe.sh	deleted with #157 (single-mode elaboration) �
 REF	test/diff_compiler_lexer.sh	migrated into the snapshot # TOKENS section in #280; archive/design/BROWSER-STACK-DIAGNOSIS.md records the gate as it existed when the layout stack was diagnosed — legitimate history
 REF	test/diff_compiler_eval_dict.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_dict_main probe + eval_dict_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log and archive/design/D2-REKEY-DESIGN.md record the gate as it existed
 REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_typed_main probe + eval_typed_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log records the gate as it existed
+REF	test/effect_set_domain.sh	migrated to a `kind = "native"` gate module in #2591 (test/effect_set_domain_test.mdk); docs/design/EFFECTS-CONFORMANCE-ROADMAP.md's WS-3a landing note and docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot both record the gate as it existed as a script
 
 # ── REF: pds/ — #1722 widened the bare-path matcher to include pds/… ────────
 REF	pds/main.mdk	pds/README.md documents the intentional ABSENCE of pds/main.mdk — pds/medaka.toml has no `entry` key on purpose, so this citation is deliberately naming a file that must not exist
