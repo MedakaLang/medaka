@@ -161,6 +161,24 @@ whatever `build_site.sh` last copied, so after any change that moves
 the deploy by hand. The wasm is the page's dominant download and the whole
 playground blocks on it.
 
+🚨 **And "re-run the deploy" is not enough on its own.** `build_site.sh` copies
+whatever `playground/dist/` already holds and rebuilds the wasm only when
+`dist/playground.wasm` is *missing*; `deploy_cloudflare.sh` builds `site/` only
+when `site/` is missing. A gate run on another branch
+(`test/wasm/diff_playground_input.sh`) leaves a `dist/` behind, and a deploy from
+`main` then ships that branch's compiler and prelude with exit 0. The full recipe:
+
+```sh
+bash playground/build_playground_wasm.sh   # rebuild the wasm AND re-copy dist/*.mdk
+rm -rf playground/site                     # so the deploy rebuilds the site
+bash playground/deploy_cloudflare.sh
+```
+
+Then verify the *compiler*, not only the origin — compile a probe through the live
+`/dist/playground.wasm` + `/dist/core.mdk` with `playground/dev_compile_node.mjs`,
+and grep the live `core.mdk` for a line only the new source has. The custom domain
+can lag `medaka.pages.dev` by about a minute after a deploy.
+
 ### Verifying a deploy
 
 🚨 **Never read the deploy's exit code as the answer** — the preview trap above
