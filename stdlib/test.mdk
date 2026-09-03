@@ -10,6 +10,7 @@
 
    Import what you need: `import test.{expectEqual, expectTrue}`. -}
 
+import list.{last}
 import math.{approxEq}
 import string.{lines, stripSuffix}
 
@@ -196,14 +197,23 @@ expectWithin expected actual eps =
     Fail "expected \{a} within \{debug eps} of \{e}" e a
 
 -- The single normalizer for the trailing-Unit shapes the shell `strip_unit`
--- helpers across test/*.sh disagree on: strips a trailing "()" if present,
--- else a trailing "0" (the auto-printed Unit value or exit code a probe's
--- last line carries). The shell scripts' seven variants stay as they are.
+-- helpers across test/*.sh disagree on: strips a trailing "()" suffix if
+-- present, else drops the LAST LINE when it is exactly "0" (the auto-printed
+-- Unit value or exit code a probe's last line carries). The "0" arm is
+-- WHOLE-LINE, not a bare suffix strip: an earlier draft stripped a trailing
+-- "0" character from anywhere the text ended in one, so "10" and "1" (or
+-- "…0" and "…" for any real numeral) compared equal — a silent wrong-answer
+-- in the one primitive every migrated gate's text comparison goes through.
+-- Anchoring to "the whole last line reads 0" is what the shell precedent's
+-- own safest variant already does for "()" (`${/^()$/d;}`); this applies the
+-- same discipline to "0". The shell scripts' seven variants stay as they are.
 normalizeTrailingUnit : String -> String
 -- lint-disable-next-line rule-stdlib-reimpl
 normalizeTrailingUnit s = match stripSuffix "()" s
   Some s2 => s2
-  None => optionOr s (stripSuffix "0" s)
+  None => match last (lines s)
+    Some "0" => optionOr s (stripSuffix "0" s)
+    _ => s
 
 -- Renders the first line at which two line lists diverge, 1-indexed.
 diffLineMsg : Int -> List String -> List String -> String
@@ -219,10 +229,19 @@ diffLineMsg n (e :: es) (a :: asL) =
     "line \{intToString n}: expected \{debug e} but got \{debug a}"
 
 {- | Passes when two texts are equal after normalizing one trailing
-   auto-printed Unit shape (a trailing `()` or `0`).
+   auto-printed Unit shape: a trailing `()` suffix, or a last line that is
+   exactly `0`. Ordinary text ending in the digit `0` is NOT touched — only
+   a `0` occupying the whole last line normalizes.
 
    A mismatch names the first differing line, 1-indexed, rather than
-   dumping both texts whole. -}
+   dumping both texts whole.
+
+   > expectEqualText "same" "same"
+   Pass "same" "same"
+   > expectEqualText "result()" "result"
+   Pass "result" "result"
+   > expectEqualText "value: 10" "value: 1"
+   Fail "line 1: expected \"value: 10\" but got \"value: 1\"" "value: 10" "value: 1" -}
 export
 expectEqualText : String -> String -> Expectation
 expectEqualText expected actual =
@@ -311,3 +330,15 @@ prop "a passing expectEqual carries both rendered operands" (n : Int) =
 -- distinguishable ones render differently.
 prop "Debug Expectation agrees with Eq" (m : String) =
   debug (fail m) == debug (fail m) && debug (fail m) == debug pass == False
+
+-- LAW (regression, the S0-2 review finding): `expectEqualText`'s trailing-Unit
+-- normalizer must never treat "a value with a literal 0 appended" as the same
+-- text as the value alone — that collapse ("10" == "1") was the actual bug.
+-- `normalizeTrailingUnit` only drops a `0` that is the WHOLE last line, so `s`
+-- and `s ++ "0"` (which puts the extra digit ON `s`'s own last line, not on a
+-- line of its own) must always compare unequal.
+prop "expectEqualText never conflates a value with that value plus a digit" (n : Int) =
+  let s = intToString (abs n)
+  match expectEqualText s (s ++ "0")
+    Pass _ _ => False
+    Fail _ _ _ => True

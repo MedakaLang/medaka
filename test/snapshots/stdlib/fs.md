@@ -1,5 +1,5 @@
 # META
-source_lines=166
+source_lines=169
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -123,7 +123,10 @@ filesOnly (p :: rest) = match isFile p
    tested nothing.
 
    > fixtureFiles "stdlib/no-such-fixture-doctest-dir"
-   Err "No such file or directory" -}
+   Err "No such file or directory"
+
+   > map length (fixtureFiles "test/effect_set_fixtures")
+   Ok 5 -}
 export
 fixtureFiles : String -> <FileRead "_"> Result String (List String)
 fixtureFiles root = match walkDir root

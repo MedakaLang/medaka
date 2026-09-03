@@ -1,5 +1,5 @@
 # META
-source_lines=313
+source_lines=344
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -14,6 +14,7 @@ stages=DESUGAR,MARK
 
    Import what you need: `import test.{expectEqual, expectTrue}`. -}
 
+import list.{last}
 import math.{approxEq}
 import string.{lines, stripSuffix}
 
@@ -200,14 +201,23 @@ expectWithin expected actual eps =
     Fail "expected \{a} within \{debug eps} of \{e}" e a
 
 -- The single normalizer for the trailing-Unit shapes the shell `strip_unit`
--- helpers across test/*.sh disagree on: strips a trailing "()" if present,
--- else a trailing "0" (the auto-printed Unit value or exit code a probe's
--- last line carries). The shell scripts' seven variants stay as they are.
+-- helpers across test/*.sh disagree on: strips a trailing "()" suffix if
+-- present, else drops the LAST LINE when it is exactly "0" (the auto-printed
+-- Unit value or exit code a probe's last line carries). The "0" arm is
+-- WHOLE-LINE, not a bare suffix strip: an earlier draft stripped a trailing
+-- "0" character from anywhere the text ended in one, so "10" and "1" (or
+-- "…0" and "…" for any real numeral) compared equal — a silent wrong-answer
+-- in the one primitive every migrated gate's text comparison goes through.
+-- Anchoring to "the whole last line reads 0" is what the shell precedent's
+-- own safest variant already does for "()" (`${/^()$/d;}`); this applies the
+-- same discipline to "0". The shell scripts' seven variants stay as they are.
 normalizeTrailingUnit : String -> String
 -- lint-disable-next-line rule-stdlib-reimpl
 normalizeTrailingUnit s = match stripSuffix "()" s
   Some s2 => s2
-  None => optionOr s (stripSuffix "0" s)
+  None => match last (lines s)
+    Some "0" => optionOr s (stripSuffix "0" s)
+    _ => s
 
 -- Renders the first line at which two line lists diverge, 1-indexed.
 diffLineMsg : Int -> List String -> List String -> String
@@ -223,10 +233,19 @@ diffLineMsg n (e :: es) (a :: asL) =
     "line \{intToString n}: expected \{debug e} but got \{debug a}"
 
 {- | Passes when two texts are equal after normalizing one trailing
-   auto-printed Unit shape (a trailing `()` or `0`).
+   auto-printed Unit shape: a trailing `()` suffix, or a last line that is
+   exactly `0`. Ordinary text ending in the digit `0` is NOT touched — only
+   a `0` occupying the whole last line normalizes.
 
    A mismatch names the first differing line, 1-indexed, rather than
-   dumping both texts whole. -}
+   dumping both texts whole.
+
+   > expectEqualText "same" "same"
+   Pass "same" "same"
+   > expectEqualText "result()" "result"
+   Pass "result" "result"
+   > expectEqualText "value: 10" "value: 1"
+   Fail "line 1: expected \"value: 10\" but got \"value: 1\"" "value: 10" "value: 1" -}
 export
 expectEqualText : String -> String -> Expectation
 expectEqualText expected actual =
@@ -315,7 +334,20 @@ prop "a passing expectEqual carries both rendered operands" (n : Int) =
 -- distinguishable ones render differently.
 prop "Debug Expectation agrees with Eq" (m : String) =
   debug (fail m) == debug (fail m) && debug (fail m) == debug pass == False
+
+-- LAW (regression, the S0-2 review finding): `expectEqualText`'s trailing-Unit
+-- normalizer must never treat "a value with a literal 0 appended" as the same
+-- text as the value alone — that collapse ("10" == "1") was the actual bug.
+-- `normalizeTrailingUnit` only drops a `0` that is the WHOLE last line, so `s`
+-- and `s ++ "0"` (which puts the extra digit ON `s`'s own last line, not on a
+-- line of its own) must always compare unequal.
+prop "expectEqualText never conflates a value with that value plus a digit" (n : Int) =
+  let s = intToString (abs n)
+  match expectEqualText s (s ++ "0")
+    Pass _ _ => False
+    Fail _ _ _ => True
 # DESUGAR
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("math") ((mem "approxEq" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripSuffix" false))))
 (DData Public "Expectation" () ((variant "Pass" (ConPos (TyCon "String") (TyCon "String"))) (variant "Fail" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
@@ -350,7 +382,7 @@ prop "Debug Expectation agrees with Eq" (m : String) =
 (DTypeSig true "expectWithin" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Expectation")))))
 (DFunDef false "expectWithin" ((PVar "expected") (PVar "actual") (PVar "eps")) (EBlock (DoLet false false (PVar "e") (EApp (EVar "debug") (EVar "expected"))) (DoLet false false (PVar "a") (EApp (EVar "debug") (EVar "actual"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "approxEq") (EVar "expected")) (EVar "actual")) (EVar "eps")) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString " within "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "eps")))) (ELit (LString " of "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "e")) (EVar "a"))))))
 (DTypeSig false "normalizeTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s"))))))
+(DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EMatch (EApp (EVar "last") (EApp (EVar "lines") (EVar "s"))) (arm (PCon "Some" (PLit (LString "0"))) () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s")))) (arm PWild () (EVar "s"))))))
 (DTypeSig false "diffLineMsg" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "diffLineMsg" ((PVar "n") (PList) (PList)) (ELit (LString "expected and actual differ only outside their lines")))
 (DFunDef false "diffLineMsg" ((PVar "n") (PList) (PCons (PVar "a") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected nothing but got "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString ""))))
@@ -374,7 +406,9 @@ prop "Debug Expectation agrees with Eq" (m : String) =
 (DProp false "Eq Expectation separates constructors and payloads" ((pp "m" (TyCon "String"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "pass") (EVar "pass")) (EBinOp "==" (EApp (EVar "fail") (EVar "m")) (EApp (EVar "fail") (EVar "m")))) (EBinOp "==" (EBinOp "==" (EVar "pass") (EApp (EVar "fail") (EVar "m"))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EApp (EVar "fail") (EVar "m")) (EApp (EVar "fail") (EBinOp "++" (EVar "m") (ELit (LString "!"))))) (EVar "False"))))
 (DProp false "a passing expectEqual carries both rendered operands" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "expectEqual") (EVar "n")) (EVar "n")) (EApp (EApp (EVar "Pass") (EApp (EVar "debug") (EVar "n"))) (EApp (EVar "debug") (EVar "n")))))
 (DProp false "Debug Expectation agrees with Eq" ((pp "m" (TyCon "String"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "debug") (EApp (EVar "fail") (EVar "m"))) (EApp (EVar "debug") (EApp (EVar "fail") (EVar "m")))) (EBinOp "==" (EBinOp "==" (EApp (EVar "debug") (EApp (EVar "fail") (EVar "m"))) (EApp (EVar "debug") (EVar "pass"))) (EVar "False"))))
+(DProp false "expectEqualText never conflates a value with that value plus a digit" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EApp (EVar "abs") (EVar "n")))) (DoExpr (EMatch (EApp (EApp (EVar "expectEqualText") (EVar "s")) (EBinOp "++" (EVar "s") (ELit (LString "0")))) (arm (PCon "Pass" PWild PWild) () (EVar "False")) (arm (PCon "Fail" PWild PWild PWild) () (EVar "True"))))))
 # MARK
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("math") ((mem "approxEq" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripSuffix" false))))
 (DData Public "Expectation" () ((variant "Pass" (ConPos (TyCon "String") (TyCon "String"))) (variant "Fail" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
@@ -409,7 +443,7 @@ prop "Debug Expectation agrees with Eq" (m : String) =
 (DTypeSig true "expectWithin" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Expectation")))))
 (DFunDef false "expectWithin" ((PVar "expected") (PVar "actual") (PVar "eps")) (EBlock (DoLet false false (PVar "e") (EApp (EMethodRef "debug") (EVar "expected"))) (DoLet false false (PVar "a") (EApp (EMethodRef "debug") (EVar "actual"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "approxEq") (EVar "expected")) (EVar "actual")) (EVar "eps")) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString " within "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "eps")))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "e")) (EVar "a"))))))
 (DTypeSig false "normalizeTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s"))))))
+(DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EMatch (EApp (EVar "last") (EApp (EVar "lines") (EVar "s"))) (arm (PCon "Some" (PLit (LString "0"))) () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s")))) (arm PWild () (EVar "s"))))))
 (DTypeSig false "diffLineMsg" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "diffLineMsg" ((PVar "n") (PList) (PList)) (ELit (LString "expected and actual differ only outside their lines")))
 (DFunDef false "diffLineMsg" ((PVar "n") (PList) (PCons (PVar "a") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected nothing but got "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString ""))))
@@ -433,3 +467,4 @@ prop "Debug Expectation agrees with Eq" (m : String) =
 (DProp false "Eq Expectation separates constructors and payloads" ((pp "m" (TyCon "String"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "pass") (EVar "pass")) (EBinOp "==" (EApp (EVar "fail") (EVar "m")) (EApp (EVar "fail") (EVar "m")))) (EBinOp "==" (EBinOp "==" (EVar "pass") (EApp (EVar "fail") (EVar "m"))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EApp (EVar "fail") (EVar "m")) (EApp (EVar "fail") (EBinOp "++" (EVar "m") (ELit (LString "!"))))) (EVar "False"))))
 (DProp false "a passing expectEqual carries both rendered operands" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EDictApp "expectEqual") (EVar "n")) (EVar "n")) (EApp (EApp (EVar "Pass") (EApp (EMethodRef "debug") (EVar "n"))) (EApp (EMethodRef "debug") (EVar "n")))))
 (DProp false "Debug Expectation agrees with Eq" ((pp "m" (TyCon "String"))) (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "debug") (EApp (EVar "fail") (EVar "m"))) (EApp (EMethodRef "debug") (EApp (EVar "fail") (EVar "m")))) (EBinOp "==" (EBinOp "==" (EApp (EMethodRef "debug") (EApp (EVar "fail") (EVar "m"))) (EApp (EMethodRef "debug") (EVar "pass"))) (EVar "False"))))
+(DProp false "expectEqualText never conflates a value with that value plus a digit" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EApp (EMethodRef "abs") (EVar "n")))) (DoExpr (EMatch (EApp (EApp (EVar "expectEqualText") (EVar "s")) (EBinOp "++" (EVar "s") (ELit (LString "0")))) (arm (PCon "Pass" PWild PWild) () (EVar "False")) (arm (PCon "Fail" PWild PWild PWild) () (EVar "True"))))))
