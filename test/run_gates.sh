@@ -320,8 +320,9 @@ fi
 #
 # The second arm is `kind = "native"` (#2591): such an entry has no `.sh` for the
 # globs to find, so it resolves by registry NAME instead, and the gate IS its
-# `run` module. Zero rows carry that kind today, so the arm selects nothing —
-# it exists so that the first migration does not silently shrink a shard.
+# `run` module. It exists so a migration never silently shrinks a shard — proven
+# by `effect_set_domain` (the first migrated row), and load-bearing from here on
+# as more gates migrate.
 gates=""
 # "<name>:<run>" pairs — ':' because a `for` split over "<name> <run>" would tear
 # the pair in half, and neither a gate name nor a path in this tree contains one.

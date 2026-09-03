@@ -1,5 +1,5 @@
 # META
-source_lines=5450
+source_lines=5454
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -17,14 +17,18 @@ stages=DESUGAR,MARK
    registry-level fail-open policy says about it —
    `docs/ops/GATE-REGISTRY-DESIGN.md` §2/§3).
 
-   ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
-   to behave.  Every gate script, every assertion in it, and the meaning of
-   every exit code it returns are untouched, and `sh test/run_gates.sh` remains
-   authoritative.  What `gate run` adds is the SERVICES around the script —
-   scratch-dir lifecycle, the stale-oracle refusal, a timeout, separated
-   stdout/stderr capture, and a machine-readable timing report — provided once,
-   natively, instead of re-hand-rolled per gate.  See the `gate run` section
-   below.
+   ⚠️ For a `kind = "exec"` entry, `gate run` is a NEW WAY TO INVOKE a gate
+   script, not a new way for a gate to behave: every assertion in the script
+   and the meaning of every exit code it returns are untouched, and
+   `sh test/run_gates.sh` remains authoritative.  A `kind = "native"` entry has
+   no script at all — `gate run` compiles and runs its `_test.mdk` module
+   directly (`medaka test --native --json`) and grades the JSON envelope, so
+   for THAT kind `gate run` is the gate's only way to run, not a wrapper around
+   one.  Either way, what `gate run` adds around the underlying execution is the
+   SAME set of SERVICES — scratch-dir lifecycle, the stale-oracle refusal (exec
+   only), a timeout, separated stdout/stderr capture, and a machine-readable
+   timing report — provided once, natively, instead of re-hand-rolled per gate.
+   See the `gate run` section below.
 
    **Selector language** (design doc §3, "keep it boring"): a selector is a
    `field:pattern` token, where `field` is one of `name`/`area`/`project`/

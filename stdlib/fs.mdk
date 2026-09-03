@@ -112,8 +112,8 @@ filesOnly (p :: rest) = match isFile p
   Ok True => map (p :: _) (filesOnly rest)
   Ok False => filesOnly rest
 
-{- | Every regular file under `root`, depth first — `walkDir` with
-   directories filtered out and an anti-vacuity floor: a directory that
+{- | Every regular file under `root`, depth first: `walkDir` with
+   directories filtered out and an anti-vacuity floor. A directory that
    reads cleanly but holds zero files is still `Err`, since a fixture-file
    gate iterating zero fixtures would otherwise report success having
    tested nothing.

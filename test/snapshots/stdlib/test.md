@@ -5,8 +5,8 @@ stages=DESUGAR,MARK
 {- | Assertions for unit tests.
 
    An assertion produces an `Expectation`: `Pass` or `Fail`, each carrying
-   the rendered operands the assertion compared, so a reader — or a driver
-   reading a compiled probe's output — sees the values and not just a
+   the rendered operands the assertion compared, so a reader (or a driver
+   reading a compiled probe's output) sees the values and not just a
    verdict. Write a test as `test "name" = expectEqual expected actual`,
    and run the file with `medaka test`, which also runs the doctests and
    `prop` declarations it finds. `runTests` runs a list of tests from an
@@ -22,7 +22,7 @@ import string.{lines, stripSuffix}
    Both outcomes carry the two operands as rendered text, so a caller can
    report or re-compare them without the `Eq` or `Debug` instance the
    assertion itself used. `Fail` carries a message ahead of them. An
-   assertion with nothing to show — `pass`, `fail` — renders both operands
+   assertion with nothing to show (`pass`, `fail`) renders both operands
    as the empty string. -}
 public export data Expectation =
   -- Pass: expected, actual.  Fail: message, expected, actual.
@@ -281,8 +281,8 @@ runTests tests = goTests tests 0 0
 {- | Compares `actual` against the golden file at `path`, via
    `expectEqualText`.
 
-   Read-only: never writes or blesses a golden. A read failure — most often
-   a golden that does not exist yet — surfaces as a `Fail` naming it, so a
+   Read-only: never writes or blesses a golden. A read failure (most often
+   a golden that does not exist yet) surfaces as a `Fail` naming it, so a
    caller doesn't need a separate branch for "no golden" versus "golden
    didn't match."
 

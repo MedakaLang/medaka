@@ -963,8 +963,8 @@ jobs:
           # WHOLE shard resolves to nothing, so a shard that quietly resolved to
           # one gate FEWER would have gone green having never run it, and
           # diff_compiler_ci_shard_coverage.sh would have certified it reachable
-          # (it reads `shard` from the registry, not this expansion). Zero rows
-          # carry the kind today, so the arm currently selects nothing.
+          # (it reads `shard` from the registry, not this expansion). Proven by
+          # `effect_set_domain`, the first migrated row.
           awk -F'"' '
             /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
             /^name = "/       { n = $2 }
