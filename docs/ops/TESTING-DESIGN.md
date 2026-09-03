@@ -1,6 +1,15 @@
 # TESTING-DESIGN.md — a coherent testing architecture for Medaka
 
-**Status:** PARTIAL — built 2026-07-13. §§1–3 are the diagnosis + research (unchanged).
+**Status:** SUPERSEDED as a plan, 2026-09-03 — `docs/ops/TESTING-ARCHITECTURE.md` is the
+design authority for the testing architecture and its migration (the 2026-09-03 survey;
+per-gate table in `docs/ops/TESTING-INVENTORY.md`). §§0–3 below stay as the diagnosis
+history they are; §§4–7 are historical (§4.4 and §4.6 shipped, §4.3/§4.7 did not — the
+new document's §3 and §10 carry their successors). ⚠️ §4.2's "the same assertions run on
+all three engines" is FALSE for `test`/`prop` today (they are eval-only); do not cite it as
+the unit tier's anti-circularity compensator until the native arm lands
+(TESTING-ARCHITECTURE §4). Original status line follows.
+
+**Status (2026-07-13):** PARTIAL — built 2026-07-13. §§1–3 are the diagnosis + research (unchanged).
 §4.4 (the differential tier) and the capability gate ARE BUILT and merged on
 `testing-arc`. **§4.6 (the must-fail suite) IS BUILT — 2026-07-17, #547:**
 `test/diff_compiler_must_fail.sh` + `test/must_fail_fixtures/`, run as a named step in
