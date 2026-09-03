@@ -105,6 +105,30 @@ walkEntries root (name :: rest) acc =
       else
         walkEntries root rest (acc ++ [full])
 
+filesOnly : List String -> <FileRead "_"> Result String (List String)
+filesOnly [] = Ok []
+filesOnly (p :: rest) = match isFile p
+  Err e => Err e
+  Ok True => map (p :: _) (filesOnly rest)
+  Ok False => filesOnly rest
+
+{- | Every regular file under `root`, depth first — `walkDir` with
+   directories filtered out and an anti-vacuity floor: a directory that
+   reads cleanly but holds zero files is still `Err`, since a fixture-file
+   gate iterating zero fixtures would otherwise report success having
+   tested nothing.
+
+   > fixtureFiles "stdlib/no-such-fixture-doctest-dir"
+   Err "No such file or directory" -}
+export
+fixtureFiles : String -> <FileRead "_"> Result String (List String)
+fixtureFiles root = match walkDir root
+  Err e => Err e
+  Ok paths => match filesOnly paths
+    Err e => Err e
+    Ok [] => Err "\{root}: no fixture files found"
+    Ok fs => Ok fs
+
 -- ── Instance laws ────────────────────────────────────────────────────────────
 -- `FileStat` is a plain record of four immutable fields, so derived `Eq` is
 -- field-wise structural equality.  The externs above do not run under the

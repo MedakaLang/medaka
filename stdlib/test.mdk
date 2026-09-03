@@ -10,6 +10,9 @@
 
    Import what you need: `import test.{expectEqual, expectTrue}`. -}
 
+import math.{approxEq}
+import string.{lines, stripSuffix}
+
 {- | The result of one assertion.
 
    Both outcomes carry the two operands as rendered text, so a caller can
@@ -120,6 +123,113 @@ expectGreaterThan expected actual =
   let a = debug actual
   if gt actual expected then Pass e a else Fail "expected \{a} > \{e}" e a
 
+{- | Passes when the result is `Ok`.
+
+   > expectOk (Ok 1)
+   Pass "Ok _" "Ok 1"
+   > expectOk (Err "boom")
+   Fail "expected Ok but got Err \"boom\"" "Ok _" "Err \"boom\"" -}
+export
+expectOk : (Debug e, Debug a) => Result e a -> Expectation
+expectOk r =
+  let a = debug r
+  match r
+    Ok _ => Pass "Ok _" a
+    Err _ => Fail "expected Ok but got \{a}" "Ok _" a
+
+{- | Passes when the result is `Err`.
+
+   > expectErr (Err "boom")
+   Pass "Err _" "Err \"boom\""
+   > expectErr (Ok 1)
+   Fail "expected Err but got Ok 1" "Err _" "Ok 1" -}
+export
+expectErr : (Debug e, Debug a) => Result e a -> Expectation
+expectErr r =
+  let a = debug r
+  match r
+    Err _ => Pass "Err _" a
+    Ok _ => Fail "expected Err but got \{a}" "Err _" a
+
+{- | Passes when the option is `Some`.
+
+   > expectSome (Some 1)
+   Pass "Some _" "Some 1"
+   > expectSome None
+   Fail "expected Some but got None" "Some _" "None" -}
+export
+expectSome : Debug a => Option a -> Expectation
+expectSome o =
+  let a = debug o
+  match o
+    Some _ => Pass "Some _" a
+    None => Fail "expected Some but got \{a}" "Some _" a
+
+{- | Passes when the option is `None`.
+
+   > expectNone None
+   Pass "None" "None"
+   > expectNone (Some 1)
+   Fail "expected None but got Some 1" "None" "Some 1" -}
+export
+expectNone : Debug a => Option a -> Expectation
+expectNone o =
+  let a = debug o
+  match o
+    None => Pass "None" a
+    Some _ => Fail "expected None but got \{a}" "None" a
+
+{- | Passes when `actual` is within `eps` of `expected`.
+
+   > expectWithin 1.0 1.0005 0.01
+   Pass "1.0" "1.0005"
+   > expectWithin 1.0 2.0 0.01
+   Fail "expected 2.0 within 0.01 of 1.0" "1.0" "2.0" -}
+export
+expectWithin : Float -> Float -> Float -> Expectation
+expectWithin expected actual eps =
+  let e = debug expected
+  let a = debug actual
+  if approxEq expected actual eps then
+    Pass e a
+  else
+    Fail "expected \{a} within \{debug eps} of \{e}" e a
+
+-- The single normalizer for the trailing-Unit shapes the shell `strip_unit`
+-- helpers across test/*.sh disagree on: strips a trailing "()" if present,
+-- else a trailing "0" (the auto-printed Unit value or exit code a probe's
+-- last line carries). The shell scripts' seven variants stay as they are.
+normalizeTrailingUnit : String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
+normalizeTrailingUnit s = match stripSuffix "()" s
+  Some s2 => s2
+  None => optionOr s (stripSuffix "0" s)
+
+-- Renders the first line at which two line lists diverge, 1-indexed.
+diffLineMsg : Int -> List String -> List String -> String
+diffLineMsg n [] [] = "expected and actual differ only outside their lines"
+diffLineMsg n [] (a :: _) =
+  "line \{intToString n}: expected nothing but got \{debug a}"
+diffLineMsg n (e :: _) [] =
+  "line \{intToString n}: expected \{debug e} but got nothing"
+diffLineMsg n (e :: es) (a :: asL) =
+  if e == a then
+    diffLineMsg (n + 1) es asL
+  else
+    "line \{intToString n}: expected \{debug e} but got \{debug a}"
+
+{- | Passes when two texts are equal after normalizing one trailing
+   auto-printed Unit shape (a trailing `()` or `0`).
+
+   A mismatch names the first differing line, 1-indexed, rather than
+   dumping both texts whole. -}
+export
+expectEqualText : String -> String -> Expectation
+expectEqualText expected actual =
+  let e = normalizeTrailingUnit expected
+  let a = normalizeTrailingUnit actual
+  if e == a then Pass e a else Fail (diffLineMsg 1 (lines e) (lines a)) e a
+
 -- Helper for expectAll: accumulate the first Fail, or stay Pass.  An
 -- aggregate pass has no single pair of operands to report, so it collapses
 -- to `pass` rather than keeping some arbitrary member's.
@@ -161,6 +271,24 @@ goTests ((name, thunk) :: rest) passed failed = match thunk ()
 export
 runTests : List (String, Unit -> Expectation) -> <IO> Bool
 runTests tests = goTests tests 0 0
+
+-- # Golden files
+
+{- | Compares `actual` against the golden file at `path`, via
+   `expectEqualText`.
+
+   Read-only: never writes or blesses a golden. A read failure — most often
+   a golden that does not exist yet — surfaces as a `Fail` naming it, so a
+   caller doesn't need a separate branch for "no golden" versus "golden
+   didn't match."
+
+   > expectGolden "stdlib/no-such-golden-doctest-fixture.golden" "hello"
+   Fail "expected golden stdlib/no-such-golden-doctest-fixture.golden: No such file or directory" "" "hello" -}
+export
+expectGolden : String -> String -> <FileRead "_"> Expectation
+expectGolden path actual = match readFile path
+  Err e => Fail "expected golden \{path}: \{e}" "" actual
+  Ok golden => expectEqualText golden actual
 
 -- ── Instance laws ────────────────────────────────────────────────────────
 -- LAW: derived `Eq Expectation` must separate the two constructors AND the
