@@ -2607,6 +2607,21 @@ corpus = ["test/lint_fixtures"]
 toolchain = []
 
 [[gate]]
+name = "diff_compiler_lint_baseline"
+area = "tooling"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_lint_baseline.sh"
+oracles = []
+sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/lint_baseline.toml", "test/diff_compiler_lint_baseline.sh", ".githooks/pre-commit"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_llvm_ffi"
 area = "backend"
 shard = "gates_6"

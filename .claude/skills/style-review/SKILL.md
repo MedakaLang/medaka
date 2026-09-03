@@ -132,8 +132,8 @@ settled; do not reopen it inside a sprint.
 | **Mass-conversion sweeps** — "convert every `X` in this file / this subsystem" | Out of diff scope by construction, and `lint --fix` reprints WHOLE declarations and bails on comment-bearing ones, so a sweep silently corrupts unrelated syntax in the same decl. If a sweep is genuinely owed, it is a filed issue with its own PR. |
 | **Findings about untouched code** | Diff-scoped only (see Scope). At most one neighbour line. |
 | **"Remove this suppression"** where the suppression carries a rationale | A `-- lint-disable-next-line <rule>` with a stated reason is the **correct** outcome, not debt. A suppression with no rationale is the finding; the suppression itself is not. |
-| **"Add a lint rule for this"** | Not this reviewer's to implement — see the shrink rule below. The max-ratchet lint model has no baseline mechanism, which is an OPEN Val decision (crusade #2276). |
-| **Reopening a standing architecture decision** | The `architecture` skill's DECLINED register — hard size ratchets, the `typecheck.mdk` split's sequencing (#2284), the `driver`/`tools` de-grab-bag's ownership (#2282), skill-tree mirroring (#2313). |
+| **"Add a lint rule for this"** | Not this reviewer's to implement — see the shrink rule below. It lands through its own filed issue and PR, gated either by the max ratchet (`GATED_LINT_RULES`, a rule the tree is already clean of) or, when it is not, by the per-(file, rule) count baseline (`BASELINED_LINT_RULES` + `test/lint_baseline.toml`, #2619 (lint count baseline)). |
+| **Reopening a standing architecture decision** | The `architecture` skill's DECLINED register — hard size ratchets, the `typecheck.mdk` split's sequencing (#2586 (typecheck refactor), which superseded the closed #2284), the `driver`/`tools` de-grab-bag's ownership (#2282), skill-tree mirroring (#2313). |
 | **A comment-length or comment-count ratchet** | Declined on record (#2281): a length ratchet teaches agents to write short bad comments. |
 
 ## The shrink rule — this checklist must get SHORTER

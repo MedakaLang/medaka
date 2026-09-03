@@ -14,6 +14,15 @@
 #      ESLint-style directive comment, e.g. `-- lint-disable-next-line rule-lambda-section`
 #      (also -line / -file forms). If a gated style rule proves too noisy in practice,
 #      remove it from GATED_LINT_RULES below (it then still warns under plain `medaka lint`).
+#   2b. BASELINED LINT: `medaka lint --baseline test/lint_baseline.toml
+#      --only=<baselined rules>` — for a rule the tree is NOT yet clean of, so the
+#      max ratchet of check 2 cannot carry it. Each file's current finding count
+#      is pinned in test/lint_baseline.toml; a file may fall below its count
+#      freely, and exceeding it — or having findings with no row there at all —
+#      fails the commit. Counts move only by regenerating the file
+#      (`sh test/diff_compiler_lint_baseline.sh --write`), never by hand.
+#      test/diff_compiler_lint_baseline.sh re-checks the whole tree in CI, so
+#      `--no-verify` cannot smuggle an increase past this check.
 #   3. CROSS-FILE LINT: one project-wide scan (rule-duplicate-body can't be checked
 #      per-staged-file).
 #   4. SNAPSHOT: `make snapshot-check` — the per-stage snapshot suite, CHECK ONLY.
@@ -89,13 +98,16 @@ set -u
 # whole-project scan (it compares a body against OTHER files), so it's checked in
 # one scan over all source roots at once (catches cross-root duplicates too).
 # Intentional exceptions use inline directives (-- lint-disable-next-line / -file <rule>).
-# rule-stdlib-reimpl is intentionally NOT gated here: S2/S3's signature-aware matcher (the
-# stdlib-reimpl-detection sprint) widened its reach and the tree carries 74 pre-existing
-# findings across 32 files (mostly deliberate compiler/support thin-wrapper duplication,
-# [T-STDLIB-IMPORT]) that are not this sprint's to fix — see the drain issue. Gating it now
-# would be #1214's max-ratchet trap (a rule gated before the tree is clean of its findings).
-# It still warns under plain `medaka lint` (SevWarning, ungated).
 GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op"
+# Rules carried by the COUNT BASELINE instead of the max ratchet (check 2b, #2619).
+# A rule belongs here when the tree is not clean of it and draining it is not the
+# current change's job: rule-stdlib-reimpl's signature-aware matcher reaches ~70
+# pre-existing findings across ~30 files, mostly deliberate compiler/support
+# thin-wrapper duplication ([T-STDLIB-IMPORT]). Putting it in GATED_LINT_RULES
+# would be #1214's max-ratchet trap (a rule gated before the tree is clean of it);
+# leaving it nowhere left its count free to grow, which is what #2619 fixes.
+BASELINED_LINT_RULES="rule-stdlib-reimpl"
+LINT_BASELINE_FILE="test/lint_baseline.toml"
 # Cross-file rules, checked project-wide (not per staged file).
 GATED_CROSSFILE_RULES="rule-duplicate-body"
 # Source roots scanned for the cross-file check (dirs that exist are used).
@@ -172,6 +184,34 @@ if [ -n "$badlint" ]; then
   echo "  See findings:  medaka lint --only=$GATED_LINT_RULES$badlint" >&2
   echo "  If intentional, silence inline with a directive comment above the site:" >&2
   echo "                 -- lint-disable-next-line <rule>" >&2
+  echo "  Bypass once:   git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# ── 2b. baselined lint check (per-file count ratchet) ────────────────────
+# Same per-staged-file loop as check 2. The difference is the verdict: check 2
+# fails on ANY finding, this one fails only where a file's count for a baselined
+# rule EXCEEDS its pinned row — or where the baseline cannot answer at all (no
+# row for a file that has findings, or an unreadable baseline file). It never
+# passes on a question it could not answer.
+badbase=""
+for f in $files; do
+  [ -f "$f" ] || continue
+  "$MEDAKA" lint --baseline="$ROOT/$LINT_BASELINE_FILE" --only="$BASELINED_LINT_RULES" "$f" >/dev/null 2>&1 || badbase="$badbase $f"
+done
+
+if [ -n "$badbase" ]; then
+  echo "" >&2
+  echo "✗ pre-commit: baselined lint count exceeded ($BASELINED_LINT_RULES):" >&2
+  for f in $badbase; do echo "      $f" >&2; done
+  echo "" >&2
+  echo "  See findings:  medaka lint --baseline=$LINT_BASELINE_FILE --only=$BASELINED_LINT_RULES$badbase" >&2
+  echo "  The count in $LINT_BASELINE_FILE may only FALL. Either remove the new" >&2
+  echo "  finding(s), or silence an intentional one inline above the site:" >&2
+  echo "                 -- lint-disable-next-line <rule>" >&2
+  echo "  A count that legitimately moves is re-pinned by REGENERATING the file," >&2
+  echo "  never by editing it:  sh test/diff_compiler_lint_baseline.sh --write" >&2
   echo "  Bypass once:   git commit --no-verify" >&2
   echo "" >&2
   exit 1

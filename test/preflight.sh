@@ -1057,6 +1057,16 @@ while IFS= read -r f; do
                                    add 'diff_compiler_gate_cost'
                                    add 'diff_compiler_gate_balance'
                                    add 'diff_compiler_ci_gen_drift' ;;
+    # #2619 (S-lint-baseline): the per-(file, rule) lint count baseline and the
+    # hook that reads it. Both are loose non-.mdk files `_fixture_dir_for`
+    # cannot see, and both are exactly what someone edits ALONE (re-pinning a
+    # count, adding a rule to BASELINED_LINT_RULES) — and an UNMAPPED non-prose
+    # path widens the whole PR run to the FULL suite ([W-THIRD-CONSUMER]). The
+    # hook is in the arm because diff_compiler_lint_baseline.sh READS its
+    # BASELINED_LINT_RULES and LINT_ROOTS rather than re-typing them, so a hook
+    # edit moves the gate's own inputs.
+    test/lint_baseline.toml|.githooks/pre-commit)
+                                   add 'diff_compiler_lint_baseline' ;;
     # FR-3 (fix round, S1-1/S3-5): the nightly auto-advance TOOL (in
     # CI-COVERAGE-TOOLS.txt, so it is not a gate candidate either). It shares
     # the ingest/balance/gen-ci gates above (it calls all three), plus the two

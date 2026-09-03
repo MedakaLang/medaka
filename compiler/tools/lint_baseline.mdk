@@ -1,0 +1,278 @@
+-- compiler/tools/lint_baseline.mdk — the per-(file, rule) finding-count baseline
+-- behind `medaka lint --baseline` / `--write-baseline` (#2619).
+--
+-- WHY.  `.githooks/pre-commit`'s `GATED_LINT_RULES` is a MAX RATCHET: a rule may
+-- only be gated once the whole tree is at zero findings for it.  A rule whose
+-- tree count is nonzero and not this sprint's to drain (`rule-stdlib-reimpl`)
+-- therefore had no enforcement at all — it warned, and nothing stopped the count
+-- from growing.  A baseline is the intermediate: the CURRENT per-file count is
+-- pinned, a file may go down freely, and going UP is an error.
+--
+-- ── THE INVARIANT (hold every change in this file to it) ─────────────────────
+--   AN UNANSWERABLE QUESTION IS AN ERROR, NEVER A PASS.
+-- A missing baseline file, malformed TOML, a duplicate row, a negative count,
+-- and — the one that matters most — a file that HAS findings for a rule but no
+-- row for that (file, rule) all resolve to a violation.  There is no "assume
+-- zero" and no "assume clean" branch and there must never be one: a baseline
+-- that silently passes when it cannot answer is worth less than no baseline,
+-- because it reports green.
+--
+-- ── KEYS ────────────────────────────────────────────────────────────────────
+-- A row's `file` is the lint TARGET path as `medaka lint` was given it, made
+-- relative to the process's working directory.  Both consumers (the pre-commit
+-- hook and test/diff_compiler_lint_baseline.sh) run at the repo root, so the
+-- rows read as ordinary repo-relative paths.  Run from elsewhere, a key stops
+-- matching and the run fails closed with the key it looked for — the loud half
+-- of the invariant above, not a wrong answer.
+
+import driver.diagnostics.{Diag(..), Severity(..)}
+import tools.lint.{Finding(..), applyFindingDeny}
+import support.util.{
+  contains, listLen, filterList, joinNl, startsWith, sortUniqS, isSome
+}
+import list.{sortOn}
+import toml.{Toml, parse, getString, getInt, tableCount, tableEntry}
+
+-- ── the data ────────────────────────────────────────────────────────────────
+
+-- One `[[entry]]` of the baseline file: "file F is allowed COUNT findings of
+-- rule R, and no more".
+public export data BaselineRow = BaselineRow {
+  file : String,
+  rule : String,
+  count : Int,
+}
+
+public export data LintBaseline = LintBaseline (List BaselineRow)
+
+-- ── reading ─────────────────────────────────────────────────────────────────
+
+-- Read and parse a baseline file.  `Err` on anything that leaves the baseline
+-- unable to answer — including the file not existing, which is the case a
+-- careless implementation would treat as "no rows, so nothing exceeds".
+export
+readLintBaseline : String -> <IO> Result String LintBaseline
+readLintBaseline path = match readFile path
+  Err msg => Err "cannot read lint baseline '\{path}': \{msg}"
+  Ok src => parseLintBaseline path src
+
+export
+parseLintBaseline : String -> String -> Result String LintBaseline
+parseLintBaseline origin src = match parse src
+  Err e => Err "\{origin}: not valid TOML: \{e}"
+  Ok doc =>
+    map LintBaseline (baselineRowsGo doc origin 0 (tableCount "entry" doc) [])
+
+baselineRowsGo : Toml ->
+  String ->
+  Int ->
+  Int ->
+  List BaselineRow ->
+  Result String (List BaselineRow)
+baselineRowsGo doc origin i n acc =
+  if i >= n then
+    Ok acc
+  else match baselineRowAt doc origin i
+    Err e => Err e
+    Ok r =>
+      if baselineHasKey acc r.file r.rule then
+        Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
+      else
+        baselineRowsGo doc origin (i + 1) n (acc ++ [r])
+
+baselineRowAt : Toml -> String -> Int -> Result String BaselineRow
+baselineRowAt doc origin i = match tableEntry "entry" i doc
+  None => Err "\{origin}: [[entry]] #\{intToString i} is out of range"
+  Some e => match (getString "file" e, getString "rule" e, getInt "count" e)
+    (Some f, Some r, Some c) =>
+      if c < 0 then
+        Err "\{origin}: [[entry]] #\{intToString i} has a negative count"
+      else
+        Ok BaselineRow { file = f, rule = r, count = c }
+    _ => Err "\{origin}: [[entry]] #\{intToString i} needs file, rule and count"
+
+baselineHasKey : List BaselineRow -> String -> String -> Bool
+baselineHasKey rows file rule = isSome (baselineAllowedGo rows file rule)
+
+-- ── the key ─────────────────────────────────────────────────────────────────
+
+-- The baseline key for a lint target, given the canonical working directory:
+-- the target with that directory's prefix (or a leading `./`) removed.  A path
+-- that is neither is left alone — it will simply not match a row, which the
+-- caller reports as a missing row.
+export
+baselineKeyOf : String -> String -> String
+baselineKeyOf cwd target
+  | startsWith "\{cwd}/" target =
+    stringSlice (stringLength cwd + 1) (stringLength target) target
+  | startsWith "./" target = stringSlice 2 (stringLength target) target
+  | otherwise = target
+
+-- ── comparing ───────────────────────────────────────────────────────────────
+
+-- The allowance for one (file, rule), or `None` when the baseline has no row.
+export
+baselineAllowed : LintBaseline -> String -> String -> Option Int
+baselineAllowed (LintBaseline rows) file rule = baselineAllowedGo rows file rule
+
+baselineAllowedGo : List BaselineRow -> String -> String -> Option Int
+baselineAllowedGo [] _ _ = None
+baselineAllowedGo (r :: rest) file rule
+  | r.file == file && r.rule == rule = Some r.count
+  | otherwise = baselineAllowedGo rest file rule
+
+-- One entry per DISTINCT rule name in `names`, with how many times it occurs,
+-- rule-sorted.  `names` is one entry per finding, so the count is the finding
+-- count for that rule in that file.
+export
+ruleCounts : List String -> List (String, Int)
+ruleCounts names = map (r => (r, occurrencesOf r names)) (sortUniqS names)
+
+occurrencesOf : String -> List String -> Int
+occurrencesOf r names = listLen (filterList (== r) names)
+
+-- Every rule whose count for `file` is not covered by the baseline: `(rule,
+-- actual, allowance)`, with `None` as the allowance when there is no row at all.
+export
+baselineViolations : LintBaseline ->
+  String ->
+  List String ->
+  List (String, Int, Option Int)
+baselineViolations base file names =
+  filterList
+    baselineViolated
+    (map (rc => baselineCheckOne base file rc) (ruleCounts names))
+
+baselineCheckOne : LintBaseline ->
+  String ->
+  (String, Int) ->
+  (String, Int, Option Int)
+baselineCheckOne base file (rule, n) = (rule, n, baselineAllowed base file rule)
+
+baselineViolated : (String, Int, Option Int) -> Bool
+baselineViolated (_, _, None) = True
+baselineViolated (_, n, Some allowed) = n > allowed
+
+export
+baselineViolationLine : String -> (String, Int, Option Int) -> String
+baselineViolationLine file (rule, n, None) =
+  "\{file}: \{rule}: \{intToString n} finding(s) but no baseline row"
+baselineViolationLine file (rule, n, Some allowed) =
+  "\{file}: \{rule}: \{intToString n} finding(s) exceed the baseline of \{intToString allowed}"
+
+-- The rules a file busted, as a plain name list — the input both promotion
+-- surfaces below reduce to.
+export
+baselineBustedRules : LintBaseline -> String -> List String -> List String
+baselineBustedRules base file names =
+  map (v => bustedRuleOf v) (baselineViolations base file names)
+
+bustedRuleOf : (String, Int, Option Int) -> String
+bustedRuleOf (rule, _, _) = rule
+
+-- ── promotion ───────────────────────────────────────────────────────────────
+--
+-- Promotion is `--deny`'s, conditioned on the count rather than on blanket rule
+-- membership: once a file busts its row for a rule, EVERY finding of that rule
+-- in that file becomes a `SevError`, so the exit code follows from the ordinary
+-- `isFindingError` / `diagIsError` fold and no caller needs a second channel.
+-- Findings, for the text report path:
+export
+applyBaselineToFindings : LintBaseline -> String -> List Finding -> List Finding
+applyBaselineToFindings base file findings =
+  applyFindingDeny
+    (baselineBustedRules base file (map findingRuleOf findings))
+    findings
+
+-- Diags, for `--json` — `findingToDiag` puts the rule name in `code`, so the
+-- same decision applies to the serialized form without re-deriving it.
+-- The `baselineViolations` of a file's serialized diagnostics, so a `--json`
+-- caller need not reach for the `code` accessor itself.
+export
+baselineDiagViolations : LintBaseline ->
+  String ->
+  List Diag ->
+  List (String, Int, Option Int)
+baselineDiagViolations base file diags =
+  baselineViolations base file (map diagCodeOf diags)
+
+export
+applyBaselineToDiags : LintBaseline -> String -> List Diag -> List Diag
+applyBaselineToDiags base file diags =
+  promoteDiags (baselineBustedRules base file (map diagCodeOf diags)) diags
+
+-- Both promotion surfaces reduce their input to a plain rule-name list; these
+-- two projections are where `Finding` and `Diag` say the same thing.  Named
+-- rather than inlined as `f => f.rule`, which is ambiguous between `Finding` and
+-- `BaselineRow` at the use site.
+export
+findingRuleOf : Finding -> String
+findingRuleOf f = f.rule
+
+export
+diagCodeOf : Diag -> String
+diagCodeOf (Diag _ code _ _ _ _) = code
+
+promoteDiags : List String -> List Diag -> List Diag
+promoteDiags [] diags = diags
+promoteDiags names diags = map (d => promoteDiag names d) diags
+
+promoteDiag : List String -> Diag -> Diag
+promoteDiag names (Diag sev code msg loc help fix)
+  | contains code names = Diag SevError code msg loc help fix
+  | otherwise = Diag sev code msg loc help fix
+
+-- ── writing ─────────────────────────────────────────────────────────────────
+
+-- Render a whole baseline file from a real run's per-file rule occurrences
+-- (`(key, one name per finding)`).  Rows are sorted by `file` then `rule` and
+-- zero-count files are omitted, so a regeneration that changed nothing produces
+-- a byte-identical file — the property that lets `--write-baseline` be the ONLY
+-- sanctioned way to move a count.
+export
+renderLintBaseline : List (String, List String) -> String
+renderLintBaseline perFile = stringConcat [
+  baselineFileHeader,
+  joinNl
+    (map renderBaselineRow (sortOn baselineRowKey (baselineRowsOf perFile))),
+  "\n",
+]
+
+export
+baselineRowsOf : List (String, List String) -> List BaselineRow
+baselineRowsOf [] = []
+baselineRowsOf ((file, names) :: rest) =
+  map (rc => baselineRowOf file rc) (ruleCounts names) ++ baselineRowsOf rest
+
+baselineRowOf : String -> (String, Int) -> BaselineRow
+baselineRowOf file (rule, n) =
+  BaselineRow { file = file, rule = rule, count = n }
+
+baselineRowKey : BaselineRow -> String
+baselineRowKey r = "\{r.file}\n\{r.rule}"
+
+renderBaselineRow : BaselineRow -> String
+renderBaselineRow r =
+  "[[entry]]\nfile = \"\{r.file}\"\nrule = \"\{r.rule}\"\ncount = \{intToString r.count}\n"
+
+baselineFileHeader : String
+baselineFileHeader = stringConcat [
+  "# lint finding-count baseline — GENERATED, never hand-edited (#2619).\n",
+  "#\n",
+  "# One [[entry]] per (file, rule) with at least one finding: the number of\n",
+  "# findings that file is currently ALLOWED for that rule.  A file may drop\n",
+  "# below its count freely; exceeding it is an error, and so is having\n",
+  "# findings for a rule with no row here at all.\n",
+  "#\n",
+  "# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)\n",
+  "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n",
+  "# cannot smuggle an increase past the hook).\n",
+  "#\n",
+  "# Regenerate from the repo root, never by hand:\n",
+  "#\n",
+  "#   sh test/diff_compiler_lint_baseline.sh --write\n",
+  "#\n",
+  "# Paths are relative to the directory `medaka lint` runs in (the repo root\n",
+  "# for both consumers above).\n",
+  "\n",
+]
