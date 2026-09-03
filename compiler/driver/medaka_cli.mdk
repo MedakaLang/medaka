@@ -3254,7 +3254,7 @@ runTestJsonCmd engines cases filterOpt target =
 cliTestReportOk : Option String ->
   List (Engine, RunResult) ->
   List PropResult ->
-  List (String, Int, ExResult) ->
+  List (Engine, String, Int, ExResult) ->
   Bool
 cliTestReportOk typeError runs props tests =
   isNone typeError
@@ -3271,9 +3271,9 @@ cliAllPropsPass : List PropResult -> Bool
 cliAllPropsPass [] = True
 cliAllPropsPass (p :: rest) = propResultPassed p && cliAllPropsPass rest
 
-cliAllTestsPass : List (String, Int, ExResult) -> Bool
+cliAllTestsPass : List (Engine, String, Int, ExResult) -> Bool
 cliAllTestsPass [] = True
-cliAllTestsPass ((_, _, Pass _ _) :: rest) = cliAllTestsPass rest
+cliAllTestsPass ((_, _, _, Pass _ _) :: rest) = cliAllTestsPass rest
 cliAllTestsPass (_ :: _) = False
 
 cliPrimaryDoctestRun : List (Engine, RunResult) -> RunResult
@@ -3290,14 +3290,14 @@ cliCountFailProps [] = 0
 cliCountFailProps (p :: rest) =
   (if propResultPassed p then 0 else 1) + cliCountFailProps rest
 
-cliCountPassTests : List (String, Int, ExResult) -> Int
+cliCountPassTests : List (Engine, String, Int, ExResult) -> Int
 cliCountPassTests [] = 0
-cliCountPassTests ((_, _, Pass _ _) :: rest) = 1 + cliCountPassTests rest
+cliCountPassTests ((_, _, _, Pass _ _) :: rest) = 1 + cliCountPassTests rest
 cliCountPassTests (_ :: rest) = cliCountPassTests rest
 
-cliCountFailTests : List (String, Int, ExResult) -> Int
+cliCountFailTests : List (Engine, String, Int, ExResult) -> Int
 cliCountFailTests [] = 0
-cliCountFailTests ((_, _, Pass _ _) :: rest) = cliCountFailTests rest
+cliCountFailTests ((_, _, _, Pass _ _) :: rest) = cliCountFailTests rest
 cliCountFailTests (_ :: rest) = 1 + cliCountFailTests rest
 
 cliExampleJson : (Example, ExResult) -> Json
@@ -3332,10 +3332,19 @@ cliPropJson p = jObject [
   ("detail", JString (propResultDetail p)),
 ]
 
-cliTestJson : (String, Int, ExResult) -> Json
-cliTestJson (name, line, result) =
+-- #2588: every `test "…"` result names the engine that produced it. Under
+-- `--engines eval,native` the same test appears twice, once per engine, and the
+-- field is what tells the two apart; under the default single engine it still
+-- says which one ran, so a reader never has to infer it from the flags.
+cliTestJson : (Engine, String, Int, ExResult) -> Json
+cliTestJson (engine, name, line, result) =
   jObject
-    ([("name", JString name), ("line", JInt line)] ++ exResultJsonFields result)
+    ([
+        ("name", JString name),
+        ("line", JInt line),
+        ("engine", JString (engineName engine)),
+      ]
+      ++ exResultJsonFields result)
 
 cliTypeErrorField : Option String -> List (String, Json)
 cliTypeErrorField None = []
@@ -3357,7 +3366,7 @@ cliTestReportJson : String ->
   Option String ->
   List (Engine, RunResult) ->
   List PropResult ->
-  List (String, Int, ExResult) ->
+  List (Engine, String, Int, ExResult) ->
   Bool ->
   Json
 cliTestReportJson path typeError runs props tests typecheckSkipped =

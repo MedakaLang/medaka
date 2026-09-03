@@ -96,8 +96,9 @@ import tools.doctest.{
   synthName,
 }
 import tools.native_doctest.{runNativeDoctests}
+import tools.native_test_decls.{runNativeTests}
 import tools.prop_runner.{runAllProps, hasProps, runAllPropsResults, PropResult}
-import tools.test_runner.{collectTests, runOneTest, hasTests}
+import tools.test_runner.{collectTests, runOneTest, hasTests, uncapableExterns}
 import driver.diagnostics.{
   analyzeProject,
   analyzeLocated,
@@ -467,7 +468,15 @@ driveAll engines runtimeDecls coreDecls target tsrc roots cases filterOpt =
   let propsOk =
     runProps runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
   let testsOk =
-    runTestDecls runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+    runTestDecls
+      engines
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      userDecls
+      roots
+      filterOpt
   doctestsOk && propsOk && testsOk
 
 -- ── doctest phase ────────────────────────────────────────────────────────────
@@ -1023,7 +1032,14 @@ lookupModuleDecls rootId ((mid, decls) :: rest)
 -- DTest bodies from the ELABORATED root module so their `expectEqual`/… call sites
 -- carry the dict argument (`import test`'s constrained assertions).
 
-runTestDecls : List Decl ->
+-- #2588: `engines` selects the execution engine(s) the same way the doctest
+-- phase's does — `[EngInterp]` (the default) is byte-identical to the pre-#2588
+-- report, `--native` adds `EngNative`, and each engine's block is labelled when
+-- there is more than one.  Until #2588 this phase took no `Engine` at all, so
+-- `--native` and `--engines` were silently inert for `test "…"` decls even
+-- though they already worked for doctests.
+runTestDecls : List Engine ->
+  List Decl ->
   List Decl ->
   String ->
   String ->
@@ -1031,8 +1047,84 @@ runTestDecls : List Decl ->
   List String ->
   Option String ->
   <IO> Bool
-runTestDecls runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+runTestDecls engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   | not (hasTests userDecls) = True
+  | otherwise =
+    runTestEngines
+      engines
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      userDecls
+      roots
+      filterOpt
+
+runTestEngines : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  Option String ->
+  <IO> Bool
+runTestEngines [e] runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  runTestsOn e runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+runTestEngines engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  runTestEnginesTagged
+    engines
+    runtimeDecls
+    coreDecls
+    target
+    tsrc
+    userDecls
+    roots
+    filterOpt
+
+runTestEnginesTagged : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  Option String ->
+  <IO> Bool
+runTestEnginesTagged [] _ _ _ _ _ _ _ = True
+runTestEnginesTagged (e :: rest) runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  let _ = putStrLn ""
+  let _ = putStrLn "-- \{engineName e} --"
+  let ok =
+    runTestsOn e runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+  let restOk =
+    runTestEnginesTagged
+      rest
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      userDecls
+      roots
+      filterOpt
+  ok && restOk
+
+-- The SINGLE call site that picks an execution engine for the `test "…"`
+-- phase.  `EngInterp` evaluates each elaborated body through the interpreter;
+-- `EngNative` compiles ONE probe binary per file (tools.native_test_decls) and
+-- reads the `Expectation`s it prints.  The two arms genuinely differ in how
+-- they reach a body — an elaborated `Expr` versus a re-rendered binding — which
+-- is why that module is `native_doctest.mdk`'s template rather than its caller.
+runTestsOn : Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  Option String ->
+  <IO> Bool
+runTestsOn EngInterp runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   | hasUseDecls userDecls =
     runTestDeclsMulti
       runtimeDecls
@@ -1051,6 +1143,47 @@ runTestDecls runtimeDecls coreDecls target tsrc userDecls roots filterOpt
       userDecls
       roots
       filterOpt
+runTestsOn EngNative _runtimeDecls _coreDecls target tsrc userDecls _roots filterOpt =
+  runTestDeclsNative target tsrc userDecls filterOpt
+
+-- ── the native arm ──────────────────────────────────────────────────────────
+-- The probe compiles the file's SOURCE, so it needs the RAW (parsed, not
+-- desugared, not elaborated) bodies: those are what `printer.declToString` can
+-- render back as ordinary bindings for the probe program.  The interpreter arm
+-- needs the opposite — the elaborated bodies, whose `expectEqual` call sites
+-- already carry their dictionary argument.  Both lists come from the same
+-- source through the same `--filter`, so index `i` names the same test in each.
+runTestDeclsNative : String -> String -> List Decl -> Option String -> <IO> Bool
+runTestDeclsNative target tsrc userDecls filterOpt =
+  let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
+  let _ = putStrLn ("running tests in " ++ target)
+  reportNativeTests target tests (runNativeTests target tsrc userDecls tests)
+
+nativeRawTests : String -> List (String, Int, Expr)
+nativeRawTests tsrc = collectTests (parseLocated tsrc)
+
+reportNativeTests : String ->
+  List (String, Int, Expr) ->
+  List ExResult ->
+  <IO> Bool
+reportNativeTests target tests results =
+  let (passed, failed, errors) = nativeTestLoop target tests results 0 0 0
+  reportTestSummary target passed failed errors
+
+nativeTestLoop : String ->
+  List (String, Int, Expr) ->
+  List ExResult ->
+  Int ->
+  Int ->
+  Int ->
+  <IO> (Int, Int, Int)
+nativeTestLoop _ [] _ passed failed errors = (passed, failed, errors)
+nativeTestLoop _ (_ :: _) [] passed failed errors = (passed, failed, errors)
+nativeTestLoop target ((name, line, _) :: rest) (r :: rRest) passed failed errors =
+  let _ = printTestRunning target line name
+  let _ = printTestVerdict target line name r
+  let (p, f, e) = tallyTest r passed failed errors
+  nativeTestLoop target rest rRest p f e
 
 -- Line map keyed by test name, from a POSITION-populating reparse of the source
 -- (the bare `parse` used elsewhere leaves placeholder line-1 locs).
@@ -1094,8 +1227,9 @@ runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots filterOpt 
   let rootTests = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
     None => userDecls
-  reportTests
+  gatedReportTests
     target
+    (runtimeDecls ++ fst elaborated ++ flatMap snd (snd elaborated))
     env
     (filterTestsByName
       filterOpt
@@ -1123,8 +1257,9 @@ runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
           (fst elaborated)
           (snd elaborated)
       let rootTests = elaboratedRootProps target (snd elaborated) userDecls
-      reportTests
+      gatedReportTests
         target
+        (runtimeDecls ++ fst elaborated ++ flatMap snd (snd elaborated))
         env
         (filterTestsByName
           filterOpt
@@ -1154,6 +1289,44 @@ attachRawLines [] ((name, _, body) :: rest) =
 attachRawLines ((_, l, _) :: rawRest) ((name, _, body) :: rest) =
   (name, l, body) :: attachRawLines rawRest rest
 
+-- ── the eval arm's capability gate (#2588) ──────────────────────────────────
+-- `medaka test` evaluates `test "…"` bodies under a capability policy
+-- (eval.testCapableExterns) that binds the clock, the GC counter and stderr and
+-- nothing else.  A body reaching past it — directly, or through a stdlib
+-- wrapper like `runCommandOk` — used to die mid-run with eval's own `unbound
+-- identifier runCommand`, a message about the interpreter's internals that
+-- named no test and arrived after earlier tests had already reported.
+--
+-- The gate answers the same question by name, before anything runs, and refuses
+-- the WHOLE FILE rather than the individual test: the tests that would still
+-- have run are not the point when the file as written cannot be run as asked.
+-- `--native` compiles a real binary and so has no such policy, which is what
+-- the diagnostic points at.
+gatedReportTests : String ->
+  List Decl ->
+  List (String, Value e) ->
+  List (String, Int, Expr) ->
+  <IO> Bool
+gatedReportTests target corpus env tests =
+  match uncapableExterns corpus env tests
+    [] => reportTests target env tests
+    names =>
+      let _ = ePutStrLn (uncapableExternsMsg target names)
+      False
+
+uncapableExternsMsg : String -> List String -> String
+uncapableExternsMsg target names =
+  "\{target}: `test \"…\"` declarations here reach \{externWord names} \{joinCommas names}, which `medaka test` does not provide under the interpreter — its capability policy covers the clock, allocation counts and stderr only, so no filesystem, environment, stdin, network or subprocess extern is bound. No test was run. Run these tests natively instead: `medaka test --native \{target}`."
+
+externWord : List String -> String
+externWord [_] = "the extern"
+externWord _ = "the externs"
+
+joinCommas : List String -> String
+joinCommas [] = ""
+joinCommas [n] = "`\{n}`"
+joinCommas (n :: rest) = "`\{n}`, " ++ joinCommas rest
+
 -- Reuses the doctest reporting SHAPE (`ok`/`FAIL <f>:<line>: <name>`, then the
 -- `<f>: P/T passed[ (F failed, E errors)]` summary + exit code, P0-6).  Like the
 -- prop phase, each result is printed AS its body is evaluated (not batched), so a
@@ -1166,12 +1339,45 @@ reportTests : String ->
 reportTests target env tests =
   let _ = putStrLn ("running tests in " ++ target)
   let (passed, failed, errors) = runTestLoop target env tests 0 0 0
+  reportTestSummary target passed failed errors
+
+-- The per-file summary line + exit signal, shared by both engines so their
+-- reports can be compared line for line.
+reportTestSummary : String -> Int -> Int -> Int -> <IO> Bool
+reportTestSummary target passed failed errors =
   let total = passed + failed + errors
   let _ =
     putStr "\n\{target}: \{intToString passed}/\{intToString total} passed"
   let _ = putStr (testFailSuffix failed errors)
   let _ = putStr "\n"
   failed == 0 && errors == 0
+
+-- #2293: name the test BEFORE its outcome is known. Panics are uncatchable by
+-- design (settled: isolation only, never catchability), so under the
+-- interpreter this print is the runner's only chance to attribute a mid-run
+-- process death — if the process dies inside `runOneTest`, this line is the
+-- last thing on stdout, and the disappearance of every test after it is
+-- explained rather than mysterious.
+printTestRunning : String -> Int -> String -> <IO> Unit
+printTestRunning target line name =
+  putStrLn "  running \{target}:\{intToString line}: \{name}"
+
+printTestVerdict : String -> Int -> String -> ExResult -> <IO> Unit
+printTestVerdict target line name result =
+  let loc = "\{target}:\{intToString line}"
+  match result
+    Pass _ _ => putStrLn "  ok   \{loc}: \{name}"
+    Fail msg _ _ =>
+      let _ = putStrLn "  FAIL \{loc}: \{name}"
+      putStrLn ("       " ++ msg)
+    Errored msg =>
+      let _ = putStrLn "  FAIL \{loc}: \{name}"
+      putStrLn ("       " ++ msg)
+
+tallyTest : ExResult -> Int -> Int -> Int -> (Int, Int, Int)
+tallyTest (Pass _ _) passed failed errors = (passed + 1, failed, errors)
+tallyTest (Fail _ _ _) passed failed errors = (passed, failed + 1, errors)
+tallyTest (Errored _) passed failed errors = (passed, failed, errors + 1)
 
 runTestLoop : String ->
   List (String, Value e) ->
@@ -1182,26 +1388,11 @@ runTestLoop : String ->
   <IO> (Int, Int, Int)
 runTestLoop _ _ [] passed failed errors = (passed, failed, errors)
 runTestLoop target env ((name, line, body) :: rest) passed failed errors =
-  let loc = "\{target}:\{intToString line}"
-  -- #2293: name the test BEFORE evaluating its body. Panics are uncatchable
-  -- by design (settled: isolation only, never catchability), so this print is
-  -- the runner's only chance to attribute a mid-run process death — if the
-  -- process dies inside `runOneTest` below, this line is the last thing on
-  -- stdout, and the disappearance of every test after it is explained rather
-  -- than mysterious.
-  let _ = putStrLn "  running \{loc}: \{name}"
-  match runOneTest env body
-    Pass _ _ =>
-      let _ = putStrLn "  ok   \{loc}: \{name}"
-      runTestLoop target env rest (passed + 1) failed errors
-    Fail msg _ _ =>
-      let _ = putStrLn "  FAIL \{loc}: \{name}"
-      let _ = putStrLn ("       " ++ msg)
-      runTestLoop target env rest passed (failed + 1) errors
-    Errored msg =>
-      let _ = putStrLn "  FAIL \{loc}: \{name}"
-      let _ = putStrLn ("       " ++ msg)
-      runTestLoop target env rest passed failed (errors + 1)
+  let _ = printTestRunning target line name
+  let result = runOneTest env body
+  let _ = printTestVerdict target line name result
+  let (p, f, e) = tallyTest result passed failed errors
+  runTestLoop target env rest p f e
 
 testFailSuffix : Int -> Int -> String
 testFailSuffix failed errors
@@ -1258,7 +1449,7 @@ runTestReport : List Engine ->
   Int ->
   Option String ->
   Bool ->
-  <IO> (Option String, List (Engine, RunResult), List PropResult, List (String, Int, ExResult), Bool)
+  <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls =
   -- S-1/#2234 (F-converge): content-keyed prelude memo (see `runTest` above).
   let runtimeDecls = desugaredPrelude runtimeSrc
@@ -1291,6 +1482,7 @@ runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt i
       let testResults =
         if includeTestDecls then
           testDeclsReport
+            engines
             runtimeDecls
             coreDecls
             target
@@ -1486,7 +1678,74 @@ propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots cases filter
 -- so this is a second, CLI-only consumer of the same discovery/eval
 -- machinery, not a change to what medaka_test reports.  `filterOpt` mirrors
 -- `runTestDecls`' `filterTestsByName` (F1).
-testDeclsReport : List Decl ->
+--
+-- #2588: each result carries the `Engine` that produced it, so `--json` can tag
+-- it.  Under `--engines eval,native` a file's tests appear once per engine —
+-- the same test judged twice is two results, not one, because that is exactly
+-- the disagreement a second engine exists to expose.
+testDeclsReport : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  Option String ->
+  <IO> List (Engine, String, Int, ExResult)
+testDeclsReport engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+  | not (hasTests userDecls) = []
+  | otherwise =
+    testDeclsReportEngines
+      engines
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      userDecls
+      roots
+      filterOpt
+
+testDeclsReportEngines : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  Option String ->
+  <IO> List (Engine, String, Int, ExResult)
+testDeclsReportEngines [] _ _ _ _ _ _ _ = []
+testDeclsReportEngines (e :: rest) runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  let here =
+    map
+      (t => tagWithEngine e t)
+      (testDeclsReportOn
+        e
+        runtimeDecls
+        coreDecls
+        target
+        tsrc
+        userDecls
+        roots
+        filterOpt)
+  here
+    ++ testDeclsReportEngines
+      rest
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      userDecls
+      roots
+      filterOpt
+
+tagWithEngine : Engine ->
+  (String, Int, ExResult) ->
+  (Engine, String, Int, ExResult)
+tagWithEngine e (name, line, result) = (e, name, line, result)
+
+testDeclsReportOn : Engine ->
+  List Decl ->
   List Decl ->
   String ->
   String ->
@@ -1494,8 +1753,7 @@ testDeclsReport : List Decl ->
   List String ->
   Option String ->
   <IO> List (String, Int, ExResult)
-testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots filterOpt
-  | not (hasTests userDecls) = []
+testDeclsReportOn EngInterp runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   | hasUseDecls userDecls =
     testDeclsReportMulti
       runtimeDecls
@@ -1514,6 +1772,17 @@ testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots filterOpt
       userDecls
       roots
       filterOpt
+testDeclsReportOn EngNative _runtimeDecls _coreDecls target tsrc userDecls _roots filterOpt =
+  let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
+  zipTestResults tests (runNativeTests target tsrc userDecls tests)
+
+zipTestResults : List (String, Int, Expr) ->
+  List ExResult ->
+  List (String, Int, ExResult)
+zipTestResults [] _ = []
+zipTestResults (_ :: _) [] = []
+zipTestResults ((name, line, _) :: rest) (r :: rRest) =
+  (name, line, r) :: zipTestResults rest rRest
 
 testDeclsReportSingle : List Decl ->
   List Decl ->
@@ -1538,7 +1807,9 @@ testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots filterO
   let rootTests = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
     None => userDecls
-  runTestsCollect
+  gatedTestsCollect
+    target
+    (runtimeDecls ++ fst elaborated ++ flatMap snd (snd elaborated))
     env
     (filterTestsByName
       filterOpt
@@ -1564,11 +1835,32 @@ testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots filterOp
           (fst elaborated)
           (snd elaborated)
       let rootTests = elaboratedRootProps target (snd elaborated) userDecls
-      runTestsCollect
+      gatedTestsCollect
+        target
+        (runtimeDecls ++ fst elaborated ++ flatMap snd (snd elaborated))
         env
         (filterTestsByName
           filterOpt
           (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
+
+-- The `--json` twin of `gatedReportTests`: the capability refusal reaches this
+-- surface as one `Errored` per test carrying the same message, so a machine
+-- reader sees `"status":"error"` with the offending extern named rather than a
+-- silently empty `tests` array.
+gatedTestsCollect : String ->
+  List Decl ->
+  List (String, Value e) ->
+  List (String, Int, Expr) ->
+  <IO> List (String, Int, ExResult)
+gatedTestsCollect target corpus env tests =
+  match uncapableExterns corpus env tests
+    [] => runTestsCollect env tests
+    names =>
+      let msg = uncapableExternsMsg target names
+      map (t => (fst3 t, snd3 t, Errored msg)) tests
+
+snd3 : (a, b, c) -> b
+snd3 (_, b, _) = b
 
 runTestsCollect : List (String, Value e) ->
   List (String, Int, Expr) ->
