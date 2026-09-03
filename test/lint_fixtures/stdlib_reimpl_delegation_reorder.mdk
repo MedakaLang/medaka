@@ -1,0 +1,9 @@
+-- POSITIVE fixture for rule-stdlib-reimpl's delegation exemption (#2620): an
+-- argument REORDER is not a delegation — it is the `listContains`/`elemInt`
+-- flipped-twin class (#2312) — so the rule must keep firing even though the
+-- body's only call is to the matched stdlib name.
+import string.{startsWith}
+
+export
+startsWithFlip : String -> String -> Bool
+startsWithFlip s pre = startsWith pre s

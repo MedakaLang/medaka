@@ -35,6 +35,8 @@ import frontend.ast.{
   -- one needs the Route constructors in scope.
   Route(..),
   Pat(..),
+  UsePath(..),
+  UseMember(..),
   RecPatField(..),
   Guard(..),
   Arm(..),
@@ -1747,7 +1749,7 @@ ruleStdlibReimpl idx path _ pos prog =
   -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
   -- keeping the FIRST clause's location.
   flatMap
-    (reimplHit idx ownMod names sigs locals)
+    (reimplHit idx ownMod names sigs locals prog)
     (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
 
 -- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
@@ -1826,14 +1828,18 @@ dedupeNamesLoc xs = dedupBy fst xs
 -- `locals` is the homonym guard (`localTyNamesL`): a signature naming a type,
 -- interface or effect this very file declares cannot be talking about stdlib's
 -- name of the same spelling, so it is skipped before comparison.
+-- `prog` is the whole file's raw decls, needed only to test the matched def
+-- for the delegation exemption below (#2620) — a plain forwarding wrapper is
+-- not a reimplementation.
 reimplHit : StdlibIndex ->
   Option String ->
   List String ->
   HashMap String Ty ->
   HashMap String Unit ->
+  List Decl ->
   (String, Option Loc) ->
   List Finding
-reimplHit idx ownMod names sigs locals (name, loc) = match get name sigs
+reimplHit idx ownMod names sigs locals prog (name, loc) = match get name sigs
   None => []
   Some ty =>
     if mentionsLocalTy locals ty then
@@ -1844,7 +1850,136 @@ reimplHit idx ownMod names sigs locals (name, loc) = match get name sigs
       (tyCanon ty)
       (filterList (relaxesOnto name) names))
       None => []
-      Some (modName, stdName) => [stdlibFinding name modName stdName loc]
+      Some (modName, stdName) =>
+        if isDelegationOf prog name modName stdName then
+          []
+        else
+          [stdlibFinding name modName stdName loc]
+
+-- ── delegation exemption (#2620) ────────────────────────────────────────────
+-- A delegation (`take n xs = List.take n xs`) reimplements nothing — it is a
+-- one-line forwarding wrapper, and the rule exists to flag DUPLICATED logic.
+-- Exempt iff `name`'s SOLE `DFunDef` clause applies a name this file imports
+-- from `modName` under `stdName` to the clause's own parameters, IN THE SAME
+-- ORDER they were declared — or the clause is a bare zero-param alias
+-- (`f = m.g`).  A multi-clause def is pattern-matching, not forwarding, so it
+-- never qualifies; an argument reorder (`f a b = g b a`) is deliberately NOT
+-- exempt — the `listContains`/`elemInt` flipped-twin class (#2312) is exactly
+-- what a naive "does the body call the stdlib name" check would wrongly wave
+-- through.
+isDelegationOf : List Decl -> String -> String -> String -> Bool
+isDelegationOf prog name modName stdName =
+  match localNameForStdlib prog modName stdName
+    None => False
+    Some local => match soleClauseOf name prog
+      None => False
+      Some (ps, body) => forwardsParams local ps body
+
+-- `name`'s params/body, if it has EXACTLY one `DFunDef` clause in this file.
+soleClauseOf : String -> List Decl -> Option (List Pat, Expr)
+soleClauseOf name prog = match clausesOf name prog
+  [one] => Some one
+  _ => None
+
+clausesOf : String -> List Decl -> List (List Pat, Expr)
+clausesOf _ [] = []
+clausesOf name ((DAttrib _ d) :: rest) = clausesOf name (d :: rest)
+clausesOf name ((DFunDef _ n ps body) :: rest)
+  | n == name = (ps, body) :: clausesOf name rest
+  | otherwise = clausesOf name rest
+clausesOf name (_ :: rest) = clausesOf name rest
+
+-- Does `body` apply `local` to exactly `ps`'s own parameters, left to right?
+-- Zero params is the bare-alias shape: `body` must be the variable `local`
+-- itself.  Any non-variable param or argument (a destructured pattern, a
+-- literal, a reordered/extra/missing argument) fails the comparison rather
+-- than being coerced into a match.
+forwardsParams : String -> List Pat -> Expr -> Bool
+forwardsParams local [] body = match stripELoc body
+  EVar n => n == local
+  _ => False
+forwardsParams local ps body =
+  let (headE, args) = appSpineOf body
+  match headE
+    EVar n => n == local && paramNamesOf ps == argNamesOf args
+    _ => False
+
+-- The parser wraps every expr production in a transparent `ELoc` (span info
+-- for diagnostics) — mirrors `frontend/parser.mdk`'s own private `stripLoc`,
+-- unexported there, so a shape match here must peel it locally.
+stripELoc : Expr -> Expr
+stripELoc (ELoc _ e) = stripELoc e
+stripELoc e = e
+
+-- Flattens a curried application spine: `f a b` is `EApp (EApp f a) b`.
+appSpineOf : Expr -> (Expr, List Expr)
+appSpineOf e = appSpineGo e []
+
+appSpineGo : Expr -> List Expr -> (Expr, List Expr)
+appSpineGo e acc = match stripELoc e
+  EApp f a => appSpineGo f (a :: acc)
+  other => (other, acc)
+
+paramNamesOf : List Pat -> List (Option String)
+paramNamesOf ps = map paramNameOf ps
+
+paramNameOf : Pat -> Option String
+paramNameOf (PVar n _) = Some n
+paramNameOf _ = None
+
+argNamesOf : List Expr -> List (Option String)
+argNamesOf args = map argNameOf args
+
+argNameOf : Expr -> Option String
+argNameOf e = match stripELoc e
+  EVar n => Some n
+  _ => None
+
+-- The LOCAL name this file's own `import` decls bind to `modName.stdName`, if
+-- any — read straight off the raw `DUse` decls, never a resolved binding
+-- (lint has no resolver).  `None` when the file never imports that module, or
+-- imports it without binding that particular name (a bare `import m`, per
+-- [P-IMPORT-BINDS], binds no names at all).
+localNameForStdlib : List Decl -> String -> String -> Option String
+localNameForStdlib prog modName stdName =
+  firstJustL (localNameForStdlibInDecl modName stdName) prog
+
+firstJustL : (a -> Option b) -> List a -> Option b
+firstJustL _ [] = None
+firstJustL f (x :: rest) = match f x
+  Some y => Some y
+  None => firstJustL f rest
+
+localNameForStdlibInDecl : String -> String -> Decl -> Option String
+localNameForStdlibInDecl modName stdName (DUse _ path _) =
+  localNameForStdlibInPath modName stdName path
+localNameForStdlibInDecl modName stdName (DAttrib _ d) =
+  localNameForStdlibInDecl modName stdName d
+localNameForStdlibInDecl _ _ _ = None
+
+localNameForStdlibInPath : String -> String -> UsePath -> Option String
+localNameForStdlibInPath modName stdName (UseGroup path members) =
+  if lastSegOf path == modName then
+    firstJustL (memberLocalIfOrigin stdName) members
+  else
+    None
+localNameForStdlibInPath modName stdName (UseWild path) =
+  if lastSegOf path == modName then Some stdName else None
+localNameForStdlibInPath _ _ _ = None
+
+memberLocalIfOrigin : String -> UseMember -> Option String
+memberLocalIfOrigin stdName (UseMember origin _ _ alias) =
+  if origin == stdName then
+    Some (match alias
+      Some a => a
+      None => origin)
+  else
+    None
+
+lastSegOf : List String -> String
+lastSegOf [] = ""
+lastSegOf [x] = x
+lastSegOf (_ :: rest) = lastSegOf rest
 
 -- `user` is a RELAXATION of the stdlib name `std` iff, case-insensitively, it
 -- starts or ends with it (`listReverse` ⊇ `reverse`, `takeN` ⊇ `take`).  The
