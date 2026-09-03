@@ -87,11 +87,6 @@ rule = "rule-stdlib-reimpl"
 count = 5
 
 [[entry]]
-file = "compiler/tools/lint.mdk"
-rule = "rule-stdlib-reimpl"
-count = 4
-
-[[entry]]
 file = "compiler/tools/lsp_harness.mdk"
 rule = "rule-stdlib-reimpl"
 count = 1
