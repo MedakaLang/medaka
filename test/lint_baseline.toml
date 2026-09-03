@@ -82,11 +82,6 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
-file = "compiler/frontend/ast.mdk"
-rule = "rule-clone-type"
-count = 1
-
-[[entry]]
 file = "compiler/frontend/exhaust.mdk"
 rule = "rule-orelse-staircase"
 count = 1
@@ -185,11 +180,6 @@ count = 2
 file = "compiler/tools/snapshot.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
-
-[[entry]]
-file = "compiler/types/registry.mdk"
-rule = "rule-clone-type"
-count = 1
 
 [[entry]]
 file = "compiler/types/repr.mdk"

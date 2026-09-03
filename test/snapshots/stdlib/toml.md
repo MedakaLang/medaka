@@ -1,5 +1,5 @@
 # META
-source_lines=777
+source_lines=778
 stages=DESUGAR,MARK
 # SOURCE
 {- | A reader for a subset of TOML.
@@ -254,6 +254,7 @@ parseKvScalar tok key
 
 -- A header line: `[name]` opens a plain table, `[[name]]` opens the next
 -- element of an array of tables.
+-- lint-disable-next-line rule-clone-type
 data Header = HTable String | HArrayTable String
 
 -- Detect a section header and classify it, or return None.

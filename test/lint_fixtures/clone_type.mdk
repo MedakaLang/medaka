@@ -31,8 +31,11 @@ impl Describe Answer where
   describe ANo = "no"
   describe (AYes s) = s
 
--- NEGATIVE: `InterpPart` is on the adjudicated list — two domain variants that
--- land on Result's arity by coincidence, not an error/success pair.
+-- NEGATIVE: a per-site directive adjudicates this declaration — two domain
+-- variants that land on Result's arity by coincidence, not an error/success
+-- pair. The directive is the ONLY exclusion mechanism: the rule holds no list
+-- of exonerated type names, so a like-named type elsewhere is unaffected.
+-- lint-disable-next-line rule-clone-type
 data InterpPart = IPText String | IPExpr String
 
 -- NEGATIVE: three constructors is neither Option's nor Result's shape.
@@ -46,3 +49,8 @@ data Flag = FlagOff | FlagOn
 
 -- NEGATIVE: two payloads each — neither prelude shape.
 data Pair2 = PLeft Int Int | PRight String String
+
+-- POSITIVE: `SExp` names a declaration elsewhere in the tree that a directive
+-- exonerates. Exclusion binds to the declaration, not to the name, so this
+-- unrelated same-named declaration still fires.
+data SExp = SAtom String | SList Int

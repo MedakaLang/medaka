@@ -2,3 +2,4 @@ warning: [rule-clone-type] 'MaybeCount' re-declares `Option`'s constructor shape
 warning: [rule-clone-type] 'MaybeName' re-declares `Option`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `Option`, whose combinators come with it
 warning: [rule-clone-type] 'ParseOutcome' re-declares `Result`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `Result`, whose combinators come with it
 warning: [rule-clone-type] 'RecOutcome' re-declares `Result`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `Result`, whose combinators come with it
+warning: [rule-clone-type] 'SExp' re-declares `Result`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `Result`, whose combinators come with it

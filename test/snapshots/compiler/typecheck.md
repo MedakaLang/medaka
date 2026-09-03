@@ -1,5 +1,5 @@
 # META
-source_lines=42341
+source_lines=42342
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -2848,6 +2848,7 @@ data GoalKind =
 -- Where a goal's evidence lands once solved: today the `Ref Route` cell a site
 -- stamper writes, or the `Ref (List Route)` cell a dictionary-application carrier
 -- owns.  #2549 adds the evidence-id arm.
+-- lint-disable-next-line rule-clone-type
 data EvDest = EvRoute (Ref Route) | EvRoutes (Ref (List Route))
 
 -- What the kind's stamper needs beyond the destination.  The three dictionary

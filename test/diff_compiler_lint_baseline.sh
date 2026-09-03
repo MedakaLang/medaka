@@ -39,10 +39,17 @@
 # it. The CANONICAL rule-name list (for assertion 1) is read out of
 # compiler/tools/lint.mdk's own `ruleName*` bindings -- the one place a new
 # rule's name is declared, per the module's own header convention (append a
-# `ruleNameFoo` binding + a `Rule`/`CrossFileRule` entry) -- rather than a
-# blind grep for any quoted "rule-*" string, which a doc comment mentioning a
-# rule name in prose would false-positive, and a programmatically-built name
-# could escape.
+# `ruleNameFoo` binding + a `Rule`/`CrossFileRule` entry). That derivation is
+# narrow BY DESIGN (a rule name quoted in prose does not become an enrolment
+# demand), and narrow means escapable: a name written only as an inline
+# `Rule { name = "rule-foo", ... }` literal, or one carrying a digit, is a rule
+# assertion 1 never sees and therefore never demands an enrolment for.
+# Assertion 1b closes that by deriving the same set a SECOND, independent way --
+# every quoted "rule-*" literal in the file -- and requiring the two to agree.
+# The blind grep is a CROSS-CHECK, never the enrolment source: its known
+# false-positive (a rule name quoted in prose) now reds loudly and is fixed by
+# unquoting the prose, which is strictly better than a rule enforced by nothing
+# passing in silence.
 #
 # Usage:  sh test/diff_compiler_lint_baseline.sh            # CHECK (the gate)
 #         sh test/diff_compiler_lint_baseline.sh --write    # REGENERATE the file
@@ -95,6 +102,36 @@ fi
 # rule name is caught even before anyone rebuilds the binary.
 canon="$(sed -n 's/^ruleName[A-Za-z]* = "\(rule-[a-z-]*\)"$/\1/p' "$LINT_SRC" | sort -u)"
 [ -n "$canon" ] || { echo "FAIL: could not read any ruleName* binding from $LINT_SRC"; exit 1; }
+
+# ── assertion 1b: the two rule-name derivations must agree ───────────────────
+# Assertion 1's `ruleName<Foo> = "rule-..."` derivation is what makes enrolment
+# demandable, and it is deliberately narrow. Derive the same set independently
+# -- every quoted "rule-*" literal in the file, digits included -- and require
+# equality, so a rule that names itself any other way reds here instead of
+# escaping enrolment silently.
+canon_f="$(mktemp)"
+literal_f="$(mktemp)"
+printf '%s\n' "$canon" >"$canon_f"
+grep -o '"rule-[a-z0-9-]*"' "$LINT_SRC" | tr -d '"' | sort -u >"$literal_f"
+if ! cmp -s "$canon_f" "$literal_f"; then
+  echo "FAIL: the two rule-name derivations over $LINT_SRC disagree."
+  echo ""
+  echo "  bound as ruleName* but written as no \"rule-...\" literal:"
+  comm -23 "$canon_f" "$literal_f" | sed 's/^/    /'
+  echo "  written as a \"rule-...\" literal but bound through no ruleName*:"
+  comm -13 "$canon_f" "$literal_f" | sed 's/^/    /'
+  echo ""
+  echo "  Enrolment completeness (assertion 1) reads ONLY the ruleName* form,"
+  echo "  so a rule named any other way -- an inline Rule { name = \"rule-...\" }"
+  echo "  literal, or a name containing a digit -- would be enforced by nothing"
+  echo "  while this gate stayed green."
+  echo "  Fix: give the rule a top-level ruleName<Foo> binding whose name is"
+  echo "  [a-z-] only, and enrol it in one of the hook's three lists. If the"
+  echo "  extra literal is a rule name quoted in PROSE, unquote it instead."
+  rm -f "$canon_f" "$literal_f"
+  exit 1
+fi
+rm -f "$canon_f" "$literal_f"
 
 enrolled_csv="$GATED,$CROSSFILE,$RULES"
 orphans=""
