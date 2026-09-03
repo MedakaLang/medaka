@@ -11,8 +11,9 @@
 # NATIVE-ONLY: the frozen OCaml oracle has no Set/Product domain and cannot parse
 # `effect Net Product` nor a product literal, so this gate exercises `./medaka
 # check` / `medaka check-policy` ALONE (no differential oracle), exactly like
-# effect_param_domain.sh / effect_set_domain.sh.  All fixtures DECLARE their domain
-# per-program and use LOCAL externs, so the shared stdlib/runtime.mdk is untouched
+# effect_param_domain.sh / test/effect_set_domain_test.mdk.  All fixtures DECLARE
+# their domain per-program and use LOCAL externs, so the shared
+# stdlib/runtime.mdk is untouched
 # (keeps the oracle-gated canary diffs byte-identical).
 #
 # Prereq: `make medaka` (native CLI).  Usage: sh test/effect_product_domain.sh
