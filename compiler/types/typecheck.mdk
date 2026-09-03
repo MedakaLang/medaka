@@ -2811,6 +2811,117 @@ data PendingEntry =
   -- ambiguity reject can point at the goal it was actually posed by.
   | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc)
 
+-- ── #2547 unit 2 (ARCH M1): one deferred-goal channel ─────────────────────────
+-- The route-stamped site goals used to live on five per-kind lists (`pendingSites`,
+-- `pendingArgStamps`, `pendingRLocalSites`, `pendingBinopSites`/`pendingUnopSites`,
+-- `pendingArithSites`), each drained by its own stamper at module end.  They are
+-- ONE list of `Obligation` now, tagged by `GoalKind`; each stamper still receives
+-- exactly its kind's entries, in the order the per-kind list held them (newest
+-- first — the cons order is preserved by filtering), so no route moves.
+--
+-- `oDest` is ABSTRACT on purpose: today every goal's evidence destination is the
+-- `Ref Route` cell the stampers write (`EvRoute`); #2548 drains this channel once at
+-- quiescence into the same cells, and #2549 adds an evidence-id destination in its
+-- place.  With the abstraction here, that drain is written once.
+--
+-- Not yet on this channel: the dict-application, method-dict and record-dict
+-- channels (their destination is a `Ref (List Route)` — an `EvRoutes` arm of
+-- `EvDest` when they join), the numeric-literal channel (#991 ask 3: defaulting
+-- machinery, stays bespoke) and the two obligation-CHECK channels `obls`/`implObls`
+-- (`UObligation`, windowed per group).  `PendingEntry` survives as the stampers'
+-- parameter shape; `siteEntry` projects it.
+data GoalKind =
+  | GKReturnSite
+  | GKArgStamp
+  | GKRLocalSite
+  | GKBinopSite
+  | GKUnopSite
+  | GKArithSite
+
+data EvDest = EvRoute (Ref Route)
+
+data Obligation = Obligation {
+  oKind : GoalKind,
+  oDest : EvDest,
+  oName : String,
+  oMono : Mono,
+  oEncl : String,
+  oSite : SiteKind,
+  oLoc : Option Loc,
+}
+
+goalKindTag : GoalKind -> Int
+goalKindTag GKReturnSite = 0
+goalKindTag GKArgStamp = 1
+goalKindTag GKRLocalSite = 2
+goalKindTag GKBinopSite = 3
+goalKindTag GKUnopSite = 4
+goalKindTag GKArithSite = 5
+
+evCell : EvDest -> Ref Route
+evCell (EvRoute r) = r
+
+siteObligation : GoalKind -> PendingEntry -> Obligation
+siteObligation k (PendingEntry name tagRef m encl site loc) = Obligation {
+  oKind = k,
+  oDest = EvRoute tagRef,
+  oName = name,
+  oMono = m,
+  oEncl = encl,
+  oSite = site,
+  oLoc = loc,
+}
+
+siteEntry : Obligation -> PendingEntry
+siteEntry o =
+  PendingEntry o.oName (evCell o.oDest) o.oMono o.oEncl o.oSite o.oLoc
+
+pushSiteGoal : GoalKind -> PendingEntry -> Unit
+pushSiteGoal k e =
+  graphRun.value.goals := siteObligation k e :: graphRun.value.goals.value
+
+-- an arithmetic operator site: only its operand mono and its route cell
+pushArithGoal : Ref Route -> Mono -> Unit
+pushArithGoal dref m =
+  graphRun.value.goals :=
+    Obligation {
+        oKind = GKArithSite,
+        oDest = EvRoute dref,
+        oName = "",
+        oMono = m,
+        oEncl = "",
+        oSite = SKOp False,
+        oLoc = None,
+      }
+      :: graphRun.value.goals.value
+
+-- this module's goals of one kind (entries since `mark`, see `GraphMarks`)
+goalsOfKind : GoalKind -> Int -> List Obligation
+goalsOfKind k mark =
+  filterList
+    (o => goalKindTag o.oKind == goalKindTag k)
+    (moduleWindow graphRun.value.goals mark)
+
+siteGoals : GoalKind -> Int -> List PendingEntry
+siteGoals k mark = map siteEntry (goalsOfKind k mark)
+
+arithGoals : Int -> List (Ref Route, Mono)
+arithGoals mark =
+  map (o => (evCell o.oDest, o.oMono)) (goalsOfKind GKArithSite mark)
+
+-- drop the goals of `kinds` recorded since `mark`, keeping every other goal
+-- (`inferPropBodies`' bracket: a prop body's operator sites must not be stamped)
+dropGoalsSince : Int -> List GoalKind -> Unit
+dropGoalsSince mark kinds =
+  let now = graphRun.value.goals.value
+  let n = listLen now - mark
+  let tags = map goalKindTag kinds
+  graphRun.value.goals :=
+    filterList
+        (o => not (containsI (goalKindTag o.oKind) tags))
+        (takeFirst n now)
+      ++ dropFirst n now
+
 -- return-position method sites discovered during inference: (method name, the
 -- EMethodAt route ref to fill, the EMethodAt impl-dicts ref to fill, the method's
 -- result mono).  After the whole program is inferred, each result mono's head
@@ -8194,15 +8305,15 @@ recordArgStamp name tagRef implRef idx mono
   | toggles.value.suppressArgStamp.value = ()
   | otherwise = match nthArgMono idx mono
     Some am =>
-      graphRun.value.pendingArgStamps :=
-        PendingEntry
-            name
-            tagRef
-            am
-            perRun.value.currentFn.value
-            (SKArg implRef mono)
-            !currentLoc
-          :: graphRun.value.pendingArgStamps.value
+      pushSiteGoal
+        GKArgStamp
+        (PendingEntry
+          name
+          tagRef
+          am
+          perRun.value.currentFn.value
+          (SKArg implRef mono)
+          !currentLoc)
     None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -8827,12 +8938,7 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- Their lookups became whole-graph linear scans (`diff_compiler_perf_scaling` is the
 -- gate on that), which unit 3's re-keying (`gGiven`) retires.
 data GraphMarks = GraphMarks {
-  mSites : Int,
-  mArgStamps : Int,
-  mRLocal : Int,
-  mBinop : Int,
-  mUnop : Int,
-  mArith : Int,
+  mGoals : Int,
   mMethodDicts : Int,
   mRecDictApps : Int,
   mDictApps : Int,
@@ -8842,16 +8948,13 @@ data GraphMarks = GraphMarks {
 data GraphRun = GraphRun {
   tyvarCounter : Ref Int,
   effvarCounter : Ref Int,
-  pendingSites : Ref (List PendingEntry),
-  pendingRLocalSites : Ref (List PendingEntry),
-  pendingBinopSites : Ref (List PendingEntry),
-  pendingUnopSites : Ref (List PendingEntry),
-  pendingArithSites : Ref (List (Ref Route, Mono)),
+  -- #2547 unit 2: the ONE channel for the route-stamped site goals (return sites,
+  -- arg stamps, RLocal sites, binop/unop sites, arithmetic sites) — see `Obligation`.
+  goals : Ref (List Obligation),
   -- #991 ask 3, RULED: the numeric-literal channel STAYS BESPOKE — it is
   -- Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is
   -- deliberately NOT ported onto `UObligation` like `implObls` was.
   numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
-  pendingArgStamps : Ref (List PendingEntry),
   activeDictVars : Ref (List (Int, String)),
   -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
   -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
@@ -8868,13 +8971,8 @@ freshGraphRun : Unit -> GraphRun
 freshGraphRun _ = GraphRun {
   tyvarCounter = Ref 0,
   effvarCounter = Ref 0,
-  pendingSites = Ref [],
-  pendingRLocalSites = Ref [],
-  pendingBinopSites = Ref [],
-  pendingUnopSites = Ref [],
-  pendingArithSites = Ref [],
+  goals = Ref [],
   numlitRefs = Ref [],
-  pendingArgStamps = Ref [],
   activeDictVars = Ref [],
   activeDictPreds = Ref [],
   dictApps = wNew (),
@@ -8895,13 +8993,8 @@ copyGraphRun : GraphRun -> GraphRun
 copyGraphRun g = GraphRun {
   tyvarCounter = Ref g.tyvarCounter.value,
   effvarCounter = Ref g.effvarCounter.value,
-  pendingSites = Ref g.pendingSites.value,
-  pendingRLocalSites = Ref g.pendingRLocalSites.value,
-  pendingBinopSites = Ref g.pendingBinopSites.value,
-  pendingUnopSites = Ref g.pendingUnopSites.value,
-  pendingArithSites = Ref g.pendingArithSites.value,
+  goals = Ref g.goals.value,
   numlitRefs = Ref g.numlitRefs.value,
-  pendingArgStamps = Ref g.pendingArgStamps.value,
   activeDictVars = Ref g.activeDictVars.value,
   activeDictPreds = Ref g.activeDictPreds.value,
   dictApps = wCopy g.dictApps,
@@ -8913,12 +9006,7 @@ copyGraphRun g = GraphRun {
 -- Each channel's length as this module begins.
 graphMarksNow : Unit -> GraphMarks
 graphMarksNow _ = GraphMarks {
-  mSites = listLen graphRun.value.pendingSites.value,
-  mArgStamps = listLen graphRun.value.pendingArgStamps.value,
-  mRLocal = listLen graphRun.value.pendingRLocalSites.value,
-  mBinop = listLen graphRun.value.pendingBinopSites.value,
-  mUnop = listLen graphRun.value.pendingUnopSites.value,
-  mArith = listLen graphRun.value.pendingArithSites.value,
+  mGoals = listLen graphRun.value.goals.value,
   mMethodDicts = listLen graphRun.value.pendingMethodDicts.value,
   mRecDictApps = listLen graphRun.value.pendingRecDictApps.value,
   mDictApps = wMark graphRun.value.dictApps,
@@ -8936,12 +9024,7 @@ currentModuleMarks : Unit -> GraphMarks
 currentModuleMarks _ = match graphRun.value.moduleRanges.value
   (_, m) :: _ => m
   [] => GraphMarks {
-    mSites = 0,
-    mArgStamps = 0,
-    mRLocal = 0,
-    mBinop = 0,
-    mUnop = 0,
-    mArith = 0,
+    mGoals = 0,
     mMethodDicts = 0,
     mRecDictApps = 0,
     mDictApps = 0,
@@ -11259,15 +11342,15 @@ recordRLocalSite env name tagRef inst
   -- return-position value standalone has no such arrow to match — an unconstrained one
   -- (the whole cell #1430 pins) short-circuits to `emptyShadowDicts` there anyway.
   | isNone (methodDispatchIdx name) && standaloneValuePinned name =
-    graphRun.value.pendingRLocalSites :=
-      PendingEntry
-          name
-          tagRef
-          inst
-          perRun.value.currentFn.value
-          (SKRLocal (routeLocalSym !tagRef) True [] [] [])
-          !currentLoc
-        :: graphRun.value.pendingRLocalSites.value
+    pushSiteGoal
+      GKRLocalSite
+      (PendingEntry
+        name
+        tagRef
+        inst
+        perRun.value.currentFn.value
+        (SKRLocal (routeLocalSym !tagRef) True [] [] [])
+        !currentLoc)
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
@@ -11279,20 +11362,20 @@ recordRLocalSite env name tagRef inst
             (standaloneSchemeFor env name sym)
             (if sym == "" then name else sym)
             am
-        graphRun.value.pendingRLocalSites :=
-          PendingEntry
-              name
-              tagRef
-              am
-              perRun.value.currentFn.value
-              (SKRLocal
-                sym
-                (standaloneValuePinned name)
-                dicts.sdMonos
-                dicts.sdIfaces
-                dicts.sdArgVecs)
-              !currentLoc
-            :: graphRun.value.pendingRLocalSites.value
+        pushSiteGoal
+          GKRLocalSite
+          (PendingEntry
+            name
+            tagRef
+            am
+            perRun.value.currentFn.value
+            (SKRLocal
+              sym
+              (standaloneValuePinned name)
+              dicts.sdMonos
+              dicts.sdIfaces
+              dicts.sdArgVecs)
+            !currentLoc)
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -11525,15 +11608,15 @@ nthMethodMono i (_ :: xs) = nthMethodMono (i - 1) xs
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordSite name tagRef implRef methodType =
   let stripped = stripArrows methodType
-  graphRun.value.pendingSites :=
-    PendingEntry
-        name
-        tagRef
-        stripped
-        perRun.value.currentFn.value
-        (SKReturn implRef methodType)
-        !currentLoc
-      :: graphRun.value.pendingSites.value
+  pushSiteGoal
+    GKReturnSite
+    (PendingEntry
+      name
+      tagRef
+      stripped
+      perRun.value.currentFn.value
+      (SKReturn implRef methodType)
+      !currentLoc)
   perRun.value.methodSiteFns :=
     consSiteFn
       perRun.value.currentFn.value
@@ -13477,15 +13560,15 @@ binopSpanLoc l r = match (exprLoc l, exprLoc r)
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite op dref m = match binopMethod op
   Some method =>
-    graphRun.value.pendingBinopSites :=
-      PendingEntry
-          method
-          dref
-          m
-          perRun.value.currentFn.value
-          (SKOp perRun.value.currentImplBody.value)
-          !currentLoc
-        :: graphRun.value.pendingBinopSites.value
+    pushSiteGoal
+      GKBinopSite
+      (PendingEntry
+        method
+        dref
+        m
+        perRun.value.currentFn.value
+        (SKOp perRun.value.currentImplBody.value)
+        !currentLoc)
   None => ()
 
 -- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
@@ -13499,9 +13582,7 @@ isArithBinop op = contains op ["+", "-", "*", "/", "%"]
 
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordArithSite op dref m
-  | isArithBinop op =
-    graphRun.value.pendingArithSites :=
-      (dref, m) :: graphRun.value.pendingArithSites.value
+  | isArithBinop op = pushArithGoal dref m
   | otherwise = ()
 
 -- Roadmap #18a: `++` is the surface operator for `Semigroup`'s `append`, so it
@@ -13532,15 +13613,15 @@ unopMethod _ = None
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 recordUnopSite op dref m = match unopMethod op
   Some method =>
-    graphRun.value.pendingUnopSites :=
-      PendingEntry
-          method
-          dref
-          m
-          perRun.value.currentFn.value
-          (SKOp perRun.value.currentImplBody.value)
-          !currentLoc
-        :: graphRun.value.pendingUnopSites.value
+    pushSiteGoal
+      GKUnopSite
+      (PendingEntry
+        method
+        dref
+        m
+        perRun.value.currentFn.value
+        (SKOp perRun.value.currentImplBody.value)
+        !currentLoc)
   None => ()
 
 -- The EUnOp analogue of inferBinopE: infer the single operand, record its
@@ -15387,21 +15468,20 @@ recordImporterShadowDicts env mname (r :: rest) tx =
       (routeLocalSym !r)
       tx
   let _ =
-    setRef
-      graphRun.value.pendingRLocalSites
+    pushSiteGoal
+      GKRLocalSite
       (PendingEntry
-          mname
-          r
-          tx
-          perRun.value.currentFn.value
-          (SKRLocal
-            (routeLocalSym !r)
-            True
-            dicts.sdMonos
-            dicts.sdIfaces
-            dicts.sdArgVecs)
-          !currentLoc
-        :: graphRun.value.pendingRLocalSites.value)
+        mname
+        r
+        tx
+        perRun.value.currentFn.value
+        (SKRLocal
+          (routeLocalSym !r)
+          True
+          dicts.sdMonos
+          dicts.sdIfaces
+          dicts.sdArgVecs)
+        !currentLoc)
   recordImporterShadowDicts env mname rest tx
 
 -- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
@@ -15426,21 +15506,20 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
       (routeLocalSym !r)
       ats
   let _ =
-    setRef
-      graphRun.value.pendingRLocalSites
+    pushSiteGoal
+      GKRLocalSite
       (PendingEntry
-          mname
-          r
-          tx
-          perRun.value.currentFn.value
-          (SKRLocal
-            (routeLocalSym !r)
-            True
-            dicts.sdMonos
-            dicts.sdIfaces
-            dicts.sdArgVecs)
-          !currentLoc
-        :: graphRun.value.pendingRLocalSites.value)
+        mname
+        r
+        tx
+        perRun.value.currentFn.value
+        (SKRLocal
+          (routeLocalSym !r)
+          True
+          dicts.sdMonos
+          dicts.sdIfaces
+          dicts.sdArgVecs)
+        !currentLoc)
   recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
@@ -15670,20 +15749,20 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
     if isDictVar then
       ()
     else
-      graphRun.value.pendingRLocalSites :=
-        PendingEntry
-            name
-            tagRef
-            xt
-            perRun.value.currentFn.value
-            (SKRLocal
-              (routeLocalSym !tagRef)
-              (not dispatches)
-              dicts.sdMonos
-              dicts.sdIfaces
-              dicts.sdArgVecs)
-            !currentLoc
-          :: graphRun.value.pendingRLocalSites.value
+      pushSiteGoal
+        GKRLocalSite
+        (PendingEntry
+          name
+          tagRef
+          xt
+          perRun.value.currentFn.value
+          (SKRLocal
+            (routeLocalSym !tagRef)
+            (not dispatches)
+            dicts.sdMonos
+            dicts.sdIfaces
+            dicts.sdArgVecs)
+          !currentLoc)
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
     -- only arm whose route this stamp decides.  On the STANDALONE arm `ft` is the
@@ -15691,15 +15770,15 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
     -- pass the receiver mono `xt` so ifaceParamMonos fails its shape match and the
     -- selector falls back to the singleton goal, exactly as before #609.
     Some _ =>
-      graphRun.value.pendingArgStamps :=
-        PendingEntry
-            name
-            tagRef
-            xt
-            perRun.value.currentFn.value
-            (SKArg implRef (if dispatches then ft else xt))
-            !currentLoc
-          :: graphRun.value.pendingArgStamps.value
+      pushSiteGoal
+        GKArgStamp
+        (PendingEntry
+          name
+          tagRef
+          xt
+          perRun.value.currentFn.value
+          (SKArg implRef (if dispatches then ft else xt))
+          !currentLoc)
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
@@ -18560,11 +18639,7 @@ schemeMono (Forall _ _ t) = t
 -- byte-for-byte what the twin returned.
 methodConstrainedPairs : Unit -> List (Int, String)
 methodConstrainedPairs _ =
-  flatMap
-    argStampPairs
-    (moduleWindow
-      graphRun.value.pendingArgStamps
-      (currentModuleMarks ()).mArgStamps)
+  flatMap argStampPairs (siteGoals GKArgStamp (currentModuleMarks ()).mGoals)
 
 -- "" when the method's interface is not registered on this path — see
 -- pinnedLocalMismatch, which degrades to interface-free wording rather than dropping
@@ -19481,19 +19556,10 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
     resolveSites
       implTable
       (returnPosMethodNames prog2)
-      (moduleWindow graphRun.value.pendingSites mk.mSites)
-  let _ =
-    resolveOpSites
-      True
-      implTable
-      (moduleWindow graphRun.value.pendingBinopSites mk.mBinop)
-  let _ =
-    resolveOpSites
-      False
-      implTable
-      (moduleWindow graphRun.value.pendingUnopSites mk.mUnop)
-  let _ =
-    resolveArithSites (moduleWindow graphRun.value.pendingArithSites mk.mArith)
+      (siteGoals GKReturnSite mk.mGoals)
+  let _ = resolveOpSites True implTable (siteGoals GKBinopSite mk.mGoals)
+  let _ = resolveOpSites False implTable (siteGoals GKUnopSite mk.mGoals)
+  let _ = resolveArithSites (arithGoals mk.mGoals)
   let _ =
     realizeRecDictApps
       implTable
@@ -19507,10 +19573,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
     resolveMethodDicts
       implTable
       (moduleWindow graphRun.value.pendingMethodDicts mk.mMethodDicts)
-  let _ =
-    resolveArgStamps
-      implTable
-      (moduleWindow graphRun.value.pendingArgStamps mk.mArgStamps)
+  let _ = resolveArgStamps implTable (siteGoals GKArgStamp mk.mGoals)
   dictPass allNames prog2
 
 -- With no eligible names (the RKey-only / typed path), there is nothing to
@@ -28623,13 +28686,9 @@ checkBodyImpl seed mode prog0 =
 -- the prop body would otherwise contribute are dropped.
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodies env prog =
-  let savedBinop = graphRun.value.pendingBinopSites.value
-  let savedUnop = graphRun.value.pendingUnopSites.value
-  let savedArith = graphRun.value.pendingArithSites.value
+  let mark = listLen graphRun.value.goals.value
   let _ = inferPropBodiesGo env prog
-  graphRun.value.pendingArithSites := savedArith
-  graphRun.value.pendingUnopSites := savedUnop
-  graphRun.value.pendingBinopSites := savedBinop
+  dropGoalsSince mark [GKBinopSite, GKUnopSite, GKArithSite]
 
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferPropBodiesGo _ [] = ()
@@ -41979,28 +42038,16 @@ elabModuleStamp mid seedVars accData implDecls prog =
     resolveSites
       stampImplTable
       (returnPosMethodNames implDecls)
-      (moduleWindow graphRun.value.pendingSites mk.mSites)
-  let _ =
-    resolveOpSites
-      True
-      stampImplTable
-      (moduleWindow graphRun.value.pendingBinopSites mk.mBinop)
-  let _ =
-    resolveOpSites
-      False
-      stampImplTable
-      (moduleWindow graphRun.value.pendingUnopSites mk.mUnop)
-  let _ =
-    resolveArithSites (moduleWindow graphRun.value.pendingArithSites mk.mArith)
-  let _ =
-    resolveArgStamps
-      stampImplTable
-      (moduleWindow graphRun.value.pendingArgStamps mk.mArgStamps)
+      (siteGoals GKReturnSite mk.mGoals)
+  let _ = resolveOpSites True stampImplTable (siteGoals GKBinopSite mk.mGoals)
+  let _ = resolveOpSites False stampImplTable (siteGoals GKUnopSite mk.mGoals)
+  let _ = resolveArithSites (arithGoals mk.mGoals)
+  let _ = resolveArgStamps stampImplTable (siteGoals GKArgStamp mk.mGoals)
   let _ =
     resolveRLocalSites
       implDecls
       stampImplTable
-      (moduleWindow graphRun.value.pendingRLocalSites mk.mRLocal)
+      (siteGoals GKRLocalSite mk.mGoals)
   let _ =
     realizeRecDictApps
       stampImplTable

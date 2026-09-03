@@ -145,6 +145,7 @@ argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argStampPairs : PendingEntry -> List (Int, String)
+arithGoals : Int -> List (Ref Route, Mono)
 armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
@@ -707,6 +708,7 @@ domainParam : Option String -> Param
 driverState : Ref DriverState
 dropCtorIdentCand : Ident -> List (Ident, String, Scheme) -> List (Ident, String, Scheme)
 dropFirst : Int -> List a -> List a
+dropGoalsSince : Int -> List GoalKind -> Unit
 dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
 dropMethodIdentCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))
 dropN : Int -> List a -> List a
@@ -786,6 +788,7 @@ eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
 eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
+evCell : EvDest -> Ref Route
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
@@ -938,6 +941,7 @@ globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 goalDefersOpenWorld : IfaceRef -> List Mono -> Bool
 goalHeadCon : List Mono -> Option HeadKey
 goalIdsClaimed : List Int -> Bool
+goalKindTag : GoalKind -> Int
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
 goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOfOp : String -> Option PredicateRequest
@@ -945,6 +949,7 @@ goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalsClosed : List Mono -> Bool
+goalsOfKind : GoalKind -> Int -> List Obligation
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
@@ -1716,12 +1721,14 @@ publicValNames : List Decl -> List String
 pureRow : EffRow
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
+pushArithGoal : Ref Route -> Mono -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
 pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> Unit
+pushSiteGoal : GoalKind -> PendingEntry -> Unit
 pushTypeError : String -> String -> Unit
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
@@ -2029,6 +2036,9 @@ sigTvarIds : List Mono -> List Int
 sigTvarNamedIds : List (String, Mono) -> List (String, Int)
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
+siteEntry : Obligation -> PendingEntry
+siteGoals : GoalKind -> Int -> List PendingEntry
+siteObligation : GoalKind -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
 siteRDictNamesL : Ref (List Route) -> List String
 sitesFor : String -> Map String (List a) -> List a
