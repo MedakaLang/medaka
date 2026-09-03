@@ -167,18 +167,10 @@ gate_name() {
 # `./medaka gate list`, because two of the four resolvers that must agree run at
 # a point in CI where no binary is built yet.
 #
-# One line per row: "<name> <repo-relative run path>". Neither field can contain
-# a space (`gate verify` constrains a name; `run` is a path in this tree), so the
-# pair survives shell word-splitting.
-_native_rows() {
-  awk -F'"' '
-    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
-    /^name = "/       { n = $2 }
-    /^kind = "/       { k = $2 }
-    /^run = "/        { r = $2 }
-    END               { if (k == "native" && n != "" && r != "") print n, r }
-  ' "$ROOT/test/gates.toml" 2>/dev/null
-}
+# `_native_rows` (one line per row: "<name> <repo-relative run path>") is
+# defined in test/gate_native_rows.sh, sourced here rather than pasted, so this
+# file cannot drift from preflight.sh's and build_oracles.sh's copies (#2636).
+. "$ROOT/test/gate_native_rows.sh"
 
 # The registry NAME of the native gate whose `run` is repo-relative path $1, or
 # empty if there is none. `medaka gate run` selects by name, so the worker below

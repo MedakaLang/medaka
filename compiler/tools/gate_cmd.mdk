@@ -1646,11 +1646,20 @@ runRunCmdBody argv = match parseRunArgs argv
 --   1. every gate CANDIDATE — test/preflight.sh's own `_gate_candidates`
 --      (tracked-or-untracked `*.sh`, MINUS every name in
 --      test/CI-COVERAGE-TOOLS.txt) — is ENROLLED (some entry's `run` equals
---      its path) or excluded there.  No third state.  This mirrors
---      preflight's own two `git ls-files` calls exactly rather than
---      re-deriving the universe — see the packet's own warning: any drift
---      here would make `verify` green over a corpus S-2 already reconciled,
---      proving nothing.
+--      its path) or excluded there.  No third state.  This runs the SAME two
+--      `git ls-files` calls preflight's own `_gate_candidates` does, rather
+--      than re-deriving the universe — see the packet's own warning: any
+--      drift here would make `verify` green over a corpus S-2 already
+--      reconciled, proving nothing.  One deliberate difference from
+--      preflight's copy: `_gate_candidates` also drops a candidate with
+--      `[ -f "$ROOT/$_rel" ] || continue` (a path tracked in the index but
+--      absent from the working tree, e.g. deleted-but-uncommitted);
+--      `gateCandidates` below applies no such filter, so a candidate can
+--      surface here that preflight would already have dropped.  Check 2
+--      below (`run` target exists on disk) still catches the same case for
+--      any REGISTERED gate, so the only exposure is an unenrolled candidate
+--      of this exact shape — narrow enough that this is a stated, not a
+--      silent, gap.
 --   2. every entry's `run` target exists on disk.
 --   3. every entry's non-empty `oracles` names a real
 --      `test/build_oracles.sh --list` entry.

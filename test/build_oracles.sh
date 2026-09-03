@@ -401,16 +401,12 @@ if [ "${1:-}" = "--for" ]; then
   # still RESOLVE, or `--for` would report "matched no gates" for a diff whose
   # whole derived pattern set is native, and preflight would abort on it.
   #
-  # Read straight out of test/gates.toml, the same line-scan run_gates.sh,
-  # test/preflight.sh and ci.yml's `plan` step use — this script also runs
-  # before any binary exists.
-  _native_pairs="$(awk -F'"' '
-    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n ":" r; n=""; k=""; r="" }
-    /^name = "/       { n = $2 }
-    /^kind = "/       { k = $2 }
-    /^run = "/        { r = $2 }
-    END               { if (k == "native" && n != "" && r != "") print n ":" r }
-  ' "$ROOT/test/gates.toml" 2>/dev/null)"
+  # `_native_rows` (one line per row: "<name> <repo-relative run path>") is
+  # defined in test/gate_native_rows.sh, sourced here rather than pasted, so
+  # this script cannot drift from run_gates.sh's and preflight.sh's copies
+  # (#2636) — this script also runs before any binary exists.
+  . "$ROOT/test/gate_native_rows.sh"
+  _native_pairs="$(_native_rows | tr ' ' ':')"
   _gates=""
   for _pat in "$@"; do
     for _g in "$ROOT"/test/$_pat.sh "$ROOT"/$_pat.sh; do
@@ -486,7 +482,26 @@ if [ "${1:-}" = "--for" ]; then
   # then fell over here if that gate happened to need no oracle.
   if [ -z "$_sel" ]; then
     for _g in $_gates; do
-      echo "--for: $(basename "$_g" .sh) needs no oracles (drives ./medaka directly)."
+      # A `kind = "native"` gate's `$_g` is its `.mdk` module path, not a `.sh`
+      # -- `basename "$_g" .sh` is a no-op on it and would label the gate by
+      # its FILENAME (e.g. `effect_set_domain_test.mdk`) instead of the
+      # registry NAME (`effect_set_domain`) every other consumer uses. Look
+      # the name up in `_native_pairs` by its `run` path before falling back.
+      case "$_g" in
+        *.sh) _glabel="$(basename "$_g" .sh)" ;;
+        *)
+          _grel="${_g#"$ROOT"/}"
+          _glabel=""
+          set -f
+          for _grow in $_native_pairs; do
+            case "${_grow#*:}" in
+              "$_grel") _glabel="${_grow%%:*}" ;;
+            esac
+          done
+          set +f
+          [ -n "$_glabel" ] || _glabel="$(basename "$_g")" ;;
+      esac
+      echo "--for: $_glabel needs no oracles (drives ./medaka directly)."
     done
     echo "nothing to build."
     exit 0

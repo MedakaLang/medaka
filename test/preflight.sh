@@ -282,17 +282,10 @@ _gate_candidates() {
 # below and ci.yml's `plan` step use: this file runs in ci.yml's `detect` job,
 # which is upstream of `build:` by construction, so no ./medaka exists here.
 #
-# One line per row: "<name> <repo-relative run path>". Neither field can contain
-# a space (`gate verify` constrains a name; `run` is a path in this tree).
-_native_rows() {
-  awk -F'"' '
-    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
-    /^name = "/       { n = $2 }
-    /^kind = "/       { k = $2 }
-    /^run = "/        { r = $2 }
-    END               { if (k == "native" && n != "" && r != "") print n, r }
-  ' "$ROOT/test/gates.toml" 2>/dev/null
-}
+# `_native_rows` (one line per row: "<name> <repo-relative run path>") is
+# defined in test/gate_native_rows.sh, sourced here rather than pasted, so this
+# file cannot drift from run_gates.sh's and build_oracles.sh's copies (#2636).
+. "$ROOT/test/gate_native_rows.sh"
 
 # "<name>:<run>" pairs — ':' because a `for` split over "<name> <run>" tears the
 # pair in half, and neither a gate name nor a path in this tree contains one.
@@ -1035,6 +1028,22 @@ while IFS= read -r f; do
         add "${_p%.sh}"
       else
         echo "preflight: note — gate '${_p%.sh}' is DELETED in this diff; nothing to run for it."
+      fi ;;
+
+    # ── a changed `kind = "native"` gate's own `.mdk` runs itself (#2591, #2636) ──
+    # The `.sh` self-run arm above is `.sh`-shaped only, so a changed
+    # `test/*_test.mdk` never matched it — `_pattern_for_gate` already resolves a
+    # `.mdk` path via `_native_rows` (see above), just unused here until now.
+    test/*_test.mdk)
+      if [ -f "$ROOT/$f" ]; then
+        _ntp="$(_pattern_for_gate "$f")"
+        if [ -n "$_ntp" ]; then
+          add "$_ntp"
+        else
+          echo "preflight: note — '$f' matches no kind=\"native\" row in test/gates.toml; nothing to run for it."
+        fi
+      else
+        echo "preflight: note — native-gate fixture '$f' is DELETED in this diff; nothing to run for it."
       fi ;;
 
     # ── the snapshot corpus: goldens, but NOT in a *fixtures*/*goldens* directory ──
