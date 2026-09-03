@@ -1,0 +1,53 @@
+-- DICT-SEMANTICS §3 `assum`-BEFORE-`inst` PRECEDENCE, CROSS-MODULE. #2548 asks
+-- by name for a gate on this precedence itself: "There is no gate for the
+-- `assum`-before-`inst` precedence itself, and one must exist before this
+-- lands... a grader written afterwards can only confirm whatever the new code
+-- does." Every EXISTING assum/inst precedence row in this file
+-- (`s3-nested-obligation-most-specific`, `s6-1-4-*`, `s-nary-given-*`) is
+-- SINGLE-MODULE; this is the first CROSS-MODULE one. LAYOUT:
+--   iface.mdk -- interface Tag2, impl Tag2 Int, impl Tag2 Bool
+--   mix.mdk   -- mix : Tag2 a => a -> Int; mix x = tagn x + tagn (True : Bool)
+--   main.mdk  -- calls mix at two different ground types
+--
+-- SPEC ANSWER, hand-derived from DICT-SEMANTICS.md §3's precedence paragraph
+-- BEFORE running anything:
+--
+--   `mix (5 : Int)`: instantiates `mix`'s own `a := Int`, so the caller's
+--   dict is for `Tag2 Int`.
+--     `tagn x`              -- goal `Tag2 a` (literally the declared
+--       predicate at THIS instantiation, `Tag2 Int`) -- `assum` DISCHARGES
+--       IT FROM THE PASSED DICT, giving `impl Tag2 Int`'s body: 1.
+--     `tagn (True : Bool)`  -- goal `Tag2 Bool`, structurally distinct from
+--       the assumption `Tag2 a` -- `assum` stays silent, `inst` commits to
+--       `impl Tag2 Bool`: 2.
+--   Total: 1 + 2 = 3.
+--
+--   `mix (True : Bool)`: `a := Bool`, caller's dict is for `Tag2 Bool`.
+--     `tagn x`              -- goal `Tag2 a` = `Tag2 Bool` at this
+--       instantiation -- `assum` again, forwarding the SAME dict `inst` would
+--       have built independently at `impl Tag2 Bool`: 2.
+--     `tagn (True : Bool)`  -- unchanged from above, still `inst` at
+--       `impl Tag2 Bool`: 2.
+--   Total: 2 + 2 = 4.
+--
+-- The wrong answer this row would catch: if `assum` were skipped and BOTH
+-- goals fell to `inst`, the first call would still print 3 (inst also finds
+-- `impl Tag2 Int`/`impl Tag2 Bool` correctly here, since both goals happen to
+-- be satisfiable directly) -- so a precedence regression that only ever
+-- ROUTES THROUGH `inst` is invisible to the value alone. What is NOT
+-- invisible is the reversed decl-order permutation (section 4): swapping
+-- `impl Tag2 Int`/`impl Tag2 Bool` cannot move either value, because neither
+-- goal's answer is chosen by `⊑`-minimality over an overlapping pair -- each
+-- of the two impls is the UNIQUE match for its own ground goal. A dispatcher
+-- that quietly fell back to declaration-order search (rather than genuine
+-- `assum`/`inst` resolution) would still pass sections 1-3 here by accident,
+-- but the precedence claim itself -- that the SAME predicate at the SAME
+-- instantiation is served from the caller's own dict, not by rebuilding one --
+-- has no other observable in this corpus.
+--
+-- OBSERVED: run/build both print 3 then 4. CONFORMANT.
+import mix.{mix}
+
+main =
+  println (mix (5 : Int))
+  println (mix (True : Bool))
