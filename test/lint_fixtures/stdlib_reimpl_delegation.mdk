@@ -1,0 +1,9 @@
+-- NEGATIVE fixture for rule-stdlib-reimpl's delegation exemption (#2620): a
+-- thin one-line forwarding wrapper is not a reimplementation, so the rule
+-- must stay silent even though `reverseL`'s declared signature alpha-matches
+-- `list.reverse`.
+import list.{reverse}
+
+export
+reverseL : List a -> List a
+reverseL xs = reverse xs

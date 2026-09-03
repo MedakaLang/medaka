@@ -1,0 +1,163 @@
+# lint finding-count baseline — GENERATED, never hand-edited (#2619).
+#
+# One [[entry]] per (file, rule) with at least one finding: the number of
+# findings that file is currently ALLOWED for that rule.  A file may drop
+# below its count freely; exceeding it is an error, and so is having
+# findings for a rule with no row here at all.
+#
+# Enforced by .githooks/pre-commit (BASELINED_LINT_RULES, per staged file)
+# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify
+# cannot smuggle an increase past the hook).
+#
+# Regenerate from the repo root, never by hand:
+#
+#   sh test/diff_compiler_lint_baseline.sh --write
+#
+# Paths are relative to the directory `medaka lint` runs in (the repo root
+# for both consumers above).
+
+[[entry]]
+file = "compiler/backend/llvm_emit.mdk"
+rule = "rule-stdlib-reimpl"
+count = 3
+
+[[entry]]
+file = "compiler/backend/trmc_analysis.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/backend/wasm_emit.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/driver/diagnostics.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/driver/loader.mdk"
+rule = "rule-stdlib-reimpl"
+count = 4
+
+[[entry]]
+file = "compiler/entries/origin_agreement_main.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/eval/eval.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/exhaust.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/lexer.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/frontend/parse_cache.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/ir/core_ir_sexp_parse.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/support/char.mdk"
+rule = "rule-stdlib-reimpl"
+count = 4
+
+[[entry]]
+file = "compiler/support/path.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/support/util.mdk"
+rule = "rule-stdlib-reimpl"
+count = 5
+
+[[entry]]
+file = "compiler/tools/lsp_harness.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/tools/refindex.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/tools/repl.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/tools/snapshot.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "compiler/types/typecheck.mdk"
+rule = "rule-stdlib-reimpl"
+count = 5
+
+[[entry]]
+file = "sqlite/lib/mutate.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/select.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "sqlite/lib/sqlite.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "stdlib/base64.mdk"
+rule = "rule-stdlib-reimpl"
+count = 6
+
+[[entry]]
+file = "stdlib/hash_map.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "stdlib/hex.mdk"
+rule = "rule-stdlib-reimpl"
+count = 5
+
+[[entry]]
+file = "stdlib/io.mdk"
+rule = "rule-stdlib-reimpl"
+count = 3
+
+[[entry]]
+file = "stdlib/path.mdk"
+rule = "rule-stdlib-reimpl"
+count = 3
+
+[[entry]]
+file = "stdlib/string.mdk"
+rule = "rule-stdlib-reimpl"
+count = 2
+
+[[entry]]
+file = "stdlib/toml.mdk"
+rule = "rule-stdlib-reimpl"
+count = 1
+

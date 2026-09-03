@@ -1120,6 +1120,16 @@ while IFS= read -r f; do
                                    add 'diff_compiler_gate_cost'
                                    add 'diff_compiler_gate_balance'
                                    add 'diff_compiler_ci_gen_drift' ;;
+    # #2619 (S-lint-baseline): the per-(file, rule) lint count baseline and the
+    # hook that reads it. Both are loose non-.mdk files `_fixture_dir_for`
+    # cannot see, and both are exactly what someone edits ALONE (re-pinning a
+    # count, adding a rule to BASELINED_LINT_RULES) — and an UNMAPPED non-prose
+    # path widens the whole PR run to the FULL suite ([W-THIRD-CONSUMER]). The
+    # hook is in the arm because diff_compiler_lint_baseline.sh READS its
+    # BASELINED_LINT_RULES and LINT_ROOTS rather than re-typing them, so a hook
+    # edit moves the gate's own inputs.
+    test/lint_baseline.toml|.githooks/pre-commit)
+                                   add 'diff_compiler_lint_baseline' ;;
     # FR-3 (fix round, S1-1/S3-5): the nightly auto-advance TOOL (in
     # CI-COVERAGE-TOOLS.txt, so it is not a gate candidate either). It shares
     # the ingest/balance/gen-ci gates above (it calls all three), plus the two
@@ -1430,6 +1440,17 @@ done < "$CHANGED_PATHS"
 # about it BY NAME (see its UNIVERSAL_GATES) — any OTHER stray gate still fails there.
 if [ -s "$CHANGED_PATHS" ]; then
   add 'diff_compiler_source_bytes'
+fi
+
+# ── the emoji-shout ratchet is the same shape: whole-tree sources = ["*"] ──
+# diff_compiler_comment_shout_diff.sh (#2621) rejects a commit/diff that ADDS a
+# new 🚨/⚠️/🔒 line to any .mdk, so like diff_compiler_source_bytes above it has
+# no single per-file consumer to hang off of — it is registered `sources = ["*"]`
+# and must derive unconditionally, or the local fast-feedback loop this gate
+# exists for is silently absent even though CI's matrix always includes it
+# regardless (#2624 review S2-2/S3-1).
+if [ -s "$CHANGED_PATHS" ]; then
+  add 'diff_compiler_comment_shout_diff'
 fi
 
 # ── the IN-LANGUAGE suite (`make test`) is NOT a gate, so nothing above can reach it ──

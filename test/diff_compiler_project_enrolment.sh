@@ -42,14 +42,16 @@
 #              per project plus the parsec→sqlite dependency case. This is the
 #              FOURTH assertion — see "THE GRAPH EXCEPTION" below.
 #
-# THE ONE EXCEPTION. `UNIVERSAL_GATES` (in the PREFLIGHT leg) names gates that are
-# repo-wide by design — they scan the whole tracked tree and have no per-file
-# consumer, so preflight derives them for EVERY changed path and "outside
-# `<project>/test/`" is the correct answer for them, not drift. Today that set is
-# exactly one gate: `test/diff_compiler_source_bytes.sh` (the control-byte ratchet,
-# #1987 F4). It is a NAMED LIST, deliberately not a pattern and not an allowlist
-# mechanism — a stray gate that is stray for any other reason must still fail this
-# leg, which is the whole point of the check.
+# THE UNIVERSAL EXCEPTIONS. `UNIVERSAL_GATES` (in the PREFLIGHT leg) names gates
+# that are repo-wide by design — they scan the whole tracked tree and have no
+# per-file consumer, so preflight derives them for EVERY changed path and
+# "outside `<project>/test/`" is the correct answer for them, not drift. Today
+# that set is two gates: `test/diff_compiler_source_bytes.sh` (the control-byte
+# ratchet, #1987 F4) and `test/diff_compiler_comment_shout_diff.sh` (the
+# diff-scoped emoji-shout check, #2621 — it re-scans every changed `.mdk`
+# whatever project it lives under). It is a NAMED LIST, deliberately not a
+# pattern and not an allowlist mechanism — a stray gate that is stray for any
+# other reason must still fail this leg, which is the whole point of the check.
 #
 # THE GRAPH EXCEPTION. preflight's generic project arm now also widens across the
 # project GRAPH: a dependency edge (from a manifest's `[dependencies]`, e.g.
@@ -274,11 +276,17 @@ PY
   n_full="$(grep -c '^  FULL      ' "$WORK/pf.out" || true)"
   # The named universal set — see "THE ONE EXCEPTION" in this script's header.
   # These are repo-wide gates preflight derives for EVERY changed path, so being
-  # outside $p/test/ is correct for them specifically. Exact-match, one gate, no
-  # patterns: every other stray gate still fails below.
-  UNIVERSAL_GATES='test/diff_compiler_source_bytes.sh'
-  stray="$(printf '%s\n' "$derived" | grep -v '^$' | grep -v "^$p/test/" \
-             | grep -vxF "$UNIVERSAL_GATES" || true)"
+  # outside $p/test/ is correct for them specifically. Exact-match names only,
+  # no patterns: every other stray gate still fails below. One name per line
+  # (not a single grep -F pattern) because grep -F treats an embedded newline
+  # as part of one literal, which would require a multi-line match instead of
+  # matching either name on its own line.
+  UNIVERSAL_GATES='test/diff_compiler_source_bytes.sh
+test/diff_compiler_comment_shout_diff.sh'
+  stray="$(printf '%s\n' "$derived" | grep -v '^$' | grep -v "^$p/test/" || true)"
+  for ug in $UNIVERSAL_GATES; do
+    stray="$(printf '%s\n' "$stray" | grep -vxF "$ug" || true)"
+  done
   # Subtract graph-derived EXTRA gates — see "THE GRAPH EXCEPTION" in this
   # script's header. Lines ending in `/test/` allow a whole consumer project's
   # gate tree (dependency edge); other lines are one exact corpus-edge gate path.

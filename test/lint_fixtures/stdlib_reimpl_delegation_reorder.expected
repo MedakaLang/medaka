@@ -1,0 +1,1 @@
+warning: [rule-stdlib-reimpl] top-level 'startsWithFlip' reimplements stdlib 'string.startsWith' (same declared signature) — use the stdlib version
