@@ -88,7 +88,9 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`PDS-ORACLE.md`](ops/PDS-ORACLE.md) | PDS-ORACLE.md — running the official Bluesky PDS locally as the Phase 0/1 oracle | IMPLEMENTED |
 | [`PR-HELPER.md`](ops/PR-HELPER.md) | PR-HELPER.md — `scripts/pr.sh`, the verified PR lifecycle helper | IMPLEMENTED |
 | [`RELEASE-0.1.0-PLAN.md`](ops/RELEASE-0.1.0-PLAN.md) | RELEASE-0.1.0-PLAN.md — the road to a public 0.1.0 preview | OPEN |
-| [`TESTING-DESIGN.md`](ops/TESTING-DESIGN.md) | TESTING-DESIGN.md — a coherent testing architecture for Medaka | PARTIAL |
+| [`TESTING-ARCHITECTURE.md`](ops/TESTING-ARCHITECTURE.md) | TESTING-ARCHITECTURE.md — the target testing architecture, and the migration to it | PROPOSED 2026-09-03, from a two-round survey at `5397afc9c` |
+| [`TESTING-DESIGN.md`](ops/TESTING-DESIGN.md) | TESTING-DESIGN.md — a coherent testing architecture for Medaka | SUPERSEDED as a plan, 2026-09-03 |
+| [`TESTING-INVENTORY.md`](ops/TESTING-INVENTORY.md) | TESTING-INVENTORY.md — which gates can be native today, and what blocks the rest | — |
 
 ### stdlib — library plan
 
