@@ -56,34 +56,40 @@ instead.
    contract). Base = current sprint-branch head. While an implementer runs,
    author the NEXT slice's packet — that is your idle work, not extra
    verification.
-2. **Pre-dispatch freshness check — yours, not the implementer's, EVERY
-   dispatch, fix-round packets included.** `git fetch origin main
-   sprint/<stage>`. File overlap alone is NOT the divergence check — check
-   both directions before ruling out a resync:
-   ```sh
-   git merge-base --is-ancestor <sprint-tip> origin/main   # sprint fully in main?
-   git merge-base --is-ancestor origin/main <sprint-tip>   # main fully in sprint?
-   ```
-   If neither holds, the branches have genuinely diverged and a dispatched
-   implementer's `git merge --ff-only` WILL fail regardless of whether the
-   touched files overlap — `emit-state-injectivity`'s S-4 lost a full
-   round-trip (dispatch → BLOCKED report → orchestrator resync → redispatch)
-   to exactly this: file-overlap review said "no overlap, no resync needed,"
-   which was true about files and wrong about ff-only-ability. Resync NOW,
-   before dispatching, whenever the divergence check fails: merge
-   `origin/main` into the sprint branch on a disposable branch, push, update
-   the packet's base to the new head. This is a git command, not agent
-   judgment — a `BLOCKED` report for zero code is a wasted round-trip
-   (worktree mint + a refusal write-up), confirmed costly across a full
-   sprint (5 of 9 dispatches in one sprint were exactly this, every
-   resulting merge conflict-free and file-disjoint). Do this check every
-   time you're about to dispatch, not only after a BLOCKED report.
-   ⚠️ **This applies identically to a fix-round dispatch** — `predicate-
-   slots` re-broke on exactly this gap: the resync habit had only ever been
-   exercised on slice dispatch, so a fix packet's first dispatch blocked on
-   a base that had gone stale while the review round ran. Run the same
-   fetch-and-resync before EVERY `sprint-implementer` dispatch in the fix
-   round too, not just in the per-slice loop.
+2. **Pre-dispatch freshness CHECK — a look, not a merge.** `git fetch origin
+   main sprint/<stage>`, then read what landed on `main` since the sprint
+   was cut: `git log --oneline <sprint-base>..origin/main` and
+   `git diff --stat <sprint-base>..origin/main`. You are looking for one of
+   the four merge triggers below — **not** for divergence.** A `main` that
+   simply moved is not a trigger: packet §2 checks out the sprint base
+   directly and never merges `main`, and [W-MERGE-QUEUE] means branch
+   currency is never required. `prelude-shadow-build-agreement` measured the
+   elective case — a pre-fix-round resync that cost a rebuild and a re-bless
+   and prevented nothing, since the branch was `CONFLICTING` at land anyway.
+   The check is still worth its two commands: it is what let
+   `comment-register` discover mid-sprint that a sibling sprint had shipped
+   the same census tool, and drop a doomed slice before the review round.
+
+   **Merge `origin/main` into the sprint branch NOW only if the check shows
+   one of these** (then push, and update the packet's base):
+   - **A formatter, linter, or accepted-syntax change landed.** Otherwise
+     every later slice is authored in the old format and the rebuilt binary's
+     pre-commit hook reflows it at land — one sprint ate "stale-binary fmt
+     drift across ~480 files" from the tree-wide reformat.
+   - **A slice needs something that just landed** — new code, a renamed gate
+     or shard a packet must cite by name.
+   - **`main` touched a shared record or table this sprint is also
+     extending** (`DriverState`, `DeclEnvs`, a `CrossRun` bundle). Divergence
+     here grows the [T-LEGA-REBASE] hazard of a clean-but-non-compiling
+     auto-merge; a small early merge keeps the break attributable.
+   - **Land time, or `mergeable` says `CONFLICTING`.**
+
+   Whichever the trigger, resync with `sh scripts/sprint-resync.sh
+   <sprint-branch>` — never by hand. Three orchestrator git slips came from
+   hand-running that sequence: a bare merge pushed without its blessed
+   goldens, a `git checkout <stale-sha> --` over an already-verified bless
+   (costing a full rebuild+rebless+preflight redo), and a merge into the
+   wrong branch.
 3. **Dispatch** one `sprint-implementer` with `isolation: "worktree"` and the
    contract's model tier for the slice. The brief is one line: the packet
    path. (The harness mints the worktree from `main`'s tip; the packet's §2
@@ -124,10 +130,35 @@ by serialization.
 
 ## End of sprint — review, fix, merge
 
-1. **Review round.** All slices landed (or dropped): dispatch ONE
-   `sprint-reviewer` (opus) with the sprint branch head SHA, the merge-base
-   with main, the contract path, and NOTES.md. If the contract's §7 named
-   domain property classes, name them in the brief. It reviews the WHOLE
+1. **Resync once, then start the full CI run, then review.** All slices
+   landed (or dropped), in this order:
+
+   a. **The sprint's one scheduled resync** — `sh scripts/sprint-resync.sh
+      <sprint-branch>`, here rather than at land, so the reviewer sees the
+      tree that will actually merge and the golden re-derivation happens once
+      with a reviewer downstream of it.
+
+   b. **Trigger the unnarrowed CI run** on the resynced head:
+      `gh workflow run ci.yml --ref sprint/<stage>`. PR runs are narrowed;
+      this is the only pre-queue execution of the whole suite, and in
+      particular the only pre-queue run of `registry_keying_ratchet.sh`
+      (inside `compiler-soundness`, invisible to `make preflight`). It costs
+      ~40 min of wall-clock **in parallel with** the review round, so it is
+      off the critical path, and runner-minutes are free on this repo. Its
+      concurrency group is keyed on `github.ref`, so it will not cancel the
+      PR's own runs — but a second dispatch on the same branch cancels the
+      first, so trigger it once.
+      ⚠️ **Read it, and fold its reds into step 2's triage.** An unread red
+      run is the failure this replaces, not a lesser version of it — one
+      sprint dispatched three slices over a standing red nobody read for ~3h.
+      Two limits worth knowing when you read it: CI **warns** on a C3a
+      fixpoint failure where the local script hard-fails, and a break it
+      finds must be attributed by `git log`/bisect rather than by the slice
+      that owned it.
+
+   c. **Dispatch ONE `sprint-reviewer`** (opus) with the resynced head SHA,
+      the merge-base with main, the contract path, and NOTES.md. If the
+      contract's §7 named domain property classes, name them in the brief. It reviews the WHOLE
    sprint diff at once — adversarial programs plus spec conformance — and
    reports ranked findings. For a large sprint, two reviewers with different
    lenses (breakage vs conformance) are licensed; more is not.
@@ -152,16 +183,20 @@ by serialization.
    *dismiss* (with one NOTES.md line saying why). Anything you'd argue with
    Val about goes to Val.
 3. **Fix round.** Dispatch fix packets (same implementer contract, small
-   packets) serially until the fix-now bin is empty. Run the SAME
-   pre-dispatch freshness check as the per-slice loop's step 2 before each
-   one — the review round can take long enough for `main` to move under you,
-   and a fix-round dispatch is not exempt from the resync just because it's
-   small. A fix that moves a golden gets the same by-name bless discipline.
-   ⚠️ **Any packet — slice or fix — touching a snapshotted file must name
-   "run the snapshot/LEG-A bless-check" as its own §6 acceptance line**
-   (`sprint-packet` §6); don't rely on catching a stale golden yourself after
-   the merge — `selector-identity-2`'s F-fixround-1 shipped clean per its own
-   checks and only the orchestrator's post-merge pass caught the miss.
+   packets) serially until the fix-now bin is empty, running the per-slice
+   loop's step 2 freshness CHECK before each. A fix that moves a golden gets
+   the same by-name bless discipline.
+
+   ⚠️ **A one-line fix a previous fixer already located does NOT get its own
+   dispatch.** Fold it into the packet still in flight, or make it yourself —
+   a dispatch is a worktree mint, a cold build, a gate run and a report,
+   measured at 18–36 min against ~10 min for an orchestrator-direct fix. This
+   is the fix round's most-repeated waste: nine sprints spun a full cycle for
+   a change the prior packet's own report had already named and located (a
+   missing `-c user.name=`, an identical one-line grep pattern in a fourth
+   script, a golden re-bless, a one-line mirror), and one such chain burned
+   1h10 for a ~10-minute packet. Dispatch a fix when it needs a build and a
+   judgment call; do it yourself when it needs neither.
 4. **Land.** `medaka fmt --write` + `medaka lint` clean on touched files;
    `make preflight` if the diff touches blast-radius paths, else let CI
    answer. Mark the PR ready, `gh pr merge --auto --merge`. The merge queue

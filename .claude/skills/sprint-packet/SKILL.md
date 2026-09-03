@@ -25,12 +25,30 @@ it):
 
 ```sh
 git -C <worktree> fetch origin sprint/<stage>
-git -C <worktree> merge --ff-only <base SHA>   # licensed by this packet
-make -C <worktree> medaka                      # cold bootstrap, ~31 s
+git -C <worktree> rev-parse FETCH_HEAD              # must equal §1's base SHA
+git -C <worktree> checkout -B slice-work <base SHA> # licensed by this packet
+make -C <worktree> medaka                           # cold bootstrap, ~31 s
 ```
 
-(`--ff-only` from a fresh `main`-tip mint fails only if `main` moved past the
-sprint branch — that's a re-sync for the orchestrator, so BLOCKED is correct.)
+(`slice-work` is a throwaway LOCAL branch, never pushed under that name — you
+still push by ref to the sprint branch. It exists so the checkout does not
+leave you on a detached HEAD, where a later commit lands on a dangling line
+and strands: `.claude/ORCHESTRATING.md` records two verified phases lost that
+way, recoverable only via `git reflog`.)
+
+The checkout MOVES to the sprint base; it does not merge `main` into it. A
+sprint branch is never required to be current with `main` ([W-MERGE-QUEUE] —
+the queue tests your PR merged onto current `main` anyway), so a `main` that
+moved after the branch was cut is not a reason to block a slice. The
+`rev-parse` line is the one assertion that matters: FETCH_HEAD ≠ the base SHA
+means the packet's base is stale — the sprint branch moved after this packet
+was authored — and that IS a BLOCKED, because the diff would be written
+against a tree the orchestrator has already moved past.
+
+(The former `merge --ff-only <base>` form failed whenever `main` moved,
+regardless of whether anything relevant had changed, and cost a dozen recorded
+dispatches — worktree mint plus a refusal write-up — on docs-only, CI-only and
+stdlib-only landings.)
 
 **§3 Mission.** One paragraph: the transformation and what is true after it
 lands. State the classification: parity (behavior identical, IR may prove it)
@@ -60,31 +78,15 @@ finding, never a bless. Decide expected values from semantics before
 capturing anything — a captured golden records what the engine DID, not what
 is correct.
 
-⚠️ **Touching a snapshotted file (comment or signature edit, not just logic)?
-Name "run the snapshot/LEG-A bless-check" as its own §6 line, explicitly.**
-`selector-identity-2`'s fix round landed clean per its own checks but left a
-stale LEG A golden that only the orchestrator's post-merge pass caught — the
-packet's acceptance list never said to run the check, so nothing in-slice
-could have caught it.
-
-⚠️ **Touching `compiler/backend/*`? Name `sh test/selfcompile_fixpoint.sh`
-(background it if near the foreground ceiling) as its own §6 line, always —
-don't rely on remembering it from the contract.** `emit-state-injectivity`
-had two backend/* slices; only one packet named it, and the gap on the other
-was caught post-hoc by the orchestrator after landing, not by the slice's own
-acceptance list.
-
-⚠️ **Touching a cross-module-observable check (siblings/oracles/reach tables,
-anything an `OrdMap`/`TabKey` keyed per-module or per-graph)? §6 must name at
-least one MULTI-MODULE acceptance check, not just single-file.** `record-
-field-floor`'s fix-round F1 shipped with single-file-only §6 checks and
-reintroduced a fail-open regression on the very issue it was fixing (#1468's
-own original cross-module repro, a `TkBare`-vs-`TkIdent` key mismatch that a
-flat single-file run cannot expose because unstamped decls happen to agree
-under either mint) — caught only by CI's full differential, costing a whole
-extra fix dispatch (F4) to repair. A packet that touches a table keyed by
-module identity and checks only a single-file program is checking the one
-case where a spelling-vs-identity key mismatch is invisible by construction.
+**Do not enumerate the gates the diff might have moved.** That list does not
+converge: across the sprint record the unnamed gate was a snapshot/LEG-A bless
+ten times, `registry_keying_ratchet.sh` six, `selfcompile_fixpoint` three,
+`docs-index`/`docs-links` four, plus lextok, doctest goldens and cross-backend
+parity — and the reminders that were added here for the first three were still
+omitted in five later sprints apiece. The end-of-sprint unnarrowed CI run
+(`sprint-orchestrator` end-of-sprint step 1b) executes all of them mechanically
+and does not depend on a packet author remembering. §6 names the checks that
+prove THIS slice's own claim; everything else is that run's job.
 
 **"LEG A diff must be additive-only" allows one exception, stated up front if
 it applies: a verified pure signature change** (row count unchanged, the

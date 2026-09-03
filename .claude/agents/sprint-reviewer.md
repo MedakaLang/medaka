@@ -14,9 +14,10 @@ merge.
 # Setup
 
 1. `git rev-parse --show-toplevel` — your tree; absolute paths everywhere.
-   Sync it to the sprint head SHA from your brief
-   (`git -C <tree> fetch origin <branch>` then `git -C <tree> merge --ff-only
-   <sha>`), verify `git rev-parse HEAD` matches, and build:
+   Sync it to the sprint head SHA from your brief (`git -C <tree> fetch
+   origin <branch>` then `git -C <tree> checkout -B review-head <sha>` — the
+   harness mints your tree at `main`'s tip, so move to the SHA rather than
+   trying to merge into it), verify `git rev-parse HEAD` matches, and build:
    `make -C <tree> medaka`. Never read another tree.
 2. Read the contract, NOTES.md, the packets, and the slice reports. NOTES.md
    rows are untriaged leads — chase each one to CONFIRMED or REFUTED with a

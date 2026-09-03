@@ -285,6 +285,13 @@ scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical di
                                parallel. Asserts nothing about the compiler; exit 1 means
                                "collision evidence found", which is data for the planner,
                                not a suite failure. See .claude/skills/sprint-packet.
+scripts/sprint-resync          sprint-orchestration git tool: merges origin/main into a
+                               sprint branch and re-derives the LEG A/snapshot goldens the
+                               merge invalidates. MUST NOT BE RUN BY CI OR PREFLIGHT — it
+                               merges, rebuilds and can push. Refuses unless the checkout is
+                               already on the named branch and clean, so a stray invocation
+                               exits 2 without touching anything. Asserts nothing about the
+                               compiler. See .claude/skills/sprint-orchestrator.
 scripts/sprint-report-check    sprint-orchestration intake tool: shape check for the three
                                v8 report sections (Verdict first line, Evidence, Notes —
                                .claude/skills/sprint-packet "The report") in an agent

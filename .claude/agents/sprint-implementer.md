@@ -34,9 +34,17 @@ the end-of-sprint review's and CI's job, not yours.
    answers the same question as the named sites is a refusal moment, not a
    thing to quietly include or exclude.
 3. After each `.mdk` edit: `medaka fmt --write` + `medaka lint` on the touched
-   files, then build from formatted source. Build and probe in the FOREGROUND;
-   never end a turn with anything running. `MEDAKA_STRICT=1` on every probe so
+   files, then build from formatted source. `MEDAKA_STRICT=1` on every probe so
    a stale binary fails loudly instead of answering.
+   🚨 **Finish every build and gate run INSIDE the turn that started it.** You
+   are a subagent: a backgrounded step's completion notification is delivered to
+   the session that dispatched you, never to you, so ending your turn to "wait
+   for it" waits forever — this stalled seven dispatches across the sprint
+   record, one of them four times in a row, and once with a warning against it
+   sitting in the packet. Long steps (`selfcompile_fixpoint.sh`, `preflight`)
+   can exceed a single call's ceiling, so run one from a script that waits on it,
+   or `timeout <n> <cmd>` in the foreground, or poll it to completion in a loop
+   within the turn. What you must never do is end the turn with work running.
 4. Run §6's acceptance checks exactly, expected output included, and nothing
    beyond them — §6 is a ceiling as well as a floor. If it feels too thin for
    what you changed, that's a Notes line, not a license to run more.
