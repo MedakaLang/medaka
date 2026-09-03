@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_tier_drift.sh — a registry entry's `tiers` must be what the
 # workflows actually do (#2181, epic #2182).
 #

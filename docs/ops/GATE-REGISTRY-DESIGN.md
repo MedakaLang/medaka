@@ -100,6 +100,36 @@ cost        = "cheap"          # cheap|medium|heavy — the CI kill timeout `tim
                                #   fourth class; this is also what `gate budget` clause
                                #   (b) checks a gate's measured cost against (§14).
 kind        = "exec"           # exec (wrap a script) | native (a medaka gate module)
+migration   = "native-rewrite" # where this check ENDS UP under the testing-architecture
+                               #   epic (#2591, epic #2600), or the prerequisite that has
+                               #   to be discharged before a destination can be picked:
+                               #     native-wrap            a native module invokes the
+                               #                            existing script; its logic
+                               #                            survives verbatim. The release
+                               #                            valve — needs nothing built.
+                               #     native-rewrite         the check becomes Medaka code;
+                               #                            probes and static text become
+                               #                            library calls.
+                               #     shell:trust-anchor     stays shell: it checks the
+                               #                            machinery a native gate would
+                               #                            run INSIDE.
+                               #     shell:instrumentation  stays shell: valgrind/cachegrind/
+                               #                            wall-clock plus statistics.
+                               #     shell:external-harness stays shell: its SUBJECT is a
+                               #                            shell/python/browser harness or
+                               #                            live `gh` state.
+                               #     split-first            one script holding a check AND a
+                               #                            shared helper, or several
+                               #                            unrelated sections; the editorial
+                               #                            split is the prerequisite.
+                               #     inverted-polarity      a pinning gate whose RED is
+                               #                            healthy ([G-MUST-FAIL]); needs a
+                               #                            per-pin drain field first.
+                               #     done                   already migrated.
+                               #   Seeded 2026-09-03 by classifying every entry against
+                               #   docs/ops/TESTING-INVENTORY.md. Value checked by
+                               #   `gate verify`; a `shell:*` value is additionally PAIRED
+                               #   with its run script — see the fourth rule below.
 run         = "test/diff_compiler_parse_result.sh"   # exec: the script; native: module path
 oracles     = ["parse_result_main"]   # test/bin/* names this gate reads (drives oracle builds)
 sources     = ["compiler/frontend/parser.mdk"]   # what SELECTS this gate (preflight/
@@ -114,7 +144,7 @@ corpus      = ["test/parse_error_fixtures"]      # fixture DIRECTORIES read (lit
 toolchain   = []               # e.g. ["clang"] ["wasm-tools","node>=24"] ["sqlite3"] ["valgrind"]
 ```
 
-Three rules the reader enforces, each because the alternative fails quietly:
+Four rules the reader enforces, each because the alternative fails quietly:
 
 - **Every field is required on every entry, list fields included.** An absent
   `sources` is a read error, not an empty list — "not yet populated" and "this gate
@@ -129,6 +159,15 @@ Three rules the reader enforces, each because the alternative fails quietly:
   pilot for this reason: its fixtures pin OPEN bugs, so RED is its healthy state
   ([G-MUST-FAIL]), and no field in an entry claims otherwise. Whatever runs a gate
   keeps owning what its exit code means.
+- **A `shell:*` migration is PAIRED with its own script, not taken on the
+  registry's word.** `migration = "shell:<class>"` is an exemption — this gate is
+  never going native — so the run script must carry a header line
+  `# shell-because: <class> …` naming the same class, and `gate verify` reds when
+  it is missing or names a different one. Otherwise the exemption is a claim one
+  side grants itself and nothing reads: a script that stopped being a trust anchor
+  and became an ordinary differential would keep its exemption forever, with no
+  file anywhere disagreeing. Every other `migration` value needs no header —
+  `native-wrap` in particular is the release valve and requires nothing.
 
 Notes on the load-bearing fields:
 

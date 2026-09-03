@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # BOOTSTRAP (B4) — natively compiled self-hosted RESOLVE stage == reference over
 # resolve_fixtures.  OCaml-free (REROOT-PLAN §2e): reference = committed golden
 # originally captured from `main.exe run compiler/entries/resolve_main.mdk runtime

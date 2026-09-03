@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # BOOTSTRAP (B6) — natively compiled self-hosted TYPECHECK stage == reference over
 # typecheck_fixtures.  OCaml-free (REROOT-PLAN §2e): reference = committed golden
 # captured from `main.exe run compiler/entries/typecheck_main.mdk <fixture>`

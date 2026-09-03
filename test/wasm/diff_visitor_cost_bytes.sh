@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_visitor_cost_bytes.sh — S4 gate (#2442, epic #2036 visitor-wait-time arm).
 # Asserts an ABSOLUTE CEILING on the total byte size of the assembled
 # `playground/site/` tree — i.e. what `playground/build_site.sh` (the exact

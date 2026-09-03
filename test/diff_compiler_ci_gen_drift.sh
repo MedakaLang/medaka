@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_ci_gen_drift.sh — the generated gates-matrix region's own
 # drift gate (#2177, S-3).
 #

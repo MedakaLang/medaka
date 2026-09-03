@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: trust-anchor — circular: checks the machinery a native gate would run inside
 # diff_compiler_gate_budget.sh — #2180's governor (S-5, epic #2182).
 #
 # Wraps `medaka gate budget` (compiler/tools/gate_cmd.mdk), which reds when:

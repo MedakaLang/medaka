@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # Reject Bash scripts that recursively invoke themselves through `sh`. The
 # child then parses Bash syntax as POSIX sh, often failing far from the launcher
 # and wasting a full verification turn. Pure text analysis; Linux + macOS.

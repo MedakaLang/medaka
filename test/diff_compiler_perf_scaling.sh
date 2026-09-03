@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_perf_scaling.sh — the O(n²) detector.
 #
 # PROBLEM: agents keep introducing quadratic algorithms into the compiler. Three
