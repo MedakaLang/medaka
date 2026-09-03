@@ -128,6 +128,7 @@ import driver.diagnostics.{
   ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
+  renderTcDiags,
   ppResolveErrorsByFile,
   srcLinesArr,
   Diag(..),
@@ -179,6 +180,7 @@ import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
   hadTypeErrors,
+  stickyTypeErrorDiags,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
@@ -937,27 +939,31 @@ renderTripleWarnings (path, src, diags) =
 -- elaborate pass armed `hadTypeErrors` — i.e. precisely the #1812 divergence, where
 -- `medaka check` on this program exits 0 and reports success.  The old text read
 -- "Run `medaka check` for details" and so named the one command guaranteed to
--- confirm the wrong thing.  The elaborate pass's own diagnostic text is NOT
--- reachable here (`elaborateModules` returns decls, not diags, and the sticky
--- accumulator `hadTypeErrors` reads is a Bool), so the arm still cannot print the
--- real error — but it now says WHERE the error was detected and warns that `check`
--- may not show it, instead of promising detail that command will not deliver.
+-- confirm the wrong thing.  #2544 (M4): the elaborate pass's residual IS reachable
+-- now — `stickyTypeErrorDiags` holds every diagnostic the elaboration that just ran
+-- left standing, each with its own `Loc` — so the arm renders it located, through
+-- the same face `check` uses.  The generic text survives only for a residual that
+-- carries nothing (a `hadTypeErrors` armed by a push this channel does not see),
+-- and it still says WHERE the error was detected and that `check` may not show it.
 locatedOrGeneric : Bool ->
   List String ->
+  List (String, String) ->
   String ->
   List String ->
   String ->
   String ->
   <IO> String
-locatedOrGeneric allowInternal trusted target roots rsrc csrc =
+locatedOrGeneric allowInternal trusted pathMap target roots rsrc csrc =
   match locatedProjectErrors allowInternal trusted target roots rsrc csrc
     Some t => t
-    None =>
-      "error: type error in "
-        ++ target
-        ++ ", detected during elaboration (the run/build type pass); no located"
-        ++ " diagnostic is available for it, and `medaka check` may not report this"
-        ++ " program at all — see issue #1812"
+    None => match renderTcDiags pathMap (stickyTypeErrorDiags ())
+      [] =>
+        "error: type error in "
+          ++ target
+          ++ ", detected during elaboration (the run/build type pass); no located"
+          ++ " diagnostic is available for it, and `medaka check` may not report this"
+          ++ " program at all — see issue #1812"
+      rendered => joinNl rendered
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -2502,7 +2508,14 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
         match hadTypeErrors ()
           True =>
             TGErr
-              (locatedOrGeneric allowInternal trusted target roots rsrc csrc)
+              (locatedOrGeneric
+                allowInternal
+                trusted
+                pathMap
+                target
+                roots
+                rsrc
+                csrc)
           -- #1236: same main-shape fold as the single-module arm above.
           -- `elaborateModules` just ran over the WHOLE graph (line above), so
           -- mainSchemeRef is already populated — no second typecheck pass.
@@ -2922,6 +2935,7 @@ runRunCmd argv =
                         (locatedOrGeneric
                           allowInternal
                           trusted
+                          pathMap
                           target
                           roots
                           rsrc
@@ -2974,16 +2988,21 @@ elaborateRun : List Decl ->
   List (String, List Decl) ->
   <IO> (List Decl, List (String, List Decl))
 elaborateRun rtD coreD modsD =
-  let elaborated = elaborateModules rtD coreD modsD
+  let (coreE, modulesE, _) = elaborateModules rtD coreD modsD
   match asyncMainShapeError modsD
     Some msg =>
       let _ = runAbort msg
-      elaborated
+      (coreE, modulesE)
     None =>
-      if shouldAsyncWrapMain "runAsyncIOMain" modsD then
-        elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
+      if shouldAsyncWrapMain
+        "runAsyncIOMain"
+        modsD then match (elaborateModules
+        rtD
+        coreD
+        (asyncWrapModules "runAsyncIOMain" modsD))
+        (coreW, modulesW, _) => (coreW, modulesW)
       else
-        elaborated
+        (coreE, modulesE)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main

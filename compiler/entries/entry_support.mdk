@@ -10,6 +10,7 @@
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
 import frontend.ast.{Decl}
+import types.typecheck.{TcDiag(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import support.util.{splitLast}
@@ -19,9 +20,9 @@ import types.typecheck.{
   elaborateModules,
   tcMsg,
   hadTypeErrors,
-  stickyTypeErrorMessages,
   setLocalPinDisabled,
 }
+import driver.diagnostics.{renderTcDiags}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{loadProgram, unknownModuleIdOf}
 import backend.private_mangle.{mangleUnits}
@@ -221,14 +222,13 @@ argtagUnpinArmed () = match getEnv "MEDAKA_ARGTAG_UNPIN"
 -- by ruling: print the messages the sticky channel kept and continue; only
 -- `MEDAKA_STRICT=1` makes it fatal.  The flip to hard-by-default waits on a
 -- self-compile fixpoint measured with this gate on (C3a and C3b separately).
-emitElaborationGate : Unit -> <IO> Unit
-emitElaborationGate _ =
+emitElaborationGate : List (String, TcDiag) -> <IO> Unit
+emitElaborationGate residual =
   if hadTypeErrors () then
-    let msgs = stickyTypeErrorMessages ()
     let _ =
       ePutStrLn
         "warning: emit-path elaboration recorded type errors that no earlier pass reported (#2089); continuing — set MEDAKA_STRICT=1 to make this fatal"
-    let _ = map ePutStrLn msgs
+    let _ = map ePutStrLn (renderTcDiags [] residual)
     match getEnv "MEDAKA_STRICT"
       Some "" => ()
       Some _ => exit 1
@@ -244,9 +244,9 @@ runEmitWith : String ->
 runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) =
+  let (coreD, modules2, residual) =
     elaborateModules runtimeDecls coreMangled modulesMangled
-  let _ = emitElaborationGate ()
+  let _ = emitElaborationGate residual
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
@@ -280,9 +280,9 @@ emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Un
 emitModulesWith emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) =
+  let (coreD, modules2, residual) =
     elaborateModules runtimeDecls coreMangled modulesMangled
-  let _ = emitElaborationGate ()
+  let _ = emitElaborationGate residual
   emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────

@@ -768,7 +768,7 @@ elabPromotionFixpoint : ElabSweep -> List String -> (List Decl, List (String, Li
 elabSweep : ElabSweep -> List String -> (List String, List Decl, List (String, List Decl))
 elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
-elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, TcDiag))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -1399,6 +1399,7 @@ liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
+locGoalKey : Option Loc -> String
 locSameFileAs : Option Loc -> Option Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
 localPinIds : Int -> Int -> List Int
@@ -1500,6 +1501,7 @@ missingImplMethodMsg : String -> List Ty -> String -> String
 missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
 mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> UObligation
 modInScope : String -> Map String Unit -> Bool
+modeModuleId : CheckMode -> String
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleChainMemoRef : Ref (Option ChainMemo)
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
@@ -2111,6 +2113,8 @@ standaloneShadowScheme : String -> Option Mono
 standaloneShadowSigTy : String -> String -> Option Ty
 standaloneShadowsFromSet : Map String Unit -> Map String Unit -> List Decl -> List String
 standaloneValuePinned : String -> Bool
+stickyTypeErrorDiags : Unit -> List (String, TcDiag)
+stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
 stickyTypeErrorMessages : Unit -> List String
 stmtCalleeName : Expr -> Option String
 storeDataUniverse : Unit -> Unit
@@ -2159,6 +2163,7 @@ takeFirst : Int -> List a -> List a
 takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tcCode : TcDiag -> String
+tcDiagGoalKey : (String, TcDiag) -> String
 tcMsg : TcDiag -> String
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
@@ -2201,7 +2206,7 @@ tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
 typeErrorLines : List String -> List String
 typeErrorsSticky : Ref Bool
-typeErrorsStickyMsgs : Ref (List String)
+typeErrorsStickyDiags : Ref (List (String, TcDiag))
 typeInRowSlotMsg : Ty -> String
 typeMismatch : Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit

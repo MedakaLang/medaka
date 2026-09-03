@@ -55,7 +55,7 @@ main = driveModules runEmit
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) =
+  let (coreD, modules2, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls = coreD ++ flatMap snd modules2
   let _ =

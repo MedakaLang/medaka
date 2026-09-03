@@ -7413,6 +7413,11 @@ data DriverState = DriverState {
   sigTyMapRef : Ref (OrdMap Ty),
   implInferEnabled : Ref Bool,
   localPinDisabledRef : Ref Bool,
+  -- #2544 (M4): the module whose body `checkBodyImpl` is inferring (`""` on the Flat
+  -- arm and outside any body).  Read by `recordTypeError` to tag each residual
+  -- diagnostic with its module, since a `Loc` carries no file on the elaborate path
+  -- and the graph's residual would otherwise be unattributable.
+  currentModuleRef : Ref String,
 }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -7447,6 +7452,7 @@ freshDriverState _ = DriverState {
   sigTyMapRef = Ref omEmpty,
   implInferEnabled = Ref False,
   localPinDisabledRef = Ref False,
+  currentModuleRef = Ref "",
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -8793,29 +8799,56 @@ tcMsg (TcDiag _ _ _ m _ _) = m
 typeErrorsSticky : Ref Bool
 typeErrorsSticky = Ref False
 
--- #2089: the rendered messages behind `typeErrorsSticky`, newest first, across every
--- module of the graph.  `perRun.typeErrors` is wiped per module, so this is the only
--- place a caller that has no per-module hook (the emit driver's `runEmitWith`) can
--- read WHAT armed the sticky flag rather than merely THAT it was armed.  Written only
--- by `recordTypeError`, cleared only by `resetTypeErrorsSticky`, and rolled back
--- wherever `typeErrorsSticky` is (`elabPromotionFixpoint`) — the same pairing
--- obligation the detection counter states.  Interim until #2544 returns the residual
--- diagnostics from `elaborateModules` itself.
-typeErrorsStickyMsgs : Ref (List String)
-typeErrorsStickyMsgs = Ref []
+-- #2089 / #2544 (M4): the diagnostics behind `typeErrorsSticky`, newest first, across
+-- every module of the graph.  `perRun.typeErrors` is wiped per module, so this is the
+-- only place a caller with no per-module hook can read WHAT armed the sticky flag
+-- rather than merely THAT it was armed — it is what `elaborateModules` returns as its
+-- residual, each entry with its own `Loc`.  Written only by `recordTypeError`, cleared
+-- only by `resetTypeErrorsSticky`, and rolled back wherever `typeErrorsSticky` is
+-- (`elabPromotionFixpoint`) — the same pairing obligation the detection counter states.
+typeErrorsStickyDiags : Ref (List (String, TcDiag))
+typeErrorsStickyDiags = Ref []
 
 -- Clear the sticky accumulator.  Call once at the start of a build/run pipeline.
 export
 resetTypeErrorsSticky : Unit -> Unit
 resetTypeErrorsSticky _ =
   typeErrorsSticky := False
-  typeErrorsStickyMsgs := []
+  typeErrorsStickyDiags := []
 
 -- #2089: every message that armed the sticky gate since the last reset, in push
 -- order, deduplicated by rendered text.
 export
 stickyTypeErrorMessages : Unit -> List String
-stickyTypeErrorMessages _ = dedup (reverseL typeErrorsStickyMsgs.value)
+stickyTypeErrorMessages _ = map (p => tcMsg (snd p)) (stickyTypeErrorDiags ())
+
+-- #2544 (M4): every diagnostic that armed the sticky gate since the last reset, each
+-- tagged with the module it was recorded in, in push order, deduplicated PER GOAL —
+-- module, code, location and text together — never by text alone (a text key would
+-- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
+-- the same rendering are two findings).
+export
+stickyTypeErrorDiags : Unit -> List (String, TcDiag)
+stickyTypeErrorDiags _ =
+  dedupBy tcDiagGoalKey (reverseL typeErrorsStickyDiags.value)
+
+-- The diagnostics pushed since `before` was read off `typeErrorsStickyDiags` — the
+-- list is consed at the head, so they are its first `now - before` entries.
+stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
+stickyTypeErrorDiagsSince before =
+  let now = typeErrorsStickyDiags.value
+  dedupBy
+    tcDiagGoalKey
+    (reverseL (takeFirst (listLen now - listLen before) now))
+
+tcDiagGoalKey : (String, TcDiag) -> String
+tcDiagGoalKey (mid, TcDiag code _ loc msg _ _) =
+  "\{mid}|\{code}|\{locGoalKey loc}|\{msg}"
+
+locGoalKey : Option Loc -> String
+locGoalKey None = ""
+locGoalKey (Some (Loc file sl sc el ec)) =
+  "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
 -- #760: True only while inferUserImplBodies runs (the CHECK-path ground-impl obligation
 -- pass).  It routes inferImplMethod's interface-method-type lookup through the O(log)
@@ -8864,7 +8897,8 @@ hadTypeErrors _ = !typeErrorsSticky
 recordTypeError : TcDiag -> Unit
 recordTypeError d =
   typeErrorsSticky := True
-  typeErrorsStickyMsgs := tcMsg d :: typeErrorsStickyMsgs.value
+  typeErrorsStickyDiags :=
+    (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
   let _ = noteTypeErrorDetected ()
   perRun.value.typeErrorMsgSetRef :=
     omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value
@@ -19922,7 +19956,7 @@ unifyClauses env v ((pats, body) :: rest) =
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
-  let (coreD, modules) =
+  let (coreD, modules, _) =
     elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
 
@@ -28353,6 +28387,10 @@ checkProgramSeededSplit seed coreProg0 userProg0 =
 --   Module mid accData implDecls  — module id, prior modules' public data, impl universe
 data CheckMode = Flat (List Decl) | Module String (List Decl) (List Decl)
 
+modeModuleId : CheckMode -> String
+modeModuleId (Flat _) = ""
+modeModuleId (Module mid _ _) = mid
+
 checkBodyImpl : List (String, Scheme) ->
   CheckMode ->
   List Decl ->
@@ -28361,6 +28399,7 @@ checkBodyImpl : List (String, Scheme) ->
 -- lint-disable-next-line rule-prefer-assign-op
 checkBodyImpl seed mode prog0 =
   let _ = resetState ()
+  driverState.value.currentModuleRef := modeModuleId mode
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
   -- `importSeed` because the seed is built BEFORE this `resetState ()` — see
@@ -40424,6 +40463,7 @@ copyDriverState d = DriverState {
   sigTyMapRef = Ref d.sigTyMapRef.value,
   implInferEnabled = Ref d.implInferEnabled.value,
   localPinDisabledRef = Ref d.localPinDisabledRef.value,
+  currentModuleRef = Ref d.currentModuleRef.value,
 }
 
 -- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)
@@ -41514,10 +41554,16 @@ allModuleLines ((mid, ss) :: rest) =
 -- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
 -- and no pendingDictApps / pendingRecDictApps to resolve.
 export
+-- #2544 (M4): the third component is the RESIDUAL — every diagnostic this
+-- elaboration recorded and left standing, tagged with its module id, per goal with
+-- its own `Loc`, in push order.
+-- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
+-- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
+-- to this call.
 elaborateModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
+  (List Decl, List (String, List Decl), List (String, TcDiag))
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
@@ -41536,6 +41582,7 @@ elaborateModules : List Decl ->
 -- lint-disable-next-line rule-prefer-assign-op
 elaborateModules runtimeDecls coreDecls0 modulesIn =
   driverState.value.implInferEnabled := True
+  let stickyBefore = typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — resolve it back to the origin name
   -- before ANY of the marking / stamping / dict-arity machinery below runs.  See
   -- renameAliasedMethods: a method is global-by-name, so an alias of one is a second
@@ -41697,7 +41744,8 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
     esCoreShadowMap = coreShadowMap,
     esRuntimeSeed = runtimeSeed,
   }
-  elabPromotionFixpoint sweep bareDictNames0
+  let (coreD, modules2) = elabPromotionFixpoint sweep bareDictNames0
+  (coreD, modules2, stickyTypeErrorDiagsSince stickyBefore)
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 
@@ -42792,7 +42840,7 @@ elabPromotionFixpoint : ElabSweep ->
   (List Decl, List (String, List Decl))
 elabPromotionFixpoint es grown =
   let savedSticky = !typeErrorsSticky
-  let savedStickyMsgs = typeErrorsStickyMsgs.value
+  let savedStickyDiags = typeErrorsStickyDiags.value
   let savedMatchWarnings = driverState.value.matchWarnings.value
   let (dictNames, core2, modules2) = elabSweep es grown
   let next = dedup (grown ++ driverState.value.promotionHarvestRef.value)
@@ -42800,7 +42848,7 @@ elabPromotionFixpoint es grown =
     dictPassModulesIfEnabled dictNames core2 modules2
   else
     typeErrorsSticky := savedSticky
-    typeErrorsStickyMsgs := savedStickyMsgs
+    typeErrorsStickyDiags := savedStickyDiags
     driverState.value.matchWarnings := savedMatchWarnings
     let _ = resetCrossModuleState ()
     driverState.value.mainSchemeRef := None

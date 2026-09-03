@@ -563,6 +563,44 @@ ppDiagCliLines srcLines file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
 ppDiagCliLines _ _ (Diag sev _ msg None _ _) =
   "\{ppSeverity sev}: <unknown location>: \{msg}"
 
+-- #2544 (M4): render the residual an elaboration returned — the `run`/`build`
+-- verbs and the emit driver's #2089 gate print these where they used to print a
+-- deflection or nothing.  Same face `check` renders through (`ppDiagCliLines`).  A
+-- `Loc` carries no file on the elaborate path, so each entry arrives tagged with its
+-- MODULE id and `pathMap` (the loader's modId → path map) names the file; a module
+-- the map does not know (the emit driver has no paths) renders under its id with no
+-- source snippet, and a diagnostic with no location renders as the `<unknown
+-- location>` line that renderer already has.
+export
+renderTcDiags : List (String, String) ->
+  List (String, TcDiag) ->
+  <IO> List String
+renderTcDiags pathMap ds = renderTcDiagsGo pathMap ds []
+
+renderTcDiagsGo : List (String, String) ->
+  List (String, TcDiag) ->
+  List (String, Array String) ->
+  <IO> List String
+renderTcDiagsGo _ [] _ = []
+renderTcDiagsGo pathMap ((mid, d) :: rest) cache = match lookupAssoc mid pathMap
+  Some file =>
+    let (lines, cache2) = srcLinesCached file cache
+    ppDiagCliLines lines file (diagOfTypeError d)
+      :: renderTcDiagsGo pathMap rest cache2
+  None =>
+    ppDiagCliLines (arrayFromList []) mid (diagOfTypeError d)
+      :: renderTcDiagsGo pathMap rest cache
+
+-- one read per file, however many diagnostics land in it
+srcLinesCached : String ->
+  List (String, Array String) ->
+  <IO> (Array String, List (String, Array String))
+srcLinesCached file cache = match lookupAssoc file cache
+  Some ls => (ls, cache)
+  None =>
+    let ls = srcLinesArr (readFileSafe file)
+    (ls, (file, ls) :: cache)
+
 -- ── ONE FACE for the module-graph resolve channel (#2400 F2) ────────────────
 --
 -- `frontend.resolve` used to render its own multi-module human output by hand
