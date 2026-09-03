@@ -413,9 +413,22 @@ the prose first would destroy the only record of why each table is keyed as it i
 7. **Soft budget.** Step 7 lands if the memo-path regression on playground analyze and
    `import list` is under an agreed ceiling of about 25% Ir; the memoized-solve follow-up is
    filed regardless. Measured in instructions, never wall time. (#2549)
+8. **The file split is part of the refactor** (Val, 2026-09-03; #2586). R3's rejection of
+   the HM-core/dispatch split stands as a *measurement* (61 functions, 36 back-imports, a
+   loader cycle), not as a standing verdict: its premise — state read at `infer` depth
+   across the 25-arm walk — is exactly what step 5's first unit (#2547, the `PerRun`
+   lifetime split) changes. So: the D extraction R3 already sanctions lands whenever
+   convenient; after #2547 unit 1 the import graph is re-measured per candidate boundary
+   (K, the HM core, I, E, Sh) and a boundary with zero back-imports becomes a file while any
+   other stays a gateway-owned region until the unit that moves its state; after step 7
+   (M2) the driver seam is gone and the drivers separate. No split threads records through
+   `infer` ahead of that measurement. The "kept, explicitly" register entry in §5 R3 is
+   amended to say so.
 
 Consequences for SA-4: step 1 gains the two S0 fixes; step 6 reads "drain with the T4 reject
-as a warning, census, then SC-3"; a step 8 (SC-1, #2563) follows step 5's third unit.
+as a warning, census, then SC-3"; a step 8 (SC-1, #2563) follows step 5's third unit; the
+file split (#2586) is not a numbered step but a measurement owed after step 5's first unit
+and a set of extractions that ride the steps whose state moves they depend on.
 
 ### SA-11. Artifacts
 
@@ -1298,7 +1311,11 @@ once) is the architecture, the file boundary is not.
 
 **Kept, explicitly (do not re-derive):**
 
-- **HM-core/dispatch file split: rejected.** (ARCH-REVIEW PASS 2; map §8.)
+- **HM-core/dispatch file split: rejected as measured** (ARCH-REVIEW PASS 2; map §8: 61
+  functions, 36 back-imports, a loader cycle). **Re-opened 2026-09-03 by the owner as part
+  of the refactor (#2586, SA-10 ruling 8)** — re-measured after #2547 unit 1 moves the
+  state the trial split tripped on; until that measurement the verdict is unchanged and
+  no split threads records through `infer`.
 - **`pending*` deferred-site channels: essential.** Bundled, never eliminated.
 - **`typeErrorsSticky` outside every bundle.** Sound *because* it survives resets.
 - **Effect rows transparent in matching** (single-meaning law; EFFECTS §8).
