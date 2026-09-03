@@ -1,5 +1,5 @@
 # META
-source_lines=371
+source_lines=396
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -73,10 +73,13 @@ import support.util.{joinNl, splitNl}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
+  decodeValue,
   endTag,
   firstNonEmptyLine,
   lookupChunk,
   sentinelLine,
+  tagsInOrder,
+  valuePrintExpr,
 }
 import tools.doctest.{
   Example,
@@ -98,6 +101,28 @@ sentinelPrefix = "@@__mdk_native_doctest__@@ "
 
 sentinelFor : String -> String
 sentinelFor tag = sentinelLine sentinelPrefix tag
+
+-- Every tag this engine's probe prints, in the order it prints them — one per
+-- example whose synth PARSED (mirroring `mainLines`), then the terminator.
+expectedTags : Int ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  List String
+expectedTags _ [] _ = [endTag]
+expectedTags _ (_ :: _) [] = [endTag]
+expectedTags i (_ :: rest) ((Err _) :: srRest) =
+  expectedTags (i + 1) rest srRest
+expectedTags i (_ :: rest) ((Ok _) :: srRest) =
+  intToString i :: expectedTags (i + 1) rest srRest
+
+-- A transcript carrying a sentinel line this engine did not write.  Rendered
+-- values are printed quoted so a value cannot spell one; a module's own
+-- top-level or doctest-expression output still can, and reaching here means one
+-- did.  The whole file errors: no chunk in such a transcript is known to belong
+-- to the example whose tag it wears.
+forgedTranscript : String
+forgedTranscript =
+  "native doctest runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which example each value belongs to. No example was judged from it."
 
 -- ── skips that must be LOUD ─────────────────────────────────────────────────
 -- Two shapes cannot run natively.  Both return a whole-file error, so every
@@ -267,13 +292,11 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        Ok
-          (renderAll
-            (chunksOf sentinelPrefix (splitNl out))
-            (abortNote code errOut)
-            0
-            examples
-            synthResults)
+        let chunks = chunksOf sentinelPrefix (splitNl out)
+        if tagsInOrder (expectedTags 0 examples synthResults) chunks then
+          Ok (renderAll chunks (abortNote code errOut) 0 examples synthResults)
+        else
+          Err forgedTranscript
 
 -- ── the probe program ───────────────────────────────────────────────────────
 -- target source (verbatim) ++ the `__dt_i__` bindings ++ a synthesized `main`.
@@ -332,7 +355,7 @@ mainLines i (ex :: rest) ((Ok _) :: srRest) =
 
 valueLine : Int -> Example -> String
 valueLine i ex = match exampleExpected ex
-  Some _ => "  let _ = putStrLn \{synthName i}"
+  Some _ => "  let _ = \{valuePrintExpr (synthName i)}"
   None => "  let _ = \{synthName i}"
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
@@ -370,7 +393,9 @@ renderOne : List Chunk ->
   Result String String
 renderOne _ _ _ (Err _) = Err "example did not parse"
 renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
-  Some (Chunk _ ls True) => Ok (joinNl ls)
+  Some (Chunk _ ls True) => match decodeValue ls
+    Some v => Ok v
+    None => Err note
   Some (Chunk _ _ False) => Err note
   None => Err note
 # DESUGAR
@@ -379,12 +404,19 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "sentinelLine" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "RunResult" false) (mem "buildDetailsFrom" false) (mem "exampleExpected" false) (mem "synthName" false) (mem "synthSrc" false))))
 (DTypeSig false "sentinelPrefix" (TyCon "String"))
 (DFunDef false "sentinelPrefix" () (ELit (LString "@@__mdk_native_doctest__@@ ")))
 (DTypeSig false "sentinelFor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "sentinelFor" ((PVar "tag")) (EApp (EApp (EVar "sentinelLine") (EVar "sentinelPrefix")) (EVar "tag")))
+(DTypeSig false "expectedTags" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "expectedTags" (PWild (PList) PWild) (EListLit (EVar "endTag")))
+(DFunDef false "expectedTags" (PWild (PCons PWild PWild) (PList)) (EListLit (EVar "endTag")))
+(DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Err" PWild) (PVar "srRest"))) (EApp (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest")))
+(DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Ok" PWild) (PVar "srRest"))) (EBinOp "::" (EApp (EVar "intToString") (EVar "i")) (EApp (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
+(DTypeSig false "forgedTranscript" (TyCon "String"))
+(DFunDef false "forgedTranscript" () (ELit (LString "native doctest runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which example each value belongs to. No example was judged from it.")))
 (DTypeSig false "nativeSkipReason" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "nativeSkipReason" ((PVar "target") (PVar "userDecls")) (EIf (EApp (EVar "dtProgramIsCore") (EVar "userDecls")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: SKIPPED ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " — it is the prelude itself, and `medaka build` cannot build stdlib/core.mdk as a program (issue #1334). No example was executed natively.")))) (EIf (EApp (EVar "definesMain") (EVar "userDecls")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: SKIPPED ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " — it already defines a top-level `main`, which the synthesized doctest entry point would collide with. No example was executed natively.")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "dtProgramIsCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
@@ -412,7 +444,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DTypeSig false "runInTmp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))))
 (DFunDef false "runInTmp" ((PVar "target") (PVar "tsrc") (PVar "examples") (PVar "synthResults") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "entryPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (EApp (EVar "scratchEntryName") (EVar "target")))) (DoLet false false (PVar "outPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "dt_probe")))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "medaka.toml")))) (EVar "scratchManifest"))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "entryPath")) (EApp (EApp (EApp (EVar "probeSource") (EVar "tsrc")) (EVar "examples")) (EVar "synthResults"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not write the probe source: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildAndRun") (EVar "target")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "examples")) (EVar "synthResults")))))))
 (DTypeSig false "buildAndRun" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))))))
-(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not build ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EVar "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (EVar "outPath")) (EListLit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not run the compiled probe: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EApp (EApp (EVar "chunksOf") (EVar "sentinelPrefix")) (EApp (EVar "splitNl") (EVar "out")))) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))))))))))
+(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not build ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EVar "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (EVar "outPath")) (EListLit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not run the compiled probe: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EVar "sentinelPrefix")) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))))))))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "probeSource" ((PVar "tsrc") (PVar "examples") (PVar "synthResults")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "tsrc") (ELit (LString ""))) (EApp (EApp (EApp (EVar "synthLines") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EListLit (ELit (LString "")) (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EVar "display") (EApp (EVar "sentinelFor") (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
 (DTypeSig false "synthLines" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -426,7 +458,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "mainLines" ((PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Err" PWild) (PVar "srRest"))) (EApp (EApp (EApp (EVar "mainLines") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest")))
 (DFunDef false "mainLines" ((PVar "i") (PCons (PVar "ex") (PVar "rest")) (PCons (PCon "Ok" PWild) (PVar "srRest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EVar "display") (EApp (EVar "sentinelFor") (EApp (EVar "intToString") (EVar "i"))))) (ELit (LString "\""))) (EApp (EApp (EVar "valueLine") (EVar "i")) (EVar "ex"))) (EApp (EApp (EApp (EVar "mainLines") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
 (DTypeSig false "valueLine" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
-(DFunDef false "valueLine" ((PVar "i") (PVar "ex")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn ")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString ""))))))
+(DFunDef false "valueLine" ((PVar "i") (PVar "ex")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "valuePrintExpr") (EApp (EVar "synthName") (EVar "i"))))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString ""))))))
 (DTypeSig false "abortNote" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "abortNote" ((PVar "code") (PVar "errOut")) (EBlock (DoLet false false (PVar "detail") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "errOut")))) (DoLet false false (PVar "suffix") (EIf (EBinOp "==" (EVar "detail") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString " — ")) (EVar "detail")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest run ended (probe exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ") before this example was reported"))) (EApp (EVar "display") (EVar "suffix"))) (ELit (LString ""))))))
 (DTypeSig false "renderAll" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
@@ -435,19 +467,26 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "renderAll" ((PVar "chunks") (PVar "note") (PVar "i") (PCons PWild (PVar "rest")) (PCons (PVar "sr") (PVar "srRest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "renderOne") (EVar "chunks")) (EVar "note")) (EVar "i")) (EVar "sr")) (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EVar "note")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
 (DTypeSig false "renderOne" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
 (DFunDef false "renderOne" (PWild PWild PWild (PCon "Err" PWild)) (EApp (EVar "Err") (ELit (LString "example did not parse"))))
-(DFunDef false "renderOne" ((PVar "chunks") (PVar "note") (PVar "i") (PCon "Ok" PWild)) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "intToString") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EApp (EVar "Ok") (EApp (EVar "joinNl") (EVar "ls")))) (arm (PCon "Some" (PCon "Chunk" PWild PWild (PCon "False"))) () (EApp (EVar "Err") (EVar "note"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note")))))
+(DFunDef false "renderOne" ((PVar "chunks") (PVar "note") (PVar "i") (PCon "Ok" PWild)) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "intToString") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EMatch (EApp (EVar "decodeValue") (EVar "ls")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "Ok") (EVar "v"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note"))))) (arm (PCon "Some" (PCon "Chunk" PWild PWild (PCon "False"))) () (EApp (EVar "Err") (EVar "note"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DFunDef" false) (mem "DData" false) (mem "DInterface" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "sentinelLine" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "RunResult" false) (mem "buildDetailsFrom" false) (mem "exampleExpected" false) (mem "synthName" false) (mem "synthSrc" false))))
 (DTypeSig false "sentinelPrefix" (TyCon "String"))
 (DFunDef false "sentinelPrefix" () (ELit (LString "@@__mdk_native_doctest__@@ ")))
 (DTypeSig false "sentinelFor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "sentinelFor" ((PVar "tag")) (EApp (EApp (EVar "sentinelLine") (EVar "sentinelPrefix")) (EVar "tag")))
+(DTypeSig false "expectedTags" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "expectedTags" (PWild (PList) PWild) (EListLit (EVar "endTag")))
+(DFunDef false "expectedTags" (PWild (PCons PWild PWild) (PList)) (EListLit (EVar "endTag")))
+(DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Err" PWild) (PVar "srRest"))) (EApp (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest")))
+(DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Ok" PWild) (PVar "srRest"))) (EBinOp "::" (EApp (EVar "intToString") (EVar "i")) (EApp (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
+(DTypeSig false "forgedTranscript" (TyCon "String"))
+(DFunDef false "forgedTranscript" () (ELit (LString "native doctest runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which example each value belongs to. No example was judged from it.")))
 (DTypeSig false "nativeSkipReason" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "nativeSkipReason" ((PVar "target") (PVar "userDecls")) (EIf (EApp (EVar "dtProgramIsCore") (EVar "userDecls")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: SKIPPED ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " — it is the prelude itself, and `medaka build` cannot build stdlib/core.mdk as a program (issue #1334). No example was executed natively.")))) (EIf (EApp (EVar "definesMain") (EVar "userDecls")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: SKIPPED ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " — it already defines a top-level `main`, which the synthesized doctest entry point would collide with. No example was executed natively.")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "dtProgramIsCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
@@ -475,7 +514,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DTypeSig false "runInTmp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))))
 (DFunDef false "runInTmp" ((PVar "target") (PVar "tsrc") (PVar "examples") (PVar "synthResults") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "entryPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (EApp (EVar "scratchEntryName") (EVar "target")))) (DoLet false false (PVar "outPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "dt_probe")))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "medaka.toml")))) (EVar "scratchManifest"))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "entryPath")) (EApp (EApp (EApp (EVar "probeSource") (EVar "tsrc")) (EVar "examples")) (EVar "synthResults"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not write the probe source: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildAndRun") (EVar "target")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "examples")) (EVar "synthResults")))))))
 (DTypeSig false "buildAndRun" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))))))
-(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not build ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EMethodRef "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (EVar "outPath")) (EListLit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not run the compiled probe: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EApp (EApp (EVar "chunksOf") (EVar "sentinelPrefix")) (EApp (EVar "splitNl") (EVar "out")))) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))))))))))
+(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not build ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EMethodRef "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (EVar "outPath")) (EListLit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest runner: could not run the compiled probe: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EVar "sentinelPrefix")) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))))))))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "probeSource" ((PVar "tsrc") (PVar "examples") (PVar "synthResults")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "tsrc") (ELit (LString ""))) (EApp (EApp (EApp (EVar "synthLines") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EListLit (ELit (LString "")) (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EMethodRef "display") (EApp (EVar "sentinelFor") (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
 (DTypeSig false "synthLines" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -489,7 +528,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "mainLines" ((PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Err" PWild) (PVar "srRest"))) (EApp (EApp (EApp (EVar "mainLines") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest")))
 (DFunDef false "mainLines" ((PVar "i") (PCons (PVar "ex") (PVar "rest")) (PCons (PCon "Ok" PWild) (PVar "srRest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EMethodRef "display") (EApp (EVar "sentinelFor") (EApp (EVar "intToString") (EVar "i"))))) (ELit (LString "\""))) (EApp (EApp (EVar "valueLine") (EVar "i")) (EVar "ex"))) (EApp (EApp (EApp (EVar "mainLines") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
 (DTypeSig false "valueLine" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
-(DFunDef false "valueLine" ((PVar "i") (PVar "ex")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn ")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString ""))))))
+(DFunDef false "valueLine" ((PVar "i") (PVar "ex")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "valuePrintExpr") (EApp (EVar "synthName") (EVar "i"))))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString ""))))))
 (DTypeSig false "abortNote" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "abortNote" ((PVar "code") (PVar "errOut")) (EBlock (DoLet false false (PVar "detail") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "errOut")))) (DoLet false false (PVar "suffix") (EIf (EBinOp "==" (EVar "detail") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString " — ")) (EVar "detail")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest run ended (probe exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ") before this example was reported"))) (EApp (EMethodRef "display") (EVar "suffix"))) (ELit (LString ""))))))
 (DTypeSig false "renderAll" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
@@ -498,4 +537,4 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "renderAll" ((PVar "chunks") (PVar "note") (PVar "i") (PCons PWild (PVar "rest")) (PCons (PVar "sr") (PVar "srRest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "renderOne") (EVar "chunks")) (EVar "note")) (EVar "i")) (EVar "sr")) (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EVar "note")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
 (DTypeSig false "renderOne" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
 (DFunDef false "renderOne" (PWild PWild PWild (PCon "Err" PWild)) (EApp (EVar "Err") (ELit (LString "example did not parse"))))
-(DFunDef false "renderOne" ((PVar "chunks") (PVar "note") (PVar "i") (PCon "Ok" PWild)) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "intToString") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EApp (EVar "Ok") (EApp (EVar "joinNl") (EVar "ls")))) (arm (PCon "Some" (PCon "Chunk" PWild PWild (PCon "False"))) () (EApp (EVar "Err") (EVar "note"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note")))))
+(DFunDef false "renderOne" ((PVar "chunks") (PVar "note") (PVar "i") (PCon "Ok" PWild)) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "intToString") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EMatch (EApp (EVar "decodeValue") (EVar "ls")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "Ok") (EVar "v"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note"))))) (arm (PCon "Some" (PCon "Chunk" PWild PWild (PCon "False"))) () (EApp (EVar "Err") (EVar "note"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note")))))

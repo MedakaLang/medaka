@@ -19,6 +19,28 @@
 --
 -- The sentinel PREFIX is per-engine (so one engine's transcript can never be
 -- mistaken for the other's) and therefore a parameter here, not a constant.
+--
+-- ── why a value is printed QUOTED ───────────────────────────────────────────
+-- A value's own text is chosen by the program under test, so an unescaped
+-- value can spell a sentinel line.  That is not a cosmetic collision: a value
+-- containing `<prefix><a later tag>` closes its own chunk early and opens a
+-- chunk under someone else's tag, and `lookupChunk` answers with the FIRST
+-- match — so the forged chunk beats the genuine one the probe prints later,
+-- and one test's operand text decides another test's verdict.  The driver
+-- would still be the one judging, but on evidence the probe supplied.
+--
+-- So a value is never printed raw: `valuePrintExpr` prints it through
+-- `debugStringLit`, whose output is ONE line, always starts with `"`, and
+-- carries no raw newline.  `decodeValue` is the exact inverse.  A quoted value
+-- therefore cannot spell a sentinel line whatever it contains.
+--
+-- Escaping covers the values.  It does not cover what the program under test
+-- prints on its own account (a `println` inside a test body lands in the
+-- transcript unescaped), so `tagsInOrder` is the second half: the driver knows
+-- the exact tag sequence its probe emits, and a transcript that is not that
+-- sequence is rejected whole rather than read.  Between them, no text a
+-- program can produce turns into a verdict it did not earn — at worst it turns
+-- into a loud error.
 
 import support.util.{reverseL, startsWith, stringTrim}
 
@@ -67,6 +89,71 @@ closeChunk : List Chunk -> Option String -> List String -> Bool -> List Chunk
 closeChunk acc None _ _ = acc
 closeChunk acc (Some t) curLines terminated =
   Chunk t (reverseL curLines) terminated :: acc
+
+-- The observed tags must be the tags the probe was generated to print, in
+-- order — truncated by an abort is allowed, reordered or inserted is not.  A
+-- transcript that fails this carries a sentinel line the generator did not
+-- write, so nothing in it can be trusted to belong to the test it names.
+export
+tagsInOrder : List String -> List Chunk -> Bool
+tagsInOrder _ [] = True
+tagsInOrder [] (_ :: _) = False
+tagsInOrder (e :: es) ((Chunk t _ _) :: cs) = e == t && tagsInOrder es cs
+
+-- ── values, quoted ──────────────────────────────────────────────────────────
+
+-- The probe-source expression that prints `expr`'s value as one quoted line.
+-- Its inverse is `decodeValue`; the two are here together because a change to
+-- either alone silently corrupts every value the driver reads.
+export
+valuePrintExpr : String -> String
+valuePrintExpr expr = "putStrLn (debugStringLit (\{expr}))"
+
+-- A chunk's lines back to the value that was printed.  Zero lines is the empty
+-- value (a doctest smoke example prints nothing but still evaluates); one line
+-- is a quoted value; anything else is a transcript the generator cannot have
+-- produced.
+export
+decodeValue : List String -> Option String
+decodeValue [] = Some ""
+decodeValue (l :: []) = unquoteLit l
+decodeValue _ = None
+
+-- The inverse of `debugStringLit` (runtime/medaka_rt.c): a double-quoted body
+-- in which `\\ \n \t \r \0 \"` are the only escapes.  Codepoint-indexed while
+-- the escaper is byte-oriented, which agrees: every escape it writes is ASCII
+-- and every other byte passes through untouched.
+export
+unquoteLit : String -> Option String
+unquoteLit s
+  | stringLength s >= 2
+    && charAt s 0 == "\""
+    && charAt s (stringLength s - 1) == "\"" =
+    unquoteScan s 1 (stringLength s - 1) []
+  | otherwise = None
+
+charAt : String -> Int -> String
+charAt s i = stringSlice i (i + 1) s
+
+unquoteScan : String -> Int -> Int -> List String -> Option String
+unquoteScan s i end acc
+  | i >= end = Some (stringConcat (reverseL acc))
+  | charAt s i == "\\" =
+    if i + 1 >= end then
+      None
+    else match unescapeChar (charAt s (i + 1))
+      Some c => unquoteScan s (i + 2) end (c :: acc)
+      None => None
+  | otherwise = unquoteScan s (i + 1) end (charAt s i :: acc)
+
+unescapeChar : String -> Option String
+unescapeChar "n" = Some "\n"
+unescapeChar "t" = Some "\t"
+unescapeChar "r" = Some "\r"
+unescapeChar "0" = Some "\0"
+unescapeChar "\\" = Some "\\"
+unescapeChar "\"" = Some "\""
+unescapeChar _ = None
 
 export
 lookupChunk : String -> List Chunk -> Option Chunk

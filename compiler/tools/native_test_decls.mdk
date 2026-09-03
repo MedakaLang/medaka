@@ -56,10 +56,13 @@ import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
+  decodeValue,
   endTag,
   firstNonEmptyLine,
   lookupChunk,
   sentinelLine,
+  tagsInOrder,
+  valuePrintExpr,
 }
 import tools.printer.{declToString}
 
@@ -84,6 +87,20 @@ startTag i = "\{intToString i}.start"
 
 fieldTag : Int -> String -> String
 fieldTag i f = "\{intToString i}.\{f}"
+
+-- Every tag this engine's probe prints, in the order it prints them — the
+-- sequence `tagsInOrder` holds the transcript to.
+expectedTags : Int -> List (String, Int, Expr) -> List String
+expectedTags _ [] = [endTag]
+expectedTags i (_ :: rest) =
+  [
+      startTag i,
+      fieldTag i "tag",
+      fieldTag i "msg",
+      fieldTag i "exp",
+      fieldTag i "act",
+    ]
+    ++ expectedTags (i + 1) rest
 
 -- ── skips that must be LOUD ─────────────────────────────────────────────────
 -- A target that already defines `main` cannot host the synthesized entry point.
@@ -191,27 +208,40 @@ buildAndRun target entryPath outPath tmpDir tests =
     Ok _ => match runCommand outPath []
       Err e => Err "native test runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        Ok
-          (renderAll
-            (chunksOf sentinelPrefix (splitNl out))
-            (abortNote code errOut)
-            0
-            tests)
+        let chunks = chunksOf sentinelPrefix (splitNl out)
+        if tagsInOrder (expectedTags 0 tests) chunks then
+          Ok (renderAll chunks (abortNote code errOut) 0 tests)
+        else
+          Err forgedTranscript
 
 -- ── the probe program ───────────────────────────────────────────────────────
--- `import test.{Expectation(..)}` is PREPENDED so the printers below can
--- destructure the result.  A second `import test` line beside the target's own
--- is accepted (imports are name lists, not module claims), and the target must
--- already import `test` or its bodies could not have produced an `Expectation`.
+-- THE PROBE MAY NOT NAME `Pass` OR `Fail`.  The target's source is spliced
+-- into THIS module's scope, so a target that declares constructors of its own
+-- spelled `Pass`/`Fail` (a real shape — `test/compiler_test_fixtures/
+-- ctor_collision_test_seam/verdict.mdk` declares exactly that, pinning the
+-- analogous eval-engine exemption) wins the bare name over anything this file
+-- imports, and the printers below stop being about `Expectation` at all.  So
+-- `test` is imported UNDER AN ALIAS and the result is read through the
+-- accessors in `stdlib/test.mdk`, which resolve those constructors in the one
+-- module where they are unambiguous.  An alias-qualified name cannot be
+-- shadowed by anything the target declares.  The alias is Uppercase because the
+-- parser requires it of every module alias.
+--
+-- A second `import test` line beside the target's own is accepted (imports are
+-- name lists, not module claims), and the target must already import `test` or
+-- its bodies could not have produced an `Expectation`.
 --
 -- ⚠️ `main` MUST be a zero-arg VALUE. `main () = …` is a silent no-op
 -- ([T-MAIN-ZERO-ARG]), which here would present as every test aborting.
 -- Referencing every `__tse_i__` from `main` is also what keeps `dceFilter` from
 -- dropping them.
+expectationAlias : String
+expectationAlias = "MdkProbeTest__"
+
 probeSource : String -> List (String, Int, Expr) -> String
 probeSource tsrc tests =
   joinNl
-    (["import test.{Expectation(..)}", "", tsrc, ""]
+    (["import test as \{expectationAlias}", "", tsrc, ""]
       ++ testBindings 0 tests
       ++ ["main ="]
       ++ mainLines 0 tests
@@ -222,6 +252,9 @@ bindingName i = "__ts_\{intToString i}__"
 
 printerName : Int -> String
 printerName i = "__tse_\{intToString i}__"
+
+valueName : Int -> String
+valueName i = "__tsv_\{intToString i}__"
 
 -- Per test: the body as a binding, plus a printer that emits the constructor
 -- tag and the three rendered fields between sentinels.
@@ -242,33 +275,32 @@ testBindings i ((_, _, body) :: rest) =
     ++ printerDecl i
     ++ testBindings (i + 1) rest
 
+-- The body is forced by the `let` BEFORE the first field sentinel, which is
+-- what keeps the abort rule's attribution: a body that panics leaves its own
+-- `<i>.start` chunk unterminated, and whatever the body printed on its own
+-- account lands in that chunk rather than inside a field.
 printerDecl : Int -> List String
 printerDecl i =
-  [
-      "\{printerName i} _ = match \{bindingName i} ()",
-      "  Pass e a =>",
-    ]
-    ++ emit i "tag" "\"Pass\""
-    ++ emit i "msg" "\"\""
-    ++ emit i "exp" "e"
-    ++ lastEmit i "act" "a"
-    ++ ["  Fail m e a =>"]
-    ++ emit i "tag" "\"Fail\""
-    ++ emit i "msg" "m"
-    ++ emit i "exp" "e"
-    ++ lastEmit i "act" "a"
+  ["\{printerName i} _ =", "  let \{valueName i} = \{bindingName i} ()"]
+    ++ emit i "tag" (accessor "expectationTag" i)
+    ++ emit i "msg" (accessor "expectationMessage" i)
+    ++ emit i "exp" (accessor "expectationExpected" i)
+    ++ lastEmit i "act" (accessor "expectationActual" i)
     ++ [""]
+
+accessor : String -> Int -> String
+accessor f i = "\{expectationAlias}.\{f} \{valueName i}"
 
 emit : Int -> String -> String -> List String
 emit i f expr = [
-  "    let _ = putStrLn \"\{sentinelFor (fieldTag i f)}\"",
-  "    let _ = putStrLn \{expr}",
+  "  let _ = putStrLn \"\{sentinelFor (fieldTag i f)}\"",
+  "  let _ = \{valuePrintExpr expr}",
 ]
 
 lastEmit : Int -> String -> String -> List String
 lastEmit i f expr = [
-  "    let _ = putStrLn \"\{sentinelFor (fieldTag i f)}\"",
-  "    putStrLn \{expr}",
+  "  let _ = putStrLn \"\{sentinelFor (fieldTag i f)}\"",
+  "  \{valuePrintExpr expr}",
 ]
 
 mainLines : Int -> List (String, Int, Expr) -> List String
@@ -282,16 +314,25 @@ mainLines i (_ :: rest) =
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 
--- A complete field: present AND closed by a following sentinel.
+-- A complete field: present, closed by a following sentinel, and decodable
+-- back from the quoted form the probe printed it in.
 completeField : List Chunk -> Int -> String -> Option String
 completeField chunks i f = match lookupChunk (fieldTag i f) chunks
-  Some (Chunk _ ls True) => Some (joinNl ls)
+  Some (Chunk _ ls True) => decodeValue ls
   _ => None
 
 startedTest : List Chunk -> Int -> Bool
 startedTest chunks i = match lookupChunk (startTag i) chunks
   Some _ => True
   None => False
+
+-- A transcript carrying a sentinel line this engine did not write.  Values are
+-- printed quoted so a value cannot spell one; a test's own `println` output
+-- still can, and reaching here means one did.  Every test is `Errored`: no
+-- chunk in such a transcript is known to belong to the test whose tag it wears.
+forgedTranscript : String
+forgedTranscript =
+  "native test runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which test each value belongs to. No verdict was read from it."
 
 -- ⚠️ THE ABORT RULE.  A test whose four fields are not all complete is
 -- `Errored` NAMING the abort.  It is never dropped and never treated as a pass.
