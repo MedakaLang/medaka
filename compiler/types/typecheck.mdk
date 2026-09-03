@@ -2824,12 +2824,12 @@ data PendingEntry =
 -- quiescence into the same cells, and #2549 adds an evidence-id destination in its
 -- place.  With the abstraction here, that drain is written once.
 --
--- Not yet on this channel: the dict-application, method-dict and record-dict
--- channels (their destination is a `Ref (List Route)` — an `EvRoutes` arm of
--- `EvDest` when they join), the numeric-literal channel (#991 ask 3: defaulting
+-- The dictionary-application, method-dict and record-dict channels are on it too
+-- (`EvRoutes` destinations; the `let`/SCC brackets that windowed `dictApps` now mark
+-- this channel).  Not on it: the numeric-literal channel (#991 ask 3: defaulting
 -- machinery, stays bespoke) and the two obligation-CHECK channels `obls`/`implObls`
--- (`UObligation`, windowed per group).  `PendingEntry` survives as the stampers'
--- parameter shape; `siteEntry` projects it.
+-- (`UObligation`, windowed per group).  `PendingEntry` and the three dictionary
+-- carriers survive as the stampers' parameter shapes, projected back out of the bag.
 data GoalKind =
   | GKReturnSite
   | GKArgStamp
@@ -2837,17 +2837,32 @@ data GoalKind =
   | GKBinopSite
   | GKUnopSite
   | GKArithSite
+  | GKDictApp
+  | GKMethodDict
+  | GKRecDictApp
 
-data EvDest = EvRoute (Ref Route)
+-- Where a goal's evidence lands once solved: today the `Ref Route` cell a site
+-- stamper writes, or the `Ref (List Route)` cell a dictionary-application carrier
+-- owns.  #2549 adds the evidence-id arm.
+data EvDest = EvRoute (Ref Route) | EvRoutes (Ref (List Route))
+
+-- What the kind's stamper needs beyond the destination.  The three dictionary
+-- carriers keep their shape (their stampers are unchanged); a site carries what
+-- `PendingEntry` carried minus the cell and the enclosing fn, which are on the
+-- obligation itself.
+data GoalPayload =
+  | GPSite String Mono SiteKind
+  | GPArith Mono
+  | GPDictApp PendingDictApp
+  | GPMethodDict PendingMethodDict
+  | GPRecDictApp RecDictApp
 
 data Obligation = Obligation {
   oKind : GoalKind,
   oDest : EvDest,
-  oName : String,
-  oMono : Mono,
   oEncl : String,
-  oSite : SiteKind,
   oLoc : Option Loc,
+  oPayload : GoalPayload,
 }
 
 goalKindTag : GoalKind -> Int
@@ -2857,57 +2872,120 @@ goalKindTag GKRLocalSite = 2
 goalKindTag GKBinopSite = 3
 goalKindTag GKUnopSite = 4
 goalKindTag GKArithSite = 5
+goalKindTag GKDictApp = 6
+goalKindTag GKMethodDict = 7
+goalKindTag GKRecDictApp = 8
 
-evCell : EvDest -> Ref Route
-evCell (EvRoute r) = r
+pushGoal : Obligation -> Unit
+pushGoal o = graphRun.value.goals := o :: graphRun.value.goals.value
 
 siteObligation : GoalKind -> PendingEntry -> Obligation
 siteObligation k (PendingEntry name tagRef m encl site loc) = Obligation {
   oKind = k,
   oDest = EvRoute tagRef,
-  oName = name,
-  oMono = m,
   oEncl = encl,
-  oSite = site,
   oLoc = loc,
+  oPayload = GPSite name m site,
 }
 
-siteEntry : Obligation -> PendingEntry
-siteEntry o =
-  PendingEntry o.oName (evCell o.oDest) o.oMono o.oEncl o.oSite o.oLoc
-
 pushSiteGoal : GoalKind -> PendingEntry -> Unit
-pushSiteGoal k e =
-  graphRun.value.goals := siteObligation k e :: graphRun.value.goals.value
+pushSiteGoal k e = pushGoal (siteObligation k e)
 
 -- an arithmetic operator site: only its operand mono and its route cell
 pushArithGoal : Ref Route -> Mono -> Unit
-pushArithGoal dref m =
-  graphRun.value.goals :=
-    Obligation {
-        oKind = GKArithSite,
-        oDest = EvRoute dref,
-        oName = "",
-        oMono = m,
-        oEncl = "",
-        oSite = SKOp False,
-        oLoc = None,
-      }
-      :: graphRun.value.goals.value
+pushArithGoal dref m = pushGoal Obligation {
+  oKind = GKArithSite,
+  oDest = EvRoute dref,
+  oEncl = "",
+  oLoc = None,
+  oPayload = GPArith m,
+}
 
--- this module's goals of one kind (entries since `mark`, see `GraphMarks`)
+pushDictApp : PendingDictApp -> Unit
+pushDictApp app = pushGoal Obligation {
+  oKind = GKDictApp,
+  oDest = EvRoutes app.pdaRoutesRef,
+  oEncl = app.pdaEncl,
+  oLoc = app.pdaLoc,
+  oPayload = GPDictApp app,
+}
+
+pushMethodDictGoal : PendingMethodDict -> Unit
+pushMethodDictGoal pmd = pushGoal Obligation {
+  oKind = GKMethodDict,
+  oDest = EvRoutes pmd.pmdRoutesRef,
+  oEncl = pmd.pmdEncl,
+  oLoc = None,
+  oPayload = GPMethodDict pmd,
+}
+
+pushRecDictAppGoal : RecDictApp -> Unit
+pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _)) = pushGoal Obligation {
+  oKind = GKRecDictApp,
+  oDest = EvRoutes routesRef,
+  oEncl = encl,
+  oLoc = None,
+  oPayload = GPRecDictApp r,
+}
+
+-- the goals recorded since `mark` (a length of the channel: a module's start mark
+-- from `GraphMarks`, or a `let`/SCC bracket's own), newest first
+goalsSince : Int -> List Obligation
+goalsSince mark = moduleWindow graphRun.value.goals mark
+
 goalsOfKind : GoalKind -> Int -> List Obligation
 goalsOfKind k mark =
-  filterList
-    (o => goalKindTag o.oKind == goalKindTag k)
-    (moduleWindow graphRun.value.goals mark)
+  filterList (o => goalKindTag o.oKind == goalKindTag k) (goalsSince mark)
 
+-- each stamper's own parameter shape, projected back out of the bag
 siteGoals : GoalKind -> Int -> List PendingEntry
-siteGoals k mark = map siteEntry (goalsOfKind k mark)
+siteGoals k mark = flatMap siteEntry (goalsOfKind k mark)
+
+siteEntry : Obligation -> List PendingEntry
+siteEntry o = match o.oPayload
+  GPSite name m site =>
+    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc]
+  _ => []
+
+evCell : EvDest -> Ref Route
+evCell (EvRoute r) = r
+evCell (EvRoutes _) = Ref RNone
 
 arithGoals : Int -> List (Ref Route, Mono)
-arithGoals mark =
-  map (o => (evCell o.oDest, o.oMono)) (goalsOfKind GKArithSite mark)
+arithGoals mark = flatMap arithEntry (goalsOfKind GKArithSite mark)
+
+arithEntry : Obligation -> List (Ref Route, Mono)
+arithEntry o = match o.oPayload
+  GPArith m => [(evCell o.oDest, m)]
+  _ => []
+
+dictAppsSince : Int -> List PendingDictApp
+dictAppsSince mark = flatMap dictAppEntry (goalsSince mark)
+
+dictAppEntry : Obligation -> List PendingDictApp
+dictAppEntry o = match o.oPayload
+  GPDictApp a => [a]
+  _ => []
+
+methodDictsSince : Int -> List PendingMethodDict
+methodDictsSince mark = flatMap methodDictEntry (goalsSince mark)
+
+methodDictEntry : Obligation -> List PendingMethodDict
+methodDictEntry o = match o.oPayload
+  GPMethodDict d => [d]
+  _ => []
+
+recDictAppsSince : Int -> List RecDictApp
+recDictAppsSince mark = flatMap recDictAppEntry (goalsSince mark)
+
+recDictAppEntry : Obligation -> List RecDictApp
+recDictAppEntry o = match o.oPayload
+  GPRecDictApp r => [r]
+  _ => []
+
+-- a bracket's mark: the channel's length now (what `wMark` was for `dictApps`)
+goalsMark : Unit -> Int
+goalsMark _ = listLen graphRun.value.goals.value
 
 -- drop the goals of `kinds` recorded since `mark`, keeping every other goal
 -- (`inferPropBodies`' bracket: a prop body's operator sites must not be stamped)
@@ -7424,9 +7502,6 @@ wAll : Windowed a -> List a
 wAll w = !w.items
 
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
-wCopy : Windowed a -> Windowed a
-wCopy w = Windowed { items = Ref !w.items, n = Ref !w.n }
-
 wSnapshot : Windowed a -> (List a, Int)
 wSnapshot w = (!w.items, !w.n)
 
@@ -7924,9 +7999,6 @@ data PendingDictApp = PendingDictApp {
   pdaEncl : String,
   pdaLoc : Option Loc,
 }
-
-pushDictApp : PendingDictApp -> Unit
-pushDictApp app = wPush graphRun.value.dictApps app
 
 -- Method-level-constraint dict-passing.  `methodPredicateSlotsRef` is the sole
 -- per-run authority: each method constraint owns one complete PredicateSlot and the
@@ -8937,13 +9009,7 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- graph counter keeps unique, so an entry can only ever match its own module's sites.
 -- Their lookups became whole-graph linear scans (`diff_compiler_perf_scaling` is the
 -- gate on that), which unit 3's re-keying (`gGiven`) retires.
-data GraphMarks = GraphMarks {
-  mGoals : Int,
-  mMethodDicts : Int,
-  mRecDictApps : Int,
-  mDictApps : Int,
-  mNumlit : Int,
-}
+data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 
 data GraphRun = GraphRun {
   tyvarCounter : Ref Int,
@@ -8961,9 +9027,6 @@ data GraphRun = GraphRun {
   -- same predicate as another iff they have equal length and `monoSameGiven` holds at
   -- every position, in order — see `monoVecSameGiven`.
   activeDictPreds : Ref (List (PredicateSlot, String)),
-  dictApps : Windowed PendingDictApp,  -- #841: pendingDictApps/N, ported onto Windowed
-  pendingMethodDicts : Ref (List PendingMethodDict),
-  pendingRecDictApps : Ref (List RecDictApp),
   moduleRanges : Ref (List (String, GraphMarks)),
 }
 
@@ -8975,9 +9038,6 @@ freshGraphRun _ = GraphRun {
   numlitRefs = Ref [],
   activeDictVars = Ref [],
   activeDictPreds = Ref [],
-  dictApps = wNew (),
-  pendingMethodDicts = Ref [],
-  pendingRecDictApps = Ref [],
   moduleRanges = Ref [],
 }
 
@@ -8997,9 +9057,6 @@ copyGraphRun g = GraphRun {
   numlitRefs = Ref g.numlitRefs.value,
   activeDictVars = Ref g.activeDictVars.value,
   activeDictPreds = Ref g.activeDictPreds.value,
-  dictApps = wCopy g.dictApps,
-  pendingMethodDicts = Ref g.pendingMethodDicts.value,
-  pendingRecDictApps = Ref g.pendingRecDictApps.value,
   moduleRanges = Ref g.moduleRanges.value,
 }
 
@@ -9007,9 +9064,6 @@ copyGraphRun g = GraphRun {
 graphMarksNow : Unit -> GraphMarks
 graphMarksNow _ = GraphMarks {
   mGoals = listLen graphRun.value.goals.value,
-  mMethodDicts = listLen graphRun.value.pendingMethodDicts.value,
-  mRecDictApps = listLen graphRun.value.pendingRecDictApps.value,
-  mDictApps = wMark graphRun.value.dictApps,
   mNumlit = listLen graphRun.value.numlitRefs.value,
 }
 
@@ -9023,13 +9077,7 @@ recordModuleStart mid =
 currentModuleMarks : Unit -> GraphMarks
 currentModuleMarks _ = match graphRun.value.moduleRanges.value
   (_, m) :: _ => m
-  [] => GraphMarks {
-    mGoals = 0,
-    mMethodDicts = 0,
-    mRecDictApps = 0,
-    mDictApps = 0,
-    mNumlit = 0,
-  }
+  [] => GraphMarks { mGoals = 0, mNumlit = 0 }
 
 -- The entries a channel gained since `mark` — this module's own, in the order the
 -- per-module list used to hold them.
@@ -11514,14 +11562,11 @@ recordMethodDicts name methodRef subst =
     name
     perRun.value.methodPredicateSlotsRef.value)
     None => ()
-    Some slots =>
-      graphRun.value.pendingMethodDicts :=
-        PendingMethodDict {
-            pmdRoutesRef = methodRef,
-            pmdSlots = instantiateMethodPredicateSlots slots subst,
-            pmdEncl = perRun.value.currentFn.value,
-          }
-          :: graphRun.value.pendingMethodDicts.value
+    Some slots => pushMethodDictGoal PendingMethodDict {
+      pmdRoutesRef = methodRef,
+      pmdSlots = instantiateMethodPredicateSlots slots subst,
+      pmdEncl = perRun.value.currentFn.value,
+    }
 
 -- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
 -- stable positions index the occurrence's ordered substitution, avoiding any reliance
@@ -11940,9 +11985,8 @@ inferDictAtFound name routesRef inst =
     let _ = recordCallObligations expanded monos argVecs
     fst inst
   else
-    graphRun.value.pendingRecDictApps :=
-      RecDictApp routesRef name perRun.value.currentFn.value (fst inst)
-        :: graphRun.value.pendingRecDictApps.value
+    pushRecDictAppGoal
+      (RecDictApp routesRef name perRun.value.currentFn.value (fst inst))
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -12464,7 +12508,7 @@ blockRecLet env x xloc e =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark graphRun.value.dictApps
+  let dictN0 = goalsMark ()
   let placeholder = freshVar ()
   let envSelf = extendLocalVar env x (monoScheme placeholder)
   let t1 = infer envSelf e
@@ -12484,7 +12528,7 @@ blockLet env (PVar x xloc) e =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark graphRun.value.dictApps
+  let dictN0 = goalsMark ()
   let t = infer env e
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
@@ -17101,7 +17145,7 @@ inferRecLet env x xloc e1 e2 =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark graphRun.value.dictApps
+  let dictN0 = goalsMark ()
   let placeholder = freshVar ()
   let envSelf = extendLocalVar env x (monoScheme placeholder)
   let t1 = infer envSelf e1
@@ -17167,7 +17211,7 @@ inferLetSimple env pat e1 e2 =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark graphRun.value.dictApps
+  let dictN0 = goalsMark ()
   let t1 = infer env e1
   let _ = exitLevel ()
   -- PLAN.md #11: ground an ambiguous Num-only var before this inner let
@@ -18532,7 +18576,7 @@ processLetGroup env binds =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark graphRun.value.dictApps
+  let dictN0 = goalsMark ()
   let placeholders = map letBindPlaceholder binds
   let env2 = extendLocalVars env placeholders
   let _ = inferLetBinds env2 (zipL binds placeholders)
@@ -18760,7 +18804,7 @@ methodOccArgIdPairsAt iface typarams mty occ =
 -- covers every constrained var.  Measured on a built binary during #1021 review.
 dictForwardedPairs : Int -> Int -> List (Int, String)
 dictForwardedPairs callN0 dictN0 =
-  flatMap dictAppMonoIds (wWindow graphRun.value.dictApps dictN0)
+  flatMap dictAppMonoIds (dictAppsSince dictN0)
     ++ flatMap callOblMonoIds (callOblsWindow callN0)
 
 dictAppMonoIds : PendingDictApp -> List (Int, String)
@@ -19560,19 +19604,9 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let _ = resolveOpSites True implTable (siteGoals GKBinopSite mk.mGoals)
   let _ = resolveOpSites False implTable (siteGoals GKUnopSite mk.mGoals)
   let _ = resolveArithSites (arithGoals mk.mGoals)
-  let _ =
-    realizeRecDictApps
-      implTable
-      (moduleWindow graphRun.value.pendingRecDictApps mk.mRecDictApps)
-  let _ =
-    resolveDictApps
-      prog2
-      implTable
-      (wWindow graphRun.value.dictApps mk.mDictApps)
-  let _ =
-    resolveMethodDicts
-      implTable
-      (moduleWindow graphRun.value.pendingMethodDicts mk.mMethodDicts)
+  let _ = realizeRecDictApps implTable (recDictAppsSince mk.mGoals)
+  let _ = resolveDictApps prog2 implTable (dictAppsSince mk.mGoals)
+  let _ = resolveMethodDicts implTable (methodDictsSince mk.mGoals)
   let _ = resolveArgStamps implTable (siteGoals GKArgStamp mk.mGoals)
   dictPass allNames prog2
 
@@ -34174,7 +34208,7 @@ processSCC env sigs grouped members =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark graphRun.value.dictApps
+  let dictN0 = goalsMark ()
   let placeholders = map (m => (m, freshVar ())) members
   let env2 = extendVars env (map placeholderBinding placeholders)
   let (regs, sigTvMaps) = preunifySigsEx sigs placeholders
@@ -34213,8 +34247,7 @@ processSCC env sigs grouped members =
   -- feed ONLY the Num-defaulting search; addedObls alone still drives the
   -- ambiguous-constraint/scheme-obligation registration below.
   let extraNumObls =
-    numCallObls (callOblsWindow callN0)
-      ++ numDictObls (wWindow graphRun.value.dictApps dictN0)
+    numCallObls (callOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
   let defaultObls = addedObls ++ extraNumObls
   let _ = defaultGroupNum defaultObls (map snd placeholders)
   let _ = defaultEachMember defaultObls placeholders
@@ -36503,7 +36536,7 @@ ifaceForInferredId m id =
     direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
     Some ir => ir
-    None => match ifaceFromDictApps id graphRun.value.dictApps.items.value
+    None => match ifaceFromDictApps id (dictAppsSince 0)
       "" => ifaceRefNone
       n => ifaceRefBare n
 
@@ -42048,19 +42081,9 @@ elabModuleStamp mid seedVars accData implDecls prog =
       implDecls
       stampImplTable
       (siteGoals GKRLocalSite mk.mGoals)
-  let _ =
-    realizeRecDictApps
-      stampImplTable
-      (moduleWindow graphRun.value.pendingRecDictApps mk.mRecDictApps)
-  let _ =
-    resolveDictApps
-      implDecls
-      stampImplTable
-      (wWindow graphRun.value.dictApps mk.mDictApps)
-  let _ =
-    resolveMethodDicts
-      stampImplTable
-      (moduleWindow graphRun.value.pendingMethodDicts mk.mMethodDicts)
+  let _ = realizeRecDictApps stampImplTable (recDictAppsSince mk.mGoals)
+  let _ = resolveDictApps implDecls stampImplTable (dictAppsSince mk.mGoals)
+  let _ = resolveMethodDicts stampImplTable (methodDictsSince mk.mGoals)
   schemes
 -- DRIVER-COLLAPSE Phase 2: pass the return-position method names (was `[]`) so
 -- resolveSite's RDict-case routes a RETURN-position method site RDictFwd (forward the

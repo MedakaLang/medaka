@@ -145,6 +145,7 @@ argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argStampPairs : PendingEntry -> List (Int, String)
+arithEntry : Obligation -> List (Ref Route, Mono)
 arithGoals : Int -> List (Ref Route, Mono)
 armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
@@ -669,7 +670,9 @@ depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derefOp : Mono -> Mono
 derivableIface : String -> Bool
+dictAppEntry : Obligation -> List PendingDictApp
 dictAppMonoIds : PendingDictApp -> List (Int, String)
+dictAppsSince : Int -> List PendingDictApp
 dictArityOf : String -> Int
 dictForwardedPairs : Int -> Int -> List (Int, String)
 dictParamName : String -> Int -> String
@@ -949,7 +952,9 @@ goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalsClosed : List Mono -> Bool
+goalsMark : Unit -> Int
 goalsOfKind : GoalKind -> Int -> List Obligation
+goalsSince : Int -> List Obligation
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
@@ -1452,6 +1457,8 @@ methodConstraintNames : List Decl -> List String
 methodConstraintNamesOfDecl : Decl -> List String
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
 methodDictArityOf : String -> Int
+methodDictEntry : Obligation -> List PendingMethodDict
+methodDictsSince : Int -> List PendingMethodDict
 methodDispatchIdx : String -> Option Int
 methodEffArgOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffChargedOccs : Ty -> List (String, List Atom)
@@ -1725,9 +1732,12 @@ pushArithGoal : Ref Route -> Mono -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
+pushGoal : Obligation -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
+pushMethodDictGoal : PendingMethodDict -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
 pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> Unit
+pushRecDictAppGoal : RecDictApp -> Unit
 pushSiteGoal : GoalKind -> PendingEntry -> Unit
 pushTypeError : String -> String -> Unit
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
@@ -1745,6 +1755,8 @@ qualSchemeOblsFor : String -> Option (List VecObl)
 quotedNames : List String -> String
 rangeFromCount : Int -> Int -> List Int
 realizeRecDictApps : Map String (List ImplEntry) -> List RecDictApp -> Unit
+recDictAppEntry : Obligation -> List RecDictApp
+recDictAppsSince : Int -> List RecDictApp
 recFieldMono : List (String, Mono) -> Field -> (String, Mono)
 recPatFieldVarsTc : RecPatField -> List String
 recPredicateArgs : Mono -> PredicateSlot -> Option (List Mono)
@@ -2036,7 +2048,7 @@ sigTvarIds : List Mono -> List Int
 sigTvarNamedIds : List (String, Mono) -> List (String, Int)
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
-siteEntry : Obligation -> PendingEntry
+siteEntry : Obligation -> List PendingEntry
 siteGoals : GoalKind -> Int -> List PendingEntry
 siteObligation : GoalKind -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
@@ -2230,7 +2242,6 @@ vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 wAll : Windowed a -> List a
-wCopy : Windowed a -> Windowed a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit

@@ -471,8 +471,17 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
    the first extraction (#2586). The state records were in the closed set too and are
    deliberately left in `typecheck.mdk` until a second half needs them importable.
 
-Next in order: #2547 unit 2 (one `Obligation` bag, abstract `EvDest`), then #2548 (the
-whole-graph drain at quiescence, T4 reject as a `W-` warning per ruling 1), unit 3, #2549.
+8. **Step 5 unit 2 done for the route channels** (#2547): `GraphRun.goals`, one list of
+   `Obligation { oKind, oDest : EvDest, oEncl, oLoc, oPayload }` carrying the return-site,
+   arg-stamp, RLocal, binop/unop, arithmetic, dictionary-application, method-dict and
+   record-dict goals; `EvDest` is `EvRoute (Ref Route) | EvRoutes (Ref (List Route))`.
+   Every stamper keeps its parameter shape, projected back out of the bag, in its old
+   order; the `let`/SCC brackets that windowed `dictApps` mark the one channel. Still
+   bespoke: the numeric-literal channel (#991 ask 3) and the obligation-check channels
+   `obls`/`implObls` (`UObligation`, windowed per group).
+
+Next in order: #2548 (the whole-graph drain at quiescence over `goals` + `numlitRefs`,
+T4 reject as a `W-` warning per ruling 1; re-pin I5 class 3 first), unit 3, #2549.
 
 ### SA-11. Artifacts
 
