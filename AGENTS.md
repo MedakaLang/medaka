@@ -517,12 +517,12 @@ BLESS A WRONG GOLDEN, permanently. **After ANY merge/rebase, rebuild oracles BEF
 then route through `run_gates.sh`. The same applies to `--bless` — see **[WT-GOLDEN-ENSHRINES]**
 under *Writing tests*.
 
-### Pre-commit hook (ACTIVE) — fmt + lint + snapshot + lextok
+### Pre-commit hook (ACTIVE) — fmt + lint + baselined-lint + snapshot + lextok + emoji-shout
 
 *Incident narrative, where an item below has any: `.claude/dossier/tooling.md`.*
 
-`.githooks/pre-commit`: fmt+lint always, snapshot+lextok if staged, over staged `.mdk`
-(`test/` fixtures excluded). Re-install: `cp .githooks/pre-commit
+`.githooks/pre-commit`: fmt+lint+baselined-lint+emoji-shout always, snapshot+lextok if staged,
+over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-commit
 "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
 
 - **[H-FMT] Format** — **Run `medaka fmt --write <changed.mdk>` and re-`git add` before
@@ -549,6 +549,13 @@ under *Writing tests*.
 - **[H-LEXTOK] Lextok** — OPPORTUNISTIC (needs `test/bin/lex_main` + a sibling
   `.lextok.golden`). Stale golden: `CAPTURE=1 sh test/diff_compiler_lex_files.sh <files>`,
   re-stage `.lextok.golden`.
+- **[H-LINT-BASELINE] Baselined lint** — a per-file COUNT ratchet for a rule the tree isn't
+  clean of yet (`rule-stdlib-reimpl`), scoped to `$LINT_ROOTS` (`compiler stdlib sqlite`).
+  A count may only fall; regenerate via `sh test/diff_compiler_lint_baseline.sh --write`,
+  never by hand. See `.githooks/pre-commit` check 2b.
+- **[H-EMOJI-SHOUT] Emoji-shout diff** — rejects a commit that ADDS a new 🚨/⚠️/🔒 line to a
+  staged `.mdk` (diff-scoped, added lines only). See `.githooks/pre-commit` check 6 and
+  `[T-COMMENT-REGISTER]`.
 
 Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 

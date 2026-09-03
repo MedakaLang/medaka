@@ -1394,6 +1394,17 @@ if [ -s "$CHANGED_PATHS" ]; then
   add 'diff_compiler_source_bytes'
 fi
 
+# ── the emoji-shout ratchet is the same shape: whole-tree sources = ["*"] ──
+# diff_compiler_comment_shout_diff.sh (#2621) rejects a commit/diff that ADDS a
+# new 🚨/⚠️/🔒 line to any .mdk, so like diff_compiler_source_bytes above it has
+# no single per-file consumer to hang off of — it is registered `sources = ["*"]`
+# and must derive unconditionally, or the local fast-feedback loop this gate
+# exists for is silently absent even though CI's matrix always includes it
+# regardless (#2624 review S2-2/S3-1).
+if [ -s "$CHANGED_PATHS" ]; then
+  add 'diff_compiler_comment_shout_diff'
+fi
+
 # ── the IN-LANGUAGE suite (`make test`) is NOT a gate, so nothing above can reach it ──
 #
 # `$gates` is a set of `test/*.sh` scripts run through run_gates.sh. `make test` is a

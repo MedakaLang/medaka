@@ -16,7 +16,10 @@
 #      remove it from GATED_LINT_RULES below (it then still warns under plain `medaka lint`).
 #   2b. BASELINED LINT: `medaka lint --baseline test/lint_baseline.toml
 #      --only=<baselined rules>` — for a rule the tree is NOT yet clean of, so the
-#      max ratchet of check 2 cannot carry it. Each file's current finding count
+#      max ratchet of check 2 cannot carry it. Scoped to staged files under
+#      $LINT_ROOTS only (like check 3) — the baseline itself only ever covers
+#      those roots, so a file outside them is simply not checked by this rule at
+#      all, same as it already is for the gate. Each file's current finding count
 #      is pinned in test/lint_baseline.toml; a file may fall below its count
 #      freely, and exceeding it — or having findings with no row there at all —
 #      fails the commit. Counts move only by regenerating the file
@@ -195,14 +198,27 @@ if [ -n "$badlint" ]; then
 fi
 
 # ── 2b. baselined lint check (per-file count ratchet) ────────────────────
-# Same per-staged-file loop as check 2. The difference is the verdict: check 2
-# fails on ANY finding, this one fails only where a file's count for a baselined
-# rule EXCEEDS its pinned row — or where the baseline cannot answer at all (no
-# row for a file that has findings, or an unreadable baseline file). It never
-# passes on a question it could not answer.
+# Same per-staged-file loop as check 2, but scoped to $LINT_ROOTS (like check 3)
+# — the baseline itself (test/diff_compiler_lint_baseline.sh --write) only ever
+# scans those roots, so a staged file outside them has no baseline row to check
+# against by construction. Without this scoping, a file outside $LINT_ROOTS with
+# pre-existing findings hits the "no row" fail-closed arm below with a printed
+# remedy that cannot create a row for it (#2624 review S1-1).
+# The difference from check 2's verdict: check 2 fails on ANY finding, this one
+# fails only where a file's count for a baselined rule EXCEEDS its pinned row —
+# or where the baseline cannot answer at all (no row for a file that has
+# findings, or an unreadable baseline file). It never passes on a question it
+# could not answer.
 badbase=""
 for f in $files; do
   [ -f "$f" ] || continue
+  in_roots=0
+  for r in $LINT_ROOTS; do
+    case "$f" in
+      "$r"/*) in_roots=1 ;;
+    esac
+  done
+  [ "$in_roots" = 1 ] || continue
   "$MEDAKA" lint --baseline="$ROOT/$LINT_BASELINE_FILE" --only="$BASELINED_LINT_RULES" "$f" >/dev/null 2>&1 || badbase="$badbase $f"
 done
 
@@ -394,7 +410,7 @@ fi
 # (#536) on why `test/diff_compiler_test.sh` cannot be scoped to staged files
 # from the outside — running it here would risk rejecting a commit over an
 # unrelated, stale fixture with no working per-file remediation.
-checked="fmt, lint, emoji-shout-diff"
+checked="fmt, lint, baselined-lint, emoji-shout-diff"
 notchecked=""
 if [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then notchecked="$notchecked snapshots(deferred)"; else checked="$checked, snapshots"; fi
 if [ "$lex_checked" = 1 ]; then checked="$checked, lextok"; else notchecked="$notchecked lextok"; fi
