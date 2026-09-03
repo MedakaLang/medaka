@@ -222,8 +222,13 @@ if not pats:
     print("ERROR no shard patterns could be read out of any workflow file")
     sys.exit(0)
 
-# Resolve every pattern token against BOTH roots, exactly as run_gates.sh,
-# build_oracles.sh --for, preflight's resolver and the coverage gate all do.
+# Resolve every pattern token against BOTH roots, `.sh` only — this check's
+# FLOOR is `git ls-files "$p/test/*.sh"` (below), so a `kind = "native"` floor
+# gate is out of scope until one exists (#2591; the native-test-vehicle
+# sprint's own migration was deliberately NOT a project floor, so this arm
+# was untouched). run_gates.sh, build_oracles.sh --for, preflight's resolver
+# and the coverage gate all ALSO resolve a `kind = "native"` entry by registry
+# name; this script does not need to yet, because nothing here is one.
 hits = []
 for shard, pat in sorted(pats.items()):
     for tok in shlex.split(pat):

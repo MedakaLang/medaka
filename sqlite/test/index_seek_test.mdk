@@ -17,7 +17,7 @@
 --
 -- Run: `medaka test sqlite/test/index_seek_test.mdk` from the sqlite root.
 
-import test.{Expectation, Pass, Fail, expectEqual}
+import test.{Expectation, expectEqual, fail}
 import lib.writer.{
   TableSchema,
   Column,
@@ -133,14 +133,14 @@ seekRowids db table column target =
 -- One agreement case: seek and scan must return the SAME rowid set.  Both
 -- sides are sorted, so the comparison is order-independent.
 agrees : Result String Db -> String -> String -> Int -> Cell -> Expectation
-agrees (Err e) _ _ _ _ = Fail "fixture failed to build: \{e}"
+agrees (Err e) _ _ _ _ = fail "fixture failed to build: \{e}"
 agrees (Ok db) table column colIdx target = match (
   seekRowids db table column target,
   scanRowids db table colIdx target,
 )
   (Ok got, Ok want) => expectEqual want got
-  (Err e, _) => Fail "seek errored: \{e}"
-  (_, Err e) => Fail "scan errored: \{e}"
+  (Err e, _) => fail "seek errored: \{e}"
+  (_, Err e) => fail "scan errored: \{e}"
 
 -- ---------------------------------------------------------------------------
 -- Agreement across every key shape

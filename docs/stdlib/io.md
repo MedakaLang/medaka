@@ -85,6 +85,29 @@ exit code and captured stderr on a nonzero exit.
 Ok ("", "")
 ```
 
+### `runVerb`
+
+```
+runVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+```
+
+Runs a program with arguments and waits for it, keeping the exit code,
+stdout, and stderr as three distinct fields instead of folding a nonzero
+exit into an `Err` the way `runCommandOk` does.
+
+Only a spawn failure (the program could not be started) is `Err`, with
+the host's message. A nonzero exit is still `Ok`: a caller asserting on
+failure output needs the exit code and stderr in hand, not conflated
+into a rejected `Result` or silently dropped the way comparing stdout
+alone would drop it.
+
+```medaka
+> runVerb "true" []
+Ok (0, "", "")
+> runVerb "sh" ["-c", "printf err >&2; exit 3"]
+Ok (3, "", "err")
+```
+
 ## Environment
 
 ### `getEnvOr`

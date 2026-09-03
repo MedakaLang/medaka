@@ -1,0 +1,19 @@
+-- #2588: the native arm's ABORT RULE.  The probe binary dies inside test 2 of
+-- 4, so tests 2, 3 and 4 have no complete output.  They must be reported
+-- `Errored` naming the abort — never dropped, never counted as passing.  Test 1
+-- already printed its result and is still judged normally.
+--
+-- The `panic` sits INSIDE the test body rather than in a top-level binding: the
+-- native backend forces a top-level nullary binding before `main` runs, which
+-- would abort the probe before test 1 could report and hide the very
+-- distinction this fixture exists to show.
+
+import test.{expectEqual, Expectation}
+
+test "runs before the abort" = expectEqual 1 1
+
+test "aborts the probe" = expectEqual 1 (panic "boom")
+
+test "never reached (a)" = expectEqual 2 2
+
+test "never reached (b)" = expectEqual 3 3

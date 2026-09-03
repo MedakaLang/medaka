@@ -13,14 +13,18 @@
    registry-level fail-open policy says about it —
    `docs/ops/GATE-REGISTRY-DESIGN.md` §2/§3).
 
-   ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
-   to behave.  Every gate script, every assertion in it, and the meaning of
-   every exit code it returns are untouched, and `sh test/run_gates.sh` remains
-   authoritative.  What `gate run` adds is the SERVICES around the script —
-   scratch-dir lifecycle, the stale-oracle refusal, a timeout, separated
-   stdout/stderr capture, and a machine-readable timing report — provided once,
-   natively, instead of re-hand-rolled per gate.  See the `gate run` section
-   below.
+   ⚠️ For a `kind = "exec"` entry, `gate run` is a NEW WAY TO INVOKE a gate
+   script, not a new way for a gate to behave: every assertion in the script
+   and the meaning of every exit code it returns are untouched, and
+   `sh test/run_gates.sh` remains authoritative.  A `kind = "native"` entry has
+   no script at all — `gate run` compiles and runs its `_test.mdk` module
+   directly (`medaka test --native --json`) and grades the JSON envelope, so
+   for THAT kind `gate run` is the gate's only way to run, not a wrapper around
+   one.  Either way, what `gate run` adds around the underlying execution is the
+   SAME set of SERVICES — scratch-dir lifecycle, the stale-oracle refusal (exec
+   only), a timeout, separated stdout/stderr capture, and a machine-readable
+   timing report — provided once, natively, instead of re-hand-rolled per gate.
+   See the `gate run` section below.
 
    **Selector language** (design doc §3, "keep it boring"): a selector is a
    `field:pattern` token, where `field` is one of `name`/`area`/`project`/
@@ -132,6 +136,23 @@ import support.util.{
 -- class (verify check 11).  Without that pairing, "stays shell" is a value one
 -- side asserts and nothing reads — and a script that later stops being a trust
 -- anchor would keep its exemption silently.
+--
+-- ── `kind` (#2591, epic #2600) ──────────────────────────────────────────────
+--
+-- HOW the `run` target is executed, and therefore what shape `run` has:
+--
+--   exec    a script.  `run` is its repo-relative path; the interpreter comes
+--           from its shebang, not from this field.
+--   native  a Medaka test module.  `run` is a repo-relative `*_test.mdk` path,
+--           executed by `medaka test --native --json`.
+--
+-- The suffix is the pairing that keeps the two halves from disagreeing —
+-- `test/diff_compiler_ci_shard_coverage.sh` reds an entry whose `kind` and
+-- `run` suffix do not match, the same way check 11 pairs `shell:*` with a
+-- `shell-because:` header.  Every pattern-to-gate resolver in the tree
+-- (`test/run_gates.sh`, `test/preflight.sh`, `test/build_oracles.sh --for`,
+-- `.github/workflows/ci.yml`'s `plan` step) resolves a `native` entry by
+-- registry NAME, since there is no `.sh` for its glob to find.
 --
 -- ── `tiers` (S-tier-is-data, #2181) ─────────────────────────────────────────
 --
@@ -1169,21 +1190,34 @@ substrAt needle hay i last
 -- SIGTERM path and 137 when the -k grace period had to escalate to SIGKILL;
 -- both are reported as a timeout, with the raw code still printed so a genuine
 -- 137 from elsewhere (an OOM kill, say) is not hidden by the label.
-gateArgs : RunEnv -> String -> Int -> String -> String -> List String
-gateArgs env scratch secs sh script = [
-  "MEDAKA_ROOT=\{env.root}",
-  "MEDAKA=\{env.medaka}",
-  "MEDAKA_EMITTER=\{env.emitter}",
-  "TMPDIR=\{scratch}",
-  "MEDAKA_SCRATCH=\{scratch}",
-  "JOBS=1",
-  "timeout",
-  "-k",
-  "5s",
-  "\{intToString secs}s",
-  sh,
-  script,
-]
+gateArgs : RunEnv -> String -> Int -> List String -> List String
+gateArgs env scratch secs cmd =
+  "MEDAKA_ROOT=\{env.root}"
+    :: "MEDAKA=\{env.medaka}"
+    :: "MEDAKA_EMITTER=\{env.emitter}"
+    :: "TMPDIR=\{scratch}"
+    :: "MEDAKA_SCRATCH=\{scratch}"
+    :: "JOBS=1"
+    :: "timeout"
+    :: "-k"
+    :: "5s"
+    :: "\{intToString secs}s"
+    :: cmd
+
+-- What runs a gate, and the label its result lines carry.
+--
+-- `kind = "exec"` is a script, so the interpreter comes from its shebang
+-- (shellFor).  `kind = "native"` is a `*_test.mdk` module run by the compiler's
+-- own test runner: `medaka test --native --json` exits 0 when every `test`
+-- declaration passed and 1 when any failed, which is already the contract
+-- `gateOk` reads off the exit code, so nothing downstream needs a second shape.
+gateInvocation : RunEnv -> Gate -> String -> <IO> (String, List String)
+gateInvocation env g script =
+  if g.kind == "native" then
+    ("medaka test --native", [env.medaka, "test", "--native", "--json", script])
+  else
+    let sh = shellFor script
+    (sh, [sh, script])
 
 spawnFailure : Gate -> String -> String -> Float -> GateResult
 spawnFailure g script msg dt = GateResult {
@@ -1208,13 +1242,13 @@ runOneGate env g =
       "gate script not found (registry `run` field): \{g.run}"
       0.0
   else
-    let sh = shellFor script
+    let (sh, cmd) = gateInvocation env g script
     let secs = timeoutFor env.timeoutOverride g.cost
     match makeGateScratch env.scratchRoot
       Err e => spawnFailure g script "could not create a scratch dir: \{e}" 0.0
       Ok scratch =>
         let t0 = monotonicSec ()
-        let res = runCommand "env" (gateArgs env scratch secs sh script)
+        let res = runCommand "env" (gateArgs env scratch secs cmd)
         let dt = monotonicSec () - t0
         let _ = cleanupScratch scratch
         match res
@@ -1373,7 +1407,8 @@ runReportJson jobs rs =
 dryLine : RunEnv -> Gate -> <IO> String
 dryLine env g =
   let script = "\{env.root}/\{g.run}"
-  let sh = if fileExists script then shellFor script else "sh"
+  let (sh, _cmd) =
+    if fileExists script then gateInvocation env g script else ("sh", [])
   let orc = if isEmptyStrs g.oracles then "-" else joinWith "," g.oracles
   "\{g.name}\t\{sh}\t\{script}\ttimeout=\{intToString (timeoutFor env.timeoutOverride g.cost)}s\toracles=\{orc}\n"
 

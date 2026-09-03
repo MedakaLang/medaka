@@ -268,6 +268,66 @@ _gate_candidates() {
   done
 }
 
+# ── The half of the gate universe that is not a script ───────────────────────
+#
+# A `kind = "native"` registry entry (#2591) runs a `*_test.mdk` module, so
+# `_gate_candidates` above cannot see it — correctly, since that function answers
+# "which .sh scripts exist" for the orphan-script scan and for `total_gates`'s
+# denominator, and neither question changed. What DOES change is every consumer
+# that asks "which gates are there": the corpus scan, the path scan, and the two
+# pattern resolvers. Miss one and a fixture-only diff silently widens to the FULL
+# suite, or a derived pattern hard-fails as matching NO gate.
+#
+# Read straight out of test/gates.toml, the same line-scan the corpus-edge loop
+# below and ci.yml's `plan` step use: this file runs in ci.yml's `detect` job,
+# which is upstream of `build:` by construction, so no ./medaka exists here.
+#
+# One line per row: "<name> <repo-relative run path>". Neither field can contain
+# a space (`gate verify` constrains a name; `run` is a path in this tree).
+_native_rows() {
+  awk -F'"' '
+    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
+    /^name = "/       { n = $2 }
+    /^kind = "/       { k = $2 }
+    /^run = "/        { r = $2 }
+    END               { if (k == "native" && n != "" && r != "") print n, r }
+  ' "$ROOT/test/gates.toml" 2>/dev/null
+}
+
+# "<name>:<run>" pairs — ':' because a `for` split over "<name> <run>" tears the
+# pair in half, and neither a gate name nor a path in this tree contains one.
+_native_pairs="$(_native_rows | tr ' ' ':')"
+
+# The native half of the gate universe, as absolute paths, in the same shape
+# `_gate_candidates` emits so the two concatenate.
+_native_gate_candidates() {
+  printf '%s\n' "$_native_pairs" | while IFS= read -r _nrow; do
+    [ -n "$_nrow" ] || continue
+    _nrun="${_nrow#*:}"
+    [ -f "$ROOT/$_nrun" ] || continue
+    printf '%s\n' "$ROOT/$_nrun"
+  done
+}
+
+# The PATTERN form of a resolved gate — the token run_gates.sh,
+# build_oracles.sh --for, ci.yml's `plan` step and this file's own resolver all
+# resolve back to this same gate. For a script it is the repo-relative path minus
+# a leading `test/` and minus `.sh`; stripping `$ROOT/test/` alone would leave a
+# gate outside test/ (sqlite/test/*_oracle.sh, playground/e2e/run.sh) as an
+# ABSOLUTE path, which resolves to no gate and trips the "matches NO gate"
+# hard-fail. A native gate has no path rule at all — the resolvers select those
+# by registry NAME — so ask the registry rather than invent one.
+_pattern_for_gate() {
+  case "$1" in
+    *.mdk)
+      _native_rows | awk -v r="${1#"$ROOT"/}" '$2 == r { print $1; exit }' ;;
+    *)
+      _pfg="${1#"$ROOT"/}"
+      _pfg="${_pfg#test/}"
+      printf '%s\n' "${_pfg%.sh}" ;;
+  esac
+}
+
 # Live (non-comment) reference to fixture-dir $2 inside file $1. Comments are
 # stripped FIRST (full-line `#...` only) so a gate's header PROSE can't be
 # mistaken for a live dependency — the exact bug `run_gates.sh`'s stale-oracle
@@ -277,8 +337,11 @@ _gate_candidates() {
 # cannot match `llvm_fixtures_modules`/`llvm_fixtures_typed` (real sibling
 # corpora in this tree), and so `test/diff_fixtures` cannot match inside
 # `test/snapshots/diff_fixtures` (also real, also distinct).
+# `--` as well as `#`: a `kind = "native"` gate is a Medaka module, whose header
+# prose is a `--` comment and would otherwise read as a live dependency — the
+# very false positive this strip exists to prevent.
 _refs() {
-  grep -v '^[[:space:]]*#' "$1" 2>/dev/null | grep -qE "(^|[^A-Za-z0-9_])$2([^A-Za-z0-9_]|\$)"
+  grep -vE '^[[:space:]]*(#|--)' "$1" 2>/dev/null | grep -qE "(^|[^A-Za-z0-9_])$2([^A-Za-z0-9_]|\$)"
 }
 
 # Other test/*.sh or test/wasm/*.sh scripts $1 ACTUALLY INVOKES (live,
@@ -294,7 +357,7 @@ _refs() {
 # ballooning one fixture's consumer set from 3 gates to 42. Caught by testing
 # this derivation against the real corpus before trusting it.
 _invokes() {
-  grep -v '^[[:space:]]*#' "$1" 2>/dev/null | grep -ohE 'sh "\$ROOT/test/(wasm/)?[A-Za-z0-9_]+\.sh' \
+  grep -vE '^[[:space:]]*(#|--)' "$1" 2>/dev/null | grep -ohE 'sh "\$ROOT/test/(wasm/)?[A-Za-z0-9_]+\.sh' \
     | sed 's/^sh "\$ROOT\///' | sort -u
 }
 
@@ -336,7 +399,7 @@ _gates_for_fixture_dir() {
   _d="$1"
   while : ; do
     _found=""
-    for _g in $(_gate_candidates); do
+    for _g in $(_gate_candidates; _native_gate_candidates); do
       _consumes "$_g" "$_d" && _found="$_found
 $_g"
     done
@@ -503,7 +566,7 @@ _gates_for_path() {
   _pp="$1"
   _pfound=""
   while : ; do
-    for _g in $(_gate_candidates); do
+    for _g in $(_gate_candidates; _native_gate_candidates); do
       case "$_pfound" in
         *"
 $_g
@@ -1220,17 +1283,9 @@ while IFS= read -r f; do
                  "$(printf '%s\n' "$_gset" | xargs -n1 basename | tr '\n' ' ')" ;;
           esac
           for _g in $_gset; do
-            # Repo-relative, minus a leading `test/`, minus `.sh` — the same two-step
-            # form the manifest-keyed arm below uses, and for the same reason (#1992):
-            # `_gate_candidates` yields EVERY tracked .sh in the repo, not just
-            # test/*.sh, so stripping `$ROOT/test/` alone leaves a gate outside test/
-            # (sqlite/test/*_oracle.sh, playground/e2e/run.sh) as an ABSOLUTE path,
-            # which resolves to no gate and trips the "matches NO gate" hard-fail
-            # below. Latent today only because no such gate consumes a
-            # *fixtures*/*goldens* corpus yet — one arriving must not red this arm.
-            _pat="${_g#"$ROOT"/}"
-            _pat="${_pat#test/}"
-            add "${_pat%.sh}"
+            # See `_pattern_for_gate` for why this is not a plain suffix strip
+            # (#1992: a gate outside test/, and #2591: a gate with no script).
+            add "$(_pattern_for_gate "$_g")"
           done
         fi
       fi ;;
@@ -1308,14 +1363,7 @@ while IFS= read -r f; do
                      "$(printf '%s\n' "$_pgset" | xargs -n1 basename | tr '\n' ' ')" ;;
               esac
               for _g in $_pgset; do
-                # Repo-relative, minus a leading `test/`, minus `.sh` — the pattern
-                # form run_gates.sh / build_oracles.sh --for / the coverage gate all
-                # resolve. Stripping `$ROOT/test/` alone would leave an ABSOLUTE path
-                # for a gate outside test/ (playground/e2e/run.sh), which resolves to
-                # nothing and would trip the "matches NO gate" guard below.
-                _pat="${_g#"$ROOT"/}"
-                _pat="${_pat#test/}"
-                add "${_pat%.sh}"
+                add "$(_pattern_for_gate "$_g")"
               done
             fi ;;
 
@@ -1479,16 +1527,30 @@ for pat in $pats; do
   matched=0
   set +f
   # Resolve against BOTH $ROOT/test/ and $ROOT/ — the same rule run_gates.sh,
-  # build_oracles.sh --for and diff_compiler_ci_shard_coverage.sh use, so a pattern
-  # naming a gate outside test/ ('sqlite/test/*oracle') resolves identically in all
-  # four. Without this arm, preflight's own "matches NO gate" guard fired on the very
-  # patterns its change→gate map had just emitted.
+  # build_oracles.sh --for, diff_compiler_ci_shard_coverage.sh and ci.yml's `plan`
+  # step use, so a pattern naming a gate outside test/ ('sqlite/test/*oracle')
+  # resolves identically in every one of them. Without this arm, preflight's own
+  # "matches NO gate" guard fired on the very patterns its change→gate map had
+  # just emitted.
   for g in "$ROOT"/test/$pat.sh "$ROOT"/$pat.sh; do
     [ -f "$g" ] || continue
     matched=1
     case " $gates " in *" $g "*) ;; *) gates="$gates $g" ;; esac
   done
   set -f
+  # A `kind = "native"` entry (#2591) has no script for those globs to find, so
+  # it resolves by registry NAME. Under noglob the word split cannot expand a
+  # registry row, while `case` patterns still glob — which is what keeps
+  # 'diff_compiler_*' selecting a native gate exactly as it selects a script one.
+  for _row in $_native_pairs; do
+    case "${_row%%:*}" in
+      $pat)
+        _ng="$ROOT/${_row#*:}"
+        [ -f "$_ng" ] || continue
+        matched=1
+        case " $gates " in *" $_ng "*) ;; *) gates="$gates $_ng" ;; esac ;;
+    esac
+  done
   if [ "$matched" -eq 0 ]; then
     set +f
     echo "preflight: FAIL — the change→gate map points at '$pat', which matches NO gate."
@@ -1692,6 +1754,14 @@ if [ -n "$local_skipped" ]; then
       case " $gates " in *" $g "*) ;; *) gates="$gates $g" ;; esac
     done
     set -f
+    for _row in $_native_pairs; do   # the native arm, mirroring the resolver above
+      case "${_row%%:*}" in
+        $pat)
+          _ng="$ROOT/${_row#*:}"
+          [ -f "$_ng" ] || continue
+          case " $gates " in *" $_ng "*) ;; *) gates="$gates $_ng" ;; esac ;;
+      esac
+    done
   done
   [ -n "$pats" ] || {
     echo "preflight: every gate this diff derives is a local-only skip ($local_skipped) — nothing to run HERE."

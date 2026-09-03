@@ -1,5 +1,5 @@
 # META
-source_lines=926
+source_lines=928
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -759,6 +759,7 @@ isProp : Decl -> Bool
 isProp (DProp _ _ _ _) = True
 isProp _ = False
 
+export
 filterProps : List Decl -> List Decl
 filterProps decls = filterDecls isProp decls
 
@@ -770,6 +771,7 @@ filterDecls p (d :: rest)
 
 -- `medaka test --filter <substring>` (#2295): keep only props whose name
 -- contains `substring`. `None` (no `--filter` given) is a no-op.
+export
 filterPropsByName : Option String -> List Decl -> List Decl
 filterPropsByName None decls = decls
 filterPropsByName (Some sub) decls = filterDecls (propNameMatches sub) decls
@@ -1117,12 +1119,12 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "isProp" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isProp" ((PCon "DProp" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isProp" (PWild) (EVar "False"))
-(DTypeSig false "filterProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DTypeSig true "filterProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "filterProps" ((PVar "decls")) (EApp (EApp (EVar "filterDecls") (EVar "isProp")) (EVar "decls")))
 (DTypeSig false "filterDecls" (TyFun (TyFun (TyCon "Decl") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "filterDecls" (PWild (PList)) (EListLit))
 (DFunDef false "filterDecls" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "d")) (EBinOp "::" (EVar "d") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "filterPropsByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DTypeSig true "filterPropsByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "filterPropsByName" ((PCon "None") (PVar "decls")) (EVar "decls"))
 (DFunDef false "filterPropsByName" ((PCon "Some" (PVar "sub")) (PVar "decls")) (EApp (EApp (EVar "filterDecls") (EApp (EVar "propNameMatches") (EVar "sub"))) (EVar "decls")))
 (DTypeSig false "propNameMatches" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
@@ -1354,12 +1356,12 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "isProp" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isProp" ((PCon "DProp" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isProp" (PWild) (EVar "False"))
-(DTypeSig false "filterProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DTypeSig true "filterProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "filterProps" ((PVar "decls")) (EApp (EApp (EVar "filterDecls") (EVar "isProp")) (EVar "decls")))
 (DTypeSig false "filterDecls" (TyFun (TyFun (TyCon "Decl") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "filterDecls" (PWild (PList)) (EListLit))
 (DFunDef false "filterDecls" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "d")) (EBinOp "::" (EVar "d") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "filterPropsByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DTypeSig true "filterPropsByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "filterPropsByName" ((PCon "None") (PVar "decls")) (EVar "decls"))
 (DFunDef false "filterPropsByName" ((PCon "Some" (PVar "sub")) (PVar "decls")) (EApp (EApp (EVar "filterDecls") (EApp (EVar "propNameMatches") (EMethodRef "sub"))) (EVar "decls")))
 (DTypeSig false "propNameMatches" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))

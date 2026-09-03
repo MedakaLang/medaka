@@ -49,6 +49,22 @@ for f in "$ROOT"/pds/test/*_test.mdk; do
   esac
 done
 
+# NATIVE-ENGINE EXCEPTIONS (2026-09-03, native-test-vehicle sprint's review
+# round): the eval-arm capability pre-check (#2588) added this sprint is a
+# deliberate OVER-approximation of what a `test "…"` body's run would reach (a
+# branch never taken still counts — test_runner.mdk's own header says so).
+# `repo_tid_test.mdk`'s "rejects invalid signing key BEFORE commit
+# construction" test never actually calls `buildCommit` (it errors out first,
+# confirmed: 9/9 pass under `--native`, matching this file's own eval floor
+# exactly) but statically reaches it through `lib.repo.repoInitFromKeyBytes`'s
+# full call graph, so the pre-check refuses the whole file before eval's
+# unbound-identifier panic that USED to let it run clean ever gets a chance to
+# not fire. Named per-file rather than switching the whole harness to
+# `--native` (slower per-file compile, unverified across all 14 suites, and
+# out of this sprint's own stated scope). Delete a row here if that file's
+# capability surface changes and it passes under eval again.
+NATIVE_ENGINE_EXCEPTIONS=" repo_tid_test "
+
 for spec in $SUITES; do
   name="${spec%%:*}"
   floor="${spec##*:}"
@@ -57,7 +73,11 @@ for spec in $SUITES; do
     echo "FAIL: $name.mdk missing at $path"; rc=1; continue
   fi
 
-  out="$("$MEDAKA" test "$path" 2>&1)"
+  case "$NATIVE_ENGINE_EXCEPTIONS" in
+    *" $name "*) engine_flag="--native" ;;
+    *) engine_flag="" ;;
+  esac
+  out="$("$MEDAKA" test $engine_flag "$path" 2>&1)"
   code=$?
 
   # Assertions that actually executed: passing `test` lines + passing `prop` lines.

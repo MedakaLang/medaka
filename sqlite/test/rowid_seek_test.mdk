@@ -10,7 +10,7 @@
 --
 -- Run: `medaka test sqlite/test/rowid_seek_test.mdk` from the sqlite root.
 
-import test.{Expectation, Pass, Fail, expectEqual, expectAll}
+import test.{Expectation, expectEqual, expectAll, fail, pass}
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.header.{headerPageSize}
 import lib.sqlite.{
@@ -92,8 +92,8 @@ checkRowid db row = match seekTableRow db tableName (rowRowid row)
   Ok (Some got) =>
     expectEqual (rowRowid row, rowCells row) (rowRowid got, rowCells got)
   Ok None =>
-    Fail "rowid \{intToString (rowRowid row)}: seek found no row (expected one)"
-  Err e => Fail "rowid \{intToString (rowRowid row)}: seek errored: \{e}"
+    fail "rowid \{intToString (rowRowid row)}: seek found no row (expected one)"
+  Err e => fail "rowid \{intToString (rowRowid row)}: seek errored: \{e}"
 
 allRowsMatch : Result String Expectation
 allRowsMatch = do
@@ -102,10 +102,10 @@ allRowsMatch = do
   Ok (expectAll (map (checkRowid db) scanned))
 
 test "rowid seek: agrees with full scan for every rowid present in the fixture" =
-  expectEqual (Ok Pass) allRowsMatch
+  expectEqual (Ok pass) allRowsMatch
 
 -- `allRowsMatch` passes vacuously if `scanTableRows` regresses to `Ok []` —
--- `expectAll [] = Pass` and nothing above asserts a nonzero row count.
+-- `expectAll [] = pass` and nothing above asserts a nonzero row count.
 scannedRowCount : Result String Int
 scannedRowCount = do
   db <- fixture
@@ -116,10 +116,10 @@ test "rowid seek fixture: t holds thirty rows" =
   expectEqual (Ok n) scannedRowCount
 
 expectNoneRow : Result String (Option Row) -> Expectation
-expectNoneRow (Ok None) = Pass
+expectNoneRow (Ok None) = pass
 expectNoneRow (Ok (Some r)) =
-  Fail "expected no row but got rowid \{intToString (rowRowid r)}"
-expectNoneRow (Err e) = Fail "unexpected error: \{e}"
+  fail "expected no row but got rowid \{intToString (rowRowid r)}"
+expectNoneRow (Err e) = fail "unexpected error: \{e}"
 
 belowRange : Result String (Option Row)
 belowRange = do

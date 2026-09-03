@@ -131,7 +131,29 @@ sh_files = [f for f in files if f.endswith('.sh')]
 # capture_goldens, preflight, bench) is then treated as a GATE, any corpus they merely
 # mention counts as CONSUMED, and this gate goes green while under-reporting orphans —
 # exactly the failure it exists to prevent.
-candidates = [f for f in sh_files if f[:-len('.sh')] not in tools]
+sh_candidates = [f for f in sh_files if f[:-len('.sh')] not in tools]
+
+# `kind = "native"` entries (#2591) have no `.sh` at all — their gate IS a
+# `*_test.mdk` module named by `run`. Read straight out of test/gates.toml with
+# the SAME line-scan run_gates.sh/preflight.sh/build_oracles.sh/ci.yml's `plan`
+# step all use (no TOML lib, no `./medaka` binary required for this trust-anchor
+# gate). Missing this arm is exactly how `effect_set_domain_test.mdk` migrating
+# away from `effect_set_domain.sh` silently dropped `test/effect_set_fixtures`
+# out of the gate universe this script computes (S1-1, native-test-vehicle
+# sprint's review round).
+gates_toml = pathlib.Path(root, 'test', 'gates.toml').read_text()
+native_candidates = []
+_kind = _run = None
+for line in gates_toml.splitlines():
+    if line.startswith('[[gate]]'):
+        _kind = _run = None
+    elif line.startswith('kind = "'):
+        _kind = line.split('"')[1]
+    elif line.startswith('run = "'):
+        _run = line.split('"')[1]
+        if _kind == 'native' and _run:
+            native_candidates.append(_run)
+candidates = sh_candidates + native_candidates
 
 if not candidates:
     print("FAIL: found no gate-candidate *.sh scripts (harness bug, or CI-COVERAGE-TOOLS.txt swallowed everything)")
@@ -152,7 +174,16 @@ _COMMENT_PREFIX = {
 }
 
 def strip_comments(text, f=''):
-    pat = _COMMENT_PREFIX.get(pathlib.PurePosixPath(f).suffix, r'^\s*#')
+    suffix = pathlib.PurePosixPath(f).suffix
+    if suffix == '.mdk':
+        # Medaka ALSO has a block form, `{- ... -}` (a doc comment is `{- | ... -}`),
+        # which a native gate's own module header uses. Left unstripped, a corpus
+        # path merely NAMED in prose there (not a live reference) would satisfy
+        # refs() the same way the `--` case above already guards against — same
+        # bug, second comment syntax. Strip block comments first (non-greedy, DOTALL
+        # so a comment spanning lines is removed as one span), then line comments.
+        text = re.sub(r'\{-.*?-\}', '', text, flags=re.DOTALL)
+    pat = _COMMENT_PREFIX.get(suffix, r'^\s*#')
     return '\n'.join(l for l in text.splitlines() if not re.match(pat, l))
 
 _cache = {}

@@ -74,6 +74,7 @@ import tools.test_cmd.{runTestReport}
 import tools.doctest.{
   Example,
   ExResult(..),
+  exResultJsonFields,
   RunResult,
   Engine(..),
   engineName,
@@ -1383,24 +1384,16 @@ medakaTestSchema = jObject [
   ("required", jArray [JString "file"]),
 ]
 
--- The per-example fields, keyed by outcome.  A smoke example (no expected line)
--- that evaluated cleanly is `Pass` with no expected/actual; a `Fail` carries
--- both; an `Errored` carries the message under `detail`.
-exResultFields : ExResult -> List (String, Json)
-exResultFields Pass = [("status", JString "pass")]
-exResultFields (Fail expected actual) = [
-  ("status", JString "fail"),
-  ("expected", JString expected),
-  ("actual", JString actual),
-]
-exResultFields (Errored msg) =
-  [("status", JString "error"), ("detail", JString msg)]
-
 exampleJson : (Example, ExResult) -> Json
+-- Structurally identical to medaka_cli.mdk's `cliExampleJson` now that both
+-- render an `ExResult` through the shared `exResultJsonFields`; the part worth
+-- sharing already lives in tools/doctest.mdk, and each module owns its own
+-- `--json` envelope (mcp.mdk is a CLI-independent server surface).
+-- lint-disable-next-line rule-duplicate-body
 exampleJson (ex, res) =
   jObject
     ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))]
-      ++ exResultFields res)
+      ++ exResultJsonFields res)
 
 doctestsJson : RunResult -> Json
 doctestsJson run = jObject [
