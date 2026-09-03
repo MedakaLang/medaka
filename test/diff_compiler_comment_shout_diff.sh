@@ -40,6 +40,16 @@ re_emoji='🚨|⚠️|🔒'
 HEAD="${2:-HEAD}"
 BASE="${1:-}"
 if [ -z "$BASE" ]; then
+  # actions/checkout@v4's default shallow checkout fetches depth=1 of only the
+  # triggering ref -- origin/main is unresolvable, AND HEAD itself has no
+  # parent history for merge-base to walk, without both of these. Without
+  # them the gate phantom-skips (exit 2, misread as "oracle not built") on
+  # every real CI run, never actually enforcing anything (found at
+  # S-gate-cost-discharge time, #2621).
+  git rev-parse --verify --quiet origin/main >/dev/null 2>&1 ||
+    git fetch --quiet --depth=50 origin refs/heads/main:refs/remotes/origin/main 2>/dev/null
+  git merge-base origin/main "$HEAD" >/dev/null 2>&1 ||
+    git fetch --quiet --deepen=50 origin "$HEAD" 2>/dev/null
   BASE="$(git merge-base origin/main "$HEAD" 2>/dev/null)"
   [ -n "$BASE" ] || BASE="$(git merge-base main "$HEAD" 2>/dev/null)"
 fi
