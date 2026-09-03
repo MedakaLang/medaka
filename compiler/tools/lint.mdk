@@ -45,6 +45,8 @@ import frontend.ast.{
   DoStmt(..),
   Section(..),
   InterpPart(..),
+  Variant(..),
+  ConPayload(..),
   GuardArm(..),
   FieldAssign(..),
   LetBind(..),
@@ -229,6 +231,9 @@ ruleNamePromissoryReader = "rule-promissory-reader"
 
 ruleNameOrElseStaircase : String
 ruleNameOrElseStaircase = "rule-orelse-staircase"
+
+ruleNameCloneType : String
+ruleNameCloneType = "rule-clone-type"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -487,6 +492,17 @@ orElseStaircaseRule = Rule {
   fix = None,
 }
 
+cloneTypeRule : Rule
+cloneTypeRule = Rule {
+  name = ruleNameCloneType,
+  descr =
+    "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleCloneType,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -513,6 +529,7 @@ allRules = [
   preferAssignOpRule,
   promissoryReaderRule,
   orElseStaircaseRule,
+  cloneTypeRule,
   duplicateBodySameFileRule,
 ]
 
@@ -4710,6 +4727,109 @@ orElseFinding loc = Finding {
   rule = ruleNameOrElseStaircase,
   message =
     "first-match probe staircase (≥2 `None`/`Err` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list",
+  severity = SevWarning,
+  loc = loc,
+}
+
+-- ── rule: clone-type (#2566) ─────────────────────────────────────────
+-- The TYPE-level analogue of `rule-stdlib-reimpl`: a two-constructor `data`
+-- whose constructor arities are exactly `Option`'s (`None | Some a` -- 0 then 1)
+-- or `Result`'s (`Err e | Ok a` -- 1 and 1), declared in a file that writes no
+-- `impl` for it.  Such a type re-declares a prelude shape while getting none of
+-- the prelude's combinators, so every consumer hand-rolls `map`/`andThen`/
+-- `orElse`/`withDefault` at each use site.
+--
+-- Both conjuncts are SYNTACTIC, because the linter has no type environment: the
+-- arity signature read off `dataCtors`, and the absence of a `DImpl` in the SAME
+-- file whose target type head is this type's name.  A `deriving (Eq, Ord, Debug)`
+-- clause is deliberately not counted as an impl -- a derived structural instance
+-- is not the combinator API this rule is about, so a derived-only type is still
+-- as impl-less as a bare one for this purpose.
+--
+-- Arity cannot separate a clone from a two-variant DOMAIN sum that lands on the
+-- same shape by coincidence (`SExp = SAtom String | SList (List SExp)` is
+-- atom-vs-list, not failure-vs-success), and no syntactic test can: the
+-- difference is what the variants MEAN.  `cloneTypeAdjudicated` holds the names
+-- a human has ruled on for exactly that reason; each entry costs one hand-read
+-- of the declaration, which is the price of adding to it.
+cloneTypeAdjudicated : List String
+cloneTypeAdjudicated = [
+  "DirScope",
+  "DocSegment",
+  "EvDest",
+  "Header",
+  "InterpPart",
+  "SExp",
+]
+
+-- payload width of one constructor: positional arity, or field count for a
+-- record-style payload.
+cloneCtorArity : Variant -> Int
+cloneCtorArity (Variant _ (ConPos ts)) = listLen ts
+cloneCtorArity (Variant _ (ConNamed fs _)) = listLen fs
+
+-- the prelude type these constructors clone, if any.  Either arm order counts:
+-- `Some a | None` is the same shape as `None | Some a`.
+cloneShapeName : List Variant -> Option String
+cloneShapeName [a, b] =
+  cloneShapeOfArities (cloneCtorArity a) (cloneCtorArity b)
+cloneShapeName _ = None
+
+cloneShapeOfArities : Int -> Int -> Option String
+cloneShapeOfArities x y
+  | x == 1 && y == 1 = Some "Result"
+  | x + y == 1 = Some "Option"
+  | otherwise = None
+
+-- head names of every type this file writes an `impl` for.
+cloneImplTargets : List Decl -> List String
+cloneImplTargets ds = flatMap cloneImplTargetsOf ds
+
+cloneImplTargetsOf : Decl -> List String
+cloneImplTargetsOf (DImpl { tys, ... }) = flatMap cloneTyHeadList tys
+cloneImplTargetsOf (DAttrib _ d) = cloneImplTargetsOf d
+cloneImplTargetsOf _ = []
+
+cloneTyHeadList : Ty -> List String
+cloneTyHeadList t = match tyHeadName t
+  Some n => [n]
+  None => []
+
+ruleCloneType : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleCloneType _ _ _ pos prog =
+  let impls = cloneImplTargets prog
+  flatMap (cloneTypeDeclL impls) (declLocList pos prog)
+
+cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
+cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
+
+cloneTypeDecl : List String -> Option Loc -> Decl -> List Finding
+cloneTypeDecl impls loc (DData { dataName, dataCtors, ... }) =
+  cloneTypeHit impls loc dataName dataCtors
+cloneTypeDecl impls loc (DAttrib _ d) = cloneTypeDecl impls loc d
+cloneTypeDecl _ _ _ = []
+
+cloneTypeHit : List String ->
+  Option Loc ->
+  String ->
+  List Variant ->
+  List Finding
+cloneTypeHit impls loc n ctors
+  | contains n cloneTypeAdjudicated || contains n impls = []
+  | otherwise = match cloneShapeName ctors
+    Some shape => [cloneTypeFinding loc n shape]
+    None => []
+
+cloneTypeFinding : Option Loc -> String -> String -> Finding
+cloneTypeFinding loc n shape = Finding {
+  rule = ruleNameCloneType,
+  message =
+    "'\{n}' re-declares `\{shape}`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `\{shape}`, whose combinators come with it",
   severity = SevWarning,
   loc = loc,
 }

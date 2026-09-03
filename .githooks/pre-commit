@@ -118,7 +118,7 @@ GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-
 # pre-existing first-match probe staircases across 6 files, and converting them to
 # orElse/findMap changes evaluation order (Medaka is strict, so a rewritten chain
 # runs every probe), which is a judgement call per site, not this rule's job.
-BASELINED_LINT_RULES="rule-stdlib-reimpl,rule-orelse-staircase"
+BASELINED_LINT_RULES="rule-stdlib-reimpl,rule-orelse-staircase,rule-clone-type"
 LINT_BASELINE_FILE="test/lint_baseline.toml"
 # Cross-file rules, checked project-wide (not per staged file).
 GATED_CROSSFILE_RULES="rule-duplicate-body"

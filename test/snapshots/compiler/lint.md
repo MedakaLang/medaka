@@ -1,5 +1,5 @@
 # META
-source_lines=5802
+source_lines=5922
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -49,6 +49,8 @@ import frontend.ast.{
   DoStmt(..),
   Section(..),
   InterpPart(..),
+  Variant(..),
+  ConPayload(..),
   GuardArm(..),
   FieldAssign(..),
   LetBind(..),
@@ -233,6 +235,9 @@ ruleNamePromissoryReader = "rule-promissory-reader"
 
 ruleNameOrElseStaircase : String
 ruleNameOrElseStaircase = "rule-orelse-staircase"
+
+ruleNameCloneType : String
+ruleNameCloneType = "rule-clone-type"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -491,6 +496,17 @@ orElseStaircaseRule = Rule {
   fix = None,
 }
 
+cloneTypeRule : Rule
+cloneTypeRule = Rule {
+  name = ruleNameCloneType,
+  descr =
+    "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleCloneType,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -517,6 +533,7 @@ allRules = [
   preferAssignOpRule,
   promissoryReaderRule,
   orElseStaircaseRule,
+  cloneTypeRule,
   duplicateBodySameFileRule,
 ]
 
@@ -4718,6 +4735,109 @@ orElseFinding loc = Finding {
   loc = loc,
 }
 
+-- ── rule: clone-type (#2566) ─────────────────────────────────────────
+-- The TYPE-level analogue of `rule-stdlib-reimpl`: a two-constructor `data`
+-- whose constructor arities are exactly `Option`'s (`None | Some a` -- 0 then 1)
+-- or `Result`'s (`Err e | Ok a` -- 1 and 1), declared in a file that writes no
+-- `impl` for it.  Such a type re-declares a prelude shape while getting none of
+-- the prelude's combinators, so every consumer hand-rolls `map`/`andThen`/
+-- `orElse`/`withDefault` at each use site.
+--
+-- Both conjuncts are SYNTACTIC, because the linter has no type environment: the
+-- arity signature read off `dataCtors`, and the absence of a `DImpl` in the SAME
+-- file whose target type head is this type's name.  A `deriving (Eq, Ord, Debug)`
+-- clause is deliberately not counted as an impl -- a derived structural instance
+-- is not the combinator API this rule is about, so a derived-only type is still
+-- as impl-less as a bare one for this purpose.
+--
+-- Arity cannot separate a clone from a two-variant DOMAIN sum that lands on the
+-- same shape by coincidence (`SExp = SAtom String | SList (List SExp)` is
+-- atom-vs-list, not failure-vs-success), and no syntactic test can: the
+-- difference is what the variants MEAN.  `cloneTypeAdjudicated` holds the names
+-- a human has ruled on for exactly that reason; each entry costs one hand-read
+-- of the declaration, which is the price of adding to it.
+cloneTypeAdjudicated : List String
+cloneTypeAdjudicated = [
+  "DirScope",
+  "DocSegment",
+  "EvDest",
+  "Header",
+  "InterpPart",
+  "SExp",
+]
+
+-- payload width of one constructor: positional arity, or field count for a
+-- record-style payload.
+cloneCtorArity : Variant -> Int
+cloneCtorArity (Variant _ (ConPos ts)) = listLen ts
+cloneCtorArity (Variant _ (ConNamed fs _)) = listLen fs
+
+-- the prelude type these constructors clone, if any.  Either arm order counts:
+-- `Some a | None` is the same shape as `None | Some a`.
+cloneShapeName : List Variant -> Option String
+cloneShapeName [a, b] =
+  cloneShapeOfArities (cloneCtorArity a) (cloneCtorArity b)
+cloneShapeName _ = None
+
+cloneShapeOfArities : Int -> Int -> Option String
+cloneShapeOfArities x y
+  | x == 1 && y == 1 = Some "Result"
+  | x + y == 1 = Some "Option"
+  | otherwise = None
+
+-- head names of every type this file writes an `impl` for.
+cloneImplTargets : List Decl -> List String
+cloneImplTargets ds = flatMap cloneImplTargetsOf ds
+
+cloneImplTargetsOf : Decl -> List String
+cloneImplTargetsOf (DImpl { tys, ... }) = flatMap cloneTyHeadList tys
+cloneImplTargetsOf (DAttrib _ d) = cloneImplTargetsOf d
+cloneImplTargetsOf _ = []
+
+cloneTyHeadList : Ty -> List String
+cloneTyHeadList t = match tyHeadName t
+  Some n => [n]
+  None => []
+
+ruleCloneType : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleCloneType _ _ _ pos prog =
+  let impls = cloneImplTargets prog
+  flatMap (cloneTypeDeclL impls) (declLocList pos prog)
+
+cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
+cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
+
+cloneTypeDecl : List String -> Option Loc -> Decl -> List Finding
+cloneTypeDecl impls loc (DData { dataName, dataCtors, ... }) =
+  cloneTypeHit impls loc dataName dataCtors
+cloneTypeDecl impls loc (DAttrib _ d) = cloneTypeDecl impls loc d
+cloneTypeDecl _ _ _ = []
+
+cloneTypeHit : List String ->
+  Option Loc ->
+  String ->
+  List Variant ->
+  List Finding
+cloneTypeHit impls loc n ctors
+  | contains n cloneTypeAdjudicated || contains n impls = []
+  | otherwise = match cloneShapeName ctors
+    Some shape => [cloneTypeFinding loc n shape]
+    None => []
+
+cloneTypeFinding : Option Loc -> String -> String -> Finding
+cloneTypeFinding loc n shape = Finding {
+  rule = ruleNameCloneType,
+  message =
+    "'\{n}' re-declares `\{shape}`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `\{shape}`, whose combinators come with it",
+  severity = SevWarning,
+  loc = loc,
+}
+
 -- ── rule: promissory-reader (#2550) ───────────────────────────────────────────
 -- A comment claiming a symbol is not read YET ("nothing reads this yet",
 -- "no reader yet", "do not add a reader") is a negative about the whole file that
@@ -5805,7 +5925,7 @@ duplicateBodySameFileRule = Rule {
   fix = None,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
@@ -5869,6 +5989,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "ruleNamePromissoryReader" () (ELit (LString "rule-promissory-reader")))
 (DTypeSig false "ruleNameOrElseStaircase" (TyCon "String"))
 (DFunDef false "ruleNameOrElseStaircase" () (ELit (LString "rule-orelse-staircase")))
+(DTypeSig false "ruleNameCloneType" (TyCon "String"))
+(DFunDef false "ruleNameCloneType" () (ELit (LString "rule-clone-type")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -5915,8 +6037,10 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "promissoryReaderRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "descr" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "rulePromissoryReader")) (fa "fix" (EVar "None")))))
 (DTypeSig false "orElseStaircaseRule" (TyCon "Rule"))
 (DFunDef false "orElseStaircaseRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "descr" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleOrElseStaircase")) (fa "fix" (EVar "None")))))
+(DTypeSig false "cloneTypeRule" (TyCon "Rule"))
+(DFunDef false "cloneTypeRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameCloneType")) (fa "descr" (ELit (LString "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleCloneType")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "duplicateBodySameFileRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "duplicateBodySameFileRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -7297,6 +7421,36 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "orElseHeadLoc" ((PVar "declLoc") PWild) (EVar "declLoc"))
 (DTypeSig false "orElseFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding")))
 (DFunDef false "orElseFinding" ((PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOrElseStaircase")) (fa "message" (ELit (LString "first-match probe staircase (≥2 `None`/`Err` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "cloneTypeAdjudicated" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "cloneTypeAdjudicated" () (EListLit (ELit (LString "DirScope")) (ELit (LString "DocSegment")) (ELit (LString "EvDest")) (ELit (LString "Header")) (ELit (LString "InterpPart")) (ELit (LString "SExp"))))
+(DTypeSig false "cloneCtorArity" (TyFun (TyCon "Variant") (TyCon "Int")))
+(DFunDef false "cloneCtorArity" ((PCon "Variant" PWild (PCon "ConPos" (PVar "ts")))) (EApp (EVar "listLen") (EVar "ts")))
+(DFunDef false "cloneCtorArity" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EVar "listLen") (EVar "fs")))
+(DTypeSig false "cloneShapeName" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "cloneShapeName" ((PList (PVar "a") (PVar "b"))) (EApp (EApp (EVar "cloneShapeOfArities") (EApp (EVar "cloneCtorArity") (EVar "a"))) (EApp (EVar "cloneCtorArity") (EVar "b"))))
+(DFunDef false "cloneShapeName" (PWild) (EVar "None"))
+(DTypeSig false "cloneShapeOfArities" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "cloneShapeOfArities" ((PVar "x") (PVar "y")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LInt 1))) (EBinOp "==" (EVar "y") (ELit (LInt 1)))) (EApp (EVar "Some") (ELit (LString "Result"))) (EIf (EBinOp "==" (EBinOp "+" (EVar "x") (EVar "y")) (ELit (LInt 1))) (EApp (EVar "Some") (ELit (LString "Option"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "cloneImplTargets" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "cloneImplTargets" ((PVar "ds")) (EApp (EApp (EVar "flatMap") (EVar "cloneImplTargetsOf")) (EVar "ds")))
+(DTypeSig false "cloneImplTargetsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "cloneImplTargetsOf" ((PRec "DImpl" ((rf "tys" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "cloneTyHeadList")) (EVar "tys")))
+(DFunDef false "cloneImplTargetsOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "cloneImplTargetsOf") (EVar "d")))
+(DFunDef false "cloneImplTargetsOf" (PWild) (EListLit))
+(DTypeSig false "cloneTyHeadList" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "cloneTyHeadList" ((PVar "t")) (EMatch (EApp (EVar "tyHeadName") (EVar "t")) (arm (PCon "Some" (PVar "n")) () (EListLit (EVar "n"))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleCloneType" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
+(DTypeSig false "cloneTypeDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors")))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
+(DFunDef false "cloneTypeDecl" (PWild PWild PWild) (EListLit))
+(DTypeSig false "cloneTypeHit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "cloneTypeAdjudicated")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
+(DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EVar "display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EVar "display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 (DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "src") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
 (DTypeSig false "codePortions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -7565,7 +7719,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
@@ -7629,6 +7783,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "ruleNamePromissoryReader" () (ELit (LString "rule-promissory-reader")))
 (DTypeSig false "ruleNameOrElseStaircase" (TyCon "String"))
 (DFunDef false "ruleNameOrElseStaircase" () (ELit (LString "rule-orelse-staircase")))
+(DTypeSig false "ruleNameCloneType" (TyCon "String"))
+(DFunDef false "ruleNameCloneType" () (ELit (LString "rule-clone-type")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -7675,8 +7831,10 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "promissoryReaderRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "descr" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "rulePromissoryReader")) (fa "fix" (EVar "None")))))
 (DTypeSig false "orElseStaircaseRule" (TyCon "Rule"))
 (DFunDef false "orElseStaircaseRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameOrElseStaircase")) (fa "descr" (ELit (LString "first-match probe staircase (≥2 nested `None`/`Err` fallthrough re-probes, each success arm handing its payload straight back). Rewrite with `orElse`/`findMap` (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleOrElseStaircase")) (fa "fix" (EVar "None")))))
+(DTypeSig false "cloneTypeRule" (TyCon "Rule"))
+(DFunDef false "cloneTypeRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameCloneType")) (fa "descr" (ELit (LString "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleCloneType")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "duplicateBodySameFileRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "duplicateBodySameFileRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -9057,6 +9215,36 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "orElseHeadLoc" ((PVar "declLoc") PWild) (EVar "declLoc"))
 (DTypeSig false "orElseFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding")))
 (DFunDef false "orElseFinding" ((PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameOrElseStaircase")) (fa "message" (ELit (LString "first-match probe staircase (≥2 `None`/`Err` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "cloneTypeAdjudicated" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "cloneTypeAdjudicated" () (EListLit (ELit (LString "DirScope")) (ELit (LString "DocSegment")) (ELit (LString "EvDest")) (ELit (LString "Header")) (ELit (LString "InterpPart")) (ELit (LString "SExp"))))
+(DTypeSig false "cloneCtorArity" (TyFun (TyCon "Variant") (TyCon "Int")))
+(DFunDef false "cloneCtorArity" ((PCon "Variant" PWild (PCon "ConPos" (PVar "ts")))) (EApp (EVar "listLen") (EVar "ts")))
+(DFunDef false "cloneCtorArity" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EVar "listLen") (EVar "fs")))
+(DTypeSig false "cloneShapeName" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "cloneShapeName" ((PList (PVar "a") (PVar "b"))) (EApp (EApp (EVar "cloneShapeOfArities") (EApp (EVar "cloneCtorArity") (EVar "a"))) (EApp (EVar "cloneCtorArity") (EVar "b"))))
+(DFunDef false "cloneShapeName" (PWild) (EVar "None"))
+(DTypeSig false "cloneShapeOfArities" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "cloneShapeOfArities" ((PVar "x") (PVar "y")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LInt 1))) (EBinOp "==" (EVar "y") (ELit (LInt 1)))) (EApp (EVar "Some") (ELit (LString "Result"))) (EIf (EBinOp "==" (EBinOp "+" (EVar "x") (EVar "y")) (ELit (LInt 1))) (EApp (EVar "Some") (ELit (LString "Option"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "cloneImplTargets" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "cloneImplTargets" ((PVar "ds")) (EApp (EApp (EDictApp "flatMap") (EVar "cloneImplTargetsOf")) (EVar "ds")))
+(DTypeSig false "cloneImplTargetsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "cloneImplTargetsOf" ((PRec "DImpl" ((rf "tys" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "cloneTyHeadList")) (EVar "tys")))
+(DFunDef false "cloneImplTargetsOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "cloneImplTargetsOf") (EVar "d")))
+(DFunDef false "cloneImplTargetsOf" (PWild) (EListLit))
+(DTypeSig false "cloneTyHeadList" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "cloneTyHeadList" ((PVar "t")) (EMatch (EApp (EVar "tyHeadName") (EVar "t")) (arm (PCon "Some" (PVar "n")) () (EListLit (EVar "n"))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleCloneType" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
+(DTypeSig false "cloneTypeDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors")))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
+(DFunDef false "cloneTypeDecl" (PWild PWild PWild) (EListLit))
+(DTypeSig false "cloneTypeHit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "cloneTypeAdjudicated")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
+(DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EMethodRef "display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EMethodRef "display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 (DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "src") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
 (DTypeSig false "codePortions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))

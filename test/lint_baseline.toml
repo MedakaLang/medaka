@@ -52,6 +52,11 @@ rule = "rule-stdlib-reimpl"
 count = 4
 
 [[entry]]
+file = "compiler/driver/medaka_cli.mdk"
+rule = "rule-clone-type"
+count = 1
+
+[[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
@@ -59,6 +64,11 @@ count = 2
 [[entry]]
 file = "compiler/eval/eval.mdk"
 rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/ast.mdk"
+rule = "rule-clone-type"
 count = 1
 
 [[entry]]
@@ -102,6 +112,16 @@ rule = "rule-stdlib-reimpl"
 count = 5
 
 [[entry]]
+file = "compiler/tools/check_policy.mdk"
+rule = "rule-clone-type"
+count = 1
+
+[[entry]]
+file = "compiler/tools/codemod.mdk"
+rule = "rule-clone-type"
+count = 1
+
+[[entry]]
 file = "compiler/tools/lint.mdk"
 rule = "rule-orelse-staircase"
 count = 1
@@ -130,6 +150,16 @@ count = 2
 file = "compiler/tools/snapshot.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
+
+[[entry]]
+file = "compiler/types/registry.mdk"
+rule = "rule-clone-type"
+count = 1
+
+[[entry]]
+file = "compiler/types/typecheck.mdk"
+rule = "rule-clone-type"
+count = 3
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
