@@ -1,5 +1,5 @@
 # META
-source_lines=2243
+source_lines=2239
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -77,14 +77,10 @@ import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
 import string.{stripCR}
 import frontend.desugar.{desugar}
+import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneSchemeFullK,
-  ppSchemeNamed,
-  ppSchemeNamedFull,
-  Scheme(..),
-  currentLocalSchemes,
-  currentLocalSchemesLoc,
-  currentSeedSchemes,
+  checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
+  currentLocalSchemesLoc, currentSeedSchemes
 }
 import tools.fmt.{formatSource}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
@@ -2256,7 +2252,8 @@ unit = ()
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
@@ -2725,7 +2722,8 @@ unit = ()
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))

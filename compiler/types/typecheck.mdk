@@ -112,6 +112,90 @@ import frontend.ast.{
 -- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` was deliberately
 -- NOT re-keyed and has since been retired entirely (#1569) — see
 -- `CrossRun.universeRegisteredIfacesRef`'s retirement note.
+import types.repr.{
+  atomLabel,
+  atomParam,
+  drender,
+  effrowLabels,
+  normalize,
+  ppScheme,
+  tupleSpine,
+  Atom(..),
+  EffRow(..),
+  Effvar(..),
+  IfaceRef(..),
+  Mono(..),
+  Param(..),
+  Scheme(..),
+  Tyvar(..),
+  VecObl(..),
+  assignName,
+  atomInsert,
+  atomsNorm,
+  atomsNormGo,
+  atomsUnion,
+  axisUnion,
+  commaStr,
+  commonPrefixLen,
+  dedupCells,
+  djoin,
+  djoinN,
+  drenderN,
+  effHoleSrc,
+  effStr,
+  effrowNorm,
+  effvarId,
+  insertAxis,
+  isHoleStr,
+  isJoinCell,
+  isSubTop,
+  joinAxis,
+  letters,
+  lookupAssocI,
+  lookupAxis,
+  nameOf,
+  normHole,
+  normalizeLink,
+  ppApp,
+  ppConName,
+  ppConstraint,
+  ppConstraints,
+  ppEach,
+  ppEachShared,
+  ppEffArg,
+  ppEffArgFmt,
+  ppEffAtomTy,
+  ppEffInsideTy,
+  ppEffvarName,
+  ppFun,
+  ppGo,
+  ppMono,
+  ppMonosShared,
+  ppPredArgsShared,
+  ppSchemeCon,
+  ppTy,
+  ppTyAtom,
+  ppTyFunArg,
+  ppVar,
+  productNorm,
+  quoteStr,
+  renderAtom,
+  renderAtoms,
+  renderAxis,
+  renderAxisVal,
+  renderConstraintCtx,
+  renderProductLit,
+  rowFlat,
+  rowFlatMembers,
+  setCardCap,
+  sortAxes,
+  spineParts,
+  subTopOf,
+  tupleHeadTagTc,
+  tupleTagArity,
+  tupleTagArityGo,
+  wrapIf,
+}
 import types.registry.{
   RegKey,
   Registry,
@@ -244,160 +328,6 @@ import types.registry.{
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{implRouteKeyWord, funHeadTag}
 
--- ── monotypes & schemes ───────────────────────────────────────────────────
-public export data Mono =
-  | TVar (Ref Tyvar)
-  | TCon String TyConOrigin
-  -- The GOAL-SIDE dispatch head, and the second field is #1110's module identity
-  -- for it (DICT-SEMANTICS §8 I4's `(originModule, name)`).  Same three
-  -- inhabitants as `Ty.TyCon`'s `tyConOrigin` and the four decl-layer carriers,
-  -- for the reason `frontend/ast.mdk` gives at the type: the layers name the SAME
-  -- fact, and a parallel ADT would buy a conversion at every seam relating a
-  -- declaration to a head that spells it.
-  --
-  -- ⚠️ THIS FIELD IS READ, AND IT DECIDES ACCEPTANCE (#1111 Stage A-2 unit
-  -- A-2.10).  It said "CARRIER ONLY — NOTHING READS IT YET, and no answer
-  -- changes" until A-2.2b, then "IT IS READ, AND STILL NO ANSWER CHANGES" until
-  -- this unit.  The first was already FALSE on `main` when it was written
-  -- (`headTyconMono` read the field from A-2.2 onward), and a reviewer traced a
-  -- shipped S0 to someone believing it — the retained `hd == Some hk` guard in
-  -- `implExistsForHeadGo`, which compared an origin-carrying impl head against a
-  -- frequently-origin-less goal head inside a bucket keyed by spelling, and so
-  -- answered `False` wherever they differed.  The lesson survives both
-  -- corrections and is worth more than either: a "nothing reads this" / "no
-  -- answer changes" claim is a NEGATIVE ABOUT THE WHOLE FILE, it expires the
-  -- moment any unit adds a reader, and no gate notices.
-  --
-  -- WHAT IS TRUE NOW, in the two halves A-2.2b separated (they are INDEPENDENT
-  -- facts and collapsing them is what the wording above kept getting wrong):
-  --
-  --   * THE COMPARISONS READ IT AND ACCEPTANCE MOVED.  The six "are these the
-  --     same type?" tests — `unifyN`, `cohGoR`, `cohStep`, `cohEqR`,
-  --     `matchStep`, `monoSameGiven` — all read the field, all through the
-  --     single seam `sameTyConHead` (`frontend/ast.mdk`), whose doc-comment owns
-  --     the absent-origin rule and its derivation.  Two modules' same-named
-  --     types no longer unify (#1208, #1209).
-  --   * THE DISPATCH KEY STILL DOES NOT.  `headTyconMono`'s `TCon n o` arm hands
-  --     `o` to `headKeyOfCon`, so every goal-side `HeadKey` CARRIES the
-  --     identity — and every consumer of that `HeadKey` then projects it BACK to
-  --     the bare spelling before comparing: `dispHeadTab` (the bucket key,
-  --     `implExistsForHeadGo`'s retest, `countHeadGo` / `ieCountHeadByIfaceGo`,
-  --     the obligation universes) or `headKeyName` / `headKeyNameOr` (the
-  --     emitted route word).  `headTyconNameMono`, the name-only residual, still
-  --     hands out a bare name outright.  (A-2.10's draft of this paragraph also
-  --     named `monoHeadCon`; A-2.2b DELETED that projection on `main` — see its
-  --     obituary above `mainTypeIsAsync` — and the merge of the two units is
-  --     where that was caught.)  The discard is LEDGERED, not incidental:
-  --     `dispHeadTab` IS the list of sites whose answer would move the day the
-  --     goal side becomes supplied and canonical
-  --     (`grep -nw dispHeadTab compiler/types/typecheck.mdk`).
-  --
-  -- 🚨 SO A LEDGERED RETEST IS STILL NOT AN IDENTITY COMPARISON, AND PROMOTING
-  -- ONE AS A TIDY-UP STILL CHANGES ACCEPTANCE — that is exactly what A-2.2b did
-  -- three times before review caught it, and A-2.10 narrowing the COMPARISONS
-  -- does not license it on the DISPATCH side.  Derive the reader set rather than
-  -- trusting this prose; the grep finds a reader whatever it is called:
-  --
-  --     grep -n TCon compiler/types/typecheck.mdk \
-  --       | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE 'TCon [^ )]+ _'
-  --
-  -- 🚨 THE CONSTRUCTOR IS NEVER APPLIED OUTSIDE THE FOUR MINTS BELOW
-  -- (`tconBuiltin` / `tconTupleHead` / `tconFrom` / `tconUnresolved`), and that is
-  -- the property this widening rests on rather than "every construction site is
-  -- individually right".  There is no stamping pass at this layer and no
-  -- first-write immunity rule to lean on — `stampTyHead`'s filter protects the
-  -- `Ty` layer only — so identity has to be correct AT CONSTRUCTION.  Funnelling
-  -- every construction through four one-line helpers makes that four decisions,
-  -- each named after the identity class it claims, and
-  -- `test/typecheck_compiler_source.sh` pins the set.  Everything else that
-  -- mentions `TCon` in this file is a PATTERN — most with `_` in the origin
-  -- slot, and (since A-2.10) a set of them that BIND it.  The ratchet's own
-  -- remedy predicted exactly that ("a pattern that legitimately BINDS the origin
-  -- is the expected first false positive; list it, and the list stays the
-  -- audit"), so THE BINDING SET IS ENUMERATED THERE AND THE ENUMERATION IS THE
-  -- AUDIT.  Derive it, do not read it here:
-  --
-  --   sh test/typecheck_compiler_source.sh   # prints "N Mono.TCon mint(s) +
-  --                                          # M origin-binding pattern(s)"
-  --   grep -n 'mono_tcon_allowed' -A20 test/typecheck_compiler_source.sh
-  --
-  -- ⚠️ THIS PARAGRAPH SAID "SEVEN that BIND it: `headTyconMono` plus the six
-  -- comparisons above" AND WAS WRONG BY ONE ON ITS FIRST DAY — it omitted
-  -- `firstIdConflict` (the diagnostic-side reader that pairs the two conflicting
-  -- identities so `Type mismatch: T vs T` can name both modules), which binds
-  -- BOTH origins.  A count of the binding sites is an encoded fact with no
-  -- derivation, and the number of PATTERN LINES is not even the number of
-  -- FUNCTIONS (`cohStep` and `monoSameGiven` contribute two lines each), so the
-  -- reader has to pick which is meant.  Do not re-describe this population with a
-  -- rule of thumb — `_`-shaped or numeric.
-  --
-  -- ⚠️ AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
-  -- from `instantiate`, i.e. every use of every imported binding) used to answer
-  -- `TCon n => TCon n`; they now return the MATCHED NODE, so preservation is
-  -- structural rather than a per-site promise — and one allocation per head per
-  -- instantiation goes away with it.  `unifyN`'s mismatch arms likewise hand
-  -- `typeMismatch` the node they matched.
-  | TRigid String
-  -- A RIGID type variable: a head fabricated from a type-PARAMETER name, not
-  -- from any declaration.  It has exactly two producers — `fromAstTypeE`'s
-  -- `TyVar` fallback and `paramMonoOf` — and both mint it from a name the
-  -- parser already routed through `TIdent` (`parseTyAtom`,
-  -- `compiler/frontend/parser.mdk:2049`).
-  --
-  -- 🚨 THE NAMING RULE, STATED CORRECTLY — it is the safety argument for every
-  -- consumer that does NOT carry a `TRigid` arm, so getting it wrong silently
-  -- changes answers:
-  --   * a RIGID name never starts with an UPPERCASE letter.  It is not
-  --     necessarily lowercase: `identStartLower` (`frontend/lexer.mdk:1638`) is
-  --     `isLower … || … == '_'`, so `_k`/`_v`/`_a` (synthesized by
-  --     `frontend/desugar.mdk:964,967`), `_` (`frontend/parser.mdk:2720`) and
-  --     `__tuple2__` are all legal rigid spellings.
-  --   * a REAL head is uppercase-initial, OR one of the reserved `__tupleN__`
-  --     builtin tags (`tupleCtorTyName`, `frontend/parser.mdk:2137`;
-  --     `tupleHeadTagTc` below).
-  -- So the two populations are disjoint on the UPPERCASE test alone, and they
-  -- DO collide on `__tupleN__` — which is why `tupleSpine` and `matchStep` each
-  -- carry an explicit answer-preserving `TRigid` arm rather than relying on a
-  -- wildcard.  An earlier version of this comment claimed "rigid = lowercase,
-  -- real = uppercase"; both halves are false at the edges and the claim is what
-  -- let the `matchStep` case through review.  DICT-SEMANTICS §8 I6.2(b) tracks
-  -- the `__tupleN__` forgery as OWED-#1110.
-  --
-  -- WHY IT IS ITS OWN CONSTRUCTOR (#1110, DICT-SEMANTICS §8 I6.1 ∧ I6.3):
-  -- a rigid variable must carry NO module identity, a real head MUST carry
-  -- one.  While both lived in `TCon String` that field could not be added at
-  -- all.  This split is the carrier step only — every arm below reproduces
-  -- the answer the shared `TCon` gave, byte for byte.  The field has since
-  -- landed on `TCon` (above); `TRigid` deliberately did NOT grow one, which is
-  -- the I6.1 half — "a rigid carries no identity" is now unrepresentable-wrong
-  -- rather than merely unwritten.
-  --
-  -- ⚠️ It does NOT yet satisfy I6.1: a rigid is still usable as a dispatch
-  -- key wherever `headTyconMono`/`headTyconNameMono` hand one out (both keep an
-  -- explicit answer-preserving `TRigid` arm, deliberately).  The gain is that
-  -- the violation is now GREPPABLE — `grep -nw TRigid` — instead of invisible
-  -- inside `TCon`.  Eliminating it is the follow-on step, not this one.
-  | TApp Mono Mono
-  | TFun Mono EffRow Mono
-  -- arg -> <effect row> result
-  | TEff EffRow
--- An effect row occupying a type-CONSTRUCTOR ARGUMENT slot, for a data type
--- with an effect-row parameter (`data Async e a = … <e> …`).  Produced ONLY
--- by kind-directed elaboration at a Row-kinded param position; consumed only
--- by unifyN's TApp~TApp recursion.  Never appears in code lacking an
--- effect-poly data type, so its addition is purely additive.
-
-data Tyvar =
-  | Unbound Int Int  -- Unbound id level | Link
-  | Link Mono
-
--- ── the FOUR mints of `Mono.TCon` (#1110) ─────────────────────────────────
--- These four one-line bodies are the ONLY applications of the `TCon`
--- constructor in this file; `test/typecheck_compiler_source.sh` pins that set,
--- and `Mono`'s own comment says why the property is worth buying.  Each name
--- states the identity class it claims, so a reviewer grades a CALL rather than
--- re-deriving what a bare third argument meant.
-
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
 -- or two modules' `(Int, Int)` stop being the same type — silently.  Every name
@@ -458,81 +388,9 @@ tconFrom o n = TCon n o
 tconUnresolved : String -> Mono
 tconUnresolved n = TCon n OriginUnresolved
 
--- An effect row (Phase 79/146): a set of concrete effect labels plus an optional
--- tail variable.
---   tail = None    ⇒ closed row, exactly [labels].
---   tail = Some v  ⇒ open row <labels | v>: v can absorb further effects.
--- Inference-synthesized arrows use open rows so effect-subsumption survives
--- equality unification; user annotations are closed unless they name a tail.
-public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
--- #821: a tail cell may stand for the JOIN of several tails (`e ⊔ e2`, written
--- `(e | e2)` in an index slot).  The row stays single-tailed syntactically; the
--- join lives in the cell, so every consumer that only follows links keeps
--- working, and `rowFlat` is the one place a join is taken apart.  A join with
--- fewer than two unbound members normalizes back to a plain row
--- (`effrowNorm`), so joins are only ever visible where two genuinely distinct
--- variables meet — a graded impl body (rigid `e` and `e2`) or a written join.
-data Effvar =
-  | EUnbound Int Int  -- EUnbound id level | link
-  | ELink EffRow
-  | EJoin Int Int (List (Ref Effvar))  -- EJoin id level members
-
--- ── Effect refinement domains (capability-effects v2, Stage 1) ─────────────
--- An effect label may carry a PARAMETER drawn from its declared refinement
--- DOMAIN — a small lattice of data-shaped values with a top ⊤ (unconstrained).
--- Stage 1 is the REPRESENTATION only: every param is built at ⊤, so the row is
--- byte-identical to the v1 set-of-bare-labels.  Stage 2 adds the Prefix domain's
--- analysis with NO change to this row code.
--- WS-4: a PRODUCT refinement domain — a label refined on several named AXES at
--- once, each axis a value in an existing sub-domain (e.g. structured `Net` =
--- `Host(Prefix) × Method(Set)`).  Represented as a sorted assoc-list keyed by
--- axis name; an axis ABSENT from the list is ⊤ on that axis, and `PProduct []`
--- is the product ⊤ (no axis constrained).  The lattice ops are POINTWISE
--- (`dsubN`/`djoinN`/`drenderN` below).  No `dmeetN`/⊥ arm: the escape check and
--- policy compare only ever call `dsub`/`djoin` — ⊓ is unreachable today and is
--- deliberately omitted (model ⊥ as `Option Param`→`None` if ever needed).
-public export data Param =
-  | PUnit
-  | PPrefix (Option String)
-  | PSet (Option (List String))
-  | PProduct (List (String, Param))
-
--- v2 Stage 2b inferred-hole marker.  A leaf
--- extern's `<Net _>` parses to the param string "_" (`effHoleSrc`), which
--- `atomOfWritten` keeps as `PPrefix (Some "_")` — the hole the call-site α
--- overwrites.  "_" is unambiguous: it can never be a valid written pattern
--- (fails `prefixPatternOk`).  An un-filled hole degrades to ⊤ for all domain
--- ops (sound over-approximation), so a surviving hole never leaks.
-effHoleSrc : String
-effHoleSrc = "_"
-
-isHoleStr : String -> Bool
-isHoleStr s = s == effHoleSrc
-
 isHoleParam : Param -> Bool
 isHoleParam (PPrefix (Some s)) = isHoleStr s
 isHoleParam _ = False
-
-normHole : Param -> Param
-normHole (PPrefix (Some s)) =
-  if isHoleStr s then PPrefix None else PPrefix (Some s)
-normHole p = p
--- WS-4: per-axis holes are out of scope (the hole marker stays at the whole-atom
--- `Param` level, not per axis), so `normHole (PProduct …)` is the identity — the
--- explicit clause above (`normHole p = p`) already covers it.  Documented so a
--- reader doesn't mistake the absence for an oversight.
--- an atom = a label applied to a domain parameter.  A v1 atomic label `Foo` is
--- exactly `Atom "Foo" (dtopFor "Foo")` (= PUnit in Stage 1).
-public export data Atom = Atom String Param
-
-export
-atomLabel : Atom -> String
-atomLabel (Atom l _) = l
-
-export
-atomParam : Atom -> Param
-atomParam (Atom _ p) = p
-
 -- ── effect-label DOMAIN registry (v2 Stage 2a) ─────────────────────────────
 -- Maps a label to the ⊤-param of its declared domain.  A `PPrefix None` entry
 -- means "Prefix-domain (carries a pattern)"; absence ⇒ atomic (Unit).  Seeded
@@ -642,18 +500,6 @@ lookupAxisOrTop name ax bp = match lookupAxis name ax
   Some v => v
   None => subTopOf bp
 
--- the ⊤ of a sub-domain param's domain.
-subTopOf : Param -> Param
-subTopOf (PPrefix _) = PPrefix None
-subTopOf (PSet _) = PSet None
-subTopOf (PProduct _) = PProduct []
-subTopOf _ = PUnit
-
-lookupAxis : String -> List (String, Param) -> Option Param
-lookupAxis _ [] = None
-lookupAxis name ((k, v) :: rest) =
-  if name == k then Some v else lookupAxis name rest
-
 -- total `all` over a list (avoids relying on a stdlib import in compiler).
 allList : (a -> Bool) -> List a -> Bool
 allList _ [] = True
@@ -663,159 +509,6 @@ allList f (x :: xs) = if f x then allList f xs else False
 subsetStr : List String -> List String -> Bool
 subsetStr [] _ = True
 subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
-
--- least upper bound (over-approximation)
-djoin : Param -> Param -> Param
-djoin p1 p2 = djoinN (normHole p1) (normHole p2)
-
-djoinN : Param -> Param -> Param
-djoinN PUnit PUnit = PUnit
-djoinN (PPrefix None) _ = PPrefix None
-djoinN _ (PPrefix None) = PPrefix None
-djoinN (PPrefix (Some a)) (PPrefix (Some b)) =
-  let k = commonPrefixLen a b 0
-  if k == 0 then PPrefix None else PPrefix (Some (stringSlice 0 k a))
-djoinN (PSet None) _ = PSet None
-djoinN _ (PSet None) = PSet None
-djoinN (PSet (Some a)) (PSet (Some b)) =
-  -- ∪, saturating to ⊤ (PSet None) past the cardinality cap (setCardCap = 16)
-  let u = sortUniqS (a ++ b)
-  if listLen u > setCardCap then PSet None else PSet (Some u)
--- WS-4: PRODUCT join is POINTWISE — for every axis present in EITHER side, join
--- the two sub-params (a side silent on an axis = sub-⊤ there, which makes the join
--- ⊤ on that axis — correct over-approximation).  `productNorm` then drops axes
--- that joined to sub-⊤ and re-sorts; all-⊤ collapses to `PProduct []`.  Component
--- saturation (prefix→LCP→⊤, set→card-cap→⊤) is inherited from the recursive calls.
-djoinN (PProduct ax) (PProduct bx) =
-  productNorm (map (joinAxis ax bx) (axisUnion ax bx))
-djoinN p _ = p  -- domain mismatch — never happens
-
--- join the two sides' values on axis `name` (missing side = sub-⊤).  The sub-⊤
--- to use is taken from whichever side HAS the axis (both sides' axes are sub-⊤
--- compatible since one label has one product shape).
-joinAxis : List (String, Param) ->
-  List (String, Param) ->
-  String ->
-  (String, Param)
-joinAxis ax bx name = match (lookupAxis name ax, lookupAxis name bx)
-  (Some pa, Some pb) => (name, djoinN pa pb)
-  (Some pa, None) => (name, djoinN pa (subTopOf pa))
-  (None, Some pb) => (name, djoinN (subTopOf pb) pb)
-  (None, None) => (name, PUnit)  -- unreachable (name ∈ union)
-
--- the sorted union of axis NAMES present in either side.
-axisUnion : List (String, Param) -> List (String, Param) -> List String
-axisUnion ax bx = sortUniqS (map fst ax ++ map fst bx)
-
--- canonicalize a product: drop axes whose value is its sub-domain ⊤ (unconstrained
--- ⇒ omit), sort by axis name; all-⊤ ⇒ `PProduct []` (the product ⊤).
-productNorm : List (String, Param) -> Param
-productNorm axes =
-  PProduct (sortAxes (filterList (p => not (isSubTop (snd p))) axes))
-
--- is a sub-param the ⊤ of its sub-domain?
-isSubTop : Param -> Bool
-isSubTop (PPrefix None) = True
-isSubTop (PSet None) = True
-isSubTop (PProduct []) = True
-isSubTop PUnit = True
-isSubTop _ = False
-
--- sort an axis assoc-list by axis name (insertion sort — the axis count is tiny).
-sortAxes : List (String, Param) -> List (String, Param)
-sortAxes [] = []
-sortAxes (x :: xs) = insertAxis x (sortAxes xs)
-
-insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
-insertAxis x [] = [x]
-insertAxis x (y :: ys) = match stringCompare (fst x) (fst y)
-  Gt => y :: insertAxis x ys
-  _ => x :: y :: ys
-
--- Set-domain cardinality cap: a join whose union exceeds this many distinct
--- authority elements saturates to ⊤ (PSet None), bounding the lattice height.
-setCardCap : Int
-setCardCap = 16
-
--- length of the longest common prefix of two strings (Stage-2 djoin support)
-commonPrefixLen : String -> String -> Int -> Int
-commonPrefixLen a b i =
-  if i >= stringLength a || i >= stringLength b then
-    i
-  else if stringSlice i (i + 1) a == stringSlice i (i + 1) b then
-    commonPrefixLen a b (i + 1)
-  else
-    i
-
--- manifest / error text for a param.  ⊤ renders as empty so a ⊤-param atom
--- renders as JUST its label — byte-identical to v1.
-export
-drender : Param -> String
-drender p = drenderN (normHole p)
-
-drenderN : Param -> String
-drenderN PUnit = ""
-drenderN (PPrefix None) = ""
-drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
-drenderN (PSet None) = ""  -- ⊤ renders empty (like the others)
-drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
--- WS-4: render a product as the chosen USER SURFACE (keyword-axes, capitalized:
--- `Host="…" Method={…}`) so error/manifest text round-trips back through the
--- parser.  Product-⊤ (`PProduct []`) renders empty, like every other ⊤.
-drenderN (PProduct []) = ""
-drenderN (PProduct ax) = " " ++ renderProductLit ax
-
-quoteStr : String -> String
-quoteStr s = "\"" ++ s ++ "\""
-
--- WS-4: render a product's constrained axes as `Host="…" Method={…}` (space-
--- separated, axis-sorted) — the Option-A keyword-axes user surface.  Each axis
--- value renders via its sub-domain (`drenderN` drops the leading space, which we
--- supply per axis as `Name=`).  Only constrained axes appear (⊤ axes are absent
--- by `productNorm`), so the surface is minimal.
-renderProductLit : List (String, Param) -> String
-renderProductLit ax = joinWith " " (map renderAxis ax)
-
-renderAxis : (String, Param) -> String
-renderAxis (name, p) = "\{name}=\{renderAxisVal p}"
-
--- an axis value WITHOUT the leading-space that `drenderN` prefixes (we reuse the
--- sub-domain rendering but strip the space, so Host="a/*" / Method={"GET"}).
-renderAxisVal : Param -> String
-renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
-renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
-renderAxisVal _ = ""  -- a ⊤ axis never reaches here (productNorm drops it)
-
--- ── atom-set helpers (replace the v1 String-set ops) ───────────────────────
--- render one atom: label + domain refinement text (⊤ ⇒ just the label)
-renderAtom : Atom -> String
-renderAtom a = atomLabel a ++ drender (atomParam a)
-
--- render a set of atoms as the comma-separated body of a `<…>`, label-sorted —
--- byte-identical to v1 when all params are ⊤.
-renderAtoms : List Atom -> String
-renderAtoms atoms = joinWith ", " (map renderAtom (atomsNorm atoms))
-
--- insert an atom into a label-sorted set, joining same-label params (djoin).
--- With all-⊤ params this is exactly v1's sortInsertS over labels.
-atomInsert : Atom -> List Atom -> List Atom
-atomInsert x [] = [x]
-atomInsert x (y :: ys) = match stringCompare (atomLabel x) (atomLabel y)
-  Lt => x :: y :: ys
-  Eq => Atom (atomLabel y) (djoin (atomParam x) (atomParam y)) :: ys
-  Gt => y :: atomInsert x ys
-
--- canonical form: ≤ one atom per label (same-label params joined), label-sorted.
-atomsNorm : List Atom -> List Atom
-atomsNorm xs = atomsNormGo xs []
-
-atomsNormGo : List Atom -> List Atom -> List Atom
-atomsNormGo [] acc = acc
-atomsNormGo (x :: xs) acc = atomsNormGo xs (atomInsert x acc)
-
--- union of two atom sets, joining same-label params
-atomsUnion : List Atom -> List Atom -> List Atom
-atomsUnion a b = atomsNorm (a ++ b)
 
 -- set difference: atoms of [a] whose label is absent from [b], OR present but
 -- NOT subsumed (`not (dsub pa pb)`) — the Stage-2 escape direction.  In Stage 1
@@ -1096,9 +789,6 @@ strHasSlashGo s i n =
   else
     strHasSlashGo s (i + 1) n
 
--- forall <quantified tyvar ids> <quantified effvar ids>. mono
-public export data Scheme = Forall (List Int) (List Int) Mono
-
 -- ── global inference state ────────────────────────────────────────────────
 
 newTyvarId : Unit -> Int
@@ -1132,39 +822,6 @@ freshEffvarAt lvl = Ref (EUnbound (newEffvarId ()) lvl)
 -- an open row with a fresh tail variable
 openRow : Unit -> EffRow
 openRow _ = EffRow [] (Some (freshEffvar ()))
-
--- follow ELink tails (merging labels) to a canonical row whose tail, if present,
--- is an unbound effvar
-effrowNorm : EffRow -> EffRow
-effrowNorm (EffRow labels tail) = match tail
-  Some cell => match !cell
-    ELink r2 =>
-      let nr = effrowNorm r2
-      match nr
-        EffRow ls2 t2 => EffRow (atomsUnion labels ls2) t2
-    EUnbound _ _ => EffRow labels tail
-    -- #821: a join normalizes through its members — atoms merge in, bound
-    -- members disappear, and a join left with fewer than two unbound members
-    -- IS a plain row.  The cell is path-compressed to its live members so a
-    -- later read pays for the flattening once.
-    -- ⚠️ NO path compression: a bound member carries ATOMS on its link row
-    -- (`70 := <Stdout | 75>`), and rewriting the cell to its unbound leaves
-    -- would drop them — the next normalization of the same cell then read
-    -- `<>` where `<Stdout | …>` was (a launder, found first-hand).  The flat
-    -- view is recomputed per call; the cell is never rewritten.
-    EJoin _ _ _ =>
-      let f = rowFlat (EffRow labels (Some cell))
-      match snd f
-        [] => EffRow (fst f) None
-        [m] => EffRow (fst f) (Some m)
-        _ => EffRow (fst f) (Some cell)
-  None => EffRow labels tail
-
--- the concrete labels (atoms) currently known for a row (ignores the open tail)
-export
-effrowLabels : EffRow -> List Atom
-effrowLabels r = match effrowNorm r
-  EffRow labels _ => labels
 
 -- v2 Stage 2b: fill inferred-hole atoms in a freshly-incurred call effect row.
 -- Returns a row whose head labels have every hole atom replaced by α of the
@@ -1231,49 +888,11 @@ exitLevel _ = perRun.value.currentLevel := perRun.value.currentLevel.value - 1
 -- becomes the lambda's arrow effect.  A closed (tail=None) ambient is a SINK that
 -- discards effects — the top-level state where a value binding's effects drop.
 
--- the unbound-tail id of an effvar cell (-1 once linked); unique like tyvar ids,
--- so id-equality stands in for the reference's physical `==` on effvars
-effvarId : Ref Effvar -> Int
-effvarId cell = match !cell
-  EUnbound id _ => id
-  ELink _ => 0 - 1
-  EJoin id _ _ => id
-
-isJoinCell : Ref Effvar -> Bool
-isJoinCell cell = match !cell
-  EJoin _ _ _ => True
-  _ => False
-
 -- #821: a rigid method effect variable (its cell id is in the current impl
 -- body's rigid set) must never be identified with another tail; two such tails
 -- meeting in an ambient row JOIN instead.
 isRigidCell : Ref Effvar -> Bool
 isRigidCell cell = containsI (effvarId cell) perRun.value.rigidEffvarsRef.value
-
--- a row's FLAT view: every atom reachable through links and joins, and every
--- UNBOUND leaf cell (deduped by id).  The one place a join is decomposed.
-rowFlat : EffRow -> (List Atom, List (Ref Effvar))
-rowFlat (EffRow labels None) = (labels, [])
-rowFlat (EffRow labels (Some c)) = match !c
-  EUnbound _ _ => (labels, [c])
-  ELink r =>
-    let f = rowFlat r
-    (atomsUnion labels (fst f), snd f)
-  EJoin _ _ ms => rowFlatMembers labels ms
-
-rowFlatMembers : List Atom ->
-  List (Ref Effvar) ->
-  (List Atom, List (Ref Effvar))
-rowFlatMembers labels [] = (labels, [])
-rowFlatMembers labels (m :: ms) =
-  let f = rowFlat (EffRow [] (Some m))
-  let rest = rowFlatMembers (atomsUnion labels (fst f)) ms
-  (fst rest, dedupCells (snd f ++ snd rest))
-
-dedupCells : List (Ref Effvar) -> List (Ref Effvar)
-dedupCells [] = []
-dedupCells (c :: cs) =
-  c :: dedupCells (filterList (d => effvarId d /= effvarId c) cs)
 
 -- a row whose tail stands for exactly [members]: closed for none, the cell
 -- itself for one, a fresh join cell for several.
@@ -7716,45 +7335,6 @@ wPushAll w (x :: rest) =
   let _ = wPush w x
   wPushAll w rest
 
--- #838 I1 (DESIGN.md §2.2): the unified obligation record.  `pred.args` is the
--- ALREADY-PROJECTED dispatch/argument vector — exactly the call channel's existing
--- shape (contrast the impl channel's un-projected method type, out of scope this
--- increment).  `originId` is the #837 binding id of the binding this obligation was
--- DEFERRED BY (0 = anchorless/local/cross-module, mirroring incr1's id-0 fallback);
--- populated now so a later increment does not re-key every record (#838 §2.2).
--- `prov` is documentary in I1 — the checker below does not yet branch on it (that is
--- I2's uniform-deferral work); it is carried now so I2 does not need a second
--- migration to add it.
--- ── P1 (#1446): THE INTERFACE HALF OF AN OBLIGATION IS AN IDENTITY, NOT A NAME ──
--- DICT-SEMANTICS §8 I4: a class is a `(module, name)` pair.  `Predicate.iface` used
--- to be a bare `String`, so the whole entailment/obligation channel could not tell
--- two same-spelled interfaces from different modules apart — an imported, unrelated
--- `Sizer` silently satisfied a locally-declared `Sizer` constraint (#1438: `check`
--- clean, `run` panics, the built binary segfaults at 139).
---
--- `irOrigin` is the `TyConOrigin` of the DECLARATION this occurrence denotes, read
--- off whichever carrier the site already has (`Constraint.constraintOrigin`,
--- `Require.requireOrigin`, `DInterface.ifaceOrigin` via `methodIfaceParamsRef`,
--- `DImpl.implOrigin`).  `irName` is kept ALONGSIDE it, not derived from it: every
--- diagnostic in this channel prints the spelling, and `concreteReqMatchByIface`
--- still asks the SPELLING-keyed `KeyBuckets` registry a route-word question that
--- must NOT become an identity question (#1317 T1 / the closed S0 #1277 — see
--- `dispHeadTab`).  One value carrying both halves is what keeps those two questions
--- from drifting apart.
---
--- 🚨 `OriginUnresolved` IS A LEGAL INHABITANT AND MUST STAY ONE.  A flat user
--- module's own interface is unstamped on BOTH sides (its `interface` decl and its
--- `impl` alike), so it keys `TkBare`/`TkBare` symmetrically and is unaffected by the
--- re-key — that symmetry is why this change is not a mass false-reject.  A TOTAL
--- identity would require #1115 (E-1) to land first, and `stampTyHead`'s immunity
--- rule makes an invented one PERMANENT.  `tabKeyOf`'s `None => TkBare` arm and
--- `tabKeyEq`'s refusal to equate `TkBare` with `TkIdent` are the representation
--- built for exactly this.
-data IfaceRef = IfaceRef {
-  irName : String,  -- the SPELLING; still needed for diagnostics and for the spelling-keyed KeyBuckets question
-  irOrigin : TyConOrigin,  -- the I4 identity of the declaration this occurrence denotes
-}
-
 -- an interface occurrence whose identity is not (yet) recoverable at the site.
 --
 -- ⚠️ U1b (#1482) RETIRED the two sites this comment used to name.
@@ -7780,40 +7360,6 @@ ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 -- that must not pollute the grep.
 ifaceRefNone : IfaceRef
 ifaceRefNone = IfaceRef { irName = "", irOrigin = OriginUnresolved }
-
--- U1b (#1482): ONE vector obligation — one interface OCCURRENCE (identity-carrying,
--- #1446 P1) applied to one vector of scheme-quantified tyvar ids.  This is the payload
--- of `schemeObligationsRef` and of its three cross-module mirrors.
---
--- ⚠️ The point of the record is not ergonomics.  Before it, this payload was
--- `(String, List Int)` — the SAME shape as `funConstraintsRef`'s `(fn name, slot ids)`
--- entries, 58 lines of the file apart, with nothing but a convention keeping the two
--- meanings from being passed to each other's readers.  Widening the interface half to
--- `IfaceRef` removes M1 from that shape, which leaves the fn-name meaning as its only
--- inhabitant: a cross-family mixup is now an ordinary type error in the compiler's own
--- typechecker, defended by `make check-self` / `typecheck_compiler_source.sh` rather
--- than by care.  The widening IS the disambiguation.
---
--- #1161 (S-obligation-nary-payload): [voArgs] is the predicate's WHOLE argument
--- vector as monos, at the recording site's instantiation — the `Predicate.args`
--- shape, carried here so a predicate with a GROUND argument (`Ix a Bool =>`)
--- survives the channel at all.  `[]` means "no vector was recoverable", exactly
--- the convention `zipSlotArgs`/`enclPreds` already use for the slot channel, and
--- it reproduces the pre-widening ids-only behaviour byte for byte.
---
--- ⚠️ [voIds] IS NOT REDUNDANT WITH IT, AND MUST NOT BE DERIVED FROM IT.  Two
--- producers have only an id (`vecOblsOfSlots` lifts a `CSlot`, whose payload is
--- `csId : Int`; `superSlotVecOf` maps typaram names positionally onto ids), and a
--- `Mono` is a `Ref Tyvar` that cannot be minted from an id.  [voIds] also remains
--- the currency of the dict-slot cardinality (`leadInferredPred`) and of the coverage
--- subset test (`pairsOfVecObls`), neither of which has anything to say about a
--- ground argument.  When [voArgs] is non-empty, [voIds] holds the ids of exactly
--- its BARE-TYVAR positions, in order.
-data VecObl = VecObl {
-  voIface : IfaceRef,
-  voIds : List Int,
-  voArgs : List Mono,
-}
 
 -- U1b (#1482): ONE dict slot of a constrained callee — the interface the slot
 -- discharges, paired with the scheme-var id it is keyed on.
@@ -9615,13 +9161,6 @@ resetState _ =
   perRun := freshPerRun ()
   toggles := freshToggles ()
 
--- ── small helpers ─────────────────────────────────────────────────────────
-lookupAssocI : Int -> List (Int, b) -> Option b
-lookupAssocI _ [] = None
-lookupAssocI k ((k2, v) :: rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocI k rest
-
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
 containsI x (y :: ys) = x == y || containsI x ys
@@ -9634,48 +9173,6 @@ containsI x (y :: ys) = x == y || containsI x ys
 anyListM : (a -> Bool) -> List a -> Bool
 anyListM _ [] = False
 anyListM p (x :: xs) = p x || anyListM p xs
-
--- ── union-find core ───────────────────────────────────────────────────────
--- PERF (issue #115): this is a union-find FIND, and it PATH-COMPRESSES.  Without
--- compression it was the compiler's worst performance defect: `unifyVars` links the
--- current root to the *fresh* var it meets (`bindVar c1 (TVar c2)`), so inferring a
--- single large declaration — an N-arm `match` whose arms all unify against one
--- result var, an N-element list literal — builds a Link chain of length N.  Every
--- later `normalize`/`rootIdOf` of any var in that class then walked O(N) links, and
--- the post-inference walkers (`walkDispatch`, `setNumlitFloatsGo`, `monoUnboundIds`)
--- plus the Chunk-D numlit scans do that once per literal ⇒ O(N²) link steps, on a
--- non-allocating hot loop that no allocation-graded gate could see.  Compression
--- makes it amortized near-O(1) and leaves the ROOT IDENTITY untouched — this is a
--- representation change only, so no program's inferred type moves.
---
--- Returns the ARGUMENT ITSELF (never a rebuilt `TVar`) when already at a root, so
--- the overwhelmingly common case allocates nothing — the old multi-clause form's
--- `Unbound _ _ => TVar cell` rebuilt a cell on every call.  That is why this matches
--- on the whole parameter instead of destructuring it in the head: a multi-clause
--- definition cannot name the value it matched, so it cannot give it back unchanged.
-export
-normalize : Mono -> Mono
--- lint-disable-next-line rule-match-on-param
-normalize m = match m
-  TVar cell => match !cell
-    Link t => normalizeLink cell t
-    Unbound _ _ => m
-  _ => m
-
--- [cell] is a `Link` to [t]: resolve [t] to its root, re-point [cell] STRAIGHT at
--- that root, and return it.  The write happens only when the chain is longer than
--- one hop — a direct link is already compressed, so re-writing it would be pure cost.
--- Matches on the whole [t] for the same no-rebuild reason as `normalize` above.
-normalizeLink : Ref Tyvar -> Mono -> Mono
--- lint-disable-next-line rule-match-on-param
-normalizeLink cell t = match t
-  TVar c2 => match !c2
-    Unbound _ _ => t
-    Link t2 =>
-      let r = normalizeLink c2 t2
-      cell := Link r
-      r
-  _ => t
 
 -- #1576: the structural node count of a monotype.  Its ONLY consumer is the SHRINKING
 -- test in `argImplRequiresRoutes` — it is a termination signal, not a semantic one, so
@@ -10457,63 +9954,6 @@ substMonoP pos subst esub t = match normalize t
       (substMonoP pos subst esub b)
   TEff r => TEff (substRow esub r)
 
--- ── rendering ─────────────────────────────────────────────────────────────
-export
-ppScheme : Scheme -> String
-ppScheme (Forall _ _ t) = ppMono t
-
--- Render a scheme WITH its constraint context (`Num a => a -> a -> a`).  The
--- constraint tyvar ids are threaded through the SAME ctx/cnt that renders the
--- body, so a constraint's letter matches the body's (id → letter shared).  The
--- body is rendered FIRST so ctx already carries the body's letter assignments
--- when the constraints reuse it via nameOf.  Constraints are rendered+sorted+
--- deduped for a stable display order.  Empty list ⇒ plain ppScheme (no `=>`).
--- Single-vs-multiple form mirrors ppConstrDoc in tools/doc.mdk (`Num a =>` /
--- `(Num a, Ord b) =>`).
-ppSchemeCon : List VecObl -> Scheme -> String
-ppSchemeCon [] s = ppScheme s
-ppSchemeCon cons (Forall _ _ t) =
-  let ctx = Ref []
-  let cnt = Ref 0
-  let body = ppGo ctx cnt 0 t
-  let rendered = sortUniqS (renderConstraintCtx ctx cnt cons)
-  let ctxStr = match rendered
-    [c] => c
-    _ => "(" ++ joinWith ", " rendered ++ ")"
-  "\{ctxStr} => \{body}"
-
--- a predicate renders with its WHOLE argument vector — `Ix a i =>`, not the
--- `(Ix a, Ix i) =>` two-1-ary-facts rendering the shattered representation produced
--- before #607.
--- ⚠️ Renders the SPELLING (`voIface.irName`).  U1b (#1482) gave this payload an
--- identity-carrying interface half; every DISPLAY surface must keep printing the name
--- the user wrote, or every `Num a => …` in `check --types`, LSP hover, inlay hints and
--- the snapshot corpus moves.
-renderConstraintCtx : Ref (List (Int, String)) ->
-  Ref Int ->
-  List VecObl ->
-  List String
-renderConstraintCtx _ _ [] = []
-renderConstraintCtx ctx cnt (o :: rest) =
-  -- #1161: a vector-carrying entry renders its WHOLE argument vector under the SAME
-  -- naming context as the body, so `Ix a Bool =>` prints with its ground argument
-  -- instead of degrading to `Ix a`.  An ids-only entry renders exactly as before.
-  -- #1952: ARGUMENT precedence (3), not 2.  At prec 2 `wrapIf (prec > 2)` leaves an
-  -- application BARE, so a STRUCTURED predicate argument printed as `Conv Wrap a b =>` —
-  -- which is not the same predicate: it reads as a four-argument context and does not
-  -- round-trip through the parser.  This is SOURCE SYNTAX (`check --types`, LSP hover,
-  -- inlay hints all show it as a signature), so it owes the parens unconditionally, at
-  -- arity 1 as much as at arity 2.  Bare-tyvar and nullary-`TCon` arguments are atoms and
-  -- render identically at either precedence, so `Num a =>` / `Ix a Bool =>` do not move —
-  -- and the compiler's and stdlib's own declared contexts are all bare-tyvar 1-ary, so
-  -- neither the snapshot corpus nor the self-compile fixpoint sees this at all.
-  let s =
-    if isEmptyL o.voArgs then
-      joinWith " " (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
-    else
-      joinWith " " (o.voIface.irName :: map (ppGo ctx cnt 3) o.voArgs)
-  s :: renderConstraintCtx ctx cnt rest
-
 -- Render a binding's scheme WITH its inferred/declared constraint context, looked
 -- up by NAME from schemeObligationsRef (the always-on obligation side-channel the
 -- most-recent typecheck left populated).  A name with no recorded obligations
@@ -10569,120 +10009,9 @@ ppSchemeNamedFull n s = match omLookup n perRun.value.schemeDefIdsRef.value
         (optionOr [] (omLookup n crossRun.value.coreSchemeObligationsRef.value))
         s
 
-ppMono : Mono -> String
-ppMono t =
-  let ctx = Ref []
-  let cnt = Ref 0
-  ppGo ctx cnt 0 t
-
-letters : String
-letters = "abcdefghijklmnopqrstuvwxyz"
-
-nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
-nameOf ctx cnt id = match lookupAssocI id !ctx
-  Some s => s
-  None => assignName ctx cnt id
-
-assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
-assignName ctx cnt id =
-  let n = !cnt
-  cnt := n + 1
-  let s = if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
-  ctx := (id, s) :: !ctx
-  s
-
-ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
-ppGo ctx cnt prec t = match normalize t
-  TVar cell => ppVar ctx cnt cell
-  TCon n _ => ppConName n
-  -- Same renderer as `TCon`: a rigid prints as its own type-parameter name
-  -- (`ppConName` is the tuple-tag de-mangler and is the identity on any name
-  -- that is not a `__tupleN__` tag).  Byte-identical to the pre-split output.
-  TRigid n => ppConName n
-  TApp a b => ppApp ctx cnt prec a b
-  TFun a eff b => ppFun ctx cnt prec a eff b
-  TEff r => ppEffArg ctx cnt r
-
--- Render a row sitting in type-argument position (the `e` of `Async e a`).  Bare
--- open tail → the row var's name (reads `Async e a`); labels → `<IO>`/`<IO | e>`;
--- closed empty → `<>`.  Effvar ids are offset into a private letter namespace so
--- they never collide with tyvar letters.
-ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
-ppEffArg ctx cnt r = match effrowNorm r
-  EffRow labels tail =>
-    let lbl = match labels
-      [] => ""
-      ls => renderAtoms ls
-    let tailS = match tail
-      Some cell => ppEffvarName ctx cnt cell
-      None => ""
-    -- #821: a bare join in an index slot renders parenthesised, `(e | e2)`,
-    -- which is also its written form; with labels, `<L | e | e2>`.
-    match tail
-      Some cell =>
-        if isJoinCell cell && lbl == "" then
-          "(" ++ tailS ++ ")"
-        else
-          ppEffArgFmt lbl tailS
-      None => ppEffArgFmt lbl tailS
-
-ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
-ppEffvarName ctx cnt cell = match !cell
-  EUnbound id _ => nameOf ctx cnt (id + 1000000)
-  ELink _ => ""
-  EJoin _ _ ms => joinWith " | " (map (m => ppEffvarName ctx cnt m) ms)
-
-ppEffArgFmt : String -> String -> String
-ppEffArgFmt l t
-  | l == "" && t == "" = "<>"
-  | l == "" = t
-  | t == "" = "<" ++ l ++ ">"
-  | otherwise = "<\{l} | \{t}>"
-
-ppVar : Ref (List (Int, String)) -> Ref Int -> Ref Tyvar -> String
-ppVar ctx cnt cell = match !cell
-  Unbound id _ => nameOf ctx cnt id
-  Link _ => "_"
-
-ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
-ppApp ctx cnt prec a b = match tupleSpine (TApp a b)
-  -- a fully-saturated `__tupleN__` spine renders back to surface `(e1, …, eN)`
-  Some ts => "(" ++ joinWith ", " (ppEach ctx cnt 0 ts) ++ ")"
-  None =>
-    let sa = ppGo ctx cnt 2 a
-    let sb = ppGo ctx cnt 3 b
-    wrapIf (prec > 2) "\{sa} \{sb}"
-
-ppFun : Ref (List (Int, String)) ->
-  Ref Int ->
-  Int ->
-  Mono ->
-  EffRow ->
-  Mono ->
-  String
-ppFun ctx cnt prec a eff b =
-  let sa = ppGo ctx cnt 2 a
-  let sb = ppGo ctx cnt 1 b
-  wrapIf (prec > 1) "\{sa} -> \{effStr (effrowLabels eff)}\{sb}"
-
-effStr : List Atom -> String
-effStr [] = ""
-effStr labels = "<" ++ renderAtoms labels ++ "> "
-
 stripEff : Ty -> Ty
 stripEff (TyEffect _ _ t) = t
 stripEff t = t
-
-ppEach : Ref (List (Int, String)) -> Ref Int -> Int -> List Mono -> List String
-ppEach _ _ _ [] = []
-ppEach ctx cnt prec (t :: ts) =
-  let s = ppGo ctx cnt prec t
-  s :: ppEach ctx cnt prec ts
-
-wrapIf : Bool -> String -> String
-wrapIf True s = "(" ++ s ++ ")"
-wrapIf False s = s
-
 -- ── AST type → mono (for ADT field types / annotations / signatures) ──────
 -- free type-variable NAMES in the type map to fresh tyvars (a signature's `a`
 -- is a variable, not a TCon)
@@ -25607,18 +24936,6 @@ implHeadLabel : String -> KeyEntry -> String
 implHeadLabel iface (KeyEntry _ _ _ _ _ itys _ _) =
   "`impl \{iface} \{joinWith " " (map ppTyAtom itys)}`"
 
--- render a PREDICATE's argument vector against one shared naming ctx, at ARGUMENT
--- precedence — so `List a` in an argument slot prints as `(List a)`.
--- ⚠️ NOT `ppMonosShared`, and not a candidate for merging with it: that one renders
--- the dispatch monos at prec 2, where `wrapIf (prec > 2)` leaves an application
--- BARE.  For a predicate whose arguments are themselves applications that is
--- ambiguous — `Index List a Int a` reads as either a 3-argument or a 5-argument
--- predicate — and the whole value of naming the goal is that the reader can match it
--- against the impl heads printed beside it.  `cohPpEach` (prec 0) has the same
--- problem.  Same shared-naming-context discipline as both, one precedence up.
-ppPredArgsShared : List Mono -> String
-ppPredArgsShared ms = joinWith " " (ppEach (Ref []) (Ref 0) 3 ms)
-
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
 findMostSpecificEntry [] _ = None
 findMostSpecificEntry (c :: cs) all
@@ -28351,12 +27668,6 @@ headTyconNameMono t = match headMonoNode t
   TRigid n => Some n
   _ => None
 
--- Native Gap C: the arity-distinguished tuple dispatch tag (`__tuple2__`, …),
--- byte-identical to eval.mdk's `tupleHeadTag`.  Stamped as the RKey route tag at a
--- tuple method site so each arity routes to its own impl group / lifted define.
-tupleHeadTagTc : Int -> String
-tupleHeadTagTc n = "__tuple" ++ intToString n ++ "__"
-
 -- An n-tuple TYPE is a saturated left-spine TApp over the synthetic nullary
 -- constructor `TCon (tupleHeadTagTc n)` — the constructor NAME string IS the
 -- existing `__tupleN__` dispatch tag, so tag/eval parity is automatic and no
@@ -28367,60 +27678,6 @@ tupleMono ts = tupleSpineOf (tconTupleHead (listLen ts)) ts
 tupleSpineOf : Mono -> List Mono -> Mono
 tupleSpineOf acc [] = acc
 tupleSpineOf acc (t :: rest) = tupleSpineOf (TApp acc t) rest
-
--- collect a left-spine `TApp` into (head, args-in-application-order),
--- normalizing at each level so a linked head resolves.
-spineParts : Mono -> (Mono, List Mono)
-spineParts t = match normalize t
-  TApp a b => match spineParts a
-    (h, args) => (h, args ++ [b])
-  other => (other, [])
-
--- recognise a fully-saturated tuple spine (arity >= 2 — `()`/Unit stays
--- `TCon "Unit"`, never a tuple); return its element monos in order.
-export
-tupleSpine : Mono -> Option (List Mono)
-tupleSpine t = match spineParts t
-  (TCon n _, args) =>
-    if listLen args >= 2 && n == tupleHeadTagTc (listLen args) then
-      Some args
-    else
-      None
-  -- #1110 answer-preserving, and deliberately not "simplified" away.  A rigid
-  -- variable can be the head of an application spine (`fromAstTypeVarApp` builds
-  -- `TApp (TRigid h) …` at a row-slot arg), and before the split such a head was
-  -- a `TCon` and reached the arm above.  A type parameter spelled `__tupleN__`
-  -- is absurd but lexically legal, so dropping this arm would be a real — if
-  -- unreachable-in-corpus — answer change.  Keep the answer; fix it with the
-  -- rest of I6.1.
-  (TRigid n, args) =>
-    if listLen args >= 2 && n == tupleHeadTagTc (listLen args) then
-      Some args
-    else
-      None
-  _ => None
-
--- arity a `__tupleN__` tag string names (else None) — bounded probe so a bare
--- or PARTIAL tuple ctor never leaks the raw `__tupleN__` tag into a message.
-tupleTagArity : String -> Option Int
-tupleTagArity n = tupleTagArityGo n 2
-
-tupleTagArityGo : String -> Int -> Option Int
-tupleTagArityGo n k
-  | k > 32 = None
-  | tupleHeadTagTc k == n = Some k
-  | otherwise = tupleTagArityGo n (k + 1)
-
-commaStr : Int -> String
-commaStr n = if n <= 0 then "" else "," ++ commaStr (n - 1)
-
--- render a bare/partial tuple constructor as the surface-less `(,)`/`(,,)` head
--- (only reached when a tuple spine is UNSATURATED, e.g. an arity-mismatch
--- message); a saturated spine renders `(e1, …)` via ppApp before reaching here.
-ppConName : String -> String
-ppConName n = match tupleTagArity n
-  Some k => "(" ++ commaStr (k - 1) ++ ")"
-  None => n
 
 -- Two monos genuinely CANNOT unify because a tuple spine meets a differing
 -- concrete head/arity — used only to pick the readable full-type mismatch
@@ -31629,20 +30886,6 @@ allHeadArgsMatch [] = True
 allHeadArgsMatch ((ty, m) :: rest) = match matchTyMono ty m
   Some _ => allHeadArgsMatch rest
   None => False
-
--- render the dispatch monos space-separated under ONE shared naming context
--- so distinct free vars don't all collapse
--- to "a".  Concrete heads (the only case that reaches an error) render as the
--- type name.
-ppMonosShared : List Mono -> String
-ppMonosShared ms =
-  let ctx = Ref []
-  let cnt = Ref 0
-  joinWith " " (ppEachShared ctx cnt ms)
-
-ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
-ppEachShared _ _ [] = []
-ppEachShared ctx cnt (m :: rest) = ppGo ctx cnt 2 m :: ppEachShared ctx cnt rest
 
 -- register, per slot, the default body's constraint var id → `$dict_<method>_<slot>`
 -- in activeDictVars, so an in-body method ref unified to that var routes RDict.
@@ -35677,65 +34920,6 @@ annotTooGeneralMsg ty =
   "Type annotation '"
     ++ ppTy ty
     ++ "' is more polymorphic than the expression. A type variable in the annotation is actually a specific type (or two annotation variables are the same type)"
-
--- pretty-print an AST type
-ppTy : Ty -> String
-ppTy (TyCon { tyConName = n }) = n
-ppTy (TyVar n) = n
-ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
-ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"
-ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
-ppTy (TyEffect effs tail t) = "<\{ppEffInsideTy effs tail}> \{ppTy t}"
--- A label-free join takes the parenthesised type-argument spelling it is
--- written in (`f (e | e2) b`), matching tools/printer.mdk.
-ppTy (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
--- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
--- wrapped type it has none of.
-ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
-ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
-
--- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
--- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
--- rule-duplicate-body would flag an inlined copy).
-ppEffInsideTy : List (String, Option String) -> List String -> String
-ppEffInsideTy effs tails =
-  let labs = map ppEffAtomTy effs
-  match tails
-    [] => joinWith ", " labs
-    _ =>
-      let tls = joinWith " | " tails
-      match effs
-        [] => tls
-        _ => "\{joinWith ", " labs} | \{tls}"
-
--- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
-ppEffAtomTy : (String, Option String) -> String
-ppEffAtomTy (l, None) = l
--- Intentional cross-file duplicate of the same helper in doc.mdk AND eval.mdk's ppEffAtomK; not consolidating (tiny helper / divergent-by-design backend trio).
--- lint-disable-next-line rule-duplicate-body
-ppEffAtomTy (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
-
--- single constraint: no outer parens; multiple: wrap in parens (mirrors OCaml)
-ppConstraints : List Constraint -> String
-ppConstraints [c] = ppConstraint c
-ppConstraints cs = "(" ++ joinWith ", " (map ppConstraint cs) ++ ")"
-
--- argument of `->`: wrap TyFun (prec>=1) but not TyApp (prec<2)
-ppTyFunArg : Ty -> String
-ppTyFunArg (TyFun a b) = "(" ++ ppTy (TyFun a b) ++ ")"
-ppTyFunArg t = ppTy t
-
--- argument of application: wrap TyFun (prec>=1) and TyApp (prec>=2)
-ppTyAtom : Ty -> String
-ppTyAtom (TyFun a b) = "(" ++ ppTy (TyFun a b) ++ ")"
-ppTyAtom (TyApp a b) = "(" ++ ppTy (TyApp a b) ++ ")"
-ppTyAtom t = ppTy t
-
-ppConstraint : Constraint -> String
-ppConstraint (Constraint { constraintHead = iface, constraintArgs = [] }) =
-  iface
-ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
-  "\{iface} \{joinWith " " (map ppTyAtom tys)}"
 
 -- ── inferred-constraint promotion (unsignatured `=>` — the two-pass layer) ──
 -- After a group is generalized, an UNSIGNATURED eligible member that uses a

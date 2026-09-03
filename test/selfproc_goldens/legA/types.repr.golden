@@ -1,0 +1,73 @@
+assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
+atomInsert : Atom -> List Atom -> List Atom
+atomLabel : Atom -> String
+atomParam : Atom -> Param
+atomsNorm : List Atom -> List Atom
+atomsNormGo : List Atom -> List Atom -> List Atom
+atomsUnion : List Atom -> List Atom -> List Atom
+axisUnion : List (String, Param) -> List (String, Param) -> List String
+commaStr : Int -> String
+commonPrefixLen : String -> String -> Int -> Int
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+djoin : Param -> Param -> Param
+djoinN : Param -> Param -> Param
+drender : Param -> String
+drenderN : Param -> String
+effHoleSrc : String
+effStr : List Atom -> String
+effrowLabels : EffRow -> List Atom
+effrowNorm : EffRow -> EffRow
+effvarId : Ref Effvar -> Int
+insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
+isHoleStr : String -> Bool
+isJoinCell : Ref Effvar -> Bool
+isSubTop : Param -> Bool
+joinAxis : List (String, Param) -> List (String, Param) -> String -> (String, Param)
+letters : String
+lookupAssocI : Int -> List (Int, a) -> Option a
+lookupAxis : String -> List (String, Param) -> Option Param
+nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
+normHole : Param -> Param
+normalize : Mono -> Mono
+normalizeLink : Ref Tyvar -> Mono -> Mono
+ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
+ppConName : String -> String
+ppConstraint : Constraint -> String
+ppConstraints : List Constraint -> String
+ppEach : Ref (List (Int, String)) -> Ref Int -> Int -> List Mono -> List String
+ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
+ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
+ppEffArgFmt : String -> String -> String
+ppEffAtomTy : (String, Option String) -> String
+ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
+ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> String
+ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
+ppMono : Mono -> String
+ppMonosShared : List Mono -> String
+ppPredArgsShared : List Mono -> String
+ppScheme : Scheme -> String
+ppSchemeCon : List VecObl -> Scheme -> String
+ppTy : Ty -> String
+ppTyAtom : Ty -> String
+ppTyFunArg : Ty -> String
+ppVar : Ref (List (Int, String)) -> Ref Int -> Ref Tyvar -> String
+productNorm : List (String, Param) -> Param
+quoteStr : String -> String
+renderAtom : Atom -> String
+renderAtoms : List Atom -> String
+renderAxis : (String, Param) -> String
+renderAxisVal : Param -> String
+renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List VecObl -> List String
+renderProductLit : List (String, Param) -> String
+rowFlat : EffRow -> (List Atom, List (Ref Effvar))
+rowFlatMembers : List Atom -> List (Ref Effvar) -> (List Atom, List (Ref Effvar))
+setCardCap : Int
+sortAxes : List (String, Param) -> List (String, Param)
+spineParts : Mono -> (Mono, List Mono)
+subTopOf : Param -> Param
+tupleHeadTagTc : Int -> String
+tupleSpine : Mono -> Option (List Mono)
+tupleTagArity : String -> Option Int
+tupleTagArityGo : String -> Int -> Option Int
+wrapIf : Bool -> String -> String

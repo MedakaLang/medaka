@@ -430,6 +430,50 @@ as a warning, census, then SC-3"; a step 8 (SC-1, #2563) follows step 5's third 
 file split (#2586) is not a numbered step but a measurement owed after step 5's first unit
 and a set of extractions that ride the steps whose state moves they depend on.
 
+### SA-10a. Landing log (2026-09-03, branch `typecheck-refactor`)
+
+Recorded here so the RULED block above reads against what is on the tree, not against the
+plan alone. One PR, one commit per step; every step's gate list is in its commit message.
+
+1. **Step 1 done** (#2554, #2556 fixed, HM-CORE §1; PR #2564) — before this branch.
+2. **Step 1's cheap gates done**: #2552 (27 exports narrowed, 7 dead functions deleted),
+   #2553 (the `PerRun` field comments), #2550 (`rule-promissory-reader`), #2551
+   (`diff_compiler_catch_all_census`, 82 sites pinned), #2089 (the emit gate — warn-first,
+   hard under `MEDAKA_STRICT=1`, per ruling 2). Its census on the compiler's own graph
+   found eight discarded diagnostics from two mangling-vs-typecheck divergences on the emit
+   path (a constructor-head fast path that rejected mangled constructors; the prelude
+   mapping that covered only core's exports), both fixed, so the self-compile is clean with
+   the gate hard (C3a measured). Side finding: the emitter never honored
+   `MEDAKA_ARGTAG_UNPIN`, so `test/argtag_matrix_fixtures/CENSUS.md`'s headline (every
+   masked cell wrong on the native engine, blocked on #1082) was an instrument artifact;
+   re-measured with the hatch armed, the disjoint-head cells are `decidable` — the census
+   and `docs/KNOWN-GAPS.md` are corrected.
+3. **Step 2 done** (#2543): `elabPromotionFixpoint` — discovery is a fixpoint over the real
+   Module-arm sweep; the joint Flat scratch pass and `dropShadowedCore` are gone; the
+   cross-module constraint tables needed no snapshot (the per-module pass already writes
+   them back). Drained #1343, re-pointed to `eval_typed_modules_fixtures`.
+4. **Step 3 done as far as the channel** (#2544): `elaborateModules` returns its residual
+   `(mid, TcDiag)` list; `run`/`build` render it located; the emit gate prints it. Not done:
+   turning the direct-push constraint sites into obligations reported at quiescence — that
+   is step 6's drain. #1910's claim has no live witness (see the commit).
+5. **Step 4 done** (#2546): one impl-body inference form on the Module arm (the check
+   path's `inferUserImplBodies`); the corpus's acceptance delta is empty. The Flat arm's
+   gate stays (E-2b's business); the impl-obligation gate on the emit path is untouched.
+6. **Step 5 unit 1 done** (#2547): `GraphRun` — the deferred channels, the two counters and
+   the id-keyed given tables are graph-lifetime; per-module drains take their slices from
+   `GraphMarks` recorded at module start (`moduleRanges` is the substrate step 6 reads).
+   `funPredicateSlotsRef` and the impl-`requires` givens stay per-module (bare-name keyed).
+7. **Ruling 8's measurement, re-run after unit 1** with the survey's per-binding tags on
+   the branch's tree: every candidate boundary (K, HM core, I, E, Sh, D) still references
+   every other and reads state cells, so all stay gateway-owned regions — except that the
+   closure of the renderers over their own references (the TYPES-REP tag plus helpers, 82
+   definitions, 909 lines) is closed and reads no cell. That is `compiler/types/repr.mdk`,
+   the first extraction (#2586). The state records were in the closed set too and are
+   deliberately left in `typecheck.mdk` until a second half needs them importable.
+
+Next in order: #2547 unit 2 (one `Obligation` bag, abstract `EvDest`), then #2548 (the
+whole-graph drain at quiescence, T4 reject as a `W-` warning per ruling 1), unit 3, #2549.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under

@@ -130,17 +130,11 @@ import json.{
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
 import support.util.{startsWith}
+import types.repr.{Scheme}
 import types.typecheck.{
-  elaborateModules,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
-  mainTypeIsFloat,
-  mainTypeIsUnit,
-  checkedFfiExternTypeNamesModules,
-  Scheme,
-  ppSchemeNamedFull,
-  checkOneSchemeFullK,
+  elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
+  preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
+  checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
   ifaceImplHeadTable,

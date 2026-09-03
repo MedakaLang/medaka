@@ -73,14 +73,10 @@ import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
 import string.{stripCR}
 import frontend.desugar.{desugar}
+import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneSchemeFullK,
-  ppSchemeNamed,
-  ppSchemeNamedFull,
-  Scheme(..),
-  currentLocalSchemes,
-  currentLocalSchemesLoc,
-  currentSeedSchemes,
+  checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
+  currentLocalSchemesLoc, currentSeedSchemes
 }
 import tools.fmt.{formatSource}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}

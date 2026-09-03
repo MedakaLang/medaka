@@ -1,5 +1,5 @@
 # META
-source_lines=2079
+source_lines=2072
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -51,18 +51,11 @@ import frontend.marker.{
   preludeStandaloneSet,
   preludeStandaloneShadowsWith,
 }
+import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneDiagsK,
-  checkModulesDiagsChain,
-  checkModules,
-  entryOwnSchemes,
-  Scheme(..),
-  setCoherenceUserDecls,
-  setStdlibOwnership,
-  TcDiag(..),
-  tcMsg,
-  mainTypeIsUnit,
-  mainTypeIsAsync,
+  checkOneDiagsK, checkModulesDiagsChain, checkModules, entryOwnSchemes,
+  setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit,
+  mainTypeIsAsync
 }
 import driver.loader.{
   LoadMsg,
@@ -2091,7 +2084,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
@@ -2380,7 +2374,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))

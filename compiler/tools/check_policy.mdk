@@ -44,22 +44,21 @@ import frontend.ast.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import tools.check.{checkHasErrors}
-import types.typecheck.{
+import types.repr.{
   Scheme(..),
   Mono(..),
   EffRow(..),
   Atom(..),
   Param(..),
-  checkOneSchemeFull,
   normalize,
   tupleSpine,
   effrowLabels,
   atomLabel,
   atomParam,
-  dsub,
   drender,
-  decodeProductParam,
-  decodeSetParam,
+}
+import types.typecheck.{
+  checkOneSchemeFull, dsub, decodeProductParam, decodeSetParam
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{sortUniqS, joinWith, reverseL, escStr, lookupAssoc}

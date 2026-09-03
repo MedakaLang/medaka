@@ -47,18 +47,11 @@ import frontend.marker.{
   preludeStandaloneSet,
   preludeStandaloneShadowsWith,
 }
+import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneDiagsK,
-  checkModulesDiagsChain,
-  checkModules,
-  entryOwnSchemes,
-  Scheme(..),
-  setCoherenceUserDecls,
-  setStdlibOwnership,
-  TcDiag(..),
-  tcMsg,
-  mainTypeIsUnit,
-  mainTypeIsAsync,
+  checkOneDiagsK, checkModulesDiagsChain, checkModules, entryOwnSchemes,
+  setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit,
+  mainTypeIsAsync
 }
 import driver.loader.{
   LoadMsg,
