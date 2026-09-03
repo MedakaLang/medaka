@@ -1,5 +1,5 @@
 # META
-source_lines=5475
+source_lines=5474
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -4418,9 +4418,8 @@ bindChainFinding loc _ = Finding {
 -- ── rule: promissory-reader (#2550) ───────────────────────────────────────────
 -- A comment claiming a symbol is not read YET ("nothing reads this yet",
 -- "no reader yet", "do not add a reader") is a negative about the whole file that
--- expires the moment a reader lands, and no gate notices: three such claims were
--- live-false at once in typecheck.mdk, and a reviewer traced a shipped S0 to
--- someone believing one.  This rule asserts the claim: the subject must occur in
+-- expires the moment a reader lands, and no other gate notices (#2550 has the
+-- measured failure rate).  This rule asserts the claim: the subject must occur in
 -- no code line of the file other than its own definition.
 --
 -- The SUBJECT is, in order: the identifier the claim names in backticks right
