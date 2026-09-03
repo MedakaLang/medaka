@@ -1,5 +1,5 @@
 # META
-source_lines=5454
+source_lines=5455
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -2199,13 +2199,14 @@ verifyCmdBody argv = match parseVerifyArgs argv
 --      path matches when it IS the dir or lives under it).
 --
 -- ⚠️ A `sources` glob of exactly `*` is a WHOLE-TREE source (today only
--- diff_compiler_source_bytes, which re-scans every tracked file whatever
--- changed).  It matches every path by construction, so it must never
--- establish that a path is MAPPED — otherwise layer 1's fail-open could never
--- fire again and an unmapped path would silently select one whole-tree gate
--- instead of the suite.  preflight draws exactly this line too: its
--- unconditional `add 'diff_compiler_source_bytes'` sits OUTSIDE the case table
--- whose misses it reports as UNMAPPED.
+-- two gates, diff_compiler_source_bytes and diff_compiler_comment_shout_diff
+-- (#2621), each of which re-scans every tracked file whatever changed).  It
+-- matches every path by construction, so it must never establish that a path
+-- is MAPPED — otherwise layer 1's fail-open could never fire again and an
+-- unmapped path would silently select one whole-tree gate instead of the
+-- suite.  preflight draws exactly this line too: its unconditional `add` for
+-- each of the two sits OUTSIDE the case table whose misses it reports as
+-- UNMAPPED.
 --
 -- Output uses preflight's own machine-readable prefixes (GATE / FULL /
 -- UNMAPPED), so the two derivations can be diffed line-for-line.

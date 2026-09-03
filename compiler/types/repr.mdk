@@ -28,7 +28,7 @@ public export data Mono =
   -- fact, and a parallel ADT would buy a conversion at every seam relating a
   -- declaration to a head that spells it.
   --
-  -- ⚠️ THIS FIELD IS READ, AND IT DECIDES ACCEPTANCE (#1111 Stage A-2 unit
+  -- THIS FIELD IS READ, AND IT DECIDES ACCEPTANCE (#1111 Stage A-2 unit
   -- A-2.10).  It said "CARRIER ONLY — NOTHING READS IT YET, and no answer
   -- changes" until A-2.2b, then "IT IS READ, AND STILL NO ANSWER CHANGES" until
   -- this unit.  The first was already FALSE on `main` when it was written
@@ -65,7 +65,7 @@ public export data Mono =
   --     goal side becomes supplied and canonical
   --     (`grep -nw dispHeadTab compiler/types/typecheck.mdk`).
   --
-  -- 🚨 SO A LEDGERED RETEST IS STILL NOT AN IDENTITY COMPARISON, AND PROMOTING
+  -- SO A LEDGERED RETEST IS STILL NOT AN IDENTITY COMPARISON, AND PROMOTING
   -- ONE AS A TIDY-UP STILL CHANGES ACCEPTANCE — that is exactly what A-2.2b did
   -- three times before review caught it, and A-2.10 narrowing the COMPARISONS
   -- does not license it on the DISPATCH side.  Derive the reader set rather than
@@ -74,7 +74,7 @@ public export data Mono =
   --     grep -n TCon compiler/types/typecheck.mdk \
   --       | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE 'TCon [^ )]+ _'
   --
-  -- 🚨 THE CONSTRUCTOR IS NEVER APPLIED OUTSIDE THE FOUR MINTS BELOW
+  -- THE CONSTRUCTOR IS NEVER APPLIED OUTSIDE THE FOUR MINTS BELOW
   -- (`tconBuiltin` / `tconTupleHead` / `tconFrom` / `tconUnresolved`), and that is
   -- the property this widening rests on rather than "every construction site is
   -- individually right".  There is no stamping pass at this layer and no
@@ -94,7 +94,7 @@ public export data Mono =
   --                                          # M origin-binding pattern(s)"
   --   grep -n 'mono_tcon_allowed' -A20 test/typecheck_compiler_source.sh
   --
-  -- ⚠️ THIS PARAGRAPH SAID "SEVEN that BIND it: `headTyconMono` plus the six
+  -- THIS PARAGRAPH SAID "SEVEN that BIND it: `headTyconMono` plus the six
   -- comparisons above" AND WAS WRONG BY ONE ON ITS FIRST DAY — it omitted
   -- `firstIdConflict` (the diagnostic-side reader that pairs the two conflicting
   -- identities so `Type mismatch: T vs T` can name both modules), which binds
@@ -104,7 +104,7 @@ public export data Mono =
   -- reader has to pick which is meant.  Do not re-describe this population with a
   -- rule of thumb — `_`-shaped or numeric.
   --
-  -- ⚠️ AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
+  -- AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
   -- from `instantiate`, i.e. every use of every imported binding) used to answer
   -- `TCon n => TCon n`; they now return the MATCHED NODE, so preservation is
   -- structural rather than a per-site promise — and one allocation per head per
@@ -117,7 +117,7 @@ public export data Mono =
   -- parser already routed through `TIdent` (`parseTyAtom`,
   -- `compiler/frontend/parser.mdk:2049`).
   --
-  -- 🚨 THE NAMING RULE, STATED CORRECTLY — it is the safety argument for every
+  -- THE NAMING RULE, STATED CORRECTLY — it is the safety argument for every
   -- consumer that does NOT carry a `TRigid` arm, so getting it wrong silently
   -- changes answers:
   --   * a RIGID name never starts with an UPPERCASE letter.  It is not
@@ -145,7 +145,7 @@ public export data Mono =
   -- the I6.1 half — "a rigid carries no identity" is now unrepresentable-wrong
   -- rather than merely unwritten.
   --
-  -- ⚠️ It does NOT yet satisfy I6.1: a rigid is still usable as a dispatch
+  -- It does NOT yet satisfy I6.1: a rigid is still usable as a dispatch
   -- key wherever `headTyconMono`/`headTyconNameMono` hand one out (both keep an
   -- explicit answer-preserving `TRigid` arm, deliberately).  The gain is that
   -- the violation is now GREPPABLE — `grep -nw TRigid` — instead of invisible
@@ -454,7 +454,7 @@ effrowNorm (EffRow labels tail) = match tail
     -- members disappear, and a join left with fewer than two unbound members
     -- IS a plain row.  The cell is path-compressed to its live members so a
     -- later read pays for the flattening once.
-    -- ⚠️ NO path compression: a bound member carries ATOMS on its link row
+    -- NO path compression: a bound member carries ATOMS on its link row
     -- (`70 := <Stdout | 75>`), and rewriting the cell to its unbound leaves
     -- would drop them — the next normalization of the same cell then read
     -- `<>` where `<Stdout | …>` was (a launder, found first-hand).  The flat
@@ -542,7 +542,7 @@ dedupCells (c :: cs) =
 -- `dispHeadTab`).  One value carrying both halves is what keeps those two questions
 -- from drifting apart.
 --
--- 🚨 `OriginUnresolved` IS A LEGAL INHABITANT AND MUST STAY ONE.  A flat user
+-- `OriginUnresolved` IS A LEGAL INHABITANT AND MUST STAY ONE.  A flat user
 -- module's own interface is unstamped on BOTH sides (its `interface` decl and its
 -- `impl` alike), so it keys `TkBare`/`TkBare` symmetrically and is unaffected by the
 -- re-key — that symmetry is why this change is not a mass false-reject.  A TOTAL
@@ -559,7 +559,7 @@ public export data IfaceRef = IfaceRef {
 -- #1446 P1) applied to one vector of scheme-quantified tyvar ids.  This is the payload
 -- of `schemeObligationsRef` and of its three cross-module mirrors.
 --
--- ⚠️ The point of the record is not ergonomics.  Before it, this payload was
+-- The point of the record is not ergonomics.  Before it, this payload was
 -- `(String, List Int)` — the SAME shape as `funConstraintsRef`'s `(fn name, slot ids)`
 -- entries, 58 lines of the file apart, with nothing but a convention keeping the two
 -- meanings from being passed to each other's readers.  Widening the interface half to
@@ -575,7 +575,7 @@ public export data IfaceRef = IfaceRef {
 -- the convention `zipSlotArgs`/`enclPreds` already use for the slot channel, and
 -- it reproduces the pre-widening ids-only behaviour byte for byte.
 --
--- ⚠️ [voIds] IS NOT REDUNDANT WITH IT, AND MUST NOT BE DERIVED FROM IT.  Two
+-- [voIds] IS NOT REDUNDANT WITH IT, AND MUST NOT BE DERIVED FROM IT.  Two
 -- producers have only an id (`vecOblsOfSlots` lifts a `CSlot`, whose payload is
 -- `csId : Int`; `superSlotVecOf` maps typaram names positionally onto ids), and a
 -- `Mono` is a `Ref Tyvar` that cannot be minted from an id.  [voIds] also remains
@@ -669,7 +669,7 @@ ppSchemeCon cons (Forall _ _ t) =
 -- a predicate renders with its WHOLE argument vector — `Ix a i =>`, not the
 -- `(Ix a, Ix i) =>` two-1-ary-facts rendering the shattered representation produced
 -- before #607.
--- ⚠️ Renders the SPELLING (`voIface.irName`).  U1b (#1482) gave this payload an
+-- Renders the SPELLING (`voIface.irName`).  U1b (#1482) gave this payload an
 -- identity-carrying interface half; every DISPLAY surface must keep printing the name
 -- the user wrote, or every `Num a => …` in `check --types`, LSP hover, inlay hints and
 -- the snapshot corpus moves.
@@ -825,7 +825,7 @@ wrapIf False s = s
 
 -- render a PREDICATE's argument vector against one shared naming ctx, at ARGUMENT
 -- precedence — so `List a` in an argument slot prints as `(List a)`.
--- ⚠️ NOT `ppMonosShared`, and not a candidate for merging with it: that one renders
+-- NOT `ppMonosShared`, and not a candidate for merging with it: that one renders
 -- the dispatch monos at prec 2, where `wrapIf (prec > 2)` leaves an application
 -- BARE.  For a predicate whose arguments are themselves applications that is
 -- ambiguous — `Index List a Int a` reads as either a 3-argument or a 5-argument
