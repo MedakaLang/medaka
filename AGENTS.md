@@ -601,6 +601,21 @@ not added to that list is silently absent from the deploy — this shipped a sit
 that 404'd on **every** stdlib import. The script now derives the expected set
 from `main.js` and fails closed; keep that check.
 
+🚨 **[WEB-STALE-DIST] `build_site.sh` COPIES whatever `playground/dist/` already
+holds and rebuilds the wasm only when `dist/playground.wasm` is MISSING**, and
+`deploy_cloudflare.sh` builds `site/` only when `site/` is missing. A gate run
+(`test/wasm/diff_playground_input.sh` calls `build_playground_wasm.sh`) leaves a
+`dist/` from THAT branch's source, and a later deploy from `main` ships it with
+exit 0 — this deployed a `core.mdk` that predated a merged stdlib change while
+`verify_stdlib_deploy.sh` still PASSED (it checks the docs route, not `dist/`).
+Before a deploy: `bash playground/build_playground_wasm.sh` (re-copies every
+`dist/*.mdk` from `stdlib/`), `rm -rf playground/site`, then deploy. Verify the
+COMPILER, not just the origin: compile a probe through the live
+`/dist/playground.wasm` + `/dist/core.mdk` with `playground/dev_compile_node.mjs`,
+and grep the live `core.mdk` for a line only the new source has. The custom domain
+can lag `medaka.pages.dev` by a minute after a deploy; re-fetch before concluding
+it missed.
+
 ⚠️ **[WEB-OG-ABSOLUTE] `og:image` in `index.html` is an ABSOLUTE
 `https://medaka-lang.dev/…` url** — scrapers don't resolve relative ones — so no
 link-preview card renders from any other origin, `*.pages.dev` previews included.
