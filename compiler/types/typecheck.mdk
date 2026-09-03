@@ -1103,8 +1103,8 @@ public export data Scheme = Forall (List Int) (List Int) Mono
 
 newTyvarId : Unit -> Int
 newTyvarId _ =
-  let n = perRun.value.tyvarCounter.value
-  perRun.value.tyvarCounter := n + 1
+  let n = graphRun.value.tyvarCounter.value
+  graphRun.value.tyvarCounter := n + 1
   n
 
 freshVar : Unit -> Mono
@@ -1115,8 +1115,8 @@ freshVar _ =
 
 newEffvarId : Unit -> Int
 newEffvarId _ =
-  let n = perRun.value.effvarCounter.value
-  perRun.value.effvarCounter := n + 1
+  let n = graphRun.value.effvarCounter.value
+  graphRun.value.effvarCounter := n + 1
   n
 
 -- the empty closed row — a pure arrow
@@ -7694,6 +7694,9 @@ wAll : Windowed a -> List a
 wAll w = !w.items
 
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
+wCopy : Windowed a -> Windowed a
+wCopy w = Windowed { items = Ref !w.items, n = Ref !w.n }
+
 wSnapshot : Windowed a -> (List a, Int)
 wSnapshot w = (!w.items, !w.n)
 
@@ -8266,7 +8269,7 @@ data PendingDictApp = PendingDictApp {
 }
 
 pushDictApp : PendingDictApp -> Unit
-pushDictApp app = wPush perRun.value.dictApps app
+pushDictApp app = wPush graphRun.value.dictApps app
 
 -- Method-level-constraint dict-passing.  `methodPredicateSlotsRef` is the sole
 -- per-run authority: each method constraint owns one complete PredicateSlot and the
@@ -8442,7 +8445,9 @@ crossRun = Ref (freshCrossRun initialEnv)
 -- field, so the set that resets == the set in CrossRun, enforced by the constructor.
 -- Scoped to exactly these 22; do NOT fold into `resetState` (they must survive THAT).
 resetCrossModuleState : Unit -> Unit
-resetCrossModuleState _ = crossRun := freshCrossRun initialEnv
+resetCrossModuleState _ =
+  crossRun := freshCrossRun initialEnv
+  resetGraphState ()
 
 -- self/mutually-recursive constrained-fn call sites.  At such a site the callee's
 -- own constraints are not yet registered (its letrec group is still inferring),
@@ -8643,7 +8648,7 @@ recordArgStamp name tagRef implRef idx mono
   | toggles.value.suppressArgStamp.value = ()
   | otherwise = match nthArgMono idx mono
     Some am =>
-      perRun.value.pendingArgStamps :=
+      graphRun.value.pendingArgStamps :=
         PendingEntry
             name
             tagRef
@@ -8651,7 +8656,7 @@ recordArgStamp name tagRef implRef idx mono
             perRun.value.currentFn.value
             (SKArg implRef mono)
             !currentLoc
-          :: perRun.value.pendingArgStamps.value
+          :: graphRun.value.pendingArgStamps.value
     None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -9251,26 +9256,177 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
   [] => False
   _ => True
 
+-- ── graph-lifetime state (#2547 unit 1, ARCH M1) ─────────────────────────────
+-- What `resetState` does NOT clear: the cells that must outlive a module so a
+-- whole-graph resolve pass (#2548) can read them at quiescence, and the two counters
+-- that keep every tyvar/effvar id unique across the graph so an entry recorded in one
+-- module can never alias one recorded in another.  Minted once per graph by
+-- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble,
+-- and each sweep of `elabPromotionFixpoint`) and from `checkBodyImpl`'s Flat arm (a
+-- loader-less driver IS its whole graph).
+--
+-- The channels are still DRAINED PER MODULE today, by the stamper sequence in
+-- `elabModuleStamp` / `elaborateDict`, and that drain must see exactly this module's
+-- entries: `recordModuleStart` notes each channel's length as the module begins and
+-- `moduleRanges` keeps the (module id, marks) pairs — every entry a module records is
+-- consed after its mark, contiguously, because modules are processed one at a time.
+-- `moduleWindow` cuts the slice.  A graph-end drain takes the same slices from
+-- `moduleRanges` instead of from its head.
+--
+-- Deliberately still per-module: `funPredicateSlotsRef` (keyed by bare binding NAME —
+-- graph-global it would collide across modules; it is seeded from and written back to
+-- crossRun's tables per module already) and the impl-`requires` given table.
+-- `activeDictVars` / `activeDictPreds` ARE here: both are keyed by tyvar ids, which the
+-- graph counter keeps unique, so an entry can only ever match its own module's sites.
+-- Their lookups became whole-graph linear scans (`diff_compiler_perf_scaling` is the
+-- gate on that), which unit 3's re-keying (`gGiven`) retires.
+data GraphMarks = GraphMarks {
+  mSites : Int,
+  mArgStamps : Int,
+  mRLocal : Int,
+  mBinop : Int,
+  mUnop : Int,
+  mArith : Int,
+  mMethodDicts : Int,
+  mRecDictApps : Int,
+  mDictApps : Int,
+  mNumlit : Int,
+}
+
+data GraphRun = GraphRun {
+  tyvarCounter : Ref Int,
+  effvarCounter : Ref Int,
+  pendingSites : Ref (List PendingEntry),
+  pendingRLocalSites : Ref (List PendingEntry),
+  pendingBinopSites : Ref (List PendingEntry),
+  pendingUnopSites : Ref (List PendingEntry),
+  pendingArithSites : Ref (List (Ref Route, Mono)),
+  -- #991 ask 3, RULED: the numeric-literal channel STAYS BESPOKE — it is
+  -- Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is
+  -- deliberately NOT ported onto `UObligation` like `implObls` was.
+  numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
+  pendingArgStamps : Ref (List PendingEntry),
+  activeDictVars : Ref (List (Int, String)),
+  -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
+  -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
+  -- same predicate as another iff they have equal length and `monoSameGiven` holds at
+  -- every position, in order — see `monoVecSameGiven`.
+  activeDictPreds : Ref (List (PredicateSlot, String)),
+  dictApps : Windowed PendingDictApp,  -- #841: pendingDictApps/N, ported onto Windowed
+  pendingMethodDicts : Ref (List PendingMethodDict),
+  pendingRecDictApps : Ref (List RecDictApp),
+  moduleRanges : Ref (List (String, GraphMarks)),
+}
+
+freshGraphRun : Unit -> GraphRun
+freshGraphRun _ = GraphRun {
+  tyvarCounter = Ref 0,
+  effvarCounter = Ref 0,
+  pendingSites = Ref [],
+  pendingRLocalSites = Ref [],
+  pendingBinopSites = Ref [],
+  pendingUnopSites = Ref [],
+  pendingArithSites = Ref [],
+  numlitRefs = Ref [],
+  pendingArgStamps = Ref [],
+  activeDictVars = Ref [],
+  activeDictPreds = Ref [],
+  dictApps = wNew (),
+  pendingMethodDicts = Ref [],
+  pendingRecDictApps = Ref [],
+  moduleRanges = Ref [],
+}
+
+graphRun : Ref GraphRun
+graphRun = Ref (freshGraphRun ())
+
+resetGraphState : Unit -> Unit
+resetGraphState _ = graphRun := freshGraphRun ()
+
+-- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
+-- over the same value, so neither side's later writes reach the other.
+copyGraphRun : GraphRun -> GraphRun
+copyGraphRun g = GraphRun {
+  tyvarCounter = Ref g.tyvarCounter.value,
+  effvarCounter = Ref g.effvarCounter.value,
+  pendingSites = Ref g.pendingSites.value,
+  pendingRLocalSites = Ref g.pendingRLocalSites.value,
+  pendingBinopSites = Ref g.pendingBinopSites.value,
+  pendingUnopSites = Ref g.pendingUnopSites.value,
+  pendingArithSites = Ref g.pendingArithSites.value,
+  numlitRefs = Ref g.numlitRefs.value,
+  pendingArgStamps = Ref g.pendingArgStamps.value,
+  activeDictVars = Ref g.activeDictVars.value,
+  activeDictPreds = Ref g.activeDictPreds.value,
+  dictApps = wCopy g.dictApps,
+  pendingMethodDicts = Ref g.pendingMethodDicts.value,
+  pendingRecDictApps = Ref g.pendingRecDictApps.value,
+  moduleRanges = Ref g.moduleRanges.value,
+}
+
+-- Each channel's length as this module begins.
+graphMarksNow : Unit -> GraphMarks
+graphMarksNow _ = GraphMarks {
+  mSites = listLen graphRun.value.pendingSites.value,
+  mArgStamps = listLen graphRun.value.pendingArgStamps.value,
+  mRLocal = listLen graphRun.value.pendingRLocalSites.value,
+  mBinop = listLen graphRun.value.pendingBinopSites.value,
+  mUnop = listLen graphRun.value.pendingUnopSites.value,
+  mArith = listLen graphRun.value.pendingArithSites.value,
+  mMethodDicts = listLen graphRun.value.pendingMethodDicts.value,
+  mRecDictApps = listLen graphRun.value.pendingRecDictApps.value,
+  mDictApps = wMark graphRun.value.dictApps,
+  mNumlit = listLen graphRun.value.numlitRefs.value,
+}
+
+recordModuleStart : String -> Unit
+recordModuleStart mid =
+  graphRun.value.moduleRanges :=
+    (mid, graphMarksNow ()) :: graphRun.value.moduleRanges.value
+
+-- The marks of the module being processed (the head of `moduleRanges`); all zeros
+-- before any module started, which is the whole graph.
+currentModuleMarks : Unit -> GraphMarks
+currentModuleMarks _ = match graphRun.value.moduleRanges.value
+  (_, m) :: _ => m
+  [] => GraphMarks {
+    mSites = 0,
+    mArgStamps = 0,
+    mRLocal = 0,
+    mBinop = 0,
+    mUnop = 0,
+    mArith = 0,
+    mMethodDicts = 0,
+    mRecDictApps = 0,
+    mDictApps = 0,
+    mNumlit = 0,
+  }
+
+-- The entries a channel gained since `mark` — this module's own, in the order the
+-- per-module list used to hold them.
+moduleWindow : Ref (List a) -> Int -> List a
+moduleWindow cell mark =
+  let now = cell.value
+  takeFirst (listLen now - mark) now
+
 -- #158 PR3: the ~58 per-RUN accumulators/counters that `resetState` clears are bundled
 -- into ONE typed record so their reset lifecycle is a TYPE FACT, not a hand-maintained
 -- block.  `freshPerRun` constructs exactly the field-Refs `resetState` installs, so "what
 -- resetState clears" == "what PerRun holds" — enforced by the constructor: a new per-module
 -- accumulator cannot be added without appearing in freshPerRun (and thus the reset).  This
 -- is a record OF Refs (fields stay `Ref …`), NOT a record of values: the hot accumulators
--- (pendingSites, typeErrors, activeDictVars, …) are pushed with
+-- (typeErrors, poisonedVars, localBindRefs, …) are pushed with
 -- `setRef x (v :: x.value)`, so the field must be a Ref for that to stay one Ref-write — a
 -- record of values would rebuild the whole 58-field record on every push.  (`obls`,
--- `implObls`, `dictApps` — #838 I1 / #841 — are the exceptions: each a small `Windowed
+-- `implObls` — #838 I1 / #841 — are the exceptions: each a small `Windowed
 -- a` VALUE whose own two fields are Refs — see `wPush` — so pushing through one is
 -- still one Ref-write, not a whole-record rebuild.)
 -- (#158 PR4 extracted shadowHeadCtxRef OUT of here into `Toggles`; its resetState clearing is
 -- preserved by freshToggles being minted in the same resetState — see resetState below.)
 data PerRun = PerRun {
-  tyvarCounter : Ref Int,
   -- True while an IMPL or DEFAULT method body is being inferred — the scope in
   -- which registerLocalScheme records obligations (see its comment).
   inRigidityBodyRef : Ref Bool,
-  effvarCounter : Ref Int,
   curEffect : Ref EffRow,
   rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
   recordByNameRef : Ref (OrdMap RecordInfo),
@@ -9280,8 +9436,6 @@ data PerRun = PerRun {
   dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
   dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
   aliasTableRef : Ref (List (TabKey, (List String, Ty))),
-  pendingSites : Ref (List PendingEntry),
-  pendingRLocalSites : Ref (List PendingEntry),
   shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
   ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1/L2: the Module arm's interface-method schemes under an identity key; read by `pickSchemesByDecl` (checkBodyImpl step 21)
   numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
@@ -9289,15 +9443,11 @@ data PerRun = PerRun {
   definerShadowNamesRef : Ref (List String),
   definerShadowSigsRef : Ref (List (String, Ty)),
   bodyImplEnvRef : Ref ImplEnv,
-  pendingBinopSites : Ref (List PendingEntry),
-  pendingUnopSites : Ref (List PendingEntry),
-  pendingArithSites : Ref (List (Ref Route, Mono)),
   methodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
   methodAdmittedIfacesRef : Ref (OrdMap (List IfaceRef)),
   -- ⚠️ `registeredIfacesRef` was HERE and is RETIRED by #1569 — see the sibling
   -- `CrossRun.universeRegisteredIfacesRef`'s retirement note for the history.
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
-  numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),  -- #991 ask 3, RULED: the numeric-literal channel STAYS BESPOKE — it is Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is deliberately NOT ported onto `UObligation` like `implObls` above was
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
@@ -9308,13 +9458,6 @@ data PerRun = PerRun {
   localBindRefs : Ref (List (String, Option Loc, Mono)),
   localSchemesOut : Ref (List (String, Option Loc, Scheme)),
   seedSchemesOut : Ref (List (String, Scheme)),
-  pendingArgStamps : Ref (List PendingEntry),
-  activeDictVars : Ref (List (Int, String)),
-  -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
-  -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
-  -- same predicate as another iff they have equal length and `monoSameGiven` holds at
-  -- every position, in order — see `monoVecSameGiven`.
-  activeDictPreds : Ref (List (PredicateSlot, String)),
   -- #1154 RESIDUAL: the impl-`requires` twin of `enclPreds`.  One entry per dict slot
   -- an impl's `requires` opens: the tyvar ids the slot is keyed on, and the WHOLE
   -- predicate that slot discharges.  `activeDictVars` above cannot answer a body's
@@ -9327,7 +9470,6 @@ data PerRun = PerRun {
   currentImportDefinersRef : Ref (List (String, String)),
   currentImportOriginsRef : Ref (List (String, String)),
   importedSchemeOblsRef : Ref (OrdMap (List VecObl)),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
-  dictApps : Windowed PendingDictApp,  -- #841: pendingDictApps/N, ported onto Windowed
   obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
   absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
   -- #837: keyed by (binding-name, binding-id) — the id from resolve's
@@ -9339,8 +9481,6 @@ data PerRun = PerRun {
   -- it to tag a top-level member's obligations with its binding id.
   schemeDefIdsRef : Ref (OrdMap Int),
   methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot)),
-  pendingMethodDicts : Ref (List PendingMethodDict),
-  pendingRecDictApps : Ref (List RecDictApp),
   currentFn : Ref String,
   currentImplBody : Ref Bool,
   methodSiteFns : Ref (OrdMap (List Mono)),
@@ -9390,9 +9530,7 @@ data PerRun = PerRun {
 -- A derivation is only honest if someone ran it — so run it, don't read a number here.
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
-  tyvarCounter = Ref 0,
   inRigidityBodyRef = Ref False,
-  effvarCounter = Ref 0,
   curEffect = Ref (EffRow [] None),
   rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -9402,8 +9540,6 @@ freshPerRun _ = PerRun {
   dataParamPolarityRef = Ref [],
   dataParamRowAtomsRef = Ref [],
   aliasTableRef = Ref [],
-  pendingSites = Ref [],
-  pendingRLocalSites = Ref [],
   shadowStandaloneSchemesRef = Ref [],
   ifaceMethodSchemesByIdRef = Ref [],
   numLitFromIntSchemeRef = Ref None,
@@ -9411,13 +9547,9 @@ freshPerRun _ = PerRun {
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
-  pendingBinopSites = Ref [],
-  pendingUnopSites = Ref [],
-  pendingArithSites = Ref [],
   methodIfaceParamsRef = Ref omEmpty,
   methodAdmittedIfacesRef = Ref omEmpty,
   implObls = wNew (),
-  numlitRefs = Ref [],
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
   tupleCallCandidates = Ref [],
@@ -9428,23 +9560,17 @@ freshPerRun _ = PerRun {
   localBindRefs = Ref [],
   localSchemesOut = Ref [],
   seedSchemesOut = Ref [],
-  pendingArgStamps = Ref [],
-  activeDictVars = Ref [],
-  activeDictPreds = Ref [],
   implReqPredicateSlots = Ref [],
   funPredicateSlotsRef = Ref [],
   funConstraintDeclaredRef = Ref [],
   currentImportDefinersRef = Ref [],
   currentImportOriginsRef = Ref [],
   importedSchemeOblsRef = Ref omEmpty,
-  dictApps = wNew (),
   obls = wNew (),
   absorptions = wNew (),  -- #839 2a: resets per module for free via this whole-record re-mint
   schemeObligationsRef = Ref [],
   schemeDefIdsRef = Ref omEmpty,
   methodPredicateSlotsRef = Ref [],
-  pendingMethodDicts = Ref [],
-  pendingRecDictApps = Ref [],
   currentFn = Ref "",
   currentImplBody = Ref False,
   methodSiteFns = Ref omEmpty,
@@ -11804,7 +11930,7 @@ recordRLocalSite env name tagRef inst
   -- return-position value standalone has no such arrow to match — an unconstrained one
   -- (the whole cell #1430 pins) short-circuits to `emptyShadowDicts` there anyway.
   | isNone (methodDispatchIdx name) && standaloneValuePinned name =
-    perRun.value.pendingRLocalSites :=
+    graphRun.value.pendingRLocalSites :=
       PendingEntry
           name
           tagRef
@@ -11812,7 +11938,7 @@ recordRLocalSite env name tagRef inst
           perRun.value.currentFn.value
           (SKRLocal (routeLocalSym !tagRef) True [] [] [])
           !currentLoc
-        :: perRun.value.pendingRLocalSites.value
+        :: graphRun.value.pendingRLocalSites.value
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
@@ -11824,7 +11950,7 @@ recordRLocalSite env name tagRef inst
             (standaloneSchemeFor env name sym)
             (if sym == "" then name else sym)
             am
-        perRun.value.pendingRLocalSites :=
+        graphRun.value.pendingRLocalSites :=
           PendingEntry
               name
               tagRef
@@ -11837,7 +11963,7 @@ recordRLocalSite env name tagRef inst
                 dicts.sdIfaces
                 dicts.sdArgVecs)
               !currentLoc
-            :: perRun.value.pendingRLocalSites.value
+            :: graphRun.value.pendingRLocalSites.value
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -11977,13 +12103,13 @@ recordMethodDicts name methodRef subst =
     perRun.value.methodPredicateSlotsRef.value)
     None => ()
     Some slots =>
-      perRun.value.pendingMethodDicts :=
+      graphRun.value.pendingMethodDicts :=
         PendingMethodDict {
             pmdRoutesRef = methodRef,
             pmdSlots = instantiateMethodPredicateSlots slots subst,
             pmdEncl = perRun.value.currentFn.value,
           }
-          :: perRun.value.pendingMethodDicts.value
+          :: graphRun.value.pendingMethodDicts.value
 
 -- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
 -- stable positions index the occurrence's ordered substitution, avoiding any reliance
@@ -12070,7 +12196,7 @@ nthMethodMono i (_ :: xs) = nthMethodMono (i - 1) xs
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordSite name tagRef implRef methodType =
   let stripped = stripArrows methodType
-  perRun.value.pendingSites :=
+  graphRun.value.pendingSites :=
     PendingEntry
         name
         tagRef
@@ -12078,7 +12204,7 @@ recordSite name tagRef implRef methodType =
         perRun.value.currentFn.value
         (SKReturn implRef methodType)
         !currentLoc
-      :: perRun.value.pendingSites.value
+      :: graphRun.value.pendingSites.value
   perRun.value.methodSiteFns :=
     consSiteFn
       perRun.value.currentFn.value
@@ -12402,9 +12528,9 @@ inferDictAtFound name routesRef inst =
     let _ = recordCallObligations expanded monos argVecs
     fst inst
   else
-    perRun.value.pendingRecDictApps :=
+    graphRun.value.pendingRecDictApps :=
       RecDictApp routesRef name perRun.value.currentFn.value (fst inst)
-        :: perRun.value.pendingRecDictApps.value
+        :: graphRun.value.pendingRecDictApps.value
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -12926,7 +13052,7 @@ blockRecLet env x xloc e =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark perRun.value.dictApps
+  let dictN0 = wMark graphRun.value.dictApps
   let placeholder = freshVar ()
   let envSelf = extendLocalVar env x (monoScheme placeholder)
   let t1 = infer envSelf e
@@ -12946,7 +13072,7 @@ blockLet env (PVar x xloc) e =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark perRun.value.dictApps
+  let dictN0 = wMark graphRun.value.dictApps
   let t = infer env e
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
@@ -14022,7 +14148,7 @@ binopSpanLoc l r = match (exprLoc l, exprLoc r)
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite op dref m = match binopMethod op
   Some method =>
-    perRun.value.pendingBinopSites :=
+    graphRun.value.pendingBinopSites :=
       PendingEntry
           method
           dref
@@ -14030,7 +14156,7 @@ recordBinopSite op dref m = match binopMethod op
           perRun.value.currentFn.value
           (SKOp perRun.value.currentImplBody.value)
           !currentLoc
-        :: perRun.value.pendingBinopSites.value
+        :: graphRun.value.pendingBinopSites.value
   None => ()
 
 -- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
@@ -14045,8 +14171,8 @@ isArithBinop op = contains op ["+", "-", "*", "/", "%"]
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordArithSite op dref m
   | isArithBinop op =
-    perRun.value.pendingArithSites :=
-      (dref, m) :: perRun.value.pendingArithSites.value
+    graphRun.value.pendingArithSites :=
+      (dref, m) :: graphRun.value.pendingArithSites.value
   | otherwise = ()
 
 -- Roadmap #18a: `++` is the surface operator for `Semigroup`'s `append`, so it
@@ -14077,7 +14203,7 @@ unopMethod _ = None
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 recordUnopSite op dref m = match unopMethod op
   Some method =>
-    perRun.value.pendingUnopSites :=
+    graphRun.value.pendingUnopSites :=
       PendingEntry
           method
           dref
@@ -14085,7 +14211,7 @@ recordUnopSite op dref m = match unopMethod op
           perRun.value.currentFn.value
           (SKOp perRun.value.currentImplBody.value)
           !currentLoc
-        :: perRun.value.pendingUnopSites.value
+        :: graphRun.value.pendingUnopSites.value
   None => ()
 
 -- The EUnOp analogue of inferBinopE: infer the single operand, record its
@@ -14448,8 +14574,8 @@ inferNumLit env n fref dref
       let fromIntTy = inferNumLitMethod env s dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
-      perRun.value.numlitRefs :=
-        (a, fref, n, dref) :: perRun.value.numlitRefs.value
+      graphRun.value.numlitRefs :=
+        (a, fref, n, dref) :: graphRun.value.numlitRefs.value
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
@@ -14509,8 +14635,8 @@ inferNumLitBare n fref =
       a
       PNumLit
       !currentLoc
-  perRun.value.numlitRefs :=
-    (a, fref, n, Ref RNone) :: perRun.value.numlitRefs.value
+  graphRun.value.numlitRefs :=
+    (a, fref, n, Ref RNone) :: graphRun.value.numlitRefs.value
   let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
   a
 
@@ -15933,7 +16059,7 @@ recordImporterShadowDicts env mname (r :: rest) tx =
       tx
   let _ =
     setRef
-      perRun.value.pendingRLocalSites
+      graphRun.value.pendingRLocalSites
       (PendingEntry
           mname
           r
@@ -15946,7 +16072,7 @@ recordImporterShadowDicts env mname (r :: rest) tx =
             dicts.sdIfaces
             dicts.sdArgVecs)
           !currentLoc
-        :: perRun.value.pendingRLocalSites.value)
+        :: graphRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
 
 -- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
@@ -15972,7 +16098,7 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
       ats
   let _ =
     setRef
-      perRun.value.pendingRLocalSites
+      graphRun.value.pendingRLocalSites
       (PendingEntry
           mname
           r
@@ -15985,7 +16111,7 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
             dicts.sdIfaces
             dicts.sdArgVecs)
           !currentLoc
-        :: perRun.value.pendingRLocalSites.value)
+        :: graphRun.value.pendingRLocalSites.value)
   recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
@@ -16215,7 +16341,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
     if isDictVar then
       ()
     else
-      perRun.value.pendingRLocalSites :=
+      graphRun.value.pendingRLocalSites :=
         PendingEntry
             name
             tagRef
@@ -16228,7 +16354,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
               dicts.sdIfaces
               dicts.sdArgVecs)
             !currentLoc
-          :: perRun.value.pendingRLocalSites.value
+          :: graphRun.value.pendingRLocalSites.value
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
     -- only arm whose route this stamp decides.  On the STANDALONE arm `ft` is the
@@ -16236,7 +16362,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
     -- pass the receiver mono `xt` so ifaceParamMonos fails its shape match and the
     -- selector falls back to the singleton goal, exactly as before #609.
     Some _ =>
-      perRun.value.pendingArgStamps :=
+      graphRun.value.pendingArgStamps :=
         PendingEntry
             name
             tagRef
@@ -16244,7 +16370,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
             perRun.value.currentFn.value
             (SKArg implRef (if dispatches then ft else xt))
             !currentLoc
-          :: perRun.value.pendingArgStamps.value
+          :: graphRun.value.pendingArgStamps.value
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
@@ -17567,7 +17693,7 @@ inferRecLet env x xloc e1 e2 =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark perRun.value.dictApps
+  let dictN0 = wMark graphRun.value.dictApps
   let placeholder = freshVar ()
   let envSelf = extendLocalVar env x (monoScheme placeholder)
   let t1 = infer envSelf e1
@@ -17633,7 +17759,7 @@ inferLetSimple env pat e1 e2 =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark perRun.value.dictApps
+  let dictN0 = wMark graphRun.value.dictApps
   let t1 = infer env e1
   let _ = exitLevel ()
   -- PLAN.md #11: ground an ambiguous Num-only var before this inner let
@@ -18998,7 +19124,7 @@ processLetGroup env binds =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark perRun.value.dictApps
+  let dictN0 = wMark graphRun.value.dictApps
   let placeholders = map letBindPlaceholder binds
   let env2 = extendLocalVars env placeholders
   let _ = inferLetBinds env2 (zipL binds placeholders)
@@ -19105,7 +19231,11 @@ schemeMono (Forall _ _ t) = t
 -- byte-for-byte what the twin returned.
 methodConstrainedPairs : Unit -> List (Int, String)
 methodConstrainedPairs _ =
-  flatMap argStampPairs perRun.value.pendingArgStamps.value
+  flatMap
+    argStampPairs
+    (moduleWindow
+      graphRun.value.pendingArgStamps
+      (currentModuleMarks ()).mArgStamps)
 
 -- "" when the method's interface is not registered on this path — see
 -- pinnedLocalMismatch, which degrades to interface-free wording rather than dropping
@@ -19226,7 +19356,7 @@ methodOccArgIdPairsAt iface typarams mty occ =
 -- covers every constrained var.  Measured on a built binary during #1021 review.
 dictForwardedPairs : Int -> Int -> List (Int, String)
 dictForwardedPairs callN0 dictN0 =
-  flatMap dictAppMonoIds (wWindow perRun.value.dictApps dictN0)
+  flatMap dictAppMonoIds (wWindow graphRun.value.dictApps dictN0)
     ++ flatMap callOblMonoIds (callOblsWindow callN0)
 
 dictAppMonoIds : PendingDictApp -> List (Int, String)
@@ -20016,18 +20146,42 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
       prog2
   let _ = expandSupersTable prog2
   let implTable = buildImplTable prog2
+  -- #2547 unit 1: same module slices as `elabModuleStamp` (one Flat module = the graph).
+  let mk = currentModuleMarks ()
   let _ =
     resolveSites
       implTable
       (returnPosMethodNames prog2)
-      perRun.value.pendingSites.value
-  let _ = resolveOpSites True implTable perRun.value.pendingBinopSites.value
-  let _ = resolveOpSites False implTable perRun.value.pendingUnopSites.value
-  let _ = resolveArithSites perRun.value.pendingArithSites.value
-  let _ = realizeRecDictApps implTable perRun.value.pendingRecDictApps.value
-  let _ = resolveDictApps prog2 implTable perRun.value.dictApps.items.value
-  let _ = resolveMethodDicts implTable perRun.value.pendingMethodDicts.value
-  let _ = resolveArgStamps implTable perRun.value.pendingArgStamps.value
+      (moduleWindow graphRun.value.pendingSites mk.mSites)
+  let _ =
+    resolveOpSites
+      True
+      implTable
+      (moduleWindow graphRun.value.pendingBinopSites mk.mBinop)
+  let _ =
+    resolveOpSites
+      False
+      implTable
+      (moduleWindow graphRun.value.pendingUnopSites mk.mUnop)
+  let _ =
+    resolveArithSites (moduleWindow graphRun.value.pendingArithSites mk.mArith)
+  let _ =
+    realizeRecDictApps
+      implTable
+      (moduleWindow graphRun.value.pendingRecDictApps mk.mRecDictApps)
+  let _ =
+    resolveDictApps
+      prog2
+      implTable
+      (wWindow graphRun.value.dictApps mk.mDictApps)
+  let _ =
+    resolveMethodDicts
+      implTable
+      (moduleWindow graphRun.value.pendingMethodDicts mk.mMethodDicts)
+  let _ =
+    resolveArgStamps
+      implTable
+      (moduleWindow graphRun.value.pendingArgStamps mk.mArgStamps)
   dictPass allNames prog2
 
 -- With no eligible names (the RKey-only / typed path), there is nothing to
@@ -21206,7 +21360,7 @@ stampRLocalOrFallback False tagRef sym dicts = tagRef := RLocal sym dicts
 -- is a TCon and falls through to None → RKey, unchanged.)
 activeDictVarOf : Mono -> Option String
 activeDictVarOf m = match normalize m
-  TVar cell => lookupAssocI (tyvarId cell) perRun.value.activeDictVars.value
+  TVar cell => lookupAssocI (tyvarId cell) graphRun.value.activeDictVars.value
   TApp a _ => activeDictVarOf a
   _ => None
 
@@ -21228,7 +21382,7 @@ activeDictVarForEncl m encl
       firstDictForEncl
         (tyvarId cell)
         ("$dict_" ++ encl ++ "_")
-        perRun.value.activeDictVars.value
+        graphRun.value.activeDictVars.value
     TApp a _ => activeDictVarForEncl a encl
     _ => None
 
@@ -28400,6 +28554,13 @@ checkBodyImpl : List (String, Scheme) ->
 checkBodyImpl seed mode prog0 =
   let _ = resetState ()
   driverState.value.currentModuleRef := modeModuleId mode
+  -- #2547 unit 1: a loader-less (Flat) driver is its whole graph; a Module driver's
+  -- graph state was minted by its preamble.  Either way this module's channel marks
+  -- are noted now, before any body pushes.
+  let _ = match mode
+    Flat _ => resetGraphState ()
+    Module _ _ _ => ()
+  let _ = recordModuleStart (modeModuleId mode)
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
   -- `importSeed` because the seed is built BEFORE this `resetState ()` — see
@@ -29205,13 +29366,13 @@ checkBodyImpl seed mode prog0 =
 -- the prop body would otherwise contribute are dropped.
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodies env prog =
-  let savedBinop = perRun.value.pendingBinopSites.value
-  let savedUnop = perRun.value.pendingUnopSites.value
-  let savedArith = perRun.value.pendingArithSites.value
+  let savedBinop = graphRun.value.pendingBinopSites.value
+  let savedUnop = graphRun.value.pendingUnopSites.value
+  let savedArith = graphRun.value.pendingArithSites.value
   let _ = inferPropBodiesGo env prog
-  perRun.value.pendingArithSites := savedArith
-  perRun.value.pendingUnopSites := savedUnop
-  perRun.value.pendingBinopSites := savedBinop
+  graphRun.value.pendingArithSites := savedArith
+  graphRun.value.pendingUnopSites := savedUnop
+  graphRun.value.pendingBinopSites := savedBinop
 
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferPropBodiesGo _ [] = ()
@@ -30828,7 +30989,9 @@ checkUndeterminedObligation univ iface occ loc
 --     RNone (route never filled, e.g. unreachable position) falls to Int below.
 -- Reads numlitRefs (populated by inferNumLit during THIS run/module's inference).
 setNumlitFloats : Unit -> Unit
-setNumlitFloats _ = setNumlitFloatsGo perRun.value.numlitRefs.value
+setNumlitFloats _ =
+  setNumlitFloatsGo
+    (moduleWindow graphRun.value.numlitRefs (currentModuleMarks ()).mNumlit)
 
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setNumlitFloatsGo [] = ()
@@ -31496,9 +31659,9 @@ registerOneMethodDict mname slot id subst = match lookupAssocI id subst
   None => ()
   Some m => match normalize m
     TVar cell =>
-      perRun.value.activeDictVars :=
+      graphRun.value.activeDictVars :=
         (tyvarId cell, dictParamName mname slot)
-          :: perRun.value.activeDictVars.value
+          :: graphRun.value.activeDictVars.value
     _ => ()
 
 -- infer each impl-with-`requires`' return-position method bodies; the interface
@@ -32645,9 +32808,9 @@ registerImplMethodDictOne mname slot vname tvMap = match lookupAssoc vname tvMap
   None => ()
   Some m => match normalize m
     TVar cell =>
-      perRun.value.activeDictVars :=
+      graphRun.value.activeDictVars :=
         (tyvarId cell, dictParamName mname slot)
-          :: perRun.value.activeDictVars.value
+          :: graphRun.value.activeDictVars.value
     _ => ()
 
 -- the non-interface-param dispatch var name of each method-level constraint, in
@@ -32895,8 +33058,8 @@ registerPredGiven iface args dname
       psArgs = PSArgsKnown args,
       psBoundIds = dedupI (flatMap monoTyvarIds args),
     }
-    perRun.value.activeDictPreds :=
-      (slot, dname) :: perRun.value.activeDictPreds.value
+    graphRun.value.activeDictPreds :=
+      (slot, dname) :: graphRun.value.activeDictPreds.value
 
 monoIsBareTyvar : Mono -> Bool
 monoIsBareTyvar m = match normalize m
@@ -32951,7 +33114,7 @@ monoVecSameGiven _ _ = False
 -- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does.
 activeDictPredOf : PredicateRequest -> Mono -> String -> Option String
 activeDictPredOf request targetMono encl =
-  let preds = perRun.value.activeDictPreds.value
+  let preds = graphRun.value.activeDictPreds.value
   let local =
     if encl == "" then
       None
@@ -32983,7 +33146,7 @@ activeFunDictPredOf request encl =
   firstPredForEncl
     request
     ("$dict_" ++ encl ++ "_")
-    perRun.value.activeDictPreds.value
+    graphRun.value.activeDictPreds.value
 
 firstPredForEncl : PredicateRequest ->
   String ->
@@ -33017,7 +33180,7 @@ activeFunDictPredOfResidual iface args encl =
     iface
     args
     ("$dict_" ++ encl ++ "_")
-    perRun.value.activeDictPreds.value
+    graphRun.value.activeDictPreds.value
 
 firstPredForEnclResidual : String ->
   List Mono ->
@@ -33043,8 +33206,8 @@ ifaceOfMethodName name =
 registerEachActive : List Int -> String -> Unit
 registerEachActive [] _ = ()
 registerEachActive (id :: rest) dname =
-  perRun.value.activeDictVars :=
-    (id, dname) :: perRun.value.activeDictVars.value
+  graphRun.value.activeDictVars :=
+    (id, dname) :: graphRun.value.activeDictVars.value
   registerEachActive rest dname
 
 -- the tyvar ids in a (normalized) mono — single var for a bare constraint arg
@@ -34709,7 +34872,7 @@ processSCC env sigs grouped members =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let dictN0 = wMark perRun.value.dictApps
+  let dictN0 = wMark graphRun.value.dictApps
   let placeholders = map (m => (m, freshVar ())) members
   let env2 = extendVars env (map placeholderBinding placeholders)
   let (regs, sigTvMaps) = preunifySigsEx sigs placeholders
@@ -34749,7 +34912,7 @@ processSCC env sigs grouped members =
   -- ambiguous-constraint/scheme-obligation registration below.
   let extraNumObls =
     numCallObls (callOblsWindow callN0)
-      ++ numDictObls (wWindow perRun.value.dictApps dictN0)
+      ++ numDictObls (wWindow graphRun.value.dictApps dictN0)
   let defaultObls = addedObls ++ extraNumObls
   let _ = defaultGroupNum defaultObls (map snd placeholders)
   let _ = defaultEachMember defaultObls placeholders
@@ -35119,8 +35282,8 @@ abstractSlotIds (mono :: rest) = match normalize mono
 registerEachActiveId : List Int -> String -> Unit
 registerEachActiveId [] _ = ()
 registerEachActiveId (id :: rest) dname =
-  perRun.value.activeDictVars :=
-    (id, dname) :: perRun.value.activeDictVars.value
+  graphRun.value.activeDictVars :=
+    (id, dname) :: graphRun.value.activeDictVars.value
   registerEachActiveId rest dname
 
 -- #1909: the SIGNATURE channel's `registerPredGiven` call — the one `registerReqSlots`
@@ -35157,8 +35320,8 @@ registerFunPredGiven slot dname
 registerFunPredGivenSlots : List PredicateSlot -> String -> Unit
 registerFunPredGivenSlots [] _ = ()
 registerFunPredGivenSlots (slot :: rest) dname =
-  perRun.value.activeDictPreds :=
-    (slot, dname) :: perRun.value.activeDictPreds.value
+  graphRun.value.activeDictPreds :=
+    (slot, dname) :: graphRun.value.activeDictPreds.value
   registerFunPredGivenSlots rest dname
 
 -- A dictionary supplied for one predicate also supplies every transitive
@@ -36453,7 +36616,7 @@ goalMatchesGiven _ [] = False
 goalMatchesGiven iface args =
   anyGivenMatches
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-    perRun.value.activeDictPreds.value
+    graphRun.value.activeDictPreds.value
 
 anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
 anyGivenMatches _ [] = False
@@ -37097,7 +37260,7 @@ ifaceForInferredId m id =
     direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
     Some ir => ir
-    None => match ifaceFromDictApps id perRun.value.dictApps.items.value
+    None => match ifaceFromDictApps id graphRun.value.dictApps.items.value
       "" => ifaceRefNone
       n => ifaceRefBare n
 
@@ -40380,6 +40543,7 @@ data CoreCheckMemo = CoreCheckMemo {
   ccmKey : (Int, Int),
   ccmCoreSchemes : List (String, Scheme),
   ccmCrossRun : CrossRun,
+  ccmGraphRun : GraphRun,
   ccmDriver : DriverState,
 }
 
@@ -40485,6 +40649,7 @@ checkCoreMemoized : Option (Int, Int) ->
 checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
     crossRun := copyCrossRun m.ccmCrossRun
+    graphRun := copyGraphRun m.ccmGraphRun
     perRun := freshPerRun ()
     let _ = restoreCoreDriverFields m.ccmDriver
     m.ccmCoreSchemes
@@ -40509,6 +40674,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
           ccmKey = k,
           ccmCoreSchemes = coreSchemes,
           ccmCrossRun = copyCrossRun crossRun.value,
+          ccmGraphRun = copyGraphRun graphRun.value,
           ccmDriver = copyDriverState driverState.value,
         }
     coreSchemes
@@ -40903,6 +41069,7 @@ data ChainStep = ChainStep {
   csAccAll : List Decl,
   csResults : List (String, (List TcDiag, List TcDiag)),
   csCrossRun : CrossRun,
+  csGraphRun : GraphRun,
   csDriver : DriverState,
 }
 
@@ -40936,6 +41103,7 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
     None => ([], publicDataDecls coreDecls, coreDecls, [])
     Some st =>
       crossRun := copyCrossRun st.csCrossRun
+      graphRun := copyGraphRun st.csGraphRun
       perRun := freshPerRun ()
       let _ = restoreCoreDriverFields st.csDriver
       (st.csDepEnv, st.csAccData, st.csAccAll, st.csResults)
@@ -41024,6 +41192,7 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
         csAccAll = accAll2,
         csResults = results2,
         csCrossRun = copyCrossRun crossRun.value,
+        csGraphRun = copyGraphRun graphRun.value,
         csDriver = copyDriverState driverState.value,
       }
       let (finalResults, moreSteps) =
@@ -42619,28 +42788,48 @@ elabModuleStamp mid seedVars accData implDecls prog =
   let schemes = checkModuleFullImpl mid seedVars accData implDecls prog
   let _ = setNumlitFloats ()  -- PLAN.md #11: stamp Float-typed int literals (per module, before dictPass)
   let stampImplTable = buildImplTable implDecls
+  -- #2547 unit 1: the channels are graph-lifetime; this module's slice is what the
+  -- per-module stampers read (see `GraphRun`).
+  let mk = currentModuleMarks ()
   let _ =
     resolveSites
       stampImplTable
       (returnPosMethodNames implDecls)
-      perRun.value.pendingSites.value
+      (moduleWindow graphRun.value.pendingSites mk.mSites)
   let _ =
-    resolveOpSites True stampImplTable perRun.value.pendingBinopSites.value
+    resolveOpSites
+      True
+      stampImplTable
+      (moduleWindow graphRun.value.pendingBinopSites mk.mBinop)
   let _ =
-    resolveOpSites False stampImplTable perRun.value.pendingUnopSites.value
-  let _ = resolveArithSites perRun.value.pendingArithSites.value
-  let _ = resolveArgStamps stampImplTable perRun.value.pendingArgStamps.value
+    resolveOpSites
+      False
+      stampImplTable
+      (moduleWindow graphRun.value.pendingUnopSites mk.mUnop)
+  let _ =
+    resolveArithSites (moduleWindow graphRun.value.pendingArithSites mk.mArith)
+  let _ =
+    resolveArgStamps
+      stampImplTable
+      (moduleWindow graphRun.value.pendingArgStamps mk.mArgStamps)
   let _ =
     resolveRLocalSites
       implDecls
       stampImplTable
-      perRun.value.pendingRLocalSites.value
+      (moduleWindow graphRun.value.pendingRLocalSites mk.mRLocal)
   let _ =
-    realizeRecDictApps stampImplTable perRun.value.pendingRecDictApps.value
+    realizeRecDictApps
+      stampImplTable
+      (moduleWindow graphRun.value.pendingRecDictApps mk.mRecDictApps)
   let _ =
-    resolveDictApps implDecls stampImplTable perRun.value.dictApps.items.value
+    resolveDictApps
+      implDecls
+      stampImplTable
+      (wWindow graphRun.value.dictApps mk.mDictApps)
   let _ =
-    resolveMethodDicts stampImplTable perRun.value.pendingMethodDicts.value
+    resolveMethodDicts
+      stampImplTable
+      (moduleWindow graphRun.value.pendingMethodDicts mk.mMethodDicts)
   schemes
 -- DRIVER-COLLAPSE Phase 2: pass the return-position method names (was `[]`) so
 -- resolveSite's RDict-case routes a RETURN-position method site RDictFwd (forward the

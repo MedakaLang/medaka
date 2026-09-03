@@ -508,6 +508,7 @@ containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
 copyCrossRun : CrossRun -> CrossRun
 copyDriverState : DriverState -> DriverState
+copyGraphRun : GraphRun -> GraphRun
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
 coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
@@ -529,6 +530,7 @@ currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
 currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
 currentMethodMismatch : Ref (Option String)
+currentModuleMarks : Unit -> GraphMarks
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
@@ -931,6 +933,7 @@ freshEffMap : List String -> List (String, Ref Effvar)
 freshEffSubst : List Int -> List (Int, Ref Effvar)
 freshEffvar : Unit -> Ref Effvar
 freshEffvarAt : Int -> Ref Effvar
+freshGraphRun : Unit -> GraphRun
 freshPerRun : Unit -> PerRun
 freshSubst : List Int -> List (Int, Mono)
 freshToggles : Unit -> Toggles
@@ -969,9 +972,11 @@ graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (St
 graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (String, List String))
 graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
+graphMarksNow : Unit -> GraphMarks
 graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
 graphPubDefiners : String -> List (String, (String, String))
+graphRun : Ref GraphRun
 groundAdmittedGo : String -> List IfaceRef -> List Mono -> Option Loc -> Unit
 groundAdmittedReceivers : String -> List Mono -> Option Loc -> Unit
 groundMultiParamObligations : List Decl -> List UObligation -> Unit
@@ -1508,6 +1513,7 @@ modulePubDefiners : Map String (List (String, (String, String))) -> String -> Li
 moduleRefNameSet : List Decl -> Map String Unit
 moduleSpellsShadowBare : List Decl -> String -> String -> Bool
 moduleUserFnNames : List (String, List Decl) -> List String
+moduleWindow : Ref (List a) -> Int -> List a
 monoArgUnboundIds : Mono -> List Int
 monoClosed : Mono -> Bool
 monoHasArrow : Mono -> Bool
@@ -1819,6 +1825,7 @@ recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
 recordMethodLevelSlotObls : List (String, IfaceRef) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
+recordModuleStart : String -> Unit
 recordNumLitImplObligation : Mono -> Mono
 recordNumLitObligationGuarded : TcEnv -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
@@ -1931,6 +1938,7 @@ requiresKindMsg : String -> String -> String
 requiresNonShrinkingFuel : Int
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
 resetCrossModuleState : Unit -> Unit
+resetGraphState : Unit -> Unit
 resetState : Unit -> Unit
 resetTypeErrorsSticky : Unit -> Unit
 residualBoundPreds : List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
@@ -2284,6 +2292,7 @@ vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 wAll : Windowed a -> List a
+wCopy : Windowed a -> Windowed a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit
