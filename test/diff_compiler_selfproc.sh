@@ -114,7 +114,7 @@ echo "== LEG A: self-hosted front-end typechecks its own source =="
 # no longer exist on disk or in the dump, which is why this leg silently checked
 # nothing for a while (`$SHDIR/$m.mdk` never matched) — fixed by mapping mid ->
 # subfolder path below.
-MODULES="frontend.ast frontend.lexer frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.exhaust driver.loader types.typecheck eval.eval tools.check"
+MODULES="frontend.ast frontend.lexer frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.exhaust driver.loader types.repr types.typecheck eval.eval tools.check"
 
 # One full-closure run emits every module's schemes (sections marked
 # `## MODULE <mid>`).  all_modules_entry imports one name from each module so the

@@ -4369,3 +4369,18 @@ full_cores = false
 wasm_arm = true
 rationale = "test/gate_shards/gates_8.txt"
 pinned_gates = []
+
+[[gate]]
+name = "diff_compiler_catch_all_census"
+area = "types"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_catch_all_census.sh"
+oracles = []
+sources = ["compiler/frontend/ast.mdk", "compiler/types/repr.mdk", "compiler/types/typecheck.mdk", "test/catch_all_census.ledger", "test/catch_all_census.py", "test/diff_compiler_catch_all_census.sh"]
+corpus = []
+toolchain = []

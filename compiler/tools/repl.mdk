@@ -30,13 +30,8 @@ import frontend.lexer.{Token(..), tokenize}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
-import types.typecheck.{
-  checkOneDiags,
-  checkOneScheme,
-  ppScheme,
-  Scheme(..),
-  tcMsg,
-}
+import types.repr.{ppScheme, Scheme(..)}
+import types.typecheck.{checkOneDiags, checkOneScheme, tcMsg}
 import eval.eval.{
   Value(..),
   evalOneRootEnvWith,

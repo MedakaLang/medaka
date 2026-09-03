@@ -1,5 +1,5 @@
 # META
-source_lines=1923
+source_lines=1924
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -951,7 +951,8 @@ elaborateModulesMangled : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 elaborateModulesMangled runtimeDecls coreDecls modules =
-  mangleCtorCollisionsPair (elaborateModules runtimeDecls coreDecls modules)
+  match elaborateModules runtimeDecls coreDecls modules
+    (coreE, modulesE, _) => mangleCtorCollisionsPair (coreE, modulesE)
 
 runProps : List Decl ->
   List Decl ->
@@ -2044,7 +2045,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "exprLineLocal" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLineLocal") (EVar "e")))
 (DFunDef false "exprLineLocal" (PWild) (ELit (LInt 0)))
 (DTypeSig false "elaborateModulesMangled" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "mangleCtorCollisionsPair") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))
+(DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE"))))))
 (DTypeSig false "runProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
 (DFunDef false "runProps" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runPropsMulti") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runPropsSingle") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "runPropsSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
@@ -2284,7 +2285,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "exprLineLocal" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLineLocal") (EVar "e")))
 (DFunDef false "exprLineLocal" (PWild) (ELit (LInt 0)))
 (DTypeSig false "elaborateModulesMangled" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "mangleCtorCollisionsPair") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))
+(DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE"))))))
 (DTypeSig false "runProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
 (DFunDef false "runProps" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runPropsMulti") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runPropsSingle") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "runPropsSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))

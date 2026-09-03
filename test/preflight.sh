@@ -701,6 +701,8 @@ while IFS= read -r f; do
       add 'diff_compiler_diagnostics'; add 'diff_compiler_eval_typed*'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
+      add 'diff_compiler_catch_all_census'
       # #1110: typecheck.mdk hosts BOTH ends of the resolve->typecheck channel
       # (checkProgramSeededSplit on the flat path, elaborateModules on the graph
       # path) — i.e. two of the three arms the agreement table compares.

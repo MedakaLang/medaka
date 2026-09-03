@@ -98,48 +98,59 @@ did not catch `B3` — because a miscounted axis is not a third *input*, it is a
 A reader auditing this corpus should re-derive each axis's arity from the mechanism before
 trusting a product argument built on it.
 
-## 🚨 The headline result: the region is uniformly broken, and NOT for the reason on record
+## The headline result, re-measured: the region is NOT uniformly broken
 
-`docs/KNOWN-GAPS.md` states that the narrowing is blocked specifically on
-[#1046](https://github.com/MedakaLang/medaka/issues/1046) — the method-less-`impl` arg-tag
-group collapse — and that fixing #1046 then unblocks the preserved
-`enclosingRigidScopeInPlay` narrowing. **The matrix refutes the "specifically" and leaves
-the conclusion standing for a broader reason.**
+**The previous headline was an artifact of the instrument, and this section corrects it.**
+This census's first measurement (#2445) reported every masked cell wrong on the native
+engine — `A1_distinct_user_heads__B1_both_defined`, two ordinary impls at two distinct user
+tycons with no method-less impl anywhere, printed `woof|woof` silently at exit 0 — and
+concluded that a `let`-local lowers to ONE lifted lambda with ONE shared route ref that
+cannot serve two instantiations (the #1082 blocker). The regime argument under § "The
+cells" asserted that the hatch reached the build path because `medaka build` runs the same
+typechecker. It reaches the CLI's own typecheck gate, which is what that argument
+measured; it did NOT reach the separate `medaka_emitter` process, whose elaboration is the
+one the emitted IR is lowered from. That process never read `MEDAKA_ARGTAG_UNPIN`, so its
+elaboration ran with the pin ARMED: `f` was narrowed to its first instantiation (`Dog`),
+the `T-LOCAL-CONSTRAINED-MONO` error it recorded was discarded (the emit driver never read
+`hadTypeErrors` — #2089), and `f Cat` was compiled against `Dog`'s impl. `woof|woof` was
+the pin's own narrowing leaking through a discarded type error, not a route-ref collapse.
+The emit driver now arms the hatch exactly as the CLI does (`argtagUnpinArmed`,
+`compiler/entries/entry_support.mdk`), and the #2089 gate rejects a build whose emit-path
+elaboration recorded that error under `MEDAKA_STRICT=1` — which is how the discrepancy
+surfaced.
 
-`A1_distinct_user_heads__B1_both_defined` has **no method-less impl at all** — two ordinary
-impls at two distinct user tycons, the friendliest possible shape — and the native binary
-still prints `woof|woof` instead of `woof|meow`, **silently, at exit 0**, while `medaka run`
-prints the correct `woof|meow`. Zero of the eleven masked cells produce the correct answer on
-both engines. The `decidable` class is populated only by the control, which is not in the
-region.
+Re-measured with the hatch reaching the emitter, the picture is what the mechanism
+predicts:
 
-The discriminating measurement is the control. It holds the interface, the impls, the head
-constructors and the use sites fixed and changes **one thing** — the helper is a top-level
-definition rather than a `let`-local:
+- **`A1` (disjoint, non-empty tag sets) is `decidable` on all three `B` values.** Two
+  groups, two distinct tags, `emitArgDispatchChain` tests them and the right arm runs —
+  including `B3`, where the receiver identity survives through the shared inherited default
+  to the per-impl `name`. `woof|meow` and `<dog>|<cat>` on both engines.
+- **`A5__B2` is `decidable`** for the same reason: once the parametric arm needs no inner
+  dict, its selection is `A1`'s.
+- **`A2` (equal tag sets) is `undecidable-by-construction` and now SAYS SO on the native
+  engine too**: the binary builds and traps with `E-AMBIGUOUS-DISPATCH` on the first
+  receiver — the same retimed refusal `A6` records — instead of the emitter panicking about
+  a `fromInt` the program never mentions.
+- **`A3`/`A4` (a receiver with no cell tag) stay `undecidable-by-construction`**; the build
+  still aborts, now with the emitter naming the actual reason (`arg-tag dispatch on impl
+  type that owns no constructors`) instead of the `fromInt` panic.
+- **`A5__B1` stays a `bug`**: the `requires`-carrying arm's body still has no route to its
+  inner dict; the native failure moved from `E-NONEXHAUSTIVE-MATCH` to a memory fault (exit
+  139 — the shell's 128+SIGSEGV convention, not a code the binary chose), loud on both
+  engines.
 
-```
-topF : Speak a => a -> String
-topF v = speak v
-main = println (speak Dog ++ "|" ++ speak Cat ++ "//" ++ topF Dog ++ "|" ++ topF Cat)
-```
-```
-woof|meow//woof|meow      <- correct, on both engines
-```
+The control is unchanged. So the information needed to dispatch is present, the group/tag
+machinery handles it, and the ONLY shapes the arg-tag route cannot decide are the ones
+where the tag is strictly weaker than the type identity (`A2`) or absent (`A3`/`A4`) —
+which no narrowing of the pin could ever reach, and which now fail loudly on both engines.
 
-So the information needed to dispatch is present, and the group/tag machinery handles it
-correctly. What fails is specific to the **local**: `dict_pass` prepends `$dict_…` params
-to top-level defs and impl methods only, never to a `where`/`let` member, which lowers to
-**one lifted lambda with one shared route ref** — as `pinLocalIfDictForwarded`'s own note in
-`compiler/types/typecheck.mdk` already says. One route ref structurally cannot serve two
-instantiations, so the first one wins.
-
-**Consequence for #2032's fix order.** Fixing #1046 is *necessary but not sufficient*: it
-would drain `A1…__B2_one_default` and leave `A1…__B1_both_defined` — a shape with no
-method-less impl anywhere — silently wrong. The blocker is the one #1082
-(dict-abstracting local bindings) names, and `docs/KNOWN-GAPS.md` already names #1082 as
-the eventual fix for the *first* entry. The narrowing is blocked on **#1082**, not on
-#1046. Until #1082 lands, no narrowing of `T-LOCAL-CONSTRAINED-MONO` is safe anywhere in
-this region, which is a stronger and simpler answer than the one on record.
+**Consequence for #2032's fix order.** The narrowing is NOT blocked on #1082 for the
+disjoint-head shapes: `A1__B1`, `A1__B2`, `A1__B3` and `A5__B2` are correct on the native
+engine as built. The shape #1046 names (`A1__B2`, one method-less impl) answers correctly
+here. What remains is the `requires`-body failure (`A5__B1`, the #1082 shape proper) and
+the undecidable classes, which any narrowing must keep pinned — or route by a different
+mechanism — exactly as `docs/KNOWN-GAPS.md` says.
 
 ## Classification vocabulary
 
@@ -159,11 +170,13 @@ hatch working, and it is why the region is observable at all.
 
 **Which regime each column observes — measured, not assumed.** All four graded columns
 (`check:`, `run:`, `build:`, `exec:`) are produced with `MEDAKA_ARGTAG_UNPIN=1` set, so all
-four observe the **unpinned** regime; the comparison across them is not confounded by the
-pin. `build` is not an exception to this, which is worth stating because a reader can
-reasonably assume the hatch is a `check`-only affordance — it is not, because `medaka build`
-runs the same typechecker, and the pin would reject these programs before any IR existed.
-The discriminating measurement, on `A1__B1`, with the hatch dropped from the build alone:
+four observe the **unpinned** regime. That is true of `build:` only because the emit
+driver arms the hatch ITSELF (`argtagUnpinArmed`, `compiler/entries/entry_support.mdk`):
+`medaka build` runs the CLI's typecheck gate in one process and the elaboration the IR is
+lowered from in another (`medaka_emitter`), and an environment variable the CLI honours
+says nothing about what the emitter did with it. This census's first measurement was
+taken with the emitter NOT honouring it — see § headline result. The discriminating
+measurement, on `A1__B1`, with the hatch dropped from the build alone:
 
 ```
 $ ./medaka build test/argtag_matrix_fixtures/A1_distinct_user_heads__B1_both_defined/main.mdk -o /tmp/x
@@ -174,22 +187,26 @@ $ echo $?
 1
 ```
 
-So a `build:` line reading `0 | built …` is itself evidence the hatch reached the build
-path; had it not, every `build:` in this table would read `1` with that diagnostic.
+And with the hatch reaching the CLI but withheld from the emitter (the pre-correction
+state), the same build exits 0 and the binary prints `woof|woof`: the emitter's own
+elaboration recorded that diagnostic, discarded it, and compiled the narrowed local. A
+`build:` line reading `0 | built …` alongside a correct `exec:` is therefore evidence the
+hatch reached the emitter; a `0 | built …` alongside a wrong `exec:` is the signature of
+it not having done so.
 
 | cell | class | correct | `run` (eval) | native binary |
 |---|---|---|---|---|
-| `A1…__B1_both_defined` | bug | `woof\|meow` | ✅ `woof\|meow` | 🚨 `woof\|woof` **silent, exit 0** |
-| `A1…__B2_one_default` | bug | `woof\|meow` | ✅ `woof\|meow` | 🚨 `woof\|woof` **silent, exit 0** |
-| `A1…__B3_both_inherit_default` | bug | `<dog>\|<cat>` | ✅ `<dog>\|<cat>` | 🚨 `<dog>\|<dog>` **silent, exit 0** |
-| `A2…__B1_both_defined` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | build aborts, exit 1 |
-| `A2…__B2_one_default` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | build aborts, exit 1 |
-| `A3…__B1_both_defined` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts, exit 1 |
-| `A3…__B2_one_default` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts, exit 1 |
-| `A4…__B1_both_defined` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts, exit 1 |
-| `A4…__B2_one_default` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts, exit 1 |
-| `A5…__B1_both_defined` | bug | `[meow]\|meow` | E-PANIC, exit 1 | E-NONEXHAUSTIVE, exit 1 |
-| `A5…__B2_one_default` | bug | `box\|meow` | ✅ `box\|meow` | 🚨 `box\|box` **silent, exit 0** |
+| `A1…__B1_both_defined` | decidable | `woof\|meow` | ✅ `woof\|meow` | ✅ `woof\|meow` |
+| `A1…__B2_one_default` | decidable | `woof\|meow` | ✅ `woof\|meow` | ✅ `woof\|meow` |
+| `A1…__B3_both_inherit_default` | decidable | `<dog>\|<cat>` | ✅ `<dog>\|<cat>` | ✅ `<dog>\|<cat>` |
+| `A2…__B1_both_defined` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
+| `A2…__B2_one_default` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
+| `A3…__B1_both_defined` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts (no cell tag), exit 1 |
+| `A3…__B2_one_default` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts (no cell tag), exit 1 |
+| `A4…__B1_both_defined` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts (no cell tag), exit 1 |
+| `A4…__B2_one_default` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts (no cell tag), exit 1 |
+| `A5…__B1_both_defined` | bug | `[meow]\|meow` | E-PANIC, exit 1 | builds; memory fault, exit 139 |
+| `A5…__B2_one_default` | decidable | `box\|meow` | ✅ `box\|meow` | ✅ `box\|meow` |
 | `A6…__no_local` | undecidable | `1\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
 | `A6…__one_default` | undecidable | `9\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
 | `A7…__one_default` | decidable | `9\|2` | ✅ | ✅ |
@@ -197,25 +214,32 @@ path; had it not, every `build:` in this table would read `1` with that diagnost
 
 ### A1_distinct_user_heads__B1_both_defined
 
-**`bug`.** Two impls, two distinct user tycons, both defining the method — disjoint
-non-empty tag sets, two groups, everything `emitArgDispatchChain` needs. `medaka run` gets
-it right, so the information is sufficient. The native binary answers `woof|woof` at exit 0.
-This is the census's headline cell: it is the counterexample to "the narrowing is blocked
-on #1046", because there is no method-less impl in it. See § headline result.
+**`decidable`.** Two impls, two distinct user tycons, both defining the method — disjoint
+non-empty tag sets, two groups, everything `emitArgDispatchChain` needs — and it decides:
+`woof|meow` on both engines.
+
+⚠️ **This cell MOVED from `bug` to `decidable`, and the reason is the instrument, not the
+route.** It was this census's headline: the native binary printed `woof|woof` at exit 0
+while `medaka run` printed `woof|meow`, read as a one-route-ref collapse in the lifted
+local. That measurement was taken with the hatch reaching the CLI's typecheck gate but not
+the `medaka_emitter` process, whose elaboration pinned `f` to `Dog`, recorded the
+`T-LOCAL-CONSTRAINED-MONO` error, had it discarded (#2089), and compiled `f Cat` against
+`Dog`'s impl. See § headline result. Re-deriving `woof|woof` here would restore the
+un-hatched emitter, not a finding about dispatch.
 
 ### A1_distinct_user_heads__B2_one_default
 
-**`bug`.** `A1__B1` with `impl Speak Dog where` left method-less so the interface default
-supplies `speak`. This is #1046's named shape. Identical symptom to `A1__B1` — `woof|woof`,
-silent, exit 0 — which is precisely why #1046 cannot be the whole story: the shape with
-and the shape without the method-less impl fail the same way. Fixing #1046 drains this
-cell and leaves `A1__B1` standing.
+**`decidable`.** `A1__B1` with `impl Speak Dog where` left method-less so the interface
+default supplies `speak`. This is #1046's named shape, and it answers `woof|meow` on both
+engines: the default's group is selected by `Dog`'s tag exactly as a defining impl's would
+be. Moved from `bug` with `A1__B1`, for the same reason — the pinned-emitter artifact
+produced `woof|woof` here too, which is why the two shapes looked identical.
 
 ### A1_distinct_user_heads__B3_both_inherit_default
 
-**`bug`**, and the cell whose *absence* refuted this census's own completeness argument
-(#2445 review round, S-3's finding). `A1`'s two disjoint user heads, with `speak` left
-undefined on **both** impls so both inherit ONE interface default:
+**`decidable`**, and the cell whose *absence* refuted this census's own completeness
+argument (#2445 review round, S-3's finding). `A1`'s two disjoint user heads, with `speak`
+left undefined on **both** impls so both inherit ONE interface default:
 
 ```
 interface Speak a where
@@ -231,24 +255,14 @@ impl Speak Cat where
 
 The default is receiver-derived — it dispatches `name v` on the same receiver — so the two
 instances must print different strings even though they share one `speak` body. Correct is
-`<dog>|<cat>`; `medaka run` produces it, so the information is sufficient and this is a
-`bug`, not an `undecidable-by-construction` cell. The native binary answers
-**`<dog>|<dog>` at exit 0, silently.**
+`<dog>|<cat>`, and both engines produce it: the receiver identity survives through the
+shared inherited default to the per-impl `name`.
 
-**Why this is not just `A1__B2` with an extra impl left blank.** In `B2` exactly one group
-carries a body of its own, and the *defining* impl's body is what both receivers end up
-running — the collapse is visible as "the wrong impl won". In `B3` **no** group carries a
-body: every arm of the chain routes into the same inherited default, and the receiver
-identity has to survive *through* that default to reach the per-impl `name`. The observable
-symptom is the same one-route-ref collapse the § headline result describes — the pinned
-local lowers to one lifted lambda with one shared route ref, and the first instantiation
-wins the inner `name` dispatch too — but the shape reaching it is different, and nothing in
-the `B1`/`B2` pair exercises "the discriminating call is *inside* an inherited default."
-
-This is also why `B` had to be recounted. The old argument ("an impl either defines the
-method or inherits it, so B is exhausted at two") is true of one impl and false of a pair,
-and the cell it missed is a **silent-wrong** one — the most expensive class this corpus
-grades. See § "The axes, and how far their product is actually sampled".
+**Why this cell still earns its place.** In `B2` exactly one group carries a body of its
+own; in `B3` **no** group does — every arm of the chain routes into the same inherited
+default, and the discriminating call is *inside* that default. Nothing in the `B1`/`B2`
+pair exercises that, and the old two-valued count of axis B could not have found it. It
+moved from `bug` (`<dog>|<dog>` at exit 0) with the rest of `A1` — see § headline result.
 
 ### A2_same_head_diff_args__B1_both_defined
 
@@ -256,37 +270,41 @@ grades. See § "The axes, and how far their product is actually sampled".
 S-1 packet names. `Box Int` and `Box String` are two impls with two distinct canonical
 impl keys, so `groupImpls` yields TWO groups — but `ctorsOfType e (groupTag g)` is
 `{Box}` for both, because a tycon determines its ctor set and there is one tycon here. Two
-groups, one runtime test, first arm wins. The cell tag is strictly weaker than the type
-identity the decision needs, so no amount of narrowing helps.
+groups, one runtime test. The cell tag is strictly weaker than the type identity the
+decision needs, so no amount of narrowing helps.
 
 ⚠️ **This cell's `run` line MOVED in #2445 S-3, and the class did not.** Eval used to
 answer `boxint|boxint` **silently, at exit 0** — `filterByTag` kept both candidates
 (they share the head tag) and `collectPartials` took the first one that applied. It now
 refuses with `E-AMBIGUOUS-DISPATCH` at exit 1 (`checkArgTagDecidable`, `eval/eval.mdk`).
-The shape is still `undecidable-by-construction` — nothing here became decidable, and the
-correct answer is still unreachable on this route. What changed is that the compiler now
-SAYS SO instead of inventing an answer, so the pin records a refusal rather than a wrong
-value. Re-deriving `boxint|boxint` here would be a regression, not a repair.
+Re-deriving `boxint|boxint` here would be a regression, not a repair.
 
-The native side does not even get that far — `medaka build` aborts at exit 1 with
-`runtime error [E-PANIC]: no impl of method 'fromInt' for type 'String'`. That message is
-the *emitter's own* panic, and it names `fromInt`, a method the user's program never
-mentions; see the "loud but misleading" note below.
+⚠️ **Its `build`/`exec` lines MOVED with the hatch reaching the emitter, and the class did
+not.** The native side used to abort the whole build with the emitter's own `fromInt`
+panic — a symptom of the pinned local's narrowed numeric literal, not of this cell (see §
+headline result). It now BUILDS at exit 0 and traps with `E-AMBIGUOUS-DISPATCH` on the
+first receiver: the retimed refusal `A6__no_local` documents, reached here through the
+local instead of the bare chain. The correct answer is unreachable on this route either
+way; what changed is that both engines now say so at the same phase.
 
 ### A2_same_head_diff_args__B2_one_default
 
 **`undecidable-by-construction`.** `A2__B1` with the `Box Int` impl method-less. Identical
-outcome on both engines (including the S-3 `run` refusal noted above), which is the point: at a head collision, axis B does not matter —
-the tag sets are equal whatever the group set is, so the discrimination has already failed
-before the group set is consulted. This cell is what makes "A2 is undecidable" a statement
-about the *head*, not about a particular impl spelling.
+outcome on both engines (eval's S-3 refusal, the binary's retimed trap), which is the
+point: at a head collision, axis B does not matter — the tag sets are equal whatever the
+group set is, so the discrimination has already failed before the group set is consulted.
+This cell is what makes "A2 is undecidable" a statement about the *head*, not about a
+particular impl spelling.
 
 ### A3_both_primitive__B1_both_defined
 
 **`undecidable-by-construction` on the arg-tag route.** `Int` and `Bool` are primitive
 receivers and carry no constructor cell tag at all — `argDefaultEmittable`
 (`llvm_emit.mdk:6335`) already declines such heads by design, so there is no tag for
-`emitTagMatch` to test. `medaka build` aborts at exit 1.
+`emitTagMatch` to test. `medaka build` aborts at exit 1, and since the hatch reaches the
+emitter it aborts with the emitter naming that reason (`arg-tag dispatch on impl type that
+owns no constructors (primitive receiver carries no cell tag)`) rather than the `fromInt`
+panic the pinned local used to produce first.
 
 ⚠️ Note the engines part company here, and the reason matters for #2032: `medaka run`
 answers `int|bool` **correctly**, because eval discriminates on the runtime *value* tag,
@@ -305,10 +323,10 @@ test in the first place.
 
 **`undecidable-by-construction`.** One user head (`Cat`) with a tag, one primitive head
 (`Int`) without. A chain can test the `Cat` arm but has nothing to test for the `Int` arm,
-so the pair is not separable by the route. `medaka build` aborts at exit 1; eval again gets
-it right by value tag. This is the "one empty" relation, and it behaves like the
-"both empty" one rather than like the disjoint one — worth recording, because a reader might
-expect the tagged half to survive.
+so the pair is not separable by the route. `medaka build` aborts at exit 1 with the same
+no-cell-tag reason as `A3`; eval again gets it right by value tag. This is the "one empty"
+relation, and it behaves like the "both empty" one rather than like the disjoint one —
+worth recording, because a reader might expect the tagged half to survive.
 
 ### A4_mixed_primitive__B2_one_default
 
@@ -318,26 +336,30 @@ the `A2__B2` / `A3__B2` reason.
 ### A5_open_head__B1_both_defined
 
 **`bug`.** `impl Speak (Box a) requires Speak a` and `impl Speak Cat` — disjoint heads, so
-the discrimination is `A1`'s and should succeed. It does not, and it fails *differently* on
-each engine: `medaka run` dies with
-`E-PANIC: '++' requires Semigroup (List, String, or a type with append)`, while the native
-binary builds cleanly (exit 0) and then dies with `E-NONEXHAUSTIVE-MATCH`. Neither failure
-is about tag discrimination; both are about the `requires`-carrying arm's **body** — the
-inner `speak x` needs a dict for `a`, and the pinned local has no route to give it one.
-Classified `bug` because the selection information is sufficient (the heads are disjoint);
-what breaks is downstream of selection.
+the discrimination is `A1`'s and it succeeds (its `B2` sibling proves that). What fails is
+the `requires`-carrying arm's **body**: the inner `speak x` needs a dict for `a`, and the
+local has no route to give it one. `medaka run` dies with
+`E-PANIC: '++' requires Semigroup (List, String, or a type with append)`; the native binary
+builds cleanly (exit 0) and dies with a memory fault (exit 139). Neither failure is about
+tag discrimination; both are downstream of selection. Classified `bug` because the
+selection information is sufficient.
 
-Loud on both engines, so unlike `A1` this one is not a silent-wrongness cell.
+⚠️ **The native failure MOVED with the hatch reaching the emitter** — from
+`E-NONEXHAUSTIVE-MATCH` to `E-FATAL-SIGNAL`. Under the pinned emitter the local was
+narrowed to its first instantiation and the parametric arm's missing inner dict surfaced
+as a non-exhaustive match; with the local genuinely polymorphic the missing dict is read as
+a word. Same defect, one phase later; this is the `#1082` shape proper. Loud on both
+engines, so not a silent-wrongness cell.
 
 ### A5_open_head__B2_one_default
 
-**`bug`.** `A5__B1` with the parametric `impl Speak (Box a) requires Speak a` left
+**`decidable`.** `A5__B1` with the parametric `impl Speak (Box a) requires Speak a` left
 method-less, so the interface default supplies `speak` and the arm no longer needs an inner
-dict. That removes `A5__B1`'s downstream failure and re-exposes the *upstream* one: eval is
-correct (`box|meow`), the native binary answers `box|box` **silently at exit 0** — the same
-one-route-ref collapse as the `A1` row. The pair `A5__B1`/`A5__B2` is therefore useful
-evidence on its own: it separates the `requires`-body failure from the local-route failure,
-and shows the local-route failure is what remains once the body is made trivial.
+dict. That removes `A5__B1`'s body failure and leaves selection alone, which is `A1`'s:
+`box|meow` on both engines. Moved from `bug` (`box|box` at exit 0) with `A1` — the same
+pinned-emitter artifact, see § headline result. The pair `A5__B1`/`A5__B2` is therefore
+useful evidence on its own: it separates the `requires`-body failure from selection, and
+shows the body failure is what remains once selection is made trivial.
 
 ### A6_same_head_chain_reached__no_local
 
@@ -449,19 +471,20 @@ impls or these two tycons are broken", and the census's central claim would be a
 rather than a measurement. **If this cell ever goes red, the environment broke, not the
 region** — do not read it as progress on #2032.
 
-## Loud, but misleading: the emitter's `fromInt` panic
+## The emitter's `fromInt` panic, resolved
 
-Six of the eleven masked cells (`A2`, `A3`, `A4`) fail `medaka build` at exit 1 with a
-message of the form:
+Six of the eleven masked cells (`A2`, `A3`, `A4`) used to fail `medaka build` at exit 1 with
 
 ```
 error: emitter failed compiling main.mdk
 runtime error [E-PANIC]: no impl of method 'fromInt' for type 'String'
 ```
 
-`fromInt` appears in none of these programs, and the type named (`String`, `Bool`, `Cat`) is
-whichever receiver the emitter reached second. This is the *emitter process panicking*, not a
-diagnostic: there is no located error, no diagnostic code, and nothing pointing at the
-construct at fault. It is loud, which is the right direction, but it is an S2-misleading
-message rather than a rejection. Recorded here as a finding rather than fixed — this slice's
-mandate was to make the region observable, not to repair it.
+naming a method none of these programs mention. It was recorded here as an S2-misleading
+finding. It was the pinned emitter again: with the local narrowed to its first
+instantiation, the emitter's elaboration left a numeric-literal route on the local's body
+unresolved and the emitter panicked on the second receiver. With the hatch reaching the
+emitter the panic is gone: `A2` builds and traps at run time with `E-AMBIGUOUS-DISPATCH`,
+and `A3`/`A4` abort the build naming the actual reason — a primitive receiver carries no
+cell tag.
+

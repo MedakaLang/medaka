@@ -2,5 +2,5 @@ class: undecidable-by-construction
 correct: meow|int
 check: 0
 run: 0 | meow|int
-build: 1 | error: emitter failed compiling main.mdk\nruntime error [E-PANIC]: no impl of method 'fromInt' for type 'Cat'\n
+build: 1 | error: emitter failed compiling main.mdk\nruntime error [E-PANIC]: arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)\n
 exec: n/a

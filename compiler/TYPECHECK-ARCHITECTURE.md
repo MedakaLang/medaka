@@ -328,7 +328,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
 | **The spine** | `checkBodyImpl` | **835 / 10,917 / 110** | — |
-| **Promotion fixpoint** | `discoverAll` → `discoverPromoted` → `discoverNext`; `discoverPromotedModules` for the whole graph | ~175 lines + 2 banner regions | — |
+| **Promotion fixpoint** | `discoverAll` → `discoverPromoted` → `discoverNext` per module; `elabPromotionFixpoint` re-sweeps the graph until the promoted set is stable (#2543) | ~175 lines + 2 banner regions | — |
 | Inferred-constraint registration | `registerInferredConstraints`, `setDictEligible` | ~204 lines | DICT §4 `gen` |
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
 | Multi-module check drivers | `checkModules`, `checkModuleFullImpl`, `checkProgramSeededSplit` + the `check*` tails | ~590 lines | — |
@@ -400,12 +400,10 @@ elaborateModules
   │    foldModules elabHarvestWorker → elabWorker → elabModuleStamp
   │      → checkModuleFullImpl → checkBodyImpl (Module …)   ← resetState at module START
   │
-  └─ match promotionHarvestRef
-       [] → the bare sweep IS final — one whole-program typecheck (the #194 win)
-       _  → DISCARD it; resetCrossModuleState, then the 2-pass path:
-              discoverPromotedModules              ← FIXPOINT, over a FLATTENED joint program
-                → discoverPromotedJoint → checkProgramSeeded
-                  → checkProgramSeededSplit → checkBodyImpl (Flat …)
+  └─ elabPromotionFixpoint (#2543): compare promotionHarvestRef to the grown set
+       no delta → the sweep IS final — one whole-program typecheck (the #194 win)
+       delta    → DISCARD it (clearSweepCells; resetCrossModuleState) and re-sweep the
+                  Module arm with the union — never a flattened joint program
               then a second real marking sweep with the promotion-augmented dict set
 ```
 

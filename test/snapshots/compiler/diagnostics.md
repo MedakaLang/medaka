@@ -1,5 +1,5 @@
 # META
-source_lines=2041
+source_lines=2074
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -51,18 +51,11 @@ import frontend.marker.{
   preludeStandaloneSet,
   preludeStandaloneShadowsWith,
 }
+import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneDiagsK,
-  checkModulesDiagsChain,
-  checkModules,
-  entryOwnSchemes,
-  Scheme(..),
-  setCoherenceUserDecls,
-  setStdlibOwnership,
-  TcDiag(..),
-  tcMsg,
-  mainTypeIsUnit,
-  mainTypeIsAsync,
+  checkOneDiagsK, checkModulesDiagsChain, checkModules, entryOwnSchemes,
+  setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit,
+  mainTypeIsAsync
 }
 import driver.loader.{
   LoadMsg,
@@ -157,7 +150,7 @@ diagOfResError e =
 -- side-channel lookup.
 --
 -- ⚠️ `SevError` is HARDCODED here ON PURPOSE, and the TcDiag's own `severity` field
--- is deliberately NOT consulted — do not "fix" this to read `tcSeverity`.  The
+-- is deliberately NOT consulted — do not "fix" this to read that field.  The
 -- `typeErrors` channel this converts is not a pure report: every push funnels
 -- through `recordTypeError` (`compiler/types/typecheck.mdk`), which also arms
 -- `typeErrorsSticky` — the gate `hadTypeErrors` uses to ABORT `build`/`run` — and
@@ -566,6 +559,46 @@ ppDiagCliLines srcLines file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
 -- `Decl` carries no `Loc` at all), and `--json` still reports `"range":null`.
 ppDiagCliLines _ _ (Diag sev _ msg None _ _) =
   "\{ppSeverity sev}: <unknown location>: \{msg}"
+
+-- #2544 (M4): render the residual an elaboration returned — the `run`/`build`
+-- verbs and the emit driver's #2089 gate print these where they used to print a
+-- deflection or nothing.  Same face `check` renders through (`ppDiagCliLines`).  A
+-- `Loc` carries no file on the elaborate path, so each entry arrives tagged with its
+-- MODULE id and `pathMap` (the loader's modId → path map) names the file; a module
+-- the map does not know (the emit driver has no paths) renders under its id with no
+-- source snippet, and a diagnostic with no location renders as the `<unknown
+-- location>` line that renderer already has.
+export
+renderTcDiags : List (String, String) ->
+  List (String, TcDiag) ->
+  <IO> List String
+renderTcDiags pathMap ds = renderTcDiagsGo pathMap ds []
+
+renderTcDiagsGo : List (String, String) ->
+  List (String, TcDiag) ->
+  List (String, Array String) ->
+  <IO> List String
+renderTcDiagsGo _ [] _ = []
+renderTcDiagsGo pathMap ((mid, d) :: rest) cache = match lookupAssoc mid pathMap
+  Some file =>
+    let (lines, cache2) = srcLinesCached file cache
+    ppDiagCliLines lines file (diagOfTypeError d)
+      :: renderTcDiagsGo pathMap rest cache2
+  -- no path for this module id (the prelude, or a caller that passed no map):
+  -- the id stands in for the file, marked so it is not read as one
+  None =>
+    ppDiagCliLines (arrayFromList []) "(module \{mid})" (diagOfTypeError d)
+      :: renderTcDiagsGo pathMap rest cache
+
+-- one read per file, however many diagnostics land in it
+srcLinesCached : String ->
+  List (String, Array String) ->
+  <IO> (Array String, List (String, Array String))
+srcLinesCached file cache = match lookupAssoc file cache
+  Some ls => (ls, cache)
+  None =>
+    let ls = srcLinesArr (readFileSafe file)
+    (ls, (file, ls) :: cache)
 
 -- ── ONE FACE for the module-graph resolve channel (#2400 F2) ────────────────
 --
@@ -2053,7 +2086,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
@@ -2106,6 +2140,13 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "ppDiagCliLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
 (DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "displayPath") (EVar "file")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EVar "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
 (DFunDef false "ppDiagCliLines" (PWild PWild (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": <unknown location>: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
+(DTypeSig true "renderTcDiags" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "renderTcDiags" ((PVar "pathMap") (PVar "ds")) (EApp (EApp (EApp (EVar "renderTcDiagsGo") (EVar "pathMap")) (EVar "ds")) (EListLit)))
+(DTypeSig false "renderTcDiagsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Array") (TyCon "String")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "renderTcDiagsGo" (PWild (PList) PWild) (EListLit))
+(DFunDef false "renderTcDiagsGo" ((PVar "pathMap") (PCons (PTuple (PVar "mid") (PVar "d")) (PVar "rest")) (PVar "cache")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "pathMap")) (arm (PCon "Some" (PVar "file")) () (EBlock (DoLet false false (PTuple (PVar "lines") (PVar "cache2")) (EApp (EApp (EVar "srcLinesCached") (EVar "file")) (EVar "cache"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "file")) (EApp (EVar "diagOfTypeError") (EVar "d"))) (EApp (EApp (EApp (EVar "renderTcDiagsGo") (EVar "pathMap")) (EVar "rest")) (EVar "cache2")))))) (arm (PCon "None") () (EBinOp "::" (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "arrayFromList") (EListLit))) (EBinOp "++" (EBinOp "++" (ELit (LString "(module ")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString ")")))) (EApp (EVar "diagOfTypeError") (EVar "d"))) (EApp (EApp (EApp (EVar "renderTcDiagsGo") (EVar "pathMap")) (EVar "rest")) (EVar "cache"))))))
+(DTypeSig false "srcLinesCached" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Array") (TyCon "String")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Array") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Array") (TyCon "String")))))))))
+(DFunDef false "srcLinesCached" ((PVar "file") (PVar "cache")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "file")) (EVar "cache")) (arm (PCon "Some" (PVar "ls")) () (ETuple (EVar "ls") (EVar "cache"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ls") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (ETuple (EVar "ls") (EBinOp "::" (ETuple (EVar "file") (EVar "ls")) (EVar "cache"))))))))
 (DTypeSig true "ppResolveErrorsByFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "ppResolveErrorsByFile" ((PVar "pairs")) (EApp (EVar "joinNl") (EApp (EVar "ppResolveErrorLines") (EVar "pairs"))))
 (DTypeSig false "ppResolveErrorLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
@@ -2335,7 +2376,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
@@ -2388,6 +2430,13 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "ppDiagCliLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
 (DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "displayPath") (EVar "file")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EMethodRef "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
 (DFunDef false "ppDiagCliLines" (PWild PWild (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": <unknown location>: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
+(DTypeSig true "renderTcDiags" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "renderTcDiags" ((PVar "pathMap") (PVar "ds")) (EApp (EApp (EApp (EVar "renderTcDiagsGo") (EVar "pathMap")) (EVar "ds")) (EListLit)))
+(DTypeSig false "renderTcDiagsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Array") (TyCon "String")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "renderTcDiagsGo" (PWild (PList) PWild) (EListLit))
+(DFunDef false "renderTcDiagsGo" ((PVar "pathMap") (PCons (PTuple (PVar "mid") (PVar "d")) (PVar "rest")) (PVar "cache")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "pathMap")) (arm (PCon "Some" (PVar "file")) () (EBlock (DoLet false false (PTuple (PVar "lines") (PVar "cache2")) (EApp (EApp (EVar "srcLinesCached") (EVar "file")) (EVar "cache"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "file")) (EApp (EVar "diagOfTypeError") (EVar "d"))) (EApp (EApp (EApp (EVar "renderTcDiagsGo") (EVar "pathMap")) (EVar "rest")) (EVar "cache2")))))) (arm (PCon "None") () (EBinOp "::" (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "arrayFromList") (EListLit))) (EBinOp "++" (EBinOp "++" (ELit (LString "(module ")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString ")")))) (EApp (EVar "diagOfTypeError") (EVar "d"))) (EApp (EApp (EApp (EVar "renderTcDiagsGo") (EVar "pathMap")) (EVar "rest")) (EVar "cache"))))))
+(DTypeSig false "srcLinesCached" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Array") (TyCon "String")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Array") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Array") (TyCon "String")))))))))
+(DFunDef false "srcLinesCached" ((PVar "file") (PVar "cache")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "file")) (EVar "cache")) (arm (PCon "Some" (PVar "ls")) () (ETuple (EVar "ls") (EVar "cache"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ls") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (ETuple (EVar "ls") (EBinOp "::" (ETuple (EVar "file") (EVar "ls")) (EVar "cache"))))))))
 (DTypeSig true "ppResolveErrorsByFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "ppResolveErrorsByFile" ((PVar "pairs")) (EApp (EVar "joinNl") (EApp (EVar "ppResolveErrorLines") (EVar "pairs"))))
 (DTypeSig false "ppResolveErrorLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))

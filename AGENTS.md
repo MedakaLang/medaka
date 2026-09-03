@@ -74,6 +74,7 @@ Support files:
 | `compiler/backend/private_mangle.mdk` | Universal constructor mangling |
 | `compiler/backend/trmc_analysis.mdk` | Tail-recursion-modulo-cons analysis |
 | `compiler/types/annotate.mdk` | Type annotation helpers |
+| `compiler/types/repr.mdk` | The type representation (`Mono`/`Tyvar`/`EffRow`/`Scheme`/`IfaceRef`), `normalize`, the row-atom algebra and every renderer (`ppMono`/`ppScheme`/`ppTy`) — reads no typechecker state; the first extraction under #2586 |
 | `compiler/tools/printer.mdk` / `fmt.mdk` | AST→source round-trip / comment-preserving formatter |
 | `compiler/tools/lsp.mdk` | LSP/stdio: diagnostics/fmt/symbols/hover/definition/highlight/completion/inlay |
 | `compiler/tools/mcp.mdk` | `medaka mcp` — MCP stdio, 8 tools (check/type_at/symbols/definition/references/fmt/lint/test). **Prefer over grep/Bash.** `docs/ops/MCP.md` |

@@ -1,0 +1,5 @@
+warning: [rule-promissory-reader] comment claims nothing reads `counter` yet, but it is read on line 19. Restate the claim as what is measured today, or delete it
+warning: [rule-promissory-reader] comment claims nothing reads `producer` yet, but it is read on line 45. Restate the claim as what is measured today, or delete it
+warning: [rule-promissory-reader] comment claims nothing reads `slot` yet, but it is read on line 28. Restate the claim as what is measured today, or delete it
+warning: [rule-promissory-reader] comment claims nothing reads `tableById` yet, but it is read on line 11. Restate the claim as what is measured today, or delete it
+warning: [rule-promissory-reader] comment claims nothing reads `wrapped` yet, but it is read on line 37. Restate the claim as what is measured today, or delete it

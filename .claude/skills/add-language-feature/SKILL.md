@@ -58,7 +58,7 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    exhaust is not a standalone stage. Per-node `infer`/`check` arms are shared, but
    **whole-program orchestration lives in two near-identical entry points** —
    `checkProgramDiags` (`:11565`, single-file) and `checkModuleFullDiags` (`:12417`,
-   multi-module, driven by `checkModulesDiags` `:12480`). A change to registration,
+   multi-module, driven by `checkModulesDiagsK` `:12480`). A change to registration,
    coherence, or a post-HM pass usually must be mirrored in both.
 6. **Desugar** — `compiler/frontend/desugar.mdk`. If the feature is sugar, lower
    it to existing core nodes here rather than handling it in eval. Desugar runs

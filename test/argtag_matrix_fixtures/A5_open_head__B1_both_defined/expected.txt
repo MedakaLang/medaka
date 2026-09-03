@@ -3,4 +3,4 @@ correct: [meow]|meow
 check: 0
 run: 1 | runtime error [E-PANIC]: '++' requires Semigroup (List, String, or a type with append)
 build: 0 | built main.mdk -> <BIN>
-exec: 1 | runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match
+exec: 139 | runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)

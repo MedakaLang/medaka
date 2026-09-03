@@ -732,7 +732,11 @@ tconBuiltin n = TCon n OriginBuiltin
 tconFrom o n = TCon n o
 tconTupleHead n = TCon (tupleHeadTagTc n) OriginBuiltin
 tconUnresolved n = TCon n OriginUnresolved"
-mono_tcon_actual=$(grep -wE 'TCon' "$ROOT/compiler/types/typecheck.mdk" \
+# #2586: `Mono` and its renderers live in compiler/types/repr.mdk since the first
+# extraction; the declaration line is there, the mints and comparisons stay here.
+# One set over both files, so a `TCon` minted in either is graded.
+mono_tcon_actual=$(cat "$ROOT/compiler/types/typecheck.mdk" "$ROOT/compiler/types/repr.mdk" \
+  | grep -wE 'TCon' \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
   | sed -E 's/[[:space:]]--[[:space:]].*$//' \
@@ -1115,7 +1119,7 @@ crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List Metho
 perRun.value.funPredicateSlotsRef :=
 perRun.value.implReqPredicateSlots :=
 perRun.value.methodPredicateSlotsRef :=
-crossRun.value.crossModuleFunPredicateSlotsRef :=
+crossRun.value.crossModuleFunPredicateSlotsRef
 crossRun.value.crossModuleFunPredicateSlotsQualRef
 crossRun.value.crossModuleMethodPredicateSlotsRef :=
 crossRun.value.crossModuleMethodPredicateSlotsQualRef

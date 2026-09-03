@@ -157,7 +157,7 @@ through `processSCCs`/`processSCC`. But the *orchestration* — registration ord
 coherence, and the final passes — is duplicated in two near-identical blocks:
 
 - single-file: `checkProgramDiags` (`:11565`), plus `checkProgramSchemes` (`:9259`)
-- multi-module: `checkModuleFullDiags` (`:12417`), driven by `checkModulesDiags`
+- multi-module: `checkModuleFullDiags` (`:12417`), driven by `checkModulesDiagsK`
   (`:12480`) / `checkModules` (`:12395`); `elaborateModules` (`:12610`) for the
   elaborated tree
 

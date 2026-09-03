@@ -82,6 +82,7 @@ import support.util.{
   lookupAssoc,
   dedupBy,
   dedup,
+  isSome,
 }
 import hash_map.{
   HashMap,
@@ -100,7 +101,13 @@ import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
-import frontend.lexer.{Comment, collectComments, commentLine, commentText}
+import frontend.lexer.{
+  Comment,
+  collectComments,
+  commentLine,
+  commentCol,
+  commentText,
+}
 
 -- ── public types ───────────────────────────────────────────────────────────
 
@@ -216,6 +223,9 @@ ruleNameSelfShadowExtern = "rule-self-shadow-extern"
 
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
+
+ruleNamePromissoryReader : String
+ruleNamePromissoryReader = "rule-promissory-reader"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -452,6 +462,17 @@ preferAssignOpRule = Rule {
   fix = Some preferAssignFix,
 }
 
+promissoryReaderRule : Rule
+promissoryReaderRule = Rule {
+  name = ruleNamePromissoryReader,
+  descr =
+    "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)",
+  severity = SevWarning,
+  enabled = True,
+  check = rulePromissoryReader,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -476,6 +497,7 @@ allRules = [
   concatToInterpRule,
   selfShadowExternRule,
   preferAssignOpRule,
+  promissoryReaderRule,
   duplicateBodySameFileRule,
 ]
 
@@ -4539,6 +4561,307 @@ bindChainFinding loc _ = Finding {
   severity = SevWarning,
   loc = loc,
 }
+
+-- ── rule: promissory-reader (#2550) ───────────────────────────────────────────
+-- A comment claiming a symbol is not read YET ("nothing reads this yet",
+-- "no reader yet", "do not add a reader") is a negative about the whole file that
+-- expires the moment a reader lands, and no other gate notices (#2550 has the
+-- measured failure rate).  This rule asserts the claim: the subject must occur in
+-- no code line of the file other than its own definition.
+--
+-- The SUBJECT is, in order: the identifier the claim names in backticks right
+-- after "reads" (the claim names its subject in backticks); for a trailing comment, the field or
+-- binding declared on the comment's own line; for a leading block, the first
+-- declaration after the block (an `export` line is skipped).  A READER is any
+-- whole-word occurrence of the subject on a code line that is not the subject's
+-- own signature, clause head, field declaration or record initializer, and is not
+-- an assignment target (`x := …`).  Double-quoted spans are removed before the
+-- phrase test, so a retraction that quotes the old claim is not a claim.
+--
+-- Deliberately NOT matched: the backward-looking form ("inert BECAUSE x was
+-- reverted", "MEASURED constant-True").  Those carry their own evidence and do not
+-- expire; each one in the tree stopped a deletion that a body-only reading would
+-- have licensed.  The defect this rule fixes is the grammatical form, not the
+-- practice of recording inertness.
+rulePromissoryReader : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+rulePromissoryReader _ path src _ _ =
+  let ls = splitNl src
+  let comments = collectComments src
+  let codeLines = arrayFromList (codePortions ls comments 1)
+  flatMap
+    (promissoryFinding path codeLines)
+    (promissoryClaims (commentBlocks comments codeLines))
+
+-- The code portion of every source line (text before the line's comment, or the
+-- whole line when it has none), by one linear merge of the line list against the
+-- comment list — both are in ascending line order.
+codePortions : List String -> List Comment -> Int -> List String
+codePortions [] _ _ = []
+codePortions (l :: rest) [] n = l :: codePortions rest [] (n + 1)
+codePortions (l :: rest) (c :: cs) n
+  | commentLine c < n = codePortions (l :: rest) cs n
+  | commentLine c == n =
+    stringSlice 0 (commentCol c) l :: codePortions rest cs (n + 1)
+  | otherwise = l :: codePortions rest (c :: cs) (n + 1)
+
+-- One claim candidate per comment BLOCK: consecutive full-line comments form a
+-- block; a trailing comment (code before it on its line) is a block of its own.
+-- Fields: first line, last line, trailing?, the joined comment text.
+data CommentBlock = CommentBlock Int Int Bool String
+
+commentBlocks : List Comment -> Array String -> List CommentBlock
+commentBlocks [] _ = []
+commentBlocks (c :: rest) codeLines =
+  let line = commentLine c
+  let trailing = trimWs (codeLineAt codeLines line) /= ""
+  if trailing then
+    CommentBlock line line True (commentText c) :: commentBlocks rest codeLines
+  else match commentBlockExtend rest codeLines line (commentText c)
+    (lastLine, text, rest2) =>
+      CommentBlock line lastLine False text :: commentBlocks rest2 codeLines
+
+commentBlockExtend : List Comment ->
+  Array String ->
+  Int ->
+  String ->
+  (Int, String, List Comment)
+commentBlockExtend [] _ last text = (last, text, [])
+commentBlockExtend (c :: rest) codeLines last text
+  | commentLine c == last + 1
+    && trimWs (codeLineAt codeLines (last + 1)) == "" =
+    commentBlockExtend rest codeLines (last + 1) "\{text}\n\{commentText c}"
+  | otherwise = (last, text, c :: rest)
+
+codeLineAt : Array String -> Int -> String
+codeLineAt codeLines line
+  | line >= 1 && line <= arrayLength codeLines =
+    arrayGetUnsafe (line - 1) codeLines
+  | otherwise = ""
+
+-- Blocks whose (quote-stripped, lowercased) text makes a promissory claim, as
+-- (claim line, its raw text, the block).
+promissoryClaims : List CommentBlock -> List (Int, String, CommentBlock)
+promissoryClaims blocks = flatMap promissoryClaimOf blocks
+
+promissoryClaimOf : CommentBlock -> List (Int, String, CommentBlock)
+promissoryClaimOf (b@(CommentBlock first _ _ text)) =
+  match promissoryLine (splitNl text) 0
+    Some (i, l) => [(first + i, l, b)]
+    None =>
+      -- a claim wrapped across lines: test the block as one line
+      let joined = joinWith " " (splitNl text)
+      if isPromissoryText (stringToLower (stripQuoted joined)) then
+        [(first, joined, b)]
+      else
+        []
+
+promissoryLine : List String -> Int -> Option (Int, String)
+promissoryLine [] _ = None
+promissoryLine (l :: rest) i
+  | isPromissoryText (stringToLower (stripQuoted l)) = Some (i, l)
+  | otherwise = promissoryLine rest (i + 1)
+
+isPromissoryText : String -> Bool
+isPromissoryText t =
+  let has = needle => isSome (stringIndexOf needle t)
+  has "nothing reads" && has "yet"
+    || has "no reader yet"
+    || has "no readers yet"
+    || has "no consumer yet"
+    || has "no consumers yet"
+    || has "do not add a reader"
+    || has "don't add a reader"
+
+-- Drop every double-quoted span (an unterminated quote runs to end of line).
+stripQuoted : String -> String
+stripQuoted s = match stringIndexOf "\"" s
+  None => s
+  Some i =>
+    let after = stringSlice (i + 1) (stringLength s) s
+    match stringIndexOf "\"" after
+      None => stringSlice 0 i s
+      Some j =>
+        "\{stringSlice 0 i s} \{stripQuoted (stringSlice (j + 1) (stringLength after) after)}"
+
+-- The subject of a claim, per the header's order.
+claimSubject : Array String -> (Int, String, CommentBlock) -> Option String
+claimSubject codeLines (line, text, CommentBlock _ last trailing _) =
+  match backtickedAfterReads text
+    Some n => Some n
+    None =>
+      if trailing then
+        declaredNameOf (codeLineAt codeLines line)
+      else
+        nextDeclaredName codeLines (last + 1)
+
+-- The backticked subject: the identifier right after "reads `" in the claim.
+backtickedAfterReads : String -> Option String
+backtickedAfterReads t =
+  let lower = stringToLower t
+  match stringIndexOf "reads `" lower
+    None => None
+    Some i =>
+      let start = i + stringLength "reads `"
+      let rest = stringSlice start (stringLength t) t
+      map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
+
+-- The first declaration at or after `line`: a signature, clause head, field or
+-- data/type name; `export` lines are skipped; a blank line ends the search (the
+-- comment did not precede a declaration).
+nextDeclaredName : Array String -> Int -> Option String
+nextDeclaredName codeLines line
+  | line > arrayLength codeLines = None
+  | otherwise =
+    let t = trimWs (codeLineAt codeLines line)
+    if t == "export" || t == "public export" then
+      nextDeclaredName codeLines (line + 1)
+    else
+      declaredNameOf t
+
+-- The identifier a code line declares: the leading word of `name : …`,
+-- `name args = …`, `  field : …`, `data Name` / `type Name`, after an optional
+-- `export` / `public export` prefix.
+declaredNameOf : String -> Option String
+declaredNameOf c =
+  let t = trimWs c
+  let t1 = dropPrefixWord "public" t
+  let t2 = dropPrefixWord "export" t1
+  let t3 =
+    dropPrefixWord
+      "data"
+      (dropPrefixWord "type" (dropPrefixWord "interface" t2))
+  let w = leadingIdent t3
+  if w == "" then None else Some w
+
+dropPrefixWord : String -> String -> String
+dropPrefixWord w s
+  | startsWith (w ++ " ") s =
+    trimWs (stringSlice (stringLength w) (stringLength s) s)
+  | otherwise = s
+
+leadingIdent : String -> String
+leadingIdent s =
+  let cs = stringToChars s
+  stringSlice 0 (subjectIdentEnd cs (arrayLength cs) 0) s
+
+subjectIdentEnd : Array Char -> Int -> Int -> Int
+subjectIdentEnd cs n i
+  | i < n && isIdentChar (arrayGetUnsafe i cs) = subjectIdentEnd cs n (i + 1)
+  | otherwise = i
+
+isIdentChar : Char -> Bool
+isIdentChar ch = isAlnum ch || ch == '_' || ch == '\''
+
+-- The finding: a claim whose subject has a reader.
+promissoryFinding : String ->
+  Array String ->
+  (Int, String, CommentBlock) ->
+  List Finding
+promissoryFinding path codeLines claim = match claimSubject codeLines claim
+  None => []
+  Some subject =>
+    -- a claim about a name this file does not declare is another file's to bear
+    -- out (and a bare word from the prose would otherwise match any use of it)
+    if declaredInFile subject codeLines then
+      readerFinding path subject claim (readerLines subject codeLines)
+    else
+      []
+
+readerFinding : String ->
+  String ->
+  (Int, String, CommentBlock) ->
+  List Int ->
+  List Finding
+readerFinding _ _ _ [] = []
+readerFinding path subject (line, _, _) (firstReader :: more) = [
+  Finding {
+    rule = ruleNamePromissoryReader,
+    message =
+      "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
+    severity = SevWarning,
+    loc = Some (Loc path line 1 line 1),
+  },
+]
+
+declaredInFile : String -> Array String -> Bool
+declaredInFile subject codeLines =
+  declaredInFileGo subject codeLines (arrayLength codeLines) 1
+
+declaredInFileGo : String -> Array String -> Int -> Int -> Bool
+declaredInFileGo subject codeLines n line
+  | line > n = False
+  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+  | otherwise = declaredInFileGo subject codeLines n (line + 1)
+
+readerCountSuffix : Int -> String
+readerCountSuffix 0 = ""
+readerCountSuffix n = " and \{n} more line(s)"
+
+-- Every code line on which `subject` occurs as a reader, ascending.
+readerLines : String -> Array String -> List Int
+readerLines subject codeLines =
+  readerLinesGo subject codeLines (arrayLength codeLines) 1
+
+readerLinesGo : String -> Array String -> Int -> Int -> List Int
+readerLinesGo subject codeLines n line
+  | line > n = []
+  | isReaderLine subject (arrayGetUnsafe (line - 1) codeLines) =
+    line :: readerLinesGo subject codeLines n (line + 1)
+  | otherwise = readerLinesGo subject codeLines n (line + 1)
+
+isReaderLine : String -> String -> Bool
+isReaderLine subject c =
+  not (isDefinitionLine subject c) && wordReadIn subject c
+
+-- `subject` at column 0 (signature / clause head, optionally `export`-prefixed),
+-- or indented and followed by `:` (field declaration) or `=` (record initializer).
+isDefinitionLine : String -> String -> Bool
+isDefinitionLine subject c =
+  let t = dropPrefixWord "export" (dropPrefixWord "public" (trimWs c))
+  let after = trimWs (stringSlice (stringLength subject) (stringLength t) t)
+  startsWith subject t
+    && identBoundaryAt (stringToChars t) (stringLength subject)
+    && (not (startsWith " " c || startsWith "\t" c)
+      || startsWith ":" after && not (startsWith ":=" after)
+      || startsWith "=" after && not (startsWith "==" after))
+
+identBoundaryAt : Array Char -> Int -> Bool
+identBoundaryAt cs i =
+  i >= arrayLength cs || not (isIdentChar (arrayGetUnsafe i cs))
+
+-- Whole-word occurrence of `w` in `line` that is not an assignment target.
+wordReadIn : String -> String -> Bool
+wordReadIn w line =
+  let cs = stringToChars line
+  let ws = stringToChars w
+  wordReadScan cs (arrayLength cs) ws (arrayLength ws) 0
+
+wordReadScan : Array Char -> Int -> Array Char -> Int -> Int -> Bool
+wordReadScan cs n ws m i
+  | i + m > n = False
+  | charsMatchAt cs ws m i 0
+    && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) cs)))
+    && identBoundaryAt cs (i + m)
+    && not (assignFollows cs n (i + m)) = True
+  | otherwise = wordReadScan cs n ws m (i + 1)
+
+charsMatchAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+charsMatchAt cs ws m i j
+  | j >= m = True
+  | arrayGetUnsafe (i + j) cs == arrayGetUnsafe j ws =
+    charsMatchAt cs ws m i (j + 1)
+  | otherwise = False
+
+assignFollows : Array Char -> Int -> Int -> Bool
+assignFollows cs n i
+  | i < n && arrayGetUnsafe i cs == ' ' = assignFollows cs n (i + 1)
+  | i + 1 < n = arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
+  | otherwise = False
 
 -- ── rule: dead-code (per-file reachability) ───────────────────────────────────
 -- Flag a PRIVATE (unexported) top-level value/function binding that is NOT

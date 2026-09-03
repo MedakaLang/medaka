@@ -1,5 +1,5 @@
 # META
-source_lines=450
+source_lines=445
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -34,13 +34,8 @@ import frontend.lexer.{Token(..), tokenize}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
-import types.typecheck.{
-  checkOneDiags,
-  checkOneScheme,
-  ppScheme,
-  Scheme(..),
-  tcMsg,
-}
+import types.repr.{ppScheme, Scheme(..)}
+import types.typecheck.{checkOneDiags, checkOneScheme, tcMsg}
 import eval.eval.{
   Value(..),
   evalOneRootEnvWith,
@@ -458,7 +453,8 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "ppScheme" false) (mem "Scheme" true) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DTypeSig false "accumulatedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -600,7 +596,8 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "ppScheme" false) (mem "Scheme" true) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DTypeSig false "accumulatedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl"))))

@@ -2922,5 +2922,38 @@ else
   fail=$((fail+1)); printf 'FAIL shadow/own-still-wins (check exit %d: [%s])\n' "$own_code" "$own_out"
 fi
 
+# 10. elab-residual (#2544, ARCH M4): a program the CHECK predicate accepts but the
+#     elaborate pass (run/build's own typecheck) rejects — the #1812 shape, pinned by
+#     test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject — must
+#     be rejected by `run` AND `build` with a LOCATED diagnostic from the elaboration's
+#     residual (`<file>:L:C: <message>`), not the "no located diagnostic is available"
+#     deflection #1813 left there.  The residual is attributed per MODULE (a `Loc`
+#     carries no file on the elaborate path), so the located line must name the
+#     module the error is in, which here is an IMPORTED module, not the entry.
+#     Three orderings of the same three imports are silent under `check`; this leg
+#     drives the one the pin drives (`Z, amodI, fmodI`).  If `check` ever starts
+#     rejecting this program the pin drains and this leg's `check` premise goes with
+#     it — re-derive both, do not loosen this leg to keep it green.
+mkdir -p "$TMP/resid"
+cp "$ROOT"/test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject/*.mdk "$TMP/resid/"
+resid_check="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/resid/main.mdk" >/dev/null 2>&1; echo $?)"
+resid_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/resid/main.mdk" 2>&1 >/dev/null; echo "exit:$?")"
+MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/resid/main.mdk" -o "$TMP/resid/bin" > "$TMP/resid/build.log" 2>&1
+resid_build_code=$?
+resid_build="$(cat "$TMP/resid/build.log")"
+if [ "$resid_check" -ne 0 ]; then
+  fail=$((fail+1)); printf 'FAIL elab-residual/premise (check now rejects the #1812 shape, exit %s — the pin drained; re-derive this leg)\n' "$resid_check"
+else
+  case "$resid_run" in
+    *"error: "*.mdk:[0-9]*:[0-9]*:*"Type mismatch"*"exit:1") pass=$((pass+1)); printf 'ok   elab-residual/run (located elaboration diagnostic, exit 1)\n' ;;
+    *) fail=$((fail+1)); printf 'FAIL elab-residual/run (want a located `<file>.mdk:L:C: Type mismatch` line and exit 1, got: [%s])\n' "$resid_run" ;;
+  esac
+  case "$resid_build" in
+    *"error: "*.mdk:[0-9]*:[0-9]*:*"Type mismatch"*) if [ "$resid_build_code" -ne 0 ] && [ ! -x "$TMP/resid/bin" ]; then pass=$((pass+1)); printf 'ok   elab-residual/build (located elaboration diagnostic, no binary)\n'
+      else fail=$((fail+1)); printf 'FAIL elab-residual/build (located but exit %d, binary present=%s)\n' "$resid_build_code" "$([ -x "$TMP/resid/bin" ] && echo yes || echo no)"; fi ;;
+    *) fail=$((fail+1)); printf 'FAIL elab-residual/build (want a located `<file>.mdk:L:C: Type mismatch` line, got: [%s])\n' "$resid_build" ;;
+  esac
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

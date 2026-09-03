@@ -130,17 +130,11 @@ import json.{
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
 import support.util.{startsWith}
+import types.repr.{Scheme}
 import types.typecheck.{
-  elaborateModules,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
-  mainTypeIsFloat,
-  mainTypeIsUnit,
-  checkedFfiExternTypeNamesModules,
-  Scheme,
-  ppSchemeNamedFull,
-  checkOneSchemeFullK,
+  elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
+  preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
+  checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
@@ -564,7 +558,7 @@ desugarPair (mid, p) = (mid, desugar p)
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) =
+  let (coreD, modules2, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0

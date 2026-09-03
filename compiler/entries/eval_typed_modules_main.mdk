@@ -54,5 +54,5 @@ run runtimeP coreP entry roots = match readFile runtimeP
 
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let elaborated = elaborateModules runtimeDecls coreDecls modules
-  putStr (evalModulesOutput (fst elaborated) (snd elaborated))
+  let (coreE, modulesE, _) = elaborateModules runtimeDecls coreDecls modules
+  putStr (evalModulesOutput coreE modulesE)

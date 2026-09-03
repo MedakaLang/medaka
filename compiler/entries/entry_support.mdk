@@ -10,11 +10,19 @@
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
 import frontend.ast.{Decl}
+import types.typecheck.{TcDiag(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import support.util.{splitLast}
 import support.path.{dirOf}
-import types.typecheck.{elaborateOne, elaborateModules, tcMsg}
+import types.typecheck.{
+  elaborateOne,
+  elaborateModules,
+  tcMsg,
+  hadTypeErrors,
+  setLocalPinDisabled,
+}
+import driver.diagnostics.{renderTcDiags}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{loadProgram, unknownModuleIdOf}
 import backend.private_mangle.{mangleUnits}
@@ -49,6 +57,7 @@ import driver.main_autoprint.{
 -- Route every such path through `failWith` rather than a bare `ePutStrLn`.
 export
 failWith : String -> <IO> Unit
+-- lint-disable-next-line rule-duplicate-body
 failWith msg =
   let _ = ePutStrLn msg
   exit 1
@@ -193,6 +202,38 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- asyncWrapModules (#2506).  A Unit main (incl. every compiler-graph main)
 -- takes the unchanged path, so emitter output on the compiler graph is
 -- byte-identical.
+-- The test-only `MEDAKA_ARGTAG_UNPIN=1` hatch (`test/argtag_matrix_fixtures/CENSUS.md`)
+-- drops the local-pin channels so the `T-LOCAL-CONSTRAINED-MONO` region typechecks and
+-- the engines' behaviour on it can be observed.  `medaka_cli` arms it for `check`/`run`
+-- (`argtagUnpinRequested`); this driver runs in the separate `medaka_emitter` process
+-- and must arm it too, or its own elaboration still records the pin error — which the
+-- #2089 gate below would then reject under `MEDAKA_STRICT=1`, hiding exactly the
+-- region the census exists to observe.  Same three-way read as the CLI's: only a
+-- non-empty value arms it, so an unset flag fails CLOSED.
+argtagUnpinArmed : Unit -> <IO> Bool
+argtagUnpinArmed () = match getEnv "MEDAKA_ARGTAG_UNPIN"
+  Some v => v /= ""
+  None => False
+
+-- #2089: the emit driver's own elaboration is the only `elaborateModules` caller
+-- that never read `hadTypeErrors` afterwards — a type error surfaced only on this
+-- path (the mangled tree, or the compiler's own graph on the bootstrap, which never
+-- passes through `medaka build`'s CLI gate) reached codegen at exit 0.  Warn-first,
+-- by ruling: print the messages the sticky channel kept and continue; only
+-- `MEDAKA_STRICT=1` makes it fatal.  The flip to hard-by-default waits on a
+-- self-compile fixpoint measured with this gate on (C3a and C3b separately).
+emitElaborationGate : List (String, TcDiag) -> <IO> Unit
+emitElaborationGate residual =
+  if hadTypeErrors () then
+    let _ =
+      ePutStrLn
+        "warning: emit-path elaboration recorded type errors that no earlier pass reported (#2089); continuing — set MEDAKA_STRICT=1 to make this fatal"
+    let _ = map ePutStrLn (renderTcDiags [] residual)
+    match getEnv "MEDAKA_STRICT"
+      Some "" => ()
+      Some _ => exit 1
+      None => ()
+
 export
 runEmitWith : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
@@ -201,9 +242,11 @@ runEmitWith : String ->
   List (String, List Decl) ->
   <IO> Unit
 runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
+  let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) =
+  let (coreD, modules2, residual) =
     elaborateModules runtimeDecls coreMangled modulesMangled
+  let _ = emitElaborationGate residual
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
@@ -235,9 +278,11 @@ emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Un
   List (String, List Decl) ->
   <IO> Unit
 emitModulesWith emitTail runtimeDecls coreDecls modules =
+  let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) =
+  let (coreD, modules2, residual) =
     elaborateModules runtimeDecls coreMangled modulesMangled
+  let _ = emitElaborationGate residual
   emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────

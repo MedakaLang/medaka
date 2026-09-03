@@ -46,7 +46,7 @@ import frontend.ast.{
   DeriveRef,
   deriveRefName,
 }
-import types.typecheck.{Scheme(..), ppScheme}
+import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}

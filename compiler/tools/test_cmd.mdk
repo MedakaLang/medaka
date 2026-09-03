@@ -947,7 +947,8 @@ elaborateModulesMangled : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 elaborateModulesMangled runtimeDecls coreDecls modules =
-  mangleCtorCollisionsPair (elaborateModules runtimeDecls coreDecls modules)
+  match elaborateModules runtimeDecls coreDecls modules
+    (coreE, modulesE, _) => mangleCtorCollisionsPair (coreE, modulesE)
 
 runProps : List Decl ->
   List Decl ->

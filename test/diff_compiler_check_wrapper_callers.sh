@@ -18,7 +18,7 @@
 #   1. DERIVES the current caller set: for every `.mdk` file under `compiler/` (other
 #      than `compiler/types/typecheck.mdk` itself, the family's home), parse its
 #      `import types.typecheck.{ ... }` block (which may span multiple lines) and
-#      record which of the 16 wrapper-family names it imports. A name mentioned only
+#      record which of the 14 wrapper-family names it imports. A name mentioned only
 #      in a comment (not imported) is NOT a caller — this gate is keyed on the import,
 #      matching how S-migrate-tool-consumers-remainder's own investigation avoided
 #      false positives from stale prose mentioning an old function name.
@@ -50,7 +50,6 @@ root, ledger_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 WRAP_NAMES = [
     "checkProgramSchemesWithRuntime", "checkProgramSchemes",
     "checkProgramSeededSplit", "checkProgramSeeded",
-    "checkToLinesWithRuntime", "checkErrorsWithRuntime",
     "checkMatchToLines", "checkProgramDiags",
     "checkOneScheme", "checkOneDiags",
     # `checkOneSchemeFull` (the Module-arm FULL-ENVIRONMENT entry: prelude schemes
@@ -71,10 +70,10 @@ WRAP_NAMES = [
     # `checkToLines` (the prelude-free Flat entry) was MISSING from this list until
     # 2026-08-26, which made the gate demonstrably blind: a new caller importing it
     # passed the census unnoticed, and `compiler/entries/selfproc_tc_probe.mdk` had
-    # in fact been such a caller all along, absent from the ledger. Ordered AFTER
-    # `checkToLinesWithRuntime` above is not load-bearing (the `\b` after the
-    # alternation already stops `checkToLines` from matching inside it), but the
-    # family-member count in this gate's header is: keep them in sync.
+    # in fact been such a caller all along, absent from the ledger. The
+    # family-member count in this gate's header is load-bearing: keep them in sync.
+    # (`checkToLinesWithRuntime`/`checkErrorsWithRuntime` left the family in #2552,
+    # deleted as consumer-less.)
     "checkToLines",
 ]
 WRAP_SET = set(WRAP_NAMES)

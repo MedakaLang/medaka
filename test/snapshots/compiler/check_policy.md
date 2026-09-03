@@ -1,5 +1,5 @@
 # META
-source_lines=755
+source_lines=754
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
@@ -48,22 +48,21 @@ import frontend.ast.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import tools.check.{checkHasErrors}
-import types.typecheck.{
+import types.repr.{
   Scheme(..),
   Mono(..),
   EffRow(..),
   Atom(..),
   Param(..),
-  checkOneSchemeFull,
   normalize,
   tupleSpine,
   effrowLabels,
   atomLabel,
   atomParam,
-  dsub,
   drender,
-  decodeProductParam,
-  decodeSetParam,
+}
+import types.typecheck.{
+  checkOneSchemeFull, dsub, decodeProductParam, decodeSetParam
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{sortUniqS, joinWith, reverseL, escStr, lookupAssoc}
@@ -762,7 +761,8 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "checkOneSchemeFull" false) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "dsub" false) (mem "drender" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "drender" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -985,7 +985,8 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "checkOneSchemeFull" false) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "dsub" false) (mem "drender" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "drender" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())

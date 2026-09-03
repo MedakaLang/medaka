@@ -19,7 +19,7 @@ import types.annotate.{annotateProgram}
 import frontend.resolve.{resolveToLines}
 import frontend.exhaust.{exhaustToLines}
 import driver.loader.{loadProgram}
-import types.typecheck.{ppScheme}
+import types.repr.{ppScheme}
 import eval.eval.{ppValue}
 import tools.check.{runCheck}
 import tools.codemod.{codemodSource}

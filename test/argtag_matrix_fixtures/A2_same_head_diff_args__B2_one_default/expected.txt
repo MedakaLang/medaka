@@ -2,5 +2,5 @@ class: undecidable-by-construction
 correct: boxint|boxstr
 check: 0
 run: 1 | main.mdk:13:21: runtime error [E-AMBIGUOUS-DISPATCH]: arg-tag dispatch on a receiver of type 'Box' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them
-build: 1 | error: emitter failed compiling main.mdk\nruntime error [E-PANIC]: no impl of method 'fromInt' for type 'String'\n
-exec: n/a
+build: 0 | built main.mdk -> <BIN>
+exec: 1 | runtime error [E-AMBIGUOUS-DISPATCH]: arg-tag dispatch on this receiver is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them

@@ -1,0 +1,76 @@
+-- Fixture for rule-promissory-reader (#2550): a comment claiming a symbol is
+-- not read YET is a claim the file must bear out. (Exported so rule-dead-code
+-- stays quiet; signed so rule-missing-signature does.)
+
+-- FIRES: leading block, subject = the declaration that follows, read by `useIt`.
+-- NOTHING READS THIS YET, deliberately.
+export tableById : List Int
+tableById = [1, 2, 3]
+
+export useIt : Int
+useIt = listLen tableById
+
+-- FIRES: the backticked form names its own subject; `counter` is read below.
+-- nothing reads `counter` yet
+export counter : Int
+counter = 7
+
+export readsCounter : Int
+readsCounter = counter + 1
+
+-- FIRES: trailing form on a record field, read through field access below.
+export data Cell = Cell {
+  slot : Int,  -- no reader yet
+  other : Int,
+}
+
+export slotOf : Cell -> Int
+slotOf c = c.slot
+
+-- FIRES: the claim is wrapped across two comment lines; the block is read as one.
+-- The channel is recorded here but nothing reads
+-- `wrapped` yet.
+export wrapped : Int
+wrapped = 11
+
+export readsWrapped : Int
+readsWrapped = wrapped + 1
+
+-- FIRES: "no consumer yet" is the same claim in other words.
+-- no consumer yet; `producer` is written for the next slice
+export producer : Int
+producer = 5
+
+export consumer : Int
+consumer = producer * 3
+
+-- does NOT fire: the claim is true — nothing reads `unusedTable`.
+-- nothing reads `unusedTable` yet
+export unusedTable : List Int
+unusedTable = []
+
+-- does NOT fire: a write is not a read; `sink` is only ever assigned.
+-- nothing reads `sink` yet
+export sink : Ref Int
+sink = Ref 0
+
+export writeSink : Unit
+writeSink = sink := 1
+
+-- does NOT fire: a retraction quoting the old claim is not a claim.
+-- This used to say "nothing reads `readsCounter` yet", which is false.
+export twice : Int
+twice = readsCounter * 2
+
+-- does NOT fire: the subject is not declared in this file (`listLen` is the
+-- stdlib's), so the claim is that file's to bear out, not this one's.
+-- nothing reads `listLen` yet
+export usesLen : Int
+usesLen = listLen [1, 2]
+
+-- does NOT fire: the backward-looking form makes no "yet" claim, so the block is
+-- not a claim at all (and its subject, `inertFlag`, has no reader either).
+-- inert BECAUSE the caller was reverted — MEASURED constant-True; nothing reads
+-- the mis-bound word in between.
+export inertFlag : Bool
+inertFlag = True

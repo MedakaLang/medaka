@@ -156,45 +156,43 @@ constructor-cell-tag set (the four possible relations between two heads' tag
 sets, plus the parametric `requires`-carrying spelling of one of them). That
 product is **10 cells**, plus one control deliberately outside the region.
 
-**Zero of the 10 masked cells are decidable.** Each is either a `bug` (the
-information *is* sufficient — `medaka run` gets it right — and the native
-binary is wrong anyway) or `undecidable-by-construction` (the constructor
-cell tag the arg-tag route tests is strictly weaker than the type identity
-the decision needs, so no *narrower predicate* over this route could ever
-answer correctly; only a different mechanism could). The one `decidable` cell
-is the control, `CONTROL_toplevel_helper__not_pinned`, which is outside the
-pinned region by construction and therefore proves nothing about what a
-narrowed pin could safely release.
+**What the census measures now — and what its first measurement got wrong.** The
+census's first run reported zero decidable cells: every masked cell was either
+a `bug` (the information *is* sufficient — `medaka run` gets it right — and
+the native binary was wrong anyway) or `undecidable-by-construction`, and this
+entry concluded from `A1_distinct_user_heads__B1_both_defined` (two ordinary
+impls at two distinct user tycons, no method-less impl anywhere, native
+`woof|woof` at exit 0) that the blocker was the local's single shared route
+ref, i.e. dict-abstracting local bindings
+([#1082](https://github.com/MedakaLang/medaka/issues/1082)), not
+[#1046](https://github.com/MedakaLang/medaka/issues/1046). That measurement
+was an artifact of the instrument: the unpin hatch reached the CLI's typecheck
+gate but not the separate `medaka_emitter` process, whose elaboration pinned
+the local to its first instantiation, recorded the `T-LOCAL-CONSTRAINED-MONO`
+error, had it discarded (#2089), and compiled the second call against the
+first impl. `woof|woof` was the pin's own narrowing leaking through a
+discarded type error. The emit driver now arms the hatch as the CLI does, and
+re-measured (see the census's headline section):
 
-**The blocker is #1082, not #1046.** This entry previously stated that the
-narrowing was blocked *specifically* on
-[#1046](https://github.com/MedakaLang/medaka/issues/1046) — the method-less
-`impl` arg-tag group collapse — and that fixing #1046 would then unblock a
-preserved `enclosingRigidScopeInPlay` narrowing. The census refutes the
-"specifically". The cell `A1_distinct_user_heads__B1_both_defined` contains
-**no method-less impl at all** — two ordinary impls at two distinct user
-tycons, the friendliest shape the region admits — and the native binary still
-prints `woof|woof` where the semantics say `woof|meow`, **silently, at exit
-0**, while `medaka run` prints the correct answer. Fixing #1046 is therefore
-*necessary but not sufficient*: it drains
-`A1_distinct_user_heads__B2_one_default` and leaves `A1…__B1_both_defined`
-standing. The discriminating measurement is the control, which holds the
-interface, the impls, the heads and the use sites fixed and changes exactly
-one thing — the helper is a top-level definition rather than a `let`-local —
-and is correct on both engines. What fails is specific to the **local**:
-`dict_pass` gives it no dictionary parameter, so it lowers to one lifted
-lambda with one shared route ref, and one route ref structurally cannot serve
-two instantiations.
+- the disjoint-head shapes (`A1` on all three group-set values, and
+  `A5__B2`) are **`decidable`** — correct on both engines, including the
+  one-method-less-impl shape #1046 names;
+- the equal-tag-set shape (`A2`) and the no-cell-tag shapes (`A3`, `A4`) are
+  **`undecidable-by-construction`** and now fail **loudly** on the native
+  engine too (`E-AMBIGUOUS-DISPATCH` at run time; a build abort naming the
+  missing cell tag), where they used to abort with a misleading `fromInt`
+  panic;
+- the `requires`-carrying arm with a body of its own (`A5__B1`) is the one
+  remaining **`bug`**, and it is the #1082 shape proper: the inner dict has no
+  route into the local.
 
-The narrowing is therefore blocked on the same thing the first entry names as
-its eventual fix: dict-abstracting local bindings
-([#1082](https://github.com/MedakaLang/medaka/issues/1082)). Until that
-lands, **no narrowing of `T-LOCAL-CONSTRAINED-MONO` is safe anywhere in this
-region** — which is a stronger and simpler answer than the one this entry
-previously carried, and it is why the preserved `enclosingRigidScopeInPlay`
-predicate is not a design to resurrect on the grounds that no gate is red:
-the whole region is invisible to the gate suite by construction, and five
-green gates is exactly what that narrowing had when it was reverted.
+So a narrowing of `T-LOCAL-CONSTRAINED-MONO` is *not* blocked on #1082 for the
+disjoint-head region; what it must still keep pinned — or route by a different
+mechanism — is the tag-weaker-than-type region (`A2`), the tagless region
+(`A3`/`A4`), and the `requires`-body shape (`A5__B1`). The preserved
+`enclosingRigidScopeInPlay` predicate is still not a design to resurrect on
+the grounds that no gate is red: the census is the gate for this region, and
+any narrowing must be graded cell by cell against it.
 
 **Workaround.** Same as the first entry — hoist the forwarding local to a
 top-level binding — or, if hoisting is undesirable, split the one local into
