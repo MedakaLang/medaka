@@ -106,7 +106,7 @@ set -u
 # whole-project scan (it compares a body against OTHER files), so it's checked in
 # one scan over all source roots at once (catches cross-root duplicates too).
 # Intentional exceptions use inline directives (-- lint-disable-next-line / -file <rule>).
-GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op"
+GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op,rule-promissory-reader,rule-self-shadow-extern"
 # Rules carried by the COUNT BASELINE instead of the max ratchet (check 2b, #2619).
 # A rule belongs here when the tree is not clean of it and draining it is not the
 # current change's job: rule-stdlib-reimpl's signature-aware matcher reaches ~70
