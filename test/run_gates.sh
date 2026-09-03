@@ -146,8 +146,45 @@ LEGIT_SKIP_RE='no C compiler|libgc \(bdw-gc\)|not on PATH'
 # The leading `test_` is stripped so the ~119 gates under test/ keep their familiar
 # labels (diff_compiler_lexer, not test_diff_compiler_lexer) — only gates outside
 # test/ gain a prefix, and they had no label before because they never ran.
+#
+# A `kind = "native"` gate's `run` is `test/<name>_test.mdk`, so stripping the
+# `_test.mdk` suffix yields the SAME label its `.sh` carried before the
+# migration. That is not cosmetic: test/gate_cost_baseline.json is keyed by gate
+# label, so a migrated gate keeps its cost history instead of arriving uncosted
+# and hard-refusing `medaka gate balance`.
 gate_name() {
-  printf '%s\n' "${1#"$ROOT"/}" | sed -e 's|\.sh$||' -e 's|/|_|g' -e 's|^test_||'
+  printf '%s\n' "${1#"$ROOT"/}" \
+    | sed -e 's|_test\.mdk$||' -e 's|\.sh$||' -e 's|/|_|g' -e 's|^test_||'
+}
+
+# ── Registry rows no `.sh` glob can find ─────────────────────────────────────
+#
+# A `kind = "native"` entry runs a `*_test.mdk` module, so the two-glob rule
+# below cannot see it: a shard naming one would resolve to a SMALLER set with no
+# error anywhere, which is the one failure this suite exists to prevent. These
+# rows are read straight out of test/gates.toml (the same line-scan
+# test/preflight.sh and ci.yml's `plan` step use) rather than through
+# `./medaka gate list`, because two of the four resolvers that must agree run at
+# a point in CI where no binary is built yet.
+#
+# One line per row: "<name> <repo-relative run path>". Neither field can contain
+# a space (`gate verify` constrains a name; `run` is a path in this tree), so the
+# pair survives shell word-splitting.
+_native_rows() {
+  awk -F'"' '
+    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
+    /^name = "/       { n = $2 }
+    /^kind = "/       { k = $2 }
+    /^run = "/        { r = $2 }
+    END               { if (k == "native" && n != "" && r != "") print n, r }
+  ' "$ROOT/test/gates.toml" 2>/dev/null
+}
+
+# The registry NAME of the native gate whose `run` is repo-relative path $1, or
+# empty if there is none. `medaka gate run` selects by name, so the worker below
+# asks the registry rather than guessing from the filename.
+_native_name_of() {
+  _native_rows | awk -v r="$1" '$2 == r { print $1; exit }'
 }
 
 # Gates outside test/ (the sqlite oracles) locate the tree through these rather
@@ -176,10 +213,23 @@ if [ "${1:-}" = "--run-one" ]; then
   # invoked directly. A gate that fails only because the runner picked the wrong shell
   # is the purest form of the bug this suite exists to prevent: the result says
   # "the compiler is broken" and means "the harness is broken".
-  case "$(head -n 1 "$g")" in
-    *bash*) _shell=bash ;;
-    *)      _shell=sh ;;
+  #
+  # A `kind = "native"` gate is a Medaka test module, not a script: it has no
+  # shebang to honour and no `sh -n` that could parse it, and its invocation
+  # (scratch dir, timeout, environment) belongs to `medaka gate run` so this
+  # runner and that command cannot drift into two ways of running one gate.
+  case "$g" in
+    *.mdk) _native_gate=1 ;;
+    *)     _native_gate=0 ;;
   esac
+  if [ "$_native_gate" -eq 1 ]; then
+    _shell=medaka
+  else
+    case "$(head -n 1 "$g")" in
+      *bash*) _shell=bash ;;
+      *)      _shell=sh ;;
+    esac
+  fi
   # ── SYNTAX-CHECK FIRST, before running the gate (#1577) ─────────────────────
   #
   # dash exits 2 on a genuine shell parse error (e.g. an unescaped apostrophe
@@ -199,7 +249,7 @@ if [ "${1:-}" = "--run-one" ]; then
   # sample is USABLE is the consumer's call (test/gate_cost_ingest.sh drops any
   # gate whose `ok` is false), never a silent omission here.
   _t0=$(_now_ms)
-  if ! "$_shell" -n "$g" >"$rd/$name.log" 2>&1; then
+  if [ "$_native_gate" -eq 0 ] && ! "$_shell" -n "$g" >"$rd/$name.log" 2>&1; then
     st=3   # syntax error: the gate script itself is malformed, not "unbuilt"
     raw=$st
     echo "$st" >"$rd/$name.status"
@@ -208,7 +258,22 @@ if [ "${1:-}" = "--run-one" ]; then
     printf 'BROKEN %s  (SYNTAX ERROR: %s -n rejected this gate — see log)\n' "$name" "$_shell"
     exit 0
   fi
-  if JOBS="${INNER_JOBS:-1}" "$_shell" "$g" >"$rd/$name.log" 2>&1; then
+  if [ "$_native_gate" -eq 1 ]; then
+    # Selected by registry NAME, asked of the registry rather than guessed from
+    # the filename. `--no-stale-check` because this script already refused above
+    # on a stale oracle, and running that check twice can only disagree.
+    _gn="$(_native_name_of "${g#"$ROOT"/}")"
+    if [ -z "$_gn" ]; then
+      echo "$g: no native registry entry declares this run target" \
+        >"$rd/$name.log"
+      st=3
+    elif JOBS="${INNER_JOBS:-1}" "$MEDAKA" gate run --no-stale-check "$_gn" \
+           >"$rd/$name.log" 2>&1; then
+      st=0
+    else
+      st=$?
+    fi
+  elif JOBS="${INNER_JOBS:-1}" "$_shell" "$g" >"$rd/$name.log" 2>&1; then
     st=0
   else
     st=$?
@@ -247,11 +312,20 @@ fi
 # because no pattern could even REACH them). A bare pattern like 'diff_compiler_*'
 # matches nothing at the repo root, so this is backwards-compatible.
 #
-# build_oracles.sh --for and diff_compiler_ci_shard_coverage.sh resolve patterns the
-# SAME way. All three must agree: if the coverage gate believed a shard pattern
-# selected a gate that run_gates.sh could not actually glob, CI would certify
-# coverage of a gate that silently never ran.
+# build_oracles.sh --for, test/preflight.sh's resolver, its re-resolver, its
+# _gates_for_fixture_dir corpus scan, diff_compiler_ci_shard_coverage.sh and
+# ci.yml's `plan` step resolve patterns the SAME way. All of them must agree: if
+# one believed a shard pattern selected a gate another could not resolve, CI
+# would certify coverage of a gate that silently never ran.
+#
+# The second arm is `kind = "native"` (#2591): such an entry has no `.sh` for the
+# globs to find, so it resolves by registry NAME instead, and the gate IS its
+# `run` module. Zero rows carry that kind today, so the arm selects nothing —
+# it exists so that the first migration does not silently shrink a shard.
 gates=""
+# "<name>:<run>" pairs — ':' because a `for` split over "<name> <run>" would tear
+# the pair in half, and neither a gate name nor a path in this tree contains one.
+_native_pairs="$(_native_rows | tr ' ' ':')"
 for pat in "$@"; do
   for g in "$ROOT"/test/$pat.sh "$ROOT"/$pat.sh; do
     [ -f "$g" ] || continue
@@ -260,6 +334,22 @@ for pat in "$@"; do
       *) gates="$gates $g" ;;
     esac
   done
+  # `set -f` so the word split below cannot pathname-expand a registry row.
+  # `case` patterns still glob under noglob, which is what makes
+  # 'diff_compiler_*' select a native gate exactly as it selects a script one.
+  set -f
+  for _row in $_native_pairs; do
+    case "${_row%%:*}" in
+      $pat)
+        _ng="$ROOT/${_row#*:}"
+        [ -f "$_ng" ] || continue
+        case " $gates " in
+          *" $_ng "*) ;;
+          *) gates="$gates $_ng" ;;
+        esac ;;
+    esac
+  done
+  set +f
 done
 [ -n "$gates" ] || { echo "no gates match: $*"; exit 1; }
 

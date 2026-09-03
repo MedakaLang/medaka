@@ -947,18 +947,46 @@ jobs:
 
           # Expand THIS shard's patterns into repo-relative gate paths, resolving against
           # BOTH `test/` and the repo root — the SAME rule run_gates.sh, build_oracles.sh
-          # --for and diff_compiler_ci_shard_coverage.sh use. All four must agree, or CI
-          # would certify coverage of a gate that silently never ran.
+          # --for, test/preflight.sh's resolver and diff_compiler_ci_shard_coverage.sh
+          # use. All of them must agree, or CI would certify coverage of a gate that
+          # silently never ran.
           #
           # (UNQUOTED substitution of matrix.pattern is deliberate, exactly as in the run
           # step below: quoting it collapses the pattern list into ONE argument and
           # silently degrades the shard to a single bad glob.)
+          #
+          # ── the second arm: `kind = "native"` (#2591) ────────────────────────
+          #
+          # Such an entry runs a `*_test.mdk` module, so no `.sh` glob can find it
+          # and it resolves by registry NAME instead. This arm is why the migration
+          # is safe to make at all: the `::error::` guard below fires only when the
+          # WHOLE shard resolves to nothing, so a shard that quietly resolved to
+          # one gate FEWER would have gone green having never run it, and
+          # diff_compiler_ci_shard_coverage.sh would have certified it reachable
+          # (it reads `shard` from the registry, not this expansion). Zero rows
+          # carry the kind today, so the arm currently selects nothing.
+          awk -F'"' '
+            /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
+            /^name = "/       { n = $2 }
+            /^kind = "/       { k = $2 }
+            /^run = "/        { r = $2 }
+            END               { if (k == "native" && n != "" && r != "") print n, r }
+          ' test/gates.toml > "$RUNNER_TEMP/native_gates.txt"
+
           shard=""
           for pat in ${{ matrix.pattern }}; do
             for g in test/$pat.sh $pat.sh; do
               [ -f "$g" ] || continue
               case " $shard " in *" $g "*) ;; *) shard="$shard $g" ;; esac
             done
+            while read -r nname nrun; do
+              [ -n "$nname" ] || continue
+              case "$nname" in
+                $pat)
+                  [ -f "$nrun" ] || continue
+                  case " $shard " in *" $nrun "*) ;; *) shard="$shard $nrun" ;; esac ;;
+              esac
+            done < "$RUNNER_TEMP/native_gates.txt"
           done
           if [ -z "$shard" ]; then
             echo "::error::shard '${{ matrix.name }}' pattern matched NO gates at all. A gate was renamed or deleted; this shard would have reported green having run nothing."
@@ -1028,8 +1056,17 @@ jobs:
           # run_gates.sh / build_oracles.sh --for take PATTERNS; a concrete gate path minus
           # its `.sh`, minus a leading `test/`, IS one ('diff_compiler_fmt',
           # 'native_fixtures/run', 'sqlite/test/select_oracle'). Same names the shards use.
+          # A native gate has no such path rule — those resolve by registry NAME on both
+          # sides — so its pattern comes back out of the registry it went in through.
           pats=""
-          for g in $run; do p="${g%.sh}"; pats="$pats ${p#test/}"; done
+          for g in $run; do
+            case "$g" in
+              *.mdk) p="$(awk -v r="$g" '$2 == r { print $1; exit }' "$RUNNER_TEMP/native_gates.txt")" ;;
+              *)     p="${g%.sh}"; p="${p#test/}" ;;
+            esac
+            [ -n "$p" ] || { echo "::error::gate '$g' resolved into this shard but has no pattern form — the registry and this expansion disagree."; exit 1; }
+            pats="$pats $p"
+          done
           pats="${pats# }"
 
           if [ -z "$pats" ]; then
