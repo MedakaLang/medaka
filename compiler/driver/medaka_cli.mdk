@@ -4079,9 +4079,12 @@ cjLintTripleHasErr (_, _, diags) = anyList diagIsError diags
 -- tools/lint_baseline.mdk; this layer resolves the flags, reads the file, and
 -- puts the "which count moved" line on stderr next to the promoted findings.
 
--- The two flags name incompatible jobs — reading a baseline and rewriting one —
--- and `--write-baseline` reports counts, which `--fix` would be changing as it
--- went.  Reject both pairings rather than silently letting one win.
+-- The three flags name incompatible jobs — reading a baseline, rewriting one,
+-- and rewriting source — and `--fix`'s path never consulted `--baseline` at
+-- all (S3-2): it applied every fixable finding regardless of what the
+-- baseline would have allowed to pass, so `--fix --baseline=<f>` silently
+-- promoted nothing while still exiting 0. Reject every pairing rather than
+-- silently letting one win or fixing past what the baseline permits.
 assertBaselineFlagsCoherent : Option String ->
   Option String ->
   Bool ->
@@ -4091,6 +4094,8 @@ assertBaselineFlagsCoherent baselineArg writeArg fixMode
     dieMsg "medaka lint: --baseline and --write-baseline are mutually exclusive"
   | isSome writeArg && fixMode =
     dieMsg "medaka lint: --write-baseline cannot be combined with --fix"
+  | isSome baselineArg && fixMode =
+    dieMsg "medaka lint: --baseline cannot be combined with --fix"
   | otherwise = ()
 
 -- An unreadable or malformed baseline is fatal, never an empty one: a baseline

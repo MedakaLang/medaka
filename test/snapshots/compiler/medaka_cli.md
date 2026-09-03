@@ -1,5 +1,5 @@
 # META
-source_lines=4952
+source_lines=4957
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -4083,9 +4083,12 @@ cjLintTripleHasErr (_, _, diags) = anyList diagIsError diags
 -- tools/lint_baseline.mdk; this layer resolves the flags, reads the file, and
 -- puts the "which count moved" line on stderr next to the promoted findings.
 
--- The two flags name incompatible jobs — reading a baseline and rewriting one —
--- and `--write-baseline` reports counts, which `--fix` would be changing as it
--- went.  Reject both pairings rather than silently letting one win.
+-- The three flags name incompatible jobs — reading a baseline, rewriting one,
+-- and rewriting source — and `--fix`'s path never consulted `--baseline` at
+-- all (S3-2): it applied every fixable finding regardless of what the
+-- baseline would have allowed to pass, so `--fix --baseline=<f>` silently
+-- promoted nothing while still exiting 0. Reject every pairing rather than
+-- silently letting one win or fixing past what the baseline permits.
 assertBaselineFlagsCoherent : Option String ->
   Option String ->
   Bool ->
@@ -4095,6 +4098,8 @@ assertBaselineFlagsCoherent baselineArg writeArg fixMode
     dieMsg "medaka lint: --baseline and --write-baseline are mutually exclusive"
   | isSome writeArg && fixMode =
     dieMsg "medaka lint: --write-baseline cannot be combined with --fix"
+  | isSome baselineArg && fixMode =
+    dieMsg "medaka lint: --baseline cannot be combined with --fix"
   | otherwise = ()
 
 -- An unreadable or malformed baseline is fatal, never an empty one: a baseline
@@ -5428,7 +5433,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "cjLintTripleHasErr" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "cjLintTripleHasErr" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags")))
 (DTypeSig false "assertBaselineFlagsCoherent" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "assertBaselineFlagsCoherent" ((PVar "baselineArg") (PVar "writeArg") (PVar "fixMode")) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EApp (EVar "isSome") (EVar "writeArg"))) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline and --write-baseline are mutually exclusive"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "writeArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --write-baseline cannot be combined with --fix"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "assertBaselineFlagsCoherent" ((PVar "baselineArg") (PVar "writeArg") (PVar "fixMode")) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EApp (EVar "isSome") (EVar "writeArg"))) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline and --write-baseline are mutually exclusive"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "writeArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --write-baseline cannot be combined with --fix"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline cannot be combined with --fix"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "loadLintBaselineCtx" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline")))))))
 (DFunDef false "loadLintBaselineCtx" (PWild (PCon "None")) (EVar "None"))
 (DFunDef false "loadLintBaselineCtx" ((PVar "cwd") (PCon "Some" (PVar "path"))) (EMatch (EApp (EVar "readLintBaseline") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka lint: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EVar "None")))) (arm (PCon "Ok" (PVar "base")) () (EApp (EVar "Some") (ETuple (EVar "cwd") (EVar "base"))))))
@@ -6027,7 +6032,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "cjLintTripleHasErr" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "cjLintTripleHasErr" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags")))
 (DTypeSig false "assertBaselineFlagsCoherent" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "assertBaselineFlagsCoherent" ((PVar "baselineArg") (PVar "writeArg") (PVar "fixMode")) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EApp (EVar "isSome") (EVar "writeArg"))) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline and --write-baseline are mutually exclusive"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "writeArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --write-baseline cannot be combined with --fix"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "assertBaselineFlagsCoherent" ((PVar "baselineArg") (PVar "writeArg") (PVar "fixMode")) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EApp (EVar "isSome") (EVar "writeArg"))) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline and --write-baseline are mutually exclusive"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "writeArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --write-baseline cannot be combined with --fix"))) (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "baselineArg")) (EVar "fixMode")) (EApp (EVar "dieMsg") (ELit (LString "medaka lint: --baseline cannot be combined with --fix"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "loadLintBaselineCtx" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "LintBaseline")))))))
 (DFunDef false "loadLintBaselineCtx" (PWild (PCon "None")) (EVar "None"))
 (DFunDef false "loadLintBaselineCtx" ((PVar "cwd") (PCon "Some" (PVar "path"))) (EMatch (EApp (EVar "readLintBaseline") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka lint: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EVar "None")))) (arm (PCon "Ok" (PVar "base")) () (EApp (EVar "Some") (ETuple (EVar "cwd") (EVar "base"))))))

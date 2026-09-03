@@ -1,5 +1,5 @@
 # META
-source_lines=278
+source_lines=284
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_baseline.mdk — the per-(file, rule) finding-count baseline
@@ -57,8 +57,14 @@ public export data LintBaseline = LintBaseline (List BaselineRow)
 export
 readLintBaseline : String -> <IO> Result String LintBaseline
 readLintBaseline path = match readFile path
-  Err msg => Err "cannot read lint baseline '\{path}': \{msg}"
+  Err msg => Err (missingBaselineErr path msg)
   Ok src => parseLintBaseline path src
+
+-- The message for an unreadable baseline file, pulled out of `readLintBaseline`
+-- so the "missing file" case is testable without an `<IO>` action.
+export
+missingBaselineErr : String -> String -> String
+missingBaselineErr path msg = "cannot read lint baseline '\{path}': \{msg}"
 
 export
 parseLintBaseline : String -> String -> Result String LintBaseline
@@ -289,7 +295,9 @@ baselineFileHeader = stringConcat [
 (DData Public "BaselineRow" () ((variant "BaselineRow" (ConNamed (field "file" (TyCon "String")) (field "rule" (TyCon "String")) (field "count" (TyCon "Int"))))) ())
 (DData Public "LintBaseline" () ((variant "LintBaseline" (ConPos (TyApp (TyCon "List") (TyCon "BaselineRow"))))) ())
 (DTypeSig true "readLintBaseline" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
-(DFunDef false "readLintBaseline" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read lint baseline '")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "': "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "parseLintBaseline") (EVar "path")) (EVar "src")))))
+(DFunDef false "readLintBaseline" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EApp (EApp (EVar "missingBaselineErr") (EVar "path")) (EVar "msg")))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "parseLintBaseline") (EVar "path")) (EVar "src")))))
+(DTypeSig true "missingBaselineErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "missingBaselineErr" ((PVar "path") (PVar "msg")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read lint baseline '")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "': "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig true "parseLintBaseline" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
 (DFunDef false "parseLintBaseline" ((PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "map") (EVar "LintBaseline")) (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EListLit))))))
 (DTypeSig false "baselineRowsGo" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "BaselineRow")))))))))
@@ -360,7 +368,9 @@ baselineFileHeader = stringConcat [
 (DData Public "BaselineRow" () ((variant "BaselineRow" (ConNamed (field "file" (TyCon "String")) (field "rule" (TyCon "String")) (field "count" (TyCon "Int"))))) ())
 (DData Public "LintBaseline" () ((variant "LintBaseline" (ConPos (TyApp (TyCon "List") (TyCon "BaselineRow"))))) ())
 (DTypeSig true "readLintBaseline" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
-(DFunDef false "readLintBaseline" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read lint baseline '")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "': "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "parseLintBaseline") (EVar "path")) (EVar "src")))))
+(DFunDef false "readLintBaseline" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EApp (EApp (EVar "missingBaselineErr") (EVar "path")) (EVar "msg")))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "parseLintBaseline") (EVar "path")) (EVar "src")))))
+(DTypeSig true "missingBaselineErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "missingBaselineErr" ((PVar "path") (PVar "msg")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read lint baseline '")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "': "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig true "parseLintBaseline" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
 (DFunDef false "parseLintBaseline" ((PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EMethodRef "map") (EVar "LintBaseline")) (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EListLit))))))
 (DTypeSig false "baselineRowsGo" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "BaselineRow")))))))))

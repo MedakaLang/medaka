@@ -53,8 +53,14 @@ public export data LintBaseline = LintBaseline (List BaselineRow)
 export
 readLintBaseline : String -> <IO> Result String LintBaseline
 readLintBaseline path = match readFile path
-  Err msg => Err "cannot read lint baseline '\{path}': \{msg}"
+  Err msg => Err (missingBaselineErr path msg)
   Ok src => parseLintBaseline path src
+
+-- The message for an unreadable baseline file, pulled out of `readLintBaseline`
+-- so the "missing file" case is testable without an `<IO>` action.
+export
+missingBaselineErr : String -> String -> String
+missingBaselineErr path msg = "cannot read lint baseline '\{path}': \{msg}"
 
 export
 parseLintBaseline : String -> String -> Result String LintBaseline

@@ -1,5 +1,5 @@
 # META
-source_lines=5307
+source_lines=5327
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1901,8 +1901,28 @@ forwardsParams local [] body = match stripELoc body
 forwardsParams local ps body =
   let (headE, args) = appSpineOf body
   match headE
-    EVar n => n == local && paramNamesOf ps == argNamesOf args
+    EVar n => n == local && paramsMatchArgs ps args
     _ => False
+
+-- Every param must be a bound VARIABLE and every arg a variable REFERENCE,
+-- with the two resulting name lists equal in order — comparing the raw
+-- `Option String` lists directly would let a wildcard param and a hardcoded
+-- literal argument both read `None` at the same position and coincidentally
+-- "match".
+paramsMatchArgs : List Pat -> List Expr -> Bool
+paramsMatchArgs ps args = match (
+  allSome (paramNamesOf ps),
+  allSome (argNamesOf args),
+)
+  (Some pns, Some ans) => pns == ans
+  _ => False
+
+-- `None` if any element of `xs` is `None`; otherwise `Some` of the unwrapped
+-- values, in order.
+allSome : List (Option String) -> Option (List String)
+allSome [] = Some []
+allSome (None :: _) = None
+allSome ((Some x) :: rest) = map (x :: _) (allSome rest)
 
 -- The parser wraps every expr production in a transparent `ELoc` (span info
 -- for diagnostics) — mirrors `frontend/parser.mdk`'s own private `stripLoc`,
@@ -5760,7 +5780,13 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "clausesOf" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "rest")))
 (DTypeSig false "forwardsParams" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "forwardsParams" ((PVar "local") (PList) (PVar "body")) (EMatch (EApp (EVar "stripELoc") (EVar "body")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "==" (EVar "n") (EVar "local"))) (arm PWild () (EVar "False"))))
-(DFunDef false "forwardsParams" ((PVar "local") (PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "headE") (PVar "args")) (EApp (EVar "appSpineOf") (EVar "body"))) (DoExpr (EMatch (EVar "headE") (arm (PCon "EVar" (PVar "n")) () (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "local")) (EBinOp "==" (EApp (EVar "paramNamesOf") (EVar "ps")) (EApp (EVar "argNamesOf") (EVar "args"))))) (arm PWild () (EVar "False"))))))
+(DFunDef false "forwardsParams" ((PVar "local") (PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "headE") (PVar "args")) (EApp (EVar "appSpineOf") (EVar "body"))) (DoExpr (EMatch (EVar "headE") (arm (PCon "EVar" (PVar "n")) () (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "local")) (EApp (EApp (EVar "paramsMatchArgs") (EVar "ps")) (EVar "args")))) (arm PWild () (EVar "False"))))))
+(DTypeSig false "paramsMatchArgs" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool"))))
+(DFunDef false "paramsMatchArgs" ((PVar "ps") (PVar "args")) (EMatch (ETuple (EApp (EVar "allSome") (EApp (EVar "paramNamesOf") (EVar "ps"))) (EApp (EVar "allSome") (EApp (EVar "argNamesOf") (EVar "args")))) (arm (PTuple (PCon "Some" (PVar "pns")) (PCon "Some" (PVar "ans"))) () (EBinOp "==" (EVar "pns") (EVar "ans"))) (arm PWild () (EVar "False"))))
+(DTypeSig false "allSome" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "allSome" ((PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "allSome" ((PCons (PCon "None") PWild)) (EVar "None"))
+(DFunDef false "allSome" ((PCons (PCon "Some" (PVar "x")) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "allSome") (EVar "rest"))))
 (DTypeSig false "stripELoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "stripELoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripELoc") (EVar "e")))
 (DFunDef false "stripELoc" ((PVar "e")) (EVar "e"))
@@ -7396,7 +7422,13 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "clausesOf" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "rest")))
 (DTypeSig false "forwardsParams" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "forwardsParams" ((PVar "local") (PList) (PVar "body")) (EMatch (EApp (EVar "stripELoc") (EVar "body")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "==" (EVar "n") (EVar "local"))) (arm PWild () (EVar "False"))))
-(DFunDef false "forwardsParams" ((PVar "local") (PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "headE") (PVar "args")) (EApp (EVar "appSpineOf") (EVar "body"))) (DoExpr (EMatch (EVar "headE") (arm (PCon "EVar" (PVar "n")) () (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "local")) (EBinOp "==" (EApp (EVar "paramNamesOf") (EVar "ps")) (EApp (EVar "argNamesOf") (EVar "args"))))) (arm PWild () (EVar "False"))))))
+(DFunDef false "forwardsParams" ((PVar "local") (PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "headE") (PVar "args")) (EApp (EVar "appSpineOf") (EVar "body"))) (DoExpr (EMatch (EVar "headE") (arm (PCon "EVar" (PVar "n")) () (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "local")) (EApp (EApp (EVar "paramsMatchArgs") (EVar "ps")) (EVar "args")))) (arm PWild () (EVar "False"))))))
+(DTypeSig false "paramsMatchArgs" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool"))))
+(DFunDef false "paramsMatchArgs" ((PVar "ps") (PVar "args")) (EMatch (ETuple (EApp (EVar "allSome") (EApp (EVar "paramNamesOf") (EVar "ps"))) (EApp (EVar "allSome") (EApp (EVar "argNamesOf") (EVar "args")))) (arm (PTuple (PCon "Some" (PVar "pns")) (PCon "Some" (PVar "ans"))) () (EBinOp "==" (EVar "pns") (EVar "ans"))) (arm PWild () (EVar "False"))))
+(DTypeSig false "allSome" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "allSome" ((PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "allSome" ((PCons (PCon "None") PWild)) (EVar "None"))
+(DFunDef false "allSome" ((PCons (PCon "Some" (PVar "x")) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "allSome") (EVar "rest"))))
 (DTypeSig false "stripELoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "stripELoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripELoc") (EVar "e")))
 (DFunDef false "stripELoc" ((PVar "e")) (EVar "e"))

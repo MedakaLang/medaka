@@ -1897,8 +1897,28 @@ forwardsParams local [] body = match stripELoc body
 forwardsParams local ps body =
   let (headE, args) = appSpineOf body
   match headE
-    EVar n => n == local && paramNamesOf ps == argNamesOf args
+    EVar n => n == local && paramsMatchArgs ps args
     _ => False
+
+-- Every param must be a bound VARIABLE and every arg a variable REFERENCE,
+-- with the two resulting name lists equal in order — comparing the raw
+-- `Option String` lists directly would let a wildcard param and a hardcoded
+-- literal argument both read `None` at the same position and coincidentally
+-- "match".
+paramsMatchArgs : List Pat -> List Expr -> Bool
+paramsMatchArgs ps args = match (
+  allSome (paramNamesOf ps),
+  allSome (argNamesOf args),
+)
+  (Some pns, Some ans) => pns == ans
+  _ => False
+
+-- `None` if any element of `xs` is `None`; otherwise `Some` of the unwrapped
+-- values, in order.
+allSome : List (Option String) -> Option (List String)
+allSome [] = Some []
+allSome (None :: _) = None
+allSome ((Some x) :: rest) = map (x :: _) (allSome rest)
 
 -- The parser wraps every expr production in a transparent `ELoc` (span info
 -- for diagnostics) — mirrors `frontend/parser.mdk`'s own private `stripLoc`,

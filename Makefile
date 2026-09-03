@@ -112,6 +112,12 @@ test: medaka
 	## fixtures that never execute. It also picks up the isProsePath/underDir/
 	## modePartOf doctests already in the file, which were equally unrun.
 	./medaka test compiler/tools/gate_cmd.mdk
+	## FIX-lint-mechanism-correctness (Fix C): compiler/tools/lint_baseline.mdk
+	## is outside every entry's import closure ([W-MODULE-BLIND]), so its
+	## fail-closed parse/validation paths (missing file, malformed TOML, a
+	## duplicate row, a negative count, a missing count field, findings with
+	## no row) are otherwise never run. Its sibling carries the six cases.
+	./medaka test compiler/tools/lint_baseline_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
