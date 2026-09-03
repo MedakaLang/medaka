@@ -2622,6 +2622,21 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "diff_compiler_comment_shout_diff"
+area = "docs"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_comment_shout_diff.sh"
+oracles = []
+sources = ["*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_llvm_ffi"
 area = "backend"
 shard = "gates_6"

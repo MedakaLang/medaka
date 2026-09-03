@@ -29,6 +29,11 @@
 #   5. LEXTOK:   `test/diff_compiler_lex_files.sh` — OPPORTUNISTIC: only runs if
 #      test/bin/lex_main already exists (this hook never builds an oracle). Scoped to
 #      staged files (from check 1's set) that already have a sibling .lextok.golden.
+#   6. EMOJI-SHOUT DIFF: rejects a commit that ADDS a new 🚨/⚠️/🔒 line to a staged
+#      .mdk (check 1's file set). Diff-scoped on ADDED lines only (`git diff --cached
+#      -U0`) — an existing shout that is merely touched but textually unchanged does
+#      not trigger, and it needs no built binary. CI twin:
+#      test/diff_compiler_comment_shout_diff.sh (#2621).
 #
 # ── #491: this hook covers ONE of five golden families outright, plus one more
 # OPPORTUNISTICALLY (check 5, only when test/bin/lex_main happens to already be
@@ -351,6 +356,36 @@ if [ -n "$lex_relevant" ]; then
   fi
 fi
 
+# ── 6. emoji-shout diff check (added lines only, staged .mdk, test/ excluded) ─
+# New comment-register class (#2621): rejects a commit that ADDS a new
+# 🚨/⚠️/🔒 line to a staged .mdk. Diff-scoped, not baseline-scoped — an
+# existing shout line that is merely touched (context around an edit) but
+# textually unchanged does not trigger. Reuses $files from check 1 (staged
+# .mdk, test/** excluded) rather than recomputing the glob. Needs no built
+# binary — pure `git diff` + grep.
+re_emoji='🚨|⚠️|🔒'
+badshout=""
+for f in $files; do
+  [ -f "$f" ] || continue
+  hit="$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | grep -E "$re_emoji")"
+  [ -n "$hit" ] && badshout="$badshout $f"
+done
+
+if [ -n "$badshout" ]; then
+  echo "" >&2
+  echo "✗ pre-commit: new emoji-shout comment line(s) added ($re_emoji):" >&2
+  for f in $badshout; do
+    echo "" >&2
+    echo "  $f:" >&2
+    git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | grep -E "$re_emoji" | sed 's/^/      /' >&2
+  done
+  echo "" >&2
+  echo "  No new shout comments — see AGENTS.md [T-COMMENT-REGISTER]." >&2
+  echo "  Bypass once:  git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+
 # ── #491: NAME THE BLIND SPOT ─────────────────────────────────────────────────
 # This hook's silence has repeatedly been read as "goldens are complete" — it
 # never is. State plainly, every run that reaches here, what got checked and
@@ -359,7 +394,7 @@ fi
 # (#536) on why `test/diff_compiler_test.sh` cannot be scoped to staged files
 # from the outside — running it here would risk rejecting a commit over an
 # unrelated, stale fixture with no working per-file remediation.
-checked="fmt, lint"
+checked="fmt, lint, emoji-shout-diff"
 notchecked=""
 if [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then notchecked="$notchecked snapshots(deferred)"; else checked="$checked, snapshots"; fi
 if [ "$lex_checked" = 1 ]; then checked="$checked, lextok"; else notchecked="$notchecked lextok"; fi
