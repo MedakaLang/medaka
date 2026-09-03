@@ -84,8 +84,14 @@ public export data GateCost = GateCost {
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
-   Mirrors `gate_name` in `test/run_gates.sh` exactly: strip the `.sh`
-   extension, replace every `/` with `_`, then strip one leading `test_`.
+   Mirrors `gate_name` in `test/run_gates.sh` exactly: strip a trailing
+   `_test.mdk` (a `kind = "native"` gate's module) OR a trailing `.sh` (a
+   `kind = "exec"` gate's script), replace every `/` with `_`, then strip one
+   leading `test_`. A `kind = "native"` gate's `run` is `test/<name>_test.mdk`,
+   so stripping the `_test.mdk` suffix yields the SAME key its `.sh` carried
+   before a migration — not cosmetic: `test/gate_cost_baseline.json` is keyed
+   by this label, so a migrated gate keeps its cost history instead of
+   arriving uncosted and hard-refusing `medaka gate balance`.
 
    > baselineKey "test/diff_compiler_lexer.sh"
    "diff_compiler_lexer"
@@ -97,11 +103,14 @@ public export data GateCost = GateCost {
    "native_fixtures_run"
 
    > baselineKey "pds/test/repo_vectors.sh"
-   "pds_test_repo_vectors" -}
+   "pds_test_repo_vectors"
+
+   > baselineKey "test/effect_set_domain_test.mdk"
+   "effect_set_domain" -}
 export
 baselineKey : String -> String
 baselineKey run =
-  let noExt = dropDotSh run
+  let noExt = dropDotSh (dropTestMdk run)
   let flat = joinWith "_" (splitOnChar '/' noExt)
   dropTestPrefix flat
 
@@ -112,6 +121,16 @@ dropDotSh s
   | stringLength s > 3
     && stringSlice (stringLength s - 3) (stringLength s) s == ".sh" =
     stringSlice 0 (stringLength s - 3) s
+  | otherwise = s
+
+-- A `kind = "native"` gate's `run` ends `_test.mdk`, not `.sh`; strip that
+-- suffix FIRST (mirrors `gate_name`'s sed order) so a native gate's key
+-- collapses onto the same label its pre-migration `.sh` used.
+dropTestMdk : String -> String
+dropTestMdk s
+  | stringLength s > 9
+    && stringSlice (stringLength s - 9) (stringLength s) s == "_test.mdk" =
+    stringSlice 0 (stringLength s - 9) s
   | otherwise = s
 
 dropTestPrefix : String -> String
@@ -579,6 +598,12 @@ prop "baselineKey flattens every separator" (n : Int) =
 
 prop "baselineKey is idempotent on an already-flat key" (n : Int) =
   baselineKey (baselineKey "test/g\{intToString n}.sh")
+    == baselineKey "test/g\{intToString n}.sh"
+
+-- LAW: a `kind = "native"` gate's key must survive its own migration — the
+-- SAME stem, whether the gate is still `.sh` or has become `_test.mdk`.
+prop "baselineKey agrees across a native migration" (n : Int) =
+  baselineKey "test/g\{intToString n}_test.mdk"
     == baselineKey "test/g\{intToString n}.sh"
 
 prop "packStat of one sample is that sample" (n : Int) = packStat (n :: []) == n
