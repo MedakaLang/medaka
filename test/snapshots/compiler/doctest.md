@@ -1,5 +1,5 @@
 # META
-source_lines=445
+source_lines=475
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -27,6 +27,7 @@ import frontend.ast.{Decl, DUse}
 import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
+import json.{Json, JString}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -53,9 +54,10 @@ exampleLine (Example _ _ l) = l
 
 -- The outcome of running one example.
 public export data ExResult =
-  | Pass
-  | Fail String String
+  | Pass String String
   -- expected, actual
+  | Fail String String String
+  -- message, expected, actual
   | Errored String  -- message
 
 public export data RunResult =
@@ -121,8 +123,8 @@ printDoctestOne : String -> Example -> ExResult -> <IO> Unit
 printDoctestOne target ex res =
   let loc = "\{target}:\{intToString (exampleLine ex)}"
   match res
-    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
-    Fail expected actual =>
+    Pass _ _ => putStrLn "  ok   \{loc}: \{exampleInput ex}"
+    Fail _ expected actual =>
       let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
       let _ = putStrLn ("       expected: " ++ expected)
       putStrLn ("         actual: " ++ actual)
@@ -413,17 +415,45 @@ oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
 oneResultOk (Err msg) (Ok _) ex = Errored msg
 oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
 
+-- The doctest arm has no message of its own: the two operands ARE the
+-- report, so `Fail`'s message slot stays empty here and the `test` arm
+-- (`tools/test_runner.mdk`) is the one that fills it.
 compareValue : Example -> String -> ExResult
 compareValue ex actual = match exampleExpected ex
-  None => Pass
-  Some exp => if actual == exp then Pass else Fail exp actual
+  None => Pass "" actual
+  Some exp => if actual == exp then Pass exp actual else Fail "" exp actual
+
+-- The `--json` fields for one result, keyed by outcome.  BOTH `medaka test
+-- --json` (driver/medaka_cli.mdk) and `medaka mcp`'s medaka_test render an
+-- `ExResult` through this one function, so the two envelopes cannot drift.
+-- Both outcomes carry the rendered operands, so a passing example reports the
+-- value it produced and a smoke example (no expected line) reports an empty
+-- `expected`.  A `Fail` message — which only the `test` arm sets — rides under
+-- the same `detail` key an `Errored` uses.
+export
+exResultJsonFields : ExResult -> List (String, Json)
+exResultJsonFields (Pass expected actual) = [
+  ("status", JString "pass"),
+  ("expected", JString expected),
+  ("actual", JString actual),
+]
+exResultJsonFields (Fail msg expected actual) =
+  let detail = if msg == "" then [] else [("detail", JString msg)]
+  [
+      ("status", JString "fail"),
+      ("expected", JString expected),
+      ("actual", JString actual),
+    ]
+    ++ detail
+exResultJsonFields (Errored msg) =
+  [("status", JString "error"), ("detail", JString msg)]
 
 isPass : ExResult -> Bool
-isPass Pass = True
+isPass (Pass _ _) = True
 isPass _ = False
 
 isFail : ExResult -> Bool
-isFail (Fail _ _) = True
+isFail (Fail _ _ _) = True
 isFail _ = False
 
 isErr : ExResult -> Bool
@@ -453,6 +483,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
@@ -460,7 +491,7 @@ isUse _ = False
 (DFunDef false "exampleExpected" ((PCon "Example" PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "exampleLine" (TyFun (TyCon "Example") (TyCon "Int")))
 (DFunDef false "exampleLine" ((PCon "Example" PWild PWild (PVar "l"))) (EVar "l"))
-(DData Public "ExResult" () ((variant "Pass" (ConPos)) (variant "Fail" (ConPos (TyCon "String") (TyCon "String"))) (variant "Errored" (ConPos (TyCon "String")))) ())
+(DData Public "ExResult" () ((variant "Pass" (ConPos (TyCon "String") (TyCon "String"))) (variant "Fail" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "Errored" (ConPos (TyCon "String")))) ())
 (DData Public "RunResult" () ((variant "RunResult" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))) ())
 (DTypeSig true "runPassed" (TyFun (TyCon "RunResult") (TyCon "Int")))
 (DFunDef false "runPassed" ((PCon "RunResult" PWild (PVar "p") PWild PWild PWild)) (EVar "p"))
@@ -480,7 +511,7 @@ isUse _ = False
 (DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
 (DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
 (DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass" PWild PWild) () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" PWild (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -568,12 +599,16 @@ isUse _ = False
 (DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
 (DFunDef false "oneResultOk" ((PCon "Ok" (PVar "actual")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EApp (EVar "compareValue") (EVar "ex")) (EVar "actual")))
 (DTypeSig false "compareValue" (TyFun (TyCon "Example") (TyFun (TyCon "String") (TyCon "ExResult"))))
-(DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EVar "Pass")) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EVar "Pass") (EApp (EApp (EVar "Fail") (EVar "exp")) (EVar "actual"))))))
+(DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EApp (EApp (EVar "Pass") (ELit (LString ""))) (EVar "actual"))) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EApp (EApp (EVar "Pass") (EVar "exp")) (EVar "actual")) (EApp (EApp (EApp (EVar "Fail") (ELit (LString ""))) (EVar "exp")) (EVar "actual"))))))
+(DTypeSig true "exResultJsonFields" (TyFun (TyCon "ExResult") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "exResultJsonFields" ((PCon "Pass" (PVar "expected") (PVar "actual"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "pass")))) (ETuple (ELit (LString "expected")) (EApp (EVar "JString") (EVar "expected"))) (ETuple (ELit (LString "actual")) (EApp (EVar "JString") (EVar "actual")))))
+(DFunDef false "exResultJsonFields" ((PCon "Fail" (PVar "msg") (PVar "expected") (PVar "actual"))) (EBlock (DoLet false false (PVar "detail") (EIf (EBinOp "==" (EVar "msg") (ELit (LString ""))) (EListLit) (EListLit (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "msg")))))) (DoExpr (EBinOp "++" (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "fail")))) (ETuple (ELit (LString "expected")) (EApp (EVar "JString") (EVar "expected"))) (ETuple (ELit (LString "actual")) (EApp (EVar "JString") (EVar "actual")))) (EVar "detail")))))
+(DFunDef false "exResultJsonFields" ((PCon "Errored" (PVar "msg"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "error")))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "msg")))))
 (DTypeSig false "isPass" (TyFun (TyCon "ExResult") (TyCon "Bool")))
-(DFunDef false "isPass" ((PCon "Pass")) (EVar "True"))
+(DFunDef false "isPass" ((PCon "Pass" PWild PWild)) (EVar "True"))
 (DFunDef false "isPass" (PWild) (EVar "False"))
 (DTypeSig false "isFail" (TyFun (TyCon "ExResult") (TyCon "Bool")))
-(DFunDef false "isFail" ((PCon "Fail" PWild PWild)) (EVar "True"))
+(DFunDef false "isFail" ((PCon "Fail" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isFail" (PWild) (EVar "False"))
 (DTypeSig false "isErr" (TyFun (TyCon "ExResult") (TyCon "Bool")))
 (DFunDef false "isErr" ((PCon "Errored" PWild)) (EVar "True"))
@@ -595,6 +630,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
@@ -602,7 +638,7 @@ isUse _ = False
 (DFunDef false "exampleExpected" ((PCon "Example" PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "exampleLine" (TyFun (TyCon "Example") (TyCon "Int")))
 (DFunDef false "exampleLine" ((PCon "Example" PWild PWild (PVar "l"))) (EVar "l"))
-(DData Public "ExResult" () ((variant "Pass" (ConPos)) (variant "Fail" (ConPos (TyCon "String") (TyCon "String"))) (variant "Errored" (ConPos (TyCon "String")))) ())
+(DData Public "ExResult" () ((variant "Pass" (ConPos (TyCon "String") (TyCon "String"))) (variant "Fail" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "Errored" (ConPos (TyCon "String")))) ())
 (DData Public "RunResult" () ((variant "RunResult" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))) ())
 (DTypeSig true "runPassed" (TyFun (TyCon "RunResult") (TyCon "Int")))
 (DFunDef false "runPassed" ((PCon "RunResult" PWild (PVar "p") PWild PWild PWild)) (EVar "p"))
@@ -622,7 +658,7 @@ isUse _ = False
 (DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
 (DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
 (DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass" PWild PWild) () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" PWild (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -710,12 +746,16 @@ isUse _ = False
 (DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
 (DFunDef false "oneResultOk" ((PCon "Ok" (PVar "actual")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EApp (EVar "compareValue") (EVar "ex")) (EVar "actual")))
 (DTypeSig false "compareValue" (TyFun (TyCon "Example") (TyFun (TyCon "String") (TyCon "ExResult"))))
-(DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EVar "Pass")) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EVar "Pass") (EApp (EApp (EVar "Fail") (EVar "exp")) (EVar "actual"))))))
+(DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EApp (EApp (EVar "Pass") (ELit (LString ""))) (EVar "actual"))) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EApp (EApp (EVar "Pass") (EVar "exp")) (EVar "actual")) (EApp (EApp (EApp (EVar "Fail") (ELit (LString ""))) (EVar "exp")) (EVar "actual"))))))
+(DTypeSig true "exResultJsonFields" (TyFun (TyCon "ExResult") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "exResultJsonFields" ((PCon "Pass" (PVar "expected") (PVar "actual"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "pass")))) (ETuple (ELit (LString "expected")) (EApp (EVar "JString") (EVar "expected"))) (ETuple (ELit (LString "actual")) (EApp (EVar "JString") (EVar "actual")))))
+(DFunDef false "exResultJsonFields" ((PCon "Fail" (PVar "msg") (PVar "expected") (PVar "actual"))) (EBlock (DoLet false false (PVar "detail") (EIf (EBinOp "==" (EVar "msg") (ELit (LString ""))) (EListLit) (EListLit (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "msg")))))) (DoExpr (EBinOp "++" (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "fail")))) (ETuple (ELit (LString "expected")) (EApp (EVar "JString") (EVar "expected"))) (ETuple (ELit (LString "actual")) (EApp (EVar "JString") (EVar "actual")))) (EVar "detail")))))
+(DFunDef false "exResultJsonFields" ((PCon "Errored" (PVar "msg"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "error")))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "msg")))))
 (DTypeSig false "isPass" (TyFun (TyCon "ExResult") (TyCon "Bool")))
-(DFunDef false "isPass" ((PCon "Pass")) (EVar "True"))
+(DFunDef false "isPass" ((PCon "Pass" PWild PWild)) (EVar "True"))
 (DFunDef false "isPass" (PWild) (EVar "False"))
 (DTypeSig false "isFail" (TyFun (TyCon "ExResult") (TyCon "Bool")))
-(DFunDef false "isFail" ((PCon "Fail" PWild PWild)) (EVar "True"))
+(DFunDef false "isFail" ((PCon "Fail" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isFail" (PWild) (EVar "False"))
 (DTypeSig false "isErr" (TyFun (TyCon "ExResult") (TyCon "Bool")))
 (DFunDef false "isErr" ((PCon "Errored" PWild)) (EVar "True"))

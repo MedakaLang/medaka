@@ -1,5 +1,5 @@
 # META
-source_lines=56
+source_lines=64
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -44,6 +44,14 @@ collectTests ((DTest _ name body) :: rest) =
   (name, exprLine body, body) :: collectTests rest
 collectTests (_ :: rest) = collectTests rest
 
+-- One rendered operand out of an `Expectation` payload.  The field is already
+-- a `String` in every assertion stdlib `test.mdk` builds, so the `ppValue`
+-- arm is for a hand-built `Expectation` carrying something else.
+operandText : Value e -> <e> String
+operandText v = match force v
+  VString s => s
+  other => ppValue other
+
 -- Evaluate one test body to an Expectation value and classify it.  A body that
 -- does not reduce to Pass/Fail is an `Errored` (e.g. a partial closure); a body
 -- that genuinely panics is unrecoverable and aborts the whole run.
@@ -52,9 +60,9 @@ runOneTest : List (String, Value e) -> Expr -> <e> ExResult
 runOneTest evalEnv body =
   let env = extendEnv (EvalEnv [[]]) evalEnv
   match force (eval env body)
-    VCon "Pass" [] => Pass
-    VCon "Fail" [VString msg] => Fail msg ""
-    VCon "Fail" [v] => Fail (ppValue v) ""
+    VCon "Pass" [e, a] => Pass (operandText e) (operandText a)
+    VCon "Fail" [m, e, a] =>
+      Fail (operandText m) (operandText e) (operandText a)
     other =>
       Errored
         ("test body did not evaluate to an Expectation: " ++ ppValue other)
@@ -76,8 +84,10 @@ runOneTest evalEnv body =
 (DFunDef false "collectTests" ((PList)) (EListLit))
 (DFunDef false "collectTests" ((PCons (PCon "DTest" PWild (PVar "name") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLine") (EVar "body")) (EVar "body")) (EApp (EVar "collectTests") (EVar "rest"))))
 (DFunDef false "collectTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectTests") (EVar "rest")))
+(DTypeSig false "operandText" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))
+(DFunDef false "operandText" ((PVar "v")) (EMatch (EApp (EVar "force") (EVar "v")) (arm (PCon "VString" (PVar "s")) () (EVar "s")) (arm (PVar "other") () (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
-(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList)) () (EVar "Pass")) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PCon "VString" (PVar "msg")))) () (EApp (EApp (EVar "Fail") (EVar "msg")) (ELit (LString "")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "v"))) () (EApp (EApp (EVar "Fail") (EApp (EVar "ppValue") (EVar "v"))) (ELit (LString "")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
+(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTest" false) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
@@ -96,5 +106,7 @@ runOneTest evalEnv body =
 (DFunDef false "collectTests" ((PList)) (EListLit))
 (DFunDef false "collectTests" ((PCons (PCon "DTest" PWild (PVar "name") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLine") (EVar "body")) (EVar "body")) (EApp (EVar "collectTests") (EVar "rest"))))
 (DFunDef false "collectTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectTests") (EVar "rest")))
+(DTypeSig false "operandText" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))
+(DFunDef false "operandText" ((PVar "v")) (EMatch (EApp (EVar "force") (EVar "v")) (arm (PCon "VString" (PVar "s")) () (EVar "s")) (arm (PVar "other") () (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
-(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList)) () (EVar "Pass")) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PCon "VString" (PVar "msg")))) () (EApp (EApp (EVar "Fail") (EVar "msg")) (ELit (LString "")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "v"))) () (EApp (EApp (EVar "Fail") (EApp (EVar "ppValue") (EVar "v"))) (ELit (LString "")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
+(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))

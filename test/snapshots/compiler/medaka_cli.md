@@ -1,5 +1,5 @@
 # META
-source_lines=4793
+source_lines=4789
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -212,6 +212,7 @@ import tools.doctest.{
   Engine(..),
   Example,
   ExResult(..),
+  exResultJsonFields,
   RunResult,
   runPassed,
   runFailed,
@@ -3276,7 +3277,7 @@ cliAllPropsPass (p :: rest) = propResultPassed p && cliAllPropsPass rest
 
 cliAllTestsPass : List (String, Int, ExResult) -> Bool
 cliAllTestsPass [] = True
-cliAllTestsPass ((_, _, Pass) :: rest) = cliAllTestsPass rest
+cliAllTestsPass ((_, _, Pass _ _) :: rest) = cliAllTestsPass rest
 cliAllTestsPass (_ :: _) = False
 
 cliPrimaryDoctestRun : List (Engine, RunResult) -> RunResult
@@ -3295,29 +3296,24 @@ cliCountFailProps (p :: rest) =
 
 cliCountPassTests : List (String, Int, ExResult) -> Int
 cliCountPassTests [] = 0
-cliCountPassTests ((_, _, Pass) :: rest) = 1 + cliCountPassTests rest
+cliCountPassTests ((_, _, Pass _ _) :: rest) = 1 + cliCountPassTests rest
 cliCountPassTests (_ :: rest) = cliCountPassTests rest
 
 cliCountFailTests : List (String, Int, ExResult) -> Int
 cliCountFailTests [] = 0
-cliCountFailTests ((_, _, Pass) :: rest) = cliCountFailTests rest
+cliCountFailTests ((_, _, Pass _ _) :: rest) = cliCountFailTests rest
 cliCountFailTests (_ :: rest) = 1 + cliCountFailTests rest
 
-cliExResultFields : ExResult -> List (String, Json)
-cliExResultFields Pass = [("status", JString "pass")]
-cliExResultFields (Fail expected actual) = [
-  ("status", JString "fail"),
-  ("expected", JString expected),
-  ("actual", JString actual),
-]
-cliExResultFields (Errored msg) =
-  [("status", JString "error"), ("detail", JString msg)]
-
 cliExampleJson : (Example, ExResult) -> Json
+-- Structurally identical to mcp.mdk's `exampleJson` now that both render an
+-- `ExResult` through the shared `exResultJsonFields`; the part worth sharing
+-- already lives in tools/doctest.mdk, and each module owns its own `--json`
+-- envelope.
+-- lint-disable-next-line rule-duplicate-body
 cliExampleJson (ex, res) =
   jObject
     ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))]
-      ++ cliExResultFields res)
+      ++ exResultJsonFields res)
 
 cliDoctestsJson : RunResult -> Json
 cliDoctestsJson run = jObject [
@@ -3343,7 +3339,7 @@ cliPropJson p = jObject [
 cliTestJson : (String, Int, ExResult) -> Json
 cliTestJson (name, line, result) =
   jObject
-    ([("name", JString name), ("line", JInt line)] ++ cliExResultFields result)
+    ([("name", JString name), ("line", JInt line)] ++ exResultJsonFields result)
 
 cliTypeErrorField : Option String -> List (String, Json)
 cliTypeErrorField None = []
@@ -4822,7 +4818,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "seedPropRng" false) (mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
-(DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true) (mem "Example" false) (mem "ExResult" true) (mem "RunResult" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false) (mem "exampleLine" false) (mem "exampleInput" false) (mem "engineName" false))))
+(DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true) (mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false) (mem "exampleLine" false) (mem "exampleInput" false) (mem "engineName" false))))
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
@@ -5147,7 +5143,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "cliAllPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "propResultPassed") (EVar "p")) (EApp (EVar "cliAllPropsPass") (EVar "rest"))))
 (DTypeSig false "cliAllTestsPass" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Bool")))
 (DFunDef false "cliAllTestsPass" ((PList)) (EVar "True"))
-(DFunDef false "cliAllTestsPass" ((PCons (PTuple PWild PWild (PCon "Pass")) (PVar "rest"))) (EApp (EVar "cliAllTestsPass") (EVar "rest")))
+(DFunDef false "cliAllTestsPass" ((PCons (PTuple PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliAllTestsPass") (EVar "rest")))
 (DFunDef false "cliAllTestsPass" ((PCons PWild PWild)) (EVar "False"))
 (DTypeSig false "cliPrimaryDoctestRun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "RunResult")))
 (DFunDef false "cliPrimaryDoctestRun" ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
@@ -5160,24 +5156,20 @@ runMcpServerFromEnv _ =
 (DFunDef false "cliCountFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "cliCountFailProps") (EVar "rest"))))
 (DTypeSig false "cliCountPassTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
 (DFunDef false "cliCountPassTests" ((PList)) (ELit (LInt 0)))
-(DFunDef false "cliCountPassTests" ((PCons (PTuple PWild PWild (PCon "Pass")) (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountPassTests") (EVar "rest"))))
+(DFunDef false "cliCountPassTests" ((PCons (PTuple PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountPassTests") (EVar "rest"))))
 (DFunDef false "cliCountPassTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "cliCountPassTests") (EVar "rest")))
 (DTypeSig false "cliCountFailTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
 (DFunDef false "cliCountFailTests" ((PList)) (ELit (LInt 0)))
-(DFunDef false "cliCountFailTests" ((PCons (PTuple PWild PWild (PCon "Pass")) (PVar "rest"))) (EApp (EVar "cliCountFailTests") (EVar "rest")))
+(DFunDef false "cliCountFailTests" ((PCons (PTuple PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliCountFailTests") (EVar "rest")))
 (DFunDef false "cliCountFailTests" ((PCons PWild (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountFailTests") (EVar "rest"))))
-(DTypeSig false "cliExResultFields" (TyFun (TyCon "ExResult") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "cliExResultFields" ((PCon "Pass")) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "pass"))))))
-(DFunDef false "cliExResultFields" ((PCon "Fail" (PVar "expected") (PVar "actual"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "fail")))) (ETuple (ELit (LString "expected")) (EApp (EVar "JString") (EVar "expected"))) (ETuple (ELit (LString "actual")) (EApp (EVar "JString") (EVar "actual")))))
-(DFunDef false "cliExResultFields" ((PCon "Errored" (PVar "msg"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "error")))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "msg")))))
 (DTypeSig false "cliExampleJson" (TyFun (TyTuple (TyCon "Example") (TyCon "ExResult")) (TyCon "Json")))
-(DFunDef false "cliExampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "cliExResultFields") (EVar "res")))))
+(DFunDef false "cliExampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
 (DTypeSig false "cliDoctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
 (DFunDef false "cliDoctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "cliExampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
 (DTypeSig false "cliPropJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
 (DFunDef false "cliPropJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LString "pass")) (ELit (LString "fail"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))))))
 (DTypeSig false "cliTestJson" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")) (TyCon "Json")))
-(DFunDef false "cliTestJson" ((PTuple (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line")))) (EApp (EVar "cliExResultFields") (EVar "result")))))
+(DFunDef false "cliTestJson" ((PTuple (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line")))) (EApp (EVar "exResultJsonFields") (EVar "result")))))
 (DTypeSig false "cliTypeErrorField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "cliTypeErrorField" ((PCon "None")) (EListLit))
 (DFunDef false "cliTypeErrorField" ((PCon "Some" (PVar "errText"))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EVar "errText")))))
@@ -5402,7 +5394,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "seedPropRng" false) (mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
-(DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true) (mem "Example" false) (mem "ExResult" true) (mem "RunResult" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false) (mem "exampleLine" false) (mem "exampleInput" false) (mem "engineName" false))))
+(DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true) (mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false) (mem "exampleLine" false) (mem "exampleInput" false) (mem "engineName" false))))
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
@@ -5727,7 +5719,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "cliAllPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "propResultPassed") (EVar "p")) (EApp (EVar "cliAllPropsPass") (EVar "rest"))))
 (DTypeSig false "cliAllTestsPass" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Bool")))
 (DFunDef false "cliAllTestsPass" ((PList)) (EVar "True"))
-(DFunDef false "cliAllTestsPass" ((PCons (PTuple PWild PWild (PCon "Pass")) (PVar "rest"))) (EApp (EVar "cliAllTestsPass") (EVar "rest")))
+(DFunDef false "cliAllTestsPass" ((PCons (PTuple PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliAllTestsPass") (EVar "rest")))
 (DFunDef false "cliAllTestsPass" ((PCons PWild PWild)) (EVar "False"))
 (DTypeSig false "cliPrimaryDoctestRun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "RunResult")))
 (DFunDef false "cliPrimaryDoctestRun" ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
@@ -5740,24 +5732,20 @@ runMcpServerFromEnv _ =
 (DFunDef false "cliCountFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "cliCountFailProps") (EVar "rest"))))
 (DTypeSig false "cliCountPassTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
 (DFunDef false "cliCountPassTests" ((PList)) (ELit (LInt 0)))
-(DFunDef false "cliCountPassTests" ((PCons (PTuple PWild PWild (PCon "Pass")) (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountPassTests") (EVar "rest"))))
+(DFunDef false "cliCountPassTests" ((PCons (PTuple PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountPassTests") (EVar "rest"))))
 (DFunDef false "cliCountPassTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "cliCountPassTests") (EVar "rest")))
 (DTypeSig false "cliCountFailTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
 (DFunDef false "cliCountFailTests" ((PList)) (ELit (LInt 0)))
-(DFunDef false "cliCountFailTests" ((PCons (PTuple PWild PWild (PCon "Pass")) (PVar "rest"))) (EApp (EVar "cliCountFailTests") (EVar "rest")))
+(DFunDef false "cliCountFailTests" ((PCons (PTuple PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliCountFailTests") (EVar "rest")))
 (DFunDef false "cliCountFailTests" ((PCons PWild (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountFailTests") (EVar "rest"))))
-(DTypeSig false "cliExResultFields" (TyFun (TyCon "ExResult") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "cliExResultFields" ((PCon "Pass")) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "pass"))))))
-(DFunDef false "cliExResultFields" ((PCon "Fail" (PVar "expected") (PVar "actual"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "fail")))) (ETuple (ELit (LString "expected")) (EApp (EVar "JString") (EVar "expected"))) (ETuple (ELit (LString "actual")) (EApp (EVar "JString") (EVar "actual")))))
-(DFunDef false "cliExResultFields" ((PCon "Errored" (PVar "msg"))) (EListLit (ETuple (ELit (LString "status")) (EApp (EVar "JString") (ELit (LString "error")))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "msg")))))
 (DTypeSig false "cliExampleJson" (TyFun (TyTuple (TyCon "Example") (TyCon "ExResult")) (TyCon "Json")))
-(DFunDef false "cliExampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "cliExResultFields") (EVar "res")))))
+(DFunDef false "cliExampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
 (DTypeSig false "cliDoctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
 (DFunDef false "cliDoctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "cliExampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
 (DTypeSig false "cliPropJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
 (DFunDef false "cliPropJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LString "pass")) (ELit (LString "fail"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))))))
 (DTypeSig false "cliTestJson" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")) (TyCon "Json")))
-(DFunDef false "cliTestJson" ((PTuple (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line")))) (EApp (EVar "cliExResultFields") (EVar "result")))))
+(DFunDef false "cliTestJson" ((PTuple (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line")))) (EApp (EVar "exResultJsonFields") (EVar "result")))))
 (DTypeSig false "cliTypeErrorField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "cliTypeErrorField" ((PCon "None")) (EListLit))
 (DFunDef false "cliTypeErrorField" ((PCon "Some" (PVar "errText"))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EVar "errText")))))
