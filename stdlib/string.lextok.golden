@@ -1994,77 +1994,272 @@ IDENT "split"
 IDENT "sep"
 IDENT "s"
 EQUAL
+INDENT
 IF
 IDENT "sep"
 EQ_EQ
 STRING ""
 THEN
+INDENT
 LBRACKET
 IDENT "s"
 RBRACKET
+NEWLINE
+DEDENT
 ELSE
-IDENT "splitGo"
-LPAREN
-IDENT "stringLength"
-IDENT "sep"
-RPAREN
-IDENT "sep"
+INDENT
+LET
+IDENT "a"
+EQUAL
+IDENT "toChars"
 IDENT "s"
 NEWLINE
-IDENT "splitGo"
+LET
+IDENT "sepA"
+EQUAL
+IDENT "toChars"
+IDENT "sep"
+NEWLINE
+IDENT "splitFrom"
+IDENT "a"
+LPAREN
+IDENT "arrayLength"
+IDENT "a"
+RPAREN
+IDENT "sepA"
+LPAREN
+IDENT "arrayLength"
+IDENT "sepA"
+RPAREN
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "splitFrom"
 COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
 UPPER "Int"
 ARROW
-UPPER "String"
+UPPER "Array"
+UPPER "Char"
 ARROW
-UPPER "String"
+UPPER "Int"
+ARROW
+UPPER "Int"
 ARROW
 UPPER "List"
 UPPER "String"
 NEWLINE
-IDENT "splitGo"
+IDENT "splitFrom"
+IDENT "a"
+IDENT "n"
+IDENT "sepA"
 IDENT "sepLen"
-IDENT "sep"
-IDENT "s"
+IDENT "start"
 EQUAL
 MATCH
-IDENT "indexOf"
-IDENT "sep"
-IDENT "s"
+IDENT "sepFrom"
+IDENT "a"
+IDENT "n"
+IDENT "sepA"
+IDENT "sepLen"
+IDENT "start"
 INDENT
 UPPER "None"
 FAT_ARROW
 LBRACKET
-IDENT "s"
+IDENT "subChars"
+IDENT "a"
+IDENT "start"
+IDENT "n"
 RBRACKET
 NEWLINE
 UPPER "Some"
 IDENT "i"
 FAT_ARROW
-INDENT
-IDENT "stringSlice"
-INT 0
+IDENT "subChars"
+IDENT "a"
+IDENT "start"
 IDENT "i"
-IDENT "s"
 CONS
-IDENT "splitGo"
+IDENT "splitFrom"
+IDENT "a"
+IDENT "n"
+IDENT "sepA"
 IDENT "sepLen"
-IDENT "sep"
-LPAREN
-IDENT "stringSlice"
 LPAREN
 IDENT "i"
 PLUS
 IDENT "sepLen"
 RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "sepFrom"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Option"
+UPPER "Int"
+NEWLINE
+IDENT "sepFrom"
+IDENT "a"
+IDENT "n"
+IDENT "sepA"
+IDENT "sepLen"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+PLUS
+IDENT "sepLen"
+GT
+IDENT "n"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "sepAt"
+IDENT "a"
+IDENT "sepA"
+IDENT "sepLen"
+IDENT "i"
+INT 0
+EQUAL
+UPPER "Some"
+IDENT "i"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "sepFrom"
+IDENT "a"
+IDENT "n"
+IDENT "sepA"
+IDENT "sepLen"
 LPAREN
-IDENT "stringLength"
-IDENT "s"
-RPAREN
-IDENT "s"
+IDENT "i"
+PLUS
+INT 1
 RPAREN
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "sepAt"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "sepAt"
+IDENT "a"
+IDENT "sepA"
+IDENT "sepLen"
+IDENT "i"
+IDENT "k"
+INDENT
+PIPE
+IDENT "k"
+GEQ
+IDENT "sepLen"
+EQUAL
+UPPER "True"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "i"
+PLUS
+IDENT "k"
+RPAREN
+IDENT "a"
+EQ_EQ
+IDENT "arrayGetUnsafe"
+IDENT "k"
+IDENT "sepA"
+EQUAL
+INDENT
+IDENT "sepAt"
+IDENT "a"
+IDENT "sepA"
+IDENT "sepLen"
+IDENT "i"
+LPAREN
+IDENT "k"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "subChars"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "subChars"
+IDENT "a"
+IDENT "lo"
+IDENT "hi"
+EQUAL
+INDENT
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayMakeWith"
+LPAREN
+IDENT "hi"
+MINUS
+IDENT "lo"
+RPAREN
+LPAREN
+IDENT "i"
+FAT_ARROW
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "lo"
+PLUS
+IDENT "i"
+RPAREN
+IDENT "a"
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
