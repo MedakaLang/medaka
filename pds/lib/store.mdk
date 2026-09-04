@@ -32,14 +32,14 @@
    refuses.
 
    Open sessions are held here and NOWHERE else, which is what makes a session
-   end at a restart: `pds/shell/server.mdk` persists a `Store` transition only
-   when the repository half moves, so the session list lives exactly as long as
-   the process does. Every token minted before a restart is refused after it —
-   fail-closed, and deliberately: a revocation a restart could undo would be no
-   revocation at all.
+   end at a restart: `pds/shell/server.mdk` persists the repository half and
+   the blob half of a `Store` transition and nothing else, so the session list
+   lives exactly as long as the process does. Every token minted before a
+   restart is refused after it — fail-closed, and deliberately: a revocation a
+   restart could undo would be no revocation at all.
 
-   Filesystem adapters, multiple repositories, and blob persistence belong to
-   later phases and cannot leak effects through this interface. -}
+   Multiple repositories belong to a later phase and cannot leak effects
+   through this interface. -}
 
 import lib.blockstore.{
   BlockStore,
@@ -54,7 +54,7 @@ import lib.credential.{CredentialRecord, ctEqBytes}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
 import lib.sha256.{sha256}
-import map.{Map(..), get, set}
+import map.{Map(..), get, set, toList}
 import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
@@ -319,3 +319,16 @@ storeBlobMimeType cid (Store (BlobHalf _ mimeTypes) _ _) =
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
 storeBlobEntries (Store (BlobHalf blocks _) _ _) = blockStoreEntries blocks
+
+{- | The blob half's declared-type index: every CID text that has a declared
+   MIME type, paired with it, in CID-text order and carrying no bytes.
+
+   It exists so a caller can tell two blob halves apart without copying every
+   blob: `storeBlobEntries` answers the same question but hands back a copy of
+   every byte to do it, which is a whole-account walk on a path that only needs
+   to know whether anything moved. Paired with `storeSize` it is an exact
+   identity for the blob half, since a blob's name is its content and this
+   module exposes no way to remove one. -}
+export
+storeBlobMimeIndex : Store -> List (String, String)
+storeBlobMimeIndex (Store (BlobHalf _ mimeTypes) _ _) = toList mimeTypes

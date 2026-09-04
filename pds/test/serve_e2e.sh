@@ -70,6 +70,12 @@ SECRET_HEX='c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
 COLLECTION='app.bsky.feed.post'
 RKEY='e2egatefixture'
 RECORD_TEXT='pds serve_e2e gate fixture record'
+# The blob case 14 uploads before the restart and reads back after it. Its
+# declared media type is deliberately NOT the default an unknown blob would be
+# served as (`application/octet-stream`), so a restart that recovered the bytes
+# and lost the declared type fails rather than passing by coincidence.
+BLOB_TEXT='pds serve_e2e gate fixture blob bytes'
+BLOB_MIME='text/plain'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
@@ -174,6 +180,16 @@ client keepalive "$PORT1" || fail 'case 3: keep-alive reuse'
 client chunked "$PORT1" "$TOKEN" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
   || fail 'case 4: chunked write'
 
+# 4b. a blob upload over the real socket, whose CID case 14 asks for back
+#    from a FRESH process. This is what makes the blob half durable rather
+#    than merely present: before this slice the transition moved nothing to
+#    disk, because `persistTransition` looked only at the repository half.
+BLOB_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB_MIME" "$BLOB_TEXT") \
+  || fail 'case 4b: uploadBlob'
+[ -n "$BLOB_CID" ] || fail 'case 4b: uploadBlob returned an empty CID'
+client get-blob "$PORT1" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
+  || fail 'case 4b: getBlob before the restart'
+
 # 5. every remaining route: the six XRPC NSIDs no other case drives, plus
 #    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
 #    both well-knowns proven by this gate rather than by reading the registry.
@@ -253,6 +269,15 @@ require_empty "$WORK/serve2.err" 'resumed server startup'
 #    from the fresh process over the same --data directory.
 client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
   || fail 'case 9: restart-and-resume'
+
+# 14. the blob written before the restart is served, byte for byte and under
+#    its DECLARED media type, by the fresh process over the same --data dir.
+client get-blob "$PORT2" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
+  || fail 'case 14: blob did not survive the restart'
+
+# The blob is on disk beside the repository's blocks, not inside them: a blob
+# is not part of the signed block graph and must never reach `repoFromBlocks`.
+[ -d "$DATA/blobs" ] || fail 'case 14: no blobs directory beneath --data'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
@@ -359,4 +384,4 @@ HEAD_AFTER=$(cksum "$DATA10/head")
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || fail 'case 10: second --init with a different key modified the existing head file'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, init-overwrite-refusal, first-run bootstrap'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, init-overwrite-refusal, first-run bootstrap'

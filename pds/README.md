@@ -55,15 +55,18 @@ this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 - `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
   stores blocks as flat sharded CID-to-bytes files (design row P7),
   `pds/shell/persist.mdk` persists and reloads the account repository's head
-  commit, and `pds/shell/server.mdk` is the loopback accept loop and the
+  commit, `pds/shell/blobfile.mdk` does the same for the blob half under a
+  `blobs/` directory SIBLING to `blocks/` (a blob is not part of the signed
+  block graph), and `pds/shell/server.mdk` is the loopback accept loop and the
   per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
   module may import `pds/lib/`, and no `pds/lib/` module may ever import
   `pds/shell/` — the pure core performs no I/O (P14), so reconstruction logic
   lives in `pds/lib/repo.mdk`'s `repoFromBlocks` and the shell stays a thin
   effectful wrapper. No signing key can reach a file through this directory:
-  nothing here takes a `SecretKey`, `blockfile.mdk` and `persist.mdk` take
-  neither a `SecretKey` nor a `Repo`, and `server.mdk` reaches a `Repo` only to
-  export the block graph the account's own head already names.
+  nothing here takes a `SecretKey`, `blockfile.mdk`, `blobfile.mdk` and
+  `persist.mdk` take neither a `SecretKey` nor a `Repo`, and `server.mdk`
+  reaches a `Repo` only to export the block graph the account's own head
+  already names.
 - `pds/serve.mdk` — the entry point. It admits every configuration value before
   binding anything, rehydrates the repository from disk under the configured
   signing key, and hands `pds/shell/server.mdk` a listener and the one

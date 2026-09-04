@@ -83,13 +83,24 @@ contentLengthOf (line :: rest) =
   else
     contentLengthOf rest
 
-parseHeaderBlock : Array Int -> Result String (Int, Int)
+-- | The response's declared media type, or the empty string when it declares
+-- none. `sync.getBlob` answers with the blob's DECLARED type here, which is
+-- the one thing about a blob content addressing cannot check.
+contentTypeOf : List String -> String
+contentTypeOf [] = ""
+contentTypeOf (line :: rest) =
+  if startsWith "content-type:" line then
+    trim (drop 13 line)
+  else
+    contentTypeOf rest
+
+parseHeaderBlock : Array Int -> Result String (Int, String, Int)
 parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
   [] => Err "serve_client: empty response header block"
   statusLine :: rest => do
     status <- statusOf statusLine
     len <- contentLengthOf rest
-    Ok (status, len)
+    Ok (status, contentTypeOf rest, len)
 
 recvAtLeast : Connection ->
   Array Int ->
@@ -108,20 +119,23 @@ recvAtLeast conn buf need =
 
 {- | Reads one complete HTTP response starting at the front of `pending`
    (bytes already buffered from a previous read, `[||]` for a fresh
-   connection), receiving more as needed. Returns the status code, the body
-   bytes, and whatever bytes were buffered past the end of this response —
-   the next pipelined response's bytes, on a connection that has one. -}
-readResponse : Connection ->
+   connection), receiving more as needed. Returns the status code, the
+   declared media type, the body bytes, and whatever bytes were buffered past
+   the end of this response — the next pipelined response's bytes, on a
+   connection that has one. -}
+readTypedResponse : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, Array Int, Array Int)
-readResponse conn pending = match findHeaderEnd pending 0
+  <Net "_"> Result String (Int, String, Array Int, Array Int)
+readTypedResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
-    (status, len) <- parseHeaderBlock (sliceClamped 0 headerEnd pending)
+    (status, mediaType, len) <- parseHeaderBlock
+      (sliceClamped 0 headerEnd pending)
     let need = bodyStart + len
     full <- recvAtLeast conn pending need
     Ok (
       status,
+      mediaType,
       sliceClamped bodyStart need full,
       sliceClamped need (arrayLength full) full,
     )
@@ -131,7 +145,16 @@ readResponse conn pending = match findHeaderEnd pending 0
       if arrayLength chunk == 0 then
         Err "serve_client: connection closed before response headers"
       else
-        readResponse conn (appendBytes pending chunk)
+        readTypedResponse conn (appendBytes pending chunk)
+
+-- | The same read for the cases that do not care what media type came back.
+readResponse : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Int, Array Int, Array Int)
+readResponse conn pending =
+  map
+    ((status, _, body, rest) => (status, body, rest))
+    (readTypedResponse conn pending)
 
 mustConnect : Int -> <Net "_"> Connection
 mustConnect port = match connect "127.0.0.1" port
@@ -194,6 +217,17 @@ postRequest token path bodyJson =
 postNoInputRequest : String -> String -> Array Int
 postNoInputRequest token path =
   toUtf8 "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
+
+{- | A `content-length` POST whose body is raw bytes under a caller-chosen
+   media type, which is the shape `com.atproto.repo.uploadBlob` takes: the
+   `Content-Type` header IS the blob's declared MIME type, and there is no
+   JSON envelope anywhere in the request. -}
+rawPostRequest : String -> String -> String -> Array Int -> Array Int
+rawPostRequest token path mimeType body = concat [|
+  toUtf8
+    "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+  body,
+|]
 
 chunkedPostRequest : String -> String -> String -> Array Int
 chunkedPostRequest token path bodyJson =
@@ -267,6 +301,13 @@ deleteSessionPath = xrpcPath "com.atproto.server.deleteSession"
 
 getSessionPath : String
 getSessionPath = xrpcPath "com.atproto.server.getSession"
+
+uploadBlobPath : String
+uploadBlobPath = xrpcPath "com.atproto.repo.uploadBlob"
+
+getBlobPath : String -> String -> String
+getBlobPath did cid =
+  "\{xrpcPath "com.atproto.sync.getBlob"}?did=\{did}&cid=\{cid}"
 
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
@@ -741,7 +782,62 @@ main = match args ()
   ["idle", port] => runIdle (mustPort port)
   ["resume", port, did, collection, rkey, text] =>
     runResume (mustPort port) did collection rkey text
+  ["upload-blob", port, token, mimeType, text] =>
+    runUploadBlob (mustPort port) token mimeType text
+  ["get-blob", port, did, cid, mimeType, text] =>
+    runGetBlob (mustPort port) did cid mimeType text
   _ => panic usage
+
+{- | Upload one blob and print the CID the server content-addressed it to.
+
+   The gate captures that CID and asks for it back after a restart, so an
+   upload whose bytes never reached the disk is caught by the READ, not by
+   anything this case asserts on its own. -}
+runUploadBlob : Int -> String -> String -> String -> <IO, Net "_"> Unit
+runUploadBlob port token mimeType text =
+  let conn = mustConnect port
+  let () =
+    mustSend conn (rawPostRequest token uploadBlobPath mimeType (toUtf8 text))
+  let out = match readResponse conn [||]
+    Err message => panic "serve_client: uploadBlob failed: \{message}"
+    Ok (200, body, _) => blobRefCidText body
+    Ok (status, body, _) =>
+      panic
+        "serve_client: uploadBlob answered \{intToString status}: \{fromUtf8 body}"
+  let () = println out
+  ignoreResult (close conn)
+
+-- | The `ref.$link` CID of an `uploadBlob` response's `blob` value.
+blobRefCidText : Array Int -> String
+blobRefCidText body = match parse (fromUtf8 body)
+  Err message =>
+    panic "serve_client: uploadBlob response is not JSON: \{message}"
+  Ok value => match andThen (get "blob" value) (get "ref")
+    Some ref => match get "$link" ref
+      Some (JString text) => text
+      _ =>
+        panic
+          "serve_client: uploadBlob response has no 'blob.ref.$link': \{fromUtf8 body}"
+    None =>
+      panic
+        "serve_client: uploadBlob response has no 'blob.ref': \{fromUtf8 body}"
+
+{- | Fetch one blob back and grade all three things a restart can lose: the
+   status, the DECLARED media type (which content addressing does not carry,
+   so only the sidecar on disk can have preserved it), and the bytes. -}
+runGetBlob : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runGetBlob port did cid mimeType text =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getBlobPath did cid))
+  let () = match readTypedResponse conn [||]
+    Err message => report "GETBLOB" False message
+    Ok (status, mediaType, body, _) =>
+      let bodyText = fromUtf8 body
+      report
+        "GETBLOB"
+        (status == 200 && mediaType == mimeType && bodyText == text)
+        "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (arrayLength body)} byte(s)"
+  ignoreResult (close conn)
 
 -- | An expected HTTP status, as the shell gate spells it on the command line.
 mustStatus : String -> Int

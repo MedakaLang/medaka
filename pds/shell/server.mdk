@@ -4,8 +4,9 @@
    Nothing here knows what a request means. Bytes arrive from a socket, are
    framed by `lib.http`'s `scanRequestBoundary` and by nothing else, are handed
    whole to `lib.server_core`'s `handleBytes`, and the response bytes it returns
-   go back out. The successor `Store` is persisted through `shell.persist` and
-   then published into the one `Ref Store` every connection task shares.
+   go back out. The successor `Store` is persisted through `shell.persist`
+   and `shell.blobfile` and then published into the one `Ref Store` every
+   connection task shares.
 
    The listener binds the loopback address and only the loopback address: the
    address is a literal in `bindLoopback` and no parameter, argument, or
@@ -20,7 +21,7 @@
 
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
-import lib.cid.{cidToString}
+import lib.cid.{Cid, cidToString}
 import lib.http.{
   HttpFrame(..),
   parseRequestAt,
@@ -30,10 +31,18 @@ import lib.http.{
 }
 import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
 import lib.server_core.{RequestContext(..), Server, handleBytes}
-import lib.store.{Store, storeRepo}
+import lib.store.{
+  Store,
+  storeBlobEntries,
+  storeBlobMimeIndex,
+  storeBlobMimeType,
+  storeRepo,
+  storeSize,
+}
 import lib.xrpc.{xrpcErrorResponse}
 import net.{Connection, Listener, listen}
 import net_async as A
+import shell.blobfile.{blobFileWrite}
 import shell.persist.{persistSave}
 import time.{Duration, now, seconds}
 
@@ -95,8 +104,8 @@ persistFailureBytes =
    it, persist the successor, publish the successor. A scheduler can only
    interleave tasks at an `Async` bind, and there is not one in this sequence —
    `handleBytes` is pure, the clock and entropy readings handed to it are plain
-   synchronous `<Clock>`/`<Rand>` calls, and `persistSave` performs plain
-   synchronous `<FileRead, FileWrite>`, not a suspension. So the four steps run
+   synchronous `<Clock>`/`<Rand>` calls, and `persistTransition` performs plain
+   synchronous `<FileRead, FileWrite>` for both halves, not a suspension. So the four steps run
    as one indivisible unit, and two concurrent connections cannot both read the
    same store and each publish over the other's write. Wrapping the persist in
    `liftIO`, or splitting these steps across two `Async` steps, silently
@@ -125,17 +134,67 @@ applyRequest server dir storeRef bytes =
       let () = storeRef := next
       response
 
--- Persisting is skipped when the repository half did not move, so a read route
--- does not rewrite the whole block graph.
+{- | Persist whichever halves of the `Store` the transition moved.
+
+   Each half is skipped when it did not move, so a read route rewrites neither
+   the block graph nor the blob area. Neither is an `Async` step: this runs
+   inside `applyRequest`'s single indivisible sequence, and a suspension
+   between the two would let a second connection publish in the gap. -}
 persistTransition : String ->
   Store ->
   Store ->
   <FileRead "_", FileWrite "_"> Result String Unit
-persistTransition dir before after = match (storeRepo before, storeRepo after)
+persistTransition dir before after = do
+  () <- persistRepoHalf dir before after
+  if blobsMoved before after then persistBlobHalf dir after else Ok ()
+
+persistRepoHalf : String ->
+  Store ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistRepoHalf dir before after = match (storeRepo before, storeRepo after)
   (_, None) => Ok ()
   (None, Some next) => persistRepo dir next
   (Some prior, Some next) =>
     if headText prior == headText next then Ok () else persistRepo dir next
+
+{- | Whether the blob half of the transition differs.
+
+   Block COUNTS decide the byte half exactly: a blob's name is its content and
+   `lib.store` exposes no way to remove one, so two blob halves of equal size
+   hold equal blocks. The declared-type index is compared outright because it
+   moves on its own — re-uploading identical bytes under a different declared
+   MIME type leaves the count where it was — and `storeBlobMimeIndex` answers
+   that without copying every blob's bytes, which `storeBlobEntries` would do
+   on every read request. -}
+blobsMoved : Store -> Store -> Bool
+blobsMoved before after =
+  storeSize before /= storeSize after
+    || storeBlobMimeIndex before /= storeBlobMimeIndex after
+
+{- | The type declared for a stored blob.
+
+   The fallback is `com.atproto.sync.getBlob`'s own (`pds/lib/handlers.mdk`),
+   so a blob inserted through the byte-only `storePut` — which no route uses —
+   reads back after a restart as exactly what it served before one. -}
+declaredMimeType : Store -> Cid -> String
+declaredMimeType store cid = match storeBlobMimeType cid store
+  Some declared => declared
+  None => "application/octet-stream"
+
+blobRows : Store -> List (Cid, String, Array Int)
+blobRows store =
+  map
+    ((cid, bytes) => (cid, declaredMimeType store cid, bytes))
+    (storeBlobEntries store)
+
+-- Every blob is rewritten, not just the new one, exactly as `persistRepo`
+-- rewrites the whole block graph: a blob file's name is its content, so
+-- rewriting one already on disk promotes the same bytes over themselves.
+persistBlobHalf : String ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistBlobHalf dir store = blobFileWrite dir (blobRows store)
 
 headText : Repo -> String
 headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
