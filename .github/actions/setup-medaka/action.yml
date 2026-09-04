@@ -188,9 +188,12 @@ runs:
 
         # ...and the EMITTER's provenance stamp must equal what stage A would compute
         # from THIS tree. Mirrors src_fingerprint_full() in
-        # test/build_native_medaka.sh (compiler/**.mdk, excluding *_test.mdk
-        # siblings (AGENTS.md [P-TEST-SIBLING]), + runtime/*.c, names AND
-        # contents, repo-relative, LC_ALL=C sorted). This is NOT the source of the
+        # test/build_native_medaka.sh: the emitter's own import closure (walked by
+        # test/emitter_source_set.awk — the SAME file the build script runs, not a
+        # transcription of it) + stdlib/**.mdk + runtime/*.c, excluding *_test.mdk
+        # siblings (AGENTS.md [P-TEST-SIBLING]), names AND contents, repo-relative,
+        # LC_ALL=C sorted. Only the hashing loop is duplicated here; if that set
+        # changes, the constants below are what move. This is NOT the source of the
         # safety guarantee — the same-SHA checkout invariant above already makes the
         # ENTIRE tree identical between producer and consumer (Makefile, stdlib/*,
         # everything, not just this subset). This check is a narrower, defense-in-depth
@@ -199,8 +202,24 @@ runs:
         # emitter that predates a parser change, or was copied in from elsewhere)
         # hasn't.
         stamped="$(cat .medaka_emitter.srcstamp)"
-        live="$( { find compiler -name '*.mdk' -not -name '*_test.mdk' -print; find runtime -name '*.c' -print; } \
-                 | LC_ALL=C sort \
+        fp_entry="$(sed -n 's/^FP_ENTRY="\(.*\)"$/\1/p' test/build_native_medaka.sh)"
+        fp_roots="$(sed -n 's/^FP_ROOTS="\(.*\)"$/\1/p' test/build_native_medaka.sh)"
+        if [ -z "$fp_entry" ] || [ -z "$fp_roots" ]; then
+          echo "::error::could not read FP_ENTRY/FP_ROOTS from test/build_native_medaka.sh."
+          exit 1
+        fi
+        # No fallback-to-whole-tree arm here, unlike src_fingerprint_full(): the
+        # build script degrades gracefully because a failed walk must not stop a
+        # build, but a failed walk HERE means this assertion cannot be made, and
+        # AGENTS.md's rule for a check that cannot run is to fail, not to skip.
+        closure="$(awk -v entry="$fp_entry" -v roots="$fp_roots" -f test/emitter_source_set.awk)" || {
+          echo "::error::test/emitter_source_set.awk could not walk $fp_entry."
+          exit 1
+        }
+        live="$( { printf '%s\n' "$closure"; \
+                   find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; \
+                   find runtime -name '*.c' -print; } \
+                 | LC_ALL=C sort -u \
                  | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done \
                  | sha256sum | cut -d' ' -f1 )"
         if [ "$stamped" != "$live" ]; then

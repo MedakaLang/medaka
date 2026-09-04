@@ -8,11 +8,12 @@
 #     stage B: the fresh emitter compiles compiler/driver/medaka_cli.mdk -> ./medaka.
 #   Always-2-stage is correct; the rebuilt emitter's self-consistency is guaranteed
 #   separately by test/selfcompile_fixpoint.sh (not run here), so the warm loop is
-#   sound.  A CONTENT-FINGERPRINT short-circuit skips stage A when compiler/**.mdk
-#   AND runtime/*.c (the emitter links medaka_rt.c — e.g. floatToString feeds
-#   float-literal codegen, see issue #182) hash to what ./medaka_emitter was built
-#   from (can be disabled with FORCE_EMITTER_REBUILD=1).  See "Emitter provenance"
-#   below for why this is a hash and NOT a timestamp.
+#   sound.  A CONTENT-FINGERPRINT short-circuit skips stage A when everything that
+#   can change the emitter binary — its own import closure, stdlib/**.mdk, and
+#   runtime/*.c (it links medaka_rt.c; e.g. floatToString feeds float-literal
+#   codegen, issue #182) — hashes to what ./medaka_emitter was built from (can be
+#   disabled with FORCE_EMITTER_REBUILD=1).  See "Emitter provenance" below for
+#   why this is a hash and NOT a timestamp, and FP_FULL there for the file set.
 #
 #   COLD (no ./medaka_emitter — fresh clone): bootstrap emitter_v0 from the gzipped
 #   committed seed (test/bootstrap_from_seed.sh, TOLERANT — a lagging seed only WARNS,
@@ -51,6 +52,12 @@ DRIVER="$ROOT/compiler/entries/llvm_emit_modules_main.mdk"
 CLI="$ROOT/compiler/driver/medaka_cli.mdk"
 SELFHOST="$ROOT/compiler"
 STDLIB="$ROOT/stdlib"
+# The same entry + search roots emit_graph hands the emitter for stage A, spelled
+# repo-relative for test/emitter_source_set.awk (see FP_FULL below). The two must
+# name the same graph: the fingerprint's whole claim is that it covers everything
+# stage A actually compiles.
+FP_ENTRY="compiler/entries/llvm_emit_modules_main.mdk"
+FP_ROOTS="compiler:stdlib"
 FORCE_EMITTER_REBUILD="${FORCE_EMITTER_REBUILD:-0}"
 # OPT-IN, DEFAULT OFF (issue #1928 follow-up). When 1, stage B skips the clang link
 # of ./medaka if a `.medaka.srcstamp` beside it says it was already built from
@@ -202,15 +209,33 @@ hash_stream() {
 #
 # TWO fingerprints, because the value has two consumers with DIFFERENT scopes:
 #
-#   FP_FULL      = compiler/**.mdk + runtime/*.c.  Drives the stage-A rebuild-skip
-#                  and the .medaka_emitter.srcstamp write.  The emitter links
-#                  medaka_rt.c directly (see the clang invocation below), so a
-#                  codegen-affecting runtime change — e.g. #57's floatToString
-#                  formatting — must invalidate the emitter (issue #182). Before
-#                  this, only compiler/**.mdk was hashed, so a medaka_rt.c-only
-#                  change was invisible: stage A reported "up-to-date" and kept
-#                  emitting with the OLD linked runtime — a native≠native(rebuilt)
-#                  split that reads as a miscompile.
+#   FP_FULL      = the emitter's OWN import closure + stdlib/**.mdk + runtime/*.c.
+#                  Drives the stage-A rebuild-skip and the
+#                  .medaka_emitter.srcstamp write, so its correct scope is
+#                  "everything that can change the emitter binary" — no more and
+#                  no less. The emitter links medaka_rt.c directly (see the clang
+#                  invocation below), so a codegen-affecting runtime change — e.g.
+#                  #57's floatToString formatting — must invalidate it (issue
+#                  #182); stdlib/ is compiled INTO it (emit_graph passes
+#                  $RUNTIME/$CORE and $STDLIB as a search root), so a
+#                  stdlib/core.mdk edit must too (issue #2682 — it did not, and
+#                  stage A reported "up-to-date" while the emitter kept the old
+#                  prelude). Conversely compiler/tools/**, compiler/entries/**
+#                  other than the emitter's own, and every other module OUTSIDE
+#                  that closure cannot reach the emitter binary at all, and used
+#                  to force a full ~4-minute rebuild for nothing (issue #2680).
+#
+#                  The closure itself comes from test/emitter_source_set.awk, a
+#                  STATIC walker — this runs on the cold path with no ./medaka in
+#                  existence, so it cannot ask the real loader. That makes it a
+#                  reimplementation of driver.loader's resolution and therefore
+#                  driftable: test/check_fingerprint_parity.sh diffs the walker's
+#                  list against the loader's own graph
+#                  (compiler/entries/module_closure_probe.mdk) on a built binary.
+#                  And it FAILS CLOSED — any walker failure falls back to hashing
+#                  the whole compiler tree, because an over-broad set costs one
+#                  unnecessary rebuild while an under-broad one silently vouches
+#                  for an emitter built from source that is no longer on disk.
 #
 #   FP_COMPILER  = compiler/**.mdk ONLY.  Baked into ./medaka as -DMEDAKA_SRC_FP
 #                  (below) and recomputed at runtime by `liveSourceFingerprint` in
@@ -233,8 +258,31 @@ src_fingerprint_compiler() {
       cat "$f"
     done ) | hash_stream | cut -d' ' -f1
 }
+
+# The FP_FULL file set, one repo-relative path per line, LC_ALL=C sorted.
+# Run with $ROOT as cwd.
+#
+# The walker is skipped outright (not just on failure) when compiler/medaka.toml
+# grows a `[dependencies]` section: it models `findInRoots` only, so a declared
+# cross-project dep would resolve to a root it never searches and it would
+# UNDER-report the closure — the one direction that is unsafe.
+fp_full_file_list() {
+  _closure=""
+  if ! grep -q '^[[:space:]]*\[dependencies\]' compiler/medaka.toml 2>/dev/null; then
+    _closure="$(awk -v entry="$FP_ENTRY" -v roots="$FP_ROOTS" -f test/emitter_source_set.awk)" || _closure=""
+  fi
+  if [ -z "$_closure" ]; then
+    echo "note: emitter import-closure walk unavailable — hashing all of compiler/ for FP_FULL." >&2
+    _closure="$(find compiler -name '*.mdk' -not -name '*_test.mdk' -print)"
+  fi
+  { printf '%s\n' "$_closure"
+    find stdlib -name '*.mdk' -not -name '*_test.mdk' -print
+    find runtime -name '*.c' -print
+  } | LC_ALL=C sort -u
+}
+
 src_fingerprint_full() {
-  ( cd "$ROOT" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print; find runtime -name '*.c' -print; } | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$ROOT" && fp_full_file_list | while IFS= read -r f; do
       printf '%s\n' "$f"
       cat "$f"
     done ) | hash_stream | cut -d' ' -f1
@@ -270,7 +318,7 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 STAMP_FP=""
 [ -f "$SRC_STAMP" ] && STAMP_FP="$(cat "$SRC_STAMP" 2>/dev/null)"
 if [ "$FORCE_EMITTER_REBUILD" != "1" ] && [ -x "$EMITTER" ] && [ -n "$STAMP_FP" ] && [ "$STAMP_FP" = "$FP_FULL" ]; then
-  echo "stage A: emitter up-to-date (compiler + runtime source fingerprint unchanged) — skipping rebuild."
+  echo "stage A: emitter up-to-date (emitter-closure + stdlib + runtime source fingerprint unchanged) — skipping rebuild."
 else
   if [ "$FORCE_EMITTER_REBUILD" = "1" ]; then
     echo "stage A: FORCE_EMITTER_REBUILD=1 — rebuilding emitter from current source ..."
@@ -279,7 +327,7 @@ else
     # from another tree. Both are "provenance unknown" — rebuild rather than guess.
     echo "stage A: emitter provenance unknown (fresh bootstrap, or copied in from another tree) — rebuilding from current source ..."
   else
-    echo "stage A: compiler or runtime source changed since this emitter was built — rebuilding emitter from current source ..."
+    echo "stage A: emitter source (its import closure, stdlib, or runtime) changed since this emitter was built — rebuilding emitter from current source ..."
   fi
   EMIT_LL="$WORK/emitter.ll"
   if ! emit_graph "$EMIT_LL" "$WORK/emitA.err" "$DRIVER"; then

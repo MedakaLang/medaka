@@ -1,0 +1,39 @@
+-- Print the loader's real import closure of an entry module, one file path per
+-- line, in dependency-first order (the caller sorts):
+--
+--   medaka run compiler/entries/module_closure_probe.mdk <entry.mdk> [root ...]
+--
+-- The cross-check half of FP_FULL. test/build_native_medaka.sh's
+-- src_fingerprint_full() hashes the emitter's import closure as computed by a
+-- STATIC shell/awk walker (test/emitter_source_set.awk), because it must run on
+-- the cold path with no ./medaka yet. That walker is a reimplementation of
+-- driver.loader's own resolution, so it can drift from it — and a walker that
+-- silently under-reports the closure ships an emitter built from source no
+-- longer on disk. test/check_fingerprint_parity.sh diffs the two lists; this is
+-- the side that asks the real loader.
+--
+-- `loadProgramFilesE` (not `loadProgram`) because only the path-carrying variant
+-- returns the FILE each module was resolved to, which is what a fingerprint set
+-- is made of.
+
+import frontend.ast.{Decl}
+import driver.loader.{loadProgramFilesE, loadErrorMessage}
+import support.path.{dirOf}
+
+main = match args ()
+  entry :: roots => run entry (rootsOrDefault entry roots)
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/module_closure_probe.mdk <entry.mdk> [root ...]"
+
+rootsOrDefault : String -> List String -> List String
+rootsOrDefault entry [] = [dirOf entry]
+rootsOrDefault _ roots = roots
+
+pathLine : (String, String, List Decl) -> String
+pathLine (_, path, _) = path ++ "\n"
+
+run : String -> List String -> <IO> Unit
+run entry roots = match loadProgramFilesE (_ => None) entry roots
+  Err e => ePutStrLn (loadErrorMessage e)
+  Ok mods => putStr (stringConcat (map pathLine mods))
