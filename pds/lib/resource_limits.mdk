@@ -131,6 +131,37 @@ checkRawBodyBytes size =
   else
     Ok ()
 
+-- Blob layer policy. Distinct from `maxRawBodyBytes`: that is the outer
+-- HTTP raw-body framing ceiling (`pds/lib/http.mdk`'s `RawBody`), enforced
+-- before a body is even attributed to an endpoint. `maxBlobBytes` is the
+-- protocol-level per-blob cap `pds/lib/blob.mdk`'s admission function
+-- enforces; today it equals the framing ceiling because nothing yet needs
+-- them to diverge, but a future endpoint-specific policy can move one
+-- without moving the other.
+export
+maxBlobBytes : Int
+maxBlobBytes = 5242880
+
+export
+maxAccountBlobBytes : Int
+maxAccountBlobBytes = 104857600
+
+export
+checkBlobBytes : Int -> Result String Unit
+checkBlobBytes size =
+  if size > maxBlobBytes then
+    Err "blob: exceeds 5242880-byte per-blob resource limit"
+  else
+    Ok ()
+
+export
+checkAccountBlobBytes : Int -> Result String Unit
+checkAccountBlobBytes size =
+  if size > maxAccountBlobBytes then
+    Err "blob: account blob usage exceeds 104857600-byte resource limit"
+  else
+    Ok ()
+
 export
 maxCarBytes : Int
 maxCarBytes = 67108864

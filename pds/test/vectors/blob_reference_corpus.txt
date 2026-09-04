@@ -1,0 +1,6 @@
+# Generated only by pds/tools/gen_blob_corpus.sh.
+# Official @atproto/lex-data + @atproto/lex-json reference; exact package routes are in VECTOR-PROVENANCE.txt.
+# Columns: case-name<TAB>mime-type<TAB>payload-bytes-hex<TAB>cid-string<TAB>blob-ref-json.
+empty	application/octet-stream		bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku	{"$type":"blob","ref":{"$link":"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"},"mimeType":"application/octet-stream","size":0}
+small-text	text/plain	68656c6c6f2c20626c6f62	bafkreigym7tnagwqe33sfut2ob6itoamtlsyc6wq2b5slgiv2r3liw7ku4	{"$type":"blob","ref":{"$link":"bafkreigym7tnagwqe33sfut2ob6itoamtlsyc6wq2b5slgiv2r3liw7ku4"},"mimeType":"text/plain","size":11}
+image-shaped	image/png	6d6564616b612d626c6f622d636f727075732d696d6167652d7368617065642d7061796c6f6164	bafkreibf2vi7kkax3jhaay5rtu64ubtfkr4medzuldfdo72a37jjolfjyi	{"$type":"blob","ref":{"$link":"bafkreibf2vi7kkax3jhaay5rtu64ubtfkr4medzuldfdo72a37jjolfjyi"},"mimeType":"image/png","size":39}

@@ -1,0 +1,430 @@
+{- | The three blob routes (#2605) — `com.atproto.repo.uploadBlob`,
+   `com.atproto.sync.{getBlob, listBlobs}` — driven in process through the
+   real registry, the real seam, and the real handler, exactly like
+   `pds/test/session_routes_test.mdk` drives the session routes.
+
+   No repository is configured: the blob half is independent of it
+   (`pds/lib/store.mdk`), so every cell here runs against a store with a
+   session secret and credential but no repository, the same shape
+   `pds/test/session_routes_test.mdk` already uses. -}
+
+import json.{Json(..), get, jObject, parse, stringify}
+import list.{sort}
+import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
+import test.{expectEqual, expectTrue}
+import lib.blob.{blobCid}
+import lib.cid.{cidToString}
+import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
+import lib.handlers.{pdsServer}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.store.{Store, storeEmpty, storeWithCredential, storeWithServerSecret}
+
+accountDidText : String
+accountDidText = "did:plc:s-blob-routes-test-account"
+
+accountHandleText : String
+accountHandleText = "blobs.test"
+
+accountHostText : String
+accountHostText = "pds.test"
+
+password : String
+password = "s-blob-routes-test-password"
+
+account : Account
+account = match makeAccount accountDidText accountHandleText accountHostText
+  Ok made => made
+  Err message => panic "blob_routes_test: account: \{message}"
+
+server : Server
+server = match pdsServer account
+  Ok made => made
+  Err message => panic "blob_routes_test: server: \{message}"
+
+testSecret : Array Int
+testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
+
+credential : CredentialRecord
+credential =
+  let derived =
+    makeCredential
+      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
+      defaultIterations
+      password
+  match derived
+    Ok made => made
+    Err message => panic "blob_routes_test: credential: \{message}"
+
+-- | A configured server's store: session secret and account credential, no
+-- repository. No blob route touches the repository.
+configuredStore : Store
+configuredStore = match storeWithServerSecret testSecret storeEmpty
+  Ok withSecret => storeWithCredential credential withSecret
+  Err message => panic "blob_routes_test: session secret: \{message}"
+
+testInstant : Int
+testInstant = 1700000000
+
+nonceAt : Int -> Array Int
+nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
+
+contextAt : Int -> Int -> RequestContext
+contextAt instant seed =
+  RequestContext { nowSeconds = instant, nonce = nonceAt seed }
+
+-- ── requests and responses ──────────────────────────────────────────────────
+
+authOf : String -> String
+authOf "" = ""
+authOf token = "Authorization: Bearer \{token}\r\n"
+
+postJson : String -> String -> String -> Array Int
+postJson token nsid bodyJson =
+  toUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength (toUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
+
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right =
+  let leftSize = arrayLength left
+  arrayMakeWith (leftSize + arrayLength right) (i =>
+    if i < leftSize then left[i] else right[i - leftSize])
+
+postRaw : String -> String -> String -> Array Int -> Array Int
+postRaw token nsid mimeType body =
+  appendBytes
+    (toUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n")
+    body
+
+getQuery : String -> String -> String -> Array Int
+getQuery token nsid query =
+  toUtf8
+    "GET /xrpc/\{nsid}\{query} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
+
+loginJson : String -> String -> String
+loginJson identifier passwordText =
+  stringify
+    (jObject [
+      ("identifier", JString identifier),
+      ("password", JString passwordText),
+    ])
+
+statusLineOf : String -> String
+statusLineOf text = match split "\r\n" text
+  first :: _ => drop 9 first
+  [] => "no status line"
+
+bodyOf : String -> String
+bodyOf text = match indexOf "\r\n\r\n" text
+  Some at => drop (at + 4) text
+  None => ""
+
+-- The status line and, for a refusal, atproto's error code: the two things a
+-- client can act on.
+outcome : Array Int -> String
+outcome bytes =
+  let text = fromUtf8 bytes
+  let status = match parse (bodyOf text)
+    Ok body => match get "error" body
+      Some (JString code) => code
+      _ => ""
+    Err _ => ""
+  if status == "" then statusLineOf text else "\{statusLineOf text} \{status}"
+
+headText : Array Int -> String
+headText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at => drop 0 (fromUtf8 (arrayMakeWith at (i => bytes[i])))
+  None => fromUtf8 bytes
+
+hasContentType : String -> Array Int -> Bool
+hasContentType value bytes =
+  contains "content-type: \{value}\r\n" (headText bytes)
+
+-- | The raw bytes of a non-JSON success response body.
+rawBodyOf : Array Int -> Array Int
+rawBodyOf bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at =>
+    let start = at + 4
+    arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
+  None => [||]
+
+-- | One string field nested under `blob` in an `uploadBlob` response body.
+blobStringField : String -> Array Int -> String
+blobStringField name bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get "blob" body
+    Some blob => match get name blob
+      Some (JString value) => value
+      _ => ""
+    None => ""
+  Err _ => ""
+
+blobIntField : String -> Array Int -> Int
+blobIntField name bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get "blob" body
+    Some blob => match get name blob
+      Some (JInt value) => value
+      _ => -1
+    None => -1
+  Err _ => -1
+
+blobRefCidText : Array Int -> String
+blobRefCidText bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get "blob" body
+    Some blob => match get "ref" blob
+      Some ref => match get "$link" ref
+        Some (JString link) => link
+        _ => ""
+      None => ""
+    None => ""
+  Err _ => ""
+
+listedCids : Array Int -> List String
+listedCids bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get "cids" body
+    Some (JArray entries) => stringEntries (toList entries)
+    _ => []
+  Err _ => []
+
+stringEntries : List Json -> List String
+stringEntries [] = []
+stringEntries ((JString value) :: rest) = value :: stringEntries rest
+stringEntries (_ :: rest) = stringEntries rest
+
+-- ── driving ──────────────────────────────────────────────────────────────────
+
+send : RequestContext -> Store -> Array Int -> (Store, Array Int)
+send context store bytes = handleBytes server context store bytes
+
+createSessionNsid : String
+createSessionNsid = "com.atproto.server.createSession"
+
+uploadBlobNsid : String
+uploadBlobNsid = "com.atproto.repo.uploadBlob"
+
+getBlobNsid : String
+getBlobNsid = "com.atproto.sync.getBlob"
+
+listBlobsNsid : String
+listBlobsNsid = "com.atproto.sync.listBlobs"
+
+login : Int -> Int -> Store -> (Store, Array Int)
+login instant seed store =
+  send
+    (contextAt instant seed)
+    store
+    (postJson "" createSessionNsid (loginJson accountHandleText password))
+
+loggedIn : (Store, String)
+loggedIn =
+  let (store, response) = login testInstant 1 configuredStore
+  (store, blobStringFieldTop "accessJwt" response)
+
+blobStringFieldTop : String -> Array Int -> String
+blobStringFieldTop name bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get name body
+    Some (JString value) => value
+    _ => ""
+  Err _ => ""
+
+sessionStore : Store
+sessionStore = match loggedIn
+  (store, _) => store
+
+accessToken : String
+accessToken = match loggedIn
+  (_, token) => token
+
+uploadedBytes : Array Int
+uploadedBytes = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+
+uploadedMimeType : String
+uploadedMimeType = "image/png"
+
+uploadedCidText : String
+uploadedCidText = cidToString (blobCid uploadedBytes)
+
+-- | The store and response after one successful authenticated upload. Every
+-- cell that reads back what was uploaded starts here — the read-back happens
+-- in the SAME test process, no restart (that is `S-blob-persist`'s job).
+uploaded : (Store, Array Int)
+uploaded =
+  send
+    (contextAt testInstant 2)
+    sessionStore
+    (postRaw accessToken uploadBlobNsid uploadedMimeType uploadedBytes)
+
+uploadedStore : Store
+uploadedStore = match uploaded
+  (store, _) => store
+
+uploadedResponse : Array Int
+uploadedResponse = match uploaded
+  (_, response) => response
+
+-- # uploadBlob
+
+test "uploadBlob without a credential is refused" =
+  let (_, response) =
+    send
+      (contextAt testInstant 1)
+      sessionStore
+      (postRaw "" uploadBlobNsid uploadedMimeType uploadedBytes)
+  expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
+
+test "uploadBlob with a valid session is accepted" =
+  expectEqual (outcome uploadedResponse) "200 OK"
+
+test "uploadBlob's response names the CID of the uploaded bytes" =
+  expectEqual (blobRefCidText uploadedResponse) uploadedCidText
+
+test "uploadBlob's response names the declared MIME type" =
+  expectEqual (blobStringField "mimeType" uploadedResponse) uploadedMimeType
+
+test "uploadBlob's response names the exact byte size" =
+  expectEqual (blobIntField "size" uploadedResponse) (arrayLength uploadedBytes)
+
+test "uploadBlob with a malformed MIME type is refused with the XRPC envelope, not a framing failure" =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      sessionStore
+      (postRaw accessToken uploadBlobNsid "image/p!ng" uploadedBytes)
+  expectEqual (outcome response) "400 Bad Request InvalidRequest"
+
+-- # getBlob
+
+test "getBlob on a just-uploaded blob returns the exact bytes" =
+  let (_, response) =
+    send
+      (contextAt testInstant 4)
+      uploadedStore
+      (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
+  expectEqual (rawBodyOf response) uploadedBytes
+
+test "getBlob on a just-uploaded blob declares its MIME type" =
+  let (_, response) =
+    send
+      (contextAt testInstant 5)
+      uploadedStore
+      (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
+  expectTrue (hasContentType uploadedMimeType response)
+
+test "getBlob for an unknown CID is refused" =
+  let (_, response) =
+    send
+      (contextAt testInstant 6)
+      uploadedStore
+      (getQuery
+        ""
+        getBlobNsid
+        "?did=\{accountDidText}&cid=\{cidToString (blobCid [|99, 98, 97|])}")
+  expectEqual (outcome response) "400 Bad Request BlobNotFound"
+
+test "getBlob needs no credential" =
+  let (_, response) =
+    send
+      (contextAt testInstant 7)
+      uploadedStore
+      (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
+  expectTrue (statusLineOf (fromUtf8 response) == "200 OK")
+
+-- # listBlobs
+
+test "listBlobs lists the just-uploaded CID" =
+  let (_, response) =
+    send
+      (contextAt testInstant 8)
+      uploadedStore
+      (getQuery "" listBlobsNsid "?did=\{accountDidText}")
+  expectTrue (listedCids response == [uploadedCidText])
+
+test "listBlobs on an empty store lists nothing" =
+  let (_, response) =
+    send
+      (contextAt testInstant 9)
+      sessionStore
+      (getQuery "" listBlobsNsid "?did=\{accountDidText}")
+  expectTrue (listedCids response == [])
+
+test "listBlobs needs no credential" =
+  let (_, response) =
+    send
+      (contextAt testInstant 10)
+      uploadedStore
+      (getQuery "" listBlobsNsid "?did=\{accountDidText}")
+  expectTrue (statusLineOf (fromUtf8 response) == "200 OK")
+
+-- # listBlobs cursor pagination
+
+{- | Enough blobs that the two orderings in play cannot coincide by luck.
+   `listBlobs` pages with a cursor compared as base32 CID text, while the
+   store hands its entries back in `lib.blockstore`'s hex key order; a walk
+   over one order filtered by a cursor drawn from the other skips blobs
+   silently. Distinct payloads give distinct CIDs, which is all the two orders
+   need to disagree. -}
+pagedCount : Int
+pagedCount = 40
+
+pagedBytes : Int -> Array Int
+pagedBytes n = arrayMakeWith 12 (i => (n * 37 + i * 11 + 5) % 256)
+
+uploadPaged : Int -> Store -> Store
+uploadPaged n store =
+  if n >= pagedCount then
+    store
+  else
+    let (next, _) =
+      send
+        (contextAt testInstant (100 + n))
+        store
+        (postRaw accessToken uploadBlobNsid uploadedMimeType (pagedBytes n))
+    uploadPaged (n + 1) next
+
+pagedStore : Store
+pagedStore = uploadPaged 0 sessionStore
+
+pagedCids : List String
+pagedCids =
+  sort (map (n => cidToString (blobCid (pagedBytes n))) [0..pagedCount])
+
+pagedQuery : String -> String
+pagedQuery "" = "?did=\{accountDidText}&limit=3"
+pagedQuery cursor = "?did=\{accountDidText}&limit=3&cursor=\{cursor}"
+
+{- | Every CID a client walking the `cursor` sees, in the order it sees them.
+   `fuel` bounds the walk so a cursor that fails to advance fails this test
+   instead of hanging it. -}
+walkPages : Int -> String -> List String
+walkPages fuel cursor =
+  if fuel <= 0 then
+    ["<cursor walk did not terminate>"]
+  else
+    let (_, response) =
+      send
+        (contextAt testInstant 200)
+        pagedStore
+        (getQuery "" listBlobsNsid (pagedQuery cursor))
+    let page = listedCids response
+    match blobStringFieldTop "cursor" response
+      "" => page
+      next => page ++ walkPages (fuel - 1) next
+
+walkedCids : List String
+walkedCids = walkPages (pagedCount + 2) ""
+
+test "listBlobs with one big page lists every uploaded blob" =
+  let (_, response) =
+    send
+      (contextAt testInstant 201)
+      pagedStore
+      (getQuery "" listBlobsNsid "?did=\{accountDidText}&limit=1000")
+  expectEqual (sort (listedCids response)) pagedCids
+
+test "listBlobs cursor pagination returns every uploaded blob exactly once" =
+  expectEqual walkedCids pagedCids

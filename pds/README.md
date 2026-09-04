@@ -1,12 +1,14 @@
 # pds/
 
 The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
-0–3 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
-this tree: the pure core
+0–3 and Phase 4 of the umbrella design (#1697) are landed in this tree, short
+of deployment: the pure core
 covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
-the nine atproto record/sync/identity endpoints, the four session endpoints
+the nine atproto record/sync/identity endpoints, `applyWrites` as one signed
+commit, the blob routes (`uploadBlob`/`getBlob`/`listBlobs`) with on-disk
+persistence, the four session endpoints
 (`com.atproto.server.{createSession, refreshSession, deleteSession,
 getSession}`), plus the two well-known paths.
 Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
@@ -22,10 +24,11 @@ process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
 the signature check is what stops an unannotated export from carrying an
 inferred effect row past the effect check). The bind address is loopback-only.
 Authentication now gates the writes and the three session routes that need
-it — the three record writes and `getSession` require a valid access token,
-`refreshSession`/`deleteSession` require a valid refresh token, and
-`createSession` is the public login that issues both — while the six reads,
-`resolveHandle`, and the two well-knowns stay public. Loopback-only remains
+it — the five record/blob writes and `getSession` require a valid access
+token, `refreshSession`/`deleteSession` require a valid refresh token, and
+`createSession` is the public login that issues both — while the eight
+reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only
+remains
 the separate gate on exposing this server past localhost at all; hardening
 that path (TLS, a non-loopback bind) is tracked separately, not covered by
 this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
@@ -47,23 +50,26 @@ this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
   secret-bearing") plus configured pure composition from request bytes to
   successor state and response bytes.
 - `pds/lib/handlers.mdk` — every atproto endpoint this PDS serves over that
-  state: the three record-write procedures
-  (`createRecord`/`putRecord`/`deleteRecord`), the six read/sync/identity
-  queries (`getRecord`/`listRecords`/`describeRepo`/`sync.getRepo`/
-  `sync.getLatestCommit`/`identity.resolveHandle`), and the two non-XRPC
-  well-known paths.
+  state: the five record/blob-write procedures
+  (`createRecord`/`putRecord`/`deleteRecord`/`applyWrites`/`uploadBlob`), the
+  eight read/sync/identity queries (`getRecord`/`listRecords`/`describeRepo`/
+  `sync.getRepo`/`sync.getLatestCommit`/`sync.getBlob`/`sync.listBlobs`/
+  `identity.resolveHandle`), and the two non-XRPC well-known paths.
 - `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
   stores blocks as flat sharded CID-to-bytes files (design row P7),
   `pds/shell/persist.mdk` persists and reloads the account repository's head
-  commit, and `pds/shell/server.mdk` is the loopback accept loop and the
+  commit, `pds/shell/blobfile.mdk` does the same for the blob half under a
+  `blobs/` directory SIBLING to `blocks/` (a blob is not part of the signed
+  block graph), and `pds/shell/server.mdk` is the loopback accept loop and the
   per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
   module may import `pds/lib/`, and no `pds/lib/` module may ever import
   `pds/shell/` — the pure core performs no I/O (P14), so reconstruction logic
   lives in `pds/lib/repo.mdk`'s `repoFromBlocks` and the shell stays a thin
   effectful wrapper. No signing key can reach a file through this directory:
-  nothing here takes a `SecretKey`, `blockfile.mdk` and `persist.mdk` take
-  neither a `SecretKey` nor a `Repo`, and `server.mdk` reaches a `Repo` only to
-  export the block graph the account's own head already names.
+  nothing here takes a `SecretKey`, `blockfile.mdk`, `blobfile.mdk` and
+  `persist.mdk` take neither a `SecretKey` nor a `Repo`, and `server.mdk`
+  reaches a `Repo` only to export the block graph the account's own head
+  already names.
 - `pds/serve.mdk` — the entry point. It admits every configuration value before
   binding anything, rehydrates the repository from disk under the configured
   signing key, and hands `pds/shell/server.mdk` a listener and the one
@@ -332,13 +338,29 @@ native direct-red mutation of a repaired raw-input assertion.
 ## Phase 4 record writes (#1697, pure half)
 
 `pds/lib/handlers.mdk` implements `com.atproto.repo.createRecord`,
-`com.atproto.repo.putRecord`, and `com.atproto.repo.deleteRecord` as real
-handlers: lexicon-shaped JSON in (`pds/lib/lexjson.mdk` maps the `record` field
+`com.atproto.repo.putRecord`, `com.atproto.repo.deleteRecord`, and
+`com.atproto.repo.applyWrites` as real handlers: lexicon-shaped JSON in (`pds/lib/lexjson.mdk` maps the `record` field
 to and from DAG-CBOR), the `lib.repo` transition in the middle, lexicon-shaped
 JSON out. `swapCommit` and `swapRecord` are honored as compare-and-swap
 preconditions and fail with `InvalidSwap`. `swapRecord` is three-valued: absent
 means no check, an explicit `null` asserts the record is ABSENT, and a CID
 string asserts it is exactly that record.
+
+`com.atproto.repo.applyWrites` is the batch counterpart, and the reason it
+exists is that it signs exactly ONE commit: N operations advance the repository
+by one revision, not N, so a client that needs several records to appear
+together never publishes a half-written repository to a relay reading the
+commit log. `pds/lib/repo.mdk`'s `repoApplyWrites` threads every edit through a
+single MST and blockstore and signs once at the end. The batch is
+all-or-nothing — the first failing operation aborts before anything is signed,
+so a rejected batch leaves the repository at its prior commit — and an empty
+`writes` array is accepted as a genuine no-op that returns the current commit
+rather than signing a vacuous one. A `create` element that names no `rkey`
+takes the next TID in the same sequence the revision came from, so several
+rkey-less creates in one batch cannot collide on the revision's own spelling.
+`pds/test/batch_handlers_main.mdk` grades the batch commit against
+`pds/test/vectors/repo_batch_reference_corpus.txt`, generated by the same
+pinned official `@atproto/repo` that answers for the single-write transcript.
 
 `pds/lib/server_core.mdk` gains an `Account` — the repository owner's DID, the
 owner's handle, and this PDS's hostname — admitted by `pds/lib/atsyntax.mdk`'s
@@ -458,11 +480,15 @@ this project. A record write against an unconfigured store is refused with
 
 ### Consequences shipped, deliberately
 
-- **No authentication.** Nothing in the pure core authenticates a request:
-  there is no session, no token check, no signature over the request. Any caller
-  that can reach `handleBytes` can write to the configured repository. That is
-  Phase 4's stated pure-half scope — auth belongs with the Phase 3 socket shell
-  — but it means this core is not safe to expose on a network as it stands.
+- **Auth is enforced in the pure core, not the shell.** `handleBytes` resolves
+  the caller's credential and refuses an `AuthenticatedRoute`/`RefreshRoute`
+  call via `refusalFor` before the handler ever runs — there is no unguarded
+  path from `handleBytes` to a repository write. What is NOT enforced is
+  everything downstream of an authenticated caller: no per-client rate
+  limiting (#2612), no bound on read-path cost relative to repo size (#2478),
+  and framing itself is O(n²) under one trickling client (#2571) — those, not
+  a missing auth check, are what keep this core unsafe to expose on a network
+  as it stands.
 - **No lexicon validation.** The record body is admitted as atproto data, not
   validated against a lexicon schema. `validate: true` is therefore REFUSED
   with an explicit error rather than accepted and quietly ignored; `validate:
@@ -482,6 +508,55 @@ this project. A record write against an unconfigured store is refused with
   parameter is REFUSED rather than ignored: answering the whole-repository
   question when a narrower one was asked would return something plausible and
   wrong.
+
+## Phase 4 blob routes and persistence (#1697, #2605)
+
+`pds/lib/handlers.mdk` implements the blob half of Phase 4:
+`com.atproto.repo.uploadBlob` (a write — it joins `recordHandled` rather than
+the read half because it is the only route besides the four record writes
+that can return a successor `Store`), `com.atproto.sync.getBlob`, and
+`com.atproto.sync.listBlobs`.
+
+| Route | Answer | Refusals |
+|---|---|---|
+| `com.atproto.repo.uploadBlob` | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
+| `com.atproto.sync.getBlob` | the raw bytes, with the declared MIME `content-type` | `BlobNotFound` when absent |
+| `com.atproto.sync.listBlobs` | `{cids, cursor?}` | `since` is refused, not ignored, the same policy `getRepo` uses |
+
+`pds/lib/blob.mdk`'s `admitBlob` is the single admission point: it computes the
+blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
+`maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
+Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
+an unconfigured server too, and `uploadBlob` needs only a session, not a
+repository.
+
+Persistence is `pds/shell/blobfile.mdk`, mirroring `blockfile.mdk`'s
+stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
+like the block store, plus a `.mime` sidecar recording the declared MIME
+type (bytes alone don't carry it) — the sidecar is promoted before the bytes,
+so a reader keying on the bytes file ordinarily sees a blob only once its
+declared type is already there. There is no fsync, so that order is a
+preference rather than a guarantee, and the reader skips whatever it cannot
+account for — a stray non-directory entry, an orphan sidecar, a bytes file
+whose sidecar is gone, and a sidecar whose text is not a MIME type at all —
+losing at most the one blob involved rather than refusing every later startup.
+Nothing collects an unreferenced blob (#2572 tracks that as a
+protocol-design question, not a filesystem one). `pds/test/blob_handlers_main.mdk`
+grades the three routes end to end against an EXTERNAL answer key: it uploads
+every row of `pds/test/vectors/blob_reference_corpus.txt` through the real
+`uploadBlob` route and compares the response's CID and whole `blob` ref JSON
+against the pinned official `@atproto/lex-data`'s own columns, then reads each
+row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors.sh`,
+which takes the corpus path from the provenance ledger rather than naming it).
+`pds/test/blob_routes_test.mdk` carries the routes' remaining in-process
+behavior — the refusals, the MIME-shape rejection, and cursor pagination —
+where an expected CID is our own `blobCid`'s and proves plumbing, not content
+addressing. `pds/test/serve_e2e.sh` and `pds/test/
+store_persistence.sh` extend their existing socket/restart coverage to blobs:
+upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
+tampered blob file is rejected at load; an oversize blob is refused with zero
+files written to disk; and each of the four kinds of residue above is skipped
+by a server that starts and still serves every undamaged blob.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

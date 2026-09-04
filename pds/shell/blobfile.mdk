@@ -1,0 +1,208 @@
+{- | Native durable blob storage: one sharded CID-to-bytes file per blob, plus
+   a sidecar naming that blob's declared MIME type.
+
+   **On-disk layout.** Blobs live under `<data>/blobs`, a SIBLING of the
+   repository's `<data>/blocks` (`shell.persist`) and never inside it: a blob
+   is not part of the repository's signed block graph, and mixing the two
+   would let a blob reach `repoFromBlocks`. Within `blobs/` the sharding is
+   `shell.blockfile`'s, unchanged — `<shard>/<hex of the binary CID>`, sharded
+   on the first byte of the multihash DIGEST — which needs no adjustment for
+   blobs because a shard is chosen from the digest and not from the codec that
+   produced it.
+
+       <data>/blobs/<shard>/<cid hex>          the blob's bytes
+       <data>/blobs/<shard>/<cid hex>.mime     its declared MIME type
+       <data>/blobs/.staging                   in-flight writes, never a shard
+
+   **Why a sidecar.** Content addressing verifies BYTES, not the type declared
+   for them (`pds/lib/store.mdk`'s `BlobHalf`), so a blob's MIME type is state
+   that has to be written down separately or lost at a restart. It is a file
+   per blob rather than one index file so that adding a blob stays a write of
+   that blob alone, with no whole-index rewrite to tear.
+
+   **Write order.** Both files stage under `.staging` and are promoted with
+   `rename`; the MIME sidecar is promoted FIRST and the bytes LAST, so a reader
+   — which keys on the bytes file — sees a blob only once its declared type is
+   already there. That order is a preference and not a guarantee: it holds
+   across a process crash, but there is no fsync anywhere here, so a power loss
+   can leave either half alone on disk.
+
+   **Residue.** The reader therefore skips, rather than fails on, anything
+   under `blobs/` it cannot account for: an entry that is not a directory (an
+   editor swapfile, a `.DS_Store`), an orphan sidecar naming no bytes file, and
+   a bytes file whose sidecar is missing or unreadable. Each of those loses at
+   most the one blob it belongs to; refusing the whole read would instead make
+   one torn write brick every later startup, with no recovery short of deleting
+   the file by hand. What is NOT residue is a file whose name does not spell a
+   CID: this module did not write it, so it is refused rather than skipped.
+
+   **Caps.** Admission is `pds/lib/blob.mdk`'s `admitBlob` and nothing here.
+   This module re-checks `checkBlobBytes` only to fail closed on a caller that
+   handed it something admission would have refused; that is a bug assertion,
+   not a second policy, and it is the reason a blob past the cap cannot reach
+   the disk even if a future caller forgets to admit it.
+
+   **Lifetime.** Nothing collects a blob. A blob no record references survives
+   every restart until the directory is removed by hand: garbage collection is
+   a protocol question (which references count, and when a reference that does
+   not exist yet stops being expected), not a filesystem one.
+
+   Nothing here trusts the disk. Bytes read back are returned as raw rows for
+   `blockStoreFromBlocks` to verify against their own CIDs; this module never
+   claims a row is valid.
+
+   This module is an effectful shell (P14): it holds no protocol state, and its
+   signatures carry no `Repo` and no `SecretKey`, so no signing key can reach a
+   file through it. -}
+
+import hex.{decode, encode}
+import string.{endsWith, stripSuffix, take}
+import fs.{isDir, mkdirAll}
+import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
+import lib.resource_limits.{checkBlobBytes}
+
+-- Temporary writes are promoted out of this directory, which is therefore the
+-- one entry under the blob directory that is not a shard.
+stagingName : String
+stagingName = ".staging"
+
+mimeSuffix : String
+mimeSuffix = ".mime"
+
+-- | The blob area beneath one `--data` directory.
+export
+blobDir : String -> String
+blobDir dir = "\{dir}/blobs"
+
+cidKey : Cid -> String
+cidKey cid = encode (cidToBytes cid)
+
+-- | Directory holding one blob's shard.
+blobShardDir : String -> Cid -> String
+blobShardDir dir cid = "\{blobDir dir}/\{take 2 (encode (cidDigest cid))}"
+
+-- | Absolute path of one blob's bytes.
+blobFilePath : String -> Cid -> String
+blobFilePath dir cid = "\{blobShardDir dir cid}/\{cidKey cid}"
+
+-- The pure layer already refused an oversize blob, so reaching this is a bug
+-- in the caller rather than a rejected upload; it fails rather than writing.
+admitted : Array Int -> Result String Unit
+admitted bytes = match checkBlobBytes (arrayLength bytes)
+  Err message =>
+    Err
+      "blobfile: refusing to persist a blob pds/lib/blob.mdk would not have admitted: \{message}"
+  Ok () => Ok ()
+
+writeOne : String ->
+  Cid ->
+  String ->
+  Array Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+writeOne dir cid mimeType bytes = do
+  () <- admitted bytes
+  () <- mkdirAll (blobShardDir dir cid)
+  let stagedMime = "\{blobDir dir}/\{stagingName}/\{cidKey cid}\{mimeSuffix}"
+  () <- writeFile stagedMime mimeType
+  () <- rename stagedMime "\{blobFilePath dir cid}\{mimeSuffix}"
+  let staged = "\{blobDir dir}/\{stagingName}/\{cidKey cid}"
+  () <- writeFileBytes staged bytes
+  rename staged (blobFilePath dir cid)
+
+writeRows : String ->
+  List (Cid, String, Array Int) ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+writeRows _ [] = Ok ()
+writeRows dir ((cid, mimeType, bytes) :: rest) =
+  match writeOne dir cid mimeType bytes
+    Err message => Err message
+    Ok () => writeRows dir rest
+
+{- | Write every blob durably beneath `<dir>/blobs`. Writing a blob that is
+   already present is idempotent for its bytes — a blob's name is its content —
+   and its sidecar is rewritten, which is what lets the declared type of
+   already-stored bytes be corrected by a later upload. -}
+export
+blobFileWrite : String ->
+  List (Cid, String, Array Int) ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+blobFileWrite dir rows = do
+  () <- mkdirAll "\{blobDir dir}/\{stagingName}"
+  writeRows dir rows
+
+cidForName : String -> String -> Result String Cid
+cidForName path name = match decode name
+  Err message => Err "blobfile: \{path}: file name is not hex: \{message}"
+  Ok bytes => match cidFromBytes bytes
+    Err message => Err "blobfile: \{path}: file name is not a CID: \{message}"
+    Ok cid => Ok cid
+
+-- A sidecar is read through the blob it belongs to, so it is skipped here —
+-- but its name still has to spell a CID, or the directory holds a file this
+-- module did not write and cannot account for.
+sidecarOk : String -> String -> Result String Unit
+sidecarOk path leaf = match stripSuffix mimeSuffix leaf
+  None => Err "blobfile: \{path}: not a MIME sidecar"
+  Some base => map (_ => ()) (cidForName path base)
+
+readLeaves : String ->
+  String ->
+  List String ->
+  List (Cid, String, Array Int) ->
+  <FileRead "_"> Result String (List (Cid, String, Array Int))
+readLeaves _ _ [] acc = Ok acc
+readLeaves dir shard (leaf :: rest) acc =
+  let path = "\{blobDir dir}/\{shard}/\{leaf}"
+  if endsWith mimeSuffix leaf then match sidecarOk path leaf
+    Err message => Err message
+    Ok () => readLeaves dir shard rest acc
+  else match cidForName path leaf
+    Err message => Err message
+    Ok cid => match readFile "\{path}\{mimeSuffix}"
+      -- The bytes are here and the type they were stored under is not, so
+      -- there is nothing to serve this blob AS. It is skipped as residue; see
+      -- the module's "Residue" note for why that is not a failed read.
+      Err _ => readLeaves dir shard rest acc
+      Ok mimeType => match readFileBytes path
+        Err message => Err "blobfile: \{path}: unreadable blob file: \{message}"
+        Ok bytes => readLeaves dir shard rest ((cid, mimeType, bytes) :: acc)
+
+readShards : String ->
+  List String ->
+  List (Cid, String, Array Int) ->
+  <FileRead "_"> Result String (List (Cid, String, Array Int))
+readShards _ [] acc = Ok acc
+readShards dir (shard :: rest) acc =
+  if shard == stagingName then
+    readShards dir rest acc
+  else match isDir "\{blobDir dir}/\{shard}"
+    -- A shard is a directory; anything else under `blobs/` is residue this
+    -- module did not write, and `listDir` on it would report an unreadable
+    -- shard directory — a refused startup, under a wrong description.
+    Ok False => readShards dir rest acc
+    _ => match listDir "\{blobDir dir}/\{shard}"
+      Err message =>
+        Err
+          "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
+      Ok leaves => match readLeaves dir shard leaves acc
+        Err message => Err message
+        Ok next => readShards dir rest next
+
+{- | Read every persisted blob beneath `<dir>/blobs`, in unspecified order. A
+   data directory that has never held a blob reads as no blobs, not as a
+   failure: `blobs/` is created by the first write and by nothing else.
+
+   The returned rows are UNVERIFIED bytes off disk paired with the CID their
+   file name spells and the type their sidecar declares. `blockStoreFromBlocks`
+   is what proves each row's bytes hash to that CID, and a tampered file fails
+   there. -}
+export
+blobFileRead : String ->
+  <FileRead "_"> Result String (List (Cid, String, Array Int))
+blobFileRead dir =
+  if not (fileExists (blobDir dir)) then
+    Ok []
+  else match listDir (blobDir dir)
+    Err message =>
+      Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
+    Ok shards => readShards dir shards []

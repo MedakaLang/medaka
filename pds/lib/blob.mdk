@@ -1,0 +1,170 @@
+{- | The pure atproto blob layer: raw-codec content addressing, the `blob`
+   ref JSON shape, MIME-shape admission, and size-cap admission.
+
+   No routes, no disk, no randomness, no clock — every export here declares
+   no effect row (`pds/test/lib_boundary.sh`). This is the ONE place blob
+   size-cap enforcement happens: `admitBlob` is the single admission
+   function slice 3's `uploadBlob` handler calls, and the persistence shell
+   (slice 4) does not re-decide admission — it only fails closed if handed
+   something this module would not have admitted.
+
+   `blob` ref shape (rendered and parsed here, graded against
+   `@atproto/lex-data`'s `isTypedBlobRef`/`@atproto/lex-json`'s
+   `parseTypedBlobRef`, never our own encoder):
+
+       {"$type": "blob", "ref": {"$link": "<cid>"}, "mimeType": "…", "size": N} -}
+
+import json.{Json(..), get, jObject, stringify}
+import lib.cid.{Cid, cidForRaw, cidFromString, cidToString}
+import lib.resource_limits.{checkAccountBlobBytes, checkBlobBytes}
+import string.{isAlphaNum, split, toChars}
+
+-- | Content-address a blob's raw bytes with the raw codec (reuses
+-- `cidForRaw`; blobs are not a new CID kind).
+export
+blobCid : Array Int -> Cid
+blobCid bytes = cidForRaw bytes
+
+{- | An admitted blob reference: its content CID, declared MIME type, and
+   byte size. The constructor is private — a `BlobRef` is only ever minted by
+   `admitBlob` (bytes actually hashed and sized) or `blobRefFromJson` (a
+   syntactically valid `blob` ref value), never assembled from parts a caller
+   could mismatch. -}
+export data BlobRef = BlobRef Cid String Int
+
+export
+blobRefCid : BlobRef -> Cid
+blobRefCid (BlobRef cid _ _) = cid
+
+export
+blobRefMimeType : BlobRef -> String
+blobRefMimeType (BlobRef _ mimeType _) = mimeType
+
+export
+blobRefSize : BlobRef -> Int
+blobRefSize (BlobRef _ _ size) = size
+
+-- ── MIME-shape admission ─────────────────────────────────────────────────
+
+-- RFC 2045 §5.1 token characters, restricted to the ASCII subset relevant to
+-- a `type/subtype` media-type shape (no parameters admitted here — atproto
+-- blob refs carry a bare media type).
+mimeTokenChar : Char -> Bool
+mimeTokenChar c = isAlphaNum c || c == '-' || c == '.' || c == '+' || c == '_'
+
+allTokenChars : Array Char -> Int -> Bool
+allTokenChars chars i =
+  if i >= arrayLength chars then
+    True
+  else
+    mimeTokenChar chars[i] && allTokenChars chars (i + 1)
+
+nonEmptyToken : String -> Bool
+nonEmptyToken s = stringLength s > 0 && allTokenChars (toChars s) 0
+
+{- | Syntactic MIME-type shape admission: exactly one `/` separating a
+   non-empty type and subtype, each drawn from RFC 2045 token characters. Not
+   a specific allowlist — any well-formed `type/subtype` is admitted, mirroring
+   `@atproto/lex-data`'s own "very basic mime validation" (non-empty string
+   containing exactly one `/`), only stricter about the character set on
+   either side.
+
+   > validMimeShape "image/png"
+   True
+   > validMimeShape "image"
+   False
+   > validMimeShape "image/"
+   False
+   > validMimeShape "image/png/extra"
+   False -}
+export
+validMimeShape : String -> Bool
+validMimeShape mimeType = match split "/" mimeType
+  [typePart, subtypePart] => nonEmptyToken typePart && nonEmptyToken subtypePart
+  _ => False
+
+-- ── admission: the one place size caps are enforced ─────────────────────────
+
+{- | Admit a blob's bytes and declared MIME type against every pure blob
+   policy: MIME shape, the per-blob size cap, and the per-account size cap
+   given the account's current blob usage before this upload. On success,
+   the returned `BlobRef` carries the actual content CID and byte count — the
+   caller never supplies either. -}
+export
+admitBlob : Int -> String -> Array Int -> Result String BlobRef
+admitBlob accountUsedBytes mimeType bytes = do
+  let size = arrayLength bytes
+  if not (validMimeShape mimeType) then
+    Err "blob: mimeType must be of the form type/subtype"
+  else
+    Ok ()
+  () <- checkBlobBytes size
+  () <- checkAccountBlobBytes (accountUsedBytes + size)
+  Ok (BlobRef (blobCid bytes) mimeType size)
+
+-- ── the `blob` ref JSON shape, both directions ──────────────────────────────
+
+{- | Render a `BlobRef` as its lexicon-JSON `blob` shape.
+
+   > stringify (blobRefToJson (BlobRef (cidForRaw [||]) "image/png" 0))
+   "{\"$type\":\"blob\",\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"image/png\",\"size\":0}" -}
+export
+blobRefToJson : BlobRef -> Json
+blobRefToJson (BlobRef cid mimeType size) = jObject [
+  ("$type", JString "blob"),
+  ("ref", jObject [("$link", JString (cidToString cid))]),
+  ("mimeType", JString mimeType),
+  ("size", JInt size),
+]
+
+requiredType : Json -> Result String Unit
+requiredType body = match get "$type" body
+  Some (JString "blob") => Ok ()
+  Some (JString other) => Err "blob: '$type' must be \"blob\", got \"\{other}\""
+  Some _ => Err "blob: '$type' must be a string"
+  None => Err "blob: missing '$type'"
+
+requiredRefCid : Json -> Result String Cid
+requiredRefCid body = match get "ref" body
+  None => Err "blob: missing 'ref'"
+  Some ref => match get "$link" ref
+    None => Err "blob: 'ref' must contain a '$link' string"
+    Some (JString text) => match cidFromString text
+      Err message => Err "blob: \{message}"
+      Ok cid => Ok cid
+    Some _ => Err "blob: 'ref.$link' must be a string"
+
+requiredMimeType : Json -> Result String String
+requiredMimeType body = match get "mimeType" body
+  Some (JString mimeType) =>
+    if validMimeShape mimeType then
+      Ok mimeType
+    else
+      Err "blob: 'mimeType' must be of the form type/subtype"
+  Some _ => Err "blob: 'mimeType' must be a string"
+  None => Err "blob: missing 'mimeType'"
+
+requiredSize : Json -> Result String Int
+requiredSize body = match get "size" body
+  Some (JInt size) =>
+    if size >= 0 then Ok size else Err "blob: 'size' must be non-negative"
+  Some _ => Err "blob: 'size' must be an integer"
+  None => Err "blob: missing 'size'"
+
+{- | Parse a `blob` ref JSON value back into a `BlobRef`, rejecting anything
+   that is not exactly the `$type`/`ref.$link`/`mimeType`/`size` shape (the
+   inverse of `blobRefToJson`; this does not re-hash bytes, since none are
+   present — a `BlobRef` parsed this way carries a CLAIMED size and CID, and a
+   caller that admits raw bytes against it must still verify them with
+   `blobCid`).
+
+   > map blobRefMimeType (blobRefFromJson (blobRefToJson (BlobRef (cidForRaw [||]) "image/png" 0)))
+   Ok "image/png" -}
+export
+blobRefFromJson : Json -> Result String BlobRef
+blobRefFromJson body = do
+  requiredType body
+  cid <- requiredRefCid body
+  mimeType <- requiredMimeType body
+  size <- requiredSize body
+  Ok (BlobRef cid mimeType size)

@@ -7,12 +7,20 @@
    repository that survived only inside one process cannot pass.
 
    `reject` is the tamper route: it asserts the reload REJECTS a corrupted block
-   file rather than serving its bytes. -}
+   file rather than serving its bytes.
+
+   The `blob-*` routes are the same three claims for the blob half
+   (`shell.blobfile`), which is persisted beside the repository and not inside
+   it: save in one process, load in another, and reject a tampered blob file.
+   `blob-oversize` is the fourth: a blob the pure layer refuses reaches no
+   file at all. -}
 
 import hex.{decode, encode}
 import string.{toUtf8}
+import lib.blob.{admitBlob, blobCid}
+import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
-import lib.cid.{Cid, cidToString}
+import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..)}
 import lib.repo.{
   Repo,
@@ -27,8 +35,10 @@ import lib.repo.{
   repoMutationState,
 }
 import lib.sha256.{sha256}
+import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
+import shell.blobfile.{blobFileRead, blobFileWrite}
 import shell.persist.{persistLoad, persistSave}
 
 -- The gate greps every persisted file for this hex and for its raw bytes; it is
@@ -152,9 +162,126 @@ runReject dir = match reload dir
     let () = println "REJECT: PASS \{message}"
     ()
 
+-- ── the blob half ───────────────────────────────────────────────────────────
+
+blobBytes : String -> Array Int
+blobBytes text = toUtf8 text
+
+{- | The blobs the `blob-save` route persists: two, with DIFFERENT declared
+   MIME types, because the type is the part content addressing does not carry
+   and is therefore the part a restart can lose silently. -}
+blobFixtures : List (Cid, String, Array Int)
+blobFixtures =
+  let first = blobBytes "store_persistence blob fixture one"
+  let second = blobBytes "store_persistence blob fixture two, a different type"
+  [
+    (blobCid first, "text/plain", first),
+    (blobCid second, "application/octet-stream", second),
+  ]
+
+blobSummary : String -> (Cid, String, Array Int) -> <IO> Unit
+blobSummary label (cid, mimeType, bytes) =
+  println
+    "\{label} blob \{cidToString cid} \{mimeType} \{intToString (arrayLength bytes)} \{encode (sha256 bytes)}"
+
+findBlob : Cid ->
+  List (Cid, String, Array Int) ->
+  Option (Cid, String, Array Int)
+findBlob _ [] = None
+findBlob wanted ((cid, mimeType, bytes) :: rest) =
+  if cidEqual wanted cid then
+    Some (cid, mimeType, bytes)
+  else
+    findBlob wanted rest
+
+printBlobs : String -> List (Cid, String, Array Int) -> <IO> Unit
+printBlobs _ [] = ()
+printBlobs label (row :: rest) =
+  let () = blobSummary label row
+  printBlobs label rest
+
+runBlobSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobSave dir = match blobFileWrite dir blobFixtures
+  Err message => panic "store_persistence: blob save failed: \{message}"
+  Ok () =>
+    let () = printBlobs "BLOBSAVE" blobFixtures
+    let () = println "BLOBSAVE count \{intToString (length blobFixtures)}"
+    println "BLOB-SAVE: PASS"
+
+-- The rows are unverified disk bytes until this runs, exactly as the
+-- repository's are until `repoFromBlocks` runs.
+verifiedBlobs : String ->
+  <FileRead "_"> Result String (List (Cid, String, Array Int))
+verifiedBlobs dir = do
+  rows <- blobFileRead dir
+  _ <- blockStoreFromBlocks (map ((cid, _, bytes) => (cid, bytes)) rows)
+  Ok rows
+
+-- Each fixture is reported in FIXTURE order, not disk order (`blobFileRead`
+-- promises none), so the gate can compare the two summaries line for line.
+reportBlobs : List (Cid, String, Array Int) ->
+  List (Cid, String, Array Int) ->
+  <IO> Unit
+reportBlobs _ [] = ()
+reportBlobs loaded ((cid, _, _) :: rest) = match findBlob cid loaded
+  None =>
+    panic
+      "store_persistence: blob \{cidToString cid} did not survive the restart"
+  Some row =>
+    let () = blobSummary "BLOBLOAD" row
+    reportBlobs loaded rest
+
+runBlobLoad : String -> <IO, FileRead "_"> Unit
+runBlobLoad dir = match verifiedBlobs dir
+  Err message => panic "store_persistence: blob load failed: \{message}"
+  Ok loaded =>
+    let () = reportBlobs loaded blobFixtures
+    let () = println "BLOBLOAD count \{intToString (length loaded)}"
+    println "BLOB-LOAD: PASS"
+
+runBlobReject : String -> <IO, FileRead "_"> Unit
+runBlobReject dir = match verifiedBlobs dir
+  Ok _ =>
+    let () = println "BLOB-REJECT: FAIL tampered blob loaded"
+    exit 1
+  Err message =>
+    let () = println "BLOB-REJECT: PASS \{message}"
+    ()
+
+{- | A blob past the per-blob cap is refused by `pds/lib/blob.mdk`'s
+   `admitBlob` — the ONE admission point — and therefore never reaches
+   `blobFileWrite` at all. The directory is read back afterwards to show that
+   nothing was written, which is the claim: refused BEFORE any bytes land. -}
+runBlobOversize : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobOversize dir =
+  let oversize = arrayMakeWith (maxBlobBytes + 1) (_ => 65)
+  match admitBlob 0 "application/octet-stream" oversize
+    Ok _ =>
+      let () = println "BLOB-OVERSIZE: FAIL an oversize blob was admitted"
+      exit 1
+    Err message =>
+      let () = println "BLOB-OVERSIZE refused \{message}"
+      match blobFileRead dir
+        Err readMessage =>
+          panic "store_persistence: blob directory unreadable: \{readMessage}"
+        Ok rows =>
+          if length rows == 0 then
+            println "BLOB-OVERSIZE: PASS nothing was written"
+          else
+            let () =
+              println
+                "BLOB-OVERSIZE: FAIL \{intToString (length rows)} blob(s) on disk"
+            exit 1
+
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()
   ["save", dir] => runSave dir
   ["load", dir] => runLoad dir
   ["reject", dir] => runReject dir
-  _ => panic "usage: store_persistence_main <save|load|reject> <dir>"
+  ["blob-save", dir] => runBlobSave dir
+  ["blob-load", dir] => runBlobLoad dir
+  ["blob-reject", dir] => runBlobReject dir
+  ["blob-oversize", dir] => runBlobOversize dir
+  _ =>
+    panic
+      "usage: store_persistence_main <save|load|reject|blob-save|blob-load|blob-reject|blob-oversize> <dir>"
