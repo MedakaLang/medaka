@@ -1,4 +1,0 @@
-interface:
-  display_name: "Medaka Throughput Sprint"
-  short_description: "Run a lean v8 compiler stage sprint"
-  default_prompt: "Use $medaka-throughput-sprint to run a coherent 3–5-slice Medaka v8 sprint."
