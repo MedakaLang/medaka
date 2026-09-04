@@ -60,6 +60,7 @@ import args.{
 import async.{Async, liftIO}
 import fs.{isDir}
 import hex.{decode, encode}
+import lib.blob.{validMimeShape}
 import lib.credential.{
   CredentialRecord,
   credentialDigest,
@@ -327,10 +328,19 @@ loadBlobs store dir = do
   rows <- blobFileRead dir
   admitBlobRows rows store
 
+{- | This is the seam a declared MIME type crosses from the disk into the
+   `Store`, and the only place it is checked on the way in: nothing downstream
+   re-reads a sidecar, and `sync.getBlob` puts the stored type straight into a
+   response header, where a value carrying a control byte is refused far too
+   late to answer with. `admitBlob` applies the same shape check to the upload
+   path, so a value that reaches here and fails it came from a tampered file
+   and belongs to no blob this server can serve. -}
 admitBlobRows : List (Cid, String, Array Int) -> Store -> Result String Store
 admitBlobRows [] store = Ok store
 admitBlobRows ((cid, mimeType, bytes) :: rest) store =
-  match storePutBlob cid mimeType bytes store
+  if not (validMimeShape mimeType) then
+    admitBlobRows rest store
+  else match storePutBlob cid mimeType bytes store
     Err message => Err "persisted blob \{cidToString cid} rejected: \{message}"
     Ok next => admitBlobRows rest next
 

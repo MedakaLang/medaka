@@ -533,15 +533,21 @@ Persistence is `pds/shell/blobfile.mdk`, mirroring `blockfile.mdk`'s
 stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
 like the block store, plus a `.mime` sidecar recording the declared MIME
 type (bytes alone don't carry it) — the sidecar is promoted before the bytes,
-so a reader keying on the bytes file never observes a blob with a missing
-declared type. Nothing collects an unreferenced blob (#2572 tracks that as a
+so a reader keying on the bytes file ordinarily sees a blob only once its
+declared type is already there. There is no fsync, so that order is a
+preference rather than a guarantee, and the reader skips whatever it cannot
+account for — a stray non-directory entry, an orphan sidecar, a bytes file
+whose sidecar is gone, and a sidecar whose text is not a MIME type at all —
+losing at most the one blob involved rather than refusing every later startup.
+Nothing collects an unreferenced blob (#2572 tracks that as a
 protocol-design question, not a filesystem one). `pds/test/blob_routes_test.mdk`
 grades the three routes end to end against `pds/test/vectors/
 blob_reference_corpus.txt`; `pds/test/serve_e2e.sh` and `pds/test/
 store_persistence.sh` extend their existing socket/restart coverage to blobs:
 upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
 tampered blob file is rejected at load; an oversize blob is refused with zero
-files written to disk.
+files written to disk; and each of the four kinds of residue above is skipped
+by a server that starts and still serves every undamaged blob.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

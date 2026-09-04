@@ -76,6 +76,12 @@ RECORD_TEXT='pds serve_e2e gate fixture record'
 # and lost the declared type fails rather than passing by coincidence.
 BLOB_TEXT='pds serve_e2e gate fixture blob bytes'
 BLOB_MIME='text/plain'
+# A SECOND blob, so the residue cases (15-18) can assert that skipping one
+# damaged blob still loads every other blob in the same data directory. Its
+# declared type is distinct from the first's, which is what lets the sidecar
+# of the first be found on disk by content rather than by CID-hex file name.
+BLOB2_TEXT='pds serve_e2e gate fixture blob bytes, the second'
+BLOB2_MIME='application/x-e2e-second'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
@@ -190,6 +196,12 @@ BLOB_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB_MIME" "$BLOB_TEXT") \
 client get-blob "$PORT1" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
   || fail 'case 4b: getBlob before the restart'
 
+BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
+  || fail 'case 4c: second uploadBlob'
+[ -n "$BLOB2_CID" ] || fail 'case 4c: second uploadBlob returned an empty CID'
+[ "$BLOB2_CID" != "$BLOB_CID" ] \
+  || fail 'case 4c: the two blob fixtures content-addressed to one CID'
+
 # 5. every remaining route: the six XRPC NSIDs no other case drives, plus
 #    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
 #    both well-knowns proven by this gate rather than by reading the registry.
@@ -274,6 +286,8 @@ client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
 #    its DECLARED media type, by the fresh process over the same --data dir.
 client get-blob "$PORT2" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
   || fail 'case 14: blob did not survive the restart'
+client get-blob "$PORT2" "$DID" "$BLOB2_CID" "$BLOB2_MIME" "$BLOB2_TEXT" \
+  || fail 'case 14: second blob did not survive the restart'
 
 # The blob is on disk beside the repository's blocks, not inside them: a blob
 # is not part of the signed block graph and must never reach `repoFromBlocks`.
@@ -283,6 +297,99 @@ kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve2.err" 'resumed server (post-run)'
+
+# ── residue on disk: a damaged blob is skipped, never a refused startup ────
+# Cases 15-18 each start a server over a COPY of the resumed data directory
+# with one kind of residue introduced by hand. The claim in all four is the
+# same: the server starts, the damaged blob is absent rather than
+# half-recovered, and the OTHER blob in the same directory is served intact.
+
+# The first fixture's MIME sidecar on disk, found by its declared type (the
+# two fixtures declare different ones) rather than by its CID-hex file name.
+blob1_sidecar() {
+  grep -l -F -x "$BLOB_MIME" "$1"/blobs/*/*.mime 2>/dev/null | head -1
+}
+
+start_resume_at() {
+  "$WORK/pdsd" \
+    --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+    --data "$1" --port 0 \
+    >"$2" 2>"$3" &
+  SERVER_PID=$!
+}
+
+# residue_case <label> <data dir> <served|skipped>: start over that directory,
+# grade the first blob as still served or as skipped, and require the second
+# blob to be served either way.
+residue_case() {
+  label=$1
+  data=$2
+  first=$3
+  start_resume_at "$data" "$WORK/$label.out" "$WORK/$label.err"
+  rport=$(wait_for_port "$WORK/$label.out") || {
+    cat "$WORK/$label.err" >&2
+    fail "$label: server did not start over a data directory holding residue"
+  }
+  require_empty "$WORK/$label.err" "$label startup"
+  if [ "$first" = served ]; then
+    client get-blob "$rport" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
+      || fail "$label: the intact first blob was not served"
+  else
+    client get-blob-missing "$rport" "$DID" "$BLOB_CID" \
+      || fail "$label: the damaged first blob was not skipped"
+  fi
+  client get-blob "$rport" "$DID" "$BLOB2_CID" "$BLOB2_MIME" "$BLOB2_TEXT" \
+    || fail "$label: the undamaged second blob was not served"
+  # Serving the requests above needs a live process, but say so explicitly:
+  # the panic this guards against (an unvalidated sidecar reaching a response
+  # header) kills the process rather than answering an error.
+  kill -0 "$SERVER_PID" 2>/dev/null \
+    || fail "$label: the server died while answering (a panic, not a refusal)"
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+  SERVER_PID=""
+  require_empty "$WORK/$label.err" "$label (post-run)"
+  echo "$label: started over residue, damaged blob $first, other blob intact"
+}
+
+# 15. a stray NON-DIRECTORY entry directly under `<data>/blobs` — an editor
+#    swapfile, a `.DS_Store` — is residue outside this module's business, not
+#    an unreadable shard directory that must kill the startup (#2572).
+DATA15="$WORK/data15"
+cp -R "$DATA" "$DATA15"
+touch "$DATA15/blobs/.DS_Store"
+residue_case case15 "$DATA15" served
+
+# 16. the REVERSE torn write: a blob's bytes were promoted and its sidecar was
+#    not, so the declared type the bytes need is gone. That one blob is
+#    skipped; it does not brick every restart from then on.
+DATA16="$WORK/data16"
+cp -R "$DATA" "$DATA16"
+SIDECAR16=$(blob1_sidecar "$DATA16")
+[ -n "$SIDECAR16" ] || fail 'case 16: could not find the first blob sidecar'
+rm "$SIDECAR16"
+residue_case case16 "$DATA16" skipped
+
+# 17. a sidecar whose text is not a MIME type at all — a raw control byte,
+#    which `makeHeader` refuses and which must never reach the `Store` to be
+#    refused there. Reachable only by tampering with the disk directly; the
+#    upload path admits no such value.
+DATA17="$WORK/data17"
+cp -R "$DATA" "$DATA17"
+SIDECAR17=$(blob1_sidecar "$DATA17")
+[ -n "$SIDECAR17" ] || fail 'case 17: could not find the first blob sidecar'
+printf 'text/pl\001ain' > "$SIDECAR17"
+residue_case case17 "$DATA17" skipped
+
+# 18. the FORWARD torn write, unchanged by any of the above: a sidecar with no
+#    bytes file names no blob, so it is skipped exactly as it always was.
+DATA18="$WORK/data18"
+cp -R "$DATA" "$DATA18"
+SIDECAR18=$(blob1_sidecar "$DATA18")
+[ -n "$SIDECAR18" ] || fail 'case 18: could not find the first blob sidecar'
+rm "${SIDECAR18%.mime}"
+residue_case case18 "$DATA18" skipped
 
 # ── third, independent --data dir: --init overwrite refusal (#2481) ────────
 
@@ -384,4 +491,4 @@ HEAD_AFTER=$(cksum "$DATA10/head")
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || fail 'case 10: second --init with a different key modified the existing head file'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, init-overwrite-refusal, first-run bootstrap'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap'

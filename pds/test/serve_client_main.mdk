@@ -786,6 +786,8 @@ main = match args ()
     runUploadBlob (mustPort port) token mimeType text
   ["get-blob", port, did, cid, mimeType, text] =>
     runGetBlob (mustPort port) did cid mimeType text
+  ["get-blob-missing", port, did, cid] =>
+    runGetBlobMissing (mustPort port) did cid
   _ => panic usage
 
 {- | Upload one blob and print the CID the server content-addressed it to.
@@ -837,6 +839,31 @@ runGetBlob port did cid mimeType text =
         "GETBLOB"
         (status == 200 && mediaType == mimeType && bodyText == text)
         "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (arrayLength body)} byte(s)"
+  ignoreResult (close conn)
+
+{- | Fetch a blob the server must NOT hold and grade the refusal: a blob whose
+   on-disk residue the loader skipped is absent from the store, so the route
+   answers `BlobNotFound` rather than serving a partially-recovered blob.
+
+   The refusal is graded by its error NAME and not by its status alone: every
+   other refusal this route can produce carries the same 400. -}
+runGetBlobMissing : Int -> String -> String -> <IO, Net "_"> Unit
+runGetBlobMissing port did cid =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getBlobPath did cid))
+  let result = readResponse conn [||]
+  let () = expectStatus "GETBLOBMISSING" 400 result
+  let () = match result
+    Ok (_, body, _) =>
+      let bodyText = fromUtf8 body
+      if contains "\"BlobNotFound\"" bodyText then
+        ()
+      else
+        report
+          "GETBLOBMISSING"
+          False
+          "refusal body is not BlobNotFound: \{bodyText}"
+    Err _ => ()
   ignoreResult (close conn)
 
 -- | An expected HTTP status, as the shell gate spells it on the command line.

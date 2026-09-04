@@ -21,10 +21,20 @@
    that blob alone, with no whole-index rewrite to tear.
 
    **Write order.** Both files stage under `.staging` and are promoted with
-   `rename`; the MIME sidecar is promoted FIRST and the bytes LAST, so a
-   reader — which keys on the bytes file — never finds a blob whose declared
-   type is missing. A crash between the two leaves an orphan sidecar, which
-   the reader skips: it names no blob, so it is residue, not corruption.
+   `rename`; the MIME sidecar is promoted FIRST and the bytes LAST, so a reader
+   — which keys on the bytes file — sees a blob only once its declared type is
+   already there. That order is a preference and not a guarantee: it holds
+   across a process crash, but there is no fsync anywhere here, so a power loss
+   can leave either half alone on disk.
+
+   **Residue.** The reader therefore skips, rather than fails on, anything
+   under `blobs/` it cannot account for: an entry that is not a directory (an
+   editor swapfile, a `.DS_Store`), an orphan sidecar naming no bytes file, and
+   a bytes file whose sidecar is missing or unreadable. Each of those loses at
+   most the one blob it belongs to; refusing the whole read would instead make
+   one torn write brick every later startup, with no recovery short of deleting
+   the file by hand. What is NOT residue is a file whose name does not spell a
+   CID: this module did not write it, so it is refused rather than skipped.
 
    **Caps.** Admission is `pds/lib/blob.mdk`'s `admitBlob` and nothing here.
    This module re-checks `checkBlobBytes` only to fail closed on a caller that
@@ -47,7 +57,7 @@
 
 import hex.{decode, encode}
 import string.{endsWith, stripSuffix, take}
-import fs.{mkdirAll}
+import fs.{isDir, mkdirAll}
 import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
 import lib.resource_limits.{checkBlobBytes}
 
@@ -149,8 +159,10 @@ readLeaves dir shard (leaf :: rest) acc =
   else match cidForName path leaf
     Err message => Err message
     Ok cid => match readFile "\{path}\{mimeSuffix}"
-      Err message =>
-        Err "blobfile: \{path}: MIME sidecar missing or unreadable: \{message}"
+      -- The bytes are here and the type they were stored under is not, so
+      -- there is nothing to serve this blob AS. It is skipped as residue; see
+      -- the module's "Residue" note for why that is not a failed read.
+      Err _ => readLeaves dir shard rest acc
       Ok mimeType => match readFileBytes path
         Err message => Err "blobfile: \{path}: unreadable blob file: \{message}"
         Ok bytes => readLeaves dir shard rest ((cid, mimeType, bytes) :: acc)
@@ -163,13 +175,18 @@ readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
   if shard == stagingName then
     readShards dir rest acc
-  else match listDir "\{blobDir dir}/\{shard}"
-    Err message =>
-      Err
-        "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
-    Ok leaves => match readLeaves dir shard leaves acc
-      Err message => Err message
-      Ok next => readShards dir rest next
+  else match isDir "\{blobDir dir}/\{shard}"
+    -- A shard is a directory; anything else under `blobs/` is residue this
+    -- module did not write, and `listDir` on it would report an unreadable
+    -- shard directory — a refused startup, under a wrong description.
+    Ok False => readShards dir rest acc
+    _ => match listDir "\{blobDir dir}/\{shard}"
+      Err message =>
+        Err
+          "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
+      Ok leaves => match readLeaves dir shard leaves acc
+        Err message => Err message
+        Ok next => readShards dir rest next
 
 {- | Read every persisted blob beneath `<dir>/blobs`, in unspecified order. A
    data directory that has never held a blob reads as no blobs, not as a
