@@ -343,7 +343,10 @@ their final path, promoted via same-filesystem `mv`.
 
 🚨 **[B-NO-BORROW-ISOLATED] In a worktree, never `cp` an emitter from another tree — just
 `make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
-and that is FINE; it cold-bootstraps for ~31s, and borrowing does not even save the rebuild
+and that is FINE; at current codebase size it cold-bootstraps in ~4 minutes (measured on this
+box, Debian 13, 12-core/32GB, 2026-09-05: `MEDAKA_BUILD_CACHE_DIR=` forced, no `./medaka`/
+`./medaka_emitter` present, `time sh test/build_native_medaka.sh` — 252.1s; the stale "~31s"
+figure is off by roughly an order of magnitude), and borrowing does not even save the rebuild
 (only the seed step). Reading another tree can trip the isolation classifier into a denial
 that blocks every later `make`. Rationale + the `[B-BORROW-EMITTER]` measurement: the
 `sprint-orchestrator` skill.

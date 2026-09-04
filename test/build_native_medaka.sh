@@ -41,10 +41,16 @@ CC="${CC:-clang}"
 STACK_SIZE="${STACK_SIZE:-0x20000000}"
 
 # Boehm collects when allocation since the last GC reaches ~heap size; the emitter
-# churns ~15 GB of transient garbage over a ~100 MB live set, so with the default
-# initial heap it collects ~110 times (~4 s of a ~6 s self-compile emit). A large
-# initial heap defers that to ~9 collections. These emitter runs are SERIAL (stage
-# A then B), so the extra RSS (~1 GB) doesn't contend. Measured: make medaka 16s→11s.
+# churns ~15 GB of transient garbage over a ~100 MB live set, so a small initial
+# heap forces far more collections during self-compile emit than a large one
+# does. A large initial heap defers most of that GC work. These emitter runs are
+# SERIAL (stage A then B), so the extra RSS (~1 GB) doesn't contend. Measured on
+# this box (Debian 13, 12-core/32GB) on 2026-09-05, `make medaka` on a forced
+# cache-miss full rebuild (FORCE_EMITTER_REBUILD=1, MEDAKA_BUILD_CACHE_DIR=):
+# GC_INITIAL_HEAP_SIZE unset (Boehm default) 288.4s → 1 GiB (this default) 268.3s
+# — about 7% faster, ~20s saved, at current codebase scale; re-derive with
+# `time sh test/build_native_medaka.sh` under each setting rather than trusting
+# this figure indefinitely.
 # (Not applied to the parallel oracle build, where 10× the RSS causes memory
 # pressure that erases the win — see test/build_oracles.sh.) User env value wins.
 export GC_INITIAL_HEAP_SIZE="${GC_INITIAL_HEAP_SIZE:-1073741824}"
@@ -507,8 +513,24 @@ else
   rm -f "$EMIT_NEW"
   # Build the emitter — the compiler's WORKHORSE binary — at -O2. It is reused for
   # every emit downstream (oracle build's 53 entries, every `medaka build`, make
-  # medaka's own stage B), so clang -O2 (~+3s once vs -O0) buys ~30% faster emit
-  # each time (self-compile 5.4s→3.7s; oracle build 55s→48s). EMITTER_OPT overrides.
+  # medaka's own stage B), so an -O2 emitter emits noticeably faster than an -O0
+  # one, at the one-time cost of a slower link here. Measured on this box (Debian
+  # 13, 12-core/32GB) on 2026-09-05, with the two emitter binaries built from
+  # identical source and run directly (`time ./medaka_emitter <runtime> <core>
+  # <target> <compiler> <stdlib> > out.ll`):
+  #   linking THIS binary: -O0 22.5s → -O2 74.3s (the "+3s once" framing no
+  #     longer holds at current codebase size — it's now a real ~52s cost, paid
+  #     once per emitter rebuild).
+  #   emitter re-emitting its OWN driver graph: -O0 23.1s → -O2 15.6s (~32%
+  #     faster).
+  #   emitting compiler/driver/medaka_cli.mdk: -O0 117.0s → -O2 85.9s (~27%
+  #     faster).
+  #   oracle build (2-entry subset, `diff_compiler_parse*`, FORCE=1 JOBS=1 sh
+  #     test/build_oracles.sh --for 'diff_compiler_parse*'): -O0 17.3s → -O2
+  #     16.5s (~5% faster — the per-entry clang/link overhead of two small
+  #     oracles dilutes the emitter's own emit-speed win; not re-measured
+  #     against the full 53-entry set, which is too slow to run locally per
+  #     [L-SHARED-BOX]). EMITTER_OPT overrides.
   if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
     rm -f "$EMIT_NEW"
     echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
@@ -546,13 +568,16 @@ else
   trim_unit "$CLI_LL"
   [ -s "$CLI_LL" ] || { echo "FAIL: empty IR for medaka_cli.mdk"; cat "$WORK/emit.err"; exit 1; }
 
-  # The medaka CLI is built at -O0 by DEFAULT: make medaka is the hot compiler-dev
-  # loop and does NOT reuse the CLI (the diff gates run compiled test/bin oracles,
-  # not the CLI interpreter), so -O2 here would be a straight +~4s clang cost on the
-  # most frequent command. But `medaka run`/`test`/`check` DO run the CLI's tree-walk
-  # interpreter, which is ~2× faster at -O2 (medaka test 1.3s→0.65s). So for
-  # interpreter/doctest-heavy workflows, -O2 is the default (medaka test 1.3s→0.65s);
-  # for build-heavy loops where the +~4s clang cost dominates, opt out with CLI_OPT=-O0.
+  # `medaka run`/`test`/`check` run the CLI's tree-walk interpreter, which is
+  # noticeably faster at -O2, so -O2 is the default here (matching the emitter),
+  # even though clang linking the CLI itself at -O2 is a real one-time cost, not
+  # the old "+~4s" estimate: measured on this box (Debian 13, 12-core/32GB) on
+  # 2026-09-05, `clang` linking the SAME emitted medaka_cli IR: CLI_OPT=-O0
+  # 6.8s → CLI_OPT=-O2 94.6s. Interpreter speed itself, measured the same day
+  # with `MEDAKA_STRICT=1 time ./medaka test stdlib/list.mdk`: CLI_OPT=-O0
+  # 4.78s → CLI_OPT=-O2 2.44s — about 2x faster, at current stdlib/interpreter
+  # size. For build-heavy loops where the CLI's own ~88s extra link time
+  # dominates instead, opt out with CLI_OPT=-O0.
   # (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
   CLI_OPT="${CLI_OPT:--O2}"
   echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
