@@ -1,5 +1,7 @@
 # Findings — S-sqltoken-extract (sqlite: seek instead of scan, #2541)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: a mechanical, zero-behavior-change extraction of `sqlparse.mdk`'s five
 lexeme-level parsers into a new AST-free `sqlite/lib/sqltoken.mdk`, inserted
 mid-sprint to break a module cycle `S-plan` discovered. Landed

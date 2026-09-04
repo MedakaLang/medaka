@@ -1,5 +1,7 @@
 # P0-18 standalone-fn-shadows-interface-method — dispatch miscompile
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 **Status (2026-07-09): RUN/CHECK path FIXED** (`953d9ea1`, on local main) — `size (Box 3)`
 runs to **3**, `size 3` to **4**; agreement gate **14/0**, run_gates 76/0, construct-coverage
 139/0, fixpoint C3a/C3b YES, no golden churn. **⚠️ RESIDUAL — the `build` (native emit) path

@@ -38,7 +38,7 @@ Every row below is my own run against the shipped `./medaka` with
 
 ```medaka
 mkVal _ = base
-cell = mkVal ()      -- only eager var is `mkVal`, a FUNCTION => NO EDGE
+cell = mkVal ()  -- only eager var is `mkVal`, a FUNCTION => NO EDGE
 base = 42
 main = println cell
 ```
@@ -56,7 +56,7 @@ The issue lists this as an unproven "adjacent lead". **It reproduces, silently:*
 
 ```medaka
 src = "hello"
-cell = src.[lo..3]   -- `lo` is read DIRECTLY. eagerVars descends `src` ONLY.
+cell = src.[lo..3]  -- `lo` is read DIRECTLY. eagerVars descends `src` ONLY.
 lo = 1
 main = println cell
 ```
@@ -73,7 +73,7 @@ The `hi` position fails the same way (`src.[1..hi]`, `hi = 3`): eval `el`, nativ
 `lo`/`hi` (`emit_support.mdk:60-63`); `CStringSlice` does not (`:59`). Same program shape:
 
 ```medaka
-srcl = [10,20,30,40]
+srcl = [10, 20, 30, 40]
 celll = srcl.[lo2..3]
 lo2 = 1
 main = println celll
@@ -215,7 +215,7 @@ because the fix is only legible against it.
 
 **The `topoValVisit` this section was written about — in BOTH backends — was all three at once:**
 
-```medaka
+```medaka-nocheck: verbatim excerpt of the old topoValVisit from compiler source; bindName, intersectStr and topoValVisitDeps live in the modules it was quoted out of
 topoValVisit all names b done acc visiting
   | contains (bindName b) done     = (done, acc)   -- (1) List as a SET
   | contains (bindName b) visiting = (done, acc)   -- (1) List as a SET
@@ -464,7 +464,7 @@ back-edge-vs-unorderable distinction must be got right.
 **This is the proposal the next person will reach for, and it looks right until you try to break
 it.** Concretely:
 
-```medaka
+```medaka-nocheck: sketch of the rejected closure/go proposal, in the aligned-guard layout the argument is about; calleesOf and contains are unbound here
 closure b = go (bindFreeVars b) []          -- `seen : List String`
 go [] seen = seen
 go (x::rest) seen | contains x seen = go rest seen        -- List as a SET

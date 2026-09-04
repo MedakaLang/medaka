@@ -1,5 +1,7 @@
 # Findings — S-index-seek (sqlite: seek instead of scan, #2541)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: given a table and an equality on a column, find the serving index and
 fetch matching rows. Landed `e6f4f15f064e9ce321d7f41efd2d6c36a9bd7d11`.
 

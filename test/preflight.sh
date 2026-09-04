@@ -1211,6 +1211,22 @@ while IFS= read -r f; do
     docs/stdlib/*)                 add 'diff_compiler_doc_stdlib_reference'
                                    add 'diff_compiler_stdlib_conventions'
                                    add 'diff_compiler_guide_render' ;;
+    # S-fence-corpus (#2080): check_syntax_examples' corpus is every tracked
+    # *.md carrying a Medaka fence, minus four path prefixes (see the selection
+    # block in test/check_syntax_examples.sh) — 23 documents, not the 13 the
+    # `docs/guide/*.md` arm above covers. preflight is the THIRD consumer of
+    # that corpus definition ([W-THIRD-CONSUMER]), and it had no arm for ANY of
+    # the other ten, `docs/spec/SYNTAX.md` — the document the gate was written
+    # for — included: each was UNMAPPED, which for a path CI's classifier reads
+    # as prose means the gate simply never ran on the PR that broke it.
+    #
+    # Stated as prefixes rather than as the gate's own grep because a `case`
+    # pattern cannot express the exclusions, and because running one cheap gate
+    # on a fence-less doc under these prefixes costs less than the derivation.
+    # The complement is real but bounded: a fence-bearing doc landing OUTSIDE
+    # compiler/ and docs/ is covered only in the merge tier until an arm names
+    # it. Both arms above run first, so guide and stdlib keep their richer sets.
+    compiler/*.md|docs/*.md)       add 'check_syntax_examples' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.

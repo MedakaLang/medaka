@@ -1,5 +1,7 @@
 # Findings: patterns-control-flow
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Binary: /Users/val/medaka/.claude/worktrees/virtual-fluttering-meteor/medaka ($WT/medaka).
 Probes: scratchpad/probes/patcf/. All findings reproduced twice.
 

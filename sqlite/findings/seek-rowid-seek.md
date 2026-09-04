@@ -1,5 +1,7 @@
 # Findings — S-rowid-seek (sqlite: seek instead of scan, #2541)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: descend the table b-tree to one rowid instead of scanning. Landed
 `f728135d9d52d76ae7ddc193052c78e02ad9494f`.
 

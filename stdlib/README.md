@@ -1,5 +1,7 @@
 # Medaka stdlib
 
+**Status:** LIVE. Conventions for writing stdlib modules and their doc comments.
+
 <!-- Verified against native compiler, 2026-07-16 -->
 
 ## Writing documentation

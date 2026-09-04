@@ -1,5 +1,7 @@
 # SQLite dogfood findings — `AS` aliases (column + table)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: thread `AS` aliases (column-output aliases and table aliases in FROM/JOIN)
 through `lib.sqlparse`/`lib.sqlstmt`/`lib.select` — parser, AST, renderer, executor.
 

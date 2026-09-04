@@ -1,5 +1,7 @@
 # SQLite dogfood — findings: in-language `test`/`prop` suite
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: add real `test "…"` / `prop "…"` suites for the sqlite library and wire them
 into CI. New files: `sqlite/test/{dbfix,expr_test,query_test,roundtrip_test}.mdk`
 + `sqlite/test/inlang_test_oracle.sh` (auto-enrolled by the `sqlite` shard glob

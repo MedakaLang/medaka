@@ -1,5 +1,7 @@
 # Findings — SQL expression parser (`sqlite/lib/sqlparse.mdk`)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: build `parseSqlExpr : String -> Result String SqlExpr` on the `parsec` combinator
 library, via a cross-project dependency. Stage 1 of the SQL front end.
 

@@ -1,5 +1,7 @@
 # compiler/AGENTS.md — how not to make the compiler slow
 
+**Status:** LIVE. Required reading before editing compiler/; routed to from the root AGENTS.md.
+
 You are editing the Medaka compiler. **This file exists because the people who introduce
 performance bugs here are not the people hunting them.** Almost every quadratic in this
 tree was added by an agent doing perfectly reasonable *feature* work who never thought
@@ -22,7 +24,7 @@ Not twelve of one kind and one exotic — **thirteen of the same kind.**
 
 If you are about to write any of these, stop:
 
-```medaka
+```medaka-nocheck: the anti-pattern census: four bare expressions, deliberately without the bindings or module context that would make them a file
 contains x xs              -- inside anything that runs per-element
 lookupAssoc k pairs        -- inside anything that runs per-element
 xs ++ [x]                  -- inside a fold. This is O(n²) BY ITSELF: `++` is O(left).
@@ -33,7 +35,7 @@ filter (\x -> not (contains x seen)) xs
 `omEmpty`, `omInsert`, `omHasKey`, `omLookup`, `omDelete`, `omFromNames`, `omKeys`.
 Building a membership set is one line:
 
-```medaka
+```medaka-nocheck: one let line showing the omFromNames call shape; a file-scope let is not a declaration
 let seen = omFromNames names omEmpty      -- then omHasKey n seen, O(log n)
 ```
 

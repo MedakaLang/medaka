@@ -1,5 +1,7 @@
 # Findings: bindings-mutability
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Probes: /private/tmp/claude-501/-Users-val-medaka/07db78cb-7807-4285-bb67-639494a218d2/scratchpad/probes/bindings/
 Binary: /Users/val/medaka/.claude/worktrees/virtual-fluttering-meteor/medaka ($WT/medaka). All findings reproduced twice.
 
