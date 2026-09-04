@@ -20,8 +20,8 @@
    successor `Store` at all — `uploadBlob` lives there for exactly that
    reason, not because it is a repository write.
 
-   Every registration carries its own `AuthPolicy`: the four writes and
-   `getSession` are `AuthenticatedRoute`, the six reads are `PublicRoute`,
+   Every registration carries its own `AuthPolicy`: the five writes and
+   `getSession` are `AuthenticatedRoute`, the eight reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`, `createSession` is
    `PublicRoute` (it is the login that issues the tokens the other session
    routes require), and the two well-knowns are public by construction
@@ -766,7 +766,7 @@ recordHandled _ store (ProcedureRawCall nsid _ media bytes)
 recordHandled _ _ _ = None
 
 {- | The record-write handler for one configured account. Any routed call that
-   is not one of the four record-write procedures is answered 501 with the
+   is not one of the five record-write procedures is answered 501 with the
    input `Store` intact. -}
 export
 recordHandler : Account -> Handler
@@ -1537,7 +1537,7 @@ readHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: four record writes, four session routes, six
+{- | The complete handler: five record writes, four session routes, eight
    reads, two well-knowns. The halves are disjoint by construction — each owns
    a distinct set of NSIDs, and the read half additionally owns the two
    well-knowns — so the order below is a formality rather than a
@@ -1553,7 +1553,7 @@ pdsHandler account context outcome store call =
         Some response => (store, response)
         None => (store, unhandledRoute call)
 
--- | The registry of all fourteen XRPC endpoints. The two well-known paths are
+-- | The registry of all seventeen XRPC endpoints. The two well-known paths are
 -- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -1563,7 +1563,7 @@ pdsRegistry = do
   reads <- readEndpoints
   makeRegistry (concatEndpoints writes (concatEndpoints sessions reads))
 
-{- | The six read queries, every one of them public.
+{- | The eight read queries, every one of them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,
    `listRecords` and `describeRepo`, and the `com.atproto.sync.*` pair another

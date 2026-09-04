@@ -479,11 +479,15 @@ this project. A record write against an unconfigured store is refused with
 
 ### Consequences shipped, deliberately
 
-- **No authentication.** Nothing in the pure core authenticates a request:
-  there is no session, no token check, no signature over the request. Any caller
-  that can reach `handleBytes` can write to the configured repository. That is
-  Phase 4's stated pure-half scope — auth belongs with the Phase 3 socket shell
-  — but it means this core is not safe to expose on a network as it stands.
+- **Auth is enforced in the pure core, not the shell.** `handleBytes` resolves
+  the caller's credential and refuses an `AuthenticatedRoute`/`RefreshRoute`
+  call via `refusalFor` before the handler ever runs — there is no unguarded
+  path from `handleBytes` to a repository write. What is NOT enforced is
+  everything downstream of an authenticated caller: no per-client rate
+  limiting (#2612), no bound on read-path cost relative to repo size (#2478),
+  and framing itself is O(n²) under one trickling client (#2571) — those, not
+  a missing auth check, are what keep this core unsafe to expose on a network
+  as it stands.
 - **No lexicon validation.** The record body is admitted as atproto data, not
   validated against a lexicon schema. `validate: true` is therefore REFUSED
   with an explicit error rather than accepted and quietly ignored; `validate:
