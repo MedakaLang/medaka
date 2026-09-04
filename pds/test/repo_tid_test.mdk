@@ -15,10 +15,6 @@ import lib.tid.{
   tidToString,
 }
 
-isErr : Result String a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
-
 errContains : String -> Result String a -> Bool
 errContains witness (Err message) = contains witness message
 errContains _ (Ok _) = False
