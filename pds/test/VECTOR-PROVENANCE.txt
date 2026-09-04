@@ -484,6 +484,17 @@ consumer:      P1-D-REPO (#2136 TID and signed version-3 repository commits)
 notes:         Five fixed TIDs plus empty init and create/update/create/delete commits pin record/MST/unsigned/signed/commit bytes and CIDs; the first-create and final CARs pin the generator's deterministic full-repo block order and bytes. The official-pds secondary pin supplies an independent installed @atproto/repo@0.10.10 plus @atproto/crypto@0.5.4 image-library reproduction of the @atproto/repo@0.10.12 npm answer key. No live PDS service or account was used.
 
 [vector]
+file:          pds/test/vectors/repo_batch_reference_corpus.txt
+local-sha256:  bbd9d2d48e6a405cd294c55fd87ed57666d51455890f6af3171de44542efcf4b
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_repo_corpus.sh, second output file. The same pinned npm graph and the same key/DID/TID fixtures as repo_reference_corpus.txt drive MST add/add/update/add against ONE tree and then ONE signCommit, followed by getFullRepo and readCarWithRoot; re-running must reproduce this file byte-for-byte.
+retrieved:     2026-09-04
+consumer:      P1-E-BATCH (#2605 applyWrites batch and blobs)
+notes:         The answer key for com.atproto.repo.applyWrites. It is a SEPARATE file rather than rows appended to repo_reference_corpus.txt because pds/test/repo_vectors_main.mdk and pds/test/record_handlers_main.mdk both match that corpus by exact positional row shape. The batch is generated as four tree edits and one signature, which is the property under test: a batch of N operations must land as one signed commit at one revision, so an answer key built by replaying N single-write commits would grade the wrong thing. No live PDS service or account was used.
+
+[vector]
 file:          pds/test/vectors/interop_aturi_valid.txt
 local-sha256:  ec268ffc5f5c006c87dfa46fe2be6835b65ab941b24b4a9b0d28d249a7459c80
 kind:          reference-impl

@@ -55,6 +55,17 @@ export data Repo = Repo String SecretKey PublicKey Mst BlockStore RepoCommit
 -- | A successful mutation returns both its new state and new commit metadata.
 export data RepoMutation = RepoMutation Repo RepoCommit
 
+{- | One operation of a batch: create a previously absent record, replace an
+   existing one, or remove one. The three arms are the three single-record
+   transitions, so a batch cannot express an edit the record endpoints cannot.
+
+   Constructors are public because `pds/lib/handlers.mdk` builds a batch from
+   a request body and has to name the arm each element asked for. -}
+public export data RepoWrite =
+  | RepoWriteCreate (Array Int) DagCbor
+  | RepoWriteUpdate (Array Int) DagCbor
+  | RepoWriteDelete (Array Int)
+
 validBytes : Array Int -> Int -> Bool
 validBytes bytes i =
   if i >= arrayLength bytes then
@@ -257,7 +268,7 @@ signedValue did dataCid rev signature = DcMap [
 
 encodeCommit : String -> DagCbor -> Result String (Array Int)
 encodeCommit label value = match dagCborEncode value
-  Err message => Err "repo: {label} commit encoding failed: {message}"
+  Err message => Err "repo: \{label} commit encoding failed: \{message}"
   Ok bytes => Ok bytes
 
 buildCommit : String ->
@@ -269,17 +280,17 @@ buildCommit : String ->
 buildCommit did secret rev tree store = do
   unsigned <- encodeCommit "unsigned" (unsignedValue did (mstRootCid tree) rev)
   signature <- match signDigest secret (sha256 unsigned)
-    Err message => Err "repo: signing failed: {message}"
+    Err message => Err "repo: signing failed: \{message}"
     Ok value => Ok value
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
   let commitCid = cidForDagCbor signed
   withTree <- match blockStoreAddMany (mstNodeBlocks tree) store
-    Err message => Err "repo: storing MST failed: {message}"
+    Err message => Err "repo: storing MST failed: \{message}"
     Ok value => Ok value
   complete <- match blockStorePut commitCid signed withTree
-    Err message => Err "repo: storing commit failed: {message}"
+    Err message => Err "repo: storing commit failed: \{message}"
     Ok value => Ok value
   Ok (
     RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
@@ -298,7 +309,7 @@ repoInit did secret rev = do
 export
 repoInitFromKeyBytes : String -> Array Int -> Tid -> Result String Repo
 repoInitFromKeyBytes did keyBytes rev = match secretKeyFromBytes keyBytes
-  Err message => Err "repo: bad signing key: {message}"
+  Err message => Err "repo: bad signing key: \{message}"
   Ok secret => repoInit did secret rev
 
 rehydrate : String ->
@@ -424,6 +435,21 @@ finishMutation did secret publicKey rev tree store = do
   let repo = Repo did secret publicKey tree complete commit
   Ok (RepoMutation repo commit)
 
+{- | Encode a record and admit its block, yielding the CID the MST will point
+   at. The record's SHAPE is not checked here: `validateRecord` runs at each
+   call site, before the revision check, so its position in the error order is
+   the caller's to keep. -}
+stageRecord : DagCbor -> BlockStore -> Result String (Cid, BlockStore)
+stageRecord record store = do
+  bytes <- match dagCborEncode record
+    Err message => Err "repo: record encoding failed: \{message}"
+    Ok value => Ok value
+  let recordCid = cidForDagCbor bytes
+  withRecord <- match blockStorePut recordCid bytes store
+    Err message => Err "repo: storing record failed: \{message}"
+    Ok value => Ok value
+  Ok (recordCid, withRecord)
+
 -- | Create a previously absent record.
 export
 repoCreate : Array Int -> DagCbor -> Tid -> Repo -> Result String RepoMutation
@@ -431,15 +457,9 @@ repoCreate path record rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- validateRecord record
   () <- ensureNewer rev prior
-  bytes <- match dagCborEncode record
-    Err message => Err "repo: record encoding failed: {message}"
-    Ok value => Ok value
-  let recordCid = cidForDagCbor bytes
-  withRecord <- match blockStorePut recordCid bytes store
-    Err message => Err "repo: storing record failed: {message}"
-    Ok value => Ok value
+  (recordCid, withRecord) <- stageRecord record store
   nextTree <- match mstInsert path recordCid tree
-    Err message => Err "repo: duplicate create: {message}"
+    Err message => Err "repo: duplicate create: \{message}"
     Ok value => Ok value
   finishMutation did secret publicKey rev nextTree withRecord
 
@@ -450,15 +470,9 @@ repoUpdate path record rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- validateRecord record
   () <- ensureNewer rev prior
-  bytes <- match dagCborEncode record
-    Err message => Err "repo: record encoding failed: {message}"
-    Ok value => Ok value
-  let recordCid = cidForDagCbor bytes
-  withRecord <- match blockStorePut recordCid bytes store
-    Err message => Err "repo: storing record failed: {message}"
-    Ok value => Ok value
+  (recordCid, withRecord) <- stageRecord record store
   nextTree <- match mstReplace path recordCid tree
-    Err message => Err "repo: missing update: {message}"
+    Err message => Err "repo: missing update: \{message}"
     Ok value => Ok value
   finishMutation did secret publicKey rev nextTree withRecord
 
@@ -469,9 +483,68 @@ repoDelete path rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- ensureNewer rev prior
   nextTree <- match mstDelete path tree
-    Err message => Err "repo: missing delete: {message}"
+    Err message => Err "repo: missing delete: \{message}"
     Ok value => Ok value
   finishMutation did secret publicKey rev nextTree store
+
+applyWrite : RepoWrite -> Mst -> BlockStore -> Result String (Mst, BlockStore)
+applyWrite (RepoWriteCreate path record) tree store = do
+  () <- validatePath path
+  () <- validateRecord record
+  (recordCid, withRecord) <- stageRecord record store
+  nextTree <- match mstInsert path recordCid tree
+    Err message => Err "repo: duplicate create: \{message}"
+    Ok value => Ok value
+  Ok (nextTree, withRecord)
+applyWrite (RepoWriteUpdate path record) tree store = do
+  () <- validatePath path
+  () <- validateRecord record
+  (recordCid, withRecord) <- stageRecord record store
+  nextTree <- match mstReplace path recordCid tree
+    Err message => Err "repo: missing update: \{message}"
+    Ok value => Ok value
+  Ok (nextTree, withRecord)
+applyWrite (RepoWriteDelete path) tree store = do
+  () <- validatePath path
+  nextTree <- match mstDelete path tree
+    Err message => Err "repo: missing delete: \{message}"
+    Ok value => Ok value
+  Ok (nextTree, store)
+
+applyWriteList : List RepoWrite ->
+  Mst ->
+  BlockStore ->
+  Result String (Mst, BlockStore)
+applyWriteList [] tree store = Ok (tree, store)
+applyWriteList (write :: rest) tree store = do
+  (nextTree, nextStore) <- applyWrite write tree store
+  applyWriteList rest nextTree nextStore
+
+{- | Apply a whole batch under exactly ONE signed commit.
+
+   `repoCreate`/`repoUpdate`/`repoDelete` each finish with their own
+   `finishMutation`, so replaying N of them mints N commits and advances the
+   revision N times. This threads every edit through a single `Mst` and a
+   single `BlockStore` and signs once at the end, so a batch of any size costs
+   the repository exactly one revision.
+
+   The batch is ALL-OR-NOTHING. The first failing operation returns its own
+   error before anything is signed, and the intermediate tree and blocks are
+   discarded with it, so the caller still holds the repository it passed in —
+   there is no partially applied state to observe or to roll back.
+
+   An EMPTY batch is a genuine no-op, matching `deleteRecord`'s absent-record
+   arm in `pds/lib/handlers.mdk`: the repository is returned unchanged with its
+   CURRENT commit. Signing a commit over an unchanged MST would advance the
+   revision and mint a signature attesting to a change that never happened,
+   which a relay reading the log could not distinguish from a real one. -}
+export
+repoApplyWrites : List RepoWrite -> Tid -> Repo -> Result String RepoMutation
+repoApplyWrites [] _ repo = Ok (RepoMutation repo (repoLatestCommit repo))
+repoApplyWrites writes rev (Repo did secret publicKey tree store prior) = do
+  () <- ensureNewer rev prior
+  (nextTree, nextStore) <- applyWriteList writes tree store
+  finishMutation did secret publicKey rev nextTree nextStore
 
 -- | Extract the new immutable state from a successful mutation.
 export
@@ -493,7 +566,7 @@ repoLookup path (Repo _ _ _ tree store _) = do
     Some cid => match blockStoreGet cid store
       None => Err "repo: missing graph record block"
       Some bytes => match dagCborDecode bytes
-        Err message => Err "repo: invalid stored record: {message}"
+        Err message => Err "repo: invalid stored record: \{message}"
         Ok value => Ok (Some value)
 
 -- | List canonical path order with decoded current records.
@@ -509,7 +582,7 @@ listRecords [] _ acc = Ok (reverse acc)
 listRecords ((path, cid) :: rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
   Some bytes => match dagCborDecode bytes
-    Err message => Err "repo: invalid stored record: {message}"
+    Err message => Err "repo: invalid stored record: \{message}"
     Ok value => listRecords rest store ((path, cid, value) :: acc)
 
 cidMember : Cid -> List Cid -> Bool
@@ -537,7 +610,7 @@ entryLinks _ _ _ = Err "repo: tampered graph node entry"
 
 nodeLinks : Array Int -> Result String (List Cid, List Cid)
 nodeLinks bytes = match dagCborDecode bytes
-  Err message => Err "repo: tampered graph node: {message}"
+  Err message => Err "repo: tampered graph node: \{message}"
   Ok (DcMap [("e", DcArray entries), ("l", left)]) =>
     let initial = match left
       DcNull => Ok []
@@ -610,7 +683,7 @@ repoExportGraph commitCid commitBytes dataRoot store =
         || not (cidEqual commitCid (cidForDagCbor commitBytes)) then
         Err "repo: tampered graph commit block"
       else match decodeSignedCommit commitBytes
-        Err message => Err "repo: invalid graph commit: {message}"
+        Err message => Err "repo: invalid graph commit: \{message}"
         Ok (_, commitData, _, _) =>
           if not (cidEqual commitData dataRoot) then
             Err "repo: commit data mismatch"
@@ -624,7 +697,7 @@ repoExportGraph commitCid commitBytes dataRoot store =
                   let blocks =
                     (commitCid, arrayCopy commitBytes) :: nodes ++ records
                   match carEncode [commitCid] blocks
-                    Err message => Err "repo: CAR export failed: {message}"
+                    Err message => Err "repo: CAR export failed: \{message}"
                     Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
@@ -645,7 +718,7 @@ hasField name ((key, _) :: rest) = name == key || hasField name rest
 
 decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
 decodeSignedCommit bytes = match dagCborDecode bytes
-  Err message => Err "repo: invalid commit CBOR: {message}"
+  Err message => Err "repo: invalid commit CBOR: \{message}"
   Ok (DcMap fields) =>
     if not (hasField "prev" fields) then
       Err "repo: required prev field is missing"
@@ -656,10 +729,10 @@ decodeSignedCommit bytes = match dagCborDecode bytes
         else do
           () <- validateDid did
           rev <- match tidParse revText
-            Err message => Err "repo: invalid commit TID: {message}"
+            Err message => Err "repo: invalid commit TID: \{message}"
             Ok value => Ok value
           signature <- match signatureFromCompact compact
-            Err message => Err "repo: invalid compact signature: {message}"
+            Err message => Err "repo: invalid compact signature: \{message}"
             Ok value => Ok value
           Ok (did, dataCid, rev, signature)
       _ =>

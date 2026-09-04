@@ -487,9 +487,10 @@ samePolicy _ _ = False
    the diff. A route registered later shows up in exactly one of these three
    lists, so neither an unclassified new write nor a wrongly closed read can
    land without moving one of them. -}
-test "exactly the three record writes and getSession are access-gated" = expectEqual
+test "exactly the four record writes and getSession are access-gated" = expectEqual
   (nsidsWith AuthenticatedRoute)
   [
+    "com.atproto.repo.applyWrites",
     "com.atproto.repo.createRecord",
     "com.atproto.repo.deleteRecord",
     "com.atproto.repo.putRecord",

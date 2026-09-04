@@ -1,7 +1,9 @@
 {- | Every pure atproto endpoint this PDS serves.
 
-   **Writes** (`com.atproto.repo.{createRecord, putRecord, deleteRecord}`) are
-   the three that transition the repository. **Reads** are the six that cannot:
+   **Writes** (`com.atproto.repo.{createRecord, putRecord, deleteRecord,
+   applyWrites}`) are the four that transition the repository — the last of
+   them a batch of the other three under one signed commit. **Reads** are the
+   six that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
    `com.atproto.sync.{getRepo, getLatestCommit}`, and
    `com.atproto.identity.resolveHandle`. **Sessions** are the four
@@ -16,7 +18,7 @@
    `readHandled` returns a bare `Response`, and only `recordHandled` returns a
    successor `Store` at all.
 
-   Every registration carries its own `AuthPolicy`: the three writes and
+   Every registration carries its own `AuthPolicy`: the four writes and
    `getSession` are `AuthenticatedRoute`, the six reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`, `createSession` is
    `PublicRoute` (it is the login that issues the tokens the other session
@@ -76,6 +78,8 @@ import lib.repo.{
   repoMutationCommit,
   repoMutationState,
   repoUpdate,
+  RepoWrite(..),
+  repoApplyWrites,
   validateCollection,
 }
 import lib.credential.{CredentialRecord, credentialVerify}
@@ -128,6 +132,15 @@ putRecordNsid = "com.atproto.repo.putRecord"
 
 deleteRecordNsid : String
 deleteRecordNsid = "com.atproto.repo.deleteRecord"
+
+applyWritesNsid : String
+applyWritesNsid = "com.atproto.repo.applyWrites"
+
+{- | The lexicon spells each batch element's and each result's kind as a
+   fragment reference into `applyWrites`' own lexicon, so both the accepted
+   `$type` values and the emitted ones come from one place. -}
+applyWritesType : String -> String
+applyWritesType fragment = "\{applyWritesNsid}#\{fragment}"
 
 getRecordNsid : String
 getRecordNsid = "com.atproto.repo.getRecord"
@@ -306,34 +319,45 @@ requireHostedRepo account body = do
   target <- requiredString "repo" body
   requireHostedIdentifier "repo" account target
 
-requireRecord : Json -> Result Response DagCbor
-requireRecord body = match get "record" body
-  None => Err (invalidRequest "Request field 'record' is required")
+{- | A record-valued request field. The single-record lexicons spell it
+   `record`; `applyWrites` spells the same thing `value` inside each batch
+   element, so the field name is a parameter and the diagnostic names whichever
+   one the caller actually sent. -}
+requireRecordField : String -> Json -> Result Response DagCbor
+requireRecordField name body = match get name body
+  None => Err (invalidRequest "Request field '\{name}' is required")
   Some value => match lexJsonToDagCbor value
     Err message =>
       Err
         (invalidRequest
-          "Request field 'record' is not representable as atproto data: \{message}")
+          "Request field '\{name}' is not representable as atproto data: \{message}")
     Ok record => Ok record
 
-encodeRecord : DagCbor -> Result Response (Array Int)
-encodeRecord record = match dagCborEncode record
+requireRecord : Json -> Result Response DagCbor
+requireRecord = requireRecordField "record"
+
+encodeRecordField : String -> DagCbor -> Result Response (Array Int)
+encodeRecordField name record = match dagCborEncode record
   Err message =>
-    Err (invalidRequest "Request field 'record' cannot be encoded: \{message}")
+    Err (invalidRequest "Request field '\{name}' cannot be encoded: \{message}")
   Ok bytes => Ok bytes
+
+encodeRecord : DagCbor -> Result Response (Array Int)
+encodeRecord = encodeRecordField "record"
 
 recordPath : String -> String -> Array Int
 recordPath collection rkey = toUtf8 "\{collection}/\{rkey}"
 
 -- ── revision derivation ─────────────────────────────────────────────────────
 
+advanceTid : Tid -> Result Response Tid
+advanceTid prior = match tidNext prior (tidMicros prior) (tidClockId prior)
+  Err message =>
+    Err (invalidRequest "Repository revision cannot advance: \{message}")
+  Ok rev => Ok rev
+
 nextRevision : Repo -> Result Response Tid
-nextRevision repo =
-  let prior = repoCommitTid (repoLatestCommit repo)
-  match tidNext prior (tidMicros prior) (tidClockId prior)
-    Err message =>
-      Err (invalidRequest "Repository revision cannot advance: \{message}")
-    Ok rev => Ok rev
+nextRevision repo = advanceTid (repoCommitTid (repoLatestCommit repo))
 
 -- ── compare-and-swap ────────────────────────────────────────────────────────
 
@@ -426,7 +450,7 @@ admitMutation (Err message) =
   Err (invalidRequest "Repository write rejected: \{message}")
 admitMutation (Ok mutation) = Ok mutation
 
--- ── the three endpoints ─────────────────────────────────────────────────────
+-- ── the write endpoints ─────────────────────────────────────────────────────
 
 applyCreateRecord : Account -> Store -> Json -> Result Response (Repo, Json)
 applyCreateRecord account store body = do
@@ -520,12 +544,142 @@ applyDeleteRecord account store body = do
         deleteOutput (repoMutationCommit mutation),
       )
 
+{- | The record key for the Nth `rkey`-less create in one batch.
+
+   `createRecord` uses the commit revision's own TID spelling when the caller
+   names no `rkey`, which is unique because that call mints exactly one record.
+   A batch can carry several such creates under ONE revision, so reusing that
+   spelling would make the second one collide with the first. Each successive
+   rkey-less create therefore advances the same TID sequence the revision came
+   from — deterministic, ordered, and identical to `createRecord`'s answer for
+   a batch that has only one. -}
+autoRkey : Tid -> Int -> Result Response String
+autoRkey rev n =
+  if n <= 0 then
+    Ok (tidToString rev)
+  else do
+    next <- advanceTid rev
+    autoRkey next (n - 1)
+
+batchResult : String -> String -> String -> String -> Cid -> Json
+batchResult fragment did collection rkey recordCid = jObject [
+  ("$type", JString (applyWritesType fragment)),
+  ("uri", JString "at://\{did}/\{collection}/\{rkey}"),
+  ("cid", JString (cidToString recordCid)),
+  ("validationStatus", JString "unknown"),
+]
+
+requireWrites : Json -> Result Response (Array Json)
+requireWrites body = match get "writes" body
+  None => Err (invalidRequest "Request field 'writes' is required")
+  Some (JArray values) => Ok values
+  Some _ => Err (invalidRequest "Request field 'writes' must be an array")
+
+{- | One batch element, as the operation to apply, the result row it will
+   report, and the successor rkey-less-create counter. -}
+batchElement : String ->
+  Tid ->
+  Int ->
+  Json ->
+  Result Response (RepoWrite, Json, Int)
+batchElement did rev auto element = do
+  () <- match element
+    JObject _ => Ok ()
+    _ => Err (invalidRequest "Every 'writes' element must be a JSON object")
+  kind <- requiredString "$type" element
+  collection <- requiredString "collection" element
+  if kind == applyWritesType "create" then do
+    record <- requireRecordField "value" element
+    proposed <- optionalString "rkey" element
+    (rkey, nextAuto) <- match proposed
+      Some value => Ok (value, auto)
+      None => do
+        derived <- autoRkey rev auto
+        Ok (derived, auto + 1)
+    bytes <- encodeRecordField "value" record
+    Ok (
+      RepoWriteCreate (recordPath collection rkey) record,
+      batchResult "createResult" did collection rkey (cidForDagCbor bytes),
+      nextAuto,
+    )
+  else if kind == applyWritesType "update" then do
+    rkey <- requiredString "rkey" element
+    record <- requireRecordField "value" element
+    bytes <- encodeRecordField "value" record
+    Ok (
+      RepoWriteUpdate (recordPath collection rkey) record,
+      batchResult "updateResult" did collection rkey (cidForDagCbor bytes),
+      auto,
+    )
+  else if kind == applyWritesType "delete" then do
+    rkey <- requiredString "rkey" element
+    Ok (
+      RepoWriteDelete (recordPath collection rkey),
+      jObject [("$type", JString (applyWritesType "deleteResult"))],
+      auto,
+    )
+  else
+    Err
+      (invalidRequest
+        "Every 'writes' element must be a \{applyWritesType "create"}, \{applyWritesType "update"} or \{applyWritesType "delete"}")
+
+batchElements : String ->
+  Tid ->
+  Array Json ->
+  Int ->
+  Int ->
+  Result Response (List RepoWrite, List Json)
+batchElements did rev elements i auto =
+  if i >= arrayLength elements then
+    Ok ([], [])
+  else do
+    (write, result, nextAuto) <- batchElement did rev auto elements[i]
+    (rest, results) <- batchElements did rev elements (i + 1) nextAuto
+    Ok (write :: rest, result :: results)
+
+{- | `applyWrites` is the batch counterpart of the three single-record
+   procedures, and its whole point is that it signs ONE commit: N operations
+   advance the repository by exactly one revision, not N, so a client that
+   needs several records to appear together does not publish a half-written
+   repository to any relay reading the commit log.
+
+   It is ALL-OR-NOTHING, which `lib.repo`'s `repoApplyWrites` enforces rather
+   than this layer: the first failing operation aborts before anything is
+   signed, so a rejected batch leaves the caller's repository at its prior
+   commit, exactly like every other rejection here.
+
+   An EMPTY `writes` array is accepted and changes nothing: the response
+   carries the CURRENT commit and no results. Signing a commit over an
+   unchanged tree would attest to a change that never happened.
+
+   `swapCommit` is honored exactly as the three single writes honor it, and
+   there is no `swapRecord`: the lexicon has no per-element compare-and-swap,
+   and inventing one would accept bodies a real PDS refuses. -}
+applyBatchWrites : Account -> Store -> Json -> Result Response (Repo, Json)
+applyBatchWrites account store body = do
+  () <- requireObject body
+  repo <- requireConfiguredRepo store
+  () <- requireHostedRepo account body
+  () <- requireNoLexiconValidation body
+  elements <- requireWrites body
+  rev <- nextRevision repo
+  (writes, results) <- batchElements (accountDid account) rev elements 0 0
+  () <- checkSwapCommit body repo
+  mutation <- admitMutation (repoApplyWrites writes rev repo)
+  Ok (
+    repoMutationState mutation,
+    jObject [
+      ("commit", commitJson (repoMutationCommit mutation)),
+      ("results", jArray results),
+    ],
+  )
+
 finishWrite : Store -> Result Response (Repo, Json) -> (Store, Response)
 finishWrite store (Err response) = (store, response)
 finishWrite store (Ok (repo, output)) =
   (storeWithRepo repo store, jsonOkResponse output)
 
-{- | The three record-write procedures, or `None` for a call this half does not
+{- | The four record-write procedures, or `None` for a call this half does not
    own. Only this half can return a successor `Store`. -}
 recordHandled : Account -> Store -> XrpcCall -> Option (Store, Response)
 recordHandled account store (ProcedureJsonCall nsid _ body)
@@ -535,11 +689,13 @@ recordHandled account store (ProcedureJsonCall nsid _ body)
     Some (finishWrite store (applyPutRecord account store body))
   | nsid == deleteRecordNsid =
     Some (finishWrite store (applyDeleteRecord account store body))
+  | nsid == applyWritesNsid =
+    Some (finishWrite store (applyBatchWrites account store body))
   | otherwise = None
 recordHandled _ _ _ = None
 
 {- | The record-write handler for one configured account. Any routed call that
-   is not one of the three record-write procedures is answered 501 with the
+   is not one of the four record-write procedures is answered 501 with the
    input `Store` intact. -}
 export
 recordHandler : Account -> Handler
@@ -562,25 +718,28 @@ unhandledRoute : XrpcCall -> Response
 unhandledRoute call =
   notImplemented "This route is not implemented: \{callTarget call}"
 
--- | The registry of exactly the three record-write procedures.
+-- | The registry of exactly the four record-write procedures.
 export
 recordRegistry : Result String Registry
 recordRegistry = do
   endpoints <- recordEndpoints
   makeRegistry endpoints
 
-{- | The three record-write procedures, every one of them gated.
+{- | The four record-write procedures, every one of them gated.
 
-   `com.atproto.repo.{createRecord, putRecord, deleteRecord}` each require an
-   authenticated session on a real PDS: they transition the account's own
-   repository, and a caller that could reach them unauthenticated could write
-   to somebody else's repository from the open internet. -}
+   `com.atproto.repo.{createRecord, putRecord, deleteRecord, applyWrites}` each
+   require an authenticated session on a real PDS: they transition the
+   account's own repository, and a caller that could reach them unauthenticated
+   could write to somebody else's repository from the open internet.
+   `applyWrites` is not a weaker case for being a batch — it can express every
+   edit the other three can. -}
 recordEndpoints : Result String (List Endpoint)
 recordEndpoints = do
   create <- procedureEndpoint createRecordNsid JsonInput AuthenticatedRoute
   put <- procedureEndpoint putRecordNsid JsonInput AuthenticatedRoute
   remove <- procedureEndpoint deleteRecordNsid JsonInput AuthenticatedRoute
-  Ok [create, put, remove]
+  batch <- procedureEndpoint applyWritesNsid JsonInput AuthenticatedRoute
+  Ok [create, put, remove, batch]
 
 -- | A configured record-write server for one account.
 export
@@ -814,7 +973,7 @@ lastRkey fallback (_ :: rest) = lastRkey fallback rest
    `{"records": []}` with a 200 — a syntactically impossible collection
    reported as a real, empty one. The grading is `lib.repo`'s own
    `validateCollection`, so admission here is byte-for-byte what `getRecord`
-   and the three writes apply. -}
+   and the write endpoints apply. -}
 requireCollectionSyntax : String -> Result Response Unit
 requireCollectionSyntax collection =
   let bytes = toUtf8 collection
@@ -1227,7 +1386,7 @@ readHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: three record writes, four session routes, six
+{- | The complete handler: four record writes, four session routes, six
    reads, two well-knowns. The halves are disjoint by construction — each owns
    a distinct set of NSIDs, and the read half additionally owns the two
    well-knowns — so the order below is a formality rather than a
@@ -1243,7 +1402,7 @@ pdsHandler account context outcome store call =
         Some response => (store, response)
         None => (store, unhandledRoute call)
 
--- | The registry of all thirteen XRPC endpoints. The two well-known paths are
+-- | The registry of all fourteen XRPC endpoints. The two well-known paths are
 -- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
