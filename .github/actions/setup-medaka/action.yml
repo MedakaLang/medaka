@@ -208,14 +208,25 @@ runs:
           echo "::error::could not read FP_ENTRY/FP_ROOTS from test/build_native_medaka.sh."
           exit 1
         fi
-        # No fallback-to-whole-tree arm here, unlike src_fingerprint_full(): the
-        # build script degrades gracefully because a failed walk must not stop a
-        # build, but a failed walk HERE means this assertion cannot be made, and
-        # AGENTS.md's rule for a check that cannot run is to fail, not to skip.
-        closure="$(awk -v entry="$fp_entry" -v roots="$fp_roots" -f test/emitter_source_set.awk)" || {
-          echo "::error::test/emitter_source_set.awk could not walk $fp_entry."
-          exit 1
-        }
+        # The walker is skipped outright — not merely on failure — when
+        # compiler/medaka.toml declares [dependencies], mirroring
+        # fp_full_file_list()'s own bail-out: the walker models `findInRoots` only, so
+        # a cross-project dep resolves to a root it never searches and the closure
+        # UNDER-reports. The build script's whole-compiler/ fallback is what the
+        # stamp would then describe, so this assertion must hash the same set or it
+        # compares two different questions.
+        if grep -q '^[[:space:]]*\[dependencies\]' compiler/medaka.toml 2>/dev/null; then
+          closure="$(find compiler -name '*.mdk' -not -name '*_test.mdk' -print)"
+        else
+          # No fallback-to-whole-tree arm on FAILURE, unlike src_fingerprint_full():
+          # the build script degrades gracefully because a failed walk must not stop a
+          # build, but a failed walk HERE means this assertion cannot be made, and
+          # AGENTS.md's rule for a check that cannot run is to fail, not to skip.
+          closure="$(awk -v entry="$fp_entry" -v roots="$fp_roots" -f test/emitter_source_set.awk)" || {
+            echo "::error::test/emitter_source_set.awk could not walk $fp_entry."
+            exit 1
+          }
+        fi
         live="$( { printf '%s\n' "$closure"; \
                    find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; \
                    find runtime -name '*.c' -print; } \

@@ -48,7 +48,9 @@ STACK_SIZE="${STACK_SIZE:-0x20000000}"
 # this box (Debian 13, 12-core/32GB) on 2026-09-05, `make medaka` on a forced
 # cache-miss full rebuild (FORCE_EMITTER_REBUILD=1, MEDAKA_BUILD_CACHE_DIR=):
 # GC_INITIAL_HEAP_SIZE unset (Boehm default) 288.4s → 1 GiB (this default) 268.3s
-# — about 7% faster, ~20s saved, at current codebase scale; re-derive with
+# — about 7% faster, ~20s saved, at current codebase scale. The 1 GiB arm re-ran at
+# 272.0s later the same day, so treat ~4s as this box's run-to-run noise floor and
+# read the ~20s delta as signal only because it clears it. Re-derive with
 # `time sh test/build_native_medaka.sh` under each setting rather than trusting
 # this figure indefinitely.
 # (Not applied to the parallel oracle build, where 10× the RSS causes memory
@@ -236,6 +238,21 @@ src_fingerprint_full() {
     done ) | hash_stream | cut -d' ' -f1
 }
 
+# runtime/*.c ALONE. Not a build input to any stage-skip decision — FP_FULL already
+# covers runtime/*.c for the emitter, and FP_COMPILER deliberately excludes it because
+# `liveSourceFingerprint` (a Medaka mirror) cannot read C. Its one consumer is $CLI_KEY
+# below: stage B LINKS $RT into ./medaka, so two trees differing only in an uncommitted
+# runtime/medaka_rt.c produce different binaries while sharing a FP_COMPILER, a
+# -O level, and a $BUILD_COMMIT (every dirty state collapses to the same `<sha>-dirty`).
+# Keying the CLI on $FP_FULL instead would be correct but over-broad: the CLI cache
+# would then miss on every compiler edit outside the emitter's own closure.
+src_fingerprint_runtime() {
+  ( cd "$ROOT" && find runtime -name '*.c' -print | LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s\n' "$f"
+      cat "$f"
+    done ) | hash_stream | cut -d' ' -f1
+}
+
 # Both fingerprints are computed HERE — above the cold-start bootstrap — because the
 # build cache below is keyed on them and must be able to answer "another tree already
 # built this exact emitter" BEFORE the seed bootstrap runs, which is the single most
@@ -244,6 +261,7 @@ src_fingerprint_full() {
 # reason.
 FP_FULL="$(src_fingerprint_full)"
 FP_COMPILER="$(src_fingerprint_compiler)"
+FP_RUNTIME="$(src_fingerprint_runtime)"
 
 # VERSION PROVENANCE (issue #74 W8): commit + build date baked alongside
 # FP_COMPILER below, at the SAME clang link, so `medaka --version` can report
@@ -282,6 +300,11 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 #     the exact triage field #2514 F-12 added the `-dirty` suffix to keep honest.
 #     The emitter bakes no such string, so its key stays purely source-derived and
 #     hits across commits and days; it is also the expensive half.
+#   * for the CLI only, $FP_RUNTIME — stage B links runtime/medaka_rt.c into ./medaka,
+#     and FP_COMPILER does not cover it. $BUILD_COMMIT cannot stand in: it renders every
+#     uncommitted tree state as one `<sha>-dirty` string, so without this component two
+#     worktrees at the same commit with different uncommitted runtime edits share a key.
+#     The emitter half needs no equivalent: $FP_FULL already folds runtime/*.c in.
 #
 # Storage lives under $MEDAKA_SCRATCH (the Makefile's own default, redeclared here
 # because the Makefile exports only TMPDIR) and never under /tmp, which is a RAM-backed
@@ -301,7 +324,7 @@ cache_tag() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 # The -O defaults are spelled the same way the two clang invocations spell them, so a
 # key can never claim an optimization level the link did not use.
 EMITTER_KEY="emitter-$(cache_tag "$FP_FULL")-$(cache_tag "${EMITTER_OPT:--O2}")"
-CLI_KEY="medaka-$(cache_tag "$FP_COMPILER")-$(cache_tag "${CLI_OPT:--O2}")-$(cache_tag "$BUILD_COMMIT")-$(cache_tag "$BUILD_DATE")"
+CLI_KEY="medaka-$(cache_tag "$FP_COMPILER")-$(cache_tag "$FP_RUNTIME")-$(cache_tag "${CLI_OPT:--O2}")-$(cache_tag "$BUILD_COMMIT")-$(cache_tag "$BUILD_DATE")"
 
 # Each entry is two files: <key>.bin (the binary) and <key>.sha (the digest of exactly
 # those stored bytes). Validation recomputes the digest BEFORE the entry is copied
@@ -553,11 +576,17 @@ fi
 if [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] && [ "$CLI_STAMP_APPLIES" = "1" ] \
    && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ]; then
   echo "stage B: medaka up-to-date (compiler source fingerprint unchanged) — skipping rebuild."
-elif cache_get "$CLI_KEY" "$OUT"; then
+elif [ "$FORCE_EMITTER_REBUILD" != "1" ] && cache_get "$CLI_KEY" "$OUT"; then
   # Reached even with SKIP_CLI_LINK_IF_FRESH unset: a cache hit costs a file copy, so
   # there is nothing for the default "always relink" policy to buy here. The key pins
-  # the compiler source, the -O level and the two provenance strings stage B bakes in,
-  # so the served binary is the one this link would have produced.
+  # the compiler source, the runtime source, the -O level and the two provenance strings
+  # stage B bakes in, so the served binary is the one this link would have produced.
+  #
+  # FORCE_EMITTER_REBUILD suppresses the hit even so, matching stage A's own guard: a
+  # cached ./medaka was emitted by whichever emitter held that key's source, so serving
+  # it here would pair a freshly rebuilt emitter with a CLI the OLD one produced —
+  # exactly the crossed-arm result [T-EMITTER-BENCH]'s two-rebuild protocol exists to
+  # rule out, and the flag's only purpose is to make both stages real.
   echo "stage B: medaka restored from build cache ($CLI_KEY) — skipping the emit and the link."
 else
   CLI_LL="$WORK/medaka_cli.ll"

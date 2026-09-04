@@ -1080,6 +1080,13 @@ while IFS= read -r f; do
     # full suite, since preflight's UNMAPPED path only WARNS locally).
     test/dist_install_smoke.sh)    add 'dist_install_smoke' ;;
     scripts/make_dist.sh)          add 'dist_install_smoke' ;;
+    # Same shape as F-9 above: `check_fingerprint_parity` also lacks the
+    # `diff_compiler_` prefix, and its arm-2 input is a `.awk` file the generic
+    # gate-script arm cannot match either. The derived `_gates_for_path` scan WOULD
+    # find it (check_fingerprint_parity.sh names the path literally), but that scan
+    # runs only for demo//playground/ paths in the catch-all below — every other
+    # unmatched path goes straight to note_unmapped.
+    test/emitter_source_set.awk)   add 'check_fingerprint_parity' ;;
     test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
     # Same argument again: the sidecar emitter-verdict ledger is also a loose file
     # under test/ that `_fixture_dir_for` cannot see, and it feeds the SAME gate
