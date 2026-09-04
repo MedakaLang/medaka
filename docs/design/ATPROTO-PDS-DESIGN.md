@@ -503,13 +503,16 @@ pure core stays reachable from every engine Phase 3 does not run on. The signatu
 half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
-**Loopback-only, unauthenticated, is deliberate, not an oversight.** `bindLoopback`
-takes a port and nothing else — no configuration path can move this server off
-`127.0.0.1` — and nothing in this phase authenticates a request; every one of the
-nine XRPC endpoints answers whoever can reach the socket. That is the intended shape
-of a phase with no session/auth story yet (Phase 4's "still owed" list, below):
-authentication is the gate on ever exposing this past loopback, not a Phase 3 gap to
-work around.
+**Loopback-only is deliberate, not an oversight.** `bindLoopback` takes a port and
+nothing else — no configuration path can move this server off `127.0.0.1`. §4.2-4.4
+below describe the auth seam this server now has: the three record writes and
+`getSession` require a valid access token, `refreshSession`/`deleteSession` require a
+valid refresh token, `createSession` is the public login that issues both, and the
+six reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only is the
+separate gate that remains: authentication makes the endpoints safe to answer, but
+nothing here hardens the socket for exposure past loopback (TLS, a non-loopback
+bind), which is not a Phase 3 or Phase 4 gap to work around but out of scope until a
+later phase takes it up.
 
 **Phase 4 — a standalone PDS.** *Pure half COMPLETE in the current tree
 (#1697); the rest is Phase-3-gated.*

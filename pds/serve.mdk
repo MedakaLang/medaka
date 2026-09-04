@@ -41,8 +41,10 @@
    there is no `chmod`, no `umask`, and no mode field anywhere in the runtime
    or the stdlib — so the generated session secret and the credential record
    land readable by every user on the box, and this program says so loudly on
-   stderr when it creates one. An operator who needs 0600 pre-creates the file
-   under their own umask and hands it in with `--token-secret`. -}
+   stderr when it creates one. An operator who needs the session secret at
+   0600 pre-creates it under their own umask and hands it in with
+   `--token-secret`; the credential record has no equivalent pre-create flag
+   (#2611). -}
 
 import args.{
   Args,
@@ -150,23 +152,25 @@ sessionSecretPath dir = "\{dir}/session-secret"
 credentialPath : String -> String
 credentialPath dir = "\{dir}/credential"
 
-{- | The mode warning, emitted once per file this program creates.
+{- | The mode warning, emitted once per file this program creates. `remedy`
+   is call-site-specific: the two files this program creates do not share a
+   remediation, so it is a parameter rather than baked into the message.
 
    It names the PATH and the mode and nothing else: the whole point of the
    file is its contents, so a warning that quoted them would be a far larger
    leak than the mode it is warning about.
 
-   TODO(orchestrator): file an issue for a mode-taking write primitive
-   (`chmod`, or a `writeFileBytes` taking a mode) so the session secret and the
-   credential record can land 0600 instead. Until one exists the only routes to
+   A mode-taking write primitive (`chmod`, or a `writeFileBytes` taking a mode)
+   would let the session secret and the credential record land 0600 instead;
+   that gap is tracked at #2611. Until one exists the only routes to
    0600 are `runCommand "chmod"` — which opens a real world-readable window
    between the create and the chmod, and grants this process an `<Exec>`
    capability to protect one file — and a new native extern, which is
    compiler-source work this entry point cannot do. -}
-warnWorldReadable : String -> <Stderr> Unit
-warnWorldReadable path =
+warnWorldReadable : String -> String -> <Stderr> Unit
+warnWorldReadable path remedy =
   ePutStrLn
-    "serve: WARNING: created \{path} world-readable (mode 0644): Medaka has no file-mode primitive, so this program cannot create a private file. On a shared machine, pre-create this file yourself under a 0600 umask (--token-secret takes a pre-created session secret)."
+    "serve: WARNING: created \{path} world-readable (mode 0644): Medaka has no file-mode primitive, so this program cannot create a private file. \{remedy}"
 
 {- | Generate this server's session-token secret and keep it. It is drawn from
    `osEntropyBytes`, the OS entropy source, and never from `randomInt`, whose
@@ -180,7 +184,10 @@ generateSessionSecret dir = do
     Err message =>
       Err "unwritable session secret \{sessionSecretPath dir}: \{message}"
     Ok () => Ok ()
-  let () = warnWorldReadable (sessionSecretPath dir)
+  let () =
+    warnWorldReadable
+      (sessionSecretPath dir)
+      "On a shared machine, pre-create this file yourself under a 0600 umask (--token-secret takes a pre-created session secret)."
   Ok bytes
 
 {- | This server's session-token secret: the one `--token-secret` names, else
@@ -234,7 +241,10 @@ bootstrapCredential dir path = do
   () <- match writeFile (credentialPath dir) (credentialText record)
     Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
     Ok () => Ok ()
-  let () = warnWorldReadable (credentialPath dir)
+  let () =
+    warnWorldReadable
+      (credentialPath dir)
+      "There is currently no pre-create path for this file (#2611); restrict this data directory's own permissions instead."
   Ok record
 
 loadCredential : String -> <FileRead "_"> Result String CredentialRecord

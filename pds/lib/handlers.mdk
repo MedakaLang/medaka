@@ -16,12 +16,15 @@
    `readHandled` returns a bare `Response`, and only `recordHandled` returns a
    successor `Store` at all.
 
-   Every registration carries its own `AuthPolicy`: the three writes are
-   `AuthenticatedRoute`, the six reads are `PublicRoute`, and the two
-   well-knowns are public by construction (`lib.xrpc` routes them by path, with
-   no registry entry to classify). `lib.server_core`'s `handle` enforces that
-   before dispatch, so nothing in this module checks a credential — see
-   `readEndpoints`/`recordEndpoints` for where each classification comes from.
+   Every registration carries its own `AuthPolicy`: the three writes and
+   `getSession` are `AuthenticatedRoute`, the six reads are `PublicRoute`,
+   `refreshSession`/`deleteSession` are `RefreshRoute`, `createSession` is
+   `PublicRoute` (it is the login that issues the tokens the other session
+   routes require), and the two well-knowns are public by construction
+   (`lib.xrpc` routes them by path, with no registry entry to classify).
+   `lib.server_core`'s `handle` enforces that before dispatch, so nothing in
+   this module checks a credential — see `readEndpoints`/`recordEndpoints`/
+   `sessionEndpoints` for where each classification comes from.
 
    Lexicon-shaped JSON goes in and comes out; the transition itself is
    `lib.repo`'s. Only a write that SUCCEEDS returns a successor `Store` — every
