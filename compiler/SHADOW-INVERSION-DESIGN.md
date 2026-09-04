@@ -213,7 +213,7 @@ Route)`. The brief's "the fix that JUST LANDED" is not true of `main`.
 
 S-1's bug reproduces on `main` exactly as filed:
 
-```medaka-nocheck: the S-1 repro quoted verbatim as filed, in the one-line where { ... } brace form the parser rejects (P-WHERE-BODY-SAME-LINE)
+```medaka-nocheck: the S-1 repro as filed, in the one-line where { ... } brace form the parser rejects (P-WHERE-BODY-SAME-LINE); also omits the "data Box" declaration the fence references — completed minimally it checks/runs/builds clean and does not reproduce the E-PANIC this record claims
 interface Sz a where { size : a -> String }
 impl Sz Box where { size (Box n) = "box" }
 size : Num a => a -> a

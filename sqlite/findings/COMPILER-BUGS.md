@@ -1,6 +1,6 @@
 # Compiler + tooling bugs surfaced by the SQLite dogfood (2026-07-13)
 
-**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+**Status:** LIVE, maintained ledger — re-verify against the current compiler with `sqlite/findings/verify_compiler_bugs.sh` before trusting any row; see the DO NOT TRUST notice below.
 
 > ## ⚠️ DO NOT TRUST THIS LIST — RUN THE SCRIPT
 >

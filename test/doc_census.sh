@@ -26,10 +26,12 @@
 #                        "meaningful" (a reformatting-only commit still
 #                        counts) — this is the cheap, honest signal, not a
 #                        content-diff heuristic.
-#   2. syntax-corpus   — Y if the file is exactly test/check_syntax_examples.sh's
-#                        own corpus: docs/spec/SYNTAX.md, or any
-#                        docs/guide/*.md file other than OUTLINE.md (mirrors
-#                        that script's own `find` invocation).
+#   2. syntax-corpus   — Y if the file is in test/check_syntax_examples.sh's
+#                        own corpus: any tracked .md carrying a Medaka-family
+#                        fence, minus the four path prefixes that gate excludes
+#                        (docs/stdlib, archive, sqlite/findings, test). The
+#                        selection rule is re-derived below, not copied as a
+#                        file list.
 #   3. file-exception  — Y if a FILE-tier line in
 #                        test/DOC-LINK-EXCEPTIONS.txt names this exact path
 #                        (the doc is excused wholesale from link-rot
@@ -67,20 +69,39 @@ trap 'rm -rf "$WORK"' EXIT
 IFS='
 '
 
-# ── corpus: same definition test/check_doc_links.sh uses ───────────────────
-git ls-files '*.md' ':!:test/snapshots/**' > "$WORK/corpus.txt"
+# ── corpus: same definition test/check_doc_links.sh uses, minus goldens ────
+# The golden trees below hold `medaka doc` / `medaka new` OUTPUT, not prose: a
+# gate pins their bytes, so they can never carry a **Status:** banner and would
+# report `disposition=N` forever, inflating the unadjudicated count with rows
+# nobody is allowed to adjudicate. Excluded for the same reason
+# test/snapshots/** already is — generated content is answerable at its
+# generator (compiler/tools/doc.mdk, compiler/tools/new_cmd.mdk), not here.
+git ls-files '*.md' \
+  ':!:test/snapshots/**' \
+  ':!:test/doc_goldens/**' \
+  ':!:test/native_cli_goldens/**' \
+  ':!:test/new_golden/**' > "$WORK/corpus.txt"
 
 if [ ! -s "$WORK/corpus.txt" ]; then
   echo "doc_census: git ls-files '*.md' found ZERO files — harness bug, refusing to report" >&2
   exit 1
 fi
 
-# ── syntax-example corpus: mirrors check_syntax_examples.sh exactly ────────
-{
-  echo "docs/spec/SYNTAX.md"
-  find "$ROOT/docs/guide" -type f -name '*.md' ! -path "$ROOT/docs/guide/OUTLINE.md" 2>/dev/null \
-    | sed "s#^$ROOT/##"
-} > "$WORK/syntax_corpus.txt"
+# ── syntax-example corpus: re-derives check_syntax_examples.sh's rule ──────
+# That gate selects every tracked Markdown file carrying a Medaka-family fence,
+# minus four path prefixes (docs/stdlib, archive, sqlite/findings, test). The
+# rule is re-derived here rather than mirrored as a file list, so this column
+# cannot silently encode a corpus the gate has moved past; a drift shows up as
+# this census's count disagreeing with the gate's own `covered N documents`.
+: > "$WORK/syntax_corpus.txt"
+git ls-files '*.md' > "$WORK/syntax_all.txt"
+while IFS= read -r _sc_rel; do
+  case "$_sc_rel" in
+    docs/stdlib/*|archive/*|sqlite/findings/*|test/*) continue ;;
+  esac
+  grep -qE '^[[:space:]]*(```|~~~)+[[:space:]]*(medaka|mdk)' "$ROOT/$_sc_rel" || continue
+  printf '%s\n' "$_sc_rel" >> "$WORK/syntax_corpus.txt"
+done < "$WORK/syntax_all.txt"
 
 # ── FILE-tier exceptions from test/DOC-LINK-EXCEPTIONS.txt ─────────────────
 # Format (see that file's own header): TAB-separated `KIND<TAB>pattern<TAB>reason`,
@@ -107,7 +128,10 @@ normalize_path() {
   for _np_part in "$@"; do
     case "$_np_part" in
       "" | ".") continue ;;
-      "..") _np_result="${_np_result%/*}" ;;
+      "..") case "$_np_result" in
+              */*) _np_result="${_np_result%/*}" ;;
+              *)   _np_result="" ;;
+            esac ;;
       *)
         if [ -z "$_np_result" ]; then _np_result="$_np_part"; else _np_result="$_np_result/$_np_part"; fi
         ;;
