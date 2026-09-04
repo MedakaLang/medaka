@@ -796,6 +796,10 @@ Assertions for unit tests.
 - [`expectWithin`](test.md#expectwithin)
 - [`expectEqualText`](test.md#expectequaltext)
 - [`expectAll`](test.md#expectall)
+- [`expectationTag`](test.md#expectationtag)
+- [`expectationMessage`](test.md#expectationmessage)
+- [`expectationExpected`](test.md#expectationexpected)
+- [`expectationActual`](test.md#expectationactual)
 - [`runTests`](test.md#runtests)
 - [`expectGolden`](test.md#expectgolden)
 

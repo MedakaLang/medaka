@@ -69,10 +69,15 @@ import support.util.{joinNl, splitNl}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
+  decodeValue,
   endTag,
   firstNonEmptyLine,
   lookupChunk,
+  mintNonce,
+  noncedPrefix,
   sentinelLine,
+  tagsInOrder,
+  valuePrintExpr,
 }
 import tools.doctest.{
   Example,
@@ -89,11 +94,40 @@ import tools.doctest.{
 -- `test "…"` engine.  What is per-engine is the PREFIX, so neither engine can
 -- read the other's transcript.
 
-sentinelPrefix : String
-sentinelPrefix = "@@__mdk_native_doctest__@@ "
+-- `sentinelPrefix` takes the per-run nonce `mintNonce` draws in
+-- `nativeRendered` — the target's spliced-in source is fixed before that draw
+-- happens, so it cannot spell the resulting prefix. See
+-- `probe_transcript.mdk`'s "the nonce".
+sentinelBase : String
+sentinelBase = "@@__mdk_native_doctest__@@"
 
-sentinelFor : String -> String
-sentinelFor tag = sentinelLine sentinelPrefix tag
+sentinelPrefix : String -> String
+sentinelPrefix nonce = noncedPrefix sentinelBase nonce
+
+sentinelFor : String -> String -> String
+sentinelFor nonce tag = sentinelLine (sentinelPrefix nonce) tag
+
+-- Every tag this engine's probe prints, in the order it prints them — one per
+-- example whose synth PARSED (mirroring `mainLines`), then the terminator.
+expectedTags : Int ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  List String
+expectedTags _ [] _ = [endTag]
+expectedTags _ (_ :: _) [] = [endTag]
+expectedTags i (_ :: rest) ((Err _) :: srRest) =
+  expectedTags (i + 1) rest srRest
+expectedTags i (_ :: rest) ((Ok _) :: srRest) =
+  intToString i :: expectedTags (i + 1) rest srRest
+
+-- A transcript carrying a sentinel line this engine did not write.  Rendered
+-- values are printed quoted so a value cannot spell one; a module's own
+-- top-level or doctest-expression output still can, and reaching here means one
+-- did.  The whole file errors: no chunk in such a transcript is known to belong
+-- to the example whose tag it wears.
+forgedTranscript : String
+forgedTranscript =
+  "native doctest runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which example each value belongs to. No example was judged from it."
 
 -- ── skips that must be LOUD ─────────────────────────────────────────────────
 -- Two shapes cannot run natively.  Both return a whole-file error, so every
@@ -169,10 +203,14 @@ nativeRendered target tsrc userDecls examples synthResults =
       Err e =>
         Err "native doctest runner: could not create a scratch directory: \{e}"
       Ok tmpDir =>
+        -- The nonce is drawn HERE, before the probe source is written, so it
+        -- reaches `runInTmp` in time to land in the generated code the target's
+        -- own (already-fixed) source cannot see or influence.
+        let nonce = mintNonce ()
         -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.  Same shape as
         -- `build_cmd.mdk`'s `runBuildNative`.
-        let rendered = runInTmp target tsrc examples synthResults tmpDir
+        let rendered = runInTmp target tsrc examples synthResults tmpDir nonce
         let _ = cleanupTempDir tmpDir
         rendered
 
@@ -216,14 +254,16 @@ runInTmp : String ->
   List Example ->
   List (Result String (List Decl)) ->
   String ->
+  String ->
   <IO> Result String (List (Result String String))
-runInTmp target tsrc examples synthResults tmpDir =
+runInTmp target tsrc examples synthResults tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "dt_probe"
   let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
-  match writeFile entryPath (probeSource tsrc examples synthResults)
+  match writeFile entryPath (probeSource nonce tsrc examples synthResults)
     Err e => Err "native doctest runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entryPath outPath tmpDir examples synthResults
+    Ok _ =>
+      buildAndRun target entryPath outPath tmpDir examples synthResults nonce
 
 buildAndRun : String ->
   String ->
@@ -231,8 +271,9 @@ buildAndRun : String ->
   String ->
   List Example ->
   List (Result String (List Decl)) ->
+  String ->
   <IO> Result String (List (Result String String))
-buildAndRun target entryPath outPath tmpDir examples synthResults =
+buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
   let cc = envOr "CC" "clang"
@@ -263,13 +304,11 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        Ok
-          (renderAll
-            (chunksOf sentinelPrefix (splitNl out))
-            (abortNote code errOut)
-            0
-            examples
-            synthResults)
+        let chunks = chunksOf (sentinelPrefix nonce) (splitNl out)
+        if tagsInOrder (expectedTags 0 examples synthResults) chunks then
+          Ok (renderAll chunks (abortNote code errOut) 0 examples synthResults)
+        else
+          Err forgedTranscript
 
 -- ── the probe program ───────────────────────────────────────────────────────
 -- target source (verbatim) ++ the `__dt_i__` bindings ++ a synthesized `main`.
@@ -282,16 +321,17 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
 -- dropping them: an unreferenced top-level binding is dead code, and a dropped
 -- binding is an example that never ran.
 probeSource : String ->
+  String ->
   List Example ->
   List (Result String (List Decl)) ->
   String
-probeSource tsrc examples synthResults =
+probeSource nonce tsrc examples synthResults =
   joinNl
     ([tsrc, ""]
       ++ synthLines 0 examples synthResults
       ++ ["", "main ="]
-      ++ mainLines 0 examples synthResults
-      ++ ["  putStrLn \"\{sentinelFor endTag}\"", ""])
+      ++ mainLines nonce 0 examples synthResults
+      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
 
 -- One synth binding per example whose synth PARSED.  An example whose synth
 -- failed to parse contributes no binding (mirroring `buildSynthDecls`) — its
@@ -315,20 +355,25 @@ synthLines i (_ :: rest) ((Err _) :: srRest) = synthLines (i + 1) rest srRest
 -- is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
 -- as long as it evaluated.  (There are currently zero smoke examples in the
 -- tree, so this arm is correctness, not machinery.)
-mainLines : Int ->
+mainLines : String ->
+  Int ->
   List Example ->
   List (Result String (List Decl)) ->
   List String
-mainLines _ [] _ = []
-mainLines _ (_ :: _) [] = []
-mainLines i (_ :: rest) ((Err _) :: srRest) = mainLines (i + 1) rest srRest
-mainLines i (ex :: rest) ((Ok _) :: srRest) =
-  ["  let _ = putStrLn \"\{sentinelFor (intToString i)}\"", valueLine i ex]
-    ++ mainLines (i + 1) rest srRest
+mainLines _ _ [] _ = []
+mainLines _ _ (_ :: _) [] = []
+mainLines nonce i (_ :: rest) ((Err _) :: srRest) =
+  mainLines nonce (i + 1) rest srRest
+mainLines nonce i (ex :: rest) ((Ok _) :: srRest) =
+  [
+      "  let _ = putStrLn \"\{sentinelFor nonce (intToString i)}\"",
+      valueLine i ex,
+    ]
+    ++ mainLines nonce (i + 1) rest srRest
 
 valueLine : Int -> Example -> String
 valueLine i ex = match exampleExpected ex
-  Some _ => "  let _ = putStrLn \{synthName i}"
+  Some _ => "  let _ = \{valuePrintExpr (synthName i)}"
   None => "  let _ = \{synthName i}"
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
@@ -366,6 +411,8 @@ renderOne : List Chunk ->
   Result String String
 renderOne _ _ _ (Err _) = Err "example did not parse"
 renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
-  Some (Chunk _ ls True) => Ok (joinNl ls)
+  Some (Chunk _ ls True) => match decodeValue ls
+    Some v => Ok v
+    None => Err note
   Some (Chunk _ _ False) => Err note
   None => Err note

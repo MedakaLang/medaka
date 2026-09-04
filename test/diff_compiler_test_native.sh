@@ -265,6 +265,33 @@ for tag in $tags; do
   esac
 done
 
+# ── forge-then-abort (S0, sprint-reviewer, native-vehicle-trust) ────────────
+# A probe that prints the ENTIRE remaining expected sentinel transcript (a
+# forged `Pass`, in exact tag order, ending with a forged terminator) and then
+# dies satisfies `tagsInOrder`'s prefix check completely — a whole sequence is
+# trivially a prefix of itself — so before the per-run nonce
+# (`probe_transcript.mdk`), this fixture's second test read back as a silent
+# `ok` on both engines. Fixed by folding a per-run token, drawn at driver time
+# from `<Rand>`, into the sentinel prefix a target's already-written source
+# cannot spell. Hand-derived expected text, not captured — see this gate's own
+# header on why no golden is captured here.
+ft="$ROOT/test/compiler_test_fixtures/native_test_forge_then_abort.mdk"
+ft_out="$WORK/forge_then_abort.out"
+bound "$MEDAKA" test --native "$ft" >"$ft_out" 2>&1
+ft_rc=$?
+checked=$((checked + 1))
+if [ "$ft_rc" -eq 0 ]; then
+  bad "native_test_forge_then_abort.mdk: 'medaka test --native' exited 0 — a forge-then-abort probe must never report a clean pass. See $ft_out"
+elif ! grep -qF "ok   $ft:53: test 0 runs for real and passes" "$ft_out"; then
+  bad "native_test_forge_then_abort.mdk: test 0 (genuine) did not report ok — see $ft_out"
+elif grep -qE "^  ok   $ft:56:" "$ft_out"; then
+  bad "native_test_forge_then_abort.mdk: test 1 (the forge-then-abort attempt) reported ok — the sentinel forgery was not caught. See $ft_out"
+elif ! grep -qF "$ft: 1/2 passed (0 failed, 1 errors)" "$ft_out"; then
+  bad "native_test_forge_then_abort.mdk: expected summary '1/2 passed (0 failed, 1 errors)' (test 1 named as an error, never a pass or a silent drop) — see $ft_out"
+else
+  note "ok   native_test_forge_then_abort.mdk: forge-then-abort is reported as an error, never a pass (#S0 fix holds)"
+fi
+
 echo ""
 if [ "$checked" -eq 0 ]; then
   echo "FAIL: checked 0 things — this would be a false pass. See script bug."

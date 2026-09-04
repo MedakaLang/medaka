@@ -94,17 +94,21 @@ test: medaka
 	sh test/diff_compiler_ported.sh
 	./medaka test stdlib/list.mdk
 	./medaka test stdlib/core.mdk
-	./medaka test compiler/types/registry.mdk
-	./medaka test compiler/types/registry_test.mdk
-	## ARCH B-2.2-a: the shared route-word mint — call-site-free BY DESIGN (the
-	## bites after it move `implKeyTc`/`implKeyOf`/`declRouteKey` onto it), so
-	## this line is the ONLY thing that typechecks it or runs its doctests.
-	./medaka test compiler/types/route_key.mdk
-	## A-3.2 (#1112): `typecheck.mdk` IS reached by check-self/typecheck_compiler_source.sh
-	## (it has plenty of call sites), but neither of those RUNS doctests — only
-	## `medaka test <file>` does. Listed here so `DataEnv`'s doctests (the
-	## deFieldOwnerIdents identity-collision case) actually execute somewhere.
-	./medaka test compiler/types/typecheck.mdk
+	## The one DIRECTORY target, and the only thing anywhere that reaches
+	## `checkTestMdkRoster` (compiler/driver/medaka_cli.mdk): the roster check runs
+	## inside `runTestManyTargets`, which only a multi-target/directory invocation
+	## takes, so with file targets alone its "git-tracked but never walked" arm was
+	## dead code. `compiler/types` holds a tracked `*_test.mdk` (registry_test.mdk),
+	## so the roster has something real to account for. It subsumes the four file
+	## lines that stood here, each for its own [W-MODULE-BLIND] reason:
+	##   registry.mdk / registry_test.mdk — the module is outside every entry's
+	##     import closure, so nothing else walks it;
+	##   route_key.mdk (ARCH B-2.2-a) — the shared route-word mint is call-site-free
+	##     BY DESIGN, so this is the only thing that typechecks it at all;
+	##   typecheck.mdk (A-3.2, #1112) — reached by check-self and
+	##     typecheck_compiler_source.sh, but neither RUNS doctests, and `DataEnv`'s
+	##     deFieldOwnerIdents identity-collision case lives in one.
+	./medaka test compiler/types
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on

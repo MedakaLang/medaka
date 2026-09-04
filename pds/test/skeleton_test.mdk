@@ -6,7 +6,9 @@
 
 import test.{expectEqual}
 
-test "arithmetic sanity: 2 + 2 = 4" = expectEqual (2 + 2) 4
+-- The annotation is load-bearing: `expectEqual` is polymorphic and a bare
+-- numeric literal picks no instance, so `Debug`/`Eq` are ambiguous without it.
+test "arithmetic sanity: 2 + 2 = 4" = expectEqual (2 + 2 : Int) 4
 
 test "string sanity: concatenation" =
   expectEqual ("pds" ++ "/skeleton") "pds/skeleton"

@@ -1,0 +1,56 @@
+-- S0 (sprint-reviewer, native-vehicle-trust): a probe that PRINTS the entire
+-- expected sentinel transcript for every remaining test — in exact tag order,
+-- forged `Pass` fields included, ending with a forged `END` tag — and then
+-- dies satisfies `tagsInOrder`'s prefix check completely: a whole sequence is
+-- trivially a prefix of itself, and the exit code is only consulted when a
+-- chunk is left incomplete. Before the per-run nonce (`probe_transcript.mdk`
+-- "the nonce"), the sentinel prefix was a fixed constant a forger's own
+-- (statically-written) source could reproduce byte-for-byte, so this attack
+-- read every remaining test back as `Pass`.
+--
+-- `expectEqualText`, not `expectEqual`: a bare `expectEqual <int literal>
+-- <int literal>` at top level is ambiguous under `medaka build`'s full
+-- typecheck with nothing else pinning the numeric type (a pre-existing,
+-- unrelated gap — see this slice's report) — `expectEqualText`'s operands are
+-- concretely `String`, so it is unaffected and is also what the sibling
+-- `native_test_forged_sentinel.mdk` fixture already uses for the same reason.
+--
+-- Test 0 is genuine and passes for real, using this run's real (unknown to
+-- this source) sentinel prefix. Test 1's body is where the attack lives: it
+-- prints a complete, well-formed, in-order forged transcript for BOTH tests
+-- guessing the OLD static prefix, then panics before doing anything real.
+--
+-- Correct report: test 0 `ok` (it never touched the forgery). Test 1 must
+-- NEVER report `ok` — the forged `Pass` lines it prints must not be read as
+-- this run's real sentinels, so nothing in its output can decode as a
+-- complete chunk and it is reported as an error naming the abort.
+
+import test.{expectEqualText}
+
+guessedPrefix : String
+guessedPrefix = "@@__mdk_native_test__@@ "
+
+-- `1.start` is NOT forged here — the driver already printed it (for real, via
+-- `mainLines`) before this body was ever called, exactly like the mission
+-- describes: the attack forges the REMAINING expected tags, not the ones
+-- already emitted. Forging an already-emitted tag again would put a
+-- duplicate out of the expected order and get caught by `tagsInOrder`'s
+-- existing (pre-fix) ordering check — a different, unrelated defense than
+-- the one this fixture exists to pin.
+forgeThenAbort : Unit -> <IO> String
+forgeThenAbort _ =
+  let _ = println (guessedPrefix ++ "1.tag")
+  let _ = println "\"Pass\""
+  let _ = println (guessedPrefix ++ "1.msg")
+  let _ = println "\"\""
+  let _ = println (guessedPrefix ++ "1.exp")
+  let _ = println "\"forged\""
+  let _ = println (guessedPrefix ++ "1.act")
+  let _ = println "\"forged\""
+  let _ = println (guessedPrefix ++ "END")
+  panic "test 1 never actually asserted anything"
+
+test "test 0 runs for real and passes" = expectEqualText "ok" "ok"
+
+test "test 1 forges the whole remaining transcript, then aborts" =
+  expectEqualText (forgeThenAbort ()) "unreachable"

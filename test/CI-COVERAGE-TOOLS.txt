@@ -388,3 +388,12 @@ test/cli_conformance_lib       shell library, not a script (#2354, S-help-truthf
                                test/perf_shapes does: the census derived all of this first, and a
                                gate that re-derived it independently would be a second, possibly
                                wrong answer to a question the binary answers exactly.
+test/gate_native_rows          shell library, not a script (#2636): sourced by run_gates.sh,
+                               preflight.sh and build_oracles.sh for the one awk parser that reads
+                               a `kind = "native"` row out of test/gates.toml. Defines a function
+                               only; running it does nothing observable, so there is nothing for a
+                               shard to assert. Its behavior IS asserted — by all three consumers,
+                               each in a shard (or, for preflight.sh, run directly by every CI job
+                               via `make preflight`'s callers). The three copies were pasted
+                               byte-for-byte until this file, which is the drift it now prevents
+                               rather than merely records — same shape as test/perf_shapes.
