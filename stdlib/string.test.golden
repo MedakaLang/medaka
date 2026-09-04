@@ -62,14 +62,14 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:638: splitAt 2 "hello"
   ok   stdlib/string.mdk:649: split "," "a,b,c"
   ok   stdlib/string.mdk:651: split "," "abc"
-  ok   stdlib/string.mdk:668: lines "a\nb\nc"
-  ok   stdlib/string.mdk:678: stripCR "ab\r"
-  ok   stdlib/string.mdk:680: stripCR "ab"
-  ok   stdlib/string.mdk:694: words "  hello   world "
-  ok   stdlib/string.mdk:713: unlines ["a", "b"]
-  ok   stdlib/string.mdk:728: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:740: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:754: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:769: center 5 '.' "ab"
+  ok   stdlib/string.mdk:694: lines "a\nb\nc"
+  ok   stdlib/string.mdk:704: stripCR "ab\r"
+  ok   stdlib/string.mdk:706: stripCR "ab"
+  ok   stdlib/string.mdk:720: words "  hello   world "
+  ok   stdlib/string.mdk:739: unlines ["a", "b"]
+  ok   stdlib/string.mdk:754: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:766: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:780: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:795: center 5 '.' "ab"
 
 stdlib/string.mdk: 72/72 passed

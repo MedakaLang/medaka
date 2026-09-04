@@ -1,5 +1,5 @@
 # META
-source_lines=211
+source_lines=217
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -167,36 +167,42 @@ decodeValue _ = None
 -- in which `\\ \n \t \r \0 \"` are the only escapes.  Codepoint-indexed while
 -- the escaper is byte-oriented, which agrees: every escape it writes is ASCII
 -- and every other byte passes through untouched.
+--
+-- The scan walks an `Array Char` taken once up front rather than indexing the
+-- `String` per character: a codepoint index into a UTF-8 string resolves by
+-- rescanning from byte 0, so a per-character `stringSlice i (i + 1) s` costs
+-- O(n) each and the decode as a whole costs O(n²) — in a value whose length is
+-- chosen by the program under test.
 export
 unquoteLit : String -> Option String
-unquoteLit s
-  | stringLength s >= 2
-    && charAt s 0 == "\""
-    && charAt s (stringLength s - 1) == "\"" =
-    unquoteScan s 1 (stringLength s - 1) []
-  | otherwise = None
+unquoteLit s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  if n >= 2
+    && arrayGetUnsafe 0 cs == '"'
+    && arrayGetUnsafe (n - 1) cs == '"' then
+    unquoteScan cs 1 (n - 1) []
+  else
+    None
 
-charAt : String -> Int -> String
-charAt s i = stringSlice i (i + 1) s
-
-unquoteScan : String -> Int -> Int -> List String -> Option String
-unquoteScan s i end acc
-  | i >= end = Some (stringConcat (reverseL acc))
-  | charAt s i == "\\" =
+unquoteScan : Array Char -> Int -> Int -> List Char -> Option String
+unquoteScan cs i end acc
+  | i >= end = Some (stringFromChars (arrayFromList (reverseL acc)))
+  | arrayGetUnsafe i cs == '\\' =
     if i + 1 >= end then
       None
-    else match unescapeChar (charAt s (i + 1))
-      Some c => unquoteScan s (i + 2) end (c :: acc)
+    else match unescapeChar (arrayGetUnsafe (i + 1) cs)
+      Some c => unquoteScan cs (i + 2) end (c :: acc)
       None => None
-  | otherwise = unquoteScan s (i + 1) end (charAt s i :: acc)
+  | otherwise = unquoteScan cs (i + 1) end (arrayGetUnsafe i cs :: acc)
 
-unescapeChar : String -> Option String
-unescapeChar "n" = Some "\n"
-unescapeChar "t" = Some "\t"
-unescapeChar "r" = Some "\r"
-unescapeChar "0" = Some "\0"
-unescapeChar "\\" = Some "\\"
-unescapeChar "\"" = Some "\""
+unescapeChar : Char -> Option Char
+unescapeChar 'n' = Some '\n'
+unescapeChar 't' = Some '\t'
+unescapeChar 'r' = Some '\r'
+unescapeChar '0' = Some '\0'
+unescapeChar '\\' = Some '\\'
+unescapeChar '"' = Some '"'
 unescapeChar _ = None
 
 export
@@ -245,18 +251,16 @@ firstNonEmptyLine (l :: rest)
 (DFunDef false "decodeValue" ((PCons (PVar "l") (PList))) (EApp (EVar "unquoteLit") (EVar "l")))
 (DFunDef false "decodeValue" (PWild) (EVar "None"))
 (DTypeSig true "unquoteLit" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "unquoteLit" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "s")) (ELit (LInt 0))) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "s")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (ELit (LString "\"")))) (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "s")) (ELit (LInt 1))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (EListLit)) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "charAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "charAt" ((PVar "s") (PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))
-(DTypeSig false "unquoteScan" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "unquoteScan" ((PVar "s") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "acc")))) (EIf (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "s")) (EVar "i")) (ELit (LString "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "charAt") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "end")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "::" (EApp (EApp (EVar "charAt") (EVar "s")) (EVar "i")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "unescapeChar" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "unescapeChar" ((PLit (LString "n"))) (EApp (EVar "Some") (ELit (LString "\n"))))
-(DFunDef false "unescapeChar" ((PLit (LString "t"))) (EApp (EVar "Some") (ELit (LString "\t"))))
-(DFunDef false "unescapeChar" ((PLit (LString "r"))) (EApp (EVar "Some") (ELit (LString "\r"))))
-(DFunDef false "unescapeChar" ((PLit (LString "0"))) (EApp (EVar "Some") (ELit (LString "\0"))))
-(DFunDef false "unescapeChar" ((PLit (LString "\\"))) (EApp (EVar "Some") (ELit (LString "\\"))))
-(DFunDef false "unescapeChar" ((PLit (LString "\""))) (EApp (EVar "Some") (ELit (LString "\""))))
+(DFunDef false "unquoteLit" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "\"")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "\"")))) (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EListLit)) (EVar "None")))))
+(DTypeSig false "unquoteScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "unquoteScan" ((PVar "cs") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverseL") (EVar "acc"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "end")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "unescapeChar" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "n"))) (EApp (EVar "Some") (ELit (LChar "\n"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "t"))) (EApp (EVar "Some") (ELit (LChar "\t"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "r"))) (EApp (EVar "Some") (ELit (LChar "\r"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "0"))) (EApp (EVar "Some") (ELit (LChar "\0"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "\\"))) (EApp (EVar "Some") (ELit (LChar "\\"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "\""))) (EApp (EVar "Some") (ELit (LChar "\""))))
 (DFunDef false "unescapeChar" (PWild) (EVar "None"))
 (DTypeSig true "lookupChunk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyApp (TyCon "Option") (TyCon "Chunk")))))
 (DFunDef false "lookupChunk" (PWild (PList)) (EVar "None"))
@@ -296,18 +300,16 @@ firstNonEmptyLine (l :: rest)
 (DFunDef false "decodeValue" ((PCons (PVar "l") (PList))) (EApp (EVar "unquoteLit") (EVar "l")))
 (DFunDef false "decodeValue" (PWild) (EVar "None"))
 (DTypeSig true "unquoteLit" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "unquoteLit" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "s")) (ELit (LInt 0))) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "s")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (ELit (LString "\"")))) (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "s")) (ELit (LInt 1))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (EListLit)) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "charAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "charAt" ((PVar "s") (PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))
-(DTypeSig false "unquoteScan" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "unquoteScan" ((PVar "s") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "acc")))) (EIf (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "s")) (EVar "i")) (ELit (LString "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "charAt") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "end")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "::" (EApp (EApp (EVar "charAt") (EVar "s")) (EVar "i")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "unescapeChar" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "unescapeChar" ((PLit (LString "n"))) (EApp (EVar "Some") (ELit (LString "\n"))))
-(DFunDef false "unescapeChar" ((PLit (LString "t"))) (EApp (EVar "Some") (ELit (LString "\t"))))
-(DFunDef false "unescapeChar" ((PLit (LString "r"))) (EApp (EVar "Some") (ELit (LString "\r"))))
-(DFunDef false "unescapeChar" ((PLit (LString "0"))) (EApp (EVar "Some") (ELit (LString "\0"))))
-(DFunDef false "unescapeChar" ((PLit (LString "\\"))) (EApp (EVar "Some") (ELit (LString "\\"))))
-(DFunDef false "unescapeChar" ((PLit (LString "\""))) (EApp (EVar "Some") (ELit (LString "\""))))
+(DFunDef false "unquoteLit" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "\"")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "\"")))) (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EListLit)) (EVar "None")))))
+(DTypeSig false "unquoteScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "unquoteScan" ((PVar "cs") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverseL") (EVar "acc"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "end")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "unescapeChar" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "n"))) (EApp (EVar "Some") (ELit (LChar "\n"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "t"))) (EApp (EVar "Some") (ELit (LChar "\t"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "r"))) (EApp (EVar "Some") (ELit (LChar "\r"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "0"))) (EApp (EVar "Some") (ELit (LChar "\0"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "\\"))) (EApp (EVar "Some") (ELit (LChar "\\"))))
+(DFunDef false "unescapeChar" ((PLit (LChar "\""))) (EApp (EVar "Some") (ELit (LChar "\""))))
 (DFunDef false "unescapeChar" (PWild) (EVar "None"))
 (DTypeSig true "lookupChunk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyApp (TyCon "Option") (TyCon "Chunk")))))
 (DFunDef false "lookupChunk" (PWild (PList)) (EVar "None"))

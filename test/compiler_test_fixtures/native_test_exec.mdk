@@ -8,28 +8,36 @@
 -- spawning a process are exactly the two things the eval policy withholds.
 -- `MEDAKA` names the binary under test (the same variable the native runner's
 -- own build step reads); `MEDAKA_TEST_SUBJECT` names the file to check.
+--
+-- `runVerb`, not `runCommandOk`: the latter folds a nonzero exit into an
+-- `Err` carrying only stderr, so an unresolvable `medaka` (exit 127, no
+-- captured text) reads the same as any other spawn failure — the assertion
+-- below needs the exit code and both streams to tell "never ran" apart from
+-- "ran and rejected."
 
-import io.{runCommandOk}
+import io.{getEnvOr, runVerb}
 import test.{fail, pass, Expectation}
 
-envOrDefault : String -> String -> <Env "_"> String
-envOrDefault name fallback = match getEnv name
-  Some v => v
-  None => fallback
+-- `${MEDAKA:-$ROOT/medaka}`: a bare "medaka" fallback spawns whatever is on
+-- PATH, or nothing at all (exit 127) when the tree's binary is the only one
+-- that exists.
+medakaBin : <IO> String
+medakaBin = getEnvOr "MEDAKA" "\{getEnvOr "MEDAKA_ROOT" "."}/medaka"
 
 -- Reads the subject first so a missing fixture fails as a missing fixture,
 -- not as a confusing `medaka check` error about a path that is not there.
-checkPasses : <Exec "_", Env "_", FileRead "_"> Expectation
+checkPasses : <Exec "_", IO> Expectation
 checkPasses =
   let subject =
-    envOrDefault
+    getEnvOr
       "MEDAKA_TEST_SUBJECT"
       "test/compiler_test_fixtures/native_test_subject.mdk"
   match readFile subject
     Err e => fail "could not read the subject \{subject}: \{e}"
-    Ok _ =>
-      match runCommandOk (envOrDefault "MEDAKA" "medaka") ["check", subject]
-        Err e => fail e
-        Ok _ => pass
+    Ok _ => match runVerb medakaBin ["check", subject]
+      Err e => fail e
+      Ok (0, _, _) => pass
+      Ok (code, out, err) =>
+        fail "medaka check \{subject} exited \{intToString code}: \{out}\{err}"
 
 test "medaka check accepts the subject fixture" = checkPasses

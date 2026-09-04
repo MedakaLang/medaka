@@ -1,0 +1,60 @@
+{- | Floor gate for the `parsec/` project (#1933 coverage half), migrated
+   from `parsec/test/check.sh` under #2592.
+
+   `medaka check parsec/main.mdk` exiting 0 is the floor: this
+   manifest-bearing project has no doctests or `test "…"` declarations of
+   its own, so an accepted `check` is what keeps it from being silently
+   unenrolled from CI.
+
+   `parsec/main.mdk` imports `lib.parser` only, never `lib.toml` — so
+   `parsec/lib/toml.mdk` and `parsec/toml_demo.mdk` are unreachable from
+   that entry and were checked by nothing (#1988). They are named here
+   explicitly for the same reason. Add assertions here if the project ever
+   grows behavior worth asserting on. -}
+
+-- Each manifest-bearing project owns its floor gate under its own `test/`
+-- directory ([W-PROJECT-BY-MANIFEST]), so `expectCheckOk` cannot be shared:
+-- a module common to all three would have to live in a fourth project the
+-- other three depend on, which is what the enrolment rule forbids.
+-- lint-disable-file rule-duplicate-body
+
+import io.{getEnvOr, runVerb}
+import test.{Expectation, fail, pass}
+
+-- Sources are located through MEDAKA_ROOT rather than the working
+-- directory: `medaka gate run` exports it and inherits whatever cwd the
+-- caller had.
+root : <IO> String
+root = getEnvOr "MEDAKA_ROOT" "."
+
+source : String -> <IO> String
+source rel = "\{root}/\{rel}"
+
+-- `${MEDAKA:-$ROOT/medaka}`, the deleted script's own default. A bare
+-- "medaka" fallback would spawn whatever is on PATH, or nothing at all
+-- (exit 127) when the tree's binary is the only one that exists.
+medakaBin : <IO> String
+medakaBin = getEnvOr "MEDAKA" "\{root}/medaka"
+
+-- The exit code is the assertion, never the text: a rejection can say
+-- anything, but a spawn that produced NO text at all (an unresolvable
+-- `medaka`, exit 127) would satisfy an assertion phrased over the output.
+-- stdout and stderr are concatenated only for the failure message, since
+-- which stream a diagnostic lands on is not under test here.
+expectCheckOk : String -> <Exec "_", IO> Expectation
+expectCheckOk rel = match runVerb medakaBin ["check", source rel]
+  Err e => fail "\{rel}: could not run `medaka check`: \{e}"
+  Ok (code, out, err) =>
+    if code == 0 then
+      pass
+    else
+      fail
+        "\{rel}: `medaka check` exited \{intToString code}: \{debug (out ++ err)}"
+
+test "parsec/main.mdk passes `medaka check`" = expectCheckOk "parsec/main.mdk"
+
+test "parsec/lib/toml.mdk passes `medaka check`" =
+  expectCheckOk "parsec/lib/toml.mdk"
+
+test "parsec/toml_demo.mdk passes `medaka check`" =
+  expectCheckOk "parsec/toml_demo.mdk"
