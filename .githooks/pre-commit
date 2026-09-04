@@ -106,7 +106,7 @@ set -u
 # whole-project scan (it compares a body against OTHER files), so it's checked in
 # one scan over all source roots at once (catches cross-root duplicates too).
 # Intentional exceptions use inline directives (-- lint-disable-next-line / -file <rule>).
-GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op"
+GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op,rule-promissory-reader,rule-self-shadow-extern"
 # Rules carried by the COUNT BASELINE instead of the max ratchet (check 2b, #2619).
 # A rule belongs here when the tree is not clean of it and draining it is not the
 # current change's job: rule-stdlib-reimpl's signature-aware matcher reaches ~70
@@ -114,7 +114,20 @@ GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-
 # thin-wrapper duplication ([T-STDLIB-IMPORT]). Putting it in GATED_LINT_RULES
 # would be #1214's max-ratchet trap (a rule gated before the tree is clean of it);
 # leaving it nowhere left its count free to grow, which is what #2619 fixes.
-BASELINED_LINT_RULES="rule-stdlib-reimpl"
+# rule-orelse-staircase (#2565) ships here for the same reason: it reaches 7
+# pre-existing first-match probe staircases across 6 files, and converting them to
+# orElse/findMap changes evaluation order (Medaka is strict, so a rewritten chain
+# runs every probe), which is a judgement call per site, not this rule's job.
+# rule-clone-type (#2566) ships here for the same reason: it reaches 6 pre-existing
+# Option/Result-shaped domain types across 4 files, and replacing one with the
+# stdlib type rewrites every consumer, which is a judgement call per site, not this
+# rule's job. Its exclusions are per-site `-- lint-disable-next-line rule-clone-type`
+# directives above the declarations a human has read, never a list of type names in
+# the linter: a name list would exonerate every like-named type in the tree.
+# rule-clause-map (#2567) ships here too: it reaches 17 pre-existing clause-form
+# list maps across 10 files, and each rewrite is a judgement call about whether the
+# named helper stays worth having, not this rule's job.
+BASELINED_LINT_RULES="rule-stdlib-reimpl,rule-orelse-staircase,rule-clone-type,rule-clause-map"
 LINT_BASELINE_FILE="test/lint_baseline.toml"
 # Cross-file rules, checked project-wide (not per staged file).
 GATED_CROSSFILE_RULES="rule-duplicate-body"

@@ -1,0 +1,24 @@
+warning: [rule-dead-code] private top-level 'negDepth1' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'negErrInspected' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'negHeterogeneous' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'negMixed' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'negRewrapTransform' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'posArmOrder' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'posOption3' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'posResult2' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'posUnwrap2' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-match-to-map] 2-arm match maps over an Option/Result — rewrite as 'map (v => v) (lookupC k)'
+warning: [rule-match-to-map] 2-arm match maps over an Option/Result — rewrite as 'map g (lookupB k)'
+warning: [rule-missing-signature] top-level 'negDepth1' has no type signature. Add a `negDepth1 : …` declaration
+warning: [rule-missing-signature] top-level 'negErrInspected' has no type signature. Add a `negErrInspected : …` declaration
+warning: [rule-missing-signature] top-level 'negHeterogeneous' has no type signature. Add a `negHeterogeneous : …` declaration
+warning: [rule-missing-signature] top-level 'negMixed' has no type signature. Add a `negMixed : …` declaration
+warning: [rule-missing-signature] top-level 'negRewrapTransform' has no type signature. Add a `negRewrapTransform : …` declaration
+warning: [rule-missing-signature] top-level 'posArmOrder' has no type signature. Add a `posArmOrder : …` declaration
+warning: [rule-missing-signature] top-level 'posOption3' has no type signature. Add a `posOption3 : …` declaration
+warning: [rule-missing-signature] top-level 'posResult2' has no type signature. Add a `posResult2 : …` declaration
+warning: [rule-missing-signature] top-level 'posUnwrap2' has no type signature. Add a `posUnwrap2 : …` declaration
+warning: [rule-orelse-staircase] first-match probe staircase (≥2 `Err` fallthrough re-probes). There is no `Alternative Result`, so `orElse`/`findMap` do not apply -- and Medaka is strict, so no eager combinator would stop at the first hit either; restructure the probes by hand rather than nesting `match`
+warning: [rule-orelse-staircase] first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe
+warning: [rule-orelse-staircase] first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe
+warning: [rule-orelse-staircase] first-match probe staircase (≥2 `None` fallthrough re-probes). Rewrite with `orElse` (Alternative, auto-prelude), or `findMap` when the probes are one function over a list -- both are eager, so the rewrite re-runs every probe instead of stopping at the first hit, and is a readability change only where re-probing is cheap and safe

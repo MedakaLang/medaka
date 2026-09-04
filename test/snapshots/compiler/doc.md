@@ -1,5 +1,5 @@
 # META
-source_lines=1671
+source_lines=1672
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -922,6 +922,7 @@ isDecorativeChar c =
 -- A run of extracted doc-prose lines is either plain prose or a doctest
 -- example block (starts at a `> ` line, extends through following non-blank
 -- lines — its expected-output lines — up to the next blank line or EOF).
+-- lint-disable-next-line rule-clone-type
 data DocSegment = ProseSeg (List String) | ExampleSeg (List String)
 data SegMode = ModeProse | ModeExample
 
