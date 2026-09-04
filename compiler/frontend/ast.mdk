@@ -1136,10 +1136,14 @@ public export data Expr =
   -- caller-supplied dict.  Empty for every ordinary site — eval's fold is a no-op.
   | EMethodAt String (Ref Route) (Ref (List Route)) (Ref (List Route))
   -- Constrained-function occurrence (`f` where `f : C a => …`) rewritten by the
-  -- same pre-pass: the function name + one route per `=>` constraint, filled by
-  -- the typechecker.  Eval applies the matching dictionaries as leading args,
-  -- lining up with the dict params dict_pass prepended to f's definition.
-  | EDictAt String (Ref (List Route))
+  -- same pre-pass: the function name + the identity under which the solver
+  -- publishes this occurrence's routes, one per `=>` constraint.  Eval applies the
+  -- matching dictionaries as leading args, lining up with the dict params
+  -- dict_pass prepended to f's definition; it resolves the id through the table
+  -- `elaborateModules`/`elaborateDict` publish (`evDictRoutes`,
+  -- `compiler/types/route_key.mdk`) rather than through a cell, because the
+  -- interpreter cannot reach a typechecker-private ref.
+  | EDictAt String EvId
   -- Transparent source-location wrapper.  The parser wraps atom/leaf and statement-form productions
   -- (matching parser.mly's atoms + let/if/match/function/do/lambda/as-pat) so
   -- typecheck/resolve can attribute errors to a precise expression span via a

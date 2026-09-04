@@ -126,10 +126,97 @@ import frontend.ast.{
   Ty(..),
   Constraint(..),
   TyConOrigin(..),
+  Route,
+  EvId(..),
+  EvVal(..),
+  EvEntry(..),
+  EvTable,
   constraintUnresolved,
   ifaceIdentity,
 }
 import support.util.{joinWith, escStr}
+
+-- ── the published evidence table (#2549 M2) ───────────────────────────────
+-- `EDictAt` carries an `EvId`, not a route cell, so a reader answers "what did
+-- the solver decide here" by looking the id up rather than by dereferencing a
+-- pointer the typechecker handed it.  The lookup lives HERE because this module
+-- is the one below all three readers of a solved route — `types/typecheck.mdk`
+-- (dict passing), `eval/eval.mdk` and `ir/core_ir_lower.mdk` — exactly the three
+-- the header above names as this seam's consumers.  A cell inside any one of
+-- them would be unreachable from the other two, and `frontend/ast.mdk` (the only
+-- lower module) imports nothing and holds no state.
+--
+-- The table is INSTALLED once per elaboration by the module that produces it, so
+-- there is no per-driver install to forget; `evidenceRef` holding `None` means no
+-- elaboration has run, which is why the lookup panics on it rather than answering
+-- "no routes" — a driver that grew an `EDictAt` without an elaboration would
+-- otherwise dispatch on an empty route list and be wrong in silence.
+--
+-- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
+-- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
+-- scan would be the List-as-a-map quadratic `compiler/AGENTS.md` records thirteen
+-- instances of.  Ordinals are dense and graph-global (see `freshEvId`), so the
+-- ordinal IS the index; the id's MODULE half is still compared on every hit, so a
+-- cross-module ordinal collision is a panic and not a wrong answer.
+evidenceRef : Ref (Option (Array (Option EvEntry)))
+evidenceRef = Ref None
+
+-- Replace the installed evidence with this elaboration's.  Called once per
+-- elaboration, so the table never outlives the program it describes.
+export
+installEvidence : EvTable -> Unit
+installEvidence entries =
+  let arr = arrayMake (evSlotCount entries 0) None
+  let _ = fillEvidence arr entries
+  evidenceRef := Some arr
+
+-- one past the largest ordinal in [entries]
+evSlotCount : EvTable -> Int -> Int
+evSlotCount [] acc = acc
+evSlotCount ((EvEntry (EvId _ i) _) :: rest) acc =
+  evSlotCount rest (max (i + 1) acc)
+
+-- Two entries under one ordinal would mean two goals published under one name,
+-- and the reader below could then answer with either.  The cell scheme this
+-- replaces could not express that (one node, one cell), so it is a tripwire
+-- rather than a case with a policy: no program in the gate corpus, the 59-fixture
+-- module arm, or the compiler's own self-compile reaches it.
+fillEvidence : Array (Option EvEntry) -> EvTable -> Unit
+fillEvidence _ [] = ()
+fillEvidence arr ((e@(EvEntry (EvId m i) _)) :: rest) =
+  let _ = match arrayGetUnsafe i arr
+    None => arraySetUnsafe i (Some e) arr
+    Some _ =>
+      panic "evidence table: two goals published under \{m}#\{intToString i}"
+  fillEvidence arr rest
+
+-- The dictionary routes solved for [ev], slot-ordered.
+--
+-- An id with NO entry is EMPTY, not an error: a constrained-function occurrence
+-- whose callee turns out to need no dict routing records no goal at all (the #739
+-- bare-name-collision arm of `inferDictAtFound` returns without pushing one), and
+-- the cell scheme answered that case with the untouched `Ref []` this returns.
+export
+evDictRoutes : EvId -> List Route
+evDictRoutes (EvId m i) = match !evidenceRef
+  None =>
+    panic
+      "evidence table: no elaboration has published one (looking up \{m}#\{intToString i})"
+  Some arr =>
+    if i >= arrayLength arr then
+      []
+    else match arrayGetUnsafe i arr
+      None => []
+      Some (EvEntry (EvId m2 _) v) =>
+        if m2 == m then
+          evRoutesOf v
+        else
+          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
+
+evRoutesOf : EvVal -> List Route
+evRoutesOf (EvMany rs) = rs
+evRoutesOf (EvOne _) =
+  panic "evidence table: a dictionary application solved to a single route"
 
 -- ── the interface half of the word ────────────────────────────────────────
 -- `module::Iface` when the interface's origin is known, and the BARE name when

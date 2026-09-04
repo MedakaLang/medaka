@@ -39,7 +39,7 @@ import frontend.ast.{
 -- B-2.2-e: the ONE route-word mint.  This module used to reach it as
 -- `eval.eval.implKeyOf`; that mirror is deleted and both sides of the dict-word
 -- seam now call `route_key.implRouteKeyWord` with the impl's own `implOrigin`.
-import types.route_key.{implRouteKeyWord, ifaceWordOf}
+import types.route_key.{implRouteKeyWord, ifaceWordOf, evDictRoutes}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -153,13 +153,14 @@ lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
   lowerBinop op l r tag
 lower (EAnnot e _) = lower e
 lower (EHeadAnnot e _) = lower e
--- dispatch: read the typechecker-filled route out of the mutable cell, making it
+-- dispatch: read the typechecker-filled route — `EMethodAt` still out of its
+-- mutable cell, `EDictAt` out of the published evidence table — making it
 -- structural + immutable in the IR (slice 5; present so the lowering is total).
 -- (instance-`requires` impl dicts — the second ref — are unsupported in the Core
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 lower (EMethodAt name routeRef implRef methodRef) =
   CMethod name !routeRef !implRef !methodRef
-lower (EDictAt name routesRef) = CDict name !routesRef
+lower (EDictAt name ev) = CDict name (evDictRoutes ev)
 -- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
 -- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
 -- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).

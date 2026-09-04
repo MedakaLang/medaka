@@ -330,7 +330,12 @@ import types.registry.{
 -- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
-import types.route_key.{implRouteKeyWord, funHeadTag}
+import types.route_key.{
+  implRouteKeyWord,
+  funHeadTag,
+  installEvidence,
+  evDictRoutes,
+}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -8015,9 +8020,16 @@ uOblIsDecidableNow o =
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
 -- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
 data PendingDictApp = PendingDictApp {
+  -- #2549 M2: the goal's OWN cell, minted with the goal.  It used to be the
+  -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
+  -- carries `pdaEv` instead and the reader looks that up in the published table, so
+  -- this cell is private to the solver — the stampers' write target, read back once
+  -- by `recordEvidence` and by nothing outside this file.
   pdaRoutesRef : Ref (List Route),
   -- #2549 M2: this application's evidence id, the same field `PendingEntry` carries
-  -- as its 7th and for the same reason.
+  -- as its 7th and for the same reason.  Taken FROM THE NODE (`inferDictAt`), not
+  -- minted here, so the id names the occurrence rather than the moment the goal was
+  -- queued — that is what makes the node's lookup find this goal's answer.
   pdaEv : EvId,
   pdaMonos : List Mono,
   pdaIfaces : List IfaceRef,
@@ -9167,8 +9179,18 @@ freshEvId _ =
   g.evCounter := n + 1
   EvId driverState.value.currentModuleRef.value n
 
+-- #2549 M2: the evidence ORDINAL survives this reset; nothing else does.  A reset
+-- drops the goal channel and the table, but it does NOT drop the marked trees, and
+-- since the `EDictAt` mint happens in the prePass — BEFORE the inference whose
+-- `checkBodyImpl` resets a Flat graph — restarting the ordinal at 0 here would
+-- re-issue ids the marked tree already carries, and two goals would publish under
+-- one name.  Monotone across resets, ids stay unique for as long as any tree
+-- holding one can still be read.
 resetGraphState : Unit -> Unit
-resetGraphState _ = graphRun := freshGraphRun ()
+resetGraphState _ =
+  let n = graphRun.value.evCounter.value
+  graphRun := freshGraphRun ()
+  graphRun.value.evCounter := n
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
 -- over the same value, so neither side's later writes reach the other.
@@ -11374,7 +11396,7 @@ infer env (EVariantUpdate cname base fields) =
 infer env (EBlock stmts) = inferBlock env stmts
 infer env (EMethodAt name tagRef implRef methodRef) =
   inferMethodAt env name tagRef implRef methodRef
-infer env (EDictAt name routesRef) = inferDictAt env name routesRef
+infer env (EDictAt name ev) = inferDictAt env name ev
 infer env (EArrayLit es) = inferArrayLit env es
 infer env (ERangeList lo hi _) = inferIntRange env lo hi (tconBuiltin "List")
 infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
@@ -11843,10 +11865,10 @@ recordSite name tagRef implRef methodType =
 -- constraint monos so resolveDictApps can pick a dict route once the call's args
 -- pin those monos.  funConstraintsRef[f] gives f's constraint tyvar ids, mapped
 -- through the instantiation subst to this call's fresh vars.
-inferDictAt : TcEnv -> String -> Ref (List Route) -> Mono
-inferDictAt env name routesRef = match lookupVar env name
+inferDictAt : TcEnv -> String -> EvId -> Mono
+inferDictAt env name ev = match lookupVar env name
   None => panic ("unbound constrained fn: " ++ name)
-  Some scheme => inferDictAtFound name routesRef (instantiateTracked scheme)
+  Some scheme => inferDictAtFound name ev (instantiateTracked scheme)
 
 -- The callee's constraints are registered (funConstraintsRef has it) ⇒ a normal
 -- call: map each constraint id through the instantiation subst to this call's
@@ -12084,11 +12106,8 @@ hasImportDefiner name =
     Some _ => True
     None => False
 
-inferDictAtFound : String ->
-  Ref (List Route) ->
-  (Mono, List (Int, Mono)) ->
-  Mono
-inferDictAtFound name routesRef inst =
+inferDictAtFound : String -> EvId -> (Mono, List (Int, Mono)) -> Mono
+inferDictAtFound name ev inst =
   let q = qualConstraintFor name
   -- S-xmod-vector-supply (#1868/#1867): ONE resolution, two projections.  The slots and
   -- the argument vectors `zipSlotVecs` pairs them with below MUST come from the same
@@ -12105,8 +12124,12 @@ inferDictAtFound name routesRef inst =
   -- #739: an explicitly-imported callee with NO cross-module constraint (declaredIds empty
   -- and source-exact per Fix A above) is genuinely UNCONSTRAINED — it only reached this
   -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
-  -- exports a same-named CONSTRAINED fn (`p.f`).  It needs NO dict routing: leave routesRef
-  -- empty and return the plain instantiated type.  Neither branch below is safe here — the
+  -- exports a same-named CONSTRAINED fn (`p.f`).  It needs NO dict routing: record no
+  -- goal for [ev] at all — an id with no published entry reads back empty, which is the
+  -- answer this arm wants — and return the plain instantiated type.  This is the one
+  -- occurrence shape that leaves an `EDictAt` unrepresented in the evidence table, and
+  -- `evDictRoutes` is written to answer it rather than to fault.
+  -- Neither branch below is safe here — the
   -- `if` branch would record a phantom obligation off the bare-name collision, and the
   -- `else` (recursive) branch's realizeRecDictApps does its OWN source-blind bare-name
   -- funConstraintsRef lookup and would forward the wrong module's dict slot.
@@ -12135,8 +12158,8 @@ inferDictAtFound name routesRef inst =
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
     let _ = pushDictApp PendingDictApp {
-      pdaRoutesRef = routesRef,
-      pdaEv = freshEvId (),
+      pdaRoutesRef = Ref [],
+      pdaEv = ev,
       pdaMonos = monos,
       pdaIfaces = map (s => s.csIface) expanded,
       pdaArgVecs = argVecs,
@@ -12156,12 +12179,7 @@ inferDictAtFound name routesRef inst =
     fst inst
   else
     pushRecDictAppGoal
-      (RecDictApp
-        routesRef
-        name
-        perRun.value.currentFn.value
-        (fst inst)
-        (freshEvId ()))
+      (RecDictApp (Ref []) name perRun.value.currentFn.value (fst inst) ev)
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -19779,14 +19797,21 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   -- differs from `moduleStampOrder` and why.  One Flat module is the whole graph, so
   -- there is no quiescence to defer to: it runs here, over this module's windows.
   let mk = currentModuleMarks ()
+  let flatGoals = goalsSince mk.mGoals
   let _ =
     runStampSteps
       (stampCtxOf
         driverState.value.currentModuleRef.value
         prog2
-        (goalsSince mk.mGoals)
+        flatGoals
         (moduleWindow graphRun.value.numlitRefs mk.mNumlit))
       flatStampOrder
+  -- #2549 M2: the Flat arm's own copy of what `runStampCtxs` does per module and
+  -- `dictPassModulesIfEnabled` then installs.  One Flat module is the whole graph,
+  -- so its window IS the table; without these two lines every `EDictAt` this arm
+  -- marked would resolve against an empty table and dispatch on no dicts at all.
+  let _ = recordEvidence flatGoals
+  let _ = installEvidence graphRun.value.evTable.value
   dictPass allNames prog2
 
 -- With no eligible names (the RKey-only / typed path), there is nothing to
@@ -19933,9 +19958,10 @@ anyMember [] _ = False
 anyMember (x :: xs) ys = contains x ys || anyMember xs ys
 
 -- rewrite each return-position method occurrence to EMethodAt, and each
--- constrained-fn occurrence (a name in [dictNames]) to EDictAt — both carry a
--- fresh ref the typechecker fills.  The two name sets are disjoint (interface
--- methods vs top-level functions).
+-- constrained-fn occurrence (a name in [dictNames]) to EDictAt.  EMethodAt carries
+-- fresh refs the typechecker fills; EDictAt carries a fresh evidence id the
+-- typechecker publishes an answer under (#2549 M2).  The two name sets are
+-- disjoint (interface methods vs top-level functions).
 --
 -- ⚠️ #2189: THE THREE NAME SETS ARE INDEXED, NOT SCANNED.  [rpNames]/[dictNames]
 -- grow with the program (one entry per interface method / per `=>`-constrained
@@ -19959,7 +19985,7 @@ prePassDict rpNames dictNames prog =
 rewriteRPDict : OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDict rpNames dictNames (EVar n)
   | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | omHasKey n dictNames = EDictAt n (Ref [])
+  | omHasKey n dictNames = EDictAt n (freshEvId ())
   | otherwise = EVar n
 rewriteRPDict _ _ e = e
 
@@ -20022,7 +20048,7 @@ rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDictArg rpNames dictNames argNames (EVar n)
   | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
   | omHasKey n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | omHasKey n dictNames = EDictAt n (Ref [])
+  | omHasKey n dictNames = EDictAt n (freshEvId ())
   | otherwise = EVar n
 rewriteRPDictArg _ _ _ e = e
 
@@ -20132,7 +20158,7 @@ rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
   | omHasKey n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (Ref [])
+  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (freshEvId ())
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
@@ -27522,8 +27548,8 @@ siteRDictName r = match !r
   RDictFwd d => [d]
   _ => []
 
-siteRDictNamesL : Ref (List Route) -> List String
-siteRDictNamesL r = flatMap routeRDictName !r
+siteRDictNamesL : List Route -> List String
+siteRDictNamesL rs = flatMap routeRDictName rs
 
 routeRDictName : Route -> List String
 routeRDictName (RDict d) = [d]
@@ -27601,16 +27627,22 @@ doStmtSites (DoFieldAssign _ _ e) = collectMethodSites e
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldAssignSites (FieldAssign _ e) = collectMethodSites e
 
--- mirror of collectMethodSites's structural walk, but collecting EDictAt's
--- route-LIST refs (`Ref (List Route)`) instead of EMethodAt's single route ref.
-collectDictSites : Expr -> List (Ref (List Route))
-collectDictSites (EDictAt _ rs) = [rs]
+-- mirror of collectMethodSites's structural walk, but collecting route LISTS
+-- instead of EMethodAt's single route ref.
+--
+-- #2549 M2: an `EDictAt`'s routes come from the published evidence table and an
+-- `EMethodAt`'s still from its cells, so this yields the route lists themselves
+-- rather than the cells that hold them.  Its one caller (`bodyRDictNames`)
+-- dereferenced every cell immediately anyway, so no writer downstream loses a cell
+-- it could have written.
+collectDictSites : Expr -> List (List Route)
+collectDictSites (EDictAt _ ev) = [evDictRoutes ev]
 -- D3b-1: an EMethodAt arg-position site carries its element-dict routes in the
 -- impl-/method-dicts route LISTS (not tagRef).  A nested `requires` impl whose
 -- body dispatches a method on its own element tyvar routes RDict $dict_<m>_<slot>
 -- here — scan both so implDictPassMethods' usesImplDict gate sees it and prepends
 -- the matching param.  [] on the golden path (resolveArgStamp never runs).
-collectDictSites (EMethodAt _ _ implR methR) = [implR, methR]
+collectDictSites (EMethodAt _ _ implR methR) = [!implR, !methR]
 collectDictSites (ELoc _ e) = collectDictSites e
 collectDictSites (EDoOrigin _ e) = collectDictSites e
 collectDictSites (EApp f x) = collectDictSites f ++ collectDictSites x
@@ -27643,28 +27675,28 @@ collectDictSites (EVariantUpdate _ e fs) =
   collectDictSites e ++ flatMap fieldAssignDictSites fs
 collectDictSites _ = []
 
-letBindDictSites : LetBind -> List (Ref (List Route))
+letBindDictSites : LetBind -> List (List Route)
 letBindDictSites (LetBind _ clauses) = flatMap funClauseDictSites clauses
 
-funClauseDictSites : FunClause -> List (Ref (List Route))
+funClauseDictSites : FunClause -> List (List Route)
 funClauseDictSites (FunClause _ body) = collectDictSites body
 
-armDictSites : Arm -> List (Ref (List Route))
+armDictSites : Arm -> List (List Route)
 armDictSites (Arm _ guards body) =
   flatMap guardDictSites guards ++ collectDictSites body
 
-guardDictSites : Guard -> List (Ref (List Route))
+guardDictSites : Guard -> List (List Route)
 guardDictSites (GBool e) = collectDictSites e
 guardDictSites (GBind _ e) = collectDictSites e
 
-doStmtDictSites : DoStmt -> List (Ref (List Route))
+doStmtDictSites : DoStmt -> List (List Route)
 doStmtDictSites (DoExpr e) = collectDictSites e
 doStmtDictSites (DoLet _ _ _ e) = collectDictSites e
 doStmtDictSites (DoBind _ e) = collectDictSites e
 doStmtDictSites (DoAssign _ e) = collectDictSites e
 doStmtDictSites (DoFieldAssign _ _ e) = collectDictSites e
 
-fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
+fieldAssignDictSites : FieldAssign -> List (List Route)
 fieldAssignDictSites (FieldAssign _ e) = collectDictSites e
 
 dictArityOf : String -> Int
@@ -41347,6 +41379,12 @@ dictPassModulesIfEnabled : List String ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 dictPassModulesIfEnabled dictNames core2 modules2 =
+  -- #2549 M2: publish this sweep's solved evidence to the readers before anything
+  -- reads a route out of it.  Here rather than at `elaborateModules`' return
+  -- because `dictPass` is itself a reader (`bodyRDictNames`), and this is the
+  -- Module arm's one funnel into it — the fixpoint reaches this call only on the
+  -- sweep whose trees are final, so a discarded sweep never installs.
+  let _ = installEvidence graphRun.value.evTable.value
   let allModDecls = flatMap snd modules2
   let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
