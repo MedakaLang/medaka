@@ -33,6 +33,7 @@ import tools.refindex.{
 import frontend.ast.{Loc(..)}
 import support.util.{sortUniqS, joinWith, splitOnChar, listLen}
 import support.path.{dirOf}
+import entries.entry_support.{rootsOrDefault}
 
 usage : String
 usage =
@@ -48,10 +49,6 @@ dispatch : Bool -> List String -> <IO> Unit
 dispatch dump (runtimeP :: coreP :: entry :: roots) =
   run dump runtimeP coreP entry (rootsOrDefault entry roots)
 dispatch _ _ = ePutStrLn usage
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
 
 run : Bool -> String -> String -> String -> List String -> <IO> Unit
 run dump runtimeP coreP entry roots = match readFile runtimeP

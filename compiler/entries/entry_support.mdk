@@ -145,10 +145,12 @@ driveModules runEmit = match args ()
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
 
+export
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault entry [] = [dirOf entry]
 rootsOrDefault _ roots = roots
 
+export
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
 

@@ -18,6 +18,7 @@
 
 import driver.diagnostics.{analyzeProjectToLines}
 import support.path.{dirOf}
+import entries.entry_support.{rootsOrDefault}
 
 main = match args ()
   runtimeP :: coreP :: entry :: roots =>
@@ -25,10 +26,6 @@ main = match args ()
   _ =>
     ePutStrLn
       "usage: medaka run compiler/entries/diagnostics_project_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
 
 -- disk-only read callback (no editor-buffer overrides on the CLI path).
 noOverride : String -> Option String

@@ -135,7 +135,7 @@ import frontend.resolve.{
   ifaceKey,
 }
 import types.typecheck.{elaborateModules, checkProgramSchemesWithRuntime}
-import entries.entry_support.{failWith, usageModules}
+import entries.entry_support.{failWith, usageModules, rootsOrDefault}
 import driver.loader.{loadProgramFilesE, loadErrorMessage, entrySearchRoots}
 import tools.test_cmd.{singleRootId}
 import support.util.{listLen}
@@ -181,13 +181,8 @@ originKey (OriginModule m) = "mod:\{m}"
 main : <IO> Unit
 main = match args ()
   runtimeP :: coreP :: entry :: roots0 =>
-    driveGo runtimeP coreP entry (rootsOrDefaultHere entry roots0)
+    driveGo runtimeP coreP entry (rootsOrDefault entry roots0)
   _ => failWith usageModules
-
--- Local copy of entry_support's private `rootsOrDefault` (not exported there).
-rootsOrDefaultHere : String -> List String -> List String
-rootsOrDefaultHere entry [] = [dirOf entry]
-rootsOrDefaultHere _ roots = roots
 
 driveGo : String -> String -> String -> List String -> <IO> Unit
 driveGo runtimeP coreP entry roots = match readFile runtimeP

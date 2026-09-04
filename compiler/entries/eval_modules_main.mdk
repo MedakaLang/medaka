@@ -16,19 +16,13 @@ import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import eval.eval.{evalModulesOutput}
 import support.path.{dirOf}
+import entries.entry_support.{rootsOrDefault, desugarPair}
 
 main = match args ()
   coreP :: entry :: roots => run coreP entry (rootsOrDefault entry roots)
   _ =>
     ePutStrLn
       "usage: medaka run compiler/entries/eval_modules_main.mdk <core.mdk> <entry.mdk> [root ...]"
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
-
-desugarPair : (String, List Decl) -> (String, List Decl)
-desugarPair (mid, p) = (mid, desugar p)
 
 run : String -> String -> List String -> <IO> Unit
 run coreP entry roots = match readFile coreP

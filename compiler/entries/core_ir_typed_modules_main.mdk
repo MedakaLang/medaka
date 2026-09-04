@@ -35,7 +35,9 @@ import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{elaborateModules}
 import ir.core_ir_eval.{cevalModulesOutput}
-import entries.entry_support.{failWith, usageModules}
+import entries.entry_support.{
+  failWith, usageModules, rootsOrDefault, desugarPair
+}
 import support.path.{dirOf}
 
 main : <IO> Unit
@@ -43,13 +45,6 @@ main = match args ()
   runtimeP :: coreP :: entry :: roots =>
     run runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
-
-desugarPair : (String, List Decl) -> (String, List Decl)
-desugarPair (mid, p) = (mid, desugar p)
 
 run : String -> String -> String -> List String -> <IO> Unit
 run runtimeP coreP entry roots = match readFile runtimeP
