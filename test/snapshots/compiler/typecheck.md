@@ -1,5 +1,5 @@
 # META
-source_lines=42466
+source_lines=42456
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -26901,19 +26901,6 @@ ambiguousImplMsg iface =
 -- from a DIFFERENT impl's goal.  (`entailInst`'s EKArg arm binds its goals once for
 -- exactly this reason.)
 --
--- ⚠️ The iface-UNKNOWN arm (iface == "", the method-dict / untyped-fallback path) has
--- no interface and therefore no arity to give a vector meaning, so it stays SCALAR —
--- and `goals` is pinned to `[m]` there so the substitution is scalar too.  That is not
--- a special case bolted on: at `listLen goals == 1`, `headSubstWithParams h itys m [m]`
--- IS `matchTyMono h m` (augmentWithParams gates on `listLen paramMonos > 1`), so this
--- arm reduces to the pre-#1154 body term for term, algebraically.
---
--- ⚠️ Be precise about what that pin buys, because the obvious reading is wrong:
--- `selectReqImpl`'s `iface == ""` arm IGNORES [goals] entirely (it selects with
--- `findImplEntry … m`), so pinning `goals` there changes NOTHING about selection and is
--- inert on that consumer today.  Its only live effect is on the SUBSTITUTION, and it is
--- a FORWARD guard against the two drifting apart if that arm is ever made vector-aware.
---
 -- #1161 (F-3a-ii) CORRECTION.  This comment used to add: "the property this function
 -- actually rests on is NOT anything about `iface`: it is that **only `argReqRoute` ever
 -- supplies a non-empty [rest]** … if a second non-empty-[rest] caller appears, re-derive
@@ -26929,11 +26916,16 @@ ambiguousImplMsg iface =
 --   • selection and substitution still read the ONE `goals` binding, so §6 C2's
 --     "dispatched-to impl == context-discharged impl" holds per caller, not per callsite
 --     count.
--- The property this now rests on is therefore about the VALUE, not the caller census:
--- every caller either supplies `[]` (⇒ `goals == [m]`, byte-identical) or supplies a
--- vector under a non-empty `iface`.  A caller that supplies a non-empty [rest] with
--- `iface == ""` would be the shape to re-derive for; the `if iface == ""` pin below
--- neutralizes even that.
+-- The property this rests on is therefore about the VALUE, not the caller census: every
+-- caller either supplies `[]` (⇒ `m :: rest` is `[m]` unconditionally) or supplies a
+-- vector under a non-empty `iface`.  No caller supplies a non-empty [rest] with
+-- `iface == ""` — #2665 measured this directly rather than resting on the census alone:
+-- a panic planted on exactly that conjunction, swept over a full self-compile, `check`
+-- and `test` on every `stdlib`/`compiler` module, and the dict_semantics/engines/
+-- must_fail/eval_typed_modules gate corpora, fired zero times, while the same panic
+-- moved to a sibling arm known to be live fired on the first thing compiled.  [goals] no
+-- longer special-cases `iface == ""`: `m :: rest` already gives `[m]` whenever `rest`
+-- is `[]`, which is the only value `rest` takes there.
 argImplRequiresRoutes : IfaceRef ->
   String ->
   Mono ->
@@ -26945,7 +26937,7 @@ argImplRequiresRoutes iface encl m rest prevSize spent =
   -- #1576: the goal vector is bound BEFORE the fuse test now, because the fuse test
   -- reads it.  It is pure, so hoisting it costs a `monoSizes` walk on the limit-hit
   -- path and changes no answer.
-  let goals = if iface.irName == "" then [m] else m :: rest
+  let goals = m :: rest
   let size = monoSizes goals
   -- SHRINKING ⇒ free.  No parent (`prevSize == 0`, a seed) ⇒ not shrinking, by
   -- definition rather than by measurement: there is nothing to have shrunk from.
@@ -26958,9 +26950,7 @@ argImplRequiresRoutes iface encl m rest prevSize spent =
     -- call to this function, which is how §6 C2 ("the impl dispatched to and the impl
     -- whose context is discharged must be the same impl") is held by construction
     -- rather than by care.  The reason it carries no origin is written there; moving
-    -- one of these two without the other is the thing C2 forbids.  Its own `iface ==
-    -- ""` pin in the `goals` binding above is the same sentinel `selectReqImpl`
-    -- re-spells; both stay name-scoped.
+    -- one of these two without the other is the thing C2 forbids.
 
     Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
       Some subst =>
@@ -46658,7 +46648,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ambiguousImplMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ambiguousImplMsg" ((PVar "iface")) (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous instance for `")) (EVar "iface")) (ELit (LString "`. Cannot determine which impl; add a type annotation"))))
 (DTypeSig false "argImplRequiresRoutes" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))
-(DFunDef false "argImplRequiresRoutes" ((PVar "iface") (PVar "encl") (PVar "m") (PVar "rest") (PVar "prevSize") (PVar "spent")) (EBlock (DoLet false false (PVar "goals") (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString ""))) (EListLit (EVar "m")) (EBinOp "::" (EVar "m") (EVar "rest")))) (DoLet false false (PVar "size") (EApp (EVar "monoSizes") (EVar "goals"))) (DoLet false false (PVar "spentNow") (EIf (EBinOp "&&" (EBinOp ">" (EVar "prevSize") (ELit (LInt 0))) (EBinOp "<" (EVar "size") (EVar "prevSize"))) (EVar "spent") (EBinOp "+" (EVar "spent") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp ">=" (EVar "spentNow") (EVar "requiresNonShrinkingFuel")) (EListLit) (EMatch (EApp (EApp (EVar "selectReqImpl") (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "itys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "itys")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EVar "size")) (EVar "spentNow"))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))))
+(DFunDef false "argImplRequiresRoutes" ((PVar "iface") (PVar "encl") (PVar "m") (PVar "rest") (PVar "prevSize") (PVar "spent")) (EBlock (DoLet false false (PVar "goals") (EBinOp "::" (EVar "m") (EVar "rest"))) (DoLet false false (PVar "size") (EApp (EVar "monoSizes") (EVar "goals"))) (DoLet false false (PVar "spentNow") (EIf (EBinOp "&&" (EBinOp ">" (EVar "prevSize") (ELit (LInt 0))) (EBinOp "<" (EVar "size") (EVar "prevSize"))) (EVar "spent") (EBinOp "+" (EVar "spent") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp ">=" (EVar "spentNow") (EVar "requiresNonShrinkingFuel")) (EListLit) (EMatch (EApp (EApp (EVar "selectReqImpl") (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "itys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "itys")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EVar "size")) (EVar "spentNow"))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))))
 (DTypeSig false "selectReqImpl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))))
 (DFunDef false "selectReqImpl" ((PVar "iface") (PVar "goals")) (EApp (EVar "ieRowHeadTriple") (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "iface")) (EVar "goals"))))
 (DTypeSig false "argImplDictRoutesForEncl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))))
@@ -52981,7 +52971,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ambiguousImplMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ambiguousImplMsg" ((PVar "iface")) (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous instance for `")) (EVar "iface")) (ELit (LString "`. Cannot determine which impl; add a type annotation"))))
 (DTypeSig false "argImplRequiresRoutes" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))
-(DFunDef false "argImplRequiresRoutes" ((PVar "iface") (PVar "encl") (PVar "m") (PVar "rest") (PVar "prevSize") (PVar "spent")) (EBlock (DoLet false false (PVar "goals") (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString ""))) (EListLit (EVar "m")) (EBinOp "::" (EVar "m") (EVar "rest")))) (DoLet false false (PVar "size") (EApp (EVar "monoSizes") (EVar "goals"))) (DoLet false false (PVar "spentNow") (EIf (EBinOp "&&" (EBinOp ">" (EVar "prevSize") (ELit (LInt 0))) (EBinOp "<" (EVar "size") (EVar "prevSize"))) (EVar "spent") (EBinOp "+" (EVar "spent") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp ">=" (EVar "spentNow") (EVar "requiresNonShrinkingFuel")) (EListLit) (EMatch (EApp (EApp (EVar "selectReqImpl") (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "itys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "itys")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EVar "size")) (EVar "spentNow"))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))))
+(DFunDef false "argImplRequiresRoutes" ((PVar "iface") (PVar "encl") (PVar "m") (PVar "rest") (PVar "prevSize") (PVar "spent")) (EBlock (DoLet false false (PVar "goals") (EBinOp "::" (EVar "m") (EVar "rest"))) (DoLet false false (PVar "size") (EApp (EVar "monoSizes") (EVar "goals"))) (DoLet false false (PVar "spentNow") (EIf (EBinOp "&&" (EBinOp ">" (EVar "prevSize") (ELit (LInt 0))) (EBinOp "<" (EVar "size") (EVar "prevSize"))) (EVar "spent") (EBinOp "+" (EVar "spent") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp ">=" (EVar "spentNow") (EVar "requiresNonShrinkingFuel")) (EListLit) (EMatch (EApp (EApp (EVar "selectReqImpl") (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "itys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "itys")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EVar "size")) (EVar "spentNow"))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))))
 (DTypeSig false "selectReqImpl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))))
 (DFunDef false "selectReqImpl" ((PVar "iface") (PVar "goals")) (EApp (EVar "ieRowHeadTriple") (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "iface")) (EVar "goals"))))
 (DTypeSig false "argImplDictRoutesForEncl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))))
