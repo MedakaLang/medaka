@@ -139,7 +139,7 @@ argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
 argImplDictRoutesForEncl : String -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : String -> List (String, Mono) -> List Require -> Int -> Int -> List Route
-argImplRequiresRoutes : IfaceRef -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
+argImplRequiresRoutes : IfaceRef -> String -> Mono -> List Mono -> Int -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
