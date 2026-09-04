@@ -1,0 +1,438 @@
+{- | The composition seam's authentication check (#2604).
+
+   `lib.server_core`'s `handle` refuses an unauthenticated request to a gated
+   route BEFORE any handler runs, and lets a public one through with no
+   credential at all. Both halves are silent-wrongness paths in opposite
+   directions: an open write is a repository anyone can scribble in, and a
+   closed read is a repository no client and no relay can mirror.
+
+   Two subjects, deliberately:
+
+   * a SYNTHETIC registry with one gated procedure and one public query, whose
+     handler reports the `AuthOutcome` it was handed, so every credential class
+     (absent, wrong scheme, duplicated, wrong secret, wrong subject, wrong
+     audience, expired, not yet valid, well-formed) can be graded without a
+     repository;
+   * the REAL `pdsRegistry`, whose classification is read back out of the
+     registry itself rather than restated here — a route added later without a
+     classification cannot slip past a test that enumerates what is registered.
+
+   The 401 on the real registry is also the proof of ORDER: an unauthenticated
+   `createRecord` against an unconfigured store answers `AuthenticationRequired`
+   and not the `RepoNotFound` the handler would have produced, so the check
+   demonstrably ran first. -}
+
+import json.{Json(..), get, parse}
+import list.{sort}
+import string.{fromUtf8, toUtf8}
+import test.{expectEqual, expectTrue}
+import lib.handlers.{pdsRegistry, pdsServer}
+import lib.http.{
+  Header,
+  Response,
+  makeHeader,
+  makeResponse,
+  responseBody,
+  responseStatus,
+}
+import lib.jwt.{mintToken}
+import lib.server_core.{
+  Account,
+  AuthOutcome(..),
+  Handler,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+  makeServer,
+}
+import lib.store.{Store, storeEmpty, storeWithServerSecret}
+import lib.xrpc.{
+  AuthPolicy(..),
+  Endpoint,
+  InputPolicy(..),
+  Registry,
+  XrpcCall(..),
+  endpointAuth,
+  endpointNsid,
+  makeRegistry,
+  procedureEndpoint,
+  queryEndpoint,
+  registryEndpoints,
+}
+
+-- ── fixtures ────────────────────────────────────────────────────────────────
+
+accountDidText : String
+accountDidText = "did:plc:medakaauthseamtest"
+
+accountHostText : String
+accountHostText = "pds.example"
+
+{- | A fixed session secret. The seam grades a token against whatever secret
+   the `Store` carries, so a fixture secret is the whole point here: entropy
+   would only make the tokens below irreproducible. -}
+testSecret : Array Int
+testSecret = arrayMakeWith 32 (i => (i * 11 + 5) % 256)
+
+otherSecret : Array Int
+otherSecret = arrayMakeWith 32 (i => (i * 13 + 7) % 256)
+
+testInstant : Int
+testInstant = 1700000000
+
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = testInstant }
+
+account : Account
+account = match makeAccount accountDidText "alice.example" accountHostText
+  Ok value => value
+  Err message => panic "auth_seam_test: account setup failed: \{message}"
+
+-- ── the synthetic subject ───────────────────────────────────────────────────
+
+gatedNsid : String
+gatedNsid = "com.example.gated.write"
+
+openNsid : String
+openNsid = "com.example.open.read"
+
+mustEndpoint : Result String Endpoint -> Endpoint
+mustEndpoint (Ok endpoint) = endpoint
+mustEndpoint (Err message) =
+  panic "auth_seam_test: endpoint setup failed: \{message}"
+
+syntheticRegistry : Registry
+syntheticRegistry = match makeRegistry [
+  mustEndpoint (procedureEndpoint gatedNsid JsonInput AuthenticatedRoute),
+  mustEndpoint (queryEndpoint openNsid PublicRoute),
+]
+  Ok registry => registry
+  Err message => panic "auth_seam_test: registry setup failed: \{message}"
+
+mustResponse : String -> Response
+mustResponse body = match makeResponse 200 "OK" [textHeader] (toUtf8 body)
+  Ok response => response
+  Err message => panic "auth_seam_test: response setup failed: \{message}"
+
+textHeader : Header
+textHeader = match makeHeader "content-type" (toUtf8 "text/plain")
+  Ok header => header
+  Err message => panic "auth_seam_test: header setup failed: \{message}"
+
+{- | Reports the `AuthOutcome` the seam resolved, so a public route reached
+   with a good token is distinguishable from one reached with none. Reaching
+   this handler at all on the gated route is itself the assertion that the
+   credential was accepted. -}
+syntheticHandler : Handler
+syntheticHandler Unauthenticated store _ = (store, mustResponse "anonymous")
+syntheticHandler (Authenticated did) store _ = (store, mustResponse did)
+
+syntheticServer : Server
+syntheticServer = makeServer account syntheticRegistry syntheticHandler
+
+-- ── stores ──────────────────────────────────────────────────────────────────
+
+configuredStore : Store
+configuredStore = match storeWithServerSecret testSecret storeEmpty
+  Ok store => store
+  Err message => panic "auth_seam_test: session secret setup failed: \{message}"
+
+-- ── tokens ──────────────────────────────────────────────────────────────────
+
+tokenFor : Array Int -> String -> String -> Int -> Int -> String
+tokenFor secret sub aud from until = mintToken secret sub aud from until
+
+goodToken : String
+goodToken =
+  tokenFor
+    testSecret
+    accountDidText
+    accountHostText
+    (testInstant - 60)
+    (testInstant + 3600)
+
+expiredToken : String
+expiredToken =
+  tokenFor
+    testSecret
+    accountDidText
+    accountHostText
+    (testInstant - 3600)
+    (testInstant - 1)
+
+futureToken : String
+futureToken =
+  tokenFor
+    testSecret
+    accountDidText
+    accountHostText
+    (testInstant + 60)
+    (testInstant + 3600)
+
+wrongSecretToken : String
+wrongSecretToken =
+  tokenFor
+    otherSecret
+    accountDidText
+    accountHostText
+    (testInstant - 60)
+    (testInstant + 3600)
+
+wrongSubjectToken : String
+wrongSubjectToken =
+  tokenFor
+    testSecret
+    "did:plc:somebodyelseentirely"
+    accountHostText
+    (testInstant - 60)
+    (testInstant + 3600)
+
+wrongAudienceToken : String
+wrongAudienceToken =
+  tokenFor
+    testSecret
+    accountDidText
+    "other.example"
+    (testInstant - 60)
+    (testInstant + 3600)
+
+-- ── request framing ─────────────────────────────────────────────────────────
+
+-- `auth` is spliced verbatim, so a test can send a header this server would
+-- never mint (a bare token, a second Authorization line, a wrong scheme).
+postRequest : String -> String -> Array Int
+postRequest auth nsid =
+  let body = "{}"
+  toUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}Content-Type: application/json\r\nContent-Length: 2\r\n\r\n\{body}"
+
+getRequest : String -> String -> Array Int
+getRequest auth target =
+  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
+
+bearer : String -> String
+bearer token = "Authorization: Bearer \{token}\r\n"
+
+-- ── response inspection ─────────────────────────────────────────────────────
+
+bodyStart : Array Int -> Int -> Int
+bodyStart bytes i =
+  if i + 3 >= arrayLength bytes then
+    panic "auth_seam_test: response has no body separator"
+  else if bytes[i] == 13
+    && bytes[i + 1] == 10
+    && bytes[i + 2] == 13
+    && bytes[i + 3] == 10 then
+    i + 4
+  else
+    bodyStart bytes (i + 1)
+
+bodyText : Array Int -> String
+bodyText bytes =
+  let start = bodyStart bytes 0
+  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
+
+-- The three status digits of "HTTP/1.1 NNN Reason".
+statusOf : Array Int -> String
+statusOf bytes = fromUtf8 (arrayMakeWith 3 (i => bytes[9 + i]))
+
+errorCodeOf : Array Int -> String
+errorCodeOf bytes = match parse (bodyText bytes)
+  Ok value => match get "error" value
+    Some (JString code) => code
+    _ => "<no-error-field>"
+  Err _ => "<not-json>"
+
+-- | Status and atproto error code as one comparable string.
+refusal : Array Int -> String
+refusal bytes = "\{statusOf bytes} \{errorCodeOf bytes}"
+
+-- ── the synthetic cells ─────────────────────────────────────────────────────
+
+gatedWith : String -> String
+gatedWith auth =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (postRequest auth gatedNsid)
+  refusal bytes
+
+gatedBody : String -> String
+gatedBody auth =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (postRequest auth gatedNsid)
+  bodyText bytes
+
+openWith : String -> String
+openWith auth =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (getRequest auth "/xrpc/\{openNsid}")
+  bodyText bytes
+
+openStatusWith : String -> String
+openStatusWith auth =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (getRequest auth "/xrpc/\{openNsid}")
+  statusOf bytes
+
+test "a gated route with no Authorization header is refused 401" =
+  expectEqual (gatedWith "") "401 AuthenticationRequired"
+
+test "a gated route with a well-formed token reaches its handler" =
+  expectEqual (gatedBody (bearer goodToken)) accountDidText
+
+test "an expired token is refused as expired, not as absent" =
+  expectEqual (gatedWith (bearer expiredToken)) "401 ExpiredToken"
+
+test "a not-yet-valid token is refused" =
+  expectEqual (gatedWith (bearer futureToken)) "401 InvalidToken"
+
+test "a token signed with another secret is refused" =
+  expectEqual (gatedWith (bearer wrongSecretToken)) "401 InvalidToken"
+
+test "a token for another subject is refused" =
+  expectEqual (gatedWith (bearer wrongSubjectToken)) "401 InvalidToken"
+
+test "a token for another audience is refused" =
+  expectEqual (gatedWith (bearer wrongAudienceToken)) "401 InvalidToken"
+
+test "a token presented without the Bearer scheme is refused" =
+  expectEqual (gatedWith "Authorization: \{goodToken}\r\n") "401 InvalidToken"
+
+test "a token presented under another scheme is refused" =
+  expectEqual
+    (gatedWith "Authorization: Basic \{goodToken}\r\n")
+    "401 InvalidToken"
+
+test "two Authorization headers are an ambiguous credential, not a credential" =
+  expectEqual
+    (gatedWith "\{bearer goodToken}\{bearer goodToken}")
+    "401 InvalidToken"
+
+test "the Bearer scheme is matched case-insensitively" =
+  expectEqual
+    (gatedBody "Authorization: bEaReR \{goodToken}\r\n")
+    accountDidText
+
+test "a gated route on a store with no session secret is refused" =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      storeEmpty
+      (postRequest (bearer goodToken) gatedNsid)
+  expectEqual (refusal bytes) "401 InvalidToken"
+
+test "a public route answers with no credential at all" =
+  expectTrue (openStatusWith "" == "200" && openWith "" == "anonymous")
+
+test "a public route still answers when a good token IS presented" =
+  expectEqual (openWith (bearer goodToken)) accountDidText
+
+test "a public route is not closed by an unusable token" =
+  expectTrue
+    (openStatusWith (bearer expiredToken) == "200"
+      && openWith (bearer expiredToken) == "anonymous")
+
+-- ── the real registry ───────────────────────────────────────────────────────
+
+pdsServerValue : Server
+pdsServerValue = match pdsServer account
+  Ok server => server
+  Err message => panic "auth_seam_test: pdsServer setup failed: \{message}"
+
+realRegistry : Registry
+realRegistry = match pdsRegistry
+  Ok registry => registry
+  Err message => panic "auth_seam_test: pdsRegistry setup failed: \{message}"
+
+nsidsWith : AuthPolicy -> List String
+nsidsWith wanted =
+  sort
+    (map
+      endpointNsid
+      (filter
+        (endpoint => samePolicy (endpointAuth endpoint) wanted)
+        (registryEndpoints realRegistry)))
+
+samePolicy : AuthPolicy -> AuthPolicy -> Bool
+samePolicy PublicRoute PublicRoute = True
+samePolicy AuthenticatedRoute AuthenticatedRoute = True
+samePolicy _ _ = False
+
+{- | The whole route set, read out of the registry rather than restated from
+   the diff. A route registered later shows up in exactly one of these two
+   lists, so neither an unclassified new write nor a wrongly closed read can
+   land without moving one of them. -}
+test "exactly the three record writes are gated" = expectEqual (nsidsWith
+  AuthenticatedRoute) [
+  "com.atproto.repo.createRecord",
+  "com.atproto.repo.deleteRecord",
+  "com.atproto.repo.putRecord",
+]
+
+test "every read, sync and identity query is public" = expectEqual (nsidsWith
+  PublicRoute) [
+  "com.atproto.identity.resolveHandle",
+  "com.atproto.repo.describeRepo",
+  "com.atproto.repo.getRecord",
+  "com.atproto.repo.listRecords",
+  "com.atproto.sync.getLatestCommit",
+  "com.atproto.sync.getRepo",
+]
+
+realPost : String -> String -> String
+realPost auth nsid =
+  let (_, bytes) =
+    handleBytes pdsServerValue testContext storeEmpty (postRequest auth nsid)
+  refusal bytes
+
+realGet : String -> String
+realGet target =
+  let (_, bytes) =
+    handleBytes pdsServerValue testContext storeEmpty (getRequest "" target)
+  statusOf bytes
+
+{- | The order proof. `createRecord` against an unconfigured store would answer
+   `400 RepoNotFound` if the handler ran; it answers 401 because the seam
+   refuses first. -}
+test "an unauthenticated createRecord is refused before the handler runs" =
+  expectEqual
+    (realPost "" "com.atproto.repo.createRecord")
+    "401 AuthenticationRequired"
+
+test "an unauthenticated putRecord is refused" =
+  expectEqual
+    (realPost "" "com.atproto.repo.putRecord")
+    "401 AuthenticationRequired"
+
+test "an unauthenticated deleteRecord is refused" =
+  expectEqual
+    (realPost "" "com.atproto.repo.deleteRecord")
+    "401 AuthenticationRequired"
+
+test "a public read answers without a token" =
+  expectEqual
+    (realGet "/xrpc/com.atproto.identity.resolveHandle?handle=alice.example")
+    "200"
+
+test "a well-known answers without a token" =
+  expectEqual (realGet "/.well-known/atproto-did") "200"
+
+test "the did:web document answers without a token" =
+  expectEqual (realGet "/.well-known/did.json") "200"

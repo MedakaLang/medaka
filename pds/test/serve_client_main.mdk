@@ -9,7 +9,9 @@
    that line and nothing else. -}
 
 import array.{concat, sliceClamped}
+import hex.{decode}
 import json.{Json(..), jObject, stringify}
+import lib.jwt.{mintToken}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
   contains,
@@ -24,7 +26,7 @@ import string.{
   toUtf8,
   trim,
 }
-import time.{Duration, elapsedSince, monotonic, seconds}
+import time.{Duration, elapsedSince, monotonic, now, seconds}
 
 -- # Small ad-hoc helpers this test driver owns
 
@@ -161,25 +163,36 @@ oneChunk chunkBytes = concat [|
 finalChunk : Array Int
 finalChunk = toUtf8 "0\r\n\r\n"
 
+{- | The `Authorization` header block a write carries, or the empty string.
+
+   The three record-write procedures are `AuthenticatedRoute`, so a request to
+   one is refused at `lib.server_core`'s seam before any handler runs unless it
+   presents a bearer token this server can verify. `auth` is passed in rather
+   than minted here so that the gate mints exactly one token per run (the
+   `mint-token` subcommand) against the same secret it hands the server. -}
+authHeader : String -> String
+authHeader "" = ""
+authHeader token = "Authorization: Bearer \{token}\r\n"
+
 -- | A `content-length` JSON POST, the ordinary shape the three write
 -- procedures take when nothing is testing chunked transfer encoding.
-postRequest : String -> String -> Array Int
-postRequest path bodyJson =
+postRequest : String -> String -> String -> Array Int
+postRequest token path bodyJson =
   let body = toUtf8 bodyJson
   concat [|
     toUtf8
-      "POST \{path} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
     body,
   |]
 
-chunkedPostRequest : String -> String -> Array Int
-chunkedPostRequest path bodyJson =
+chunkedPostRequest : String -> String -> String -> Array Int
+chunkedPostRequest token path bodyJson =
   let body = toUtf8 bodyJson
   let n = arrayLength body
   let mid = n / 2
   let head =
     toUtf8
-      "POST \{path} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
   concat [|
     head,
     oneChunk (sliceClamped 0 mid body),
@@ -312,13 +325,20 @@ runKeepalive port =
             "two requests over one connection: \{intToString s1}, \{intToString s2}"
   ignoreResult (close conn)
 
-runChunked : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
-runChunked port did collection rkey text =
+runChunked : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runChunked port token did collection rkey text =
   let conn = mustConnect port
   let () =
     mustSend
       conn
       (chunkedPostRequest
+        token
         createRecordPath
         (createRecordJson did collection rkey text))
   let result = readResponse conn [||]
@@ -415,8 +435,14 @@ checkRoute label port want request =
    `putRecord` and `deleteRecord` do mutate, so they work on a scratch record
    key of their own and the delete puts the repository back — RESUME reads the
    fixture record after a process restart and must still find it. -}
-runEndpoints : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
-runEndpoints port did handle collection rkey =
+runEndpoints : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runEndpoints port token did handle collection rkey =
   let scratch = "\{rkey}scratch"
   let () =
     checkRoute
@@ -457,6 +483,7 @@ runEndpoints port did handle collection rkey =
       port
       200
       (postRequest
+        token
         (xrpcPath "com.atproto.repo.putRecord")
         (createRecordJson
           did
@@ -468,6 +495,7 @@ runEndpoints port did handle collection rkey =
     port
     200
     (postRequest
+      token
       (xrpcPath "com.atproto.repo.deleteRecord")
       (deleteRecordJson did collection scratch))
 
@@ -490,19 +518,63 @@ runResume port did collection rkey text =
     Err _ => ()
   ignoreResult (close conn)
 
+{- | An unauthenticated write over the real socket must be refused 401 by the
+   composition seam, and the body must carry atproto's `AuthenticationRequired`
+   error code rather than whatever the handler would have said. This is the
+   running-server half of `pds/test/auth_seam_test.mdk`'s in-process cells. -}
+runUnauthorized : Int -> String -> String -> String -> <IO, Net "_"> Unit
+runUnauthorized port did collection rkey =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequest
+        ""
+        createRecordPath
+        (createRecordJson did collection rkey "unauthenticated write attempt"))
+  let result = readResponse conn [||]
+  let () = expectStatus "UNAUTHORIZED" 401 result
+  let () = match result
+    Ok (_, body, _) =>
+      let bodyText = fromUtf8 body
+      if contains "\"AuthenticationRequired\"" bodyText then
+        ()
+      else
+        report
+          "UNAUTHORIZED"
+          False
+          "refusal body is not AuthenticationRequired: \{bodyText}"
+    Err _ => ()
+  ignoreResult (close conn)
+
+{- | Prints one session token for this account, so the shell gate can hand the
+   same string to every write case. The window is generous because the gate
+   spends ~30 seconds on the idle-timeout case between minting and the last
+   write. -}
+runMintToken : String -> String -> String -> <IO, Clock> Unit
+runMintToken secretHex did hostname = match decode (trim secretHex)
+  Err message => panic "serve_client: token secret is not hex: \{message}"
+  Ok secret =>
+    let issued = floatToInt (now ())
+    println (mintToken secret did hostname (issued - 60) (issued + 3600))
+
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|mint-token> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
   ["query", port, did] => runQuery (mustPort port) did
   ["pipeline", port] => runPipeline (mustPort port)
   ["keepalive", port] => runKeepalive (mustPort port)
-  ["chunked", port, did, collection, rkey, text] =>
-    runChunked (mustPort port) did collection rkey text
-  ["endpoints", port, did, handle, collection, rkey] =>
-    runEndpoints (mustPort port) did handle collection rkey
+  ["chunked", port, token, did, collection, rkey, text] =>
+    runChunked (mustPort port) token did collection rkey text
+  ["endpoints", port, token, did, handle, collection, rkey] =>
+    runEndpoints (mustPort port) token did handle collection rkey
+  ["unauthorized", port, did, collection, rkey] =>
+    runUnauthorized (mustPort port) did collection rkey
+  ["mint-token", secretHex, did, hostname] =>
+    runMintToken secretHex did hostname
   ["malformed", port] => runMalformed (mustPort port)
   ["overcap", port] => runOvercap (mustPort port)
   ["idle", port] => runIdle (mustPort port)

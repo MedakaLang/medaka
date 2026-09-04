@@ -24,7 +24,13 @@
 import json.{Json(..), jObject, get, parse}
 import string.{contains, fromUtf8, split, toUtf8}
 import lib.handlers.{pdsServer}
-import lib.server_core.{Account, Server, handleBytes, makeAccount}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
 import lib.store.{Store, storeEmpty, storeRepo, storeSize}
 
 accountDidText : String
@@ -49,6 +55,11 @@ mustServer : Server
 mustServer = match pdsServer mustAccount
   Ok server => server
   Err message => panic "read_routes: server setup failed: \{message}"
+
+{- | The instant every request in this file is placed at. `lib.server_core`
+   reads no clock, so each of its callers supplies one. -}
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = 1700000000 }
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
@@ -127,7 +138,7 @@ check label ok detail =
 
 okCell : String -> Array Int -> String -> String -> <IO> Int
 okCell label request contentType expectedBody =
-  let (next, response) = handleBytes mustServer storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let ok =
     status == "200"
@@ -141,7 +152,7 @@ okCell label request contentType expectedBody =
 
 failCell : String -> Array Int -> String -> String -> <IO> Int
 failCell label request expectedStatus expectedCode =
-  let (next, response) = handleBytes mustServer storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let code = errorCode response
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next

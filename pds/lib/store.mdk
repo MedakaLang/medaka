@@ -1,6 +1,6 @@
 {- | Opaque immutable storage carrier for the pure PDS protocol core.
 
-   A `Store` has two halves.
+   A `Store` has three parts.
 
    The **blob half** is the verified content-addressed block store that Phase 2
    shipped: raw blocks keyed by their own CID, with `storeGet`/`storePut`/
@@ -20,6 +20,11 @@
    serializes, or otherwise copies a `Store` is copying the signing key. See
    `pds/README.md` § "The Store is secret-bearing".
 
+   The **auth half** is the server's own HS256 session-token secret
+   (`lib.jwt`), `None` until one is configured. It is the SERVER's secret and
+   not the account's signing key, and a `Store` without one can verify no
+   credential at all, so every gated route refuses.
+
    Filesystem adapters, multiple repositories, and blob persistence belong to
    later phases and cannot leak effects through this interface. -}
 
@@ -31,46 +36,70 @@ import lib.blockstore.{
   blockStoreSize,
 }
 import lib.cid.{Cid}
+import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
 
 -- | Immutable verified protocol state. Its representation is private.
-export data Store = Store BlockStore (Option Repo)
+export data Store = Store BlockStore (Option Repo) (Option (Array Int))
 
--- | The empty protocol store: no blobs, and no account configured.
+-- | The empty protocol store: no blobs, no account, and no session secret.
 export
 storeEmpty : Store
-storeEmpty = Store blockStoreEmpty None
+storeEmpty = Store blockStoreEmpty None None
 
 -- | A protocol store for one configured account repository, with no blobs.
 export
 storeFromRepo : Repo -> Store
-storeFromRepo repo = Store blockStoreEmpty (Some repo)
+storeFromRepo repo = Store blockStoreEmpty (Some repo) None
 
 -- | The configured account repository, or `None` when no account is set up.
 export
 storeRepo : Store -> Option Repo
-storeRepo (Store _ repo) = repo
+storeRepo (Store _ repo _) = repo
 
 -- | Successor store carrying a transitioned account repository. The blob half
--- is untouched.
+-- and the auth half are untouched.
 export
 storeWithRepo : Repo -> Store -> Store
-storeWithRepo repo (Store blocks _) = Store blocks (Some repo)
+storeWithRepo repo (Store blocks _ secret) = Store blocks (Some repo) secret
+
+{- | Successor store carrying the server's own session-token secret, admitted
+   against `lib.jwt`'s expected length so a misconfigured secret is refused
+   here rather than at the first request that would sign with it. The
+   repository and blob halves are untouched.
+
+   The secret is a SECOND secret in a `Store` that already carries the
+   account's signing key, so the same "never log, serialize, or copy a
+   `Store`" rule covers it. -}
+export
+storeWithServerSecret : Array Int -> Store -> Result String Store
+storeWithServerSecret secret (Store blocks repo _) =
+  if arrayLength secret /= serverSecretBytes then
+    Err "store: server session secret must be 32 bytes"
+  else
+    Ok (Store blocks repo (Some (arrayCopy secret)))
+
+{- | The server's session-token secret, or `None` when no session secret is
+   configured — in which case no credential can be verified at all and every
+   gated route refuses. -}
+export
+storeServerSecret : Store -> Option (Array Int)
+storeServerSecret (Store _ _ secret) = map arrayCopy secret
 
 -- | Number of distinct verified blocks in the blob half. The repository half
 -- keeps its own blocks and is not counted here.
 export
 storeSize : Store -> Int
-storeSize (Store blocks _) = blockStoreSize blocks
+storeSize (Store blocks _ _) = blockStoreSize blocks
 
 -- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store blocks _) = blockStoreGet cid blocks
+storeGet cid (Store blocks _ _) = blockStoreGet cid blocks
 
 -- | Verify and immutably insert a blob-half block, returning the successor
 -- store. The repository half is carried through unchanged.
 export
 storePut : Cid -> Array Int -> Store -> Result String Store
-storePut cid bytes (Store blocks repo) =
-  map (blocks => Store blocks repo) (blockStorePut cid bytes blocks)
+storePut cid bytes (Store blocks repo secret) =
+  map (blocks => Store blocks repo secret) (blockStorePut cid bytes blocks)

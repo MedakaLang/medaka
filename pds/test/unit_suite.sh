@@ -33,6 +33,7 @@ export MEDAKA_ROOT
 # name:engine — engine is "" for the default (interpreted) engine, or
 # "--native" for a file that needs the native engine (see header).
 SUITES="
+auth_seam_test:--native
 car_store_test:
 dagcbor_cid_test:
 ecdsa_test:

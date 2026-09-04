@@ -54,8 +54,13 @@ public export data JwtError =
   | JwtWrongAudience
   deriving (Eq, Debug)
 
-secretBytes : Int
-secretBytes = 32
+{- | How many bytes a server session-token secret is. Exported because
+     `lib.store` admits the secret it carries against this length, so a
+     misconfigured secret is refused where it is installed rather than
+     reaching `hs256Signature`'s panic on a request path. -}
+export
+serverSecretBytes : Int
+serverSecretBytes = 32
 
 -- RFC 7515 §2 requires base64url with the trailing `=` omitted, while
 -- `base64.encodeUrlSafe`/`decodeUrlSafe` are RFC 4648 §5 and keep the
@@ -106,7 +111,7 @@ ctEqBytes a b =
 export
 hs256Signature : Array Int -> String -> String
 hs256Signature secret signingInput =
-  if arrayLength secret /= secretBytes then
+  if arrayLength secret /= serverSecretBytes then
     panic "jwt: expected a 32-byte server secret"
   else
     b64uEncode (hmacSha256FixedKey secret (toUtf8 signingInput))

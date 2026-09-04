@@ -29,13 +29,13 @@ import lib.http.{
   serializeResponse,
 }
 import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
-import lib.server_core.{Server, handleBytes}
+import lib.server_core.{RequestContext(..), Server, handleBytes}
 import lib.store.{Store, storeRepo}
 import lib.xrpc.{xrpcErrorResponse}
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.persist.{persistSave}
-import time.{Duration, seconds}
+import time.{Duration, now, seconds}
 
 -- | How long one connection may stay silent between reads before it is closed.
 idleTimeout : Duration
@@ -84,7 +84,8 @@ persistFailureBytes =
    deliberately ORDINARY, non-`Async` code: read the current store, transition
    it, persist the successor, publish the successor. A scheduler can only
    interleave tasks at an `Async` bind, and there is not one in this sequence —
-   `handleBytes` is pure and `persistSave` performs plain synchronous
+   `handleBytes` is pure, the clock reading handed to it is a plain
+   synchronous `<Clock>` call, and `persistSave` performs plain synchronous
    `<FileRead, FileWrite>`, not a suspension. So the four steps run as one
    indivisible unit, and two concurrent connections cannot both read the same
    store and each publish over the other's write. Wrapping the persist in
@@ -98,10 +99,11 @@ applyRequest : Server ->
   String ->
   Ref Store ->
   Array Int ->
-  <FileRead "_", FileWrite "_", Stderr> Array Int
+  <Clock, FileRead "_", FileWrite "_", Stderr> Array Int
 applyRequest server dir storeRef bytes =
   let store = !storeRef
-  let (next, response) = handleBytes server store bytes
+  let context = RequestContext { nowSeconds = floatToInt (now ()) }
+  let (next, response) = handleBytes server context store bytes
   match persistTransition dir store next
     Err message =>
       let () = ePutStrLn "serve: persist failed, state not advanced: \{message}"

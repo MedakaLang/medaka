@@ -18,6 +18,7 @@ import lib.http.{
 import lib.resource_limits.{maxHttpRequestLineBytes}
 import lib.server_core.{
   Account,
+  RequestContext(..),
   Handler,
   Server,
   handleBytes,
@@ -26,6 +27,7 @@ import lib.server_core.{
 }
 import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
 import lib.xrpc.{
+  AuthPolicy(..),
   Endpoint,
   InputPolicy(..),
   Registry,
@@ -65,19 +67,22 @@ registry : Registry
 registry =
   mustRegistry
     (makeRegistry [
-      mustEndpoint (queryEndpoint "com.example.query.fixed"),
-      mustEndpoint (queryEndpoint "Com.Example.query.caseFixed"),
-      mustEndpoint (procedureEndpoint "com.example.params.check" NoInput),
-      mustEndpoint (procedureEndpoint "com.example.raw.echo" RawInput),
-      mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
+      mustEndpoint (queryEndpoint "com.example.query.fixed" PublicRoute),
+      mustEndpoint (queryEndpoint "Com.Example.query.caseFixed" PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.example.params.check" NoInput PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.example.raw.echo" RawInput PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.example.block.put" RawInput PublicRoute),
     ])
 
 handler : Handler
-handler store (QueryCall "com.example.query.fixed" _) =
+handler _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler store (QueryCall "Com.Example.query.caseFixed" _) =
+handler _ store (QueryCall "Com.Example.query.caseFixed" _) =
   (store, mustResponse 200 "OK" "authority-case")
-handler store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =
+handler _ store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =
   if firstName == "dryRun"
     && firstValue == "true"
     && secondName == "dryRun"
@@ -87,7 +92,7 @@ handler store (ProcedureNoInputCall "com.example.params.check" [QueryParam first
     (store, mustResponse 200 "OK" "params-ordered")
   else
     panic "protocol_all_engines: procedure parameter order mismatch"
-handler store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
+handler _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
   let mediaType = mediaTypeType media
   let mediaSubtype = mediaTypeSubtype media
   if mediaType == "text"
@@ -104,12 +109,12 @@ handler store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
     (store, mustResponse 200 "OK" "raw-opaque")
   else
     panic "protocol_all_engines: raw media/body preservation mismatch"
-handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
+handler _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
   match storePut (cidForRaw bytes) bytes store
     Err message =>
       panic "protocol_all_engines: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
-handler _ _ = panic "protocol_all_engines: unexpected routed call"
+handler _ _ _ = panic "protocol_all_engines: unexpected routed call"
 
 account : Account
 account =
@@ -120,6 +125,11 @@ account =
     Ok value => value
     Err message =>
       panic "protocol_all_engines: account setup failed: \{message}"
+
+{- | The instant every request in this file is placed at. `lib.server_core`
+   reads no clock, so each of its callers supplies one. -}
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = 1700000000 }
 
 server : Server
 server = makeServer account registry handler
@@ -232,7 +242,7 @@ resourceRequest =
 
 checkFixedQuery : <IO> Unit
 checkFixedQuery =
-  let (next, response) = handleBytes server seededStore fixedQuery
+  let (next, response) = handleBytes server testContext seededStore fixedQuery
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "fixed" then
@@ -243,7 +253,7 @@ checkFixedQuery =
 checkChunkedUpdate : <IO> Unit
 checkChunkedUpdate =
   let expectedBody = toUtf8 "abc"
-  let (next, response) = handleBytes server seededStore chunkedPut
+  let (next, response) = handleBytes server testContext seededStore chunkedPut
   if storeSize next == 2
     && seedPreserved next
     && storeGet (cidForRaw expectedBody) next == Some expectedBody
@@ -254,7 +264,8 @@ checkChunkedUpdate =
 
 checkMalformed : <IO> Unit
 checkMalformed =
-  let (next, response) = handleBytes server seededStore malformedRequest
+  let (next, response) =
+    handleBytes server testContext seededStore malformedRequest
   if storeSize next == 1
     && seedPreserved next
     && response
@@ -269,7 +280,7 @@ checkMalformed =
 
 malformedIsUnchanged : Array Int -> Bool
 malformedIsUnchanged request =
-  let (next, response) = handleBytes server seededStore request
+  let (next, response) = handleBytes server testContext seededStore request
   storeSize next == 1
     && seedPreserved next
     && response
@@ -303,7 +314,8 @@ checkInvalidTarget =
 
 checkRawText : <IO> Unit
 checkRawText =
-  let (next, response) = handleBytes server seededStore rawTextRequest
+  let (next, response) =
+    handleBytes server testContext seededStore rawTextRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-text" then
@@ -313,7 +325,8 @@ checkRawText =
 
 checkRawJson : <IO> Unit
 checkRawJson =
-  let (next, response) = handleBytes server seededStore rawJsonRequest
+  let (next, response) =
+    handleBytes server testContext seededStore rawJsonRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-json" then
@@ -324,7 +337,8 @@ checkRawJson =
 
 checkRawOpaque : <IO> Unit
 checkRawOpaque =
-  let (next, response) = handleBytes server seededStore rawOpaqueRequest
+  let (next, response) =
+    handleBytes server testContext seededStore rawOpaqueRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-opaque" then
@@ -335,7 +349,8 @@ checkRawOpaque =
 
 checkProcedureParams : <IO> Unit
 checkProcedureParams =
-  let (next, response) = handleBytes server seededStore procedureParamsRequest
+  let (next, response) =
+    handleBytes server testContext seededStore procedureParamsRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "params-ordered" then
@@ -347,7 +362,7 @@ checkProcedureParams =
 checkUppercaseAuthority : <IO> Unit
 checkUppercaseAuthority =
   let (next, response) =
-    handleBytes server seededStore uppercaseAuthorityRequest
+    handleBytes server testContext seededStore uppercaseAuthorityRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "authority-case" then
@@ -358,9 +373,12 @@ checkUppercaseAuthority =
 
 checkAuthorityDuplicateIdentity : <IO> Unit
 checkAuthorityDuplicateIdentity =
-  let lower = mustEndpoint (queryEndpoint "com.example.identity.echo")
-  let upperAuthority = mustEndpoint (queryEndpoint "Com.Example.identity.echo")
-  let upperMethod = mustEndpoint (queryEndpoint "com.example.identity.Echo")
+  let lower =
+    mustEndpoint (queryEndpoint "com.example.identity.echo" PublicRoute)
+  let upperAuthority =
+    mustEndpoint (queryEndpoint "Com.Example.identity.echo" PublicRoute)
+  let upperMethod =
+    mustEndpoint (queryEndpoint "com.example.identity.Echo" PublicRoute)
   match (
     makeRegistry [lower, upperAuthority],
     makeRegistry [lower, upperMethod],
@@ -372,7 +390,8 @@ checkAuthorityDuplicateIdentity =
 
 checkEmptyRegPort : <IO> Unit
 checkEmptyRegPort =
-  let (next, response) = handleBytes server seededStore emptyRegPortRequest
+  let (next, response) =
+    handleBytes server testContext seededStore emptyRegPortRequest
   if response == expectedTextResponse 200 "OK" "fixed"
     && storeSize next == 1
     && seedPreserved next then
@@ -382,7 +401,8 @@ checkEmptyRegPort =
 
 checkEmptyIpPort : <IO> Unit
 checkEmptyIpPort =
-  let (next, response) = handleBytes server seededStore emptyIpPortRequest
+  let (next, response) =
+    handleBytes server testContext seededStore emptyIpPortRequest
   if seedPreserved next
     && response == expectedTextResponse 200 "OK" "fixed"
     && storeSize next == 1 then
@@ -392,7 +412,8 @@ checkEmptyIpPort =
 
 checkUnknown : <IO> Unit
 checkUnknown =
-  let (next, response) = handleBytes server seededStore unknownRequest
+  let (next, response) =
+    handleBytes server testContext seededStore unknownRequest
   if storeSize next == 1
     && seedPreserved next
     && response
@@ -407,7 +428,8 @@ checkUnknown =
 
 checkResource : <IO> Unit
 checkResource =
-  let (next, response) = handleBytes server seededStore resourceRequest
+  let (next, response) =
+    handleBytes server testContext seededStore resourceRequest
   if storeSize next == 1
     && seedPreserved next
     && response

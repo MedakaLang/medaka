@@ -63,9 +63,15 @@ COLLECTION='app.bsky.feed.post'
 RKEY='e2egatefixture'
 RECORD_TEXT='pds serve_e2e gate fixture record'
 
+# The session-token secret, which is NOT the repository signing key: the two
+# are separate secrets by design, and this gate proves the server accepts a
+# token minted from the one it was handed at `--token-secret`.
+TOKEN_SECRET_HEX='7f1c0a6d2b93e45880ac31f6d5e27b04913ca8e6f27d4b51a03c8e19d6b4720f'
+
 DATA="$WORK/data"
 mkdir -p "$DATA"
 printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
+printf '%s\n' "$TOKEN_SECRET_HEX" > "$WORK/token.hex"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -93,7 +99,8 @@ start_server() {
   # shellcheck disable=SC2086 # $extra is a single optional flag, no quoting needed
   "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --data "$DATA" --port 0 $extra \
+    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+    --data "$DATA" --port 0 $extra \
     >"$outfile" 2>"$errfile" &
   SERVER_PID=$!
 }
@@ -111,6 +118,13 @@ PORT1=$(wait_for_port "$WORK/serve1.out") || {
 }
 require_empty "$WORK/serve1.err" 'server startup'
 
+# One session token for every write case below. The three record-write
+# procedures are gated at the composition seam (#2604), so a write that
+# presents no token is refused 401 before its handler runs.
+TOKEN=$(client mint-token "$TOKEN_SECRET_HEX" "$DID" "$HOSTNAME") \
+  || fail 'could not mint a session token'
+[ -n "$TOKEN" ] || fail 'minted session token was empty'
+
 # 1. a well-formed query gets a correct response
 client query "$PORT1" "$DID" || fail 'case 1: well-formed query'
 
@@ -122,14 +136,20 @@ client keepalive "$PORT1" || fail 'case 3: keep-alive reuse'
 
 # 4. chunked write procedure succeeds — this ALSO plants the record that
 #    case 9 (restart-and-resume) reads back after the process boundary.
-client chunked "$PORT1" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
+client chunked "$PORT1" "$TOKEN" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
   || fail 'case 4: chunked write'
 
 # 5. every remaining route: the six XRPC NSIDs no other case drives, plus
 #    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
 #    both well-knowns proven by this gate rather than by reading the registry.
-client endpoints "$PORT1" "$DID" "$HANDLE" "$COLLECTION" "$RKEY" \
+client endpoints "$PORT1" "$TOKEN" "$DID" "$HANDLE" "$COLLECTION" "$RKEY" \
   || fail 'case 5: remaining endpoint coverage'
+
+# 5b. the same write with NO token is refused 401 by the seam, over the real
+#    socket — the in-process test proves the seam refuses, this proves the
+#    running server does.
+client unauthorized "$PORT1" "$DID" "$COLLECTION" "$RKEY" \
+  || fail 'case 5b: unauthenticated write refused'
 
 # 6. malformed request -> 400, error path not a hang or crash
 client malformed "$PORT1" || fail 'case 6: malformed request'

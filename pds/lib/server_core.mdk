@@ -6,16 +6,23 @@
    deterministic response serialization. No filesystem, socket, clock, async,
    or other effect is available in this module. -}
 
+import string.{fromUtf8, splitAt, toLower}
 import lib.atsyntax.{validateDid, validateHandle}
 import lib.http.{
+  Header,
   HttpParseFailure(..),
   Request,
   Response,
+  headerName,
+  headerValue,
   parseRequestClassified,
+  requestHeaders,
   serializeResponse,
 }
-import lib.store.{Store}
+import lib.jwt.{Claims(..), JwtError(..), verifyToken}
+import lib.store.{Store, storeServerSecret}
 import lib.xrpc.{
+  AuthPolicy(..),
   Registry,
   RouteResult(..),
   XrpcCall,
@@ -24,8 +31,27 @@ import lib.xrpc.{
   xrpcFailureResponse,
 }
 
--- | An endpoint-agnostic pure handler with an explicit successor Store.
-export type Handler = Store -> XrpcCall -> (Store, Response)
+{- | Everything about a request that is not in the request bytes.
+
+   Today that is only the current instant, in seconds since the Unix epoch,
+   which token verification needs and which this module may not read for
+   itself: nothing in `pds/lib` declares an effect row, so the shell reads the
+   clock and passes the reading in (`pds/shell/server.mdk`). It is a record
+   rather than a bare `Int` so the peer address rate limiting will want can be
+   added beside it without moving every call site a second time. -}
+public export data RequestContext = RequestContext { nowSeconds : Int }
+
+{- | What the seam resolved about the caller's credentials, handed to every
+   handler.
+
+   `Authenticated` carries the authenticated subject DID. A handler does not
+   re-check it: whether the route may be reached at all was already decided in
+   `handle`, against the registry's own classification, before dispatch. -}
+public export data AuthOutcome = Unauthenticated | Authenticated String
+
+-- | An endpoint-agnostic pure handler with an explicit successor Store,
+-- receiving the auth outcome the seam already resolved and enforced.
+export type Handler = AuthOutcome -> Store -> XrpcCall -> (Store, Response)
 
 {- | The one account this configured server serves: the repository owner's DID,
    the owner's handle, and this PDS's own hostname. Its constructor is private
@@ -77,14 +103,127 @@ export
 serverAccount : Server -> Account
 serverAccount (Server account _ _) = account
 
--- | Route an already framed request. Route failures never invoke the handler
--- and return the identical input Store.
+{- | What the request's credential resolved to.
+
+   The four refusal classes are distinct because the answers they owe a client
+   are: no token means log in, an expired one means refresh, and neither
+   reveals anything the caller did not already send. -}
+data Credential =
+  | NoCredential
+  | MalformedCredential
+  | ExpiredCredential
+  | InvalidCredential
+  | GoodCredential String
+
+-- What the `Authorization` header carried, before any verification.
+data Presented = NoHeader | NotBearer | Bearer String
+
+-- RFC 7235 §2.1: the auth scheme is case-insensitive; the credential after it
+-- is not, so only the scheme is lowercased.
+bearerOf : String -> Presented
+bearerOf text =
+  let (scheme, token) = splitAt 7 text
+  if toLower scheme == "bearer " then Bearer token else NotBearer
+
+-- Exactly one `Authorization` header is a credential. Two are a request whose
+-- credential is ambiguous, which is not a credential.
+presentedHeader : List Header -> Int -> Option (Array Int) -> Presented
+presentedHeader [] 0 _ = NoHeader
+presentedHeader [] 1 (Some value) = bearerOf (fromUtf8 value)
+presentedHeader [] _ _ = NotBearer
+presentedHeader (header :: rest) count value =
+  if headerName header == "authorization" then
+    presentedHeader rest (count + 1) (Some (headerValue header))
+  else
+    presentedHeader rest count value
+
+refusedCredential : JwtError -> Credential
+refusedCredential JwtExpired = ExpiredCredential
+refusedCredential JwtMalformed = MalformedCredential
+refusedCredential _ = InvalidCredential
+
+{- | Verify a presented bearer token against this server's own session secret
+   and configured account. The token's subject must be the account DID and its
+   audience this PDS's hostname: those two are what a token minted for THIS
+   account on THIS server carries, so a token minted for another account, or
+   for another server sharing the secret, does not verify here.
+
+   A `Store` with no session secret can resolve nothing, so every credential
+   presented to it is refused. That is the state a server started without a
+   `--token-secret` is in, and it fails closed. -}
+verifiedCredential : Account -> RequestContext -> Store -> String -> Credential
+verifiedCredential account context store token = match storeServerSecret store
+  None => InvalidCredential
+  Some secret =>
+    let verified =
+      verifyToken
+        secret
+        (accountDid account)
+        (accountHostname account)
+        context.nowSeconds
+        token
+    match verified
+      Err jwtError => refusedCredential jwtError
+      Ok claims => GoodCredential claims.sub
+
+resolveCredential : Account -> RequestContext -> Store -> Request -> Credential
+resolveCredential account context store request =
+  match presentedHeader (requestHeaders request) 0 None
+    NoHeader => NoCredential
+    NotBearer => MalformedCredential
+    Bearer token => verifiedCredential account context store token
+
+outcomeOf : Credential -> AuthOutcome
+outcomeOf (GoodCredential did) = Authenticated did
+outcomeOf _ = Unauthenticated
+
+{- | The refusal a gated route owes an unresolved credential. The error codes
+   are atproto's own `ResponseTypeNames` spellings, the same source every other
+   failure class in `lib.xrpc` draws its code from. -}
+refusalFor : Credential -> Response
+refusalFor NoCredential =
+  xrpcErrorResponse
+    401
+    "Unauthorized"
+    "AuthenticationRequired"
+    "Authentication Required"
+refusalFor ExpiredCredential =
+  xrpcErrorResponse 401 "Unauthorized" "ExpiredToken" "Token has expired"
+refusalFor _ =
+  xrpcErrorResponse
+    401
+    "Unauthorized"
+    "InvalidToken"
+    "Token could not be verified"
+
+{- | Route an already framed request, refusing an unauthenticated call to a
+   gated route BEFORE the handler runs.
+
+   The check lives here and can live nowhere else: `routeRequest` turns a
+   `Request` into an `XrpcCall`, and no `XrpcCall` arm carries a header, so
+   this is the last point at which the `Authorization` header still exists.
+
+   A credential is resolved whenever one is presented, on a public route as
+   much as a gated one, so a handler can know who is calling; but only a gated
+   route is refused when that resolution fails. A public read therefore stays
+   readable by a client holding a stale token and by one holding none at all,
+   which is what a real PDS does — a repository nobody can read without a
+   token is a broken server, not a secure one.
+
+   Neither a route failure nor an auth refusal invokes the handler, and both
+   return the identical input Store. -}
 export
-handle : Server -> Store -> Request -> (Store, Response)
-handle (Server _ registry handler) store request =
+handle : Server -> RequestContext -> Store -> Request -> (Store, Response)
+handle (Server account registry handler) context store request =
   match routeRequest registry request
     RouteFailure failed => (store, xrpcFailureResponse failed)
-    RouteCall call => handler store call
+    RouteCall auth call =>
+      let credential = resolveCredential account context store request
+      match (auth, credential)
+        (AuthenticatedRoute, GoodCredential did) =>
+          handler (Authenticated did) store call
+        (AuthenticatedRoute, refused) => (store, refusalFor refused)
+        (PublicRoute, resolved) => handler (outcomeOf resolved) store call
 
 malformedHttpResponse : Response
 malformedHttpResponse =
@@ -101,11 +240,15 @@ resourceExcessResponse =
 -- | Handle one complete buffered request. Both HTTP failure classes preserve
 -- the exact input Store; successful calls expose the handler's successor.
 export
-handleBytes : Server -> Store -> Array Int -> (Store, Array Int)
-handleBytes server store bytes = match parseRequestClassified bytes
+handleBytes : Server ->
+  RequestContext ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+handleBytes server context store bytes = match parseRequestClassified bytes
   Err (HttpMalformed _) => (store, serializeResponse malformedHttpResponse)
   Err (HttpResourceExcess _) =>
     (store, serializeResponse resourceExcessResponse)
   Ok request =>
-    let (next, response) = handle server store request
+    let (next, response) = handle server context store request
     (next, serializeResponse response)

@@ -4,7 +4,7 @@
    Every configuration value arrives as a command-line flag and is admitted
    before anything is bound: a bad DID, handle, or hostname is rejected by
    `lib.server_core`'s `makeAccount`, an unreadable or non-hex signing key by
-   `readSecretBytes`, a data directory that is not a directory by `requireDir`,
+   `readHexBytes`, a data directory that is not a directory by `requireDir`,
    and a repository whose head does not verify under the configured key by
    `lib.repo`'s `repoFromBlocks`. Every one of those exits nonzero. There is no
    default for any of them, so a misconfigured server never starts serving
@@ -15,7 +15,15 @@
 
    The signing key is read here and handed to `lib.repo`, which is the only
    thing that needs it, and to nothing else. It is never printed, and neither is
-   the `Store` that transitively holds it. -}
+   the `Store` that transitively holds it.
+
+   `--token-secret` is the SECOND secret this entry point reads: the server's
+   own 32-byte HS256 session-token secret, which `lib.server_core`'s seam
+   verifies bearer tokens against. It is deliberately a different key from
+   `--key`: the signing key authenticates commits to every other implementation
+   on the network and has exactly one job. Without `--token-secret` the server
+   still serves every public route and refuses every gated one, because no
+   credential can be verified — it fails closed, not open. -}
 
 import args.{
   Args,
@@ -42,7 +50,7 @@ import lib.repo.{
 }
 import lib.server_core.{Server, makeAccount}
 import lib.sign.{SecretKey, secretKeyFromBytes}
-import lib.store.{Store, storeFromRepo}
+import lib.store.{Store, storeFromRepo, storeWithServerSecret}
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.persist.{persistHasHead, persistLoad, persistSave}
@@ -56,6 +64,10 @@ serveSpec = spec "serve" [
   value ["--handle"] "HANDLE" "the repository owner's handle",
   value ["--hostname"] "HOST" "this PDS's own hostname",
   value ["--key"] "PATH" "file holding the hex-encoded secp256k1 signing key",
+  value
+    ["--token-secret"]
+    "PATH"
+    "file holding the hex-encoded 32-byte session-token secret",
   value ["--data"] "DIR" "existing directory holding the persisted repository",
   intValue ["--port"] "N" "loopback TCP port to bind; 0 picks a free one",
   switch ["--init"] "create the genesis repository in an empty data directory",
@@ -82,16 +94,27 @@ requiredPort parsed = do
       else
         Ok port
 
--- The key never reaches a diagnostic: the read error names the path, and
+-- Neither key reaches a diagnostic: the read error names the path, and
 -- `hex.decode`'s own messages do not echo what they were given.
-readSecretBytes : String -> <FileRead "_"> Result String (Array Int)
-readSecretBytes path = do
+readHexBytes : String -> String -> <FileRead "_"> Result String (Array Int)
+readHexBytes label path = do
   text <- match readFile path
-    Err message => Err "unreadable signing key \{path}: \{message}"
+    Err message => Err "unreadable \{label} \{path}: \{message}"
     Ok given => Ok given
   match decode (trim text)
-    Err message => Err "signing key \{path} is not hex: \{message}"
+    Err message => Err "\{label} \{path} is not hex: \{message}"
     Ok bytes => Ok bytes
+
+{- | Install the session-token secret, if one was configured. An absent
+   `--token-secret` is not an error: the server then verifies no credential and
+   refuses every gated route. A PRESENT but unusable one IS an error, refused
+   before the listener binds rather than at the first request that needed it. -}
+withTokenSecret : Args -> Store -> <FileRead "_"> Result String Store
+withTokenSecret parsed store = match flagValue "--token-secret" parsed
+  None => Ok store
+  Some path => do
+    bytes <- readHexBytes "session-token secret" path
+    storeWithServerSecret bytes store
 
 requireDir : String -> <FileRead "_"> Result String Unit
 requireDir dir = match isDir dir
@@ -150,11 +173,12 @@ configure parsed = do
   port <- requiredPort parsed
   account <- makeAccount did handle hostname
   server <- pdsServer account
-  keyBytes <- readSecretBytes keyPath
+  keyBytes <- readHexBytes "signing key" keyPath
   secret <- secretKeyFromBytes keyBytes
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
-  Ok (server, storeFromRepo repo, dir, port)
+  store <- withTokenSecret parsed (storeFromRepo repo)
+  Ok (server, store, dir, port)
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting

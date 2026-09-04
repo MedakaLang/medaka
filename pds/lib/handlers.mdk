@@ -13,6 +13,13 @@
    `readHandled` returns a bare `Response`, and only `recordHandled` returns a
    successor `Store` at all.
 
+   Every registration carries its own `AuthPolicy`: the three writes are
+   `AuthenticatedRoute`, the six reads are `PublicRoute`, and the two
+   well-knowns are public by construction (`lib.xrpc` routes them by path, with
+   no registry entry to classify). `lib.server_core`'s `handle` enforces that
+   before dispatch, so nothing in this module checks a credential — see
+   `readEndpoints`/`recordEndpoints` for where each classification comes from.
+
    Lexicon-shaped JSON goes in and comes out; the transition itself is
    `lib.repo`'s. Only a write that SUCCEEDS returns a successor `Store` — every
    rejection (bad body shape, unadmitted identifier, failed compare-and-swap,
@@ -76,6 +83,7 @@ import lib.server_core.{
 import lib.store.{Store, storeRepo, storeWithRepo}
 import lib.tid.{Tid, tidClockId, tidMicros, tidNext, tidToString}
 import lib.xrpc.{
+  AuthPolicy(..),
   Endpoint,
   InputPolicy(..),
   Registry,
@@ -488,7 +496,7 @@ recordHandled _ _ _ = None
    input `Store` intact. -}
 export
 recordHandler : Account -> Handler
-recordHandler account store call = match recordHandled account store call
+recordHandler account _ store call = match recordHandled account store call
   Some result => result
   None => (store, unhandledRoute call)
 
@@ -514,11 +522,17 @@ recordRegistry = do
   endpoints <- recordEndpoints
   makeRegistry endpoints
 
+{- | The three record-write procedures, every one of them gated.
+
+   `com.atproto.repo.{createRecord, putRecord, deleteRecord}` each require an
+   authenticated session on a real PDS: they transition the account's own
+   repository, and a caller that could reach them unauthenticated could write
+   to somebody else's repository from the open internet. -}
 recordEndpoints : Result String (List Endpoint)
 recordEndpoints = do
-  create <- procedureEndpoint createRecordNsid JsonInput
-  put <- procedureEndpoint putRecordNsid JsonInput
-  remove <- procedureEndpoint deleteRecordNsid JsonInput
+  create <- procedureEndpoint createRecordNsid JsonInput AuthenticatedRoute
+  put <- procedureEndpoint putRecordNsid JsonInput AuthenticatedRoute
+  remove <- procedureEndpoint deleteRecordNsid JsonInput AuthenticatedRoute
   Ok [create, put, remove]
 
 -- | A configured record-write server for one account.
@@ -933,7 +947,7 @@ readHandled _ _ _ = None
    order is a formality rather than a precedence. -}
 export
 pdsHandler : Account -> Handler
-pdsHandler account store call = match recordHandled account store call
+pdsHandler account _ store call = match recordHandled account store call
   Some result => result
   None => match readHandled account store call
     Some response => (store, response)
@@ -948,14 +962,27 @@ pdsRegistry = do
   reads <- readEndpoints
   makeRegistry (concatEndpoints writes reads)
 
+{- | The six read queries, every one of them public.
+
+   A repository is public data on atproto: `com.atproto.repo.getRecord`,
+   `listRecords` and `describeRepo`, and the `com.atproto.sync.*` pair another
+   server's relay reads to mirror this repo, are all reachable on a real PDS
+   with no credential — and so is `com.atproto.identity.resolveHandle`, which
+   is how a client finds this account before it could have a token at all. A
+   server that closed these would not be a stricter PDS; it would be one no
+   client and no relay can use.
+
+   The classification is per route, not per kind: a future public procedure
+   would say `PublicRoute` here and be right, and a future private query would
+   say `AuthenticatedRoute` and be right too. -}
 readEndpoints : Result String (List Endpoint)
 readEndpoints = do
-  getRecord <- queryEndpoint getRecordNsid
-  listRecords <- queryEndpoint listRecordsNsid
-  describeRepo <- queryEndpoint describeRepoNsid
-  getRepo <- queryEndpoint getRepoNsid
-  getLatestCommit <- queryEndpoint getLatestCommitNsid
-  resolveHandle <- queryEndpoint resolveHandleNsid
+  getRecord <- queryEndpoint getRecordNsid PublicRoute
+  listRecords <- queryEndpoint listRecordsNsid PublicRoute
+  describeRepo <- queryEndpoint describeRepoNsid PublicRoute
+  getRepo <- queryEndpoint getRepoNsid PublicRoute
+  getLatestCommit <- queryEndpoint getLatestCommitNsid PublicRoute
+  resolveHandle <- queryEndpoint resolveHandleNsid PublicRoute
   Ok [
     getRecord,
     listRecords,
