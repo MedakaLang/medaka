@@ -1030,21 +1030,9 @@ while IFS= read -r f; do
         echo "preflight: note — gate '${_p%.sh}' is DELETED in this diff; nothing to run for it."
       fi ;;
 
-    # ── a changed `kind = "native"` gate's own `.mdk` runs itself (#2591, #2636) ──
-    # The `.sh` self-run arm above is `.sh`-shaped only, so a changed
-    # `test/*_test.mdk` never matched it — `_pattern_for_gate` already resolves a
-    # `.mdk` path via `_native_rows` (see above), just unused here until now.
-    test/*_test.mdk)
-      if [ -f "$ROOT/$f" ]; then
-        _ntp="$(_pattern_for_gate "$f")"
-        if [ -n "$_ntp" ]; then
-          add "$_ntp"
-        else
-          echo "preflight: note — '$f' matches no kind=\"native\" row in test/gates.toml; nothing to run for it."
-        fi
-      else
-        echo "preflight: note — native-gate fixture '$f' is DELETED in this diff; nothing to run for it."
-      fi ;;
+    # (the `kind = "native"` self-run arm for a changed `test/*_test.mdk` lives
+    # AFTER the fixture/golden arm below — see the note there for why order here
+    # is load-bearing, not cosmetic)
 
     # ── the snapshot corpus: goldens, but NOT in a *fixtures*/*goldens* directory ──
     #
@@ -1299,6 +1287,33 @@ while IFS= read -r f; do
             add "$(_pattern_for_gate "$_g")"
           done
         fi
+      fi ;;
+
+    # ── a changed `kind = "native"` gate's own `.mdk` runs itself (#2591, #2636) ──
+    # The `.sh` self-run arm above is `.sh`-shaped only, so a changed
+    # `test/*_test.mdk` never matched it — `_pattern_for_gate` already resolves a
+    # `.mdk` path via `_native_rows` (see above), just unused here until now.
+    #
+    # ORDER IS LOAD-BEARING: this arm MUST come after the `*fixtures*/*goldens*`
+    # arm above, not before it. A shell `case` glob (unlike git's pathspec glob)
+    # crosses `/`, so a bare `test/*_test.mdk)` placed first would also swallow a
+    # nested fixture like `test/construct_fixtures/prop_test.mdk`, stealing it
+    # from the fixture arm and silently dropping every gate that arm would have
+    # added. Every tracked file this arm is meant for sits directly under `test/`
+    # and names no `fixtures`/`goldens` ancestor (`git ls-files 'test/*_test.mdk'`
+    # today: `test/construct_fixtures/prop_test.mdk` — handled above — and
+    # `test/effect_set_domain_test.mdk` — handled here), so ordering the fixture
+    # arm first is sufficient; no depth guard is needed on top of it.
+    test/*_test.mdk)
+      if [ -f "$ROOT/$f" ]; then
+        _ntp="$(_pattern_for_gate "$f")"
+        if [ -n "$_ntp" ]; then
+          add "$_ntp"
+        else
+          echo "preflight: note — '$f' matches no kind=\"native\" row in test/gates.toml; nothing to run for it."
+        fi
+      else
+        echo "preflight: note — native-gate fixture '$f' is DELETED in this diff; nothing to run for it."
       fi ;;
 
     # ── ONE generic arm for every MANIFEST-BEARING PROJECT ────────────────────

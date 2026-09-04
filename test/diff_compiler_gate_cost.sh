@@ -53,6 +53,7 @@ echo "── gate cost transport (#2178) ─────────────
 mkdir -p "$TMP/tree/test"
 cp "$ROOT/test/run_gates.sh"  "$TMP/tree/test/run_gates.sh"
 cp "$ROOT/test/lib_scratch.sh" "$TMP/tree/test/lib_scratch.sh"
+cp "$ROOT/test/gate_native_rows.sh" "$TMP/tree/test/gate_native_rows.sh"
 cat >"$TMP/tree/test/diff_compiler_fake_pass.sh" <<'FAKE'
 #!/bin/sh
 # a fake gate: costs a measurable but tiny amount of wall clock, and passes.

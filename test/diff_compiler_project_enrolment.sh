@@ -77,6 +77,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/test/gate_native_rows.sh"
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found (needed to parse the workflow YAML)"; exit 2; }
 
 # ── the project set — the SAME rule test/preflight.sh's generic arm uses ──────
@@ -184,12 +185,7 @@ for p in $PROJECTS; do
   # `run` sits under `<project>/test/` (#2591; run_gates.sh/preflight/build_
   # oracles.sh all already resolve a native gate by registry row the same way).
   floor="$(git -C "$ROOT" ls-files "$p/test/*.sh" 2>/dev/null)"
-  native_floor="$(awk -F'"' '
-    /^\[\[gate\]\]/ { if (k == "native" && r != "") print r; r=""; k="" }
-    /^kind = "/       { k = $2 }
-    /^run = "/        { r = $2 }
-    END               { if (k == "native" && r != "") print r }
-  ' "$ROOT/test/gates.toml" 2>/dev/null | grep "^$p/test/" || true)"
+  native_floor="$(_native_rows | awk '{print $2}' | grep "^$p/test/" || true)"
   if [ -z "$floor" ] && [ -z "$native_floor" ]; then
     echo "  FLOOR      FAIL — no tracked gate script or native gate under $p/test/."
     echo "             A project with a manifest and no floor gate cannot be enrolled:"

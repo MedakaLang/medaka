@@ -77,7 +77,7 @@ setup() {
   echo base >compiler/backend/wasm_emit.mdk
   # The script under test, committed in the BASE commit so it is not itself part of
   # any diff below.
-  cp "$ROOT/test/preflight.sh" "$ROOT/test/lib_scratch.sh" test/ || return 1
+  cp "$ROOT/test/preflight.sh" "$ROOT/test/lib_scratch.sh" "$ROOT/test/gate_native_rows.sh" test/ || return 1
 
   git add test compiler || return 1
   git commit -qm A || return 1
