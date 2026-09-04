@@ -1,5 +1,5 @@
 # META
-source_lines=2018
+source_lines=2049
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -912,6 +912,37 @@ public export data Route =
   | RDictFwd String
   | RLocal String (List Route)
   | RScalar String
+
+-- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
+-- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
+-- the marked node holds the cell, the goal's destination holds the same cell, and
+-- the solver writes through it.  An `EvId` names that same association BY VALUE, so
+-- a solved route can be published as data rather than reached through a pointer —
+-- `compiler/eval/eval.mdk` cannot import a typechecker-private cell, and a table it
+-- can read is the only shape that crosses that boundary.
+--
+-- The key is SCOPED, never a bare program-global name: the `String` is the module
+-- the site was recorded in, the `Int` its ordinal within the graph run.  Two modules
+-- that each name a site `size` must not be able to answer each other's lookup, and a
+-- bare-name key fails that silently rather than loudly.
+public export data EvId = EvId String Int
+
+-- The two evidence shapes, one per destination arm a goal can have: a single site
+-- route, or a dictionary application's slot-ordered route list.
+-- The arity distinction is the point, so `Result` cannot stand in for it: `EvOne`
+-- and `EvMany` are two evidence SHAPES, not a success and a failure, and an empty
+-- `EvMany` (a dictionary application with no slots) is a legitimate solution
+-- rather than an error.  Mirrors `EvDest`, whose arms these two answer.
+-- lint-disable-next-line rule-clone-type
+public export data EvVal = EvOne Route | EvMany (List Route)
+
+public export data EvEntry = EvEntry EvId EvVal
+
+-- The published solution: a SPINE of entries, not a keyed structure.  This module
+-- sits below every reader, so a map type here would put that map's instances into
+-- the dispatch scope of the entire compiler; a reader that looks entries up by id
+-- builds its own index once instead.
+export type EvTable = List EvEntry
 
 -- a resolved lexical address for a variable reference (STAGE2-DESIGN §2.0, the
 -- de-risked first half: resolve EMITS the slot; eval does NOT yet consume it —
@@ -2116,6 +2147,10 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
+(DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
+(DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
 (DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
 (DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
@@ -2403,6 +2438,10 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
+(DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
+(DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
 (DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
 (DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())

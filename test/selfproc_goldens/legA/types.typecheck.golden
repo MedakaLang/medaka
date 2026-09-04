@@ -757,7 +757,7 @@ elabPromotionFixpoint : ElabSweep -> List String -> (List Decl, List (String, Li
 elabSweep : ElabSweep -> List String -> (List String, List Decl, List (String, List Decl))
 elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
-elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, TcDiag))
+elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, TcDiag), List EvEntry)
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -795,6 +795,8 @@ eqIntList : List Int -> List Int -> Bool
 eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
+evEntriesOf : List Obligation -> List EvEntry
+evValueOf : EvDest -> EvVal
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
@@ -921,6 +923,7 @@ freshEffMap : List String -> List (String, Ref Effvar)
 freshEffSubst : List Int -> List (Int, Ref Effvar)
 freshEffvar : Unit -> Ref Effvar
 freshEffvarAt : Int -> Ref Effvar
+freshEvId : Unit -> EvId
 freshGraphRun : Unit -> GraphRun
 freshPerRun : Unit -> PerRun
 freshSubst : List Int -> List (Int, Mono)
@@ -1731,7 +1734,7 @@ publicValNames : List Decl -> List String
 pureRow : EffRow
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
-pushArithGoal : Ref Route -> Mono -> Unit
+pushArithGoal : Ref Route -> Mono -> EvId -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
@@ -1781,6 +1784,7 @@ recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordCandIsType : Ident -> Ident -> String -> Bool
 recordDoMonadError : Loc -> Unit
+recordEvidence : List Obligation -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
 recordForReceiverIdent : Mono -> String -> Option RecordInfo

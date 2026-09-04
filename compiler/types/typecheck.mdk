@@ -56,6 +56,10 @@ import frontend.ast.{
   firstTyLocList,
   Constraint(..),
   Route(..),
+  EvId(..),
+  EvVal(..),
+  EvEntry(..),
+  EvTable,
   Pat(..),
   RecPatField(..),
   Guard(..),
@@ -2809,7 +2813,12 @@ data PendingEntry =
   -- ELoc was entered last (observed: the body of an unrelated impl three lines away).
   -- Each resolver loop republishes this span into `goalSiteLoc` so the min⊑ selector's
   -- ambiguity reject can point at the goal it was actually posed by.
-  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc)
+  -- #2549 M2: the 7th field is this site's EVIDENCE ID — the value-level name of
+  -- the association the 2nd field (the route cell) carries by pointer identity.
+  -- Minted where the carrier is built, which is the one point at which the marked
+  -- node and its cell are both in hand; the reader flip sources it from the node
+  -- itself instead, leaving everything downstream of here unchanged.
+  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc) EvId
 
 -- ── #2547 unit 2 (ARCH M1): one deferred-goal channel ─────────────────────────
 -- The route-stamped site goals used to live on five per-kind lists (`pendingSites`,
@@ -2861,6 +2870,10 @@ data GoalPayload =
 data Obligation = Obligation {
   oKind : GoalKind,
   oDest : EvDest,
+  -- #2549 M2: the identity this goal's solution is PUBLISHED under, alongside the
+  -- cell it is written through.  Carried in from the goal's carrier rather than
+  -- minted here, so the id names the site and not the moment the goal was queued.
+  oEv : EvId,
   oEncl : String,
   oLoc : Option Loc,
   oPayload : GoalPayload,
@@ -2884,9 +2897,10 @@ pushGoal o =
   g.goalsN := g.goalsN.value + 1
 
 siteObligation : GoalKind -> PendingEntry -> Obligation
-siteObligation k (PendingEntry name tagRef m encl site loc) = Obligation {
+siteObligation k (PendingEntry name tagRef m encl site loc ev) = Obligation {
   oKind = k,
   oDest = EvRoute tagRef,
+  oEv = ev,
   oEncl = encl,
   oLoc = loc,
   oPayload = GPSite name m site,
@@ -2896,10 +2910,11 @@ pushSiteGoal : GoalKind -> PendingEntry -> Unit
 pushSiteGoal k e = pushGoal (siteObligation k e)
 
 -- an arithmetic operator site: only its operand mono and its route cell
-pushArithGoal : Ref Route -> Mono -> Unit
-pushArithGoal dref m = pushGoal Obligation {
+pushArithGoal : Ref Route -> Mono -> EvId -> Unit
+pushArithGoal dref m ev = pushGoal Obligation {
   oKind = GKArithSite,
   oDest = EvRoute dref,
+  oEv = ev,
   oEncl = "",
   oLoc = None,
   oPayload = GPArith m,
@@ -2909,6 +2924,7 @@ pushDictApp : PendingDictApp -> Unit
 pushDictApp app = pushGoal Obligation {
   oKind = GKDictApp,
   oDest = EvRoutes app.pdaRoutesRef,
+  oEv = app.pdaEv,
   oEncl = app.pdaEncl,
   oLoc = app.pdaLoc,
   oPayload = GPDictApp app,
@@ -2918,19 +2934,22 @@ pushMethodDictGoal : PendingMethodDict -> Unit
 pushMethodDictGoal pmd = pushGoal Obligation {
   oKind = GKMethodDict,
   oDest = EvRoutes pmd.pmdRoutesRef,
+  oEv = pmd.pmdEv,
   oEncl = pmd.pmdEncl,
   oLoc = None,
   oPayload = GPMethodDict pmd,
 }
 
 pushRecDictAppGoal : RecDictApp -> Unit
-pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _)) = pushGoal Obligation {
-  oKind = GKRecDictApp,
-  oDest = EvRoutes routesRef,
-  oEncl = encl,
-  oLoc = None,
-  oPayload = GPRecDictApp r,
-}
+pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _ ev)) = pushGoal
+  Obligation {
+    oKind = GKRecDictApp,
+    oDest = EvRoutes routesRef,
+    oEv = ev,
+    oEncl = encl,
+    oLoc = None,
+    oPayload = GPRecDictApp r,
+  }
 
 -- the goals recorded since `mark` (a length of the channel: a module's start mark
 -- from `GraphMarks`, or a `let`/SCC bracket's own), newest first
@@ -2954,7 +2973,7 @@ siteGoalsIn k gs = flatMap siteEntry (goalsOfKindIn k gs)
 siteEntry : Obligation -> List PendingEntry
 siteEntry o = match o.oPayload
   GPSite name m site =>
-    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc]
+    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc o.oEv]
   _ => []
 
 evCell : EvDest -> Ref Route
@@ -7997,6 +8016,9 @@ uOblIsDecidableNow o =
 -- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
 data PendingDictApp = PendingDictApp {
   pdaRoutesRef : Ref (List Route),
+  -- #2549 M2: this application's evidence id, the same field `PendingEntry` carries
+  -- as its 7th and for the same reason.
+  pdaEv : EvId,
   pdaMonos : List Mono,
   pdaIfaces : List IfaceRef,
   pdaArgVecs : List (List Mono),
@@ -8019,6 +8041,8 @@ data PendingDictApp = PendingDictApp {
 -- identity or its arity, while non-colliding programs preserve the historical order.
 data PendingMethodDict = PendingMethodDict {
   pmdRoutesRef : Ref (List Route),
+  -- #2549 M2: this application's evidence id — see `pdaEv`.
+  pmdEv : EvId,
   pmdSlots : List PredicateSlot,
   pmdEncl : String,
 }
@@ -8191,7 +8215,8 @@ resetCrossModuleState _ =
 -- in scope in its body — rather than rebuilding one (which it cannot, the type is
 -- still the constraint variable).  Mirrors the reference's recursive_promoted_usages
 -- / realize_recursive_dict_apps (Phase 115/136).
-data RecDictApp = RecDictApp (Ref (List Route)) String String Mono
+-- #2549 M2: the 5th field is this application's evidence id — see `pdaEv`.
+data RecDictApp = RecDictApp (Ref (List Route)) String String Mono EvId
 
 -- the top-level fn whose body is currently being inferred ("" = none); captured
 -- into a deferred RecDictApp so its recursive calls forward the right dict param.
@@ -8391,7 +8416,8 @@ recordArgStamp name tagRef implRef idx mono
           am
           perRun.value.currentFn.value
           (SKArg implRef mono)
-          !currentLoc)
+          !currentLoc
+          (freshEvId ()))
     None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -8423,7 +8449,7 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
 resolveArgStamps : List PendingEntry -> Unit
 resolveArgStamps [] = goalSiteLoc := None
-resolveArgStamps ((PendingEntry name tagRef am encl kind loc) :: rest) =
+resolveArgStamps ((PendingEntry name tagRef am encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKArg implRef fullMono =>
@@ -9095,6 +9121,15 @@ data GraphRun = GraphRun {
   -- the channel's length, maintained by `pushGoal` / `dropGoalsSince`, so a mark is
   -- O(1) — `goalsMark` is taken at every `let` and SCC bracket
   goalsN : Ref Int,
+  -- #2549 M2: the ordinal source for this run's evidence ids.  Graph-global and
+  -- monotone, so `EvId <module> <ordinal>` is unique across the whole run without a
+  -- per-module reset — see `freshEvId`.
+  evCounter : Ref Int,
+  -- #2549 M2: the solved evidence, one entry per goal, appended by the graph-end
+  -- drain as each module's stampers finish.  It is a SECOND RENDERING of the routes
+  -- the stampers wrote into their cells, read back from those same cells, never an
+  -- independently-derived answer.
+  evTable : Ref EvTable,
 }
 
 freshGraphRun : Unit -> GraphRun
@@ -9108,10 +9143,29 @@ freshGraphRun _ = GraphRun {
   moduleRanges = Ref [],
   stampCtxs = Ref [],
   goalsN = Ref 0,
+  evCounter = Ref 0,
+  evTable = Ref [],
 }
 
 graphRun : Ref GraphRun
 graphRun = Ref (freshGraphRun ())
+
+-- #2549 M2: the next evidence id for the module currently being inferred.  The
+-- module component comes from `driverState`, which `checkBodyImpl` sets once per
+-- module before any body of it is inferred; the ordinal is this run's counter.  The
+-- pair is what makes the key SCOPED — a bare ordinal would be a program-global name
+-- and two modules' sites could answer each other's lookup with no error anywhere.
+--
+-- Both halves ride `GraphRun`, so the two memo layers rewind the counter and the goal
+-- channel TOGETHER (`copyGraphRun`): a hit can hand back an ordinal an abandoned
+-- branch already minted, but never two live goals sharing one id, because the goals
+-- that consumed those ordinals were dropped with the channel.
+freshEvId : Unit -> EvId
+freshEvId _ =
+  let g = graphRun.value
+  let n = g.evCounter.value
+  g.evCounter := n + 1
+  EvId driverState.value.currentModuleRef.value n
 
 resetGraphState : Unit -> Unit
 resetGraphState _ = graphRun := freshGraphRun ()
@@ -9129,6 +9183,8 @@ copyGraphRun g = GraphRun {
   moduleRanges = Ref g.moduleRanges.value,
   stampCtxs = Ref g.stampCtxs.value,
   goalsN = Ref g.goalsN.value,
+  evCounter = Ref g.evCounter.value,
+  evTable = Ref g.evTable.value,
 }
 
 -- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
@@ -11507,7 +11563,8 @@ recordRLocalSite env name tagRef inst
         inst
         perRun.value.currentFn.value
         (SKRLocal (routeLocalSym !tagRef) True [] [] [])
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
@@ -11532,7 +11589,8 @@ recordRLocalSite env name tagRef inst
               dicts.sdMonos
               dicts.sdIfaces
               dicts.sdArgVecs)
-            !currentLoc)
+            !currentLoc
+            (freshEvId ()))
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -11673,6 +11731,7 @@ recordMethodDicts name methodRef subst =
     None => ()
     Some slots => pushMethodDictGoal PendingMethodDict {
       pmdRoutesRef = methodRef,
+      pmdEv = freshEvId (),
       pmdSlots = instantiateMethodPredicateSlots slots subst,
       pmdEncl = perRun.value.currentFn.value,
     }
@@ -11770,7 +11829,8 @@ recordSite name tagRef implRef methodType =
       stripped
       perRun.value.currentFn.value
       (SKReturn implRef methodType)
-      !currentLoc)
+      !currentLoc
+      (freshEvId ()))
   perRun.value.methodSiteFns :=
     consSiteFn
       perRun.value.currentFn.value
@@ -12076,6 +12136,7 @@ inferDictAtFound name routesRef inst =
     -- below carries identity.
     let _ = pushDictApp PendingDictApp {
       pdaRoutesRef = routesRef,
+      pdaEv = freshEvId (),
       pdaMonos = monos,
       pdaIfaces = map (s => s.csIface) expanded,
       pdaArgVecs = argVecs,
@@ -12095,7 +12156,12 @@ inferDictAtFound name routesRef inst =
     fst inst
   else
     pushRecDictAppGoal
-      (RecDictApp routesRef name perRun.value.currentFn.value (fst inst))
+      (RecDictApp
+        routesRef
+        name
+        perRun.value.currentFn.value
+        (fst inst)
+        (freshEvId ()))
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -13721,7 +13787,8 @@ recordBinopSite op dref m = match binopMethod op
         m
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   None => ()
 
 -- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
@@ -13735,7 +13802,7 @@ isArithBinop op = contains op ["+", "-", "*", "/", "%"]
 
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordArithSite op dref m
-  | isArithBinop op = pushArithGoal dref m
+  | isArithBinop op = pushArithGoal dref m (freshEvId ())
   | otherwise = ()
 
 -- Roadmap #18a: `++` is the surface operator for `Semigroup`'s `append`, so it
@@ -13774,7 +13841,8 @@ recordUnopSite op dref m = match unopMethod op
         m
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   None => ()
 
 -- The EUnOp analogue of inferBinopE: infer the single operand, record its
@@ -15634,7 +15702,8 @@ recordImporterShadowDicts env mname (r :: rest) tx =
           dicts.sdMonos
           dicts.sdIfaces
           dicts.sdArgVecs)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   recordImporterShadowDicts env mname rest tx
 
 -- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
@@ -15672,7 +15741,8 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
           dicts.sdMonos
           dicts.sdIfaces
           dicts.sdArgVecs)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
@@ -15915,7 +15985,8 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
             dicts.sdMonos
             dicts.sdIfaces
             dicts.sdArgVecs)
-          !currentLoc)
+          !currentLoc
+          (freshEvId ()))
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
     -- only arm whose route this stamp decides.  On the STANDALONE arm `ft` is the
@@ -15931,7 +16002,8 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
           xt
           perRun.value.currentFn.value
           (SKArg implRef (if dispatches then ft else xt))
-          !currentLoc)
+          !currentLoc
+          (freshEvId ()))
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
@@ -18799,7 +18871,7 @@ methodConstrainedPairs _ =
 -- the explanation.  Dropping was the earlier behaviour and it is why a `where` helper
 -- pinned by this channel got a bare mismatch with no help at all.
 argStampPairs : PendingEntry -> List (Int, String)
-argStampPairs (PendingEntry name _ am _ _ _) =
+argStampPairs (PendingEntry name _ am _ _ _ _) =
   map (id => (id, optionOr "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
 -- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
@@ -19643,7 +19715,7 @@ unifyClauses env v ((pats, body) :: rest) =
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
-  let (coreD, modules, _) =
+  let (coreD, modules, _, _) =
     elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
 
@@ -20289,7 +20361,7 @@ constraintNonParamVars typarams (Constraint { constraintArgs = args }) =
 
 resolveSites : List String -> List PendingEntry -> Unit
 resolveSites _ [] = goalSiteLoc := None
-resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc) :: rest) =
+resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKReturn implRef fullMono =>
@@ -20786,7 +20858,7 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
 resolveRLocalSites : List Decl -> List PendingEntry -> Unit
 resolveRLocalSites _ [] = goalSiteLoc := None
-resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc) :: rest) =
+resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
@@ -21134,7 +21206,7 @@ resolveArithSite dref m = match !dref
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
 resolveOpSites : Bool -> List PendingEntry -> Unit
 resolveOpSites _ [] = goalSiteLoc := None
-resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc) :: rest) =
+resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKOp inImpl => resolveOpSite isBinop method tagRef operandMono inImpl encl
@@ -27109,7 +27181,7 @@ methodPredicateRoute encl slot = match slot.psArgs
 -- fully populated.
 realizeRecDictApps : List RecDictApp -> Unit
 realizeRecDictApps [] = ()
-realizeRecDictApps ((RecDictApp routesRef callee encl mono) :: rest) =
+realizeRecDictApps ((RecDictApp routesRef callee encl mono _) :: rest) =
   let slots =
     optionOr
       []
@@ -40977,10 +41049,15 @@ export
 -- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
 -- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
 -- to this call.
+-- #2549 M2: the fourth component is the EVIDENCE TABLE — every goal this
+-- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
+-- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
+-- cell.  Nothing consumes it yet: the routes it carries are the same routes already
+-- stamped into the trees' own cells, so a caller that ignores it loses nothing.
 elaborateModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl), List (String, TcDiag))
+  (List Decl, List (String, List Decl), List (String, TcDiag), EvTable)
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
@@ -41162,7 +41239,12 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
     esRuntimeSeed = runtimeSeed,
   }
   let (coreD, modules2) = elabPromotionFixpoint sweep bareDictNames0
-  (coreD, modules2, stickyTypeErrorDiagsSince stickyBefore)
+  (
+    coreD,
+    modules2,
+    stickyTypeErrorDiagsSince stickyBefore,
+    graphRun.value.evTable.value,
+  )
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 
@@ -42299,7 +42381,23 @@ runStampCtxs (ctx :: rest) =
   driverState.value.currentModuleRef := ctx.scModule
   driverState.value.superDeclsRef := ctx.scImplDecls
   let _ = runStampSteps ctx moduleStampOrder
+  let _ = recordEvidence ctx.scGoals
   runStampCtxs rest
+
+-- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
+-- READ BACK OUT OF THE CELLS THEY WROTE.  Deriving the table any other way would make
+-- it a second answer that can disagree with the cells; derived this way it cannot.
+recordEvidence : List Obligation -> Unit
+recordEvidence gs =
+  let g = graphRun.value
+  g.evTable := evEntriesOf gs ++ g.evTable.value
+
+evEntriesOf : List Obligation -> EvTable
+evEntriesOf gs = map (o => EvEntry o.oEv (evValueOf o.oDest)) gs
+
+evValueOf : EvDest -> EvVal
+evValueOf (EvRoute r) = EvOne !r
+evValueOf (EvRoutes rs) = EvMany !rs
 
 -- #2543: everything one Module-arm sweep of `elaborateModules` needs, bundled so
 -- the promotion fixpoint can re-run the sweep with a grown dict-name set.
@@ -42434,7 +42532,11 @@ clearSweepCells : Unit -> Unit
 clearSweepCells _ =
   let g = graphRun.value
   let _ = clearGoalCells g.goals.value
-  clearNumlitCells g.numlitRefs.value
+  let _ = clearNumlitCells g.numlitRefs.value
+  -- The table is the cells' second rendering, so it is discarded on exactly the same
+  -- condition: evidence derived from a promotion set the fixpoint rejected must not
+  -- reach the sweep that replaces it.
+  g.evTable := []
 
 clearGoalCells : List Obligation -> Unit
 clearGoalCells [] = ()
