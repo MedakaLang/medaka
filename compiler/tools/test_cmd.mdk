@@ -56,6 +56,7 @@ import driver.loader.{
   entrySearchRoots,
   canonicalPathId,
   readDeps,
+  findProjectRoot,
   findProjectRootOrSelf,
 }
 import driver.build_cmd.{readPreludeFile}
@@ -123,8 +124,9 @@ import support.util.{
   isNonEmptyL,
   filterList,
   endsWith,
+  splitOnChar,
 }
-import support.path.{dirOf}
+import support.path.{dirOf, baseOf}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -283,10 +285,12 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- presence still wins over the `test`/`prop` exemption (same precedence as
 -- before the factor-out).
 --
--- #1445/#2513: the exemption is narrowed by SUFFIX, not just by decl shape —
+-- #1445/#2513: the exemption is narrowed by PATH, not just by decl shape —
 -- `isNewVehiclePath` below excludes the `[P-TEST-SIBLING]` `*_test.mdk`
--- convention (AGENTS.md) so a test sibling is always type-checked, never
--- silently swallowed the way `test/ported/*.mdk` deliberately still is.
+-- convention (AGENTS.md) so a test sibling that lives in the tree — under
+-- `compiler/`/`stdlib/`, or in a real project's own `test/` directory — is
+-- always type-checked, never silently swallowed the way `test/ported/*.mdk`
+-- deliberately still is.
 typecheckExempt : String -> List Decl -> String -> <IO> Bool
 typecheckExempt target userDecls tsrc
   | isNonEmptyL (extractExamples (collectComments tsrc)) = False
@@ -298,22 +302,67 @@ typecheckExempt target userDecls tsrc
 -- meant for the eval-vs-check divergence corpus (`test/ported/*.mdk`) — that
 -- corpus predates the convention and keeps the exemption unchanged, which it
 -- does for free: not one of its files carries the `_test.mdk` suffix
--- (`git ls-files 'test/ported/*_test.mdk'` is empty), so the suffix alone
--- already separates the two families.
+-- (`git ls-files 'test/ported/*_test.mdk'` is empty).
 --
--- The classification is the SUFFIX and nothing else.  It used to be narrowed
--- further, to a `compiler`/`stdlib` path segment, so that `pds/test/` and
--- `sqlite/test/` stayed exempt on the belief that they too traded on
--- eval-vs-check divergence.  They do not: gating all 26 tracked `*_test.mdk`
--- files outside `compiler/`/`stdlib/` surfaced four type errors, every one of
--- them ordinary (a missing `deriving`, an unimported type name, an
--- under-general signature, an unannotated ambiguous literal) and none a
--- construct eval accepts and `check` rejects.  A segment roster is also the
--- wrong shape for the convention it guards: the convention is a sibling BESIDE
--- its subject, in whatever directory that subject lives in, so a roster can
--- only ever be as complete as whoever last remembered to edit it.
-isNewVehiclePath : String -> Bool
-isNewVehiclePath target = endsWith "_test.mdk" target
+-- The rule is the suffix AND one of two path shapes: a `compiler`/`stdlib`
+-- SEGMENT, or a real project's own `test/` directory.  The suffix alone is too
+-- wide — it also claims a scratch or synthetic `*_test.mdk` that belongs to no
+-- project at all, and a directory that merely CONTAINS the text `compiler` or
+-- `stdlib` in its name.
+--
+-- The segment half is a `/`-delimited SEGMENT match over the CANONICALIZED
+-- target, not a substring test over the string the CLI was handed.  Both halves
+-- are load-bearing, and a bare `substringMatch "compiler/"` got each one wrong
+-- in the opposite direction:
+--   • canonicalization, because the classification must not depend on the
+--     invocation FORM.  `medaka test compiler/types/x_test.mdk` and, from
+--     inside that directory, `medaka test x_test.mdk` name the same module; the
+--     second carries no `compiler/` substring, so the substring form silently
+--     re-exempted the file the convention exists to guard.
+--   • segment matching, because `compiler`/`stdlib` must be real path
+--     components.  A tree under `…/mycompiler/…` or `…/newstdlib/…` contains
+--     the substring without containing the directory.
+-- `canonicalizePath` returns its input unchanged on an unresolvable path, so an
+-- already-relative, already-`compiler/`-rooted target still classifies the same.
+--
+-- The project half (`underProjectTestDir`) covers the vehicles that live
+-- outside `compiler/`/`stdlib/` — `pds/test/*_test.mdk`,
+-- `sqlite/test/*_test.mdk` and any future project's — which are ordinary
+-- type-checkable code, not eval-vs-check divergence corpora: gating all 26
+-- tracked `*_test.mdk` files outside `compiler/`/`stdlib/` surfaced four type
+-- errors, every one of them ordinary (a missing `deriving`, an unimported type
+-- name, an under-general signature, an unannotated ambiguous literal).  It asks
+-- the filesystem instead of consulting a roster, so a project added later is in
+-- scope with no edit here ([W-PROJECT-BY-MANIFEST]) — the same live derivation
+-- `test/preflight.sh` and `test/diff_compiler_project_enrolment.sh` use.
+isNewVehiclePath : String -> <IO> Bool
+isNewVehiclePath target =
+  if endsWith "_test.mdk" target then
+    hasVehicleSegment (canonicalizePath target) || underProjectTestDir target
+  else
+    False
+
+-- Is `compiler` or `stdlib` a whole `/`-delimited component of `path`?
+hasVehicleSegment : String -> Bool
+hasVehicleSegment path =
+  isNonEmptyL
+    (filterList
+      (seg => seg == "compiler" || seg == "stdlib")
+      (splitOnChar '/' path))
+
+-- Does `target` sit directly in the `test/` directory of a REAL project — a
+-- directory named exactly `test` with a `medaka.toml` at or above it?  The
+-- manifest is what makes it a project ([W-PROJECT-BY-MANIFEST]); WHICH project
+-- is irrelevant, so nothing here enumerates them.  A scratch tree with no
+-- manifest anywhere above it answers `None` and keeps the exemption.
+underProjectTestDir : String -> <IO> Bool
+underProjectTestDir target =
+  let d = dirOf target
+  if baseOf d == "test" then match findProjectRoot d
+    Some _ => True
+    None => False
+  else
+    False
 
 doctestGate : String ->
   List String ->
