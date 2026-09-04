@@ -112,6 +112,16 @@ test/arch_census                derived architecture census (#2289, S-arch-censu
                                 skill's job, not this script's). Always exits 0 and asserts
                                 nothing. See the script header.
 
+test/doc_census                 derived doc-disposition census (#2300, S-doc-census,
+                                `make doc-census`, `make slop-census` row
+                                `doc-disposition`): reports per-doc last-edit date,
+                                syntax-example-corpus enrolment (mirrors
+                                check_syntax_examples.sh's own corpus), FILE-tier
+                                DOC-LINK-EXCEPTIONS.txt enrolment, docs/README.md
+                                reachability, and `**Status:**` banner presence.
+                                Always exits 0 and asserts nothing. See the script
+                                header.
+
 test/o2_survivor_census         report-only census over test/o2_survivor_fixtures/
                                 (#2357, S2-o2-survivor-report, `make
                                 o2-survivor-census`): for each single-construct
