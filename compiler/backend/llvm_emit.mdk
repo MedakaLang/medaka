@@ -8649,14 +8649,7 @@ headPat [] = PWild
 -- each (the Maranget priority).  CImplDefault entries (interface defaults) are
 -- skipped — they are the arg-tag fallback, never a lifted static-dispatch target.
 groupImpls : Emit -> List CImplEntry -> List ImplGroup
-groupImpls e entries =
-  mapMut (gatherGroup e entries) (distinctImplKeys entries [])
-
--- map an effectful function over a list (map is pure; gatherGroup now reads the method
--- arity table to eta-expand point-free impls, so the walk must be effectful).
-mapMut : (a -> b) -> List a -> List b
-mapMut _ [] = []
-mapMut f (x :: rest) = f x :: mapMut f rest
+groupImpls e entries = map (gatherGroup e entries) (distinctImplKeys entries [])
 
 -- the (method, key) keys of tagged entries, in first-seen order.
 distinctImplKeys : List CImplEntry ->

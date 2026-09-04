@@ -1,5 +1,5 @@
 # META
-source_lines=14263
+source_lines=14256
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -8653,14 +8653,7 @@ headPat [] = PWild
 -- each (the Maranget priority).  CImplDefault entries (interface defaults) are
 -- skipped — they are the arg-tag fallback, never a lifted static-dispatch target.
 groupImpls : Emit -> List CImplEntry -> List ImplGroup
-groupImpls e entries =
-  mapMut (gatherGroup e entries) (distinctImplKeys entries [])
-
--- map an effectful function over a list (map is pure; gatherGroup now reads the method
--- arity table to eta-expand point-free impls, so the walk must be effectful).
-mapMut : (a -> b) -> List a -> List b
-mapMut _ [] = []
-mapMut f (x :: rest) = f x :: mapMut f rest
+groupImpls e entries = map (gatherGroup e entries) (distinctImplKeys entries [])
 
 -- the (method, key) keys of tagged entries, in first-seen order.
 distinctImplKeys : List CImplEntry ->
@@ -15613,10 +15606,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "headPat" ((PCons (PVar "p") PWild)) (EVar "p"))
 (DFunDef false "headPat" ((PList)) (EVar "PWild"))
 (DTypeSig false "groupImpls" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "ImplGroup")))))
-(DFunDef false "groupImpls" ((PVar "e") (PVar "entries")) (EApp (EApp (EVar "mapMut") (EApp (EApp (EVar "gatherGroup") (EVar "e")) (EVar "entries"))) (EApp (EApp (EVar "distinctImplKeys") (EVar "entries")) (EListLit))))
-(DTypeSig false "mapMut" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
-(DFunDef false "mapMut" (PWild (PList)) (EListLit))
-(DFunDef false "mapMut" ((PVar "f") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "mapMut") (EVar "f")) (EVar "rest"))))
+(DFunDef false "groupImpls" ((PVar "e") (PVar "entries")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "gatherGroup") (EVar "e")) (EVar "entries"))) (EApp (EApp (EVar "distinctImplKeys") (EVar "entries")) (EListLit))))
 (DTypeSig false "distinctImplKeys" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "distinctImplKeys" ((PList) (PVar "seen")) (EApp (EVar "reverseL") (EVar "seen")))
 (DFunDef false "distinctImplKeys" ((PCons (PCon "CImplEntry" (PVar "method") PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild)) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EApp (EVar "keySeen") (EVar "method")) (EVar "key")) (EVar "seen")) (EApp (EApp (EVar "distinctImplKeys") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EApp (EApp (EVar "distinctImplKeys") (EVar "rest")) (EBinOp "::" (ETuple (EVar "method") (EVar "key")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -18026,10 +18016,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "headPat" ((PCons (PVar "p") PWild)) (EVar "p"))
 (DFunDef false "headPat" ((PList)) (EVar "PWild"))
 (DTypeSig false "groupImpls" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "ImplGroup")))))
-(DFunDef false "groupImpls" ((PVar "e") (PVar "entries")) (EApp (EApp (EVar "mapMut") (EApp (EApp (EVar "gatherGroup") (EVar "e")) (EVar "entries"))) (EApp (EApp (EVar "distinctImplKeys") (EVar "entries")) (EListLit))))
-(DTypeSig false "mapMut" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
-(DFunDef false "mapMut" (PWild (PList)) (EListLit))
-(DFunDef false "mapMut" ((PVar "f") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "mapMut") (EVar "f")) (EVar "rest"))))
+(DFunDef false "groupImpls" ((PVar "e") (PVar "entries")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "gatherGroup") (EVar "e")) (EVar "entries"))) (EApp (EApp (EVar "distinctImplKeys") (EVar "entries")) (EListLit))))
 (DTypeSig false "distinctImplKeys" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "distinctImplKeys" ((PList) (PVar "seen")) (EApp (EVar "reverseL") (EVar "seen")))
 (DFunDef false "distinctImplKeys" ((PCons (PCon "CImplEntry" (PVar "method") PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild)) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EApp (EVar "keySeen") (EVar "method")) (EVar "key")) (EVar "seen")) (EApp (EApp (EVar "distinctImplKeys") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EApp (EApp (EVar "distinctImplKeys") (EVar "rest")) (EBinOp "::" (ETuple (EVar "method") (EVar "key")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
