@@ -1,12 +1,14 @@
 # pds/
 
 The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
-0–3 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
-this tree: the pure core
+0–3 and Phase 4 of the umbrella design (#1697) are landed in this tree, short
+of deployment: the pure core
 covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
-the nine atproto record/sync/identity endpoints, the four session endpoints
+the nine atproto record/sync/identity endpoints, `applyWrites` as one signed
+commit, the blob routes (`uploadBlob`/`getBlob`/`listBlobs`) with on-disk
+persistence, the four session endpoints
 (`com.atproto.server.{createSession, refreshSession, deleteSession,
 getSession}`), plus the two well-known paths.
 Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
@@ -501,6 +503,41 @@ this project. A record write against an unconfigured store is refused with
   parameter is REFUSED rather than ignored: answering the whole-repository
   question when a narrower one was asked would return something plausible and
   wrong.
+
+## Phase 4 blob routes and persistence (#1697, #2605)
+
+`pds/lib/handlers.mdk` implements the blob half of Phase 4:
+`com.atproto.repo.uploadBlob` (a write — it joins `recordHandled` rather than
+the read half because it is the only route besides the four record writes
+that can return a successor `Store`), `com.atproto.sync.getBlob`, and
+`com.atproto.sync.listBlobs`.
+
+| Route | Answer | Refusals |
+|---|---|---|
+| `com.atproto.repo.uploadBlob` | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
+| `com.atproto.sync.getBlob` | the raw bytes, with the declared MIME `content-type` | `BlobNotFound` when absent |
+| `com.atproto.sync.listBlobs` | `{cids, cursor?}` | `since` is refused, not ignored, the same policy `getRepo` uses |
+
+`pds/lib/blob.mdk`'s `admitBlob` is the single admission point: it computes the
+blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
+`maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
+Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
+an unconfigured server too, and `uploadBlob` needs only a session, not a
+repository.
+
+Persistence is `pds/shell/blobfile.mdk`, mirroring `blockfile.mdk`'s
+stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
+like the block store, plus a `.mime` sidecar recording the declared MIME
+type (bytes alone don't carry it) — the sidecar is promoted before the bytes,
+so a reader keying on the bytes file never observes a blob with a missing
+declared type. Nothing collects an unreferenced blob (#2572 tracks that as a
+protocol-design question, not a filesystem one). `pds/test/blob_routes_test.mdk`
+grades the three routes end to end against `pds/test/vectors/
+blob_reference_corpus.txt`; `pds/test/serve_e2e.sh` and `pds/test/
+store_persistence.sh` extend their existing socket/restart coverage to blobs:
+upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
+tampered blob file is rejected at load; an oversize blob is refused with zero
+files written to disk.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

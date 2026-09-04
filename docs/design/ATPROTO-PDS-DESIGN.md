@@ -1,11 +1,13 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** ACTIVE (2026-09-01) — Phases 0–2 are complete in the current tree,
-and so is the PURE half of Phase 4 (#1697): the nine atproto record/sync/identity
-endpoints and the two well-known paths, all as pure `Store -> Response`
-functions. Phase 3 is next, but remains gated on the Async v2 runtime arc (#500)
-and the graded-interface implementation work (#823/#824); everything left in
-Phase 4 is the part that needs it.
+**Status:** ACTIVE (2026-09-04) — Phases 0–3 are complete in the current tree.
+Phase 4 (#1697) has landed record CRUD, `applyWrites` as one signed commit,
+session authentication, and the blob half (`uploadBlob`/`getBlob`/`listBlobs`
+with on-disk persistence across restarts) — the Async v2 runtime arc (#500)
+and the graded-interface work (#823/#824) that Phase 3 depended on are both
+landed, so nothing in Phase 4 remains gated on them either. What is left of
+Phase 4 is deployment behind Caddy under systemd; multi-repository support
+stays out of scope through 0.1.0 by design (§0, P14).
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
 dev box behind Caddy. This is simultaneously the most demanding Medaka program
@@ -88,7 +90,7 @@ The organising principle, and the reason P9 costs little:
 ```
                     ┌─────────────────────────────────────────┐
    native-only,     │  socket shell — accept, read, write     │  Phase 3
-   thin, ~400 loc   │  over #500's async net surface          │  GATED
+   thin, ~400 loc   │  over #500's async net surface          │  COMPLETE
                     └──────────────────┬──────────────────────┘
                      Array Int ⇄ Array Int │ Store (injected)
                     ┌──────────────────┴──────────────────────┐
@@ -260,7 +262,7 @@ PDS ever shipping.
 
 ### 4.2 Password hashing (PBKDF2-HMAC-SHA-256)
 
-Account bootstrap and `createSession` (Phase 4's "still owed" list) need to turn a
+Account bootstrap and `createSession` (both landed, §6 Phase 4) need to turn a
 user password into a storable credential without keeping the password itself. Chosen
 algorithm: **PBKDF2-HMAC-SHA-256** (`pds/lib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
 this server signs and serves one account, so there is no attacker-throughput budget
@@ -514,31 +516,59 @@ nothing here hardens the socket for exposure past loopback (TLS, a non-loopback
 bind), which is not a Phase 3 or Phase 4 gap to work around but out of scope until a
 later phase takes it up.
 
-**Phase 4 — a standalone PDS.** *Pure half COMPLETE in the current tree
-(#1697); the rest is Phase-3-gated.*
+**Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), except
+deployment.*
 
-Shipped, all in `pds/lib/handlers.mdk` as pure functions over the Phase-2 seam:
-record CRUD `createRecord`/`putRecord`/`deleteRecord`/`getRecord`/`listRecords`
-(with `limit`/`reverse`/`cursor`), `describeRepo`,
+Shipped, all in `pds/lib/handlers.mdk` as pure functions over the Phase-2 seam,
+composed under the Phase-3 shell's auth seam (§ above): record CRUD
+`createRecord`/`putRecord`/`deleteRecord`/`getRecord`/`listRecords` (with
+`limit`/`reverse`/`cursor`), `applyWrites` (batches the three single-record
+writes into one signed commit — see P14 below), `describeRepo`,
 `com.atproto.sync.getRepo`/`getLatestCommit`,
 `com.atproto.identity.resolveHandle`, the `did:web` identity document at
-`/.well-known/did.json`, and `/.well-known/atproto-did`. The two well-knowns are
-their own explicitly-typed route class in `pds/lib/xrpc.mdk`, not synthesized
-NSIDs, and reach the handler through the same `routeRequest`/`handle` seam as
-every XRPC method. `sync.getRepo` returns `repoExportCar`'s bytes verbatim,
-graded byte-for-byte against the provenance-pinned corpus.
+`/.well-known/did.json`, `/.well-known/atproto-did`, session auth
+(`createSession`/`refreshSession`/`deleteSession`/`getSession`, #2604), and the
+blob half: `uploadBlob`/`getBlob`/`com.atproto.sync.listBlobs`, admitted by
+`pds/lib/blob.mdk`'s `admitBlob` and persisted to disk by
+`pds/shell/blobfile.mdk` (§ P14 below) across restarts. The two well-knowns
+are their own explicitly-typed route class in `pds/lib/xrpc.mdk`, not
+synthesized NSIDs, and reach the handler through the same `routeRequest`/
+`handle` seam as every XRPC method. `sync.getRepo` returns `repoExportCar`'s
+bytes verbatim, graded byte-for-byte against the provenance-pinned corpus.
 
-Deliberately NOT shipped in the pure half, and each refused rather than faked:
-authentication of any kind (there is none — the pure core is not safe to expose
-as it stands), lexicon record validation (`validate: true` is refused),
-`describeRepo`'s `didDoc` (no DID resolver, so any document would be invented),
-`sync.getRepo`'s `since` (no incremental sync), and `validationStatus`.
+Deliberately NOT shipped, and each refused rather than faked: lexicon record
+validation (`validate: true` is refused), `describeRepo`'s `didDoc` (no DID
+resolver, so any document would be invented), `sync.getRepo`'s `since` (no
+incremental sync), and `validationStatus`.
 
-Still owed, now that Phase 3's shell exists to carry them: account bootstrap,
-`createSession`/`refreshSession` and JWT signing (reusing Phase 0),
-`applyWrites`, blob upload/retrieval and `com.atproto.sync.listBlobs`,
-multi-repository and blob-storage policy, and deployment behind Caddy under
-systemd. **That is the first point with a running, useful artifact.**
+**Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
+sibling of (never inside) the repository's `<data>/blocks`, sharded on the
+first byte of the CID's multihash digest exactly like the block store —
+`<shard>/<cid hex>` for the bytes, `<shard>/<cid hex>.mime` for a sidecar
+recording the declared MIME type, since content addressing verifies bytes,
+not the type declared for them. Both files stage under `.staging` and are
+promoted by `rename`, MIME sidecar first, bytes last, so a reader — which
+keys on the bytes file — never observes a blob whose declared type is
+missing; a crash between the two leaves an orphan sidecar, treated as
+residue, not corruption. Caps are enforced once, at admission
+(`admitBlob`): `maxBlobBytes` (5 MiB, deliberately equal to the framing
+layer's raw-body cap) per blob, `maxAccountBlobBytes` (100 MiB, a first
+policy choice pending real storage-cost numbers) per account. Nothing
+collects an unreferenced blob — a blob no record references survives every
+restart until removed by hand; GC is a protocol question (which references
+count, and when an expected-but-not-yet-existing reference stops being
+expected), not a filesystem one, and is tracked separately (#2572, GC still
+open; the stray-file-naming half of that issue is discharged for blob code
+but not yet for the original block store). Full account: `pds/shell/blobfile.mdk`'s
+module doc.
+
+**Multi-repository (P14).** This server hosts exactly one account
+(`makeAccount`, `storeFromRepo`, and the `Server` seam are single-account by
+construction) and stays that shape through 0.1.0 — no slice implemented
+multi-repository either way, and no note since has overturned it.
+
+Still owed: deployment behind Caddy under systemd. **That is the first point
+with a running, useful, externally reachable artifact.**
 
 **Phase 4.5 — read-only web view** (P13). Repo, collections, and individual records
 rendered as HTML from the same process and router. No new protocol surface; makes the
