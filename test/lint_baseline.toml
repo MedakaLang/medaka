@@ -19,7 +19,7 @@
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 rule = "rule-clause-map"
-count = 5
+count = 4
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
@@ -69,7 +69,7 @@ count = 1
 [[entry]]
 file = "compiler/entries/fuzz_gen_main.mdk"
 rule = "rule-clause-map"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
@@ -168,11 +168,6 @@ count = 1
 
 [[entry]]
 file = "compiler/tools/repl.mdk"
-rule = "rule-clause-map"
-count = 1
-
-[[entry]]
-file = "compiler/tools/repl.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
 
@@ -207,57 +202,12 @@ rule = "rule-stdlib-reimpl"
 count = 5
 
 [[entry]]
-file = "sqlite/lib/mutate.mdk"
-rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
-file = "sqlite/lib/select.mdk"
-rule = "rule-stdlib-reimpl"
-count = 2
-
-[[entry]]
-file = "sqlite/lib/sqlite.mdk"
-rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
 file = "sqlite/main.mdk"
 rule = "rule-clause-map"
 count = 1
 
 [[entry]]
-file = "stdlib/base64.mdk"
-rule = "rule-stdlib-reimpl"
-count = 6
-
-[[entry]]
-file = "stdlib/hash_map.mdk"
-rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
-file = "stdlib/hex.mdk"
-rule = "rule-stdlib-reimpl"
-count = 5
-
-[[entry]]
-file = "stdlib/io.mdk"
-rule = "rule-stdlib-reimpl"
-count = 3
-
-[[entry]]
-file = "stdlib/path.mdk"
-rule = "rule-stdlib-reimpl"
-count = 3
-
-[[entry]]
 file = "stdlib/string.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
-
-[[entry]]
-file = "stdlib/toml.mdk"
-rule = "rule-stdlib-reimpl"
-count = 1
 

@@ -16,6 +16,7 @@
 -- `medaka.toml`'s schema.  The `[package]`/`[workspace]` accessors live in
 -- `compiler/support/manifest.mdk`.
 
+import list.{reverse}
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
 
@@ -31,15 +32,6 @@ public export data TomlValue =
 -- | A parsed document: its keys, qualified by section, with their values.
 public export data Toml = Toml (List (String, TomlValue))
 
--- ── Helpers ──────────────────────────────────────────────────────────────────
-
-listReverse : List a -> List a
-listReverse xs = listRevGo [] xs
-
-listRevGo : List a -> List a -> List a
-listRevGo acc [] = acc
-listRevGo acc (x :: xs) = listRevGo (x :: acc) xs
-
 -- ── Comment stripping ────────────────────────────────────────────────────────
 
 -- Strip a `#` comment from a line, respecting double-quoted strings so
@@ -52,7 +44,7 @@ stripComment s =
 
 stripCommentGo : Array Char -> Int -> Int -> Bool -> List Char -> String
 stripCommentGo arr i n inStr acc
-  | i >= n = stringFromChars (arrayFromList (listReverse acc))
+  | i >= n = stringFromChars (arrayFromList (reverse acc))
   | otherwise = stripCommentStep arr i n inStr acc (arrayGetUnsafe i arr)
 
 stripCommentStep : Array Char ->
@@ -65,7 +57,7 @@ stripCommentStep : Array Char ->
 stripCommentStep arr i n inStr acc c
   | charCode c == 34 = stripCommentGo arr (i + 1) n (not inStr) (c :: acc)
   | charCode c == 35 && not inStr =
-    stringFromChars (arrayFromList (listReverse acc))
+    stringFromChars (arrayFromList (reverse acc))
   | otherwise = stripCommentGo arr (i + 1) n inStr (c :: acc)
 
 -- ── String value parser ──────────────────────────────────────────────────────
@@ -82,7 +74,7 @@ parseQuotedBody : Array Char -> Int -> List Char -> Result String (String, Int)
 parseQuotedBody arr i acc
   | i >= arrayLength arr = Err "unterminated string"
   | arrayGetUnsafe i arr == '"' =
-    Ok (stringFromChars (arrayFromList (listReverse acc)), i + 1)
+    Ok (stringFromChars (arrayFromList (reverse acc)), i + 1)
   | otherwise = parseQuotedBody arr (i + 1) (arrayGetUnsafe i arr :: acc)
 
 -- ── Array value parser ───────────────────────────────────────────────────────
@@ -103,7 +95,7 @@ parseArrayItems : Array Char ->
   Result String (List String, Int)
 parseArrayItems arr i acc
   | i >= arrayLength arr = Err "unterminated array"
-  | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
+  | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
   | arrayGetUnsafe i arr == ' ' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '\t' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
@@ -137,7 +129,7 @@ parseArraySep arr i acc
   | arrayGetUnsafe i arr == ' ' = parseArraySep arr (i + 1) acc
   | arrayGetUnsafe i arr == '\t' = parseArraySep arr (i + 1) acc
   | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
+  | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
   | otherwise =
     Err
       (stringConcat [
@@ -292,7 +284,7 @@ parseLinesAcc : List String ->
   List (String, Int) ->
   List (String, TomlValue) ->
   Result String (List (String, TomlValue))
-parseLinesAcc [] _ _ acc = Ok (listReverse acc)
+parseLinesAcc [] _ _ acc = Ok (reverse acc)
 parseLinesAcc (l :: ls) section counts acc =
   let trimmed = trim (stripComment l)
   if trimmed == "" then

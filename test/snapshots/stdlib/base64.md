@@ -1,5 +1,5 @@
 # META
-source_lines=265
+source_lines=270
 stages=DESUGAR,MARK
 # SOURCE
 {- | Base64 encoding and decoding of bytes, per RFC 4648.
@@ -16,6 +16,11 @@ stages=DESUGAR,MARK
 
 -- base64/hex codec wrappers over a module-local decode share identical wrapper bodies by design.
 -- lint-disable-file rule-duplicate-body
+
+-- base64 and hex declare matching signatures for encode/encodeString/decode/decodeString (and
+-- base64's encodeUrlSafe matches hex's encode) — a signature-only match between two distinct
+-- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
+-- lint-disable-file rule-stdlib-reimpl
 
 import array.{get, fromList}
 import string.{toUtf8, fromUtf8, toChars}

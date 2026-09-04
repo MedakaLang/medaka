@@ -1592,7 +1592,12 @@ fnRtrimSql c = match cellToTextOp c
   None => CNull
   Some s => CText (spaceTrimRight s)
 
+-- Same declared signature as `string.trimLeft`, but narrower: SQL
+-- `ltrim(X)`/`trim(X)` strip only the literal space char (0x20), never
+-- `string.trimLeft`'s broader whitespace set (tab/CR/LF/VT/FF) — matching
+-- `sqlite3`'s TRIM semantics, not a real duplicate.
 spaceTrimLeft : String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
 spaceTrimLeft s =
   let chars = stringToChars s
   let n = arrayLength chars
@@ -1605,7 +1610,12 @@ spaceTrimLeftIdx chars i n =
   else
     i
 
+-- Same declared signature as `string.trimRight`, but narrower: SQL
+-- `rtrim(X)`/`trim(X)` strip only the literal space char (0x20), never
+-- `string.trimRight`'s broader whitespace set (tab/CR/LF/VT/FF) — matching
+-- `sqlite3`'s TRIM semantics, not a real duplicate.
 spaceTrimRight : String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
 spaceTrimRight s =
   let chars = stringToChars s
   let n = arrayLength chars

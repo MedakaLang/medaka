@@ -1,5 +1,5 @@
 # META
-source_lines=379
+source_lines=373
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable hash table from keys to values.
@@ -100,12 +100,6 @@ export
 isEmpty : HashMap k v -> Bool
 isEmpty m = size m == 0
 
-bucketLookup : Eq k => k -> List (k, v) -> Option v
-bucketLookup _ [] = None
-bucketLookup key ((k, v) :: rest)
-  | key == k = Some v
-  | otherwise = bucketLookup key rest
-
 {- | The value at `key`, or `None` when the key is absent.
 
    > get 2 (fromList [(1, 10), (2, 20)])
@@ -116,7 +110,7 @@ export
 get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
 get key (HashMap buckets _) =
   let arr = !buckets
-  bucketLookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
+  L.lookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
 
 {- | Whether `key` is present.
 
@@ -400,11 +394,8 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "size" ((PCon "HashMap" PWild (PVar "count"))) (EUnOp "!" (EVar "count")))
 (DTypeSig true "isEmpty" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))
 (DFunDef false "isEmpty" ((PVar "m")) (EBinOp "==" (EApp (EVar "size") (EVar "m")) (ELit (LInt 0))))
-(DTypeSig false "bucketLookup" (TyConstrained ((cstr "Eq" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "Option") (TyVar "v"))))))
-(DFunDef false "bucketLookup" (PWild (PList)) (EVar "None"))
-(DFunDef false "bucketLookup" ((PVar "key") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "k")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "bucketLookup") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "get" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyVar "v"))))))
-(DFunDef false "get" ((PVar "key") (PCon "HashMap" (PVar "buckets") PWild)) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoExpr (EApp (EApp (EVar "bucketLookup") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "arr"))))))
+(DFunDef false "get" ((PVar "key") (PCon "HashMap" (PVar "buckets") PWild)) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoExpr (EApp (EApp (EVar "L.lookup") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "arr"))))))
 (DTypeSig true "has" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "has" ((PVar "key") (PVar "m")) (EApp (EVar "isSome") (EApp (EApp (EVar "get") (EVar "key")) (EVar "m"))))
 (DTypeSig true "findWithDefault" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "v") (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "v"))))))
@@ -484,11 +475,8 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "size" ((PCon "HashMap" PWild (PVar "count"))) (EUnOp "!" (EDictApp "count")))
 (DTypeSig true "isEmpty#shadow" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))
 (DFunDef false "isEmpty#shadow" ((PVar "m")) (EBinOp "==" (EApp (EVar "size") (EVar "m")) (ELit (LInt 0))))
-(DTypeSig false "bucketLookup" (TyConstrained ((cstr "Eq" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "Option") (TyVar "v"))))))
-(DFunDef false "bucketLookup" (PWild (PList)) (EVar "None"))
-(DFunDef false "bucketLookup" ((PVar "key") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "k")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EDictApp "bucketLookup") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "get" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyVar "v"))))))
-(DFunDef false "get" ((PVar "key") (PCon "HashMap" (PVar "buckets") PWild)) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoExpr (EApp (EApp (EDictApp "bucketLookup") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "arr"))))))
+(DFunDef false "get" ((PVar "key") (PCon "HashMap" (PVar "buckets") PWild)) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoExpr (EApp (EApp (EVar "L.lookup") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "arr"))))))
 (DTypeSig true "has" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "has" ((PVar "key") (PVar "m")) (EApp (EVar "isSome") (EApp (EApp (EDictApp "get") (EVar "key")) (EVar "m"))))
 (DTypeSig true "findWithDefault" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "v") (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "v"))))))
