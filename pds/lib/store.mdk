@@ -42,6 +42,7 @@
 import lib.blockstore.{
   BlockStore,
   blockStoreEmpty,
+  blockStoreEntries,
   blockStoreGet,
   blockStorePut,
   blockStoreSize,
@@ -272,3 +273,9 @@ export
 storePut : Cid -> Array Int -> Store -> Result String Store
 storePut cid bytes (Store blocks repo auth) =
   map (blocks => Store blocks repo auth) (blockStorePut cid bytes blocks)
+
+-- | Every distinct verified block in the blob half, CID-sorted and
+-- defensively copied — the primitive `sync.listBlobs` (slice 3) wraps.
+export
+storeBlobEntries : Store -> List (Cid, Array Int)
+storeBlobEntries (Store blocks _ _) = blockStoreEntries blocks

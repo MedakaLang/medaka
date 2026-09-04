@@ -342,6 +342,11 @@ pds/tools/gen_lexjson_corpus   regenerates the P4-B lexicon-JSON<->DAG-CBOR roun
                                with the pinned official @atproto/lex-cbor + @atproto/lex-json +
                                @atproto/lex-data packages from that same exact lock graph; the
                                offline lexjson_vectors and vector_provenance gates grade it.
+pds/tools/gen_blob_corpus      regenerates pds/test/vectors/blob_reference_corpus.txt (blob
+                               CIDs and blob ref JSON for representative payloads) with the
+                               pinned official @atproto/lex-data + @atproto/lex-json packages
+                               from that same exact lock graph (S-blob-core, #2605 model half);
+                               the offline vector_provenance gate grades the artifact.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

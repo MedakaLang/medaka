@@ -674,3 +674,13 @@ source-note:   RFC 7515 A.1, the other published HS256 example, is NOT usable he
 extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc7520.txt | sed -n '531,539p;1201,1225p;1239,1244p' — Figure 5 (the JWK, whose "k" member is the 32-byte key), Figures 30/31 (protected header, JSON and base64url), Figure 32 (JWS Signing Input) and Figure 33 (JWS Signature) copied byte-verbatim, LF line endings, no edits. RFC 7520 §1.1 wraps its base64url figures across lines for readability; that wrapping is preserved here and unwrapped only in the pds/test/jwt_test.mdk literals, which were read back against this file.
 retrieved:     2026-09-04
 consumer:      S-jwt (#2604 token format half, JWT/HS256 session tokens)
+
+[vector]
+file:          pds/test/vectors/blob_reference_corpus.txt
+local-sha256:  59b49b1157338c0096a9ce6cb1904770f80d5bbe5bc77b084c9b5f9d38f5bff8
+kind:          reference-impl
+impl:          official-atproto-lex
+source-url:    https://registry.npmjs.org/@atproto/lex-data/-/lex-data-0.1.7.tgz
+extraction:    pds/tools/gen_blob_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/lex-data@0.1.7 and @atproto/lex-json@0.1.6, and runs gen_blob_corpus.mjs. The generator content-addresses three representative payloads (empty, a short text blob, and an image-shaped-MIME payload — none of them real image bytes, since this corpus exercises content addressing and the blob ref shape, not image format sniffing) with @atproto/lex-data's raw-codec cidForRawBytes, assembles the official TypedBlobRef shape ($type/ref/mimeType/size), and renders it with @atproto/lex-json's lexStringify. Each row self-verifies that lex-data's own isTypedBlobRef accepts the round-tripped JSON before it is emitted.
+retrieved:     2026-09-04
+consumer:      S-blob-core (#2605 model half, blob CID and blob ref shape)
