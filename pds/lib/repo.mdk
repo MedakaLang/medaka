@@ -487,6 +487,17 @@ repoDelete path rev (Repo did secret publicKey tree store prior) = do
     Ok value => Ok value
   finishMutation did secret publicKey rev nextTree store
 
+{- | One batch element against the intermediate tree and blocks.
+
+   The delete arm FORGIVES an absent record, which the single-record
+   `repoDelete` above does not: `pds/lib/handlers.mdk`'s `deleteRecord` guards
+   its own call with a lookup so that a caller retrying a delete whose
+   response it never saw is not told the second attempt failed, and every
+   argument for that applies at least as strongly to a whole batch a client
+   may have retried. Absence is the only thing forgiven — a malformed path is
+   still rejected by `validatePath`. The lookup is against the INTERMEDIATE
+   tree, not the pre-batch one, so a create earlier in the same batch is still
+   deleted by a later element. -}
 applyWrite : RepoWrite -> Mst -> BlockStore -> Result String (Mst, BlockStore)
 applyWrite (RepoWriteCreate path record) tree store = do
   () <- validatePath path
@@ -506,10 +517,11 @@ applyWrite (RepoWriteUpdate path record) tree store = do
   Ok (nextTree, withRecord)
 applyWrite (RepoWriteDelete path) tree store = do
   () <- validatePath path
-  nextTree <- match mstDelete path tree
-    Err message => Err "repo: missing delete: \{message}"
-    Ok value => Ok value
-  Ok (nextTree, store)
+  match mstLookup path tree
+    None => Ok (tree, store)
+    Some _ => match mstDelete path tree
+      Err message => Err "repo: missing delete: \{message}"
+      Ok nextTree => Ok (nextTree, store)
 
 applyWriteList : List RepoWrite ->
   Mst ->
@@ -533,18 +545,24 @@ applyWriteList (write :: rest) tree store = do
    discarded with it, so the caller still holds the repository it passed in —
    there is no partially applied state to observe or to roll back.
 
-   An EMPTY batch is a genuine no-op, matching `deleteRecord`'s absent-record
-   arm in `pds/lib/handlers.mdk`: the repository is returned unchanged with its
-   CURRENT commit. Signing a commit over an unchanged MST would advance the
-   revision and mint a signature attesting to a change that never happened,
-   which a relay reading the log could not distinguish from a real one. -}
+   A batch that leaves the tree UNCHANGED is a genuine no-op, matching
+   `deleteRecord`'s absent-record arm in `pds/lib/handlers.mdk`: the
+   repository is returned unchanged with its CURRENT commit. That covers the
+   empty batch and, since the delete arm forgives absence, a batch whose only
+   operations delete records that are not there. Signing a commit over an
+   unchanged MST would advance the revision and mint a signature attesting to
+   a change that never happened, which a relay reading the log could not
+   distinguish from a real one. -}
 export
 repoApplyWrites : List RepoWrite -> Tid -> Repo -> Result String RepoMutation
 repoApplyWrites [] _ repo = Ok (RepoMutation repo (repoLatestCommit repo))
 repoApplyWrites writes rev (Repo did secret publicKey tree store prior) = do
   () <- ensureNewer rev prior
   (nextTree, nextStore) <- applyWriteList writes tree store
-  finishMutation did secret publicKey rev nextTree nextStore
+  if cidEqual (mstRootCid nextTree) (mstRootCid tree) then
+    Ok (RepoMutation (Repo did secret publicKey tree store prior) prior)
+  else
+    finishMutation did secret publicKey rev nextTree nextStore
 
 -- | Extract the new immutable state from a successful mutation.
 export

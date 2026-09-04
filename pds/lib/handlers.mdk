@@ -59,7 +59,7 @@
 
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
-import list.{filter, last, take}
+import list.{filter, last, sort, take}
 import string.{fromUtf8, split, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
@@ -387,6 +387,16 @@ advanceTid prior = match tidNext prior (tidMicros prior) (tidClockId prior)
     Err (invalidRequest "Repository revision cannot advance: \{message}")
   Ok rev => Ok rev
 
+{- | `advanceTid` applied `n` times. `n <= 0` is the identity, so a caller
+   that minted nothing keeps the revision it started from. -}
+advanceTidBy : Tid -> Int -> Result Response Tid
+advanceTidBy rev n =
+  if n <= 0 then
+    Ok rev
+  else do
+    next <- advanceTid rev
+    advanceTidBy next (n - 1)
+
 nextRevision : Repo -> Result Response Tid
 nextRevision repo = advanceTid (repoCommitTid (repoLatestCommit repo))
 
@@ -591,12 +601,9 @@ applyDeleteRecord account store body = do
    from — deterministic, ordered, and identical to `createRecord`'s answer for
    a batch that has only one. -}
 autoRkey : Tid -> Int -> Result Response String
-autoRkey rev n =
-  if n <= 0 then
-    Ok (tidToString rev)
-  else do
-    next <- advanceTid rev
-    autoRkey next (n - 1)
+autoRkey rev n = do
+  tid <- advanceTidBy rev n
+  Ok (tidToString tid)
 
 batchResult : String -> String -> String -> String -> Cid -> Json
 batchResult fragment did collection rkey recordCid = jObject [
@@ -660,19 +667,27 @@ batchElement did rev auto element = do
       (invalidRequest
         "Every 'writes' element must be a \{applyWritesType "create"}, \{applyWritesType "update"} or \{applyWritesType "delete"}")
 
+{- | Every element's operation and result row, plus the rkey-less-create
+   counter left over at the end — the count the commit revision has to clear
+   so no auto-minted record key is ever proposed again. -}
 batchElements : String ->
   Tid ->
   Array Json ->
   Int ->
   Int ->
-  Result Response (List RepoWrite, List Json)
+  Result Response (List RepoWrite, List Json, Int)
 batchElements did rev elements i auto =
   if i >= arrayLength elements then
-    Ok ([], [])
+    Ok ([], [], auto)
   else do
     (write, result, nextAuto) <- batchElement did rev auto elements[i]
-    (rest, results) <- batchElements did rev elements (i + 1) nextAuto
-    Ok (write :: rest, result :: results)
+    (rest, results, finalAuto) <- batchElements
+      did
+      rev
+      elements
+      (i + 1)
+      nextAuto
+    Ok (write :: rest, result :: results, finalAuto)
 
 {- | `applyWrites` is the batch counterpart of the three single-record
    procedures, and its whole point is that it signs ONE commit: N operations
@@ -691,7 +706,17 @@ batchElements did rev elements i auto =
 
    `swapCommit` is honored exactly as the three single writes honor it, and
    there is no `swapRecord`: the lexicon has no per-element compare-and-swap,
-   and inventing one would accept bodies a real PDS refuses. -}
+   and inventing one would accept bodies a real PDS refuses.
+
+   The ONE commit lands at a revision past every record key the batch minted
+   for itself. `autoRkey` names a rkey-less create after a TID drawn from the
+   same sequence the revision comes from, so signing at the unadvanced `rev`
+   would leave keys the batch already consumed ahead of the repository's
+   revision — and the next `createRecord` with no `rkey`, which derives its
+   key from that revision, would propose one of them again and be refused as
+   a duplicate create, permanently, since the derivation is a pure function
+   of the repository's last commit. A batch that minted no key advances
+   nothing: `commitRev == rev`. -}
 applyBatchWrites : Account -> Store -> Json -> Result Response (Repo, Json)
 applyBatchWrites account store body = do
   () <- requireObject body
@@ -700,9 +725,11 @@ applyBatchWrites account store body = do
   () <- requireNoLexiconValidation body
   elements <- requireWrites body
   rev <- nextRevision repo
-  (writes, results) <- batchElements (accountDid account) rev elements 0 0
+  let did = accountDid account
+  (writes, results, finalAuto) <- batchElements did rev elements 0 0
   () <- checkSwapCommit body repo
-  mutation <- admitMutation (repoApplyWrites writes rev repo)
+  commitRev <- advanceTidBy rev finalAuto
+  mutation <- admitMutation (repoApplyWrites writes commitRev repo)
   Ok (
     repoMutationState mutation,
     jObject [
@@ -1190,7 +1217,16 @@ blobCidTexts entries = map ((cid, _) => cidToString cid) entries
 {- | Blobs are also independent of the repository half here; `since` (a
    revision cursor into the repository, not the blob half) is refused as
    unimplemented rather than silently ignored, the same policy
-   `rejectUnimplementedParam` already applies to `getRepo`'s `since`. -}
+   `rejectUnimplementedParam` already applies to `getRepo`'s `since`.
+
+   The listed CIDs are SORTED by their base32 text before the cursor is
+   applied, because the cursor is compared as base32 text. `storeBlobEntries`
+   yields entries in `lib.blockstore`'s own key order, which is the HEX of the
+   raw CID bytes, and hex order and base32-of-the-same-bytes order are
+   different relations. Paginating one order with a cursor drawn from the
+   other lets a client walk past a blob whose text sorts before the cursor,
+   and never see it again. Sorting here leaves `blockStoreEntries`' order
+   alone for its other callers. -}
 applyListBlobs : Account -> Store -> List QueryParam -> Result Response Json
 applyListBlobs account store params = do
   target <- requiredParam "did" params
@@ -1198,7 +1234,7 @@ applyListBlobs account store params = do
   () <- rejectUnimplementedParam "since" params
   limit <- requireBlobLimit params
   cursor <- optionalParam "cursor" params
-  let allCids = blobCidTexts (storeBlobEntries store)
+  let allCids = sort (blobCidTexts (storeBlobEntries store))
   let remaining = match cursor
     None => allCids
     Some text => filter (> text) allCids

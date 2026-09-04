@@ -9,6 +9,7 @@
    `pds/test/session_routes_test.mdk` already uses. -}
 
 import json.{Json(..), get, jObject, parse, stringify}
+import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.blob.{blobCid}
@@ -358,3 +359,72 @@ test "listBlobs needs no credential" =
       uploadedStore
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
   expectTrue (statusLineOf (fromUtf8 response) == "200 OK")
+
+-- # listBlobs cursor pagination
+
+{- | Enough blobs that the two orderings in play cannot coincide by luck.
+   `listBlobs` pages with a cursor compared as base32 CID text, while the
+   store hands its entries back in `lib.blockstore`'s hex key order; a walk
+   over one order filtered by a cursor drawn from the other skips blobs
+   silently. Distinct payloads give distinct CIDs, which is all the two orders
+   need to disagree. -}
+pagedCount : Int
+pagedCount = 40
+
+pagedBytes : Int -> Array Int
+pagedBytes n = arrayMakeWith 12 (i => (n * 37 + i * 11 + 5) % 256)
+
+uploadPaged : Int -> Store -> Store
+uploadPaged n store =
+  if n >= pagedCount then
+    store
+  else
+    let (next, _) =
+      send
+        (contextAt testInstant (100 + n))
+        store
+        (postRaw accessToken uploadBlobNsid uploadedMimeType (pagedBytes n))
+    uploadPaged (n + 1) next
+
+pagedStore : Store
+pagedStore = uploadPaged 0 sessionStore
+
+pagedCids : List String
+pagedCids =
+  sort (map (n => cidToString (blobCid (pagedBytes n))) [0..pagedCount])
+
+pagedQuery : String -> String
+pagedQuery "" = "?did=\{accountDidText}&limit=3"
+pagedQuery cursor = "?did=\{accountDidText}&limit=3&cursor=\{cursor}"
+
+{- | Every CID a client walking the `cursor` sees, in the order it sees them.
+   `fuel` bounds the walk so a cursor that fails to advance fails this test
+   instead of hanging it. -}
+walkPages : Int -> String -> List String
+walkPages fuel cursor =
+  if fuel <= 0 then
+    ["<cursor walk did not terminate>"]
+  else
+    let (_, response) =
+      send
+        (contextAt testInstant 200)
+        pagedStore
+        (getQuery "" listBlobsNsid (pagedQuery cursor))
+    let page = listedCids response
+    match blobStringFieldTop "cursor" response
+      "" => page
+      next => page ++ walkPages (fuel - 1) next
+
+walkedCids : List String
+walkedCids = walkPages (pagedCount + 2) ""
+
+test "listBlobs with one big page lists every uploaded blob" =
+  let (_, response) =
+    send
+      (contextAt testInstant 201)
+      pagedStore
+      (getQuery "" listBlobsNsid "?did=\{accountDidText}&limit=1000")
+  expectEqual (sort (listedCids response)) pagedCids
+
+test "listBlobs cursor pagination returns every uploaded blob exactly once" =
+  expectEqual walkedCids pagedCids

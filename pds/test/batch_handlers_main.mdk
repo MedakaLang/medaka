@@ -16,7 +16,12 @@
    `swapCommit` is `InvalidSwap`, a batch whose LAST operation cannot apply
    leaves the repository at its prior commit with none of the earlier three
    applied, and an empty batch is a no-op that reports the current commit
-   rather than signing a vacuous one. -}
+   rather than signing a vacuous one.
+
+   A last pair grades what a batch owes the write that comes AFTER it: a batch
+   that mints its own record keys must commit past all of them, so the next
+   rkey-less `createRecord` does not propose one again; and a batch deleting a
+   record that is not there is the same idempotent no-op `deleteRecord` is. -}
 
 import json.{Json(..), jArray, jObject, get, parse, stringify}
 import hex.{decode, encode}
@@ -61,6 +66,15 @@ accountHostText = "pds.example"
 
 applyWritesNsid : String
 applyWritesNsid = "com.atproto.repo.applyWrites"
+
+createRecordNsid : String
+createRecordNsid = "com.atproto.repo.createRecord"
+
+-- | The collection the two revision-consistency cells write into. It is not
+-- one the pinned corpus touches, so those cells cannot perturb the graded
+-- batch above.
+scratchCollection : String
+scratchCollection = "app.medaka.scratch"
 
 mustHex : String -> Array Int
 mustHex text = match decode text
@@ -132,12 +146,15 @@ authorizedStore did store = match storeWithServerSecret testSecret store
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-procedureRequest : String -> String -> Array Int
-procedureRequest did body =
+procedureRequestTo : String -> String -> String -> Array Int
+procedureRequestTo nsid did body =
   let bytes = toUtf8 body
   toUtf8
-      "POST /xrpc/\{applyWritesNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
     ++ bytes
+
+procedureRequest : String -> String -> Array Int
+procedureRequest did body = procedureRequestTo applyWritesNsid did body
 
 bodyStart : Array Int -> Int -> Int
 bodyStart bytes i =
@@ -384,7 +401,12 @@ runBatch lines =
       + emptyBatchCell did server store before
   let () =
     println "cells: \{intToString cells}/3 state-preserving batch properties"
-  if external == 4 && cells == 3 then
+  let writes =
+    autoRkeyCell did server store firstRecord
+      + absentDeleteCell did server store before
+  let () =
+    println "writes: \{intToString writes}/2 revision-consistency properties"
+  if external == 4 && cells == 3 && writes == 2 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
@@ -407,6 +429,87 @@ emptyBatchCell did server store before =
       && commitField "rev" value == tidToString (repoCommitTid current)
       && resultCids value == [])
     "state=\{stateWord (storeFingerprint after == before)} commit=\{commitField "cid" value} rev=\{commitField "rev" value}"
+
+-- ── revision consistency across a batch and the write that follows it ──
+
+autoCreateElement : Json -> Json
+autoCreateElement record = jObject [
+  ("$type", JString (elementType "create")),
+  ("collection", JString scratchCollection),
+  ("value", record),
+]
+
+absentDeleteElement : Json
+absentDeleteElement = jObject [
+  ("$type", JString (elementType "delete")),
+  ("collection", JString scratchCollection),
+  ("rkey", JString "never-created"),
+]
+
+createRecordBody : String -> Json -> String
+createRecordBody did record =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString scratchCollection),
+      ("record", record),
+    ])
+
+{- | A batch's rkey-less creates and the NEXT rkey-less `createRecord` draw
+   their record keys from the same TID sequence the commit revision comes
+   from, and nothing here has a clock: every key is a pure function of the
+   repository's last commit. So a batch that mints keys past its own commit
+   revision leaves the next `createRecord` proposing a key the batch already
+   consumed -- refused as a duplicate create, and refused identically on every
+   retry. The commit revision has to clear every key the batch minted. -}
+autoRkeyCell : String -> Server -> Store -> Json -> <IO> Int
+autoRkeyCell did server store record =
+  let (afterBatch, batchBytes) =
+    handleBytes
+      server
+      testContext
+      store
+      (procedureRequest
+        did
+        (batchBody did [autoCreateElement record, autoCreateElement record]))
+  let batchValue = responseJson batchBytes
+  let (_, createBytes) =
+    handleBytes
+      server
+      testContext
+      afterBatch
+      (procedureRequestTo createRecordNsid did (createRecordBody did record))
+  let createValue = responseJson createBytes
+  let batchError = fieldText "error" batchValue
+  let createError = fieldText "error" createValue
+  check
+    "auto-rkey-batch-then-createRecord"
+    (batchError == "<missing:error>"
+      && createError == "<missing:error>"
+      && fieldText "uri" createValue /= "<missing:uri>")
+    "batch=\{batchError} create=\{createError} uri=\{fieldText "uri" createValue}"
+
+{- | A batch deleting a record that is not there is the idempotent no-op
+   `deleteRecord` already promises for the single-record route: the repository
+   is unchanged, no commit is signed, and the response carries the CURRENT
+   commit. -}
+absentDeleteCell : String -> Server -> Store -> String -> <IO> Int
+absentDeleteCell did server store before =
+  let (after, responseBytes) =
+    handleBytes
+      server
+      testContext
+      store
+      (procedureRequest did (batchBody did [absentDeleteElement]))
+  let value = responseJson responseBytes
+  let current = repoLatestCommit (storeMustRepo store)
+  check
+    "absent-delete-is-idempotent"
+    (storeFingerprint after == before
+      && fieldText "error" value == "<missing:error>"
+      && commitField "cid" value == cidToString (repoCommitCid current)
+      && commitField "rev" value == tidToString (repoCommitTid current))
+    "state=\{stateWord (storeFingerprint after == before)} error=\{fieldText "error" value} rev=\{commitField "rev" value}"
 
 meaningful : String -> Bool
 meaningful line = line /= "" && not (startsWith "#" line)
