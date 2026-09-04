@@ -541,9 +541,17 @@ account for — a stray non-directory entry, an orphan sidecar, a bytes file
 whose sidecar is gone, and a sidecar whose text is not a MIME type at all —
 losing at most the one blob involved rather than refusing every later startup.
 Nothing collects an unreferenced blob (#2572 tracks that as a
-protocol-design question, not a filesystem one). `pds/test/blob_routes_test.mdk`
-grades the three routes end to end against `pds/test/vectors/
-blob_reference_corpus.txt`; `pds/test/serve_e2e.sh` and `pds/test/
+protocol-design question, not a filesystem one). `pds/test/blob_handlers_main.mdk`
+grades the three routes end to end against an EXTERNAL answer key: it uploads
+every row of `pds/test/vectors/blob_reference_corpus.txt` through the real
+`uploadBlob` route and compares the response's CID and whole `blob` ref JSON
+against the pinned official `@atproto/lex-data`'s own columns, then reads each
+row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors.sh`,
+which takes the corpus path from the provenance ledger rather than naming it).
+`pds/test/blob_routes_test.mdk` carries the routes' remaining in-process
+behavior — the refusals, the MIME-shape rejection, and cursor pagination —
+where an expected CID is our own `blobCid`'s and proves plumbing, not content
+addressing. `pds/test/serve_e2e.sh` and `pds/test/
 store_persistence.sh` extend their existing socket/restart coverage to blobs:
 upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
 tampered blob file is rejected at load; an oversize blob is refused with zero

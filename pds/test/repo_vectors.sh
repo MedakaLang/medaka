@@ -176,9 +176,38 @@ grep -F -q 'BATCH empty-batch-is-a-no-op PASS state=unchanged' "$WORK/batch.out"
 grep -F -q 'cells: 3/3 state-preserving batch properties' "$WORK/batch.out" || fail 'batch cell count is incomplete'
 [ "$(tail -1 "$WORK/batch.out")" = 'TOTAL: PASS' ] || fail 'batch driver did not end in TOTAL: PASS'
 
+# ── the three blob routes, graded against the official lex-data answer key ──
+# pds/test/blob_routes_test.mdk drives the same three routes, but computes its
+# expected CIDs with lib.blob.blobCid — an encoder and a decoder agreeing prove
+# only that they are inverse. This arm replays blob_reference_corpus.txt, whose
+# CIDs and whole `blob` ref JSON the pinned official @atproto/lex-data produced,
+# so uploadBlob's answer is compared against something outside this tree. Its
+# own ledger row for the same reason the batch corpus has one: a different
+# generator, a different official package, a different row shape.
+BLOB_DRIVER="$ROOT/pds/test/blob_handlers_main.mdk"
+sh "$ROOT/pds/test/vector_provenance.sh" --files-for S-blob-core > "$WORK/blob-files"
+[ "$(wc -l < "$WORK/blob-files" | tr -d ' ')" = 1 ] || fail 'expected exactly one ledger-owned blob corpus'
+BLOB_CORPUS="$ROOT/$(sed -n '1p' "$WORK/blob-files")"
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$BLOB_DRIVER" -o "$WORK/blob" > "$WORK/blob-build.log" 2>&1; then
+  cat "$WORK/blob-build.log" >&2
+  fail 'blob driver build failed'
+fi
+
+"$WORK/blob" "$BLOB_CORPUS" > "$WORK/blob.out" 2> "$WORK/blob.err"
+require_empty "$WORK/blob.err" 'blob handlers'
+
+grep -F -q 'external: 3/3 official-atproto blob checks' "$WORK/blob.out" || fail 'blob external count is incomplete'
+grep -F -q 'BLOB upload-empty PASS' "$WORK/blob.out" || fail 'blob missed the pinned zero-byte blob CID'
+grep -F -q 'BLOB upload-small-text PASS' "$WORK/blob.out" || fail 'blob missed the pinned text blob CID'
+grep -F -q 'BLOB upload-image-shaped PASS' "$WORK/blob.out" || fail 'blob missed the pinned image-shaped blob CID'
+grep -F -q 'BLOB listBlobs-corpus-cids PASS' "$WORK/blob.out" || fail 'blob missed the corpus-graded listBlobs answer'
+grep -F -q 'routes: 4/4 corpus-graded blob route reads' "$WORK/blob.out" || fail 'blob read-back route count is incomplete'
+[ "$(tail -1 "$WORK/blob.out")" = 'TOTAL: PASS' ] || fail 'blob driver did not end in TOTAL: PASS'
+
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
-  echo 'PASS: repo — full official transcript, focused representative and applyWrites batch on native; Wasm unavailable'
+  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch and the three blob routes on native; Wasm unavailable'
   exit 0
 fi
 
@@ -197,4 +226,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 12 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 12 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads'
