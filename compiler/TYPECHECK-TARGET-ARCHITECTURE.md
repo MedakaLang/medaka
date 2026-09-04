@@ -498,6 +498,26 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
 Next in order: #2548 (the whole-graph drain at quiescence over `goals` + `numlitRefs`,
 T4 reject as a `W-` warning per ruling 1; re-pin I5 class 3 first), unit 3, #2549.
 
+9. **Ruling 8's measurement, re-run after #2547 unit 3 (`60a8989ef`) and #2548
+   (`a3536b419`)** (`S-boundary-remeasure`): same six candidate boundaries (K, HM core, I,
+   Sh, E, D), re-tagged by a name-pattern catalog over the file's ~1,454 top-level
+   bindings and cross-checked by grepping each boundary's own function bodies for (a) a
+   call to a `typecheck.mdk` top-level binding outside the boundary's own set and (b) a
+   direct reference to a live state-record field (`crossRun`/`perRun`/`graphRun`/
+   `driverState`/`GraphRun.goals`/`activeDictVars`/`typeErrors`/`typeErrorsSticky`/…).
+   Result: **no boundary is closed.** K 17/21, HM core 17/21, I 20/41, Sh 12/16, E 8/11, D
+   70/99 tagged functions each carry at least one outside call or a direct state-cell
+   read; every boundary also fails the `repr.mdk` bar (that file imports no `Ref` and
+   reads no cell — none of these six do). Neither #2547 unit 3 (the given-table rekey)
+   nor #2548 (the quiescence drain + `ImplBuckets` deletion) touched the general call
+   graph these boundaries close over — both moved specific table representations, not the
+   `infer`-depth coupling R3 originally measured. **D in particular is re-confirmed still
+   open** (70/99, reading `currentLoc`/`perRun`/`typeErrors`/`typeErrorsSticky`/`goals`/
+   `activeDictVars` directly) — R3's "no inbound dependency from inference" premise for D
+   stays falsified, consistent with `TYPECHECK-ARCHITECTURE.md` §7 item 4's own
+   withdrawal (#1120). No extraction taken; nothing moved. Full per-boundary command and
+   sample back-import edges: `S-boundary-remeasure`'s report.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
