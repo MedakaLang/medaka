@@ -75,6 +75,11 @@ subject = "did:plc:s-jwt-test-account"
 audience : String
 audience = "did:web:pds.example"
 
+-- The token identifier (`jti`) every token in this corpus carries. A real one
+-- is per-request entropy; a fixture only has to be fixed.
+tokenId : String
+tokenId = "s-jwt-test-token-id"
+
 issuedAt : Int
 issuedAt = 1000
 
@@ -96,7 +101,7 @@ dropEq s = match stripSuffix "=" s
 claimsText : String
 claimsText =
   "{\"sub\":\"did:plc:s-jwt-test-account\",\"aud\":\"did:web:pds.example\","
-    ++ "\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
+    ++ "\"jti\":\"s-jwt-test-token-id\",\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
 
 -- A compact-serialization token over two already-encoded segments, signed
 -- with a genuine HS256 MAC — the forger has the secret.
@@ -117,6 +122,7 @@ expectedClaims : Claims
 expectedClaims = Claims {
   sub = subject,
   aud = audience,
+  jti = tokenId,
   iat = issuedAt,
   nbf = issuedAt,
   exp = expiresAt,
@@ -126,7 +132,7 @@ check : String -> Result JwtError Claims
 check token = verifyToken rfcKey subject audience 1500 token
 
 goodToken : String
-goodToken = mintToken rfcKey subject audience issuedAt expiresAt
+goodToken = mintToken rfcKey subject audience tokenId issuedAt expiresAt
 
 test "a freshly minted token verifies inside its window" =
   expectEqual (check goodToken) (Ok expectedClaims)
@@ -169,7 +175,7 @@ test "an empty signature segment is rejected" =
 test "a tampered payload is rejected: the old MAC no longer covers it" =
   let tamperedClaims =
     "{\"sub\":\"did:plc:somebody-else\",\"aud\":\"did:web:pds.example\","
-      ++ "\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
+      ++ "\"jti\":\"s-jwt-test-token-id\",\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
   let mac = hs256Signature rfcKey "\{honestHeaderSeg}.\{b64uSeg claimsText}"
   expectEqual
     (check "\{honestHeaderSeg}.\{b64uSeg tamperedClaims}.\{mac}")
@@ -178,7 +184,7 @@ test "a tampered payload is rejected: the old MAC no longer covers it" =
 test "a token signed under a different secret is rejected" =
   let otherSecret = arrayMake 32 7
   expectEqual
-    (check (mintToken otherSecret subject audience issuedAt expiresAt))
+    (check (mintToken otherSecret subject audience tokenId issuedAt expiresAt))
     (Err JwtBadSignature)
 
 test "an expired token is rejected" =
@@ -228,10 +234,25 @@ test "a claims segment that is not JSON is rejected" =
 test "a claims object missing exp is rejected" =
   let noExp =
     "{\"sub\":\"did:plc:s-jwt-test-account\",\"aud\":\"did:web:pds.example\","
-      ++ "\"iat\":1000,\"nbf\":1000}"
+      ++ "\"jti\":\"s-jwt-test-token-id\",\"iat\":1000,\"nbf\":1000}"
   expectEqual
     (check (tokenOf honestHeaderSeg (b64uSeg noExp)))
     (Err (JwtBadClaims "exp"))
+
+-- `jti` is required, not optional: a token without one cannot be told apart
+-- from another minted for the same subject and audience in the same second.
+test "a claims object missing jti is rejected" =
+  let noJti =
+    "{\"sub\":\"did:plc:s-jwt-test-account\",\"aud\":\"did:web:pds.example\","
+      ++ "\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
+  expectEqual
+    (check (tokenOf honestHeaderSeg (b64uSeg noJti)))
+    (Err (JwtBadClaims "jti"))
+
+test "two tokens minted a second apart differ only if their jti does" =
+  expectTrue
+    (mintToken rfcKey subject audience "one" issuedAt expiresAt
+      /= mintToken rfcKey subject audience "two" issuedAt expiresAt)
 
 test "verification reads no clock: the same token verifies at any instant in its window" =
   expectTrue

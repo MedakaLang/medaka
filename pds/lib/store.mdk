@@ -20,10 +20,21 @@
    serializes, or otherwise copies a `Store` is copying the signing key. See
    `pds/README.md` § "The Store is secret-bearing".
 
-   The **auth half** is the server's own HS256 session-token secret
-   (`lib.jwt`), `None` until one is configured. It is the SERVER's secret and
-   not the account's signing key, and a `Store` without one can verify no
-   credential at all, so every gated route refuses.
+   The **auth half** is everything the session routes rest on: the server's
+   own HS256 session-token secret (`lib.jwt`), `None` until one is configured;
+   the account's password credential (`lib.credential`), `None` until one is
+   bootstrapped; and the open sessions. The session secret is the SERVER's
+   secret and not the account's signing key, and a `Store` without one can
+   verify no credential at all, so every gated route refuses; a `Store`
+   without a credential record can open no session at all, so `createSession`
+   refuses.
+
+   Open sessions are held here and NOWHERE else, which is what makes a session
+   end at a restart: `pds/shell/server.mdk` persists a `Store` transition only
+   when the repository half moves, so the session list lives exactly as long as
+   the process does. Every token minted before a restart is refused after it —
+   fail-closed, and deliberately: a revocation a restart could undo would be no
+   revocation at all.
 
    Filesystem adapters, multiple repositories, and blob persistence belong to
    later phases and cannot leak effects through this interface. -}
@@ -36,21 +47,43 @@ import lib.blockstore.{
   blockStoreSize,
 }
 import lib.cid.{Cid}
+import lib.credential.{CredentialRecord, ctEqBytes}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
+import lib.sha256.{sha256}
+import string.{toUtf8}
+
+{- | One open session: the fingerprints of the access and refresh tokens it
+   issued, and the instant its refresh token expires at (seconds since the
+   Unix epoch), past which the record is prunable.
+
+   A session is keyed by token FINGERPRINTS — `sessionFingerprint`, the
+   SHA-256 of the token text — rather than by the tokens themselves, so the
+   bearer strings a client holds are not a second time stored on the server.
+   The constructor is private: a session is opened, rotated, and closed
+   through the operations below and cannot be forged from raw bytes. -}
+data SessionRecord = SessionRecord (Array Int) (Array Int) Int
+
+-- The three secret-bearing parts of a `Store`, kept as one field so the blob
+-- and repository halves are not respelled every time one of them changes.
+data Auth =
+  | Auth (Option (Array Int)) (Option CredentialRecord) (List SessionRecord)
+
+emptyAuth : Auth
+emptyAuth = Auth None None []
 
 -- | Immutable verified protocol state. Its representation is private.
-export data Store = Store BlockStore (Option Repo) (Option (Array Int))
+export data Store = Store BlockStore (Option Repo) Auth
 
--- | The empty protocol store: no blobs, no account, and no session secret.
+-- | The empty protocol store: no blobs, no account, and no session state.
 export
 storeEmpty : Store
-storeEmpty = Store blockStoreEmpty None None
+storeEmpty = Store blockStoreEmpty None emptyAuth
 
 -- | A protocol store for one configured account repository, with no blobs.
 export
 storeFromRepo : Repo -> Store
-storeFromRepo repo = Store blockStoreEmpty (Some repo) None
+storeFromRepo repo = Store blockStoreEmpty (Some repo) emptyAuth
 
 -- | The configured account repository, or `None` when no account is set up.
 export
@@ -61,7 +94,7 @@ storeRepo (Store _ repo _) = repo
 -- and the auth half are untouched.
 export
 storeWithRepo : Repo -> Store -> Store
-storeWithRepo repo (Store blocks _ secret) = Store blocks (Some repo) secret
+storeWithRepo repo (Store blocks _ auth) = Store blocks (Some repo) auth
 
 {- | Successor store carrying the server's own session-token secret, admitted
    against `lib.jwt`'s expected length so a misconfigured secret is refused
@@ -73,18 +106,154 @@ storeWithRepo repo (Store blocks _ secret) = Store blocks (Some repo) secret
    `Store`" rule covers it. -}
 export
 storeWithServerSecret : Array Int -> Store -> Result String Store
-storeWithServerSecret secret (Store blocks repo _) =
+storeWithServerSecret secret (Store blocks repo (Auth _ credential sessions)) =
   if arrayLength secret /= serverSecretBytes then
     Err "store: server session secret must be 32 bytes"
   else
-    Ok (Store blocks repo (Some (arrayCopy secret)))
+    Ok (Store blocks repo (Auth (Some (arrayCopy secret)) credential sessions))
 
 {- | The server's session-token secret, or `None` when no session secret is
    configured — in which case no credential can be verified at all and every
    gated route refuses. -}
 export
 storeServerSecret : Store -> Option (Array Int)
-storeServerSecret (Store _ _ secret) = map arrayCopy secret
+storeServerSecret (Store _ _ (Auth secret _ _)) = map arrayCopy secret
+
+{- | Successor store carrying the account's password credential. It is a THIRD
+   secret-bearing part of a `Store` (with the account signing key and the
+   session secret), and the same "never log, serialize, or copy a `Store`"
+   rule covers it. -}
+export
+storeWithCredential : CredentialRecord -> Store -> Store
+storeWithCredential credential (Store blocks repo (Auth secret _ sessions)) =
+  Store blocks repo (Auth secret (Some credential) sessions)
+
+{- | The account's password credential, or `None` when none is configured — in
+   which case no session can be opened at all and `createSession` refuses. -}
+export
+storeCredential : Store -> Option CredentialRecord
+storeCredential (Store _ _ (Auth _ credential _)) = credential
+
+{- | The fingerprint a session is keyed by: the SHA-256 of the token text.
+
+   Fingerprinting rather than storing the token means a reader of the server's
+   memory finds no bearer string it could present, and it is what lets the seam
+   ask "is this token's session still open?" with the token it was handed and
+   nothing else. -}
+export
+sessionFingerprint : String -> Array Int
+sessionFingerprint token = sha256 (toUtf8 token)
+
+hasAccess : Array Int -> List SessionRecord -> Bool
+hasAccess _ [] = False
+hasAccess wanted ((SessionRecord access _ _) :: rest) =
+  ctEqBytes wanted access || hasAccess wanted rest
+
+hasRefresh : Array Int -> List SessionRecord -> Bool
+hasRefresh _ [] = False
+hasRefresh wanted ((SessionRecord _ refresh _) :: rest) =
+  ctEqBytes wanted refresh || hasRefresh wanted rest
+
+withoutRefresh : Array Int -> List SessionRecord -> List SessionRecord
+withoutRefresh _ [] = []
+withoutRefresh wanted ((SessionRecord access refresh expires) :: rest) =
+  if ctEqBytes wanted refresh then
+    withoutRefresh wanted rest
+  else
+    SessionRecord access refresh expires :: withoutRefresh wanted rest
+
+unexpired : Int -> List SessionRecord -> List SessionRecord
+unexpired _ [] = []
+unexpired now ((SessionRecord access refresh expires) :: rest) =
+  if now >= expires then
+    unexpired now rest
+  else
+    SessionRecord access refresh expires :: unexpired now rest
+
+{- | Successor store with one more open session: an access-token fingerprint, a
+   refresh-token fingerprint, and the instant the refresh token expires. -}
+export
+storeSessionOpen : Array Int -> Array Int -> Int -> Store -> Store
+storeSessionOpen access refresh expires (Store blocks repo (Auth secret credential sessions)) =
+  Store
+    blocks
+    repo
+    (Auth
+      secret
+      credential
+      (SessionRecord (arrayCopy access) (arrayCopy refresh) expires
+        :: sessions))
+
+{- | Whether this access-token fingerprint belongs to an open session. A token
+   this server minted but whose session has since been closed, rotated away, or
+   lost to a restart answers `False`, which is what makes `deleteSession`
+   revoke an access token that is otherwise still inside its own window. -}
+export
+storeAccessActive : Array Int -> Store -> Bool
+storeAccessActive fingerprint (Store _ _ (Auth _ _ sessions)) =
+  hasAccess fingerprint sessions
+
+-- | Whether this refresh-token fingerprint belongs to an open session. One
+-- already consumed by a rotation answers `False`.
+export
+storeRefreshActive : Array Int -> Store -> Bool
+storeRefreshActive fingerprint (Store _ _ (Auth _ _ sessions)) =
+  hasRefresh fingerprint sessions
+
+{- | Consume a refresh token and reopen its session on a fresh token pair, or
+   `None` when no open session holds that refresh fingerprint.
+
+   The consumed record is REMOVED, not marked: presenting it again finds no
+   session and is refused, which is the reuse detection a rotating refresh
+   token exists for. -}
+export
+storeSessionRotate : Array Int ->
+  Array Int ->
+  Array Int ->
+  Int ->
+  Store ->
+  Option Store
+storeSessionRotate consumed access refresh expires (Store blocks repo (Auth secret credential sessions)) =
+  if hasRefresh consumed sessions then
+    Some
+      (storeSessionOpen
+        access
+        refresh
+        expires
+        (Store
+          blocks
+          repo
+          (Auth secret credential (withoutRefresh consumed sessions))))
+  else
+    None
+
+{- | Close the session this refresh fingerprint belongs to, or `None` when no
+   open session holds it. Both of that session's tokens stop verifying: the
+   record they were checked against is gone. -}
+export
+storeSessionClose : Array Int -> Store -> Option Store
+storeSessionClose fingerprint (Store blocks repo (Auth secret credential sessions)) =
+  if hasRefresh fingerprint sessions then
+    Some
+      (Store
+        blocks
+        repo
+        (Auth secret credential (withoutRefresh fingerprint sessions)))
+  else
+    None
+
+-- | Successor store with every session whose refresh token has expired at
+-- `now` dropped. An expired session verifies nothing, so it is only memory.
+export
+storeSessionsPrune : Int -> Store -> Store
+storeSessionsPrune now (Store blocks repo (Auth secret credential sessions)) =
+  Store blocks repo (Auth secret credential (unexpired now sessions))
+
+-- | How many sessions are open. Nothing in the protocol reads this; it is what
+-- a test asserts a rotation or a close against.
+export
+storeSessionCount : Store -> Int
+storeSessionCount (Store _ _ (Auth _ _ sessions)) = length sessions
 
 -- | Number of distinct verified blocks in the blob half. The repository half
 -- keeps its own blocks and is not counted here.
@@ -101,5 +270,5 @@ storeGet cid (Store blocks _ _) = blockStoreGet cid blocks
 -- store. The repository half is carried through unchanged.
 export
 storePut : Cid -> Array Int -> Store -> Result String Store
-storePut cid bytes (Store blocks repo secret) =
-  map (blocks => Store blocks repo secret) (blockStorePut cid bytes blocks)
+storePut cid bytes (Store blocks repo auth) =
+  map (blocks => Store blocks repo auth) (blockStorePut cid bytes blocks)

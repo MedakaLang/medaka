@@ -4,8 +4,11 @@
    the three that transition the repository. **Reads** are the six that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
    `com.atproto.sync.{getRepo, getLatestCommit}`, and
-   `com.atproto.identity.resolveHandle`. **Well-knowns** are the two non-XRPC
-   paths `lib.xrpc` routes as their own class:
+   `com.atproto.identity.resolveHandle`. **Sessions** are the four
+   `com.atproto.server.{createSession, refreshSession, deleteSession,
+   getSession}` routes, which transition the `Store`'s auth half rather than
+   its repository half. **Well-knowns** are the two non-XRPC paths `lib.xrpc`
+   routes as their own class:
    `/.well-known/did.json` (this PDS's own did:web document) and
    `/.well-known/atproto-did` (the hosted account's DID, as bare text).
 
@@ -47,6 +50,7 @@
    TID spelling as the record key, which is what a real PDS does with its
    clock and is deterministic here for the same reason. -}
 
+import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import string.{fromUtf8, split, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
@@ -71,16 +75,33 @@ import lib.repo.{
   repoUpdate,
   validateCollection,
 }
+import lib.credential.{CredentialRecord, credentialVerify}
+import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
+  AuthOutcome(..),
   Handler,
+  RequestContext(..),
   Server,
+  accessAudience,
   accountDid,
   accountHandle,
   accountHostname,
   makeServer,
+  refreshAudience,
 }
-import lib.store.{Store, storeRepo, storeWithRepo}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeCredential,
+  storeRepo,
+  storeServerSecret,
+  storeSessionClose,
+  storeSessionOpen,
+  storeSessionRotate,
+  storeSessionsPrune,
+  storeWithRepo,
+}
 import lib.tid.{Tid, tidClockId, tidMicros, tidNext, tidToString}
 import lib.xrpc.{
   AuthPolicy(..),
@@ -123,6 +144,18 @@ getLatestCommitNsid = "com.atproto.sync.getLatestCommit"
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
 
+createSessionNsid : String
+createSessionNsid = "com.atproto.server.createSession"
+
+refreshSessionNsid : String
+refreshSessionNsid = "com.atproto.server.refreshSession"
+
+deleteSessionNsid : String
+deleteSessionNsid = "com.atproto.server.deleteSession"
+
+getSessionNsid : String
+getSessionNsid = "com.atproto.server.getSession"
+
 -- ── responses ───────────────────────────────────────────────────────────────
 
 invalidRequest : String -> Response
@@ -142,6 +175,17 @@ recordNotFound = xrpcErrorResponse 400 "Bad Request" "RecordNotFound"
 
 handleNotFound : String -> Response
 handleNotFound = xrpcErrorResponse 400 "Bad Request" "HandleNotFound"
+
+authenticationRequired : String -> Response
+authenticationRequired =
+  xrpcErrorResponse 401 "Unauthorized" "AuthenticationRequired"
+
+invalidToken : String -> Response
+invalidToken = xrpcErrorResponse 401 "Unauthorized" "InvalidToken"
+
+internalError : String -> Response
+internalError =
+  xrpcErrorResponse 500 "Internal Server Error" "InternalServerError"
 
 contentTypeHeader : String -> Header
 contentTypeHeader value = match makeHeader "content-type" (toUtf8 value)
@@ -496,7 +540,7 @@ recordHandled _ _ _ = None
    input `Store` intact. -}
 export
 recordHandler : Account -> Handler
-recordHandler account _ store call = match recordHandled account store call
+recordHandler account _ _ store call = match recordHandled account store call
   Some result => result
   None => (store, unhandledRoute call)
 
@@ -907,6 +951,241 @@ wellKnownResponse account WellKnownDidDocument =
 wellKnownResponse account WellKnownAtprotoDid =
   bytesOkResponse "text/plain; charset=utf-8" (toUtf8 (accountDid account))
 
+-- ── sessions ────────────────────────────────────────────────────────────────
+
+{- | How long an access token is good for. Two hours is what a real PDS issues:
+   long enough that a client is not refreshing constantly, short enough that a
+   leaked one expires on its own. -}
+accessTokenSeconds : Int
+accessTokenSeconds = 7200
+
+{- | How long a refresh token is good for. Ninety days, again matching a real
+   PDS: it is the interval after which a client that has gone quiet has to log
+   in with the password again. -}
+refreshTokenSeconds : Int
+refreshTokenSeconds = 7776000
+
+{- | The access and refresh token this request issues, in that order.
+
+   Both are identified by the request's own nonce (`jti`, `lib.jwt`), which is
+   what makes two sessions opened in the same second — or a refresh token and
+   the token that replaced it — distinct values. They differ from each other in
+   audience and lifetime, which is what stops either being presented as the
+   other. -}
+mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
+mintSessionTokens account secret context =
+  let tokenId = Hex.encode context.nonce
+  let issued = context.nowSeconds
+  (
+    mintToken
+      secret
+      (accountDid account)
+      (accessAudience account)
+      tokenId
+      issued
+      (issued + accessTokenSeconds),
+    mintToken
+      secret
+      (accountDid account)
+      (refreshAudience account)
+      tokenId
+      issued
+      (issued + refreshTokenSeconds),
+  )
+
+-- The lexicon output shape `createSession` and `refreshSession` share.
+sessionOutput : Account -> String -> String -> Json
+sessionOutput account access refresh = jObject [
+  ("did", JString (accountDid account)),
+  ("handle", JString (accountHandle account)),
+  ("accessJwt", JString access),
+  ("refreshJwt", JString refresh),
+]
+
+-- Sessions whose refresh token has expired are dropped whenever the session
+-- list is written, so a server nobody logs out of does not accumulate records
+-- that can no longer verify anything.
+sessionExpiry : RequestContext -> Int
+sessionExpiry context = context.nowSeconds + refreshTokenSeconds
+
+{- | Whether the identifier a login presented names this account.
+
+   atproto lets a client log in with either its handle or its DID. A handle is
+   compared case-insensitively (atproto handles are domain names, which are);
+   a DID is compared exactly, because DID method-specific identifiers are
+   case-sensitive. -}
+identifiesAccount : Account -> String -> Bool
+identifiesAccount account identifier =
+  toLower identifier == toLower (accountHandle account)
+    || identifier == accountDid account
+
+-- The one place a password is graded. A wrong password and an identifier that
+-- names nobody are the same refusal, deliberately.
+checkLogin : Account ->
+  String ->
+  String ->
+  CredentialRecord ->
+  Result Response Unit
+checkLogin account identifier password credential =
+  if identifiesAccount account identifier
+    && credentialVerify password credential then
+    Ok ()
+  else
+    Err (authenticationRequired "Invalid identifier or password")
+
+{- | `com.atproto.server.createSession`: exchange the account password for a
+   token pair.
+
+   A wrong password, an unknown identifier, and a server with no credential
+   configured are answered IDENTICALLY, and deliberately: the differences
+   between them are exactly what an attacker probing for a valid identifier is
+   asking about. Nothing in the refusal repeats what was sent. -}
+applyCreateSession : Account ->
+  RequestContext ->
+  Store ->
+  Json ->
+  Result Response (Store, Json)
+applyCreateSession account context store body = do
+  () <- requireObject body
+  identifier <- requiredString "identifier" body
+  password <- requiredString "password" body
+  secret <- match storeServerSecret store
+    None =>
+      Err
+        (internalError
+          "This server has no session secret configured and can issue no session")
+    Some value => Ok value
+  credential <- match storeCredential store
+    None => Err (authenticationRequired "Invalid identifier or password")
+    Some value => Ok value
+  () <- checkLogin account identifier password credential
+  let (access, refresh) = mintSessionTokens account secret context
+  Ok (
+    storeSessionOpen
+      (sessionFingerprint access)
+      (sessionFingerprint refresh)
+      (sessionExpiry context)
+      (storeSessionsPrune context.nowSeconds store),
+    sessionOutput account access refresh,
+  )
+
+{- | `com.atproto.server.refreshSession`: rotate the presented refresh token.
+
+   The seam has already verified the refresh token and named its session
+   (`AuthOutcome`'s fingerprint), so this rotates and nothing else. The
+   consumed token is removed rather than marked, so presenting it a second
+   time finds no session and is refused by the seam — reuse of a rotated
+   refresh token buys an attacker nothing, and costs the legitimate client
+   nothing either, since it already holds the replacement. -}
+applyRefreshSession : Account ->
+  RequestContext ->
+  Array Int ->
+  Store ->
+  Result Response (Store, Json)
+applyRefreshSession account context presented store = do
+  secret <- match storeServerSecret store
+    None =>
+      Err
+        (internalError
+          "This server has no session secret configured and can issue no session")
+    Some value => Ok value
+  let (access, refresh) = mintSessionTokens account secret context
+  let rotation =
+    storeSessionRotate
+      presented
+      (sessionFingerprint access)
+      (sessionFingerprint refresh)
+      (sessionExpiry context)
+      (storeSessionsPrune context.nowSeconds store)
+  rotated <- match rotation
+    None => Err (invalidToken "Token could not be verified")
+    Some next => Ok next
+  Ok (rotated, sessionOutput account access refresh)
+
+{- | `com.atproto.server.deleteSession`: close the presented session.
+
+   Closing it revokes BOTH of its tokens: the access token the caller may
+   still be holding no longer names an open session, so the seam refuses it
+   from the next request on even though its signature is good and its window
+   has not closed. -}
+applyDeleteSession : RequestContext ->
+  Array Int ->
+  Store ->
+  Result Response (Store, Json)
+applyDeleteSession context presented store =
+  let pruned = storeSessionsPrune context.nowSeconds store
+  match storeSessionClose presented pruned
+    None => Err (invalidToken "Token could not be verified")
+    Some next => Ok (next, jObject [])
+
+-- | `com.atproto.server.getSession`: who the caller is authenticated as. The
+-- seam resolved that already; this reports it.
+applyGetSession : Account -> Json
+applyGetSession account = jObject [
+  ("did", JString (accountDid account)),
+  ("handle", JString (accountHandle account)),
+]
+
+finishSession : Store -> Result Response (Store, Json) -> (Store, Response)
+finishSession store (Err response) = (store, response)
+finishSession _ (Ok (next, output)) = (next, jsonOkResponse output)
+
+{- | The four session routes, or `None` for a call this half does not own.
+
+   `refreshSession` and `deleteSession` are reachable only with an
+   `Authenticated` outcome (they are `RefreshRoute`, which the seam refuses
+   unauthenticated), so their `Unauthenticated` arms are unreachable through
+   `handle`; they answer 401 rather than panicking, because a direct caller of
+   this function is not the seam and must not be told a different story than a
+   request would be. -}
+sessionHandled : Account ->
+  RequestContext ->
+  AuthOutcome ->
+  Store ->
+  XrpcCall ->
+  Option (Store, Response)
+sessionHandled account context _ store (ProcedureJsonCall nsid _ body)
+  | nsid == createSessionNsid =
+    Some (finishSession store (applyCreateSession account context store body))
+  | otherwise = None
+sessionHandled account context outcome store (ProcedureNoInputCall nsid _)
+  | nsid == refreshSessionNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ presented =>
+      Some
+        (finishSession
+          store
+          (applyRefreshSession account context presented store))
+  | nsid == deleteSessionNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ presented =>
+      Some (finishSession store (applyDeleteSession context presented store))
+  | otherwise = None
+sessionHandled account _ _ store (QueryCall nsid _)
+  | nsid == getSessionNsid =
+    Some (store, jsonOkResponse (applyGetSession account))
+  | otherwise = None
+sessionHandled _ _ _ _ _ = None
+
+{- | The four session routes, one per policy class it takes.
+
+   `createSession` is PUBLIC: it is how a client that holds no token at all
+   gets one, so gating it would make every session unreachable. `getSession`
+   is `AuthenticatedRoute`: it reports who the ACCESS token belongs to.
+   `refreshSession` and `deleteSession` are `RefreshRoute`, which is atproto's
+   own classification — both are authenticated by the session's REFRESH token,
+   so a client whose access token has already expired can still refresh it and
+   can still log out. -}
+sessionEndpoints : Result String (List Endpoint)
+sessionEndpoints = do
+  create <- procedureEndpoint createSessionNsid JsonInput PublicRoute
+  refresh <- procedureEndpoint refreshSessionNsid NoInput RefreshRoute
+  remove <- procedureEndpoint deleteSessionNsid NoInput RefreshRoute
+  get <- queryEndpoint getSessionNsid AuthenticatedRoute
+  Ok [create, refresh, remove, get]
+
 -- ── read dispatch ───────────────────────────────────────────────────────────
 
 collapseResponse : Result Response Response -> Response
@@ -941,26 +1220,31 @@ readHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: three record writes, six reads, two well-knowns.
-   Writes go first because the two halves are disjoint by construction (writes
-   are `ProcedureJsonCall`, reads are `QueryCall` or `WellKnownCall`), so the
-   order is a formality rather than a precedence. -}
+{- | The complete handler: three record writes, four session routes, six
+   reads, two well-knowns. The halves are disjoint by construction — each owns
+   a distinct set of NSIDs, and the read half additionally owns the two
+   well-knowns — so the order below is a formality rather than a
+   precedence. -}
 export
 pdsHandler : Account -> Handler
-pdsHandler account _ store call = match recordHandled account store call
-  Some result => result
-  None => match readHandled account store call
-    Some response => (store, response)
-    None => (store, unhandledRoute call)
+pdsHandler account context outcome store call =
+  match recordHandled account store call
+    Some result => result
+    None => match sessionHandled account context outcome store call
+      Some result => result
+      None => match readHandled account store call
+        Some response => (store, response)
+        None => (store, unhandledRoute call)
 
--- | The registry of all nine XRPC endpoints. The two well-known paths are NOT
--- here: they have no NSID, and `lib.xrpc` routes them by path.
+-- | The registry of all thirteen XRPC endpoints. The two well-known paths are
+-- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
 pdsRegistry = do
   writes <- recordEndpoints
+  sessions <- sessionEndpoints
   reads <- readEndpoints
-  makeRegistry (concatEndpoints writes reads)
+  makeRegistry (concatEndpoints writes (concatEndpoints sessions reads))
 
 {- | The six read queries, every one of them public.
 

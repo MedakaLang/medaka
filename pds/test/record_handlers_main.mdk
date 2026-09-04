@@ -37,7 +37,14 @@ import lib.server_core.{
   handleBytes,
   makeAccount,
 }
-import lib.store.{Store, storeFromRepo, storeRepo, storeWithServerSecret}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeFromRepo,
+  storeRepo,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
 import lib.tid.{Tid, tidParse}
 
 accountHandleText : String
@@ -97,12 +104,32 @@ testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
 testInstant : Int
 testInstant = 1700000000
 
-testContext : RequestContext
-testContext = RequestContext { nowSeconds = testInstant }
+{- | The per-request nonce every request in this file is placed at. Nothing
+   here drives a route that mints a token, so the value only has to be fixed;
+   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
-authorizedStore : Store -> Store
-authorizedStore store = match storeWithServerSecret testSecret store
-  Ok next => next
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = testInstant, nonce = testNonce }
+
+{- | The store a replayed write is applied to: it carries the session secret
+   the fixture token was minted from, and the open session that token belongs
+   to. A verified signature is not on its own a credential — the seam also
+   requires the token's session to be open (`lib.store`) — so a driver that
+   presents a token must open its session too.
+
+   The session's refresh half is the fingerprint of a string that is not a
+   token at all: no route this file drives is a `RefreshRoute`, so nothing can
+   present it. -}
+authorizedStore : String -> Store -> Store
+authorizedStore did store = match storeWithServerSecret testSecret store
+  Ok next =>
+    storeSessionOpen
+      (sessionFingerprint (testToken did))
+      (sessionFingerprint "record_handlers: no refresh token in this fixture")
+      (testInstant + 3600)
+      next
   Err message =>
     panic "record_handlers: session secret setup failed: \{message}"
 
@@ -114,6 +141,7 @@ testToken did =
     testSecret
     did
     accountHostText
+    "record_handlers-fixture-token"
     (testInstant - 60)
     (testInstant + 3600)
 
@@ -362,7 +390,7 @@ runTranscript ["META", did, secretHex] t0 op1 c1 op2 c2 op3 c3 op4 c4 =
   let account = mustAccount did
   let server = mustServer account
   let repo = mustRepo did secretHex (initialTidFrom t0)
-  let store = authorizedStore (storeFromRepo repo)
+  let store = authorizedStore did (storeFromRepo repo)
   let s1 = runStep did server store op1 c1
   let s2 = runStep did server s1 op2 c2
   let s3 = runStep did server s2 op3 c3

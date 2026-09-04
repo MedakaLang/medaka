@@ -17,13 +17,32 @@
    thing that needs it, and to nothing else. It is never printed, and neither is
    the `Store` that transitively holds it.
 
-   `--token-secret` is the SECOND secret this entry point reads: the server's
-   own 32-byte HS256 session-token secret, which `lib.server_core`'s seam
-   verifies bearer tokens against. It is deliberately a different key from
-   `--key`: the signing key authenticates commits to every other implementation
-   on the network and has exactly one job. Without `--token-secret` the server
-   still serves every public route and refuses every gated one, because no
-   credential can be verified — it fails closed, not open. -}
+   The session-token secret is the SECOND secret this entry point holds: the
+   server's own 32-byte HS256 key, which `lib.server_core`'s seam verifies
+   bearer tokens against. It is deliberately a different key from `--key`: the
+   signing key authenticates commits to every other implementation on the
+   network and has exactly one job. `--token-secret PATH` supplies it; with no
+   flag, the secret is generated from `osEntropyBytes` on first run and kept in
+   `<data>/session-secret` for every run after.
+
+   The account password is the THIRD, and it is what `com.atproto.server.
+   createSession` grades a login against. It arrives as `--password-file PATH`
+   and NEVER as an argument value: an argument is visible in `ps` output to
+   every user on the box. There is no interactive prompt either — no termios,
+   tty, or echo-suppression primitive exists in the runtime or the stdlib, and
+   a prompt that echoed the password to the terminal would be worse than the
+   file, not better. The password is read once, at bootstrap, turned into a
+   PBKDF2 credential record (`lib.credential`), and never stored: `<data>/
+   credential` holds a salt, an iteration count, and a derived key. A run whose
+   data directory already holds that record needs no `--password-file` at all.
+
+   A file this program creates is world-readable, mode 0644. Medaka has
+   no primitive that sets a file mode — `writeFile` is `fopen(p, "wb")` and
+   there is no `chmod`, no `umask`, and no mode field anywhere in the runtime
+   or the stdlib — so the generated session secret and the credential record
+   land readable by every user on the box, and this program says so loudly on
+   stderr when it creates one. An operator who needs 0600 pre-creates the file
+   under their own umask and hands it in with `--token-secret`. -}
 
 import args.{
   Args,
@@ -38,7 +57,18 @@ import args.{
 }
 import async.{Async, liftIO}
 import fs.{isDir}
-import hex.{decode}
+import hex.{decode, encode}
+import lib.credential.{
+  CredentialRecord,
+  credentialDigest,
+  credentialIterations,
+  credentialSalt,
+  credentialFromParts,
+  defaultIterations,
+  makeCredential,
+  saltBytes,
+}
+import lib.jwt.{serverSecretBytes}
 import lib.handlers.{pdsServer}
 import lib.repo.{
   Repo,
@@ -50,12 +80,17 @@ import lib.repo.{
 }
 import lib.server_core.{Server, makeAccount}
 import lib.sign.{SecretKey, secretKeyFromBytes}
-import lib.store.{Store, storeFromRepo, storeWithServerSecret}
+import lib.store.{
+  Store,
+  storeFromRepo,
+  storeWithCredential,
+  storeWithServerSecret,
+}
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.persist.{persistHasHead, persistLoad, persistSave}
 import shell.server.{bindLoopback, runServer}
-import string.{toInt, trim}
+import string.{lines, stripSuffix, toInt, trim}
 import time.{now}
 
 serveSpec : ArgSpec
@@ -68,6 +103,10 @@ serveSpec = spec "serve" [
     ["--token-secret"]
     "PATH"
     "file holding the hex-encoded 32-byte session-token secret",
+  value
+    ["--password-file"]
+    "PATH"
+    "file holding the account password, for first-run credential bootstrap",
   value ["--data"] "DIR" "existing directory holding the persisted repository",
   intValue ["--port"] "N" "loopback TCP port to bind; 0 picks a free one",
   switch ["--init"] "create the genesis repository in an empty data directory",
@@ -105,16 +144,136 @@ readHexBytes label path = do
     Err message => Err "\{label} \{path} is not hex: \{message}"
     Ok bytes => Ok bytes
 
-{- | Install the session-token secret, if one was configured. An absent
-   `--token-secret` is not an error: the server then verifies no credential and
-   refuses every gated route. A PRESENT but unusable one IS an error, refused
-   before the listener binds rather than at the first request that needed it. -}
-withTokenSecret : Args -> Store -> <FileRead "_"> Result String Store
-withTokenSecret parsed store = match flagValue "--token-secret" parsed
-  None => Ok store
-  Some path => do
-    bytes <- readHexBytes "session-token secret" path
-    storeWithServerSecret bytes store
+sessionSecretPath : String -> String
+sessionSecretPath dir = "\{dir}/session-secret"
+
+credentialPath : String -> String
+credentialPath dir = "\{dir}/credential"
+
+{- | The mode warning, emitted once per file this program creates.
+
+   It names the PATH and the mode and nothing else: the whole point of the
+   file is its contents, so a warning that quoted them would be a far larger
+   leak than the mode it is warning about.
+
+   TODO(orchestrator): file an issue for a mode-taking write primitive
+   (`chmod`, or a `writeFileBytes` taking a mode) so the session secret and the
+   credential record can land 0600 instead. Until one exists the only routes to
+   0600 are `runCommand "chmod"` — which opens a real world-readable window
+   between the create and the chmod, and grants this process an `<Exec>`
+   capability to protect one file — and a new native extern, which is
+   compiler-source work this entry point cannot do. -}
+warnWorldReadable : String -> <Stderr> Unit
+warnWorldReadable path =
+  ePutStrLn
+    "serve: WARNING: created \{path} world-readable (mode 0644): Medaka has no file-mode primitive, so this program cannot create a private file. On a shared machine, pre-create this file yourself under a 0600 umask (--token-secret takes a pre-created session secret)."
+
+{- | Generate this server's session-token secret and keep it. It is drawn from
+   `osEntropyBytes`, the OS entropy source, and never from `randomInt`, whose
+   SplitMix64 generator is seeded deterministically and would make every
+   session token on every deployment forgeable from a public constant. -}
+generateSessionSecret : String ->
+  <FileWrite "_", Rand, Stderr> Result String (Array Int)
+generateSessionSecret dir = do
+  let bytes = osEntropyBytes serverSecretBytes
+  () <- match writeFile (sessionSecretPath dir) "\{encode bytes}\n"
+    Err message =>
+      Err "unwritable session secret \{sessionSecretPath dir}: \{message}"
+    Ok () => Ok ()
+  let () = warnWorldReadable (sessionSecretPath dir)
+  Ok bytes
+
+{- | This server's session-token secret: the one `--token-secret` names, else
+   the one kept in the data directory, else a freshly generated one.
+
+   A PRESENT but unusable secret IS an error, refused before the listener binds
+   rather than at the first request that needed it. -}
+resolveSessionSecret : Args ->
+  String ->
+  <FileRead "_", FileWrite "_", Rand, Stderr> Result String (Array Int)
+resolveSessionSecret parsed dir = match flagValue "--token-secret" parsed
+  Some path => readHexBytes "session-token secret" path
+  None =>
+    if fileExists (sessionSecretPath dir) then
+      readHexBytes "session-token secret" (sessionSecretPath dir)
+    else
+      generateSessionSecret dir
+
+{- | The account password, as the file holds it: everything in the file with
+   one trailing newline removed, which is what `printf %s\\n` and every text
+   editor put there. Nothing else is stripped — leading and interior spaces are
+   part of a password, and a password this program silently rewrote would not
+   be the one its owner typed. -}
+passwordOf : String -> Result String String
+passwordOf text =
+  let password = match stripSuffix "\n" text
+    Some shorter => shorter
+    None => text
+  if password == "" then Err "the password file is empty" else Ok password
+
+-- The stored credential: iteration count, salt, and derived key, one per line.
+-- The password is not among them and was never stored.
+credentialText : CredentialRecord -> String
+credentialText record =
+  "\{intToString (credentialIterations record)}\n\{encode (credentialSalt record)}\n\{encode (credentialDigest record)}\n"
+
+{- | Derive the account credential from `--password-file` and keep it. The salt
+   is drawn here, from `osEntropyBytes`: `lib.credential` takes a
+   caller-supplied salt and draws no entropy of its own. -}
+bootstrapCredential : String ->
+  String ->
+  <FileRead "_", FileWrite "_", Rand, Stderr> Result String CredentialRecord
+bootstrapCredential dir path = do
+  text <- match readFile path
+    Err message => Err "unreadable password file \{path}: \{message}"
+    Ok given => Ok given
+  password <- match passwordOf text
+    Err message => Err "\{path}: \{message}"
+    Ok given => Ok given
+  record <- makeCredential (osEntropyBytes saltBytes) defaultIterations password
+  () <- match writeFile (credentialPath dir) (credentialText record)
+    Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
+    Ok () => Ok ()
+  let () = warnWorldReadable (credentialPath dir)
+  Ok record
+
+loadCredential : String -> <FileRead "_"> Result String CredentialRecord
+loadCredential dir = do
+  text <- match readFile (credentialPath dir)
+    Err message => Err "unreadable credential \{credentialPath dir}: \{message}"
+    Ok given => Ok given
+  match lines (trim text)
+    [iterationsText, saltText, digestText] => do
+      iterations <- match toInt iterationsText
+        None =>
+          Err
+            "credential \{credentialPath dir}: first line is not an iteration count"
+        Some given => Ok given
+      salt <- decode saltText
+      digest <- decode digestText
+      credentialFromParts salt iterations digest
+    _ =>
+      Err
+        "credential \{credentialPath dir}: expected three lines (iterations, salt, derived key)"
+
+{- | The account's password credential: the one the data directory already
+   holds, else one bootstrapped from `--password-file`.
+
+   With neither, the server refuses to start. The alternative — starting with
+   no credential and refusing every login — would look identical to a correctly
+   configured server right up until somebody tried to use it, and the fix would
+   be invisible from the outside. -}
+resolveCredential : Args ->
+  String ->
+  <FileRead "_", FileWrite "_", Rand, Stderr> Result String CredentialRecord
+resolveCredential parsed dir =
+  if fileExists (credentialPath dir) then
+    loadCredential dir
+  else match flagValue "--password-file" parsed
+    None =>
+      Err
+        "no account credential in \{credentialPath dir}: pass --password-file PATH once, holding the account password, to bootstrap one (the password is never taken from an argument value, and there is no terminal prompt)"
+    Some path => bootstrapCredential dir path
 
 requireDir : String -> <FileRead "_"> Result String Unit
 requireDir dir = match isDir dir
@@ -163,7 +322,7 @@ openRepo True dir did keyBytes secret =
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, and the port. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_"> Result String (Server, Store, String, Int)
+  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Result String (Server, Store, String, Int)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -177,8 +336,10 @@ configure parsed = do
   secret <- secretKeyFromBytes keyBytes
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
-  store <- withTokenSecret parsed (storeFromRepo repo)
-  Ok (server, store, dir, port)
+  sessionSecret <- resolveSessionSecret parsed dir
+  credential <- resolveCredential parsed dir
+  withSecret <- storeWithServerSecret sessionSecret (storeFromRepo repo)
+  Ok (server, storeWithCredential credential withSecret, dir, port)
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting
@@ -197,7 +358,7 @@ announce : Int ->
   Store ->
   String ->
   Server ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout | e> Unit
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 announce port lis store dir server = defer
   _ <- liftIO (u => ready port)
   storeRef <- liftIO (u => Ref store)
@@ -208,7 +369,7 @@ bound : Server ->
   Store ->
   String ->
   Result String Listener ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout | e> Unit
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 bound _ _ _ (Err message) = liftIO (u => abort "serve: bind failed: \{message}")
 bound server store dir (Ok lis) = defer
   port <- liftIO (u => listenPort lis)
@@ -218,13 +379,13 @@ bound server store dir (Ok lis) = defer
     Ok given => announce given lis store dir server
 
 start : Result String (Server, Store, String, Int) ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout | e> Unit
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port)) = defer
   listener <- liftIO (u => bindLoopback port)
   bound server store dir listener
 
-main : Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout> Unit
+main : Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout> Unit
 main = defer
   argv <- liftIO (u => args ())
   match parseArgs serveSpec argv

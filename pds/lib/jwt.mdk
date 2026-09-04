@@ -30,11 +30,19 @@ import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
 import string.{fromUtf8, split, stripSuffix, toUtf8}
 import lib.hmac_sha256.{hmacSha256FixedKey}
 
--- | The claim set this server mints and accepts. `iat`, `nbf`, and `exp` are
---   seconds since the Unix epoch (RFC 7519 §2 "NumericDate").
+{- | The claim set this server mints and accepts. `iat`, `nbf`, and `exp` are
+     seconds since the Unix epoch (RFC 7519 §2 "NumericDate").
+
+     `jti` (RFC 7519 §4.1.7) is the token's own identifier, and it is required
+     rather than optional: without it two tokens minted for the same subject
+     and audience in the same second are byte-identical, so a session opened
+     twice — or a refresh token rotated in the same second it was issued —
+     would be indistinguishable from its own predecessor. The caller supplies
+     the value; this module never generates one. -}
 public export data Claims = Claims {
   sub : String,
   aud : String,
+  jti : String,
   iat : Int,
   nbf : Int,
   exp : Int,
@@ -123,6 +131,7 @@ claimsJson : Claims -> Json
 claimsJson c = jObject [
   ("sub", JString c.sub),
   ("aud", JString c.aud),
+  ("jti", JString c.jti),
   ("iat", JInt c.iat),
   ("nbf", JInt c.nbf),
   ("exp", JInt c.exp),
@@ -131,15 +140,16 @@ claimsJson c = jObject [
 b64uEncodeText : String -> String
 b64uEncodeText s = b64uEncode (toUtf8 s)
 
-{- | A signed token for `sub` and `aud`, valid from `issuedAt` until
-     `expiresAt` (both seconds since the Unix epoch). `nbf` is `issuedAt`:
-     this server mints no post-dated token. -}
+{- | A signed token for `sub` and `aud` identified by `jti`, valid from
+     `issuedAt` until `expiresAt` (both seconds since the Unix epoch). `nbf`
+     is `issuedAt`: this server mints no post-dated token. -}
 export
-mintToken : Array Int -> String -> String -> Int -> Int -> String
-mintToken secret sub aud issuedAt expiresAt =
+mintToken : Array Int -> String -> String -> String -> Int -> Int -> String
+mintToken secret sub aud jti issuedAt expiresAt =
   let claims = Claims {
     sub = sub,
     aud = aud,
+    jti = jti,
     iat = issuedAt,
     nbf = issuedAt,
     exp = expiresAt,
@@ -183,10 +193,11 @@ readClaims : Json -> Result JwtError Claims
 readClaims payload = do
   sub <- stringClaim "sub" payload
   aud <- stringClaim "aud" payload
+  jti <- stringClaim "jti" payload
   iat <- intClaim "iat" payload
   nbf <- intClaim "nbf" payload
   exp <- intClaim "exp" payload
-  Ok Claims { sub = sub, aud = aud, iat = iat, nbf = nbf, exp = exp }
+  Ok Claims { sub = sub, aud = aud, jti = jti, iat = iat, nbf = nbf, exp = exp }
 
 -- `exp` is exclusive and `nbf` inclusive, per RFC 7519 §4.1.4/§4.1.5.
 checkWindow : Int -> Claims -> Result JwtError Claims

@@ -2,7 +2,8 @@
 # In-language (`medaka test`) gate for pds/test/*_test.mdk (#2527: originally
 # these 15 files, ~338 `test` decls of ECDSA/RFC 6979/secp256k1/field/scalar/
 # HTTP structural assertions, ran nowhere in CI; S-kdf added pbkdf2_test,
-# S-jwt added jwt_test).
+# S-jwt added jwt_test, S-sessions added credential_test and
+# session_routes_test).
 #
 # THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
 # indistinguishable from "this passed"): a `medaka test` file with ZERO
@@ -19,7 +20,8 @@
 # interpreter's capability policy does not bind — `medaka test` itself names
 # `--native` as the fix in its own error text for that last case — and
 # pbkdf2_test/jwt_test are SHA-256 volume that runs several times faster
-# natively (jwt_test: 8.9s interpreted, 2.5s native).
+# natively (jwt_test: 8.9s interpreted, 2.5s native), and S-sessions'
+# credential_test/session_routes_test are PBKDF2 volume for the same reason.
 #
 # Run from the repo root. Requires a built native `medaka` ($MEDAKA / ./medaka).
 set -u
@@ -35,6 +37,7 @@ export MEDAKA_ROOT
 SUITES="
 auth_seam_test:--native
 car_store_test:
+credential_test:--native
 dagcbor_cid_test:
 ecdsa_test:
 encodings_test:
@@ -48,6 +51,7 @@ rfc6979_test:
 scalar_test:--native
 secp256k1_point_test:
 server_core_test:
+session_routes_test:--native
 sign_key_test:
 skeleton_test:
 xrpc_test:

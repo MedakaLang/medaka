@@ -9,9 +9,7 @@
    that line and nothing else. -}
 
 import array.{concat, sliceClamped}
-import hex.{decode}
-import json.{Json(..), jObject, stringify}
-import lib.jwt.{mintToken}
+import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
   contains,
@@ -26,7 +24,7 @@ import string.{
   toUtf8,
   trim,
 }
-import time.{Duration, elapsedSince, monotonic, now, seconds}
+import time.{Duration, elapsedSince, monotonic, seconds}
 
 -- # Small ad-hoc helpers this test driver owns
 
@@ -153,6 +151,11 @@ hostHeader = "Host: 127.0.0.1\r\n"
 getRequest : String -> Array Int
 getRequest path = toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
 
+-- | The same GET, carrying a bearer token.
+getRequestWith : String -> String -> Array Int
+getRequestWith token path =
+  toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
+
 oneChunk : Array Int -> Array Int
 oneChunk chunkBytes = concat [|
   toUtf8 "\{toHexString (arrayLength chunkBytes)}\r\n",
@@ -168,8 +171,8 @@ finalChunk = toUtf8 "0\r\n\r\n"
    The three record-write procedures are `AuthenticatedRoute`, so a request to
    one is refused at `lib.server_core`'s seam before any handler runs unless it
    presents a bearer token this server can verify. `auth` is passed in rather
-   than minted here so that the gate mints exactly one token per run (the
-   `mint-token` subcommand) against the same secret it hands the server. -}
+   than obtained here so that the gate logs in once per run (the `login`
+   subcommand) and hands the access token it was issued to every case. -}
 authHeader : String -> String
 authHeader "" = ""
 authHeader token = "Authorization: Bearer \{token}\r\n"
@@ -184,6 +187,13 @@ postRequest token path bodyJson =
       "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
     body,
   |]
+
+-- A POST with no body and no body framing at all, which is the shape
+-- `com.atproto.server.{refreshSession, deleteSession}` take: they are
+-- `NoInput` procedures, and the router refuses one that carries framing.
+postNoInputRequest : String -> String -> Array Int
+postNoInputRequest token path =
+  toUtf8 "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
 
 chunkedPostRequest : String -> String -> String -> Array Int
 chunkedPostRequest token path bodyJson =
@@ -219,6 +229,14 @@ createRecordJson did collection rkey text =
       ),
     ])
 
+createSessionJson : String -> String -> String
+createSessionJson identifier password =
+  stringify
+    (jObject [
+      ("identifier", JString identifier),
+      ("password", JString password),
+    ])
+
 deleteRecordJson : String -> String -> String -> String
 deleteRecordJson did collection rkey =
   stringify
@@ -238,11 +256,35 @@ getRecordPath : String -> String -> String -> String
 getRecordPath did collection rkey =
   "\{xrpcPath "com.atproto.repo.getRecord"}?repo=\{did}&collection=\{collection}&rkey=\{rkey}"
 
+createSessionPath : String
+createSessionPath = xrpcPath "com.atproto.server.createSession"
+
+refreshSessionPath : String
+refreshSessionPath = xrpcPath "com.atproto.server.refreshSession"
+
+deleteSessionPath : String
+deleteSessionPath = xrpcPath "com.atproto.server.deleteSession"
+
+getSessionPath : String
+getSessionPath = xrpcPath "com.atproto.server.getSession"
+
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
 
 didJsonPath : String
 didJsonPath = "/.well-known/did.json"
+
+-- | One string field of a JSON response body, or a panic naming what was
+-- missing. A session response the gate cannot read is a failed gate, not a
+-- case to carry on past.
+stringField : String -> Array Int -> String
+stringField name body = match parse (fromUtf8 body)
+  Err message => panic "serve_client: response is not JSON: \{message}"
+  Ok value => match get name value
+    Some (JString text) => text
+    _ =>
+      panic
+        "serve_client: response has no string field '\{name}': \{fromUtf8 body}"
 
 -- # Cases
 
@@ -547,20 +589,131 @@ runUnauthorized port did collection rkey =
     Err _ => ()
   ignoreResult (close conn)
 
-{- | Prints one session token for this account, so the shell gate can hand the
-   same string to every write case. The window is generous because the gate
-   spends ~30 seconds on the idle-timeout case between minting and the last
-   write. -}
-runMintToken : String -> String -> String -> <IO, Clock> Unit
-runMintToken secretHex did hostname = match decode (trim secretHex)
-  Err message => panic "serve_client: token secret is not hex: \{message}"
-  Ok secret =>
-    let issued = floatToInt (now ())
-    println (mintToken secret did hostname (issued - 60) (issued + 3600))
+{- | Logs in and prints the pair `com.atproto.server.createSession` issued,
+   access token first, separated by a space, so the shell gate can hand each to
+   the case that needs it.
+
+   This is the ONLY way this gate obtains a token: there is no direct-mint
+   path any more. A token minted beside the server rather than by it would
+   verify its signature and nothing else — no session would be open for it, so
+   the seam would refuse it — and the login path is what the gate is here to
+   prove. -}
+runLogin : Int -> String -> String -> <IO, Net "_"> Unit
+runLogin port identifier password =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequest "" createSessionPath (createSessionJson identifier password))
+  let out = match readResponse conn [||]
+    Err message => panic "serve_client: createSession failed: \{message}"
+    Ok (200, body, _) =>
+      "\{stringField "accessJwt" body} \{stringField "refreshJwt" body}"
+    Ok (status, body, _) =>
+      panic
+        "serve_client: createSession answered \{intToString status}: \{fromUtf8 body}"
+  let () = println out
+  ignoreResult (close conn)
+
+-- | A login that must be REFUSED, and with atproto's own code for it.
+runLoginRefused : Int -> String -> String -> <IO, Net "_"> Unit
+runLoginRefused port identifier password =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequest "" createSessionPath (createSessionJson identifier password))
+  let result = readResponse conn [||]
+  let () = expectStatus "LOGINREFUSED" 401 result
+  let () = match result
+    Ok (_, body, _) =>
+      let bodyText = fromUtf8 body
+      if contains "\"AuthenticationRequired\"" bodyText then
+        ()
+      else
+        report
+          "LOGINREFUSED"
+          False
+          "refusal body is not AuthenticationRequired: \{bodyText}"
+    Err _ => ()
+  ignoreResult (close conn)
+
+{- | Rotates the presented refresh token and prints the pair that replaced it.
+   `refreshSession` is a `RefreshRoute`, so the REFRESH token is what its
+   `Authorization` header carries — an access token there is refused. -}
+runRefresh : Int -> String -> <IO, Net "_"> Unit
+runRefresh port refreshToken =
+  let conn = mustConnect port
+  let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
+  let out = match readResponse conn [||]
+    Err message => panic "serve_client: refreshSession failed: \{message}"
+    Ok (200, body, _) =>
+      "\{stringField "accessJwt" body} \{stringField "refreshJwt" body}"
+    Ok (status, body, _) =>
+      panic
+        "serve_client: refreshSession answered \{intToString status}: \{fromUtf8 body}"
+  let () = println out
+  ignoreResult (close conn)
+
+-- | A refresh that must be REFUSED — a token already consumed by a rotation,
+-- or one belonging to a session that has been closed.
+runRefreshRefused : Int -> String -> <IO, Net "_"> Unit
+runRefreshRefused port refreshToken =
+  let conn = mustConnect port
+  let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
+  let () = expectStatus "REFRESHREFUSED" 401 (readResponse conn [||])
+  ignoreResult (close conn)
+
+-- | Closes the session the presented refresh token belongs to.
+runLogout : Int -> String -> <IO, Net "_"> Unit
+runLogout port refreshToken =
+  let conn = mustConnect port
+  let () = mustSend conn (postNoInputRequest refreshToken deleteSessionPath)
+  let () = expectStatus "LOGOUT" 200 (readResponse conn [||])
+  ignoreResult (close conn)
+
+-- | `getSession` reports the account the presented ACCESS token belongs to.
+runGetSession : Int -> String -> String -> <IO, Net "_"> Unit
+runGetSession port token did =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token getSessionPath)
+  let result = readResponse conn [||]
+  let () = expectStatus "GETSESSION" 200 result
+  let () = match result
+    Ok (_, body, _) =>
+      if stringField "did" body == did then
+        ()
+      else
+        report "GETSESSION" False "body did not name the hosted DID"
+    Err _ => ()
+  ignoreResult (close conn)
+
+{- | One `createRecord` with `token`, required to answer `want`.
+
+   With 200 it proves a token WORKS; with 401 it proves one does not, which is
+   how a revoked access token is told from a valid one over the real socket. -}
+runWriteStatus : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  <IO, Net "_"> Unit
+runWriteStatus port token did collection rkey want =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequest
+        token
+        createRecordPath
+        (createRecordJson did collection rkey "session lifecycle probe"))
+  let () = expectStatus "WRITE\{intToString want}" want (readResponse conn [||])
+  ignoreResult (close conn)
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|mint-token> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -573,14 +726,28 @@ main = match args ()
     runEndpoints (mustPort port) token did handle collection rkey
   ["unauthorized", port, did, collection, rkey] =>
     runUnauthorized (mustPort port) did collection rkey
-  ["mint-token", secretHex, did, hostname] =>
-    runMintToken secretHex did hostname
+  ["login", port, identifier, password] =>
+    runLogin (mustPort port) identifier password
+  ["login-refused", port, identifier, password] =>
+    runLoginRefused (mustPort port) identifier password
+  ["refresh", port, token] => runRefresh (mustPort port) token
+  ["refresh-refused", port, token] => runRefreshRefused (mustPort port) token
+  ["logout", port, token] => runLogout (mustPort port) token
+  ["get-session", port, token, did] => runGetSession (mustPort port) token did
+  ["write", port, token, did, collection, rkey, want] =>
+    runWriteStatus (mustPort port) token did collection rkey (mustStatus want)
   ["malformed", port] => runMalformed (mustPort port)
   ["overcap", port] => runOvercap (mustPort port)
   ["idle", port] => runIdle (mustPort port)
   ["resume", port, did, collection, rkey, text] =>
     runResume (mustPort port) did collection rkey text
   _ => panic usage
+
+-- | An expected HTTP status, as the shell gate spells it on the command line.
+mustStatus : String -> Int
+mustStatus text = match toInt text
+  Some n => n
+  None => panic "serve_client: not a status: \{text}"
 
 mustPort : String -> Int
 mustPort text = match toInt text

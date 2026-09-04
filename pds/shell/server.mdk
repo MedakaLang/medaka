@@ -54,6 +54,16 @@ writeTimeout = seconds 30
 readChunkBytes : Int
 readChunkBytes = 65536
 
+{- | How many bytes of OS entropy each request is given.
+
+   It identifies any token the request mints (`RequestContext`'s `nonce`,
+   `lib.server_core`), so it is drawn from `osEntropyBytes` and never from
+   `randomInt`, whose generator is a seeded SplitMix64 and predictable by
+   construction. Sixteen bytes is the usual floor for a value an attacker must
+   not be able to guess ahead of time. -}
+requestNonceBytes : Int
+requestNonceBytes = 16
+
 {- | How many connections may be in flight at once. An accepted connection past
    the ceiling is closed immediately, without a read: answering it would need
    the very socket work the ceiling exists to bound. -}
@@ -84,11 +94,11 @@ persistFailureBytes =
    deliberately ORDINARY, non-`Async` code: read the current store, transition
    it, persist the successor, publish the successor. A scheduler can only
    interleave tasks at an `Async` bind, and there is not one in this sequence —
-   `handleBytes` is pure, the clock reading handed to it is a plain
-   synchronous `<Clock>` call, and `persistSave` performs plain synchronous
-   `<FileRead, FileWrite>`, not a suspension. So the four steps run as one
-   indivisible unit, and two concurrent connections cannot both read the same
-   store and each publish over the other's write. Wrapping the persist in
+   `handleBytes` is pure, the clock and entropy readings handed to it are plain
+   synchronous `<Clock>`/`<Rand>` calls, and `persistSave` performs plain
+   synchronous `<FileRead, FileWrite>`, not a suspension. So the four steps run
+   as one indivisible unit, and two concurrent connections cannot both read the
+   same store and each publish over the other's write. Wrapping the persist in
    `liftIO`, or splitting these steps across two `Async` steps, silently
    reintroduces that lost update; every caller therefore reaches this through a
    SINGLE `liftIO`.
@@ -99,10 +109,13 @@ applyRequest : Server ->
   String ->
   Ref Store ->
   Array Int ->
-  <Clock, FileRead "_", FileWrite "_", Stderr> Array Int
+  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Array Int
 applyRequest server dir storeRef bytes =
   let store = !storeRef
-  let context = RequestContext { nowSeconds = floatToInt (now ()) }
+  let context = RequestContext {
+    nowSeconds = floatToInt (now ()),
+    nonce = osEntropyBytes requestNonceBytes,
+  }
   let (next, response) = handleBytes server context store bytes
   match persistTransition dir store next
     Err message =>
@@ -139,7 +152,7 @@ runServer : Server ->
   String ->
   Ref Store ->
   Listener ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 runServer server dir storeRef lis = defer
   active <- liftIO (u => Ref 0)
   acceptLoop server dir storeRef lis active
@@ -149,7 +162,7 @@ acceptLoop : Server ->
   Ref Store ->
   Listener ->
   Ref Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 acceptLoop server dir storeRef lis active = defer
   accepted <- A.accept lis
   acceptStep server dir storeRef lis active accepted
@@ -160,7 +173,7 @@ acceptStep : Server ->
   Listener ->
   Ref Int ->
   Result String Connection ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 acceptStep _ _ _ _ _ (Err message) = deferPure (Err message)
 acceptStep server dir storeRef lis active (Ok conn) =
   if !active >= maxConcurrentConnections then defer
@@ -179,7 +192,7 @@ serveConnection : Server ->
   Ref Store ->
   Connection ->
   Ref Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> Unit
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> Unit
 serveConnection server dir storeRef conn active = defer
   _ <- connectionLoop server dir storeRef conn [||]
   _ <- A.close conn
@@ -194,7 +207,7 @@ connectionLoop : Server ->
   Ref Store ->
   Connection ->
   Array Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 connectionLoop server dir storeRef conn pending = defer
   deadline <- deadlineAfter requestTimeout
   frameLoop server dir storeRef conn deadline pending
@@ -207,7 +220,7 @@ frameLoop : Server ->
   Connection ->
   Wait ->
   Array Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 frameLoop server dir storeRef conn deadline buf =
   match scanRequestBoundary buf 0
     HttpFramedAt boundary => respond server dir storeRef conn buf boundary
@@ -225,7 +238,7 @@ readMore : Server ->
   Connection ->
   Wait ->
   Array Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 readMore server dir storeRef conn deadline buf = defer
   received <- A.recvWithin idleTimeout conn readChunkBytes
   match received
@@ -248,7 +261,7 @@ respond : Server ->
   Connection ->
   Array Int ->
   Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 respond server dir storeRef conn buf boundary =
   let keepAlive = frameKeepAlive buf boundary
   let rest = sliceClamped boundary (arrayLength buf) buf
@@ -280,7 +293,7 @@ rejectBuffer : Server ->
   Ref Store ->
   Connection ->
   Array Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 rejectBuffer server dir storeRef conn buf = defer
   response <- liftIO (u => applyRequest server dir storeRef buf)
   A.sendAllWithin writeTimeout conn response

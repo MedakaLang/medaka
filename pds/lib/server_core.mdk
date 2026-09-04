@@ -20,7 +20,13 @@ import lib.http.{
   serializeResponse,
 }
 import lib.jwt.{Claims(..), JwtError(..), verifyToken}
-import lib.store.{Store, storeServerSecret}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeAccessActive,
+  storeRefreshActive,
+  storeServerSecret,
+}
 import lib.xrpc.{
   AuthPolicy(..),
   Registry,
@@ -31,27 +37,46 @@ import lib.xrpc.{
   xrpcFailureResponse,
 }
 
-{- | Everything about a request that is not in the request bytes.
+{- | Everything about a request that is not in the request bytes, because
+   nothing in `pds/lib` declares an effect row and so nothing here can read it
+   for itself: the shell reads both and passes them in
+   (`pds/shell/server.mdk`).
 
-   Today that is only the current instant, in seconds since the Unix epoch,
-   which token verification needs and which this module may not read for
-   itself: nothing in `pds/lib` declares an effect row, so the shell reads the
-   clock and passes the reading in (`pds/shell/server.mdk`). It is a record
-   rather than a bare `Int` so the peer address rate limiting will want can be
-   added beside it without moving every call site a second time. -}
-public export data RequestContext = RequestContext { nowSeconds : Int }
+   `nowSeconds` is the current instant, in seconds since the Unix epoch, which
+   token verification and token minting both need.
+
+   `nonce` is per-request entropy from `osEntropyBytes`, and it is what a token
+   minted while serving this request is identified by (`jti`, `lib.jwt`).
+   Without it two tokens minted for the same subject and audience in the same
+   second would be byte-identical, so a refresh token rotated in the second it
+   was issued would be indistinguishable from the one it replaced and the reuse
+   detection in `lib.store`'s rotation would have nothing to detect. -}
+public export data RequestContext = RequestContext {
+  nowSeconds : Int,
+  nonce : Array Int,
+}
 
 {- | What the seam resolved about the caller's credentials, handed to every
    handler.
 
-   `Authenticated` carries the authenticated subject DID. A handler does not
-   re-check it: whether the route may be reached at all was already decided in
-   `handle`, against the registry's own classification, before dispatch. -}
-public export data AuthOutcome = Unauthenticated | Authenticated String
+   `Authenticated` carries the authenticated subject DID and the fingerprint
+   (`lib.store`'s `sessionFingerprint`) of the token that was presented. A
+   handler does not re-check either: whether the route may be reached at all
+   was already decided in `handle`, against the registry's own classification,
+   before dispatch. The fingerprint is there because the session routes act on
+   the caller's OWN session — rotating it, closing it — and a fingerprint is
+   how a session is named; the bearer token itself is deliberately not handed
+   on, so no handler can echo, log, or re-present it. -}
+public export data AuthOutcome =
+  | Unauthenticated
+  | Authenticated String (Array Int)
 
--- | An endpoint-agnostic pure handler with an explicit successor Store,
--- receiving the auth outcome the seam already resolved and enforced.
-export type Handler = AuthOutcome -> Store -> XrpcCall -> (Store, Response)
+{- | An endpoint-agnostic pure handler with an explicit successor Store,
+   receiving the request context and the auth outcome the seam already
+   resolved and enforced. The context is threaded through rather than read
+   here: a handler that mints a token needs the same instant the seam verified
+   against, and the same request's nonce. -}
+export type Handler = RequestContext -> AuthOutcome -> Store -> XrpcCall -> (Store, Response)
 
 {- | The one account this configured server serves: the repository owner's DID,
    the owner's handle, and this PDS's own hostname. Its constructor is private
@@ -90,6 +115,24 @@ export
 accountHostname : Account -> String
 accountHostname (Account _ _ hostname) = hostname
 
+{- | The audience an ACCESS token for this account carries: this PDS's own
+   hostname, the server the token may be presented to. -}
+export
+accessAudience : Account -> String
+accessAudience account = accountHostname account
+
+{- | The audience a REFRESH token for this account carries.
+
+   It is the access audience with a `#refresh` fragment appended, so the two
+   token classes are never interchangeable: `verifyToken` compares `aud` for
+   equality, so an access token presented to a refresh route is refused
+   `JwtWrongAudience` and a refresh token presented to any other gated route
+   is refused the same way. RFC 7519 §4.1.3 leaves the form of an `aud` value
+   to the application. -}
+export
+refreshAudience : Account -> String
+refreshAudience account = "\{accountHostname account}#refresh"
+
 -- | An account configuration and a validated registry paired with the
 -- injected pure handler that serves them.
 export data Server = Server Account Registry Handler
@@ -113,7 +156,7 @@ data Credential =
   | MalformedCredential
   | ExpiredCredential
   | InvalidCredential
-  | GoodCredential String
+  | GoodCredential String (Array Int)
 
 -- What the `Authorization` header carried, before any verification.
 data Presented = NoHeader | NotBearer | Bearer String
@@ -142,39 +185,76 @@ refusedCredential JwtExpired = ExpiredCredential
 refusedCredential JwtMalformed = MalformedCredential
 refusedCredential _ = InvalidCredential
 
-{- | Verify a presented bearer token against this server's own session secret
-   and configured account. The token's subject must be the account DID and its
-   audience this PDS's hostname: those two are what a token minted for THIS
-   account on THIS server carries, so a token minted for another account, or
-   for another server sharing the secret, does not verify here.
+-- Which audience a token presented to this route must carry, and therefore
+-- which of the two token classes the route accepts.
+audienceFor : Account -> AuthPolicy -> String
+audienceFor account RefreshRoute = refreshAudience account
+audienceFor account _ = accessAudience account
+
+-- Whether the session the token belongs to is still open. A refresh route
+-- asks after the refresh half, every other route after the access half.
+sessionOpen : AuthPolicy -> Array Int -> Store -> Bool
+sessionOpen RefreshRoute fingerprint store =
+  storeRefreshActive fingerprint store
+sessionOpen _ fingerprint store = storeAccessActive fingerprint store
+
+{- | Verify a presented bearer token against this server's own session secret,
+   configured account, and open sessions. The token's subject must be the
+   account DID and its audience the one this route accepts: those are what a
+   token minted for THIS account on THIS server for THIS token class carries,
+   so a token minted for another account, or for another server sharing the
+   secret, or of the other class, does not verify here.
+
+   A verified signature is NOT on its own a credential: the token's session
+   must still be open. That is what makes `deleteSession` a revocation rather
+   than an announcement — the access token it revokes is still inside its own
+   validity window and still carries a good MAC, and is refused anyway.
+   Sessions live only in memory (`lib.store`), so a restart refuses every
+   token minted before it.
 
    A `Store` with no session secret can resolve nothing, so every credential
    presented to it is refused. That is the state a server started without a
-   `--token-secret` is in, and it fails closed. -}
-verifiedCredential : Account -> RequestContext -> Store -> String -> Credential
-verifiedCredential account context store token = match storeServerSecret store
-  None => InvalidCredential
-  Some secret =>
-    let verified =
-      verifyToken
-        secret
-        (accountDid account)
-        (accountHostname account)
-        context.nowSeconds
-        token
-    match verified
-      Err jwtError => refusedCredential jwtError
-      Ok claims => GoodCredential claims.sub
+   session secret is in, and it fails closed. -}
+verifiedCredential : Account ->
+  AuthPolicy ->
+  RequestContext ->
+  Store ->
+  String ->
+  Credential
+verifiedCredential account policy context store token =
+  match storeServerSecret store
+    None => InvalidCredential
+    Some secret =>
+      let verified =
+        verifyToken
+          secret
+          (accountDid account)
+          (audienceFor account policy)
+          context.nowSeconds
+          token
+      match verified
+        Err jwtError => refusedCredential jwtError
+        Ok claims =>
+          let fingerprint = sessionFingerprint token
+          if sessionOpen policy fingerprint store then
+            GoodCredential claims.sub fingerprint
+          else
+            InvalidCredential
 
-resolveCredential : Account -> RequestContext -> Store -> Request -> Credential
-resolveCredential account context store request =
+resolveCredential : Account ->
+  AuthPolicy ->
+  RequestContext ->
+  Store ->
+  Request ->
+  Credential
+resolveCredential account policy context store request =
   match presentedHeader (requestHeaders request) 0 None
     NoHeader => NoCredential
     NotBearer => MalformedCredential
-    Bearer token => verifiedCredential account context store token
+    Bearer token => verifiedCredential account policy context store token
 
 outcomeOf : Credential -> AuthOutcome
-outcomeOf (GoodCredential did) = Authenticated did
+outcomeOf (GoodCredential did fingerprint) = Authenticated did fingerprint
 outcomeOf _ = Unauthenticated
 
 {- | The refusal a gated route owes an unresolved credential. The error codes
@@ -218,12 +298,13 @@ handle (Server account registry handler) context store request =
   match routeRequest registry request
     RouteFailure failed => (store, xrpcFailureResponse failed)
     RouteCall auth call =>
-      let credential = resolveCredential account context store request
+      let credential = resolveCredential account auth context store request
       match (auth, credential)
-        (AuthenticatedRoute, GoodCredential did) =>
-          handler (Authenticated did) store call
-        (AuthenticatedRoute, refused) => (store, refusalFor refused)
-        (PublicRoute, resolved) => handler (outcomeOf resolved) store call
+        (PublicRoute, resolved) =>
+          handler context (outcomeOf resolved) store call
+        (_, GoodCredential did fingerprint) =>
+          handler context (Authenticated did fingerprint) store call
+        (_, refused) => (store, refusalFor refused)
 
 malformedHttpResponse : Response
 malformedHttpResponse =

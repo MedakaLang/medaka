@@ -42,11 +42,19 @@ import lib.server_core.{
   Handler,
   RequestContext(..),
   Server,
+  accessAudience,
   handleBytes,
   makeAccount,
   makeServer,
+  refreshAudience,
 }
-import lib.store.{Store, storeEmpty, storeWithServerSecret}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeEmpty,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
 import lib.xrpc.{
   AuthPolicy(..),
   Endpoint,
@@ -81,8 +89,14 @@ otherSecret = arrayMakeWith 32 (i => (i * 13 + 7) % 256)
 testInstant : Int
 testInstant = 1700000000
 
+{- | A fixed nonce. It identifies any token a route mints while serving the
+   request; no route in this file's synthetic registry mints one, so the value
+   only has to be fixed. -}
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 17 + 3) % 256)
+
 testContext : RequestContext
-testContext = RequestContext { nowSeconds = testInstant }
+testContext = RequestContext { nowSeconds = testInstant, nonce = testNonce }
 
 account : Account
 account = match makeAccount accountDidText "alice.example" accountHostText
@@ -97,6 +111,9 @@ gatedNsid = "com.example.gated.write"
 openNsid : String
 openNsid = "com.example.open.read"
 
+refreshNsid : String
+refreshNsid = "com.example.refresh.rotate"
+
 mustEndpoint : Result String Endpoint -> Endpoint
 mustEndpoint (Ok endpoint) = endpoint
 mustEndpoint (Err message) =
@@ -106,6 +123,7 @@ syntheticRegistry : Registry
 syntheticRegistry = match makeRegistry [
   mustEndpoint (procedureEndpoint gatedNsid JsonInput AuthenticatedRoute),
   mustEndpoint (queryEndpoint openNsid PublicRoute),
+  mustEndpoint (procedureEndpoint refreshNsid NoInput RefreshRoute),
 ]
   Ok registry => registry
   Err message => panic "auth_seam_test: registry setup failed: \{message}"
@@ -125,23 +143,37 @@ textHeader = match makeHeader "content-type" (toUtf8 "text/plain")
    this handler at all on the gated route is itself the assertion that the
    credential was accepted. -}
 syntheticHandler : Handler
-syntheticHandler Unauthenticated store _ = (store, mustResponse "anonymous")
-syntheticHandler (Authenticated did) store _ = (store, mustResponse did)
+syntheticHandler _ Unauthenticated store _ = (store, mustResponse "anonymous")
+syntheticHandler _ (Authenticated did _) store _ = (store, mustResponse did)
 
 syntheticServer : Server
 syntheticServer = makeServer account syntheticRegistry syntheticHandler
 
 -- ── stores ──────────────────────────────────────────────────────────────────
 
-configuredStore : Store
-configuredStore = match storeWithServerSecret testSecret storeEmpty
+{- | A store carrying the session secret and NO open session. Every token below
+   verifies against it and none is a credential on it: a good signature inside
+   its window is not on its own a session. -}
+secretOnlyStore : Store
+secretOnlyStore = match storeWithServerSecret testSecret storeEmpty
   Ok store => store
   Err message => panic "auth_seam_test: session secret setup failed: \{message}"
 
+-- The same store with `goodToken`/`goodRefreshToken`'s session open, which is
+-- what makes those two credentials rather than merely well-formed tokens.
+configuredStore : Store
+configuredStore =
+  storeSessionOpen
+    (sessionFingerprint goodToken)
+    (sessionFingerprint goodRefreshToken)
+    (testInstant + 3600)
+    secretOnlyStore
+
 -- ── tokens ──────────────────────────────────────────────────────────────────
 
-tokenFor : Array Int -> String -> String -> Int -> Int -> String
-tokenFor secret sub aud from until = mintToken secret sub aud from until
+tokenFor : Array Int -> String -> String -> String -> Int -> Int -> String
+tokenFor secret sub aud tokenId from until =
+  mintToken secret sub aud tokenId from until
 
 goodToken : String
 goodToken =
@@ -149,6 +181,19 @@ goodToken =
     testSecret
     accountDidText
     accountHostText
+    "good"
+    (testInstant - 60)
+    (testInstant + 3600)
+
+{- | The refresh half of `goodToken`'s session. It differs from `goodToken` in
+   audience, which is what stops each being presented as the other. -}
+goodRefreshToken : String
+goodRefreshToken =
+  tokenFor
+    testSecret
+    accountDidText
+    (refreshAudience account)
+    "good"
     (testInstant - 60)
     (testInstant + 3600)
 
@@ -158,6 +203,7 @@ expiredToken =
     testSecret
     accountDidText
     accountHostText
+    "expired"
     (testInstant - 3600)
     (testInstant - 1)
 
@@ -167,6 +213,7 @@ futureToken =
     testSecret
     accountDidText
     accountHostText
+    "future"
     (testInstant + 60)
     (testInstant + 3600)
 
@@ -176,6 +223,7 @@ wrongSecretToken =
     otherSecret
     accountDidText
     accountHostText
+    "wrong-secret"
     (testInstant - 60)
     (testInstant + 3600)
 
@@ -185,6 +233,7 @@ wrongSubjectToken =
     testSecret
     "did:plc:somebodyelseentirely"
     accountHostText
+    "wrong-subject"
     (testInstant - 60)
     (testInstant + 3600)
 
@@ -194,6 +243,7 @@ wrongAudienceToken =
     testSecret
     accountDidText
     "other.example"
+    "wrong-audience"
     (testInstant - 60)
     (testInstant + 3600)
 
@@ -210,6 +260,12 @@ postRequest auth nsid =
 getRequest : String -> String -> Array Int
 getRequest auth target =
   toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
+
+-- A procedure with no input at all, which is the shape a refresh route takes.
+postNoInputRequest : String -> String -> Array Int
+postNoInputRequest auth nsid =
+  toUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
 
 bearer : String -> String
 bearer token = "Authorization: Bearer \{token}\r\n"
@@ -311,6 +367,12 @@ test "a token for another subject is refused" =
 test "a token for another audience is refused" =
   expectEqual (gatedWith (bearer wrongAudienceToken)) "401 InvalidToken"
 
+test "the access audience is this PDS's hostname" =
+  expectEqual (accessAudience account) accountHostText
+
+test "the refresh audience is not the access audience" =
+  expectTrue (refreshAudience account /= accessAudience account)
+
 test "a token presented without the Bearer scheme is refused" =
   expectEqual (gatedWith "Authorization: \{goodToken}\r\n") "401 InvalidToken"
 
@@ -328,6 +390,51 @@ test "the Bearer scheme is matched case-insensitively" =
   expectEqual
     (gatedBody "Authorization: bEaReR \{goodToken}\r\n")
     accountDidText
+
+refreshWith : String -> String
+refreshWith auth =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (postNoInputRequest auth refreshNsid)
+  refusal bytes
+
+refreshBody : String -> String
+refreshBody auth =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (postNoInputRequest auth refreshNsid)
+  bodyText bytes
+
+{- | The revocation property, at the seam. `goodToken` is inside its window and
+   carries a good MAC against the very secret this store holds; it is refused
+   anyway, because no open session names it. That is what `deleteSession`
+   leaves behind, and what a restart leaves behind for every token at once. -}
+test "a token whose session is not open is refused, signature notwithstanding" =
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      secretOnlyStore
+      (postRequest (bearer goodToken) gatedNsid)
+  expectEqual (refusal bytes) "401 InvalidToken"
+
+test "a refresh route reached with the session's refresh token runs" =
+  expectEqual (refreshBody (bearer goodRefreshToken)) accountDidText
+
+test "an access token is refused on a refresh route" =
+  expectEqual (refreshWith (bearer goodToken)) "401 InvalidToken"
+
+test "a refresh token is refused on an ordinary gated route" =
+  expectEqual (gatedWith (bearer goodRefreshToken)) "401 InvalidToken"
+
+test "a refresh route with no Authorization header is refused 401" =
+  expectEqual (refreshWith "") "401 AuthenticationRequired"
 
 test "a gated route on a store with no session secret is refused" =
   let (_, bytes) =
@@ -373,28 +480,43 @@ nsidsWith wanted =
 samePolicy : AuthPolicy -> AuthPolicy -> Bool
 samePolicy PublicRoute PublicRoute = True
 samePolicy AuthenticatedRoute AuthenticatedRoute = True
+samePolicy RefreshRoute RefreshRoute = True
 samePolicy _ _ = False
 
 {- | The whole route set, read out of the registry rather than restated from
-   the diff. A route registered later shows up in exactly one of these two
+   the diff. A route registered later shows up in exactly one of these three
    lists, so neither an unclassified new write nor a wrongly closed read can
    land without moving one of them. -}
-test "exactly the three record writes are gated" = expectEqual (nsidsWith
-  AuthenticatedRoute) [
-  "com.atproto.repo.createRecord",
-  "com.atproto.repo.deleteRecord",
-  "com.atproto.repo.putRecord",
-]
+test "exactly the three record writes and getSession are access-gated" = expectEqual
+  (nsidsWith AuthenticatedRoute)
+  [
+    "com.atproto.repo.createRecord",
+    "com.atproto.repo.deleteRecord",
+    "com.atproto.repo.putRecord",
+    "com.atproto.server.getSession",
+  ]
 
-test "every read, sync and identity query is public" = expectEqual (nsidsWith
-  PublicRoute) [
-  "com.atproto.identity.resolveHandle",
-  "com.atproto.repo.describeRepo",
-  "com.atproto.repo.getRecord",
-  "com.atproto.repo.listRecords",
-  "com.atproto.sync.getLatestCommit",
-  "com.atproto.sync.getRepo",
-]
+test "every read, sync and identity query is public, and so is createSession" = expectEqual
+  (nsidsWith PublicRoute)
+  [
+    "com.atproto.identity.resolveHandle",
+    "com.atproto.repo.describeRepo",
+    "com.atproto.repo.getRecord",
+    "com.atproto.repo.listRecords",
+    "com.atproto.server.createSession",
+    "com.atproto.sync.getLatestCommit",
+    "com.atproto.sync.getRepo",
+  ]
+
+{- | Refreshing and logging out are authenticated by the REFRESH token, which
+   is atproto's own classification: a client whose access token has expired can
+   still do both, and that is the whole point of holding a refresh token. -}
+test "refreshSession and deleteSession take the refresh token" = expectEqual
+  (nsidsWith RefreshRoute)
+  [
+    "com.atproto.server.deleteSession",
+    "com.atproto.server.refreshSession",
+  ]
 
 realPost : String -> String -> String
 realPost auth nsid =

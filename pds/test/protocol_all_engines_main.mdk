@@ -78,11 +78,11 @@ registry =
     ])
 
 handler : Handler
-handler _ store (QueryCall "com.example.query.fixed" _) =
+handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler _ store (QueryCall "Com.Example.query.caseFixed" _) =
+handler _ _ store (QueryCall "Com.Example.query.caseFixed" _) =
   (store, mustResponse 200 "OK" "authority-case")
-handler _ store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =
+handler _ _ store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =
   if firstName == "dryRun"
     && firstValue == "true"
     && secondName == "dryRun"
@@ -92,7 +92,7 @@ handler _ store (ProcedureNoInputCall "com.example.params.check" [QueryParam fir
     (store, mustResponse 200 "OK" "params-ordered")
   else
     panic "protocol_all_engines: procedure parameter order mismatch"
-handler _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
+handler _ _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
   let mediaType = mediaTypeType media
   let mediaSubtype = mediaTypeSubtype media
   if mediaType == "text"
@@ -109,12 +109,12 @@ handler _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
     (store, mustResponse 200 "OK" "raw-opaque")
   else
     panic "protocol_all_engines: raw media/body preservation mismatch"
-handler _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
+handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
   match storePut (cidForRaw bytes) bytes store
     Err message =>
       panic "protocol_all_engines: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
-handler _ _ _ = panic "protocol_all_engines: unexpected routed call"
+handler _ _ _ _ = panic "protocol_all_engines: unexpected routed call"
 
 account : Account
 account =
@@ -128,8 +128,14 @@ account =
 
 {- | The instant every request in this file is placed at. `lib.server_core`
    reads no clock, so each of its callers supplies one. -}
+{- | The per-request nonce every request in this file is placed at. Nothing
+   here drives a route that mints a token, so the value only has to be fixed;
+   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
 testContext : RequestContext
-testContext = RequestContext { nowSeconds = 1700000000 }
+testContext = RequestContext { nowSeconds = 1700000000, nonce = testNonce }
 
 server : Server
 server = makeServer account registry handler

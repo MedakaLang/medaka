@@ -54,8 +54,17 @@ data EndpointKind =
    the nine routes registered today, but it is not the rule atproto states,
    and a future public procedure would be silently gated (or a future private
    query silently opened) by a classifier that pattern-matched the kind. Every
-   registration therefore names its own policy, and there is no default. -}
-public export data AuthPolicy = PublicRoute | AuthenticatedRoute
+   registration therefore names its own policy, and there is no default.
+
+   `RefreshRoute` is a THIRD class rather than a flavour of the second:
+   `com.atproto.server.{refreshSession, deleteSession}` are authenticated by
+   the session's REFRESH token, not its access token, which is what lets a
+   client whose access token has already expired still refresh or log out.
+   The two token classes carry different audiences, so a route has to say
+   which one it accepts and `lib.server_core`'s seam verifies against that
+   one alone — an access token presented to a refresh route is refused, and a
+   refresh token presented to any other gated route is refused. -}
+public export data AuthPolicy = PublicRoute | AuthenticatedRoute | RefreshRoute
 
 -- Constructors stay private so every entry has passed shared NSID admission.
 export data Endpoint = Endpoint String EndpointKind AuthPolicy

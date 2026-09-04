@@ -305,11 +305,23 @@ login, every refresh — for no interop gain, since no peer verifies our session
 The secret is generated as exactly 32 bytes at account bootstrap (the shell layer's
 job, a later slice) and lives beside the account record, not in the repo.
 
-**Claims: `sub`, `aud`, `iat`, `nbf`, `exp`** — `sub` the account DID, `aud` the
-server's own DID, and the three RFC 7519 §4.1 NumericDate fields in seconds since the
-Unix epoch. `nbf` equals `iat`; this server mints no post-dated token. `nbf` is
-inclusive and `exp` exclusive. Access and refresh tokens differ only in `exp` and in
-which routes accept them, so one claim set covers both.
+**Claims: `sub`, `aud`, `jti`, `iat`, `nbf`, `exp`** — `sub` the account DID, `aud`
+the audience the token is good for, `jti` the token's own identifier, and the three
+RFC 7519 §4.1 NumericDate fields in seconds since the Unix epoch. `nbf` equals `iat`;
+this server mints no post-dated token. `nbf` is inclusive and `exp` exclusive.
+
+`jti` and the audience split both arrived with the session slice, and both are
+load-bearing rather than decorative. Without `jti`, two tokens minted for the same
+subject in the same second are the same string, and a server that identifies sessions
+by their tokens cannot then tell two sessions apart — a login while another login is
+in flight would silently join the first one's session, and rotating one refresh token
+would revoke the other's. `jti` is the request's own entropy, rendered as hex, so two
+tokens are distinct because they were minted by two requests and for no other reason.
+The audience differs between the two halves of a pair — the access token's audience is
+the PDS hostname, the refresh token's is `<hostname>#refresh` — so neither can be
+presented as the other: `verifyToken` grades the audience the ROUTE demands, and an
+access token on `refreshSession` is refused by exactly the check that refuses a token
+minted for a different server entirely.
 
 **Verification pins the algorithm rather than reading it.** A token's `alg` header is
 attacker-controlled input, so `verifyToken` always computes HS256 and then rejects any
@@ -318,6 +330,61 @@ separate case. The MAC is compared byte-wise with an XOR accumulator over the fu
 length, no early return. `verifyToken` takes the current instant as a parameter and
 reads no clock, which is what lets `pds/test/jwt_test.mdk` place itself on either side
 of every window boundary; it lives in `pds/lib/`, so it declares no effect row.
+
+### 4.4 Sessions: what a bearer token is a credential FOR
+
+A verified signature inside its window is not on its own a credential here. The store
+holds an allow-list of open sessions — a fingerprint (SHA-256) of each of the pair's
+two tokens, and the refresh token's expiry — and `lib.server_core`'s seam requires the
+presented token's session to be OPEN as well as its signature to verify. That is what
+makes `deleteSession` a revocation rather than a promise of one: after a logout, an
+access token whose window has hours left is refused from the next request on, and a
+purely stateless check could not do that at all.
+
+Refreshing ROTATES: `refreshSession` removes the record its refresh token named and
+opens a new one on a fresh pair. The consumed token is removed rather than marked, so
+presenting it again finds no session and is refused — reuse detection with no extra
+state. The rotation replaces the whole record, access half included, so a client that
+refreshes is expected to use the access token it was just issued.
+
+**Sessions live only in memory, and a restart closes all of them.** They are not
+persisted: after a restart every previously issued token is refused and every client
+logs in again. That is a fail-CLOSED behavior and it is deliberate — the alternative,
+persisting session records, is a second on-disk file of security-relevant state with
+its own staleness and mode problems, for the benefit of not asking a client to log in
+after a server restart. The credential record IS persisted, because a server that
+forgot the account password on restart could not accept a login at all.
+
+**File modes are a real gap, stated plainly.** Medaka has no primitive that sets a
+file mode: `writeFile` is `fopen(path, "wb")`, and there is no `chmod`, no `umask`,
+and no mode argument anywhere in the runtime or the stdlib. So the generated session
+secret and the stored credential record land at 0644 — world-readable — and
+`pds/serve.mdk` says so loudly on stderr, naming the path and the mode, whenever it
+creates one. It never names the contents: a warning that quoted the secret would be a
+far larger disclosure than the mode it warns about. On a shared machine an operator
+should pre-create the file under their own umask and hand it in with `--token-secret`.
+This is a gap to close with a mode-taking write primitive, not a residual risk that
+has been accepted; the two available workarounds are both worse than saying so
+(shelling out to `chmod` leaves a real world-readable window between the create and
+the chmod and grants the server an `<Exec>` capability to protect one file).
+
+**The password never appears in an argument.** `--password-file PATH` is the only way
+one reaches the server: an argument value is visible in `ps` output to every user on
+the box. There is no interactive prompt, because no termios, tty, or echo-suppression
+primitive exists in the runtime or the stdlib and a prompt that echoed the password to
+the terminal would be worse than the file. A server with neither a stored credential
+nor `--password-file` refuses to start rather than starting and refusing every login,
+which would be indistinguishable from a working server until somebody tried to use it.
+
+**Every secret this server generates comes from `osEntropyBytes`** — the session
+secret, the credential salt, and the per-request nonce that identifies minted tokens.
+`randomInt` is a SplitMix64 generator seeded deterministically; a session secret drawn
+from it would be the same secret on every deployment, and forgeable from a public
+constant. `pds/test/lib_boundary.sh` also grades a source-shape property in the same
+region: no password, secret, salt, digest or credential may be interpolated into a
+string anywhere in `pds/lib`, `pds/shell` or `pds/serve.mdk`, with one ledgered
+exemption for the line in `lib.jwt` that assembles a token, where building that string
+is the entire job.
 
 ---
 
