@@ -1,5 +1,7 @@
 # Medaka Playground
 
+**Status:** LIVE. Build and deploy procedure for the playground, which is the website.
+
 An install-free web playground for [Medaka](../README.md): edit source, hit Run,
 see output. The Medaka compiler runs **entirely in the browser** as a WasmGC module —
 no server is involved in compilation. User programs compile to WasmGC and run in a

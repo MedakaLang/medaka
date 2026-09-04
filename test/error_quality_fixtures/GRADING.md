@@ -1,5 +1,7 @@
 # GRADING — error-quality corpus scored against the rubric
 
+**Status:** LIVE. Re-derived by test/diag_census.sh; carries its own dated stamp line for the hand-scored columns.
+
 > **Stamp: 2026-09-02, base `c4e203ccf` (#2446, S-diag-census; re-stamped in
 > the sprint's fix round, which moved no fixture and re-scored nothing).**
 > The three MACHINE-SCORABLE dimensions this doc used to hand-type — **L** Located, **X** Cascade-free, **A**

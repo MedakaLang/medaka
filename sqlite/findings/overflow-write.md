@@ -1,5 +1,7 @@
 # Findings — overflow-page read + write (`sqlite/lib/{overflow,btree,dbwriter}.mdk`)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: implement overflow-page WRITE. The task brief stated overflow READ "already works,
 byte-for-byte". **It did not** — see the preamble below. The work therefore covered both
 directions, which is why this file leans on byte-array slicing, `<Mut>` effects, integer

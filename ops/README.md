@@ -1,5 +1,7 @@
 # ops/ — provisioning a Medaka build box
 
+**Status:** LIVE. Describes the provisioning scripts beside it.
+
 Scripts for standing up a box to run `make medaka` + the gate suite off a local
 laptop (e.g. to escape a host DLP/endpoint scanner — see `docker/README.md` for
 the same motivation; note that on a real Linux box the whole Docker-in-VM dance

@@ -1,5 +1,7 @@
 # SQL JOIN family (CROSS / RIGHT / FULL) — dogfood findings
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Completing the JOIN family in the `sqlite/` dogfood engine: `CROSS JOIN`,
 `RIGHT [OUTER] JOIN`, `FULL [OUTER] JOIN` threaded through parser → AST → renderer
 → executor. Pure-Medaka library change; no compiler edits.

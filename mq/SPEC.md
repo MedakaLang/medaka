@@ -1,5 +1,7 @@
 # mq — a tiny `jq` in Medaka
 
+**Status:** DORMANT. Design record for mq, a side project with no CI enrolment; kept for provenance.
+
 A first real (non-compiler) Medaka program, built to kick the tires on the
 language. Reads JSON from stdin (or a file), applies a **filter expression**
 given on the command line, writes JSON to stdout.

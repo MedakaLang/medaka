@@ -1,5 +1,7 @@
 # SQLite dogfood — language findings
 
+**Status:** LIVE. The writing convention for this directory, not itself a finding; the dated write-ups beside it are closed records.
+
 This directory is the **pain-point log** for the SQLite library workstream. The library is a
 dogfood vehicle: every hour spent writing real Medaka against a real problem is an hour of
 free evidence about what the language, stdlib, compiler, and tooling get wrong.

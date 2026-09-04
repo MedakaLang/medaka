@@ -1,5 +1,7 @@
 # Findings — unifying the `Select` / `AggQuery` query engines
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: fold `lib/aggregate.mdk`'s `AggQuery` into `lib/select.mdk`'s `Select`, giving one
 query ADT and one executor running SQL's real evaluation order (FROM → JOIN → WHERE →
 GROUP BY → HAVING → project → DISTINCT → ORDER BY → LIMIT/OFFSET), with a real `EAgg`

@@ -1,5 +1,7 @@
 # Findings: playground-wasm
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Area: the browser playground pipeline (compile.mjs seam → playground.wasm →
 wat2wasm → worker.js runner), tested via the exact seam Node harness
 (`pg_compile.mjs` feeding the same EXTRA_MODULES vfs main.js bundles, then a

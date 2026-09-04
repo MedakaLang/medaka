@@ -1,5 +1,7 @@
 # Beginner-syntax findings (first-hour human-user simulation)
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Persona: newcomer from Python/JS/Rust/Haskell typing real first-hour mistakes.
 All probes live in `scratchpad/probes/beginner-syntax/`. Binary: `$WT/medaka`
 (worktree `virtual-fluttering-meteor`). Every finding reproduced twice.

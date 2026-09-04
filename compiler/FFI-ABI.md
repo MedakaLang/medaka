@@ -1,6 +1,6 @@
 # FFI ABI contract
 
-**Status: decision, and now LOWERED.** This document fixes the value-crossing
+**Status:** DECISION, and now LOWERED. This document fixes the value-crossing
 contract for the C FFI boundary the effect label `<FFI>` (#2071, `Prefix` domain)
 already tracks. It answers a narrower question than the whole FFI story: *which
 Medaka types may cross at all, and who owns the memory on each side* — so the

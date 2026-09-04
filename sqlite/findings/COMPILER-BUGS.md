@@ -1,5 +1,7 @@
 # Compiler + tooling bugs surfaced by the SQLite dogfood (2026-07-13)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 > ## ⚠️ DO NOT TRUST THIS LIST — RUN THE SCRIPT
 >
 > ```sh
