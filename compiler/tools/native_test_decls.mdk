@@ -60,6 +60,8 @@ import tools.probe_transcript.{
   endTag,
   firstNonEmptyLine,
   lookupChunk,
+  mintNonce,
+  noncedPrefix,
   sentinelLine,
   tagsInOrder,
   valuePrintExpr,
@@ -69,14 +71,20 @@ import tools.printer.{declToString}
 -- ── sentinels ───────────────────────────────────────────────────────────────
 -- The transcript format itself — how a sentinel delimits a value and what makes
 -- one complete — lives in `tools/probe_transcript.mdk`, shared with the doctest
--- engine.  What is per-engine is the PREFIX (so neither engine can read the
--- other's transcript) and the tag vocabulary below.
+-- engine.  What is per-engine is the PREFIX base (so neither engine can read
+-- the other's transcript) and the tag vocabulary below.
+--
+-- `sentinelPrefix` takes the per-run nonce `mintNonce` draws in `nativeRendered`
+-- — a target's spliced-in source is fixed before that draw happens, so it
+-- cannot spell the resulting prefix. See `probe_transcript.mdk`'s "the nonce".
+sentinelBase : String
+sentinelBase = "@@__mdk_native_test__@@"
 
-sentinelPrefix : String
-sentinelPrefix = "@@__mdk_native_test__@@ "
+sentinelPrefix : String -> String
+sentinelPrefix nonce = noncedPrefix sentinelBase nonce
 
-sentinelFor : String -> String
-sentinelFor tag = sentinelLine sentinelPrefix tag
+sentinelFor : String -> String -> String
+sentinelFor nonce tag = sentinelLine (sentinelPrefix nonce) tag
 
 -- Chunk tags, per test index: `<i>.start` is printed BEFORE the body is forced,
 -- so a body that panics leaves its own start chunk unterminated and is named
@@ -149,9 +157,13 @@ nativeRendered target tsrc userDecls tests =
       Err e =>
         Err "native test runner: could not create a scratch directory: \{e}"
       Ok tmpDir =>
+        -- The nonce is drawn HERE, before the probe source is written, so it
+        -- reaches `runInTmp` in time to land in the generated code the target's
+        -- own (already-fixed) source cannot see or influence.
+        let nonce = mintNonce ()
         -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.
-        let results = runInTmp target tsrc tests tmpDir
+        let results = runInTmp target tsrc tests tmpDir nonce
         let _ = cleanupTempDir tmpDir
         results
 
@@ -171,22 +183,24 @@ runInTmp : String ->
   String ->
   List (String, Int, Expr) ->
   String ->
+  String ->
   <IO> Result String (List ExResult)
-runInTmp target tsrc tests tmpDir =
+runInTmp target tsrc tests tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "ts_probe"
   let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
-  match writeFile entryPath (probeSource tsrc tests)
+  match writeFile entryPath (probeSource nonce tsrc tests)
     Err e => Err "native test runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entryPath outPath tmpDir tests
+    Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
 
 buildAndRun : String ->
   String ->
   String ->
   String ->
   List (String, Int, Expr) ->
+  String ->
   <IO> Result String (List ExResult)
-buildAndRun target entryPath outPath tmpDir tests =
+buildAndRun target entryPath outPath tmpDir tests nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
   let cc = envOr "CC" "clang"
@@ -208,7 +222,7 @@ buildAndRun target entryPath outPath tmpDir tests =
     Ok _ => match runCommand outPath []
       Err e => Err "native test runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        let chunks = chunksOf sentinelPrefix (splitNl out)
+        let chunks = chunksOf (sentinelPrefix nonce) (splitNl out)
         if tagsInOrder (expectedTags 0 tests) chunks then
           Ok (renderAll chunks (abortNote code errOut) 0 tests)
         else
@@ -238,14 +252,14 @@ buildAndRun target entryPath outPath tmpDir tests =
 expectationAlias : String
 expectationAlias = "MdkProbeTest__"
 
-probeSource : String -> List (String, Int, Expr) -> String
-probeSource tsrc tests =
+probeSource : String -> String -> List (String, Int, Expr) -> String
+probeSource nonce tsrc tests =
   joinNl
     (["import test as \{expectationAlias}", "", tsrc, ""]
-      ++ testBindings 0 tests
+      ++ testBindings nonce 0 tests
       ++ ["main ="]
-      ++ mainLines 0 tests
-      ++ ["  putStrLn \"\{sentinelFor endTag}\"", ""])
+      ++ mainLines nonce 0 tests
+      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
 
 bindingName : Int -> String
 bindingName i = "__ts_\{intToString i}__"
@@ -268,49 +282,49 @@ valueName i = "__tsv_\{intToString i}__"
 -- printed and the whole file would report as one undifferentiated abort.  Under
 -- a parameter the body is evaluated where it is called — inside `main`, in test
 -- order — which is what gives the abort rule its per-test attribution.
-testBindings : Int -> List (String, Int, Expr) -> List String
-testBindings _ [] = []
-testBindings i ((_, _, body) :: rest) =
+testBindings : String -> Int -> List (String, Int, Expr) -> List String
+testBindings _ _ [] = []
+testBindings nonce i ((_, _, body) :: rest) =
   [declToString (DFunDef False (bindingName i) [PWild] body), ""]
-    ++ printerDecl i
-    ++ testBindings (i + 1) rest
+    ++ printerDecl nonce i
+    ++ testBindings nonce (i + 1) rest
 
 -- The body is forced by the `let` BEFORE the first field sentinel, which is
 -- what keeps the abort rule's attribution: a body that panics leaves its own
 -- `<i>.start` chunk unterminated, and whatever the body printed on its own
 -- account lands in that chunk rather than inside a field.
-printerDecl : Int -> List String
-printerDecl i =
+printerDecl : String -> Int -> List String
+printerDecl nonce i =
   ["\{printerName i} _ =", "  let \{valueName i} = \{bindingName i} ()"]
-    ++ emit i "tag" (accessor "expectationTag" i)
-    ++ emit i "msg" (accessor "expectationMessage" i)
-    ++ emit i "exp" (accessor "expectationExpected" i)
-    ++ lastEmit i "act" (accessor "expectationActual" i)
+    ++ emit nonce i "tag" (accessor "expectationTag" i)
+    ++ emit nonce i "msg" (accessor "expectationMessage" i)
+    ++ emit nonce i "exp" (accessor "expectationExpected" i)
+    ++ lastEmit nonce i "act" (accessor "expectationActual" i)
     ++ [""]
 
 accessor : String -> Int -> String
 accessor f i = "\{expectationAlias}.\{f} \{valueName i}"
 
-emit : Int -> String -> String -> List String
-emit i f expr = [
-  "  let _ = putStrLn \"\{sentinelFor (fieldTag i f)}\"",
+emit : String -> Int -> String -> String -> List String
+emit nonce i f expr = [
+  "  let _ = putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
   "  let _ = \{valuePrintExpr expr}",
 ]
 
-lastEmit : Int -> String -> String -> List String
-lastEmit i f expr = [
-  "  let _ = putStrLn \"\{sentinelFor (fieldTag i f)}\"",
+lastEmit : String -> Int -> String -> String -> List String
+lastEmit nonce i f expr = [
+  "  let _ = putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
   "  \{valuePrintExpr expr}",
 ]
 
-mainLines : Int -> List (String, Int, Expr) -> List String
-mainLines _ [] = []
-mainLines i (_ :: rest) =
+mainLines : String -> Int -> List (String, Int, Expr) -> List String
+mainLines _ _ [] = []
+mainLines nonce i (_ :: rest) =
   [
-      "  let _ = putStrLn \"\{sentinelFor (startTag i)}\"",
+      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
       "  let _ = \{printerName i} ()",
     ]
-    ++ mainLines (i + 1) rest
+    ++ mainLines nonce (i + 1) rest
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 

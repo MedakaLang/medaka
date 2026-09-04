@@ -1,5 +1,5 @@
 # META
-source_lines=171
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -23,6 +23,26 @@ stages=DESUGAR,MARK
 --
 -- The sentinel PREFIX is per-engine (so one engine's transcript can never be
 -- mistaken for the other's) and therefore a parameter here, not a constant.
+--
+-- ── the nonce ────────────────────────────────────────────────────────────────
+-- `tagsInOrder` proves the observed tag sequence is a prefix of the tags the
+-- probe was GENERATED to print — but a probe that prints the ENTIRE expected
+-- sequence (forged `Pass`/fields, in order) and then dies satisfies that
+-- check completely: a full sequence is trivially a prefix of itself, and the
+-- exit code is never consulted once every chunk decodes. Tag TEXT alone can
+-- never distinguish "the driver's generated code printed this" from "the
+-- target's own source printed this", because the tag text is exactly the
+-- fixed, publicly-readable constant a forger's SOURCE — written before any
+-- given run — can also spell.
+--
+-- The fix is a per-run token neither engine's tag vocabulary needs, but the
+-- PREFIX does: `mintNonce` draws it from `<Rand>` at driver time, strictly
+-- after the target's source was already committed to disk, so no source
+-- written before this invocation can contain it. Folded into the prefix via
+-- `noncedPrefix` and embedded as a literal in the generated probe's own
+-- sentinel-printing code (never exposed to the target's spliced-in source),
+-- it turns "spell the sentinel text" from copying a public constant into
+-- guessing a value that did not exist when the forger's source was written.
 --
 -- ── why a value is printed QUOTED ───────────────────────────────────────────
 -- A value's own text is chosen by the program under test, so an unescaped
@@ -60,6 +80,26 @@ sentTagOf prefix line
 export
 sentinelLine : String -> String -> String
 sentinelLine prefix tag = prefix ++ tag
+
+-- Fold a per-run nonce into an engine's fixed prefix base. Both engines call
+-- this identically; only the base differs between them (already true of
+-- `sentinelPrefix` before the nonce existed).
+export
+noncedPrefix : String -> String -> String
+noncedPrefix base nonce = "\{base}\{nonce}@@ "
+
+-- A fresh per-invocation token, drawn at driver time. Two draws rather than
+-- one so a forger who somehow learned the RNG's exact state at the START of a
+-- run still cannot predict the SECOND draw without also knowing how many
+-- other `<Rand>` calls preceded it in that run — irrelevant against a static
+-- source with no side channel at all, but cheap to add and it costs nothing
+-- correctness-wise (the two draws are just concatenated digits).
+export
+mintNonce : Unit -> <IO> String
+mintNonce _ =
+  let a = randomInt 100000000 999999999
+  let b = randomInt 100000000 999999999
+  intToString a ++ intToString b
 
 -- The tag of the terminator both engines print last.
 export
@@ -179,6 +219,10 @@ firstNonEmptyLine (l :: rest)
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
+(DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DTypeSig true "mintNonce" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "mintNonce" (PWild) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoLet false false (PVar "b") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoExpr (EBinOp "++" (EApp (EVar "intToString") (EVar "a")) (EApp (EVar "intToString") (EVar "b"))))))
 (DTypeSig true "endTag" (TyCon "String"))
 (DFunDef false "endTag" () (ELit (LString "END")))
 (DData Public "Chunk" () ((variant "Chunk" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))) ())
@@ -226,6 +270,10 @@ firstNonEmptyLine (l :: rest)
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
+(DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DTypeSig true "mintNonce" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "mintNonce" (PWild) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoLet false false (PVar "b") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoExpr (EBinOp "++" (EApp (EVar "intToString") (EVar "a")) (EApp (EVar "intToString") (EVar "b"))))))
 (DTypeSig true "endTag" (TyCon "String"))
 (DFunDef false "endTag" () (ELit (LString "END")))
 (DData Public "Chunk" () ((variant "Chunk" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))) ())
