@@ -48,7 +48,7 @@ import frontend.ast.{
 }
 import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
-import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
+import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl, contains}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
@@ -777,7 +777,7 @@ extractFold bare ((decl, dp) :: rest) schemes origins tbl revEntries seen =
     None => match renderSig bare decl schemes
       None => extractFold bare rest schemes origins tbl revEntries seen
       Some (name, sigStr) =>
-        if memberStr name seen then
+        if contains name seen then
           extractFold bare rest schemes origins tbl revEntries seen
         else
           let doc = findDocForLine tbl line
@@ -833,7 +833,7 @@ foldExtras : List (String, DocEntry) ->
   (List DocEntry, List String)
 foldExtras [] revEntries seen = (revEntries, seen)
 foldExtras ((name, e) :: rest) revEntries seen =
-  if memberStr name seen then
+  if contains name seen then
     foldExtras rest revEntries seen
   else
     foldExtras rest (e :: revEntries) (name :: seen)
@@ -842,12 +842,6 @@ foldExtras ((name, e) :: rest) revEntries seen =
 letgroupOf : Decl -> Option (Bool, List LetBind)
 letgroupOf (DLetGroup isPub bindings) = Some (isPub, bindings)
 letgroupOf _ = None
-
-memberStr : String -> List String -> Bool
-memberStr _ [] = False
-memberStr x (y :: ys)
-  | x == y = True
-  | otherwise = memberStr x ys
 
 zipDoc : List a -> List b -> List (a, b)
 zipDoc [] _ = []

@@ -1,5 +1,5 @@
 # META
-source_lines=1366
+source_lines=1362
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -42,6 +42,7 @@ import support.util.{
   startsWith,
   endsWith,
   joinDot,
+  joinWith,
   lookupAssoc,
   splitNl,
   stringTrim,
@@ -469,7 +470,7 @@ export
 availableModulesText : String -> <IO> String
 availableModulesText stdlibDir = match availableModuleIds stdlibDir
   [] => ""
-  ids => stringConcat ["available modules: ", joinComma ids]
+  ids => stringConcat ["available modules: ", joinWith ", " ids]
 
 -- Render the hint SUFFIX appended to an `unknown module: <id>` CLI-text
 -- message, e.g. " — available modules: array, list, map, string".  `[]` (no
@@ -480,11 +481,6 @@ availableModulesHint : String -> <IO> String
 availableModulesHint stdlibDir = match availableModulesText stdlibDir
   "" => ""
   txt => " — " ++ txt
-
-joinComma : List String -> String
-joinComma [] = ""
-joinComma [x] = x
-joinComma (x :: xs) = stringConcat [x, ", ", joinComma xs]
 
 -- ── file resolution + parsing ──
 
@@ -1371,7 +1367,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false) (mem "DAttrib" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dropAssoc" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dropAssoc" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "lastOr" (PWild (PList (PVar "x"))) (EVar "x"))
@@ -1463,13 +1459,9 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EVar "joinComma") (EVar "ids")))))))
+(DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ids")))))))
 (DTypeSig true "availableModulesHint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "availableModulesHint" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "txt") () (EBinOp "++" (ELit (LString " — ")) (EVar "txt")))))
-(DTypeSig false "joinComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinComma" ((PList)) (ELit (LString "")))
-(DFunDef false "joinComma" ((PList (PVar "x"))) (EVar "x"))
-(DFunDef false "joinComma" ((PCons (PVar "x") (PVar "xs"))) (EApp (EVar "stringConcat") (EListLit (EVar "x") (ELit (LString ", ")) (EApp (EVar "joinComma") (EVar "xs")))))
 (DTypeSig false "findModuleFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "findModuleFile" ((PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EVar "resolveDepFile") (EVar "deps")) (EVar "modId")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EVar "findInRoots") (EVar "roots")) (EVar "modId")))))
 (DTypeSig false "findInRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -1582,7 +1574,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false) (mem "DAttrib" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dropAssoc" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dropAssoc" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "lastOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "lastOr" (PWild (PList (PVar "x"))) (EVar "x"))
@@ -1674,13 +1666,9 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EVar "joinComma") (EVar "ids")))))))
+(DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ids")))))))
 (DTypeSig true "availableModulesHint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "availableModulesHint" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "txt") () (EBinOp "++" (ELit (LString " — ")) (EVar "txt")))))
-(DTypeSig false "joinComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinComma" ((PList)) (ELit (LString "")))
-(DFunDef false "joinComma" ((PList (PVar "x"))) (EVar "x"))
-(DFunDef false "joinComma" ((PCons (PVar "x") (PVar "xs"))) (EApp (EVar "stringConcat") (EListLit (EVar "x") (ELit (LString ", ")) (EApp (EVar "joinComma") (EVar "xs")))))
 (DTypeSig false "findModuleFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "findModuleFile" ((PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EVar "resolveDepFile") (EVar "deps")) (EVar "modId")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EVar "findInRoots") (EVar "roots")) (EVar "modId")))))
 (DTypeSig false "findInRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))

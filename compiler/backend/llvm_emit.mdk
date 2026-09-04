@@ -2228,6 +2228,14 @@ escBytes (b :: rest) = "\\\{hex2 b}\{escBytes rest}"
 hex2 : Int -> String
 hex2 b = hexDigit (b / 16) ++ hexDigit (b % 16)
 
+-- Uppercase `A`-`F`, matching LLVM's own textual convention for `\HH` string
+-- escapes.  The WAT emitter's `hexDigitW` (backend/wasm_emit.mdk) is the same
+-- function over lowercase and stays separate on purpose: both grammars accept
+-- either case and assemble to identical bytes, but `wasm-tools print`
+-- normalizes escapes to lowercase, so only lowercase keeps emitted WAT equal to
+-- its own round-trip.  One shared case would therefore have to be lowercase,
+-- which would rewrite every `\HH` escape in the emitted LLVM IR text for no
+-- semantic gain.
 hexDigit : Int -> String
 hexDigit d
   | d < 10 = intToString d

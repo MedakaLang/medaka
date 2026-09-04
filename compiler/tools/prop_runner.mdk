@@ -25,7 +25,9 @@ import frontend.ast.{
   ConPayload(..),
 }
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
-import support.util.{listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL}
+import support.util.{
+  listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains
+}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `test_cmd.mdk`'s copy — not shared via
@@ -322,17 +324,13 @@ maxGenDepth = 24
 -- `subst`: a parameter bound to its own name (`Tree a` generated with `a`
 -- free) would make resolution loop, and a recursive occurrence always shows up
 -- as the ADT's own `TyCon` head anyway.
-memberStr : String -> List String -> Bool
-memberStr _ [] = False
-memberStr x (y :: rest) = x == y || memberStr x rest
-
 adtReaches : List (String, TyDef) -> List String -> String -> String -> Bool
 adtReaches tydefs seen src target =
   src == target || adtStepReaches tydefs seen src target
 
 adtStepReaches : List (String, TyDef) -> List String -> String -> String -> Bool
 adtStepReaches tydefs seen src target =
-  if memberStr src seen then
+  if contains src seen then
     False
   else match lookupAssoc src tydefs
     None => False

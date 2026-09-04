@@ -1,5 +1,5 @@
 # META
-source_lines=5663
+source_lines=5660
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2205,7 +2205,7 @@ effParamFor _ = deferPure None
 -- join Set elements into the `{a,b,c}` carrier form (commas separate; Set
 -- authority tokens contain no commas/braces).
 encodeSetParam : List String -> String
-encodeSetParam elems = "{" ++ joinComma elems ++ "}"
+encodeSetParam elems = "{" ++ joinWith "," elems ++ "}"
 
 -- WS-4: encode product axes into the carrier sentinel `@P{Axis=val;Axis=val}`
 -- (mirror of `encodeSetParam`; `decodeProductParam` in typecheck.mdk decodes it).
@@ -2220,9 +2220,6 @@ encodeAxis (name, v) = "\{name}=\{v}"
 
 joinSemi : List String -> String
 joinSemi xs = joinWith ";" xs
-
-joinComma : List String -> String
-joinComma xs = joinWith "," xs
 
 -- Zero or more `| name` tail variables.  Several make the row a JOIN (#821):
 -- `<Stdout | e | e2>` is the row of Stdout together with everything e or e2
@@ -6391,15 +6388,13 @@ parseResultWith src tokList offList =
 (DFunDef false "effParamFor" ((PCon "TLBrace")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TLBrace"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "sepBy1") (EVar "stringLitP")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "elems")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRBrace"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "Some") (EApp (EVar "encodeSetParam") (EVar "elems")))))))))))
 (DFunDef false "effParamFor" (PWild) (EApp (EVar "deferPure") (EVar "None")))
 (DTypeSig false "encodeSetParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "encodeSetParam" ((PVar "elems")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "joinComma") (EVar "elems"))) (ELit (LString "}"))))
+(DFunDef false "encodeSetParam" ((PVar "elems")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "elems"))) (ELit (LString "}"))))
 (DTypeSig false "encodeProductParam" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "encodeProductParam" ((PVar "axes")) (EBinOp "++" (EBinOp "++" (ELit (LString "@P{")) (EApp (EVar "joinSemi") (EApp (EApp (EVar "map") (EVar "encodeAxis")) (EVar "axes")))) (ELit (LString "}"))))
 (DTypeSig false "encodeAxis" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "encodeAxis" ((PTuple (PVar "name") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))
 (DTypeSig false "joinSemi" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemi" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
-(DTypeSig false "joinComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinComma" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))
 (DTypeSig false "pipeTail" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pipeTail" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "pipeTailFor") (EVar "t")))))
 (DTypeSig false "pipeTailFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "String")))))
@@ -8013,15 +8008,13 @@ parseResultWith src tokList offList =
 (DFunDef false "effParamFor" ((PCon "TLBrace")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TLBrace"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "sepBy1") (EVar "stringLitP")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "elems")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRBrace"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "Some") (EApp (EVar "encodeSetParam") (EVar "elems")))))))))))
 (DFunDef false "effParamFor" (PWild) (EApp (EMethodRef "deferPure") (EVar "None")))
 (DTypeSig false "encodeSetParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "encodeSetParam" ((PVar "elems")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "joinComma") (EVar "elems"))) (ELit (LString "}"))))
+(DFunDef false "encodeSetParam" ((PVar "elems")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "elems"))) (ELit (LString "}"))))
 (DTypeSig false "encodeProductParam" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "encodeProductParam" ((PVar "axes")) (EBinOp "++" (EBinOp "++" (ELit (LString "@P{")) (EApp (EVar "joinSemi") (EApp (EApp (EMethodRef "map") (EVar "encodeAxis")) (EVar "axes")))) (ELit (LString "}"))))
 (DTypeSig false "encodeAxis" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "encodeAxis" ((PTuple (PVar "name") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))
 (DTypeSig false "joinSemi" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemi" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
-(DTypeSig false "joinComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinComma" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))
 (DTypeSig false "pipeTail" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pipeTail" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "pipeTailFor") (EVar "t")))))
 (DTypeSig false "pipeTailFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "String")))))

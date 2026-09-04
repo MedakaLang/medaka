@@ -61,7 +61,9 @@ import types.typecheck.{
   checkOneSchemeFull, dsub, decodeProductParam, decodeSetParam
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
-import support.util.{sortUniqS, joinWith, reverseL, escStr, lookupAssoc}
+import support.util.{
+  sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains
+}
 
 -- ── policy-arg parsing ──────────────────────────────────────────────────────
 -- Mirror bin/main.ml's parse_args: --allow / --fn carry a value; the first bare
@@ -277,16 +279,12 @@ intersectStr xs ys = filterMember xs ys
 filterMember : List String -> List String -> List String
 filterMember [] _ = []
 filterMember (x :: xs) ys =
-  if memberStr x ys then x :: filterMember xs ys else filterMember xs ys
+  if contains x ys then x :: filterMember xs ys else filterMember xs ys
 
 collectOpts : List (Option a) -> List a
 collectOpts [] = []
 collectOpts (None :: rest) = collectOpts rest
 collectOpts ((Some x) :: rest) = x :: collectOpts rest
-
-memberStr : String -> List String -> Bool
-memberStr _ [] = False
-memberStr x (y :: ys) = if x == y then True else memberStr x ys
 
 -- ── 4. effect ATOMS from a scheme (WS-1b: keep the param, not just the label) ─
 -- Walk the normalized mono: at each TFun, collect the row's atoms (effrowLabels
@@ -360,7 +358,7 @@ fnEffectsTable ((name, sch) :: rest) = match schemeEffects sch
 fnHasEffect : List (String, List Atom) -> String -> String -> Bool
 fnHasEffect table name label = match lookupAssoc name table
   None => False
-  Some effs => memberStr label (map atomLabel effs)
+  Some effs => contains label (map atomLabel effs)
 
 -- ── 6. call-chain reconstruction ────────────────────────────────────────────
 -- find_chain: from `start`, repeatedly hop to the lexicographically-smallest
@@ -389,7 +387,7 @@ traceChain callGraph effTable forbiddenLabel fn visited =
   match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
     None => [fn]
     Some c =>
-      if memberStr c visited then
+      if contains c visited then
         [fn, c]
       else
         fn :: traceChain callGraph effTable forbiddenLabel c (c :: visited)
