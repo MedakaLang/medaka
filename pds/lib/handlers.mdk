@@ -1,22 +1,24 @@
 {- | Every pure atproto endpoint this PDS serves.
 
    **Writes** (`com.atproto.repo.{createRecord, putRecord, deleteRecord,
-   applyWrites}`) are the four that transition the repository — the last of
-   them a batch of the other three under one signed commit. **Reads** are the
-   six that cannot:
+   applyWrites, uploadBlob}`) are the five that transition the `Store` — the
+   first four the repository half under one signed commit apiece (`applyWrites`
+   batches the other three), `uploadBlob` the blob half. **Reads** are the
+   eight that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
-   `com.atproto.sync.{getRepo, getLatestCommit}`, and
+   `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs}`, and
    `com.atproto.identity.resolveHandle`. **Sessions** are the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
    getSession}` routes, which transition the `Store`'s auth half rather than
-   its repository half. **Well-knowns** are the two non-XRPC paths `lib.xrpc`
-   routes as their own class:
+   its repository or blob half. **Well-knowns** are the two non-XRPC paths
+   `lib.xrpc` routes as their own class:
    `/.well-known/did.json` (this PDS's own did:web document) and
    `/.well-known/atproto-did` (the hosted account's DID, as bare text).
 
    The read half is structurally incapable of transitioning the `Store`:
    `readHandled` returns a bare `Response`, and only `recordHandled` returns a
-   successor `Store` at all.
+   successor `Store` at all — `uploadBlob` lives there for exactly that
+   reason, not because it is a repository write.
 
    Every registration carries its own `AuthPolicy`: the four writes and
    `getSession` are `AuthenticatedRoute`, the six reads are `PublicRoute`,
@@ -57,11 +59,22 @@
 
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
+import list.{filter, last, take}
 import string.{fromUtf8, split, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
+import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor, dagCborEncode}
-import lib.http.{Header, QueryParam(..), Response, makeHeader, makeResponse}
+import lib.http.{
+  Header,
+  MediaType,
+  QueryParam(..),
+  Response,
+  makeHeader,
+  makeResponse,
+  mediaTypeSubtype,
+  mediaTypeType,
+}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.repo.{
   Repo,
@@ -100,7 +113,11 @@ import lib.server_core.{
 import lib.store.{
   Store,
   sessionFingerprint,
+  storeBlobEntries,
+  storeBlobMimeType,
   storeCredential,
+  storeGet,
+  storePutBlob,
   storeRepo,
   storeServerSecret,
   storeSessionClose,
@@ -157,6 +174,15 @@ getRepoNsid = "com.atproto.sync.getRepo"
 getLatestCommitNsid : String
 getLatestCommitNsid = "com.atproto.sync.getLatestCommit"
 
+uploadBlobNsid : String
+uploadBlobNsid = "com.atproto.repo.uploadBlob"
+
+getBlobNsid : String
+getBlobNsid = "com.atproto.sync.getBlob"
+
+listBlobsNsid : String
+listBlobsNsid = "com.atproto.sync.listBlobs"
+
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
 
@@ -188,6 +214,11 @@ notImplemented = xrpcErrorResponse 501 "Not Implemented" "NotImplemented"
 
 recordNotFound : String -> Response
 recordNotFound = xrpcErrorResponse 400 "Bad Request" "RecordNotFound"
+
+-- | The name is `sync.getBlob`'s own lexicon-declared error (graded against
+-- the pinned reference package, not invented here).
+blobNotFound : String -> Response
+blobNotFound = xrpcErrorResponse 400 "Bad Request" "BlobNotFound"
 
 handleNotFound : String -> Response
 handleNotFound = xrpcErrorResponse 400 "Bad Request" "HandleNotFound"
@@ -450,6 +481,12 @@ admitMutation (Err message) =
   Err (invalidRequest "Repository write rejected: \{message}")
 admitMutation (Ok mutation) = Ok mutation
 
+-- | `pds/lib/blob.mdk`'s `admitBlob` is the ONE place blob size/MIME
+-- admission happens; this only converts its refusal into the XRPC envelope.
+admitBlobRef : Result String BlobRef -> Result Response BlobRef
+admitBlobRef (Err message) = Err (invalidRequest "Blob rejected: \{message}")
+admitBlobRef (Ok ref) = Ok ref
+
 -- ── the write endpoints ─────────────────────────────────────────────────────
 
 applyCreateRecord : Account -> Store -> Json -> Result Response (Repo, Json)
@@ -679,8 +716,38 @@ finishWrite store (Err response) = (store, response)
 finishWrite store (Ok (repo, output)) =
   (storeWithRepo repo store, jsonOkResponse output)
 
-{- | The four record-write procedures, or `None` for a call this half does not
-   own. Only this half can return a successor `Store`. -}
+totalBlobBytes : List (Cid, Array Int) -> Int
+totalBlobBytes [] = 0
+totalBlobBytes ((_, bytes) :: rest) = arrayLength bytes + totalBlobBytes rest
+
+{- | `com.atproto.repo.uploadBlob`: admit the raw body against `pds/lib/blob.
+   mdk`'s `admitBlob` — the ONE place size/MIME admission happens — then
+   record the admitted bytes and declared MIME type in the Store's blob half.
+   No request field names an account; this server hosts exactly one, and the
+   auth layer has already required a session before this handler ever runs. -}
+applyUploadBlob : Store ->
+  MediaType ->
+  Array Int ->
+  Result Response (Store, Json)
+applyUploadBlob store media bytes = do
+  let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
+  let accountUsedBytes = totalBlobBytes (storeBlobEntries store)
+  ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
+  next <- match storePutBlob (blobRefCid ref) mimeType bytes store
+    Err message =>
+      Err (internalError "Admitted blob could not be stored: \{message}")
+    Ok value => Ok value
+  Ok (next, jObject [("blob", blobRefToJson ref)])
+
+finishUploadBlob : Store -> Result Response (Store, Json) -> (Store, Response)
+finishUploadBlob store (Err response) = (store, response)
+finishUploadBlob _ (Ok (next, output)) = (next, jsonOkResponse output)
+
+{- | The four record-write procedures plus `uploadBlob`, or `None` for a call
+   this half does not own. `uploadBlob` joins this half rather than the read
+   half because it transitions the `Store` (the blob half) exactly like the
+   other four transition the repository half — only this half can return a
+   successor `Store`. -}
 recordHandled : Account -> Store -> XrpcCall -> Option (Store, Response)
 recordHandled account store (ProcedureJsonCall nsid _ body)
   | nsid == createRecordNsid =
@@ -691,6 +758,10 @@ recordHandled account store (ProcedureJsonCall nsid _ body)
     Some (finishWrite store (applyDeleteRecord account store body))
   | nsid == applyWritesNsid =
     Some (finishWrite store (applyBatchWrites account store body))
+  | otherwise = None
+recordHandled _ store (ProcedureRawCall nsid _ media bytes)
+  | nsid == uploadBlobNsid =
+    Some (finishUploadBlob store (applyUploadBlob store media bytes))
   | otherwise = None
 recordHandled _ _ _ = None
 
@@ -718,28 +789,32 @@ unhandledRoute : XrpcCall -> Response
 unhandledRoute call =
   notImplemented "This route is not implemented: \{callTarget call}"
 
--- | The registry of exactly the four record-write procedures.
+-- | The registry of the four record-write procedures plus `uploadBlob`.
 export
 recordRegistry : Result String Registry
 recordRegistry = do
   endpoints <- recordEndpoints
   makeRegistry endpoints
 
-{- | The four record-write procedures, every one of them gated.
+{- | The four record-write procedures plus `uploadBlob`, every one of them
+   gated.
 
    `com.atproto.repo.{createRecord, putRecord, deleteRecord, applyWrites}` each
    require an authenticated session on a real PDS: they transition the
    account's own repository, and a caller that could reach them unauthenticated
    could write to somebody else's repository from the open internet.
    `applyWrites` is not a weaker case for being a batch — it can express every
-   edit the other three can. -}
+   edit the other three can. `uploadBlob` is the same argument applied to the
+   blob half: an unauthenticated caller could fill this server's storage from
+   the open internet. -}
 recordEndpoints : Result String (List Endpoint)
 recordEndpoints = do
   create <- procedureEndpoint createRecordNsid JsonInput AuthenticatedRoute
   put <- procedureEndpoint putRecordNsid JsonInput AuthenticatedRoute
   remove <- procedureEndpoint deleteRecordNsid JsonInput AuthenticatedRoute
   batch <- procedureEndpoint applyWritesNsid JsonInput AuthenticatedRoute
-  Ok [create, put, remove, batch]
+  upload <- procedureEndpoint uploadBlobNsid RawInput AuthenticatedRoute
+  Ok [create, put, remove, batch, upload]
 
 -- | A configured record-write server for one account.
 export
@@ -1067,6 +1142,78 @@ applyGetLatestCommit account store params = do
       ("rev", JString (tidToString (repoCommitTid commit))),
     ])
 
+-- ── com.atproto.sync.getBlob ────────────────────────────────────────────────
+
+{- | Blobs are independent of the repository half — `pds/lib/store.mdk`'s blob
+   half exists on an unconfigured server too — so this does not call
+   `requireConfiguredRepo`, unlike every `sync.*` read above it. -}
+applyGetBlob : Account -> Store -> List QueryParam -> Result Response Response
+applyGetBlob account store params = do
+  target <- requiredParam "did" params
+  () <- requireHostedDid account target
+  cidText <- requiredParam "cid" params
+  cid <- match cidFromString cidText
+    Err message =>
+      Err
+        (invalidRequest "Query parameter 'cid' is not a valid CID: \{message}")
+    Ok value => Ok value
+  match storeGet cid store
+    None =>
+      Err
+        (blobNotFound "No blob with CID '\{cidText}' is stored on this server")
+    Some bytes =>
+      let mimeType = match storeBlobMimeType cid store
+        None => "application/octet-stream"
+        Some declared => declared
+      Ok (bytesOkResponse mimeType bytes)
+
+-- ── com.atproto.sync.listBlobs ──────────────────────────────────────────────
+
+requireBlobLimit : List QueryParam -> Result Response Int
+requireBlobLimit params = do
+  found <- optionalParam "limit" params
+  match found
+    None => Ok 500
+    Some text => match toInt text
+      None => Err (invalidRequest "Query parameter 'limit' must be an integer")
+      Some limit =>
+        if limit < 1 || limit > 1000 then
+          Err
+            (invalidRequest
+              "Query parameter 'limit' must be between 1 and 1000")
+        else
+          Ok limit
+
+blobCidTexts : List (Cid, Array Int) -> List String
+blobCidTexts entries = map ((cid, _) => cidToString cid) entries
+
+{- | Blobs are also independent of the repository half here; `since` (a
+   revision cursor into the repository, not the blob half) is refused as
+   unimplemented rather than silently ignored, the same policy
+   `rejectUnimplementedParam` already applies to `getRepo`'s `since`. -}
+applyListBlobs : Account -> Store -> List QueryParam -> Result Response Json
+applyListBlobs account store params = do
+  target <- requiredParam "did" params
+  () <- requireHostedDid account target
+  () <- rejectUnimplementedParam "since" params
+  limit <- requireBlobLimit params
+  cursor <- optionalParam "cursor" params
+  let allCids = blobCidTexts (storeBlobEntries store)
+  let remaining = match cursor
+    None => allCids
+    Some text => filter (> text) allCids
+  let page = take limit remaining
+  if length remaining > length page then match last page
+    None => Ok (jObject [("cids", jArray (map JString page))])
+    Some cursorCid =>
+      Ok
+        (jObject [
+          ("cids", jArray (map JString page)),
+          ("cursor", JString cursorCid),
+        ])
+  else
+    Ok (jObject [("cids", jArray (map JString page))])
+
 -- ── com.atproto.identity.resolveHandle ──────────────────────────────────────
 
 {- | This server resolves exactly the one handle it hosts. It needs no
@@ -1379,6 +1526,10 @@ readHandled account store (QueryCall nsid params)
     Some (collapseResponse (applyGetRepo account store params))
   | nsid == getLatestCommitNsid =
     Some (finishRead (applyGetLatestCommit account store params))
+  | nsid == getBlobNsid =
+    Some (collapseResponse (applyGetBlob account store params))
+  | nsid == listBlobsNsid =
+    Some (finishRead (applyListBlobs account store params))
   | nsid == resolveHandleNsid =
     Some (finishRead (applyResolveHandle account params))
   | otherwise = None
@@ -1432,6 +1583,8 @@ readEndpoints = do
   describeRepo <- queryEndpoint describeRepoNsid PublicRoute
   getRepo <- queryEndpoint getRepoNsid PublicRoute
   getLatestCommit <- queryEndpoint getLatestCommitNsid PublicRoute
+  getBlob <- queryEndpoint getBlobNsid PublicRoute
+  listBlobs <- queryEndpoint listBlobsNsid PublicRoute
   resolveHandle <- queryEndpoint resolveHandleNsid PublicRoute
   Ok [
     getRecord,
@@ -1439,6 +1592,8 @@ readEndpoints = do
     describeRepo,
     getRepo,
     getLatestCommit,
+    getBlob,
+    listBlobs,
     resolveHandle,
   ]
 

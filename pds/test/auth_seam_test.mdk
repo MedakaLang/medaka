@@ -487,13 +487,14 @@ samePolicy _ _ = False
    the diff. A route registered later shows up in exactly one of these three
    lists, so neither an unclassified new write nor a wrongly closed read can
    land without moving one of them. -}
-test "exactly the four record writes and getSession are access-gated" = expectEqual
+test "exactly the four record writes, uploadBlob and getSession are access-gated" = expectEqual
   (nsidsWith AuthenticatedRoute)
   [
     "com.atproto.repo.applyWrites",
     "com.atproto.repo.createRecord",
     "com.atproto.repo.deleteRecord",
     "com.atproto.repo.putRecord",
+    "com.atproto.repo.uploadBlob",
     "com.atproto.server.getSession",
   ]
 
@@ -505,8 +506,10 @@ test "every read, sync and identity query is public, and so is createSession" = 
     "com.atproto.repo.getRecord",
     "com.atproto.repo.listRecords",
     "com.atproto.server.createSession",
+    "com.atproto.sync.getBlob",
     "com.atproto.sync.getLatestCommit",
     "com.atproto.sync.getRepo",
+    "com.atproto.sync.listBlobs",
   ]
 
 {- | Refreshing and logging out are authenticated by the REFRESH token, which

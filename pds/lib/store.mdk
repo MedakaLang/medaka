@@ -3,8 +3,10 @@
    A `Store` has three parts.
 
    The **blob half** is the verified content-addressed block store that Phase 2
-   shipped: raw blocks keyed by their own CID, with `storeGet`/`storePut`/
-   `storeSize` unchanged.
+   shipped (`storeGet`/`storePut`/`storeSize` unchanged), plus each blob's
+   declared MIME type recorded alongside it by `storePutBlob`/
+   `storeBlobMimeType` — content addressing verifies bytes, not MIME, so the
+   declared type is state the routes must carry, not something a CID implies.
 
    The **repository half** is the configured account's real signed repository
    state (`lib.repo`'s `Repo`), which Phase 4 record writes transition. It is
@@ -47,11 +49,12 @@ import lib.blockstore.{
   blockStorePut,
   blockStoreSize,
 }
-import lib.cid.{Cid}
+import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord, ctEqBytes}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
 import lib.sha256.{sha256}
+import map.{Map(..), get, set}
 import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
@@ -73,18 +76,28 @@ data Auth =
 emptyAuth : Auth
 emptyAuth = Auth None None []
 
+{- | The blob half: verified content-addressed bytes (`BlockStore` — the same
+   verification `lib.repo`'s own internal block store uses), plus each blob's
+   declared MIME type tracked alongside. Content addressing verifies bytes,
+   not MIME, so the type is not derivable from the CID and is not part of
+   `BlockStore`'s own representation. -}
+data BlobHalf = BlobHalf BlockStore (Map String String)
+
+blobHalfEmpty : BlobHalf
+blobHalfEmpty = BlobHalf blockStoreEmpty Tip
+
 -- | Immutable verified protocol state. Its representation is private.
-export data Store = Store BlockStore (Option Repo) Auth
+export data Store = Store BlobHalf (Option Repo) Auth
 
 -- | The empty protocol store: no blobs, no account, and no session state.
 export
 storeEmpty : Store
-storeEmpty = Store blockStoreEmpty None emptyAuth
+storeEmpty = Store blobHalfEmpty None emptyAuth
 
 -- | A protocol store for one configured account repository, with no blobs.
 export
 storeFromRepo : Repo -> Store
-storeFromRepo repo = Store blockStoreEmpty (Some repo) emptyAuth
+storeFromRepo repo = Store blobHalfEmpty (Some repo) emptyAuth
 
 -- | The configured account repository, or `None` when no account is set up.
 export
@@ -260,22 +273,49 @@ storeSessionCount (Store _ _ (Auth _ _ sessions)) = length sessions
 -- keeps its own blocks and is not counted here.
 export
 storeSize : Store -> Int
-storeSize (Store blocks _ _) = blockStoreSize blocks
+storeSize (Store (BlobHalf blocks _) _ _) = blockStoreSize blocks
 
 -- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store blocks _ _) = blockStoreGet cid blocks
+storeGet cid (Store (BlobHalf blocks _) _ _) = blockStoreGet cid blocks
 
 -- | Verify and immutably insert a blob-half block, returning the successor
--- store. The repository half is carried through unchanged.
+-- store. No MIME type is recorded — this is the byte-only primitive
+-- `storePutBlob` is built on. The repository half is carried through
+-- unchanged.
 export
 storePut : Cid -> Array Int -> Store -> Result String Store
-storePut cid bytes (Store blocks repo auth) =
-  map (blocks => Store blocks repo auth) (blockStorePut cid bytes blocks)
+storePut cid bytes (Store (BlobHalf blocks mimeTypes) repo auth) =
+  map
+    (next => Store (BlobHalf next mimeTypes) repo auth)
+    (blockStorePut cid bytes blocks)
+
+-- | Verify and immutably insert a blob-half block together with its declared
+-- MIME type, returning the successor store. `pds/lib/blob.mdk`'s `admitBlob`
+-- is the one place that decides whether a blob is admitted at all; this only
+-- records what it already admitted.
+export
+storePutBlob : Cid -> String -> Array Int -> Store -> Result String Store
+storePutBlob cid mimeType bytes (Store (BlobHalf blocks mimeTypes) repo auth) =
+  map
+    (next =>
+      Store
+        (BlobHalf next (set (cidToString cid) mimeType mimeTypes))
+        repo
+        auth)
+    (blockStorePut cid bytes blocks)
+
+-- | The declared MIME type of a blob-half entry inserted via `storePutBlob`,
+-- or `None` when the CID is absent (or was inserted through the byte-only
+-- `storePut`, which no route uses).
+export
+storeBlobMimeType : Cid -> Store -> Option String
+storeBlobMimeType cid (Store (BlobHalf _ mimeTypes) _ _) =
+  get (cidToString cid) mimeTypes
 
 -- | Every distinct verified block in the blob half, CID-sorted and
--- defensively copied — the primitive `sync.listBlobs` (slice 3) wraps.
+-- defensively copied — the primitive `sync.listBlobs` wraps.
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
-storeBlobEntries (Store blocks _ _) = blockStoreEntries blocks
+storeBlobEntries (Store (BlobHalf blocks _) _ _) = blockStoreEntries blocks
