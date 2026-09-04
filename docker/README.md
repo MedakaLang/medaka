@@ -1,5 +1,7 @@
 # Dockerized Medaka build + gate suite
 
+**Status:** SUPERSEDED 2026-07-12. Kept for provenance; build natively instead.
+
 > ## ⚠️ SUPERSEDED (2026-07-12) — you almost certainly do not want this
 >
 > This wrapper exists to solve **one problem on one machine**: the old macOS work laptop ran

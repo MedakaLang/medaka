@@ -22,7 +22,13 @@ export LC_ALL
 # (same input -> byte-identical output), so a clean re-run is always a no-op.
 #
 # Groups (fixed order, matches the docs-tree layout):
-#   spec / guide / design / ops / stdlib / compiler internals / archive
+#   docs (top level) / spec / guide / design / ops / stdlib / compiler
+#   internals / archive
+#
+# The `docs (top level)` group covers docs/*.md itself. Every other group is a
+# subdirectory scan, so before it existed a doc sitting directly in docs/ was
+# reachable from no group at all and fell out of the index silently.
+# docs/README.md is excluded because it IS the index.
 #
 # Portable POSIX sh + awk. No bash-isms (mirrors check_doc_links.sh — safe on
 # both the Linux dev box and macOS smoke-testing, and under dash).
@@ -120,6 +126,7 @@ emit_group() {
 # ---------------------------------------------------------------------------
 # Collect file lists (sorted, deterministic).
 # ---------------------------------------------------------------------------
+TOPLEVEL_FILES="$(find docs -maxdepth 1 -name '*.md' ! -name 'README.md' | sort)"
 SPEC_FILES="$(find docs/spec -maxdepth 1 -name '*.md' | sort)"
 GUIDE_FILES="$(find docs/guide -maxdepth 1 -name '*.md' | sort)"
 DESIGN_FILES="$(find docs/design -maxdepth 1 -name '*.md' | sort)"
@@ -154,6 +161,10 @@ Root entry points (not indexed below — always here): [`README.md`](../README.m
 issues (`known-red` label for expected-red gates), not in a doc.
 
 HEADER
+
+  emit_group "docs/ — top level" \
+    "Docs that sit directly in \`docs/\`, above the subject folders below." \
+    $TOPLEVEL_FILES
 
   emit_group "spec — language ground truth" \
     "What parses, what it means, formal semantics. Read here first for \"does X exist / what does X mean\"." \

@@ -1,5 +1,7 @@
 # Findings — S-index-pages (sqlite: seek instead of scan, #2541)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: decode index-leaf (`0x0A`) and index-interior (`0x02`) b-tree pages in
 `sqlite/lib/btree.mdk`. Landed `45d8be5bc03058ef450445239051587778734fd7`.
 

@@ -1,5 +1,7 @@
 # Findings — S-plan (sqlite: seek instead of scan, #2541)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: a query planner choosing a rowid/index seek over a scan for single-table
 equality WHERE clauses. REFUSED twice on genuine module cycles before landing
 in-file (`sqlite/lib/select.mdk`) at `7a89c35ccd21a758d0965c515070fec1cf808b55`.

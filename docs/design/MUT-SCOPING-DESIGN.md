@@ -75,7 +75,7 @@ isSecurity l = not (l == "Mut" || l == "Panic")
 
 But the *purity* half is **not delivered**, and this is verifiable on the binary today:
 
-```medaka
+```medaka-nocheck: written against the <Mut> effect label, since removed from the language; kept as the record of what the design argued
 counter : Ref Int
 counter = Ref 0
 
@@ -114,7 +114,7 @@ types needed — a plain syntactic check.
 on the binary:
 
 **(a) A `Ref` laundered out inside a closure.** No `Ref` appears in the result type:
-```medaka
+```medaka-nocheck: written against the since-removed <Mut> label, and calls bumpAndGet from the surrounding prose
 mkCounter : Unit -> (Unit -> <Mut> Int)   -- mkCounter itself is typed PURE
 mkCounter _ =
   let r = Ref 0
@@ -151,7 +151,7 @@ files a soundness bug against it, rightly.
 
 **Surface: a `mut` block, not a combinator.**
 
-```medaka
+```medaka-nocheck: proposed mut-block syntax that was never implemented, with an elided body
 encodeRecord : Record -> Array Int
 encodeRecord r =
   mut

@@ -1,5 +1,7 @@
 # test/ported — Native Medaka test ports
 
+**Status:** LIVE. Describes the corpus test/diff_compiler_ported.sh runs.
+
 Stage 3 retirement-bar item 2: program-behavior cases from OCaml alcotest suites
 re-expressed as native `medaka test` files, decoupling the test suite from `lib/`.
 

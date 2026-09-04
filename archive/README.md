@@ -1,5 +1,7 @@
 # Archived docs
 
+**Status:** LIVE index for a closed tree. This page explains the archive layout; everything it points at is closed.
+
 Historical records that are **closed** and no longer living roadmaps. Kept for
 provenance. Open work is tracked in [`PLAN.md`](../PLAN.md) (see its
 **Open issues index**); the living specs are under [`../docs/`](../docs/).

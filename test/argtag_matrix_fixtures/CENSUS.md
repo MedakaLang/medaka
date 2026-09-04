@@ -1,5 +1,7 @@
 # The arg-tag decidability census
 
+**Status:** LIVE. Graded by test/diff_compiler_argtag_matrix.sh, which cites it as the source of its pins.
+
 Graded by [`test/diff_compiler_argtag_matrix.sh`](../diff_compiler_argtag_matrix.sh).
 Serves [#2032](https://github.com/MedakaLang/medaka/issues/2032) (the
 `T-LOCAL-CONSTRAINED-MONO` pin-narrowing question) and

@@ -1,5 +1,7 @@
 # Regression fixtures to add — beta hardening, 2026-07-07
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Merged from the 8 QA reports (`reports/*.md`; each report's own "Suggested regression
 fixtures" section has extra per-area detail). Organized by harness. Two kinds:
 - **[bug]** — locks a FINDINGS.md item: add red (or with the fix), cite the P-id.

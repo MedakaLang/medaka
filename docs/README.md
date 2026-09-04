@@ -16,6 +16,14 @@ Root entry points (not indexed below — always here): [`README.md`](../README.m
 [`PLAN.md`](../PLAN.md) (open roadmap). Session-handoff state lives in GitHub
 issues (`known-red` label for expected-red gates), not in a doc.
 
+### docs/ — top level
+
+Docs that sit directly in `docs/`, above the subject folders below.
+
+| Doc | What it is | Status |
+|-----|------------|--------|
+| [`KNOWN-GAPS.md`](KNOWN-GAPS.md) | Known gaps — accepted-vs-rejected boundary | living, seeded |
+
 ### spec — language ground truth
 
 What parses, what it means, formal semantics. Read here first for "does X exist / what does X mean".
@@ -138,7 +146,7 @@ What's in the standard library, what's planned, module-by-module status.
 
 | Doc | What it is | Status |
 |-----|------------|--------|
-| [`AGENTS.md`](../compiler/AGENTS.md) | compiler/AGENTS.md — how not to make the compiler slow | — |
+| [`AGENTS.md`](../compiler/AGENTS.md) | compiler/AGENTS.md — how not to make the compiler slow | LIVE |
 | [`ARCH-REVIEW.md`](../compiler/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
 | [`ARGSTAMP-UNIFY-PLAN.md`](../compiler/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`BOOTSTRAP.md`](../compiler/BOOTSTRAP.md) | BOOTSTRAP.md — Native self-compile slices | IMPLEMENTED |
@@ -156,7 +164,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | REVISED 2026-09-03 |
 | [`EQ-DISPATCH-DESIGN.md`](../compiler/EQ-DISPATCH-DESIGN.md) | `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |
 | [`ERROR-QUALITY.md`](../compiler/ERROR-QUALITY.md) | ERROR-QUALITY.md | IMPLEMENTED |
-| [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | — |
+| [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | DECISION, and now LOWERED |
 | [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../compiler/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment placement — design | the design below replaced the 2026-07-01 line-index splice |
 | [`HELPER-CENSUS.md`](../compiler/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`MESSAGE-AUDIT.md`](../compiler/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
@@ -239,19 +247,19 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 
 | Doc | What it is | Status |
 |-----|------------|--------|
-| [`FINDINGS.md`](../archive/findings/qa-beta-2026-07-07/FINDINGS.md) | Beta-hardening QA findings — 2026-07-07 | — |
-| [`FIXTURES.md`](../archive/findings/qa-beta-2026-07-07/FIXTURES.md) | Regression fixtures to add — beta hardening, 2026-07-07 | — |
-| [`P0-18-BUILD-PATH-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-18-BUILD-PATH-DESIGN.md) | P0-18 build-path soundness hole — design & scoping | — |
-| [`P0-18-STANDALONE-DISPATCH-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-18-STANDALONE-DISPATCH-DESIGN.md) | P0-18 standalone-fn-shadows-interface-method — dispatch miscompile | — |
-| [`P0-5-MUTABILITY-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-5-MUTABILITY-DESIGN.md) | P0-5 — Beta Mutability Model: enforce immutability + make `let mut` work | design / scoping pass |
-| [`beginner-syntax.md`](../archive/findings/qa-beta-2026-07-07/reports/beginner-syntax.md) | Beginner-syntax findings (first-hour human-user simulation) | — |
-| [`bindings-mutability.md`](../archive/findings/qa-beta-2026-07-07/reports/bindings-mutability.md) | Findings: bindings-mutability | — |
-| [`numerics-strings-data.md`](../archive/findings/qa-beta-2026-07-07/reports/numerics-strings-data.md) | Findings: numerics-strings-data | — |
-| [`patterns-control-flow.md`](../archive/findings/qa-beta-2026-07-07/reports/patterns-control-flow.md) | Findings: patterns-control-flow | — |
-| [`playground-wasm.md`](../archive/findings/qa-beta-2026-07-07/reports/playground-wasm.md) | Findings: playground-wasm | — |
-| [`test-gap-analysis.md`](../archive/findings/qa-beta-2026-07-07/reports/test-gap-analysis.md) | Test-gap analysis (area: test-gap-analysis) | — |
-| [`tooling-cli.md`](../archive/findings/qa-beta-2026-07-07/reports/tooling-cli.md) | QA findings — tooling-cli | — |
-| [`type-system.md`](../archive/findings/qa-beta-2026-07-07/reports/type-system.md) | Type-system findings (adversarial QA, 2026-07-07) | — |
+| [`FINDINGS.md`](../archive/findings/qa-beta-2026-07-07/FINDINGS.md) | Beta-hardening QA findings — 2026-07-07 | CLOSED RECORD |
+| [`FIXTURES.md`](../archive/findings/qa-beta-2026-07-07/FIXTURES.md) | Regression fixtures to add — beta hardening, 2026-07-07 | CLOSED RECORD |
+| [`P0-18-BUILD-PATH-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-18-BUILD-PATH-DESIGN.md) | P0-18 build-path soundness hole — design & scoping | CLOSED RECORD |
+| [`P0-18-STANDALONE-DISPATCH-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-18-STANDALONE-DISPATCH-DESIGN.md) | P0-18 standalone-fn-shadows-interface-method — dispatch miscompile | CLOSED RECORD |
+| [`P0-5-MUTABILITY-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-5-MUTABILITY-DESIGN.md) | P0-5 — Beta Mutability Model: enforce immutability + make `let mut` work | CLOSED RECORD |
+| [`beginner-syntax.md`](../archive/findings/qa-beta-2026-07-07/reports/beginner-syntax.md) | Beginner-syntax findings (first-hour human-user simulation) | CLOSED RECORD |
+| [`bindings-mutability.md`](../archive/findings/qa-beta-2026-07-07/reports/bindings-mutability.md) | Findings: bindings-mutability | CLOSED RECORD |
+| [`numerics-strings-data.md`](../archive/findings/qa-beta-2026-07-07/reports/numerics-strings-data.md) | Findings: numerics-strings-data | CLOSED RECORD |
+| [`patterns-control-flow.md`](../archive/findings/qa-beta-2026-07-07/reports/patterns-control-flow.md) | Findings: patterns-control-flow | CLOSED RECORD |
+| [`playground-wasm.md`](../archive/findings/qa-beta-2026-07-07/reports/playground-wasm.md) | Findings: playground-wasm | CLOSED RECORD |
+| [`test-gap-analysis.md`](../archive/findings/qa-beta-2026-07-07/reports/test-gap-analysis.md) | Test-gap analysis (area: test-gap-analysis) | CLOSED RECORD |
+| [`tooling-cli.md`](../archive/findings/qa-beta-2026-07-07/reports/tooling-cli.md) | QA findings — tooling-cli | CLOSED RECORD |
+| [`type-system.md`](../archive/findings/qa-beta-2026-07-07/reports/type-system.md) | Type-system findings (adversarial QA, 2026-07-07) | CLOSED RECORD |
 
 ### archive/ (flat) — closed conformance audits/roadmaps + the Phase archive
 

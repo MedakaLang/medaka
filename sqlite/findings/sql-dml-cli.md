@@ -1,5 +1,7 @@
 # Findings — SQL DML statements + the SQL CLI
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` parsing (`lib.sqlstmt`,
 `lib.schemadef`), wiring them to the existing write engine (`lib.mutate`,
 `lib.writer`), and turning `sqlite/main.mdk` into a real `sqlite3`-compatible CLI

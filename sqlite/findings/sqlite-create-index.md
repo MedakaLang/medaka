@@ -1,5 +1,7 @@
 # Findings — CREATE INDEX write path (`sqlite/lib/{schemadef,dbwriter,writer}.mdk`)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: emit a real single-column secondary-index B-tree that `sqlite3` accepts as a valid
 database (`PRAGMA integrity_check` = `ok`). This is a pure-Medaka library change; no compiler
 edits. Gated by `sqlite/test/index_write_oracle.sh`.

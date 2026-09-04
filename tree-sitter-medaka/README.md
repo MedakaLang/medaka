@@ -1,5 +1,7 @@
 # tree-sitter-medaka
 
+**Status:** LIVE. Describes the tree-sitter grammar beside it.
+
 Tree-sitter grammar for the [Medaka](https://github.com/val/medaka) programming language.
 
 Provides syntax highlighting for `.mdk` files in editors that support tree-sitter:

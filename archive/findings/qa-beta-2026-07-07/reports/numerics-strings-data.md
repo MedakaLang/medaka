@@ -1,5 +1,7 @@
 # Findings: numerics-strings-data
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Area charter: runtime value semantics — numbers, strings, collections.
 All probes live in `/private/tmp/claude-501/-Users-val-medaka/07db78cb-7807-4285-bb67-639494a218d2/scratchpad/probes/nsd/`.
 `$WT` = /Users/val/medaka/.claude/worktrees/virtual-fluttering-meteor. Every finding reproduced at least twice.
