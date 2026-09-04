@@ -24,6 +24,13 @@ isErr : Result e a -> Bool
 isErr (Err _) = True
 isErr (Ok _) = False
 
+-- `Cid` derives no `Eq` — `lib.cid` designates `cidEqual` as its equality
+-- (`Cid`'s constructor is module-private), so an `Option Cid` result cannot be
+-- compared with `==`.
+lookupIs : Option Cid -> Cid -> Bool
+lookupIs (Some found) want = cidEqual found want
+lookupIs None _ = False
+
 mustTree : Result String Mst -> Mst
 mustTree (Ok tree) = tree
 mustTree (Err message) = panic message
@@ -63,7 +70,8 @@ test "known keys occupy adjacent protocol depths" =
 
 test "lookup finds exact keys and misses absent keys" =
   let tree = mustTree (mstFromEntries [(key0, value0)])
-  expectTrue (mstLookup key0 tree == Some value0 && mstLookup key1 tree == None)
+  expectTrue
+    (lookupIs (mstLookup key0 tree) value0 && isNone (mstLookup key1 tree))
 
 test "insert rejects an existing key" =
   let tree = mustTree (mstInsert key0 value0 mstEmpty)
@@ -73,8 +81,8 @@ test "replace changes only the selected value" =
   let tree = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   let updated = mustTree (mstReplace key0 value1 tree)
   expectTrue
-    (mstLookup key0 updated == Some value1
-      && mstLookup key1 updated == Some value1)
+    (lookupIs (mstLookup key0 updated) value1
+      && lookupIs (mstLookup key1 updated) value1)
 
 test "replace rejects a missing key" =
   expectTrue (isErr (mstReplace key0 value1 mstEmpty))
@@ -83,7 +91,8 @@ test "delete removes exactly one key" =
   let tree = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   let updated = mustTree (mstDelete key0 tree)
   expectTrue
-    (mstLookup key0 updated == None && mstLookup key1 updated == Some value1)
+    (isNone (mstLookup key0 updated)
+      && lookupIs (mstLookup key1 updated) value1)
 
 test "delete-to-empty restores the canonical empty root" =
   let tree = mustTree (mstInsert key0 value0 mstEmpty)

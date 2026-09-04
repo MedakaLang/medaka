@@ -19,6 +19,7 @@ project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "exec"
+migration = "native-wrap"
 run = "test/sluggish.sh"
 oracles = []
 sources = []

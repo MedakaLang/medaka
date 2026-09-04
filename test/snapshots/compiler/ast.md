@@ -1,5 +1,5 @@
 # META
-source_lines=2016
+source_lines=2018
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -269,6 +269,7 @@ public export data Ns =
 -- what a module origin renders to, and cannot forget that there are two
 -- cases.  `types/registry.mdk`'s `originTag`/`originModuleOf` are written
 -- against it; that is the whole cost, measured at ONE accessor.
+-- lint-disable-next-line rule-clone-type
 export data IdentOrigin =
   | IdentBuiltin
   | IdentModule String
@@ -958,6 +959,7 @@ public export data DoStmt =
   | DoFieldAssign String (List String) Expr
 
 -- parts of an interpolated string `"…\{expr}…"`
+-- lint-disable-next-line rule-clone-type
 public export data InterpPart = InterpStr String | InterpExpr Expr
 
 -- a function/where guard arm: `| guards = body`

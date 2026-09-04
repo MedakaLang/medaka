@@ -19,6 +19,48 @@
 --
 -- The sentinel PREFIX is per-engine (so one engine's transcript can never be
 -- mistaken for the other's) and therefore a parameter here, not a constant.
+--
+-- ── the nonce ────────────────────────────────────────────────────────────────
+-- `tagsInOrder` proves the observed tag sequence is a prefix of the tags the
+-- probe was GENERATED to print — but a probe that prints the ENTIRE expected
+-- sequence (forged `Pass`/fields, in order) and then dies satisfies that
+-- check completely: a full sequence is trivially a prefix of itself, and the
+-- exit code is never consulted once every chunk decodes. Tag TEXT alone can
+-- never distinguish "the driver's generated code printed this" from "the
+-- target's own source printed this", because the tag text is exactly the
+-- fixed, publicly-readable constant a forger's SOURCE — written before any
+-- given run — can also spell.
+--
+-- The fix is a per-run token neither engine's tag vocabulary needs, but the
+-- PREFIX does: `mintNonce` draws it from `<Rand>` at driver time, strictly
+-- after the target's source was already committed to disk, so no source
+-- written before this invocation can contain it. Folded into the prefix via
+-- `noncedPrefix` and embedded as a literal in the generated probe's own
+-- sentinel-printing code (never exposed to the target's spliced-in source),
+-- it turns "spell the sentinel text" from copying a public constant into
+-- guessing a value that did not exist when the forger's source was written.
+--
+-- ── why a value is printed QUOTED ───────────────────────────────────────────
+-- A value's own text is chosen by the program under test, so an unescaped
+-- value can spell a sentinel line.  That is not a cosmetic collision: a value
+-- containing `<prefix><a later tag>` closes its own chunk early and opens a
+-- chunk under someone else's tag, and `lookupChunk` answers with the FIRST
+-- match — so the forged chunk beats the genuine one the probe prints later,
+-- and one test's operand text decides another test's verdict.  The driver
+-- would still be the one judging, but on evidence the probe supplied.
+--
+-- So a value is never printed raw: `valuePrintExpr` prints it through
+-- `debugStringLit`, whose output is ONE line, always starts with `"`, and
+-- carries no raw newline.  `decodeValue` is the exact inverse.  A quoted value
+-- therefore cannot spell a sentinel line whatever it contains.
+--
+-- Escaping covers the values.  It does not cover what the program under test
+-- prints on its own account (a `println` inside a test body lands in the
+-- transcript unescaped), so `tagsInOrder` is the second half: the driver knows
+-- the exact tag sequence its probe emits, and a transcript that is not that
+-- sequence is rejected whole rather than read.  Between them, no text a
+-- program can produce turns into a verdict it did not earn — at worst it turns
+-- into a loud error.
 
 import support.util.{reverseL, startsWith, stringTrim}
 
@@ -34,6 +76,26 @@ sentTagOf prefix line
 export
 sentinelLine : String -> String -> String
 sentinelLine prefix tag = prefix ++ tag
+
+-- Fold a per-run nonce into an engine's fixed prefix base. Both engines call
+-- this identically; only the base differs between them (already true of
+-- `sentinelPrefix` before the nonce existed).
+export
+noncedPrefix : String -> String -> String
+noncedPrefix base nonce = "\{base}\{nonce}@@ "
+
+-- A fresh per-invocation token, drawn at driver time. Two draws rather than
+-- one so a forger who somehow learned the RNG's exact state at the START of a
+-- run still cannot predict the SECOND draw without also knowing how many
+-- other `<Rand>` calls preceded it in that run — irrelevant against a static
+-- source with no side channel at all, but cheap to add and it costs nothing
+-- correctness-wise (the two draws are just concatenated digits).
+export
+mintNonce : Unit -> <IO> String
+mintNonce _ =
+  let a = randomInt 100000000 999999999
+  let b = randomInt 100000000 999999999
+  intToString a ++ intToString b
 
 -- The tag of the terminator both engines print last.
 export
@@ -67,6 +129,71 @@ closeChunk : List Chunk -> Option String -> List String -> Bool -> List Chunk
 closeChunk acc None _ _ = acc
 closeChunk acc (Some t) curLines terminated =
   Chunk t (reverseL curLines) terminated :: acc
+
+-- The observed tags must be the tags the probe was generated to print, in
+-- order — truncated by an abort is allowed, reordered or inserted is not.  A
+-- transcript that fails this carries a sentinel line the generator did not
+-- write, so nothing in it can be trusted to belong to the test it names.
+export
+tagsInOrder : List String -> List Chunk -> Bool
+tagsInOrder _ [] = True
+tagsInOrder [] (_ :: _) = False
+tagsInOrder (e :: es) ((Chunk t _ _) :: cs) = e == t && tagsInOrder es cs
+
+-- ── values, quoted ──────────────────────────────────────────────────────────
+
+-- The probe-source expression that prints `expr`'s value as one quoted line.
+-- Its inverse is `decodeValue`; the two are here together because a change to
+-- either alone silently corrupts every value the driver reads.
+export
+valuePrintExpr : String -> String
+valuePrintExpr expr = "putStrLn (debugStringLit (\{expr}))"
+
+-- A chunk's lines back to the value that was printed.  Zero lines is the empty
+-- value (a doctest smoke example prints nothing but still evaluates); one line
+-- is a quoted value; anything else is a transcript the generator cannot have
+-- produced.
+export
+decodeValue : List String -> Option String
+decodeValue [] = Some ""
+decodeValue (l :: []) = unquoteLit l
+decodeValue _ = None
+
+-- The inverse of `debugStringLit` (runtime/medaka_rt.c): a double-quoted body
+-- in which `\\ \n \t \r \0 \"` are the only escapes.  Codepoint-indexed while
+-- the escaper is byte-oriented, which agrees: every escape it writes is ASCII
+-- and every other byte passes through untouched.
+export
+unquoteLit : String -> Option String
+unquoteLit s
+  | stringLength s >= 2
+    && charAt s 0 == "\""
+    && charAt s (stringLength s - 1) == "\"" =
+    unquoteScan s 1 (stringLength s - 1) []
+  | otherwise = None
+
+charAt : String -> Int -> String
+charAt s i = stringSlice i (i + 1) s
+
+unquoteScan : String -> Int -> Int -> List String -> Option String
+unquoteScan s i end acc
+  | i >= end = Some (stringConcat (reverseL acc))
+  | charAt s i == "\\" =
+    if i + 1 >= end then
+      None
+    else match unescapeChar (charAt s (i + 1))
+      Some c => unquoteScan s (i + 2) end (c :: acc)
+      None => None
+  | otherwise = unquoteScan s (i + 1) end (charAt s i :: acc)
+
+unescapeChar : String -> Option String
+unescapeChar "n" = Some "\n"
+unescapeChar "t" = Some "\t"
+unescapeChar "r" = Some "\r"
+unescapeChar "0" = Some "\0"
+unescapeChar "\\" = Some "\\"
+unescapeChar "\"" = Some "\""
+unescapeChar _ = None
 
 export
 lookupChunk : String -> List Chunk -> Option Chunk

@@ -105,6 +105,7 @@ corpus = [
   "t.x * (t.y + 2) <= 100 OR t.z IS NOT NULL",
 ]
 
+-- lint-disable-next-line rule-clone-type
 data RT = RtOk | RtFail String
 
 -- parse → render → parse, and require the two ASTs to be EQUAL.

@@ -6,6 +6,7 @@ import test.{expectEqual, expectTrue}
 import lib.nsid.{validateNsid}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
+  Tid,
   tidClockId,
   tidCompare,
   tidEncode,

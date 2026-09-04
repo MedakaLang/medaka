@@ -1,0 +1,81 @@
+-- Fixture for rule-orelse-staircase (SUGGEST-ONLY): a first-match PROBE staircase
+-- — nested `match`es that try a fresh probe per level, hand that probe's own
+-- payload straight back on success, and fall through to the next probe on failure
+-- — should become `orElse` / `findMap`.  Only chains of DEPTH ≥ 2 fire; a single
+-- level (a `withDefault`), a success arm that CONSUMES its payload (the
+-- heterogeneous probe chain #2565 scopes out), a mixed Option/Result chain, and an
+-- `Err e` arm that inspects the failure must NOT fire.
+
+-- POSITIVE: depth-2 Option staircase returning the payload (`Some v => v`).
+posUnwrap2 k = match lookupA k
+  Some v => v
+  None => match lookupB k
+    Some v => v
+    None => dflt
+
+-- POSITIVE: depth-3 Option staircase returning the Option (`Some v => Some v`).
+posOption3 k = match lookupA k
+  Some v => Some v
+  None => match lookupB k
+    Some v => Some v
+    None => match lookupC k
+      Some v => Some v
+      None => None
+
+-- POSITIVE: depth-2 Result staircase — `Ok v => Ok v` with an `Err _` fallthrough.
+posResult2 k = match tryA k
+  Ok v => Ok v
+  Err _ => match tryB k
+    Ok v => Ok v
+    Err _ => tryC k
+
+-- POSITIVE: arm order reversed (failure arm written first) is the same staircase.
+posArmOrder k = match lookupA k
+  None => match lookupB k
+    None => dflt
+    Some v => v
+  Some v => v
+
+-- NEGATIVE: depth-1 — one probe and a default. That is `withDefault`, not a
+-- staircase, and there is nothing to chain with `orElse`.
+negDepth1 k = match lookupA k
+  Some v => v
+  None => dflt
+
+-- NEGATIVE: the #2565 non-hit shape — each success arm CONSUMES its payload with
+-- its own continuation (`inferAppExpr`'s probe chain). The levels do not share a
+-- result type, so `orElse` does not typecheck over them, and Medaka being strict an
+-- eager rewrite would run every probe. Explicitly out of scope.
+negHeterogeneous f x = match probeSpine f
+  Some (name, refs, nodes) => applySpine name refs nodes f x
+  None => match probeHead f
+    Some (name, refs) => applyHead name refs f x
+    None => match probeVar f
+      Some name => applyVar name f x
+      None => applyPlain f x
+
+-- NEGATIVE: mixed Option/Result staircase — not monad-consistent, so neither
+-- combinator applies and no chain reaches depth 2.
+negMixed k = match lookupA k
+  Some v => v
+  None => match tryB k
+    Ok v => Ok v
+    Err _ => match lookupC k
+      Some v => v
+      None => dflt
+
+-- NEGATIVE: the failure arm INSPECTS the error (`Err e => … e …`) rather than
+-- falling through, so the level is not a plain re-probe.
+negErrInspected k = match tryA k
+  Ok v => Ok v
+  Err e => match tryB (recover e)
+    Ok v => Ok v
+    Err _ => dflt
+
+-- NEGATIVE: the success arm re-wraps a TRANSFORMED payload (`Some v => Some (g v)`).
+-- That is a `map` (rule-match-to-map owns it), not an identity passthrough.
+negRewrapTransform k = match lookupA k
+  Some v => Some (g v)
+  None => match lookupB k
+    Some v => Some (g v)
+    None => None

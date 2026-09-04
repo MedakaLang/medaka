@@ -269,6 +269,52 @@ export
 expectAll : List Expectation -> Expectation
 expectAll es = fold expectAllStep pass es
 
+-- # Reading an expectation
+
+-- These four read an `Expectation` without naming its constructors, which a
+-- caller that also declares a `Pass` or a `Fail` of its own cannot otherwise
+-- do: the constructors resolve in this module, the accessors travel.
+
+{- | The name of the outcome's constructor, `"Pass"` or `"Fail"`.
+
+   > expectationTag pass
+   "Pass"
+   > expectationTag (fail "not ready")
+   "Fail" -}
+export
+expectationTag : Expectation -> String
+expectationTag (Pass _ _) = "Pass"
+expectationTag (Fail _ _ _) = "Fail"
+
+{- | The failure message, empty for a `Pass`.
+
+   > expectationMessage (fail "not ready")
+   "not ready"
+   > expectationMessage pass
+   "" -}
+export
+expectationMessage : Expectation -> String
+expectationMessage (Pass _ _) = ""
+expectationMessage (Fail m _ _) = m
+
+{- | The expected operand as the assertion rendered it.
+
+   > expectationExpected (expectEqual 1 2)
+   "1" -}
+export
+expectationExpected : Expectation -> String
+expectationExpected (Pass e _) = e
+expectationExpected (Fail _ e _) = e
+
+{- | The actual operand as the assertion rendered it.
+
+   > expectationActual (expectEqual 1 2)
+   "2" -}
+export
+expectationActual : Expectation -> String
+expectationActual (Pass _ a) = a
+expectationActual (Fail _ _ a) = a
+
 -- # Running tests
 
 goTests : List (String, Unit -> Expectation) -> Int -> Int -> <IO> Bool

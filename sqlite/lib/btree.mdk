@@ -94,7 +94,7 @@ beU32 bytes off = do
   Ok (shiftLeft b0 24 + shiftLeft b1 16 + shiftLeft b2 8 + b3)
 
 -- | A decoded table row: its rowid and the column cells.
-public export data Row = Row Int (List Cell)
+public export data Row = Row Int (List Cell) deriving (Debug, Eq)
 
 export
 rowRowid : Row -> Int

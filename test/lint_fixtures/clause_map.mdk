@@ -1,0 +1,102 @@
+-- Fixture for rule-clause-map (SUGGEST-ONLY): a two-clause `[]`/`(x :: xs)`
+-- recursion whose cons clause is EXACTLY a per-element transform consed onto the
+-- recursive call is a hand-written `map`.  `rule-match-to-map` cannot see this
+-- shape (it reads single-expression `match` bodies, never clause-form
+-- recursion), so the negatives below are the whole point of the rule: an
+-- accumulator fold, an adjacent-pair combinator, a copy, a field read, a
+-- guarded clause and a third clause must all stay silent.
+
+-- POSITIVE: the canonical arity-1 clause-form map.
+export
+posDoubleAll : List Int -> List Int
+posDoubleAll [] = []
+posDoubleAll (x :: xs) = double x :: posDoubleAll xs
+
+-- POSITIVE: an extra parameter carried VERBATIM through the recursive call —
+-- still a map, over `scale k`.
+export
+posScaleAll : Int -> List Int -> List Int
+posScaleAll _ [] = []
+posScaleAll k (x :: xs) = scale k x :: posScaleAll k xs
+
+-- POSITIVE: the transformed element is the LAST argument, not the only one.
+export
+posTagAll : Int -> List Int -> List Int
+posTagAll _ [] = []
+posTagAll n (x :: xs) = tagWith n x :: posTagAll n xs
+
+-- NEGATIVE: accumulator fold — the recursive call carries a running result, and
+-- the base case hands the accumulator back rather than `[]`.
+export
+negFoldAcc : Int -> List Int -> Int
+negFoldAcc acc [] = acc
+negFoldAcc acc (x :: xs) = negFoldAcc (step acc x) xs
+
+-- NEGATIVE: the sharp accumulator case — it DOES cons and it DOES recurse, but
+-- the counter argument changes per element, so the result is not `map f xs`.
+export
+negFoldCons : Int -> List Int -> List Int
+negFoldCons _ [] = []
+negFoldCons n (x :: xs) = tagWith n x :: negFoldCons (n + 1) xs
+
+-- NEGATIVE: adjacent-pair combinator (`strictlyAscending`) — the "transform" is
+-- over two neighbours, the cons pattern is nested, and there is no cons in the
+-- result at all.
+export
+negAscending : List Int -> Bool
+negAscending (a :: b :: rest) = a < b && negAscending (b :: rest)
+negAscending _ = True
+
+-- NEGATIVE: bare passthrough — a copy, not a map; there is no transform.
+export
+negCopy : List Int -> List Int
+negCopy [] = []
+negCopy (x :: xs) = x :: negCopy xs
+
+-- NEGATIVE: a FIELD of the bound head, not the head itself.
+export
+negField : List Row -> List String
+negField [] = []
+negField (r :: rs) = r.name :: negField rs
+
+-- NEGATIVE: the head is used twice — a recomputation, not `g x`.
+export
+negTwice : List Int -> List Int
+negTwice [] = []
+negTwice (x :: xs) = combine x x :: negTwice xs
+
+-- NEGATIVE: the transform also reads the TAIL, so it is not per-element.
+export
+negTailUse : List Int -> List Int
+negTailUse [] = []
+negTailUse (x :: xs) = withRest xs x :: negTailUse xs
+
+-- NEGATIVE: the base clause is a WILDCARD, not the literal `[]` — it covers
+-- inputs `[]` never would.
+export
+negWildBase : List Int -> List Int
+negWildBase (x :: xs) = double x :: negWildBase xs
+negWildBase _ = []
+
+-- NEGATIVE: a guard sits in the cons clause, so the clause drops elements.
+export
+negGuarded : List Int -> List Int
+negGuarded [] = []
+negGuarded (x :: xs)
+  | keep x = double x :: negGuarded xs
+  | otherwise = negGuarded xs
+
+-- NEGATIVE: a THIRD clause special-cases the singleton, so the definition is
+-- not two clauses of pure map.
+export
+negThreeClauses : List Int -> List Int
+negThreeClauses [] = []
+negThreeClauses [x] = [double x]
+negThreeClauses (x :: xs) = double x :: negThreeClauses xs
+
+-- NEGATIVE: a definition literally named `map` is skipped — "rewrite as `map g`"
+-- is not advice one can act on inside `map`'s own definition.
+export
+map : List Int -> List Int
+map [] = []
+map (x :: xs) = negate x :: map xs

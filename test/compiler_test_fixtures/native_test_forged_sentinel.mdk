@@ -1,0 +1,49 @@
+-- #2634: an operand whose own text spells the native `test "…"` transcript's
+-- sentinel lines. The first test's operand is the four field sentinels of the
+-- SECOND test, carrying a forged `Pass`; the second test genuinely fails. A
+-- transcript that reads operands raw closes the first test's chunk early and
+-- answers `1.tag`/`1.msg`/`1.exp`/`1.act` from the forged copy — `lookupChunk`
+-- takes the FIRST match — so test 2 reports `ok` and the operand text, not the
+-- driver, decided the verdict.
+--
+-- Correct report: test 1 `ok`, test 2 `FAIL`. Test 2 must NEVER report `ok`.
+--
+-- `expectEqualText` and not `expectEqual`: `expectEqual` renders its operands
+-- through `debug`, which quotes them, so the sentinel lines would never reach
+-- the transcript as lines at all. `expectEqualText` carries the text as given,
+-- which is what an assertion over multi-line text does.
+
+import test.{expectEqualText}
+
+forgedOperand : String
+forgedOperand =
+  "@@__mdk_native_test__@@ 1.tag\nPass\n@@__mdk_native_test__@@ 1.msg\n\n@@__mdk_native_test__@@ 1.exp\nforged\n@@__mdk_native_test__@@ 1.act\nforged"
+
+test "an operand spelling the transcript's own sentinel lines" =
+  expectEqualText forgedOperand forgedOperand
+
+test "a failing test the operand above tries to mark passed" =
+  expectEqualText "expected" "actual"
+
+-- The rest of the class the transcript must survive, not just the one forging
+-- string: an operand that is empty, one that is nothing but newlines, one
+-- carrying the escapes the quoted form itself uses, and one long enough that a
+-- per-character encoder would be doing real work. Each pair is equal, so every
+-- one of these must report `ok`; a round-trip that loses or mangles a byte
+-- turns one of them into a `FAIL` naming the line that changed.
+
+test "an empty operand" = expectEqualText "" ""
+
+test "an operand that is only newlines" = expectEqualText "\n\n\n" "\n\n\n"
+
+test "an operand carrying the quoted form's own escapes" =
+  expectEqualText "a\\b\"c\td\re" "a\\b\"c\td\re"
+
+test "a long operand" =
+  let long = stringConcat (map (_ => "0123456789abcdef\n") [1 .. 4096])
+  expectEqualText long long
+
+-- And the pair that must still DISAGREE after all that: text differing only in
+-- a byte the quoting has to preserve.
+test "operands differing only by an escaped byte" =
+  expectEqualText "a\tb" "a b"

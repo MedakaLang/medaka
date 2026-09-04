@@ -77,6 +77,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/test/gate_native_rows.sh"
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found (needed to parse the workflow YAML)"; exit 2; }
 
 # ── the project set — the SAME rule test/preflight.sh's generic arm uses ──────
@@ -180,14 +181,19 @@ for p in $PROJECTS; do
   echo "── $p ──────────────────────────────────────────────"
 
   # ── FLOOR ──────────────────────────────────────────────────────────────────
+  # A floor gate can be a `.sh` script OR a `kind = "native"` registry row whose
+  # `run` sits under `<project>/test/` (#2591; run_gates.sh/preflight/build_
+  # oracles.sh all already resolve a native gate by registry row the same way).
   floor="$(git -C "$ROOT" ls-files "$p/test/*.sh" 2>/dev/null)"
-  if [ -z "$floor" ]; then
-    echo "  FLOOR      FAIL — no tracked gate script under $p/test/."
+  native_floor="$(_native_rows | awk '{print $2}' | grep "^$p/test/" || true)"
+  if [ -z "$floor" ] && [ -z "$native_floor" ]; then
+    echo "  FLOOR      FAIL — no tracked gate script or native gate under $p/test/."
     echo "             A project with a manifest and no floor gate cannot be enrolled:"
     echo "             a ci.yml shard pattern matching NO gate is a hard ::error::."
     fails=$((fails + 1))
   else
-    echo "  FLOOR      ok — $(printf '%s\n' "$floor" | grep -c .) gate(s) under $p/test/"
+    _floor_n=$(( $(printf '%s\n' "$floor" | grep -c .) + $(printf '%s\n' "$native_floor" | grep -c .) ))
+    echo "  FLOOR      ok — $_floor_n gate(s) under $p/test/"
   fi
 
   # ── CI ─────────────────────────────────────────────────────────────────────

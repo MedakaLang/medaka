@@ -1,0 +1,56 @@
+-- Fixture for rule-clone-type (SUGGEST-ONLY): a two-constructor `data` whose
+-- constructor arities are `Option`'s (0 and 1) or `Result`'s (1 and 1), declared
+-- in a file that writes no `impl` for it, re-declares a prelude shape without
+-- the prelude's combinators.  A type with a same-file `impl`, a different
+-- constructor count, a different arity signature, or a name the rule's
+-- adjudication list already carries must NOT fire.
+
+-- POSITIVE: Result's shape (one payload each), no impl in this file.
+data ParseOutcome = POFail String | PODone Int
+
+-- POSITIVE: Option's shape (nullary, then one payload), no impl in this file.
+data MaybeName = NoName | HasName String
+
+-- POSITIVE: the arms written the other way round are the same Option shape.
+data MaybeCount = HasCount Int | NoCount
+
+-- POSITIVE: a record-style payload counts by FIELD count, so this is Result's
+-- shape too.
+data RecOutcome =
+  | ROFail { roWhy : String }
+  | RODone { roCode : Int }
+
+-- NEGATIVE: Result's shape, but this file writes an `impl` for it — the type
+-- carries its own API and is not a bare clone.
+data Answer = ANo | AYes String
+
+interface Describe a where
+  describe : a -> String
+
+impl Describe Answer where
+  describe ANo = "no"
+  describe (AYes s) = s
+
+-- NEGATIVE: a per-site directive adjudicates this declaration — two domain
+-- variants that land on Result's arity by coincidence, not an error/success
+-- pair. The directive is the ONLY exclusion mechanism: the rule holds no list
+-- of exonerated type names, so a like-named type elsewhere is unaffected.
+-- lint-disable-next-line rule-clone-type
+data InterpPart = IPText String | IPExpr String
+
+-- NEGATIVE: three constructors is neither Option's nor Result's shape.
+data Tri = TriA | TriB String | TriC Int
+
+-- NEGATIVE: a single constructor.
+data Wrap = Wrap String
+
+-- NEGATIVE: both constructors nullary — an enum, not an optional value.
+data Flag = FlagOff | FlagOn
+
+-- NEGATIVE: two payloads each — neither prelude shape.
+data Pair2 = PLeft Int Int | PRight String String
+
+-- POSITIVE: `SExp` names a declaration elsewhere in the tree that a directive
+-- exonerates. Exclusion binds to the declaration, not to the name, so this
+-- unrelated same-named declaration still fires.
+data SExp = SAtom String | SList Int
