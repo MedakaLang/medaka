@@ -17,10 +17,10 @@
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
 --      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
 --      `repeat`, and substring search via the host `stringIndexOf` (`indexOf`,
---      and `contains`/`split`/`replace*` derived from it);
+--      and `contains`/`replace*` derived from it);
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
---      or carve out `stringSlice`s: `trim*`, `words`, `reverse`, `capitalize`,
---      `toInt`;
+--      or carve out `stringSlice`s: `trim*`, `words`, `split`/`lines`,
+--      `reverse`, `capitalize`, `toInt`;
 --   3. `List Char` is avoided internally.
 --
 -- The collection functions (`split`/`words`/`lines`/`concat`/`join`/`unlines`/
@@ -652,14 +652,40 @@ splitAt n s = (take n s, drop n s)
    ["abc"] -}
 export
 split : String -> String -> List String
-split sep s = if sep == "" then [s] else splitGo (stringLength sep) sep s
+split sep s =
+  if sep == "" then
+    [s]
+  else
+    let a = toChars s
+    let sepA = toChars sep
+    splitFrom a (arrayLength a) sepA (arrayLength sepA) 0
 
-splitGo : Int -> String -> String -> List String
-splitGo sepLen sep s = match indexOf sep s
-  None => [s]
-  Some i =>
-    stringSlice 0 i s
-      :: splitGo sepLen sep (stringSlice (i + sepLen) (stringLength s) s)
+-- Decodes both operands once and carves each piece out of the array, so the
+-- whole split costs O(length of s) copying rather than one whole-suffix copy
+-- per separator: `stringSlice lo hi` walks the UTF-8 bytes from 0 to reach
+-- `lo`, so slicing a shrinking suffix is quadratic in the number of pieces.
+splitFrom : Array Char -> Int -> Array Char -> Int -> Int -> List String
+splitFrom a n sepA sepLen start = match sepFrom a n sepA sepLen start
+  None => [subChars a start n]
+  Some i => subChars a start i :: splitFrom a n sepA sepLen (i + sepLen)
+
+-- The first index at or after `i` where `sepA` occurs, or None.
+sepFrom : Array Char -> Int -> Array Char -> Int -> Int -> Option Int
+sepFrom a n sepA sepLen i
+  | i + sepLen > n = None
+  | sepAt a sepA sepLen i 0 = Some i
+  | otherwise = sepFrom a n sepA sepLen (i + 1)
+
+sepAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+sepAt a sepA sepLen i k
+  | k >= sepLen = True
+  | arrayGetUnsafe (i + k) a == arrayGetUnsafe k sepA =
+    sepAt a sepA sepLen i (k + 1)
+  | otherwise = False
+
+subChars : Array Char -> Int -> Int -> String
+subChars a lo hi =
+  stringFromChars (arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) a))
 
 {- | The lines of `s`, split on `\n`.
 
