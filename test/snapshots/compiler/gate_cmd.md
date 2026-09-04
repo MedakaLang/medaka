@@ -1,5 +1,5 @@
 # META
-source_lines=5551
+source_lines=5559
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1734,10 +1734,18 @@ candidatesFor root pattern = match gitLsFilesSh root ["ls-files"] pattern
 -- git's pathspec glob does NOT stop `*` at `/` (`test/*_test.mdk` matches
 -- `test/construct_fixtures/prop_test.mdk`, a data fixture some OTHER gate
 -- reads, not a gate module of its own) — measured:
--- `git ls-files 'test/*_test.mdk'`. A native gate's own `run` module lives
--- directly under `test/` (`test/effect_set_domain_test.mdk`), never nested,
--- so the glob's matches are narrowed to exactly that shape before joining the
--- `.sh` candidates.
+-- `git ls-files 'test/*_test.mdk'`, so the glob's matches are narrowed to the
+-- top level of `test/` before joining the `.sh` candidates.
+--
+-- That narrowing bounds the census rather than describing every native gate.
+-- A project's floor gate is a native `run` under its OWN `test/` directory
+-- (`mq/test/check_test.mdk`, #2592), which this corpus does not reach and so
+-- gets no orphan protection. Widening to `*/test/*_test.mdk` would reach it
+-- and would also sweep in ~31 `pds/test/*_test.mdk` and `sqlite/test/*_test.mdk`
+-- modules that are in-language test suites some project gate RUNS, not gates
+-- of their own — none is any entry's `run`, so every one would report
+-- unenrolled. A census cannot tell those two apart by path, so it stops where
+-- it can still be right.
 directlyUnderTest : String -> Bool
 directlyUnderTest p = listLen (splitOnChar '/' p) == 2
 
