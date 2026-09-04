@@ -471,7 +471,7 @@ third-party reproduction step** and it has the same property Zig's `zig1.wasm` h
 
 The natural first instinct — and the one my own proof-of-concept took — is:
 
-```medaka
+```medaka-nocheck: a bare test line showing the vehicle's shape; expectEqual and nDecls come from the surrounding harness, not from an import
 test "parses a function decl" = expectEqual 1 (nDecls "add x y = x + y")   -- ⚠️
 ```
 
@@ -624,7 +624,7 @@ For error tests, put the expectation **in the fixture**, keyed on the stable
 diagnostic `code` that `DIAGNOSTIC-CODES-DESIGN.md` already guarantees, and check it
 against `check --json`:
 
-```medaka
+```medaka-nocheck: a deliberately unbound reference illustrating the inline -- ~ ERROR <code> annotation convention; failing to resolve IS the example
 foo = bar   -- ~ ERROR R-101 unbound name `bar`
 ```
 

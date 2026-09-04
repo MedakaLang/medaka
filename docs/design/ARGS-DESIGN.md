@@ -59,26 +59,45 @@ first-position-only `--help`/`-h` interception, #1348, stays where it is); anyth
 ## 3. The API
 
 ```medaka
-data Arity = Switch | Value String | ValueList String | OneOf (List String) String | IntValue String
-  -- the String on each value-taking arm is the help metavar; OneOf also carries its closed set
+data Arity =
+  | Switch
+  | Value String
+  | ValueList String
+  | OneOf (List String) String
+  | IntValue String
+-- the String on each value-taking arm is the help metavar; OneOf also carries its closed set
 data Visibility = Public | Internal
 data Unknown = RejectUnknown | CollectUnknown
 data Trailing = TrailingReject | TrailingRaw | TrailingAfterSeparator
-data FlagSpec = FlagSpec { names : List String, arity : Arity, summary : String, visibility : Visibility }
-data ArgSpec  = ArgSpec  { verb : String, flags : List FlagSpec, trailing : Trailing, unknown : Unknown }
-data Args     = Args     { given : List (String, Option String), positionals : List String, rest : List String }
+data FlagSpec = FlagSpec {
+  names : List String,
+  arity : Arity,
+  summary : String,
+  visibility : Visibility,
+}
+data ArgSpec = ArgSpec {
+  verb : String,
+  flags : List FlagSpec,
+  trailing : Trailing,
+  unknown : Unknown,
+}
+data Args = Args {
+  given : List (String, Option String),
+  positionals : List String,
+  rest : List String,
+}
 
 parseArgs : ArgSpec -> List String -> Result String Args
-flag       : String -> Args -> Bool
-flagValue  : String -> Args -> Option String    -- FIRST occurrence
-lastValue  : String -> Args -> Option String    -- LAST occurrence
-flagValues : String -> Args -> List String      -- all occurrences, argv order
-rosterOf   : ArgSpec -> List String             -- every name, shorts included (see §4)
-unknownFlagMessage  : ArgSpec -> String -> String
+flag : String -> Args -> Bool
+flagValue : String -> Args -> Option String  -- FIRST occurrence
+lastValue : String -> Args -> Option String  -- LAST occurrence
+flagValues : String -> Args -> List String  -- all occurrences, argv order
+rosterOf : ArgSpec -> List String  -- every name, shorts included (see §4)
+unknownFlagMessage : ArgSpec -> String -> String
 missingValueMessage : ArgSpec -> String -> String
 invalidValueMessage : ArgSpec -> String -> String -> String
 helpBlockOf : ArgSpec -> String
-usageExitCode : Int                             -- the C3 constant, 1
+usageExitCode : Int  -- the C3 constant, 1
 ```
 
 Builders (`switch` / `value` / `valueList` / `oneOf` / `intValue` / `internal` / `spec` /
@@ -173,7 +192,7 @@ three first.
 
 ### 7.1 The decisive probe — Medaka has no existential quantification
 
-```medaka
+```medaka-nocheck: an intentionally ill-typed probe; the Cannot construct infinite type rejection printed immediately below is what the block exists to show
 data P a = PPure a | PFlag String | PAp (P (b -> a)) (P b)
 names : P a -> List String
 names (PAp f x) = names f ++ names x

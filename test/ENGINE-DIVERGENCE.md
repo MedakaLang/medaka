@@ -1,5 +1,7 @@
 # ENGINE-DIVERGENCE.md — where Medaka's three engines disagree
 
+**Status:** LIVE. Prose companion to test/engine_divergence.txt, the known-failure ledger diff_compiler_engines.sh reads.
+
 Measured 2026-07-13 by `test/diff_compiler_engines.sh` (TESTING-DESIGN.md §4.4).
 The machine-readable form of this document is **`test/engine_divergence.txt`**, the
 gate's known-failure ledger. This file is the prose: what each entry means, which

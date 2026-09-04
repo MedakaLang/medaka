@@ -1,5 +1,7 @@
 # P0-5 — Beta Mutability Model: enforce immutability + make `let mut` work
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 > **⚠️ PIVOT (2026-07-09, SHIPPED).** The user re-decided the model: **`let mut`
 > is DROPPED, not fixed.** Mutability consolidates on the **`Ref` type + `<Mut>`
 > effect**. Bindings are immutable; `=` is declaration only; a bare reassignment
@@ -16,7 +18,7 @@
 > and `language-design.md` (§Mutability Rules) for the shipped model.
 
 
-**Status:** design / scoping pass (no compiler source changed). Deliverable is this
+**Status when written:** design / scoping pass (no compiler source changed). Deliverable is this
 doc. All behavior below verified empirically on the current binary, built and run
 **in the Docker Linux container** (`scripts/docker-dev.sh build`; ad-hoc runs against
 volume `medaka-work`) on commit at branch `worktree-agent-a5d6deb2c20f49398`

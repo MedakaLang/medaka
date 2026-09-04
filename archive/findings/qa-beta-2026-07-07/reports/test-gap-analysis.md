@@ -1,5 +1,7 @@
 # Test-gap analysis (area: test-gap-analysis)
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Method: read SYNTAX.md fully; surveyed all `test/` fixture dirs (counts + names + sampled
 contents); cross-referenced every SYNTAX.md construct and every `stdlib/*.mdk` module against
 parse / check / eval / llvm-build / wasm coverage; spot-probed ~12 suspicious gaps on the binary.

@@ -1,5 +1,7 @@
 # Findings — SQL `SELECT` statement parser (`lib.sqlstmt`)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Stage 2 of the SQL front end: `parseSelect : String -> Result String Select`, aggregate-call
 syntax in `lib.sqlparse`, `queryString` / `queryStringDistinct`, and the SQL-text differential
 oracle (`sqlite/test/sql_oracle.sh`, 71 SQL strings diffed against the real `sqlite3` CLI).

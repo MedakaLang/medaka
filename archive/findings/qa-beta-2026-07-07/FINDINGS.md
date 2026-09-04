@@ -1,5 +1,7 @@
 # Beta-hardening QA findings — 2026-07-07
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Consolidated from 8 parallel adversarial-QA sweeps (beginner-syntax, bindings-mutability,
 type-system, numerics-strings-data, patterns-control-flow, tooling-cli, test-gap-analysis,
 playground-wasm). Full per-area reports with every repro and variation live in `reports/`;

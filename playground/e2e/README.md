@@ -1,5 +1,7 @@
 # Medaka playground e2e harness
 
+**Status:** LIVE. Describes the Playwright harness beside it.
+
 A Playwright harness that drives a **real browser** against the built
 playground so agents/humans can verify frontend changes (CodeMirror 6
 mounting, syntax highlighting, running a program, inline type-error squiggles)

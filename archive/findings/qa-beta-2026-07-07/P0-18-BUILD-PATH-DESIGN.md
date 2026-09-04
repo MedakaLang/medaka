@@ -1,5 +1,7 @@
 # P0-18 build-path soundness hole — design & scoping
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 **Status: ✅ IMPLEMENTED + merged (`0b4a7882` Part A + `01ac360d` Part B, on local main `01ac360d`, 2026-07-09).**
 Option 3 (thread mangle rename-info into the mark pass) + Fork-2 carry-in-route, mangler and
 pipeline order untouched. `medaka build` of `size (Box 3)` now → **3** (was garbage); N-way →

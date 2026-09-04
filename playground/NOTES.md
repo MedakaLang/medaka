@@ -1,5 +1,7 @@
 # playground/NOTES.md — the docs render machine
 
+**Status:** LIVE. Handoff contract for the playground docs-render machine.
+
 Landed by **S-render-machine** (sprint `guide-on-the-site`, #2386). This file is the
 handoff contract for the slices that build on top of it.
 

@@ -1,5 +1,7 @@
 # `WHERE col IN (SELECT …)` subqueries — design + friction log
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Adding non-correlated `expr [NOT] IN (SELECT …)` to the SQL front end + engine.
 Pure-Medaka library change (parser, AST, renderer, executor); no compiler edits.
 

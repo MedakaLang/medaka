@@ -1,5 +1,7 @@
 # Repro — `medaka run` does not gate on TYPE errors in a multi-module program
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood repro; kept for provenance, not current guidance.
+
 Verified on `sqlite-arc` @ `f4e579c5` with a freshly built `./medaka`.
 
 ## Why it probably didn't reproduce for you

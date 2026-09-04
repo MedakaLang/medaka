@@ -1,5 +1,7 @@
 # error_quality_fixtures — compiler error-message evaluation corpus
 
+**Status:** LIVE. Corpus convention for test/error_quality_fixtures; the fixtures beside it are gated.
+
 A corpus of **small, plausible mistakes** a real human or an LLM agent would
 actually make, one per file, organized by the pipeline stage that *should*
 report the problem. Its purpose is to build an evaluation baseline of the

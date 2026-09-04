@@ -1,6 +1,6 @@
 # CAPABILITY-MATRIX.md — which engine implements which extern
 
-Status: **active**, 2026-07-13.
+**Status:** LIVE. Prose explanation of what test/diff_compiler_capability_matrix.sh proves; its machine-readable ledger is test/CAPABILITY-EXCEPTIONS.txt. Last hand-revised 2026-07-13.
 
 ## The bug this exists to catch
 

@@ -95,7 +95,7 @@ The compiler's own source already asserts this conclusion, in two places:
 
 And the stdlib **depends** on the standalone winning today. `stdlib/map.mdk:454`:
 
-```medaka
+```medaka-nocheck: verbatim excerpt of stdlib/map.mdk:454; it names Map and toList from the module it was quoted out of
 export impl Debug (Map k v) requires Debug k, Debug v where
   debug m = "fromList \{debug (toList m)}"
 ```
@@ -149,7 +149,7 @@ default. The user's standalone is being typed into the prelude.
 
 Same shadow, in a 3-module project:
 
-```medaka
+```medaka-nocheck: two source files typeset side by side in two columns — the columns are helper.mdk and other.mdk, not one program
 -- helper.mdk           -- other.mdk
 export map : Int -> Int  export doubled : List Int
 map n = n + 1            doubled = map (x => x * 2) [1, 2, 3]
@@ -213,7 +213,7 @@ Route)`. The brief's "the fix that JUST LANDED" is not true of `main`.
 
 S-1's bug reproduces on `main` exactly as filed:
 
-```medaka
+```medaka-nocheck: the S-1 repro as filed, in the one-line where { ... } brace form the parser rejects (P-WHERE-BODY-SAME-LINE); also omits the "data Box" declaration the fence references — completed minimally it checks/runs/builds clean and does not reproduce the E-PANIC this record claims
 interface Sz a where { size : a -> String }
 impl Sz Box where { size (Box n) = "box" }
 size : Num a => a -> a
@@ -484,7 +484,7 @@ top-level standalone function must WIN" without distinguishing.
 **If importer shadows also win**, `test/shadow_fixtures/i4_importer_prelude_iface/`
 breaks — verified green today (`True False False True`):
 
-```medaka
+```medaka-nocheck: imports prov, a module that exists on disk only as test/shadow_fixtures/i4_importer_prelude_iface/
 import prov.{Tok(..), isEmpty}     -- prov.isEmpty : Tok -> Bool
 main =
   println (isEmpty (Tok 0))        -- True   ← standalone
@@ -504,7 +504,7 @@ preserves rows 15–20 exactly and fixes the bug that motivated the change.
 
 ### FORK 2 — dict-bound (`=>`) receiver in the shadowing module: dispatch or standalone? **RECOMMEND: DISPATCH (keep the carve-out).**
 
-```medaka
+```medaka-nocheck: the two signatures the fork turns on, over the Sz interface declared earlier in this document
 sz : Int -> Int          -- the definer shadow
 sz n = n + 1
 twice : Sz a => a -> Int -- an explicit constraint
