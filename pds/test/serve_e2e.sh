@@ -26,9 +26,17 @@ fail() {
   exit 1
 }
 
+# The server's stderr must hold nothing but the file-mode warnings it is
+# REQUIRED to emit (`pds/serve.mdk`): a file this program creates is 0644,
+# because Medaka has no file-mode primitive, and saying so loudly is the whole
+# mitigation. Filtering them here rather than dropping the check keeps every
+# other stderr line a failure — an exception for one known line, not an
+# amnesty.
 require_empty() {
-  [ ! -s "$1" ] || {
-    cat "$1" >&2
+  grep -v '^serve: WARNING: created .* world-readable (mode 0644)' "$1" \
+    > "$WORK/stderr.rest" 2>/dev/null || true
+  [ ! -s "$WORK/stderr.rest" ] || {
+    cat "$WORK/stderr.rest" >&2
     fail "$2 emitted stderr"
   }
 }
@@ -63,9 +71,23 @@ COLLECTION='app.bsky.feed.post'
 RKEY='e2egatefixture'
 RECORD_TEXT='pds serve_e2e gate fixture record'
 
+# The session-token secret, which is NOT the repository signing key: the two
+# are separate secrets by design, and this gate proves the server accepts a
+# token minted from the one it was handed at `--token-secret`.
+TOKEN_SECRET_HEX='7f1c0a6d2b93e45880ac31f6d5e27b04913ca8e6f27d4b51a03c8e19d6b4720f'
+
+# The account password. It reaches the server in a FILE and never as an
+# argument value: an argument is visible in `ps` output to every user on the
+# box, which is why `pds/serve.mdk` takes `--password-file` and no
+# `--password`. The trailing newline is deliberate — it is what every editor
+# and `printf %s\n` leaves, and the server strips exactly one.
+PASSWORD='s-sessions e2e gate password'
+
 DATA="$WORK/data"
 mkdir -p "$DATA"
 printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
+printf '%s\n' "$TOKEN_SECRET_HEX" > "$WORK/token.hex"
+printf '%s\n' "$PASSWORD" > "$WORK/password"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -90,10 +112,19 @@ start_server() {
   extra=$1
   outfile=$2
   errfile=$3
-  # shellcheck disable=SC2086 # $extra is a single optional flag, no quoting needed
+  # --password-file is only passed on genesis (--init): a resumed run finds
+  # an existing credential, and passing --password-file against one now
+  # gets refused (F1, #2604) rather than silently keeping the old password.
+  pwflag=""
+  if [ "$extra" = "--init" ]; then
+    pwflag="--password-file $WORK/password"
+  fi
+  # shellcheck disable=SC2086 # $extra/$pwflag are single optional flags, no quoting needed
   "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --data "$DATA" --port 0 $extra \
+    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+    $pwflag \
+    --data "$DATA" --port 0 $extra \
     >"$outfile" 2>"$errfile" &
   SERVER_PID=$!
 }
@@ -111,6 +142,24 @@ PORT1=$(wait_for_port "$WORK/serve1.out") || {
 }
 require_empty "$WORK/serve1.err" 'server startup'
 
+# One session for every write case below. The three record-write procedures
+# are gated at the composition seam (#2604), so a write that presents no token
+# is refused 401 before its handler runs.
+#
+# The token comes from `com.atproto.server.createSession` — the real login,
+# against the password bootstrapped above — and no longer from a token minted
+# beside the server. That is not a stylistic change: the seam now requires the
+# token's SESSION to be open as well as its signature to verify, so a token
+# this gate minted for itself would be refused, and rightly.
+LOGIN=$(client login "$PORT1" "$HANDLE" "$PASSWORD") \
+  || fail 'could not log in with the bootstrapped password'
+TOKEN=${LOGIN%% *}
+REFRESH=${LOGIN##* }
+[ -n "$TOKEN" ] || fail 'createSession issued an empty access token'
+[ -n "$REFRESH" ] || fail 'createSession issued an empty refresh token'
+[ "$TOKEN" != "$REFRESH" ] \
+  || fail 'createSession issued the same string as both tokens'
+
 # 1. a well-formed query gets a correct response
 client query "$PORT1" "$DID" || fail 'case 1: well-formed query'
 
@@ -122,14 +171,60 @@ client keepalive "$PORT1" || fail 'case 3: keep-alive reuse'
 
 # 4. chunked write procedure succeeds — this ALSO plants the record that
 #    case 9 (restart-and-resume) reads back after the process boundary.
-client chunked "$PORT1" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
+client chunked "$PORT1" "$TOKEN" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
   || fail 'case 4: chunked write'
 
 # 5. every remaining route: the six XRPC NSIDs no other case drives, plus
 #    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
 #    both well-knowns proven by this gate rather than by reading the registry.
-client endpoints "$PORT1" "$DID" "$HANDLE" "$COLLECTION" "$RKEY" \
+client endpoints "$PORT1" "$TOKEN" "$DID" "$HANDLE" "$COLLECTION" "$RKEY" \
   || fail 'case 5: remaining endpoint coverage'
+
+# 5b. the same write with NO token is refused 401 by the seam, over the real
+#    socket — the in-process test proves the seam refuses, this proves the
+#    running server does.
+client unauthorized "$PORT1" "$DID" "$COLLECTION" "$RKEY" \
+  || fail 'case 5b: unauthenticated write refused'
+
+# 5c. the access token names its own account back.
+client get-session "$PORT1" "$TOKEN" "$DID" || fail 'case 5c: getSession'
+
+# 5d. a login with the wrong password is refused with atproto's own code, and
+#    over the real socket. The in-process cells grade the refusal's shape;
+#    this proves the running server produces it.
+client login-refused "$PORT1" "$HANDLE" 'not the password' \
+  || fail 'case 5d: wrong password refused'
+
+# 11. the session lifecycle, end to end and over the socket: log in, write,
+#    log out, and find the SAME access token refused afterwards. Its signature
+#    is still good and its two-hour window is still open, so a server that
+#    verified tokens statelessly would still accept it — this is the case that
+#    tells a revocation apart from a promise of one.
+LOGIN2=$(client login "$PORT1" "$HANDLE" "$PASSWORD") \
+  || fail 'case 11: second login'
+ACCESS2=${LOGIN2%% *}
+REFRESH2=${LOGIN2##* }
+client write "$PORT1" "$ACCESS2" "$DID" "$COLLECTION" 's-sessions-live-1' 200 \
+  || fail 'case 11: write with a freshly issued access token'
+client logout "$PORT1" "$REFRESH2" || fail 'case 11: deleteSession'
+client write "$PORT1" "$ACCESS2" "$DID" "$COLLECTION" 's-sessions-live-2' 401 \
+  || fail 'case 11: access token still accepted after deleteSession'
+
+# 12. rotation, and the reuse of what it consumed. The refresh token that was
+#    exchanged is refused from then on; the pair that replaced it works.
+LOGIN3=$(client login "$PORT1" "$HANDLE" "$PASSWORD") \
+  || fail 'case 12: third login'
+REFRESH3=${LOGIN3##* }
+ROTATED=$(client refresh "$PORT1" "$REFRESH3") || fail 'case 12: refreshSession'
+ACCESS4=${ROTATED%% *}
+REFRESH4=${ROTATED##* }
+[ "$REFRESH4" != "$REFRESH3" ] \
+  || fail 'case 12: refreshSession returned the token it was given'
+client refresh-refused "$PORT1" "$REFRESH3" \
+  || fail 'case 12: the consumed refresh token was accepted again'
+client write "$PORT1" "$ACCESS4" "$DID" "$COLLECTION" 's-sessions-live-3' 200 \
+  || fail 'case 12: write with the rotated access token'
+client logout "$PORT1" "$REFRESH4" || fail 'case 12: logout of the rotated session'
 
 # 6. malformed request -> 400, error path not a hang or crash
 client malformed "$PORT1" || fail 'case 6: malformed request'
@@ -183,7 +278,8 @@ printf '%s\n' "$KEY10B_HEX" > "$WORK/key10b.hex"
 
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key10a.hex" --data "$DATA10" --port 0 --init \
+  --key "$WORK/key10a.hex" --password-file "$WORK/password" \
+  --data "$DATA10" --port 0 --init \
   >"$WORK/serve10a.out" 2>"$WORK/serve10a.err" &
 SERVER_PID=$!
 PORT10A=$(wait_for_port "$WORK/serve10a.out") || {
@@ -194,6 +290,38 @@ require_empty "$WORK/serve10a.err" 'case 10 genesis startup'
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
+
+# 13. first-run bootstrap, observed on the one server this gate starts with
+#    no --token-secret: it generates its own session secret, keeps it in the
+#    data directory, and says on stderr that the file it just created is
+#    world-readable. The warning names the PATH and the mode; it must not name
+#    the secret, which would make the warning a larger leak than the mode it
+#    warns about.
+[ -f "$DATA10/session-secret" ] \
+  || fail 'case 13: first run did not generate a session secret'
+[ -f "$DATA10/credential" ] \
+  || fail 'case 13: first run did not store an account credential'
+grep -F "created $DATA10/session-secret world-readable (mode 0644)" \
+  "$WORK/serve10a.err" >/dev/null \
+  || fail 'case 13: no world-readable warning for the generated session secret'
+grep -F "created $DATA10/credential world-readable (mode 0644)" \
+  "$WORK/serve10a.err" >/dev/null \
+  || fail 'case 13: no world-readable warning for the stored credential'
+GENERATED_SECRET=$(cat "$DATA10/session-secret")
+if grep -F "$GENERATED_SECRET" "$WORK/serve10a.err" >/dev/null 2>&1; then
+  fail 'case 13: the warning printed the generated secret itself'
+fi
+if grep -F "$PASSWORD" "$WORK/serve10a.err" "$WORK/serve10a.out" >/dev/null 2>&1
+then
+  fail 'case 13: the account password reached the server output'
+fi
+# The generated secret is 32 bytes as hex, and it is not the fixed one this
+# gate hands the other server: a "generated" secret that was a constant would
+# pass every other check here.
+[ ${#GENERATED_SECRET} -eq 64 ] \
+  || fail 'case 13: the generated session secret is not 32 bytes of hex'
+[ "$GENERATED_SECRET" != "$TOKEN_SECRET_HEX" ] \
+  || fail 'case 13: the generated session secret is a hardcoded constant'
 
 [ -f "$DATA10/head" ] || fail 'case 10: genesis did not persist a head file'
 HEAD_BEFORE=$(cksum "$DATA10/head")
@@ -206,7 +334,8 @@ HEAD_BEFORE=$(cksum "$DATA10/head")
 # it, not "eventually exits or listens".
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key10b.hex" --data "$DATA10" --port 0 --init \
+  --key "$WORK/key10b.hex" --password-file "$WORK/password" \
+  --data "$DATA10" --port 0 --init \
   >"$WORK/serve10b.out" 2>"$WORK/serve10b.err" &
 SERVER_PID=$!
 i=0
@@ -230,4 +359,4 @@ HEAD_AFTER=$(cksum "$DATA10/head")
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || fail 'case 10: second --init with a different key modified the existing head file'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, malformed, over-cap, idle timeout, restart-and-resume, init-overwrite-refusal'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, init-overwrite-refusal, first-run bootstrap'

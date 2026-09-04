@@ -696,7 +696,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -758,7 +758,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/repo_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 # Was "medium" while this gate was the 948.9s pole of the whole suite — i.e. the
@@ -794,7 +794,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -959,7 +959,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/delete_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -989,7 +989,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1334,7 +1334,7 @@ toolchain = []
 [[gate]]
 name = "build_construct_coverage"
 area = "backend"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -2339,7 +2339,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_fmt_roundtrip"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3104,7 +3104,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_rt_obj"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3359,7 +3359,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_stack_overflow"
 area = "infra"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3404,7 +3404,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_test"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3704,7 +3704,7 @@ toolchain = []
 [[gate]]
 name = "selfcompile_build_fixpoint"
 area = "backend"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3972,7 +3972,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_tier_drift"
 area = "infra"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -4118,7 +4118,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_ir_floor"
 area = "infra"
-shard = "gates_8"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -4382,5 +4382,28 @@ migration = "native-rewrite"
 run = "test/diff_compiler_catch_all_census.sh"
 oracles = []
 sources = ["compiler/frontend/ast.mdk", "compiler/types/repr.mdk", "compiler/types/typecheck.mdk", "test/catch_all_census.ledger", "test/catch_all_census.py", "test/diff_compiler_catch_all_census.sh"]
+corpus = []
+toolchain = []
+
+# S-test-runs (#2527: make pds/test/*_test.mdk actually run; tracking #2652).
+# Drives `medaka test` over the 15 pds/test/*_test.mdk files (~338 `test`
+# decls: ECDSA, RFC 6979, secp256k1, field/scalar arithmetic, HTTP framing) so
+# they are asserted on every merge instead of running nowhere in CI.
+#
+# `shard` below is a placeholder ([W-SHARD-DERIVED], #2178): this gate has no
+# row in test/gate_cost_baseline.json yet, so `medaka gate balance` must place
+# it for real at end-of-sprint discharge.
+[[gate]]
+name = "pds/test/unit_suite"
+area = "engines"
+shard = "gates_3"
+project = "pds"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-wrap"
+run = "pds/test/unit_suite.sh"
+oracles = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []

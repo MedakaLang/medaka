@@ -29,8 +29,22 @@ import lib.repo.{
   repoLatestCommit,
   repoRootCid,
 }
-import lib.server_core.{Account, Server, handleBytes, makeAccount}
-import lib.store.{Store, storeFromRepo, storeRepo}
+import lib.jwt.{mintToken}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeFromRepo,
+  storeRepo,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
 import lib.tid.{Tid, tidParse}
 
 accountHandleText : String
@@ -73,13 +87,71 @@ mustRepo did secretHex rev =
     Ok repo => repo
     Err message => panic "record_handlers: repository init failed: \{message}"
 
+-- ── the session credential every write now needs ──────────────────────────
+
+{- | A fixed session-token secret and a fixed instant. Record writes are
+   `AuthenticatedRoute`, so `lib.server_core`'s seam refuses one that
+   arrives without a verifiable bearer token — a driver that replays
+   writes must present one, and the store it replays them against must
+   carry the secret that token was minted from.
+
+   The secret is a fixture, not entropy: this file grades handler
+   behavior, and a random secret would only make the transcript
+   irreproducible. -}
+testSecret : Array Int
+testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
+
+testInstant : Int
+testInstant = 1700000000
+
+{- | The per-request nonce every request in this file is placed at. Nothing
+   here drives a route that mints a token, so the value only has to be fixed;
+   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = testInstant, nonce = testNonce }
+
+{- | The store a replayed write is applied to: it carries the session secret
+   the fixture token was minted from, and the open session that token belongs
+   to. A verified signature is not on its own a credential — the seam also
+   requires the token's session to be open (`lib.store`) — so a driver that
+   presents a token must open its session too.
+
+   The session's refresh half is the fingerprint of a string that is not a
+   token at all: no route this file drives is a `RefreshRoute`, so nothing can
+   present it. -}
+authorizedStore : String -> Store -> Store
+authorizedStore did store = match storeWithServerSecret testSecret store
+  Ok next =>
+    storeSessionOpen
+      (sessionFingerprint (testToken did))
+      (sessionFingerprint "record_handlers: no refresh token in this fixture")
+      (testInstant + 3600)
+      next
+  Err message =>
+    panic "record_handlers: session secret setup failed: \{message}"
+
+-- The audience is this PDS's own hostname and the subject the account
+-- DID, which is exactly what the seam verifies against.
+testToken : String -> String
+testToken did =
+  mintToken
+    testSecret
+    did
+    accountHostText
+    "record_handlers-fixture-token"
+    (testInstant - 60)
+    (testInstant + 3600)
+
 -- ── request framing ─────────────────────────────────────────────────────────
 
-procedureRequest : String -> String -> Array Int
-procedureRequest nsid body =
+procedureRequest : String -> String -> String -> Array Int
+procedureRequest did nsid body =
   let bytes = toUtf8 body
   toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
     ++ bytes
 
 -- Everything after the first CRLFCRLF is the response body.
@@ -161,7 +233,7 @@ runStep did server store opLine commitLine = match (
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "record_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleBytes server store (procedureRequest nsid body)
+      handleBytes server testContext store (procedureRequest did nsid body)
     let value = responseJson responseBytes
     let expectedUri = "at://\{did}/\{collection}/\{rkey}"
     let uriOk = kind == "DELETE" || fieldText "uri" value == expectedUri
@@ -189,11 +261,18 @@ storeFingerprint store = match storeRepo store
   Some repo =>
     "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
 
-rejectCell : String -> String -> String -> Server -> Store -> String -> <IO> Int
-rejectCell label expectedCode nsid server store body =
+rejectCell : String ->
+  String ->
+  String ->
+  String ->
+  Server ->
+  Store ->
+  String ->
+  <IO> Int
+rejectCell label expectedCode did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleBytes server store (procedureRequest nsid body)
+    handleBytes server testContext store (procedureRequest did nsid body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let code = fieldText "error" value
@@ -249,6 +328,7 @@ runCells did server store record =
     rejectCell
       "swap-commit-mismatch"
       "InvalidSwap"
+      did
       create
       server
       store
@@ -257,6 +337,7 @@ runCells did server store record =
     rejectCell
       "validate-true-refused"
       "InvalidRequest"
+      did
       create
       server
       store
@@ -265,6 +346,7 @@ runCells did server store record =
     rejectCell
       "unknown-collection"
       "InvalidRequest"
+      did
       create
       server
       store
@@ -273,6 +355,7 @@ runCells did server store record =
     rejectCell
       "malformed-json"
       "InvalidRequest"
+      did
       create
       server
       store
@@ -307,7 +390,7 @@ runTranscript ["META", did, secretHex] t0 op1 c1 op2 c2 op3 c3 op4 c4 =
   let account = mustAccount did
   let server = mustServer account
   let repo = mustRepo did secretHex (initialTidFrom t0)
-  let store = storeFromRepo repo
+  let store = authorizedStore did (storeFromRepo repo)
   let s1 = runStep did server store op1 c1
   let s2 = runStep did server s1 op2 c2
   let s3 = runStep did server s2 op3 c3

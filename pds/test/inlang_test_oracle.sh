@@ -29,7 +29,7 @@ export MEDAKA_ROOT
 # file:floor — floor = the assertion count committed today. Adding tests only
 # raises the real count (>= floor still passes); removing them, or a discovery
 # regression, drops below the floor and fails. Raise a floor when you add tests.
-SUITES="skeleton_test:2 http_test:74 xrpc_test:29 server_core_test:11 encodings_test:29 dagcbor_cid_test:12 mst_test:12 car_store_test:14 repo_tid_test:9 field_test:30 scalar_test:38 sign_key_test:11 secp256k1_point_test:8 rfc6979_test:4 ecdsa_test:2"
+SUITES="skeleton_test:2 http_test:74 xrpc_test:29 server_core_test:11 encodings_test:29 dagcbor_cid_test:12 mst_test:12 car_store_test:14 repo_tid_test:9 field_test:30 scalar_test:38 sign_key_test:11 secp256k1_point_test:8 rfc6979_test:4 ecdsa_test:2 pbkdf2_test:4 jwt_test:26 credential_test:20 session_routes_test:29 auth_seam_test:31"
 
 rc=0
 total_ran=0
@@ -63,7 +63,14 @@ done
 # `--native` (slower per-file compile, unverified across all 14 suites, and
 # out of this sprint's own stated scope). Delete a row here if that file's
 # capability surface changes and it passes under eval again.
-NATIVE_ENGINE_EXCEPTIONS=" repo_tid_test "
+#
+# pbkdf2_test/jwt_test/credential_test/session_routes_test/auth_seam_test are
+# a second, distinct reason for the same mechanism: PBKDF2/SHA-256 volume that
+# runs several times slower under the interpreter (`pds/test/unit_suite.sh`
+# already routes these five through `--native` for the identical reason;
+# pbkdf2_test alone ran for minutes of CPU time under eval without finishing
+# in a manual measurement).
+NATIVE_ENGINE_EXCEPTIONS=" repo_tid_test pbkdf2_test jwt_test credential_test session_routes_test auth_seam_test "
 
 for spec in $SUITES; do
   name="${spec%%:*}"

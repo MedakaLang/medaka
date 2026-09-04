@@ -14,6 +14,7 @@ import lib.http.{
 import lib.nsid.{validateNsid}
 import lib.resource_limits.{maxJsonBodyBytes, maxRawBodyBytes, maxTextBodyBytes}
 import lib.xrpc.{
+  AuthPolicy(..),
   Endpoint,
   InputPolicy(..),
   Registry,
@@ -75,12 +76,21 @@ registry : Registry
 registry =
   mustRegistry
     (makeRegistry [
-      mustEndpoint (queryEndpoint "com.atproto.server.describeServer"),
-      mustEndpoint (procedureEndpoint "com.example.nobody.ping" NoInput),
-      mustEndpoint (procedureEndpoint "com.atproto.repo.applyWrites" JsonInput),
-      mustEndpoint (procedureEndpoint "com.example.text.echo" TextInput),
-      mustEndpoint (procedureEndpoint "com.atproto.repo.uploadBlob" RawInput),
-      mustEndpoint (subscriptionEndpoint "com.atproto.sync.subscribeRepos"),
+      mustEndpoint
+        (queryEndpoint "com.atproto.server.describeServer" PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.example.nobody.ping" NoInput PublicRoute),
+      mustEndpoint
+        (procedureEndpoint
+          "com.atproto.repo.applyWrites"
+          JsonInput
+          PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.example.text.echo" TextInput PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.atproto.repo.uploadBlob" RawInput PublicRoute),
+      mustEndpoint
+        (subscriptionEndpoint "com.atproto.sync.subscribeRepos" PublicRoute),
     ])
 
 reasonFor : Int -> String
@@ -110,7 +120,7 @@ failureValueMatches status code message failed =
 
 failureMatches : Int -> String -> String -> Request -> Bool
 failureMatches status code message request = match routeRequest registry request
-  RouteCall _ => False
+  RouteCall _ _ => False
   RouteFailure failed => failureValueMatches status code message failed
 
 sizeBoundaryMatches : InputPolicy -> Int -> String -> Bool
@@ -136,18 +146,22 @@ test "shared NSID authority accepts ASCII case and rejects structural boundaries
 
 test "endpoint smart constructors reject invalid NSIDs" =
   expectTrue
-    (isErr (queryEndpoint "com.atproto.bad-name")
-      && isErr (procedureEndpoint "not-an-nsid" JsonInput)
-      && isErr (subscriptionEndpoint "com.atproto.sync.subscribe-Repos"))
+    (isErr (queryEndpoint "com.atproto.bad-name" PublicRoute)
+      && isErr (procedureEndpoint "not-an-nsid" JsonInput PublicRoute)
+      && isErr
+        (subscriptionEndpoint "com.atproto.sync.subscribe-Repos" PublicRoute))
 
 test "registry admission rejects duplicate endpoint NSIDs" =
-  let endpoint = mustEndpoint (queryEndpoint "com.example.test.echo")
+  let endpoint =
+    mustEndpoint (queryEndpoint "com.example.test.echo" PublicRoute)
   expectTrue (isErr (makeRegistry [endpoint, endpoint]))
 
 test "registry identity folds authority case but preserves method-name case" =
-  let lower = mustEndpoint (queryEndpoint "com.example.test.echo")
-  let upperAuthority = mustEndpoint (queryEndpoint "Com.Example.test.echo")
-  let upperMethod = mustEndpoint (queryEndpoint "com.example.test.Echo")
+  let lower = mustEndpoint (queryEndpoint "com.example.test.echo" PublicRoute)
+  let upperAuthority =
+    mustEndpoint (queryEndpoint "Com.Example.test.echo" PublicRoute)
+  let upperMethod =
+    mustEndpoint (queryEndpoint "com.example.test.Echo" PublicRoute)
   expectTrue
     (isErr (makeRegistry [lower, upperAuthority])
       && not (isErr (makeRegistry [lower, upperMethod])))
@@ -158,7 +172,7 @@ test "GET query routing preserves repeated decoded values and order" =
       "GET"
       "/xrpc/com.atproto.server.describeServer?detail=one&detail=&flag"
   match routeRequest registry request
-    RouteCall (QueryCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =>
+    RouteCall _ (QueryCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =>
       expectTrue
         (nsid == "com.atproto.server.describeServer"
           && firstName == "detail"
@@ -186,7 +200,7 @@ test "routing matches authority case-insensitively and returns registered spelli
   match (routeRequest
     registry
     (noBodyRequest "GET" "/xrpc/Com.AtProto.server.describeServer"))
-    RouteCall (QueryCall "com.atproto.server.describeServer" []) =>
+    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) =>
       expectTrue True
     _ => expectTrue False
 
@@ -266,7 +280,7 @@ test "no-input procedure produces a typed call" =
   match (routeRequest
     registry
     (noBodyRequest "POST" "/xrpc/com.example.nobody.ping"))
-    RouteCall (ProcedureNoInputCall "com.example.nobody.ping" []) =>
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
       expectTrue True
     _ => expectTrue False
 
@@ -286,7 +300,7 @@ test "JSON procedure produces a typed parsed call" =
       "Content-Type: application/json; charset=utf-8\r\n"
       (toUtf8 "{\"ok\":true}")
   match routeRequest registry request
-    RouteCall (ProcedureJsonCall nsid [] value) =>
+    RouteCall _ (ProcedureJsonCall nsid [] value) =>
       expectTrue
         (nsid == "com.atproto.repo.applyWrites"
           && stringify value == "{\"ok\":true}")
@@ -300,7 +314,7 @@ test "text procedure produces a typed UTF-8 call" =
       "Content-Type: text/plain; charset=utf-8\r\n"
       (toUtf8 "héllo")
   match routeRequest registry request
-    RouteCall (ProcedureTextCall nsid [] media text) =>
+    RouteCall _ (ProcedureTextCall nsid [] media text) =>
       expectTrue
         (nsid == "com.example.text.echo"
           && mediaTypeType media == "text"
@@ -331,7 +345,7 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
     routeRequest registry jsonRequest,
     routeRequest registry opaqueRequest,
   )
-    (RouteCall (ProcedureRawCall textNsid [] textMedia textBytes), RouteCall (ProcedureRawCall jsonNsid [] jsonMedia jsonBytes), RouteCall (ProcedureRawCall opaqueNsid [] opaqueMedia opaqueBytes)) =>
+    (RouteCall _ (ProcedureRawCall textNsid [] textMedia textBytes), RouteCall _ (ProcedureRawCall jsonNsid [] jsonMedia jsonBytes), RouteCall _ (ProcedureRawCall opaqueNsid [] opaqueMedia opaqueBytes)) =>
       expectTrue
         (textNsid == "com.atproto.repo.uploadBlob"
           && mediaTypeType textMedia == "text"
@@ -355,7 +369,7 @@ test "procedure query parameters preserve repeated names empty values and order"
       "Content-Type: application/json\r\n"
       (toUtf8 "{}")
   match routeRequest registry request
-    RouteCall (ProcedureJsonCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue] _) =>
+    RouteCall _ (ProcedureJsonCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue] _) =>
       expectTrue
         (nsid == "com.atproto.repo.applyWrites"
           && firstName == "dryRun"
