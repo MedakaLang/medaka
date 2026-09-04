@@ -131,11 +131,11 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
   ```medaka
   data Env = Env (List Int)
   mkEnv : Unit -> Env
-  mkEnv _ = base          -- reads the `base` global, but only INSIDE a callee
+  mkEnv _ = base  -- reads the `base` global, but only INSIDE a callee
   cell : Env
-  cell = mkEnv ()         -- eager global; only eager var is `mkEnv` ⇒ NO edge
+  cell = mkEnv ()  -- eager global; only eager var is `mkEnv` ⇒ NO edge
   base : Env
-  base = Env [1, 2, 3]    -- declared after `cell` ⇒ source order loses
+  base = Env [1, 2, 3]  -- declared after `cell` ⇒ source order loses
   size : Env -> Int
   size e = match e
     Env xs => 7

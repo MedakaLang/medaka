@@ -2301,7 +2301,7 @@ nit on one engine.
 **all three paths**, whenever the shadowed method is **higher-kinded** — which every
 `Foldable`/`Mappable`/`Traversable` method is:
 
-```medaka
+```medaka-nocheck: imports prov, whose contents are given in the block's own first comment line rather than on disk
 -- prov.mdk:  export isEmpty : Int -> Bool   (isEmpty n = n == 0)
 import prov.{isEmpty}
 main = println (debug (isEmpty 0))    -- Type mismatch: Int literal vs Int Int
