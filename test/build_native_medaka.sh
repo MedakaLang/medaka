@@ -237,14 +237,23 @@ hash_stream() {
 #                  unnecessary rebuild while an under-broad one silently vouches
 #                  for an emitter built from source that is no longer on disk.
 #
-#   FP_COMPILER  = compiler/**.mdk ONLY.  Baked into ./medaka as -DMEDAKA_SRC_FP
-#                  (below) and recomputed at runtime by `liveSourceFingerprint` in
-#                  compiler/driver/medaka_cli.mdk, which is documented as a
-#                  byte-for-byte mirror hashing the SAME find expression. The
-#                  baked value MUST match that compiler-only computation, else every
-#                  ./medaka invocation warns "stale" (and hard-fails under
-#                  MEDAKA_STRICT=1). So the bake stays compiler-only; do NOT fold
-#                  runtime/*.c into it without also editing medaka_cli.mdk.
+#   FP_COMPILER  = compiler/**.mdk + stdlib/**.mdk.  Baked into ./medaka as
+#                  -DMEDAKA_SRC_FP (below) and recomputed at runtime by
+#                  `liveSourceFingerprint` in compiler/driver/medaka_cli.mdk,
+#                  which is documented as a byte-for-byte mirror hashing the
+#                  SAME find expression. The baked value MUST match that live
+#                  computation, else every ./medaka invocation warns "stale"
+#                  (and hard-fails under MEDAKA_STRICT=1). stdlib/ is compiled
+#                  INTO the CLI binary exactly as it is into the emitter (a
+#                  compiler/*.mdk module can import stdlib/*.mdk per
+#                  [T-STDLIB-IMPORT], and those imports get linked into
+#                  medaka_cli.ll at stage B) — issue #2682's other half: a
+#                  stdlib-only edit changed CLI behavior with the same "stage
+#                  reported up-to-date" silence FP_FULL already fixed for the
+#                  emitter, and SKIP_CLI_LINK_IF_FRESH would call the resulting
+#                  binary fresh forever. runtime/*.c stays OUT (it is not
+#                  Medaka source `liveSourceFingerprint` can read); do NOT fold
+#                  it in without also editing medaka_cli.mdk.
 #
 # Both fingerprints exclude `*_test.mdk`: a test sibling (compiler/types/registry_test.mdk
 # and peers) is never linked into the emitter or the CLI, so hashing one would make
@@ -253,7 +262,9 @@ hash_stream() {
 # `liveSourceFingerprint` carries the identical exclusion; the two must move together.
 # FORCE_EMITTER_REBUILD=1 overrides the FP_FULL skip regardless.
 src_fingerprint_compiler() {
-  ( cd "$ROOT" && find compiler -name '*.mdk' -not -name '*_test.mdk' -print | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$ROOT" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print
+      find stdlib -name '*.mdk' -not -name '*_test.mdk' -print
+    } | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s\n' "$f"
       cat "$f"
     done ) | hash_stream | cut -d' ' -f1
@@ -392,11 +403,13 @@ else
   # so the CLI can warn when it is run against a NEWER compiler/ than it was built
   # from.  The -D hits ONLY this C compile of medaka_rt.c — never the emitter IR —
   # so it is fixpoint/seed-safe (the text IR is produced before clang runs).  We bake
-  # FP_COMPILER (compiler/**.mdk only), NOT FP_FULL: the driver's `liveSourceFingerprint`
-  # (compiler/driver/medaka_cli.mdk) recomputes a compiler-only hash at runtime and
-  # hard-fails a mismatch under MEDAKA_STRICT, so the baked value must stay byte-for-byte
-  # compiler-only.  FP_FULL (which folds in runtime/*.c for the emitter-rebuild trigger,
-  # issue #182) is written to .medaka_emitter.srcstamp below, a DIFFERENT consumer.
+  # FP_COMPILER (compiler/**.mdk + stdlib/**.mdk), NOT FP_FULL: the driver's
+  # `liveSourceFingerprint` (compiler/driver/medaka_cli.mdk) recomputes the SAME
+  # file set as a hash at runtime and hard-fails a mismatch under MEDAKA_STRICT,
+  # so the baked value must stay byte-for-byte identical to that live computation.
+  # FP_FULL (which additionally folds in runtime/*.c for the emitter-rebuild
+  # trigger, issue #182) is written to .medaka_emitter.srcstamp below, a
+  # DIFFERENT consumer.
   # Empty on paths that never set it (returns "" → the check silently skips).
   # $OUT.new.$$ is staged NEXT TO $OUT (never under $WORK — see the stage-A EMIT_NEW
   # comment above for why: cross-device mv is not atomic) so two concurrent `make
