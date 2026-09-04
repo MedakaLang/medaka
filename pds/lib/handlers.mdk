@@ -1027,8 +1027,9 @@ checkLogin : Account ->
   CredentialRecord ->
   Result Response Unit
 checkLogin account identifier password credential =
-  if identifiesAccount account identifier
-    && credentialVerify password credential then
+  let identified = identifiesAccount account identifier
+  let verified = credentialVerify password credential
+  if identified && verified then
     Ok ()
   else
     Err (authenticationRequired "Invalid identifier or password")
@@ -1132,12 +1133,13 @@ finishSession _ (Ok (next, output)) = (next, jsonOkResponse output)
 
 {- | The four session routes, or `None` for a call this half does not own.
 
-   `refreshSession` and `deleteSession` are reachable only with an
-   `Authenticated` outcome (they are `RefreshRoute`, which the seam refuses
-   unauthenticated), so their `Unauthenticated` arms are unreachable through
-   `handle`; they answer 401 rather than panicking, because a direct caller of
-   this function is not the seam and must not be told a different story than a
-   request would be. -}
+   `refreshSession`, `deleteSession`, and `getSession` are reachable only with
+   an `Authenticated` outcome (they are `RefreshRoute`/`AuthenticatedRoute`,
+   which the seam refuses unauthenticated), so their `Unauthenticated` arms
+   are unreachable through `handle`; they answer 401 rather than panicking or
+   reporting an account identity, because a direct caller of this function is
+   not the seam and must not be told a different story than a request would
+   be. -}
 sessionHandled : Account ->
   RequestContext ->
   AuthOutcome ->
@@ -1163,9 +1165,11 @@ sessionHandled account context outcome store (ProcedureNoInputCall nsid _)
     Authenticated _ presented =>
       Some (finishSession store (applyDeleteSession context presented store))
   | otherwise = None
-sessionHandled account _ _ store (QueryCall nsid _)
-  | nsid == getSessionNsid =
-    Some (store, jsonOkResponse (applyGetSession account))
+sessionHandled account _ outcome store (QueryCall nsid _)
+  | nsid == getSessionNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ _ => Some (store, jsonOkResponse (applyGetSession account))
   | otherwise = None
 sessionHandled _ _ _ _ _ = None
 

@@ -267,13 +267,16 @@ resolveCredential : Args ->
   String ->
   <FileRead "_", FileWrite "_", Rand, Stderr> Result String CredentialRecord
 resolveCredential parsed dir =
-  if fileExists (credentialPath dir) then
-    loadCredential dir
-  else match flagValue "--password-file" parsed
-    None =>
+  let exists = fileExists (credentialPath dir)
+  match (exists, flagValue "--password-file" parsed)
+    (True, None) => loadCredential dir
+    (True, Some _) =>
+      Err
+        "refusing to start: \{credentialPath dir} already exists and --password-file was given; in-place rotation is not supported, so remove \{credentialPath dir} first if you intend to replace the password"
+    (False, None) =>
       Err
         "no account credential in \{credentialPath dir}: pass --password-file PATH once, holding the account password, to bootstrap one (the password is never taken from an argument value, and there is no terminal prompt)"
-    Some path => bootstrapCredential dir path
+    (False, Some path) => bootstrapCredential dir path
 
 requireDir : String -> <FileRead "_"> Result String Unit
 requireDir dir = match isDir dir

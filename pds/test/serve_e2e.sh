@@ -112,11 +112,18 @@ start_server() {
   extra=$1
   outfile=$2
   errfile=$3
-  # shellcheck disable=SC2086 # $extra is a single optional flag, no quoting needed
+  # --password-file is only passed on genesis (--init): a resumed run finds
+  # an existing credential, and passing --password-file against one now
+  # gets refused (F1, #2604) rather than silently keeping the old password.
+  pwflag=""
+  if [ "$extra" = "--init" ]; then
+    pwflag="--password-file $WORK/password"
+  fi
+  # shellcheck disable=SC2086 # $extra/$pwflag are single optional flags, no quoting needed
   "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
     --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-    --password-file "$WORK/password" \
+    $pwflag \
     --data "$DATA" --port 0 $extra \
     >"$outfile" 2>"$errfile" &
   SERVER_PID=$!
