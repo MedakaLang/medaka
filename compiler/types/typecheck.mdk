@@ -2936,13 +2936,19 @@ pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _)) = pushGoal Obligation {
 goalsSince : Int -> List Obligation
 goalsSince mark = moduleWindow graphRun.value.goals mark
 
-goalsOfKind : GoalKind -> Int -> List Obligation
-goalsOfKind k mark =
-  filterList (o => goalKindTag o.oKind == goalKindTag k) (goalsSince mark)
+goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
+goalsOfKindIn k gs = filterList (o => goalKindTag o.oKind == goalKindTag k) gs
 
--- each stamper's own parameter shape, projected back out of the bag
+-- each stamper's own parameter shape, projected back out of the bag.  Each
+-- projection has a `…In` twin over an ALREADY-CUT slice: #2548's quiescence drain
+-- cuts each module's window once, when that module ends, and replays the list
+-- later — a mark is a length of a channel that has since grown, so it can no
+-- longer name a past module's window on its own.
 siteGoals : GoalKind -> Int -> List PendingEntry
-siteGoals k mark = flatMap siteEntry (goalsOfKind k mark)
+siteGoals k mark = siteGoalsIn k (goalsSince mark)
+
+siteGoalsIn : GoalKind -> List Obligation -> List PendingEntry
+siteGoalsIn k gs = flatMap siteEntry (goalsOfKindIn k gs)
 
 siteEntry : Obligation -> List PendingEntry
 siteEntry o = match o.oPayload
@@ -2954,8 +2960,8 @@ evCell : EvDest -> Ref Route
 evCell (EvRoute r) = r
 evCell (EvRoutes _) = Ref RNone
 
-arithGoals : Int -> List (Ref Route, Mono)
-arithGoals mark = flatMap arithEntry (goalsOfKind GKArithSite mark)
+arithGoalsIn : List Obligation -> List (Ref Route, Mono)
+arithGoalsIn gs = flatMap arithEntry (goalsOfKindIn GKArithSite gs)
 
 arithEntry : Obligation -> List (Ref Route, Mono)
 arithEntry o = match o.oPayload
@@ -2963,23 +2969,26 @@ arithEntry o = match o.oPayload
   _ => []
 
 dictAppsSince : Int -> List PendingDictApp
-dictAppsSince mark = flatMap dictAppEntry (goalsSince mark)
+dictAppsSince mark = dictAppsIn (goalsSince mark)
+
+dictAppsIn : List Obligation -> List PendingDictApp
+dictAppsIn gs = flatMap dictAppEntry gs
 
 dictAppEntry : Obligation -> List PendingDictApp
 dictAppEntry o = match o.oPayload
   GPDictApp a => [a]
   _ => []
 
-methodDictsSince : Int -> List PendingMethodDict
-methodDictsSince mark = flatMap methodDictEntry (goalsSince mark)
+methodDictsIn : List Obligation -> List PendingMethodDict
+methodDictsIn gs = flatMap methodDictEntry gs
 
 methodDictEntry : Obligation -> List PendingMethodDict
 methodDictEntry o = match o.oPayload
   GPMethodDict d => [d]
   _ => []
 
-recDictAppsSince : Int -> List RecDictApp
-recDictAppsSince mark = flatMap recDictAppEntry (goalsSince mark)
+recDictAppsIn : List Obligation -> List RecDictApp
+recDictAppsIn gs = flatMap recDictAppEntry gs
 
 recDictAppEntry : Obligation -> List RecDictApp
 recDictAppEntry o = match o.oPayload
@@ -8412,15 +8421,15 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- call threads the element dict (concrete element → RKey Int; a recursive element
 -- of the SAME parametric type → RDict forwarding the in-scope dict param).  A
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
-resolveArgStamps : ImplBuckets -> List PendingEntry -> Unit
-resolveArgStamps _ [] = goalSiteLoc := None
-resolveArgStamps implTable ((PendingEntry name tagRef am encl kind loc) :: rest) =
+resolveArgStamps : List PendingEntry -> Unit
+resolveArgStamps [] = goalSiteLoc := None
+resolveArgStamps ((PendingEntry name tagRef am encl kind loc) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKArg implRef fullMono =>
-      resolveArgStamp implTable name tagRef implRef am fullMono encl
+      resolveArgStamp name tagRef implRef am fullMono encl
     _ => ()
-  resolveArgStamps implTable rest
+  resolveArgStamps rest
 
 -- #156 S3c: a thin adapter over `entail` (EKArg kind).  `entail` returns
 -- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
@@ -8439,16 +8448,15 @@ resolveArgStamps implTable ((PendingEntry name tagRef am encl kind loc) :: rest)
 -- and never clobbers an RLocal seed.  implRef is []-seeded everywhere (every EMethodAt
 -- construction — 7313/7355/7356/7438/7441/7443 — uses `(Ref [])`, and only this resolver
 -- ever writes an arg-site's implRef), so []-over-[] needs no guard (matches resolveSite).
-resolveArgStamp : ImplBuckets ->
-  String ->
+resolveArgStamp : String ->
   Ref Route ->
   Ref (List Route) ->
   Mono ->
   Mono ->
   String ->
   Unit
-resolveArgStamp implTable name tagRef implRef am fullMono encl =
-  let (route, routes) = entail implTable name am encl (EKArg fullMono)
+resolveArgStamp name tagRef implRef am fullMono encl =
+  let (route, routes) = entail name am encl (EKArg fullMono)
   let _ = match route
     RNone => ()
     _ => tagRef := route
@@ -9080,6 +9088,10 @@ data GraphRun = GraphRun {
   -- what keeps each scan the length of one module's givens instead of the graph's.
   gGiven : Ref (OrdMap (List GivenEntry)),
   moduleRanges : Ref (List (String, GraphMarks)),
+  -- #2548: one `StampCtx` per module that finished elaborating, NEWEST FIRST, cut at
+  -- the point that module's stampers used to run.  `drainStampQueue` replays them in
+  -- module order at graph end.  See `StampCtx`.
+  stampCtxs : Ref (List StampCtx),
   -- the channel's length, maintained by `pushGoal` / `dropGoalsSince`, so a mark is
   -- O(1) — `goalsMark` is taken at every `let` and SCC bracket
   goalsN : Ref Int,
@@ -9094,6 +9106,7 @@ freshGraphRun _ = GraphRun {
   activeDictVars = Ref [],
   gGiven = Ref omEmpty,
   moduleRanges = Ref [],
+  stampCtxs = Ref [],
   goalsN = Ref 0,
 }
 
@@ -9114,6 +9127,7 @@ copyGraphRun g = GraphRun {
   activeDictVars = Ref g.activeDictVars.value,
   gGiven = Ref g.gGiven.value,
   moduleRanges = Ref g.moduleRanges.value,
+  stampCtxs = Ref g.stampCtxs.value,
   goalsN = Ref g.goalsN.value,
 }
 
@@ -19688,21 +19702,19 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
       (externSchemes (externTyOriginScope []) runtimeDecls)
       prog2
   let _ = expandSupersTable prog2
-  let implTable = buildImplTable prog2
-  -- #2547 unit 1: same module slices as `elabModuleStamp` (one Flat module = the graph).
+  -- #2548 / #1116: the flat path's stamper sequence is the SAME steps, run from the
+  -- same table — `flatStampOrder`, whose own comment records the two places it
+  -- differs from `moduleStampOrder` and why.  One Flat module is the whole graph, so
+  -- there is no quiescence to defer to: it runs here, over this module's windows.
   let mk = currentModuleMarks ()
   let _ =
-    resolveSites
-      implTable
-      (returnPosMethodNames prog2)
-      (siteGoals GKReturnSite mk.mGoals)
-  let _ = resolveOpSites True implTable (siteGoals GKBinopSite mk.mGoals)
-  let _ = resolveOpSites False implTable (siteGoals GKUnopSite mk.mGoals)
-  let _ = resolveArithSites (arithGoals mk.mGoals)
-  let _ = realizeRecDictApps implTable (recDictAppsSince mk.mGoals)
-  let _ = resolveDictApps prog2 implTable (dictAppsSince mk.mGoals)
-  let _ = resolveMethodDicts implTable (methodDictsSince mk.mGoals)
-  let _ = resolveArgStamps implTable (siteGoals GKArgStamp mk.mGoals)
+    runStampSteps
+      (stampCtxOf
+        driverState.value.currentModuleRef.value
+        prog2
+        (goalsSince mk.mGoals)
+        (moduleWindow graphRun.value.numlitRefs mk.mNumlit))
+      flatStampOrder
   dictPass allNames prog2
 
 -- With no eligible names (the RKey-only / typed path), there is nothing to
@@ -20275,15 +20287,15 @@ constraintNonParamVars : List String -> Constraint -> List String
 constraintNonParamVars typarams (Constraint { constraintArgs = args }) =
   removeAllS typarams (flatMap tyVarNames args)
 
-resolveSites : ImplBuckets -> List String -> List PendingEntry -> Unit
-resolveSites _ _ [] = goalSiteLoc := None
-resolveSites implTable rpNames ((PendingEntry name tagRef resultMono encl kind loc) :: rest) =
+resolveSites : List String -> List PendingEntry -> Unit
+resolveSites _ [] = goalSiteLoc := None
+resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKReturn implRef fullMono =>
-      resolveSite implTable rpNames name tagRef implRef resultMono fullMono encl
+      resolveSite rpNames name tagRef implRef resultMono fullMono encl
     _ => ()
-  resolveSites implTable rpNames rest
+  resolveSites rpNames rest
 
 -- a method occurrence's route: if its discriminating type is a constrained
 -- function's constraint variable, read that function's dict param (RDict);
@@ -20306,8 +20318,7 @@ resolveSites implTable rpNames ((PendingEntry name tagRef resultMono encl kind l
 -- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
 -- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
 -- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
-resolveSite : ImplBuckets ->
-  List String ->
+resolveSite : List String ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -20326,14 +20337,9 @@ resolveSite : ImplBuckets ->
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
-resolveSite implTable rpNames name tagRef implRef resultMono fullMono encl =
+resolveSite rpNames name tagRef implRef resultMono fullMono encl =
   let (route, routes) =
-    entail
-      implTable
-      name
-      resultMono
-      encl
-      (EKReturn fullMono (contains name rpNames))
+    entail name resultMono encl (EKReturn fullMono (contains name rpNames))
   let _ = match route
     RNone => ()
     _ => tagRef := route
@@ -20730,10 +20736,10 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- the route untouched (RNone → eval arg-tag-dispatches to the real impl).  An
 -- ungrounded receiver (still a tyvar) → leave it (polymorphic, deferred).
 -- RLocal only when no impl exists.
--- S-1: [prog]/[implTable] are here so the stamp can call routesOfMonosTop — a PURE
+-- S-1: [prog] is here so the stamp can call routesOfMonosTop — a PURE
 -- function of the (union-find-solved) constraint monos — and fill the standalone's own
 -- dict routes IN PLACE.  Deliberately NOT routed through pendingDictApps: that list is
--- resolved by resolveDictApps, which runs AFTER this in elabModuleStamp, so the stamp
+-- resolved by resolveDictApps, which runs AFTER this in `moduleStampOrder`, so the stamp
 -- would read `[]`.  Resolving inside the stamp is ordering-immune.  An unconstrained
 -- standalone has no monos ⇒ routesOfMonosTop returns [] immediately (it cannot even
 -- reach its AmbiguousImpl arm) ⇒ `RLocal sym []` ⇒ byte-identical to the pre-S1 stamp.
@@ -20778,31 +20784,18 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- ⚠️ Do not re-derive the retired defence "GLOBAL by design — local ∪ imported ∪ prelude":
 -- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global, and
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
-resolveRLocalSites : List Decl -> ImplBuckets -> List PendingEntry -> Unit
-resolveRLocalSites _ _ [] = goalSiteLoc := None
-resolveRLocalSites prog implTable ((PendingEntry name tagRef am encl kind loc) :: rest) =
+resolveRLocalSites : List Decl -> List PendingEntry -> Unit
+resolveRLocalSites _ [] = goalSiteLoc := None
+resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef :=
-          RLocal
-            sym
-            (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
+        tagRef := RLocal sym (routesOfMonosTopV prog encl monos ifaces argVecs)
       else
-        resolveRLocalSite
-          prog
-          implTable
-          name
-          tagRef
-          am
-          encl
-          sym
-          monos
-          ifaces
-          argVecs
+        resolveRLocalSite prog name tagRef am encl sym monos ifaces argVecs
     _ => ()
-  resolveRLocalSites prog implTable rest
+  resolveRLocalSites prog rest
 
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
@@ -20812,7 +20805,6 @@ resolveRLocalSites prog implTable ((PendingEntry name tagRef am encl kind loc) :
 -- An ungrounded receiver (still a tyvar) → leave it.  The
 -- RLocal-vs-ordinary-dispatch split keys the genuine case off the receiver.
 resolveRLocalSite : List Decl ->
-  ImplBuckets ->
   String ->
   Ref Route ->
   Mono ->
@@ -20822,7 +20814,7 @@ resolveRLocalSite : List Decl ->
   List IfaceRef ->
   List (List Mono) ->
   Unit
-resolveRLocalSite prog implTable name tagRef am encl sym monos ifaces argVecs =
+resolveRLocalSite prog name tagRef am encl sym monos ifaces argVecs =
   match headTyconMono am
     -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
@@ -20855,15 +20847,12 @@ resolveRLocalSite prog implTable name tagRef am encl sym monos ifaces argVecs =
           && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
         tagRef
         sym
-        (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
+        (routesOfMonosTopV prog encl monos ifaces argVecs)
     -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
     -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
     None =>
       if contains name perRun.value.definerShadowNamesRef.value then
-        tagRef :=
-          RLocal
-            sym
-            (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
+        tagRef := RLocal sym (routesOfMonosTopV prog encl monos ifaces argVecs)
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
 -- or RKey stamped by resolveArgStamps on emit) — leave untouched.
@@ -21143,15 +21132,14 @@ resolveArithSite dref m = match !dref
 -- (stampOpRouteVal — its builtin-head guard and Ord-style innerDefaultMethod reduction).
 -- #156 S3c: resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
-resolveOpSites : Bool -> ImplBuckets -> List PendingEntry -> Unit
-resolveOpSites _ _ [] = goalSiteLoc := None
-resolveOpSites isBinop implTable ((PendingEntry method tagRef operandMono encl kind loc) :: rest) =
+resolveOpSites : Bool -> List PendingEntry -> Unit
+resolveOpSites _ [] = goalSiteLoc := None
+resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
-    SKOp inImpl =>
-      resolveOpSite isBinop implTable method tagRef operandMono inImpl encl
+    SKOp inImpl => resolveOpSite isBinop method tagRef operandMono inImpl encl
     _ => ()
-  resolveOpSites isBinop implTable rest
+  resolveOpSites isBinop rest
 
 -- G4: an `==`/`<`/… INSIDE an impl body ([inImpl]) whose operand is the enclosing
 -- impl's abstract `requires`-constrained tyvar routes RDict that impl's element dict
@@ -21234,16 +21222,9 @@ opDictVarOf request False _ m _ encl = enclDictVarOf request m encl
 -- EBinOp/EUnOp keeping the same ref, never re-seeding it), so the two do-nothing arms
 -- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed
 -- byte-identically — reproducing the pre-S3c `()` arms.
-resolveOpSite : Bool ->
-  ImplBuckets ->
-  String ->
-  Ref Route ->
-  Mono ->
-  Bool ->
-  String ->
-  Unit
-resolveOpSite isBinop implTable method tagRef operandMono inImpl encl =
-  match fst (entail implTable method operandMono encl (EKOp isBinop inImpl))
+resolveOpSite : Bool -> String -> Ref Route -> Mono -> Bool -> String -> Unit
+resolveOpSite isBinop method tagRef operandMono inImpl encl =
+  match fst (entail method operandMono encl (EKOp isBinop inImpl))
     RNone => ()
     route => tagRef := route
 
@@ -21283,14 +21264,8 @@ resolveOpSite isBinop implTable method tagRef operandMono inImpl encl =
 -- Else a concrete non-builtin head → `RKey key reqs` with the element `requires` dicts
 -- PACKED into the primary route's reqs (binopRouteSplit later rips them onto the
 -- EMethodAt impl-dict ref).  Byte-identical to the pre-S3c stampOpRoute stamper.
-stampOpRouteVal : Bool ->
-  ImplBuckets ->
-  String ->
-  String ->
-  Mono ->
-  String ->
-  Route
-stampOpRouteVal isBinop implTable encl method operandMono tag =
+stampOpRouteVal : Bool -> String -> String -> Mono -> String -> Route
+stampOpRouteVal isBinop encl method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
   if isBuiltin then
@@ -21318,13 +21293,8 @@ stampOpRouteVal isBinop implTable encl method operandMono tag =
           innerDefaultMethod method
       else
         method
-    let reqs = argImplDictRoutesForEncl
-      implTable
-      encl
-      dictMethod
-      tag
-      operandMono
-      [operandMono]
+    let reqs =
+      argImplDictRoutesForEncl encl dictMethod tag operandMono [operandMono]
     RKey key reqs
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
@@ -22104,6 +22074,23 @@ pushCoherenceWarning loc msg =
       None
   driverState.value.matchWarnings :=
     warning :: driverState.value.matchWarnings.value
+
+-- The warning-channel analogue of `pushTypeErrorOnceAt`: same channel discipline as
+-- `pushCoherenceWarning` above, plus message dedup.  Dedup is by MESSAGE rather than
+-- by code, because one code may legitimately report several distinct sites in one
+-- module while a single site can be visited many times — `pickMostSpecificEntry` runs
+-- per goal occurrence, so an undeduped push would report one expression once per
+-- constraint it poses.  ⚠️ The channel is scanned linearly; that is affordable only
+-- because it holds warnings, which are rare by construction, and a code that ever
+-- makes it long owes a keyed set the way `typeErrorMsgSetRef` is one.
+pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
+pushMatchWarningOnceAt code loc msg help =
+  if anyList (w => tcMsg w == msg) driverState.value.matchWarnings.value then
+    ()
+  else
+    driverState.value.matchWarnings :=
+      TcDiag code 2 (orElseLoc loc !currentLoc) msg help None
+        :: driverState.value.matchWarnings.value
 
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
 -- at most one SOFT one onto the warning channel.  The impls are scanned in REVERSE
@@ -24375,94 +24362,35 @@ setLocalPinDisabled : Bool -> Unit
 setLocalPinDisabled off = driverState.value.localPinDisabledRef := off
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
--- One parametric impl that carries a `requires`: its head tag (the tycon eval
--- narrows by), the methods it defines (to disambiguate which impl a method site
--- picked), the head type pattern (matched against the call's concrete result mono
--- to recover the element type), and its requires constraints.
--- Fields: head tycon tag, defined method names, head type pattern, requires,
--- full impl type-args, and the INTERFACE this impl is for.  The iface field
--- disambiguates same-head impls: one type can carry several `requires`-bearing
--- impls at the same head tycon for DIFFERENT interfaces whose requires differ in
--- shape (e.g. `Applicative (VT e) requires Semigroup e` alongside
--- `Debug (VT e a) requires Debug e, Debug a`).  RKey element-dict routing must
--- pick the entry for the interface being dispatched, not merely the first by tag.
-data ImplEntry =
-  | ImplEntry String (List String) Ty (List Require) (List Ty) String
-
--- #148: the impl/key tables are keyed by head tycon TAG into a bucket of entries
--- kept in FORWARD declaration order (append; never re-sorted).  Every per-site
--- lookup filters `tag2 == tag` first, so it scans ONE bucket instead of the whole
--- impl universe — turning findImplEntry's O(impls) scan into O(bucket).  The
--- forward intra-bucket order is load-bearing for the RESIDUAL first-match consumer
--- (findImplEntry, the iface-unknown `""` fallback), so the earlier-declared of two
--- coherent siblings at the same head still wins there.  (#203: the element/requires
--- routers that USED to first-match this table — the former implDictRoutesIn /
--- argImplDictRoutesForGo — now select the most-specific impl over the graph-global
--- impl universe via `ieSelectRowByIface` (and `matchedEntry`, until B-2.1-d deleted it
--- along with `KeyBuckets`, the routers' prior source); forward order
--- still decides their tie-break when no unique min⊑ exists.)  This is NOT the coherence structure —
--- cohScan scans a separate reverseL-ed list; these buckets keep forward
--- order and coherence is not routed through them.
-type ImplBuckets = OrdMap (List ImplEntry)
-
--- the entries at head tycon [tag] (empty when no impl heads there), in declaration
--- order.  Shared by both bucket flavours (List ImplEntry / List KeyEntry).
-bucketOf : String -> OrdMap (List a) -> List a
-bucketOf tag buckets = optionOr [] (omLookup tag buckets)
-
--- build the table from the program's impls-with-requires (others need no dicts),
--- bucketed by head tycon tag with each bucket in forward declaration order.
-buildImplTable : List Decl -> ImplBuckets
-buildImplTable prog =
-  omMapValues reverseL (bucketImplEntries (flatMap implEntryOf prog) omEmpty)
-
--- fold the flat, forward-ordered entry list into tag buckets by PREPENDING (O(1)
--- per entry, vs O(bucket) tail-append → O(k²) for k same-tag entries).  Each
--- bucket ends up in reverse declaration order; buildImplTable applies one
--- `reverseL` per bucket to restore declaration order (first-match semantics).
-bucketImplEntries : List ImplEntry -> ImplBuckets -> ImplBuckets
-bucketImplEntries [] acc = acc
-bucketImplEntries ((ImplEntry tag ms hty reqs itys ifn) :: rest) acc =
-  let e = ImplEntry tag ms hty reqs itys ifn
-  bucketImplEntries rest (omInsert tag (e :: bucketOf tag acc) acc)
-
-implEntryOf : Decl -> List ImplEntry
-implEntryOf (DAttrib _ d) = implEntryOf d
-implEntryOf (DImpl { iface, tys, reqs, methods, ... }) = match reqs
-  [] => []
-  _ => implEntryFromTys iface tys reqs methods
-implEntryOf _ = []
-
-implEntryFromTys : String ->
-  List Ty ->
-  List Require ->
-  List ImplMethod ->
-  List ImplEntry
-implEntryFromTys _ [] _ _ = []
-implEntryFromTys iface (headTy :: rest) reqs methods =
-  match headTyconNameTy headTy
-    Some tag => [
-      ImplEntry
-        tag
-        (map implMethodNameTc methods)
-        headTy
-        reqs
-        (headTy :: rest)
-        iface,
-    ]
-    None => []
-
--- ⚠️ #1128 (F-3b) AUDIT — `implEntryFromTys`, `keyEntryOf` and `implHeadTagForIface`
--- all gate on a head projection answering `Some tag`, so all three DROP a fully-general
--- `impl C a`.  They were audited as a SET; only `keyEntryOf` was changed, deliberately:
+-- 🚨 #2548 DELETED `ImplEntry`/`ImplBuckets` AND THE WHOLE TABLE THAT USED TO LIVE
+-- HERE (`buildImplTable`, `bucketImplEntries`, `bucketOf`, `implEntryOf`,
+-- `implEntryFromTys`, `findImplEntry`, `findImplEntryGo`), together with the
+-- `ImplBuckets` parameter every route-stamping resolver threaded from
+-- `elabModuleStamp` down to `selectReqImpl`.  By then the table had exactly ONE
+-- reader left — `selectReqImpl`'s `iface.irName == ""` first-match fallback arm —
+-- and that arm is not reachable: a `panic` planted in it survived a full
+-- self-compile (the emitter re-emitting the whole compiler), `check` over all 174
+-- `stdlib/*.mdk` + `compiler/*/*.mdk` modules, `medaka test` over 29 stdlib
+-- modules, and the `dict_semantics` / `engines` / `must_fail` / `eval_typed_modules`
+-- / `llvm_typed_ir` gate corpora, with the same `panic` in the sibling `otherwise`
+-- arm firing on the first program compiled.  Everything the deleted arm could have
+-- answered is answered by `ieSelectRowByIface` over the graph-global
+-- `bodyImplEnvRef`, which every other selection leg already reads.  The parameter
+-- is REMOVED rather than defaulted: an ignored table parameter reads as "still
+-- consulted" at every call site.
 --
--- ⚠️ THE THREE NO LONGER READ THE SAME PROJECTION (#1617/#1618).  `implEntryFromTys`
--- and `keyEntryOf` are dispatch registrars and read the projections that gained the
+-- ⚠️ #1128 (F-3b) AUDIT — `keyEntryOf` and `implHeadTagForIface` both gate on a head
+-- projection answering `Some tag`, so both DROP a fully-general `impl C a`.  (The
+-- third member of the audited set, `implEntryFromTys`, is deleted per the block
+-- above; its bullet is gone with it.)  Only `keyEntryOf` was changed, deliberately:
+--
+-- ⚠️ THE TWO DO NOT READ THE SAME PROJECTION (#1617/#1618).  `keyEntryOf` is a
+-- dispatch registrar and reads the projections that gained the
 -- `TyFun` arm and the `TyEffect` peel (`headTyconNameTy` / `headTyconTy`);
 -- `implHeadTagForIface` is an ACCEPTANCE census and reads `censusHeadNameTy`, which is
 -- those projections as they were before that bite.  The `impl C a` argument below is
--- unaffected — a bare `TyVar` head answers `None` in all three — but do not re-derive
--- any of them from a sibling's projection.
+-- unaffected — a bare `TyVar` head answers `None` in both — but do not re-derive
+-- either of them from the other's projection.
 --
 --  • `keyEntryOf` / KeyBuckets WAS the registry every route selector read
 --    (`matchedEntry`; since ARCH B-2.1-b2 the same shape is projected out of `IE`'s
@@ -24470,7 +24398,11 @@ implEntryFromTys iface (headTy :: rest) reqs methods =
 --    `KeyBuckets` selectors outright), so it is where the missing candidate
 --    was actually costing a wrong answer.  Fixed.
 --
---  • `implEntryFromTys` / ImplBuckets holds only requires-BEARING impls and is read
+--  • (#2548 DELETED this bullet's subject outright — `ImplEntry`/`ImplBuckets` and
+--    their sole surviving reader, `selectReqImpl`'s iface-unknown `""` arm, are gone;
+--    the paragraph is kept because its CONCLUSION about headless impls still holds,
+--    now over `IE` alone.)  `implEntryFromTys` / ImplBuckets held only
+--    requires-BEARING impls and was read
 --    by `findImplEntry` (the iface-UNKNOWN `""` FIRST-MATCH fallback) via
 --    `bucketOf tag` at the GOAL's head.  (ARCH B-2.1-h moved the other reader,
 --    `implDefinesMethodAt`, onto
@@ -25030,15 +24962,68 @@ pickMostSpecificEntry goals (e :: rest) =
 -- error the warnings are dropped — a pre-existing suppression this change neither
 -- causes nor repairs.  Do not restate the improvement as general.
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
-reportAmbiguousOverlap goals cands
-  | not (goalsClosed goals) = ()
-  | otherwise = match candsOneIface cands
-    None => ()
-    Some iface =>
-      pushTypeErrorOnceAt
-        "T-AMBIGUOUS-INSTANCE"
-        !goalSiteLoc
-        (ambiguousOverlapMsg iface goals cands)
+reportAmbiguousOverlap goals cands = match candsOneIface cands
+  None => ()
+  Some iface => reportOverlapForIface iface goals cands
+
+-- the closedness gate, as the two-sided split it now is: reject a CLOSED goal, WARN an
+-- open one (see `openGoalCommitWarnCode`).  Both sides describe the same commitment;
+-- they differ only in whether the spec licenses rejecting it.
+reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
+reportOverlapForIface iface goals cands
+  | goalsClosed goals =
+    pushTypeErrorOnceAt
+      "T-AMBIGUOUS-INSTANCE"
+      !goalSiteLoc
+      (ambiguousOverlapMsg iface goals cands)
+  | otherwise =
+    pushMatchWarningOnceAt
+      openGoalCommitWarnCode
+      !goalSiteLoc
+      (openGoalCommitMsg iface goals cands)
+      (Some openGoalCommitHelp)
+
+-- ── §6.2 T4 at quiescence: the open-goal commitment, as a WARNING ──────────
+-- #2548, ruling 1.  `pickMostSpecificEntry`'s no-unique-minimum arm commits to the
+-- FIRST-DECLARED candidate.  At a CLOSED goal that commitment is a reject
+-- (`T-AMBIGUOUS-INSTANCE`, above).  At a goal still carrying an unbound metavariable
+-- T4 says DEFER rather than decide — so until #2548 there was nowhere to decide it,
+-- and the arm committed in silence: `test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk`
+-- prints `1`, and prints `2` if the two `impl` blocks are swapped, at exit 0.
+--
+-- Ruling 1 makes that commitment AUDIBLE first and rejectable second: this code is the
+-- measurement SC-3 is decided on, not the decision.  Do not promote it to an error
+-- without that decision — the open half of the `s6-2-t{3,4}` pair is a program the
+-- spec ACCEPTS, and rejecting it here is an over-rejection until the spec says
+-- otherwise.
+--
+-- 🚨 UNGATED ON WHEN THE ARM IS REACHED, AND THAT WAS MEASURED RATHER THAN ASSUMED.
+-- The obvious reading of "at quiescence" is to warn only while the stampers run
+-- (`drainStampQueue` / `elaborateDict`'s flat sequence).  Built that way the code
+-- fires on NOTHING — not even on `s6-2-t4-open-goal-deferred.mdk`, whose whole purpose
+-- is to be this shape — because selection for that site happens during inference and
+-- the stamper pass never re-poses it.  A gate that makes its own census vacuous is
+-- measuring the pass, not the program.  What licenses dropping it is that this arm is
+-- a COMMITMENT point, not a deferral point: `pickMostSpecificEntry` returns `Some e`
+-- and its caller uses that impl, so the first-declared pick is already final whenever
+-- the arm is reached.  Ungated it fires twice in the whole tree (0 across the 174
+-- `compiler/`+`stdlib/` modules, 2 of 3269 tracked `test/**/*.mdk`, both the known
+-- #1183 class) — so "open here, ground later" is not merely argued away, it is
+-- measured absent.
+-- ⚠️ Deliberately NOT in `runBuildWarnCodes` (`driver/medaka_cli.mdk`): that list is a
+-- decision with three measurements attached, and this code owes them before it can ask
+-- for the multi-module `run`/`build` channel.  It surfaces on `check`, and on the
+-- single-file `run`/`build` arms that filter the whole channel.
+openGoalCommitWarnCode : String
+openGoalCommitWarnCode = "W-OPEN-GOAL-COMMITTED"
+
+openGoalCommitMsg : String -> List Mono -> List KeyEntry -> String
+openGoalCommitMsg iface goals cands =
+  "Instance for `\{iface}` chosen by declaration order. The goal `\{iface} \{ppPredArgsShared goals}` is still undetermined here and matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)} — so the first of them to be declared is the one that runs"
+
+openGoalCommitHelp : String
+openGoalCommitHelp =
+  "Annotate this expression with a type only one of these impls matches, so the choice does not depend on the order the impls were declared."
 
 -- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
 -- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
@@ -25847,9 +25832,10 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- to THOSE turns an ACCEPT into a REJECT on programs that never dispatch to an
 -- arrow or an effect head at all: `impl C Int` beside `impl C (Int -> Int)` or
 -- `impl C (<Stdout> Bool)` went from a stamped route to *"Ambiguous instance"*,
--- exit 1, measured on both arms.  `implEntryFromTys`, the third reader, is a
--- dispatch registrar (`ImplBuckets` is looked up by `bucketOf` at the GOAL's
--- head) and correctly keeps the new arms.
+-- exit 1, measured on both arms.  `implEntryFromTys`, the third reader, was a
+-- dispatch registrar (`ImplBuckets` was looked up by `bucketOf` at the GOAL's
+-- head) and correctly kept the new arms; #2548 deleted it with the rest of
+-- `ImplBuckets`, which is why `headTyconNameTy` went with it.
 --
 -- So the acceptance pair reads `censusHeadNameTy` below, over `headTySpineNode`
 -- — the walk this one WAS before #1618 — and the split is the point rather than
@@ -25929,45 +25915,26 @@ headTyconTy t = match headTyNode t
   TyFun _ _ => Some (headKeyOfCon OriginBuiltin funHeadTag)
   _ => None
 
--- The BARE-NAME residual of the projection above: byte-identical to what
--- `headTyconTy` itself answered before A-2.2, and allocating exactly what it
--- allocated (one `Some`).  Every consumer that has not yet been re-keyed calls
--- THIS, so the IMPL-side half of the Stage A-2 ledger is what this prints —
--- a command, never a number copied down here:
+-- 🚨 THE BARE-NAME RESIDUAL `headTyconNameTy` STOOD HERE AND IS GONE (#2548).  It
+-- was `headTyconTy` as that projection answered before A-2.2 — the same three arms
+-- over `headTyNode`, returning the bare name instead of a `HeadKey` — and by the
+-- time #2548 ran it had exactly ONE reader left, `implEntryFromTys`, which #2548
+-- deleted along with the whole `ImplBuckets` table.  Its two earlier readers decide
+-- ACCEPTANCE rather than routing and had already moved to `censusHeadNameTy` below;
+-- `headTyNode`'s 🚨 carries the measurement for why they must not share the
+-- dispatch walk.  Comments elsewhere in this file still name it while recounting
+-- that split — they are describing the argument, not a live call site.
 --
---   grep -nw headTyconNameTy compiler/types/typecheck.mdk \
---     | grep -vE '^[0-9]+:[[:space:]]*--' \
---     | grep -vE '^[0-9]+:headTyconNameTy'
---
--- ⚠️ Both filters are load-bearing: the unfiltered command also prints every
--- COMMENT that names the function (including this one) and its own signature
--- and clauses, none of which is a residual call site.
---
--- ⚠️ Deliberately NOT `map headKeyName (headTyconTy t)`.  That spelling has no
--- duplication at all, and it is the one `compiler/AGENTS.md` warns about: it
--- would build a `HeadKey` (and an `Ident`, and a second `Option`) on every call
--- of a projection that runs per type-application node, on the GC-bound `check`
--- stage, purely to throw them away — and BOTH perf CI arms are structurally
--- blind to a constant factor.  The price paid instead is these three arms,
--- which must classify the same head nodes as the three above.
-headTyconNameTy : Ty -> Option String
-headTyconNameTy t = match headTyNode t
-  TyCon { tyConName = n } => Some n
-  TyTuple ts => Some (tupleHeadTagTc (listLen ts))
-  -- kept in lockstep with `headTyconTy`'s new arm (#1617): this residual's
-  -- remaining reader, `implEntryFromTys`, registers `ImplBuckets` rows that are
-  -- looked up by `bucketOf` at a GOAL head the dispatch projection minted, so an
-  -- arm present in one and absent from the other is a table that cannot be
-  -- looked up.
-  --
-  -- ⚠️ IT HAD THREE READERS AND NOW HAS ONE.  The other two decided ACCEPTANCE,
-  -- not routing, and read `censusHeadNameTy` below instead — `headTyNode`'s 🚨
-  -- has the measurement.
-  TyFun _ _ => Some funHeadTag
-  _ => None
+-- ⚠️ If a bare-name impl-head projection is ever wanted again, do NOT write it as
+-- `map headKeyName (headTyconTy t)`: that spelling has no duplication at all, and
+-- it is the one `compiler/AGENTS.md` warns about — it would build a `HeadKey` (and
+-- an `Ident`, and a second `Option`) on every call of a projection that runs per
+-- type-application node, on the GC-bound `check` stage, purely to throw them away,
+-- and BOTH perf CI arms are structurally blind to a constant factor.  The price
+-- paid instead was three duplicated arms held in lockstep with `headTyconTy`'s.
 
 -- ── the ACCEPTANCE-census head name ───────────────────────────────────────
--- `headTyconNameTy` AS IT WAS BEFORE #1617/#1618: the `TyApp` spine only, no
+-- THE DISPATCH HEAD NAME AS IT WAS BEFORE #1617/#1618: the `TyApp` spine only, no
 -- `TyEffect` peel, no `TyFun` arm — so an arrow-headed or effect-headed impl
 -- answers `None` and is DROPPED from the census, exactly as it was.
 --
@@ -26097,8 +26064,7 @@ headKeyNameOr dflt None = dflt
 -- parameter here (see the header a few lines below implDictRoutesForFull's body for the
 -- measurement — it is NOT threaded for a live re-bucketing).
 -- The OUTER head match still uses headSubstWithParams (multi-param augmentation).
-implDictRoutesForFull : ImplBuckets ->
-  String ->
+implDictRoutesForFull : String ->
   String ->
   String ->
   Mono ->
@@ -26121,12 +26087,12 @@ implDictRoutesForFull : ImplBuckets ->
 -- reads the table; each link only forwards it, and the one `KeyBuckets`-consuming
 -- fallback (`undeterminedRoute`'s `CountImpls` arm) is unreachable because
 -- `argReqRoute` seeds the recursion with `KeepNone`.
-implDictRoutesForFull implTable encl name tag resultMono paramMonos =
+implDictRoutesForFull encl name tag resultMono paramMonos =
   match (ieRowHeadTriple
     (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name paramMonos))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys resultMono paramMonos
-        Some subst => argImplReqRoutes implTable encl subst reqs 0 0
+        Some subst => argImplReqRoutes encl subst reqs 0 0
         None => []
     None => []
 
@@ -26309,46 +26275,17 @@ matchStep _ _ = MFail
 -- on the aware recursion (argImplRequiresRoutes) so the unified chain is aware +
 -- fused, not aware-and-diverging on a non-shrinking impl context.
 
--- find the ImplEntry in [implTable] for interface [iface] whose head tycon is
--- [tag] and whose head pattern matches the concrete mono [m].  A type may carry
--- SEVERAL `requires`-bearing impls at one head tycon for different interfaces
--- whose requires differ in shape (arity/parameters); keying on the tag alone
--- picked the first such impl and produced the WRONG element-dict routes (e.g.
--- `Applicative (VT e) requires Semigroup e` stealing dispatch from
--- `Debug (VT e a) requires Debug e, Debug a`).  So we filter by [iface] too.
--- [iface] == "" means "no interface known" (the method-level path) → fall back to
--- the historical first-by-tag behaviour.  The head-pattern match against [m] is
--- also required so a same-iface but wrong-arity head (e.g. `VT e` vs `VT e a`) is
--- skipped rather than matched-then-dropped.
-findImplEntry : ImplBuckets -> String -> String -> Mono -> Option ImplEntry
-findImplEntry buckets iface tag m =
-  findImplEntryGo (bucketOf tag buckets) iface tag m
-
-findImplEntryGo : List ImplEntry -> String -> String -> Mono -> Option ImplEntry
-findImplEntryGo [] _ _ _ = None
-findImplEntryGo ((ImplEntry tag2 ms hty reqs itys ifn) :: rest) iface tag m
-  | tag2 == tag && (iface == "" || ifn == iface) = match matchTyMono hty m
-    Some _ => Some (ImplEntry tag2 ms hty reqs itys ifn)
-    None => findImplEntryGo rest iface tag m
-  | otherwise = findImplEntryGo rest iface tag m
-
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List Decl -> ImplBuckets -> List PendingDictApp -> Unit
-resolveDictApps _ _ [] = goalSiteLoc := None
-resolveDictApps prog implTable (app :: rest) =
+resolveDictApps : List Decl -> List PendingDictApp -> Unit
+resolveDictApps _ [] = goalSiteLoc := None
+resolveDictApps prog (app :: rest) =
   goalSiteLoc := app.pdaLoc
   let routes =
-    routesOfMonosTopV
-      prog
-      implTable
-      app.pdaEncl
-      app.pdaMonos
-      app.pdaIfaces
-      app.pdaArgVecs
+    routesOfMonosTopV prog app.pdaEncl app.pdaMonos app.pdaIfaces app.pdaArgVecs
   app.pdaRoutesRef := routes
-  resolveDictApps prog implTable rest
+  resolveDictApps prog rest
 
 -- Caller-supplied policy for the UNDETERMINED arm of routeOf (the constraint var is
 -- pinned by NEITHER an argument nor the result).  KeepNone (the nested element-dict
@@ -26472,17 +26409,12 @@ data EntailKind =
 -- `Option` — same reason `headTyconNameTy`/`headTyconNameMono` exist at all
 -- (`compiler/AGENTS.md`): Medaka is strict, so the combinator spelling would
 -- allocate a second `Option` on every entailment to throw it away.
-entail : ImplBuckets ->
-  String ->
-  Mono ->
-  String ->
-  EntailKind ->
-  (Route, List Route)
-entail implTable name m encl kind = match entailAssum m encl name kind
+entail : String -> Mono -> String -> EntailKind -> (Route, List Route)
+entail name m encl kind = match entailAssum m encl name kind
   Some dname => (entailAssumRoute dname kind, [])
   None => match headTyconMono m
-    Some hk => entailInst implTable name m encl (headKeyName hk) kind
-    None => (entailFallback implTable kind, [])
+    Some hk => entailInst name m encl (headKeyName hk) kind
+    None => (entailFallback kind, [])
 
 -- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`
 -- takes precedence over `inst`; a predicate already in scope is USED, and `inst` fires only
@@ -26556,8 +26488,7 @@ entailAssumRoute dname (EKOp _ _) = RDict dname
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
 -- head → RNone do-nothing, else RKey with reqs packed in, no separate element routes).
-entailInst : ImplBuckets ->
-  String ->
+entailInst : String ->
   Mono ->
   String ->
   String ->
@@ -26569,10 +26500,10 @@ entailInst : ImplBuckets ->
 -- selector and the requires router now agree on one goal by construction.  A method
 -- with no registered interface (ifaceParamMonos → None) still selects on [m],
 -- exactly as before.
-entailInst implTable name m encl tag (EKReturn fullMono _) =
+entailInst name m encl tag (EKReturn fullMono _) =
   let paramMonos = optionOr [m] (ifaceParamMonos name fullMono)
   let routeKey = optionOr tag (keyForSite name paramMonos)
-  (RKey routeKey [], implDictRoutesForFull implTable encl name tag m paramMonos)
+  (RKey routeKey [], implDictRoutesForFull encl name tag m paramMonos)
 -- #203 (E, the root fix): mirror EKReturn.  Was `RKey tag …` — a BARE ambiguous head
 -- tag whose constructor carried no KeyBuckets, so it could not reach the min⊑ selector;
 -- every nested-`requires` and super-projection goal funnels through here.  Now the
@@ -26595,7 +26526,7 @@ entailInst implTable name m encl tag (EKReturn fullMono _) =
 -- recording it beside `funConstraintsRef` (rather than inside it) leaves the SHATTERED
 -- per-tyvar dict slots, and hence emitted dict arity, exactly as they were.  #607
 -- punch-list item 3 (dict slot = predicate, which really would move arity) stays open.
-entailInst implTable _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
+entailInst _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
   -- 🚨 B-4b-ii LEFT THIS BARE ON PURPOSE, AND THE REASON IS THE SOURCE, NOT THE
   -- PLUMBING.  Widening `EKNestedTop`'s field is mechanical; the question is whether
   -- anything upstream HAS an origin worth supplying, and on this leg it does not.
@@ -26656,9 +26587,7 @@ entailInst implTable _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
   -- it.  Vary the collision away and re-measure before attributing.
   let routeKey = optionOr tag (keyForSiteByIface iface (m :: rest))
   (
-    RKey
-      routeKey
-      (argImplRequiresRoutes implTable iface encl tag m rest prevSize spent),
+    RKey routeKey (argImplRequiresRoutes iface encl tag m rest prevSize spent),
     [],
   )
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
@@ -26669,7 +26598,7 @@ entailInst implTable _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
 -- the SAME impl, and the first cut of this fix computed the vector here and then
 -- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
-entailInst implTable name m encl tag (EKArg fullMono) =
+entailInst name m encl tag (EKArg fullMono) =
   let goals = optionOr [m] (ifaceParamMonos name fullMono)
   let routeKey = optionOr tag (keyForSite name goals)
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
@@ -26688,25 +26617,23 @@ entailInst implTable name m encl tag (EKArg fullMono) =
       innerDefaultMethod name
   (
     RKey routeKey [],
-    argImplDictRoutesForEncl implTable encl dictName tag m goals,
+    argImplDictRoutesForEncl encl dictName tag m goals,
   )
-entailInst implTable name m encl tag (EKOp isBinop _) =
-  (stampOpRouteVal isBinop implTable encl name m tag, [])
+entailInst name m encl tag (EKOp isBinop _) =
+  (stampOpRouteVal isBinop encl name m tag, [])
 
-entailFallback : ImplBuckets -> EntailKind -> Route
-entailFallback _ (EKReturn _ _) = RNone
-entailFallback implTable (EKNestedTop _ policy _ _ _) =
-  undeterminedRoute implTable policy
-entailFallback _ (EKArg _) = RNone
-entailFallback _ (EKOp _ _) = RNone
+entailFallback : EntailKind -> Route
+entailFallback (EKReturn _ _) = RNone
+entailFallback (EKNestedTop _ policy _ _ _) = undeterminedRoute policy
+entailFallback (EKArg _) = RNone
+entailFallback (EKOp _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
 -- Only a non-empty [encl] can supply an active dict, and only from that owner's
 -- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
-routeOf : ImplBuckets -> IfaceRef -> String -> Undetermined -> Mono -> Route
-routeOf implTable iface encl policy m =
-  routeOfD implTable iface encl policy m [] 0 0
+routeOf : IfaceRef -> String -> Undetermined -> Mono -> Route
+routeOf iface encl policy m = routeOfD iface encl policy m [] 0 0
 
 -- #217: fuse-carrying core of routeOf.  [prevSize]/[spent] thread the WS-4b fuse
 -- through the aware recursion (routeOfD → argImplRequiresRoutes → argImplReqRoutes
@@ -26715,8 +26642,7 @@ routeOf implTable iface encl policy m =
 -- diverging at route-resolution time.  Both are unchanged here; they are recomputed once
 -- per impl level in argImplRequiresRoutes, which owns the whole shrinking argument.
 -- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
-routeOfD : ImplBuckets ->
-  IfaceRef ->
+routeOfD : IfaceRef ->
   String ->
   Undetermined ->
   Mono ->
@@ -26729,14 +26655,12 @@ routeOfD : ImplBuckets ->
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
 -- here via argImplRequiresRoutes → argImplReqRoutes → argReqRoute → routeOfD, with the
 -- fuse pair threaded through the EKNestedTop payload.
-routeOfD implTable iface encl policy m rest prevSize spent =
-  fst
-    (entail implTable "" m encl (EKNestedTop iface policy prevSize spent rest))
+routeOfD iface encl policy m rest prevSize spent =
+  fst (entail "" m encl (EKNestedTop iface policy prevSize spent rest))
 
-undeterminedRoute : ImplBuckets -> Undetermined -> Route
-undeterminedRoute _ KeepNone = RNone
-undeterminedRoute implTable (CountImpls prog iface) =
-  routeUndeterminedTop prog implTable iface
+undeterminedRoute : Undetermined -> Route
+undeterminedRoute KeepNone = RNone
+undeterminedRoute (CountImpls prog iface) = routeUndeterminedTop prog iface
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
@@ -26776,22 +26700,21 @@ undeterminedRoute implTable (CountImpls prog iface) =
 -- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
 -- absence-of-regression, never correctness of the new path — as before.
 routesOfMonosTopV : List Decl ->
-  ImplBuckets ->
   String ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
-routesOfMonosTopV prog implTable encl monos ifaces [] =
-  routesOfMonosTop prog implTable encl monos ifaces
-routesOfMonosTopV _ _ _ [] _ _ = []
-routesOfMonosTopV prog implTable encl (m :: rest) [] (_ :: vs) =
-  routeOf implTable ifaceRefNone encl (CountImpls prog "") m
-    :: routesOfMonosTopV prog implTable encl rest [] vs
-routesOfMonosTopV prog implTable encl (m :: rest) (iface :: ifacesRest) (v :: vs) =
-  topRouteV prog implTable encl iface m v
-    :: routesOfMonosTopV prog implTable encl rest ifacesRest vs
+routesOfMonosTopV prog encl monos ifaces [] =
+  routesOfMonosTop prog encl monos ifaces
+routesOfMonosTopV _ _ [] _ _ = []
+routesOfMonosTopV prog encl (m :: rest) [] (_ :: vs) =
+  routeOf ifaceRefNone encl (CountImpls prog "") m
+    :: routesOfMonosTopV prog encl rest [] vs
+routesOfMonosTopV prog encl (m :: rest) (iface :: ifacesRest) (v :: vs) =
+  topRouteV prog encl iface m v
+    :: routesOfMonosTopV prog encl rest ifacesRest vs
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
@@ -26802,17 +26725,10 @@ routesOfMonosTopV prog implTable encl (m :: rest) (iface :: ifacesRest) (v :: vs
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : List Decl ->
-  ImplBuckets ->
-  String ->
-  IfaceRef ->
-  Mono ->
-  List Mono ->
-  Route
-topRouteV prog implTable encl iface m goals = match vectorGoal iface goals
-  Some (g0, gs) =>
-    routeOfD implTable iface encl (CountImpls prog iface.irName) g0 gs 0 0
-  None => routeOf implTable iface encl (CountImpls prog iface.irName) m
+topRouteV : List Decl -> String -> IfaceRef -> Mono -> List Mono -> Route
+topRouteV prog encl iface m goals = match vectorGoal iface goals
+  Some (g0, gs) => routeOfD iface encl (CountImpls prog iface.irName) g0 gs 0 0
+  None => routeOf iface encl (CountImpls prog iface.irName) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -26834,22 +26750,21 @@ vectorGoal _ [] = None
 vectorGoal iface (g0 :: gs) = if iface.irName == "" then None else Some (g0, gs)
 
 routesOfMonosTop : List Decl ->
-  ImplBuckets ->
   String ->
   List Mono ->
   List IfaceRef ->
   List Route
-routesOfMonosTop _ _ _ [] _ = []
-routesOfMonosTop prog implTable encl (m :: rest) [] =
-  routeOf implTable ifaceRefNone encl (CountImpls prog "") m
-    :: routesOfMonosTop prog implTable encl rest []
-routesOfMonosTop prog implTable encl (m :: rest) (iface :: ifacesRest) =
-  routeOf implTable iface encl (CountImpls prog iface.irName) m
-    :: routesOfMonosTop prog implTable encl rest ifacesRest
+routesOfMonosTop _ _ [] _ = []
+routesOfMonosTop prog encl (m :: rest) [] =
+  routeOf ifaceRefNone encl (CountImpls prog "") m
+    :: routesOfMonosTop prog encl rest []
+routesOfMonosTop prog encl (m :: rest) (iface :: ifacesRest) =
+  routeOf iface encl (CountImpls prog iface.irName) m
+    :: routesOfMonosTop prog encl rest ifacesRest
 
 -- the undetermined-constraint resolution: count impls of [iface] in [prog].
-routeUndeterminedTop : List Decl -> ImplBuckets -> String -> Route
-routeUndeterminedTop prog implTable iface
+routeUndeterminedTop : List Decl -> String -> Route
+routeUndeterminedTop prog iface
   | iface == "" = RNone
   | otherwise = match implHeadTagsForIface prog iface
     [] => RNone
@@ -26863,7 +26778,6 @@ routeUndeterminedTop prog implTable iface
       RKey
         tag
         (argImplRequiresRoutes
-          implTable
           (ifaceRefBare iface)
           ""
           tag
@@ -27013,8 +26927,7 @@ ambiguousImplMsg iface =
 -- vector under a non-empty `iface`.  A caller that supplies a non-empty [rest] with
 -- `iface == ""` would be the shape to re-derive for; the `if iface == ""` pin below
 -- neutralizes even that.
-argImplRequiresRoutes : ImplBuckets ->
-  IfaceRef ->
+argImplRequiresRoutes : IfaceRef ->
   String ->
   String ->
   Mono ->
@@ -27022,7 +26935,7 @@ argImplRequiresRoutes : ImplBuckets ->
   Int ->
   Int ->
   List Route
-argImplRequiresRoutes implTable iface encl tag m rest prevSize spent =
+argImplRequiresRoutes iface encl tag m rest prevSize spent =
   -- #1576: the goal vector is bound BEFORE the fuse test now, because the fuse test
   -- reads it.  It is pure, so hoisting it costs a `monoSizes` walk on the limit-hit
   -- path and changes no answer.
@@ -27033,7 +26946,7 @@ argImplRequiresRoutes implTable iface encl tag m rest prevSize spent =
   let spentNow = if prevSize > 0 && size < prevSize then spent else spent + 1
   if spentNow >= requiresNonShrinkingFuel then
     []
-  else match selectReqImpl implTable iface tag m goals
+  else match selectReqImpl iface goals
     -- B-4b-ii: still bare, and NOT independently — this `iface` is the SAME value
     -- `entailInst`'s `EKNestedTop` arm hands `keyForSiteByIface` one line above its
     -- call to this function, which is how §6 C2 ("the impl dispatched to and the impl
@@ -27047,7 +26960,7 @@ argImplRequiresRoutes implTable iface encl tag m rest prevSize spent =
       Some subst =>
         -- THIS level's goal size becomes the child's [prevSize] — that is the whole
         -- shrinking comparison, one parent/child pair at a time.
-        argImplReqRoutes implTable encl subst reqs size spentNow
+        argImplReqRoutes encl subst reqs size spentNow
       None => []
     None => []
 
@@ -27078,20 +26991,10 @@ argImplRequiresRoutes implTable iface encl tag m rest prevSize spent =
 -- is known but whose origin is absent compare unequal to the sentinel for the wrong
 -- reason.  `findImplEntry` is a DIFFERENT substrate (`ImplEntry.ifn`, still a bare
 -- `String`) and is reached only on the arm where the name is `""` anyway.
-selectReqImpl : ImplBuckets ->
-  IfaceRef ->
-  String ->
-  Mono ->
-  List Mono ->
-  Option (Ty, List Ty, List Require)
-selectReqImpl implTable iface tag m goals
-  | iface.irName == "" =
-    map
-      ((ImplEntry _ _ headTy reqs itys _) => (headTy, itys, reqs))
-      (findImplEntry implTable iface.irName tag m)
-  | otherwise =
-    ieRowHeadTriple
-      (ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface goals)
+selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
+selectReqImpl iface goals =
+  ieRowHeadTriple
+    (ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface goals)
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
 -- The argument-position analogue of implDictRoutesFor.  Same impl-table match +
@@ -27140,8 +27043,7 @@ selectReqImpl implTable iface tag m goals
 -- (`@mdk_disp_bar_0_1`).  Differing COUNTS thread the wrong NUMBER of dicts, shifting
 -- every later argument.  Regression:
 -- test/eval_typed_fixtures/multiparam_impl_requires_arity{,_swapped}.mdk.
-argImplDictRoutesForEncl : ImplBuckets ->
-  String ->
+argImplDictRoutesForEncl : String ->
   String ->
   String ->
   Mono ->
@@ -27150,12 +27052,12 @@ argImplDictRoutesForEncl : ImplBuckets ->
 -- ARCH B-2.1-b2 (LEG 3b): the arg-position twin of leg 3a, repointed for the same
 -- reason and in the same bite — the two legs select the SAME way at the same goal
 -- and a split between them is the §6 C2 break the header describes.
-argImplDictRoutesForEncl implTable encl name _tag mono goals =
+argImplDictRoutesForEncl encl name _tag mono goals =
   match (ieRowHeadTriple
     (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name goals))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys mono goals
-        Some subst => argImplReqRoutes implTable encl subst reqs 0 0
+        Some subst => argImplReqRoutes encl subst reqs 0 0
         None => []
     None => []
 
@@ -27165,34 +27067,31 @@ argImplDictRoutesForEncl implTable encl name _tag mono goals =
 -- (implDictRoutesForFull), routeOf/topRouteV and routeUndeterminedTop alike: `prevSize
 -- == 0` is the "no parent goal yet" sentinel, so a seed's own first level is counted
 -- as non-shrinking and costs one unit of fuel.
-argImplReqRoutes : ImplBuckets ->
-  String ->
+argImplReqRoutes : String ->
   List (String, Mono) ->
   List Require ->
   Int ->
   Int ->
   List Route
-argImplReqRoutes _ _ _ [] _ _ = []
-argImplReqRoutes implTable encl subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
-  argReqRoute implTable rIface encl subst rargs prevSize spent
-    :: argImplReqRoutes implTable encl subst rest prevSize spent
+argImplReqRoutes _ _ [] _ _ = []
+argImplReqRoutes encl subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
+  argReqRoute rIface encl subst rargs prevSize spent
+    :: argImplReqRoutes encl subst rest prevSize spent
 
-argReqRoute : ImplBuckets ->
-  String ->
+argReqRoute : String ->
   String ->
   List (String, Mono) ->
   List Ty ->
   Int ->
   Int ->
   Route
-argReqRoute _ _ _ _ [] _ _ = RNone
+argReqRoute _ _ _ [] _ _ = RNone
 -- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
 -- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
 -- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
-argReqRoute implTable iface encl subst (arg :: more) prevSize spent =
+argReqRoute iface encl subst (arg :: more) prevSize spent =
   routeOfD
-    implTable
     (ifaceRefBare iface)
     encl
     KeepNone
@@ -27206,26 +27105,20 @@ argReqRoute implTable iface encl subst (arg :: more) prevSize spent =
 -- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
 -- constraint variable still (the caller is itself constrained) → RDict forwarding
 -- the caller's dict.  Mirrors resolveDictApps; runs after inference.
-resolveMethodDicts : ImplBuckets -> List PendingMethodDict -> Unit
-resolveMethodDicts _ [] = ()
-resolveMethodDicts implTable (pending :: rest) =
-  pending.pmdRoutesRef :=
-    methodPredicateRoutes implTable pending.pmdEncl pending.pmdSlots
-  resolveMethodDicts implTable rest
+resolveMethodDicts : List PendingMethodDict -> Unit
+resolveMethodDicts [] = ()
+resolveMethodDicts (pending :: rest) =
+  pending.pmdRoutesRef := methodPredicateRoutes pending.pmdEncl pending.pmdSlots
+  resolveMethodDicts rest
 
-methodPredicateRoutes : ImplBuckets ->
-  String ->
-  List PredicateSlot ->
-  List Route
-methodPredicateRoutes _ _ [] = []
-methodPredicateRoutes implTable encl (slot :: rest) =
-  methodPredicateRoute implTable encl slot
-    :: methodPredicateRoutes implTable encl rest
+methodPredicateRoutes : String -> List PredicateSlot -> List Route
+methodPredicateRoutes _ [] = []
+methodPredicateRoutes encl (slot :: rest) =
+  methodPredicateRoute encl slot :: methodPredicateRoutes encl rest
 
-methodPredicateRoute : ImplBuckets -> String -> PredicateSlot -> Route
-methodPredicateRoute implTable encl slot = match slot.psArgs
-  PSArgsKnown (g0 :: gs) =>
-    routeOfD implTable slot.psIface encl KeepNone g0 gs 0 0
+methodPredicateRoute : String -> PredicateSlot -> Route
+methodPredicateRoute encl slot = match slot.psArgs
+  PSArgsKnown (g0 :: gs) => routeOfD slot.psIface encl KeepNone g0 gs 0 0
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -27233,29 +27126,29 @@ methodPredicateRoute implTable encl slot = match slot.psArgs
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
 -- ENCLOSING fn's own dict param.  Run after inference, when funConstraintsRef is
 -- fully populated.
-realizeRecDictApps : ImplBuckets -> List RecDictApp -> Unit
-realizeRecDictApps _ [] = ()
-realizeRecDictApps implTable ((RecDictApp routesRef callee encl mono) :: rest) =
+realizeRecDictApps : List RecDictApp -> Unit
+realizeRecDictApps [] = ()
+realizeRecDictApps ((RecDictApp routesRef callee encl mono) :: rest) =
   let slots =
     optionOr
       []
       (lookupPredicateSlots callee perRun.value.funPredicateSlotsRef.value)
-  let routes = recRoutes implTable encl mono slots
+  let routes = recRoutes encl mono slots
   routesRef := routes
-  realizeRecDictApps implTable rest
+  realizeRecDictApps rest
 
-recRoutes : ImplBuckets -> String -> Mono -> List PredicateSlot -> List Route
-recRoutes _ _ _ [] = []
-recRoutes implTable encl mono (slot :: rest) =
-  recRoute implTable encl mono slot :: recRoutes implTable encl mono rest
+recRoutes : String -> Mono -> List PredicateSlot -> List Route
+recRoutes _ _ [] = []
+recRoutes encl mono (slot :: rest) =
+  recRoute encl mono slot :: recRoutes encl mono rest
 
 -- For one of the callee's constraint ids, recover the live occurrence type from
 -- [mono] (the var the body unified it to).  Concrete head → RKey; still a
 -- constraint variable that is one of [encl]'s own → forward [encl]'s dict param
 -- (RDict, the slot it sits at); otherwise leave the route unresolved.
-recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
-recRoute implTable encl mono slot = match recPredicateArgs mono slot
-  Some (g0 :: gs) => routeOfD implTable slot.psIface encl KeepNone g0 gs 0 0
+recRoute : String -> Mono -> PredicateSlot -> Route
+recRoute encl mono slot = match recPredicateArgs mono slot
+  Some (g0 :: gs) => routeOfD slot.psIface encl KeepNone g0 gs 0 0
   _ => match slot.psBoundIds
     id :: _ => match findTvarInMono mono id
       None => RNone
@@ -27281,7 +27174,7 @@ resolveRecMono encl m = match headTyconNameMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
     Some slot => RDict (dictParamName encl slot)
-    None => routeOf omEmpty ifaceRefNone "" KeepNone m
+    None => routeOf ifaceRefNone "" KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
 -- constraint ids (its position in funConstraintsRef[encl] = the kept slot)
@@ -42166,28 +42059,11 @@ elabModuleStamp : String ->
 elabModuleStamp mid seedVars accData implDecls prog =
   let _ = driverState.value.superDeclsRef := implDecls  -- WS-1b: interfaces in scope for super expansion
   let schemes = checkModuleFullImpl mid seedVars accData implDecls prog
-  let _ = setNumlitFloats ()  -- PLAN.md #11: stamp Float-typed int literals (per module, before dictPass)
-  let stampImplTable = buildImplTable implDecls
-  -- #2547 unit 1: the channels are graph-lifetime; this module's slice is what the
-  -- per-module stampers read (see `GraphRun`).
-  let mk = currentModuleMarks ()
-  let _ =
-    resolveSites
-      stampImplTable
-      (returnPosMethodNames implDecls)
-      (siteGoals GKReturnSite mk.mGoals)
-  let _ = resolveOpSites True stampImplTable (siteGoals GKBinopSite mk.mGoals)
-  let _ = resolveOpSites False stampImplTable (siteGoals GKUnopSite mk.mGoals)
-  let _ = resolveArithSites (arithGoals mk.mGoals)
-  let _ = resolveArgStamps stampImplTable (siteGoals GKArgStamp mk.mGoals)
-  let _ =
-    resolveRLocalSites
-      implDecls
-      stampImplTable
-      (siteGoals GKRLocalSite mk.mGoals)
-  let _ = realizeRecDictApps stampImplTable (recDictAppsSince mk.mGoals)
-  let _ = resolveDictApps implDecls stampImplTable (dictAppsSince mk.mGoals)
-  let _ = resolveMethodDicts stampImplTable (methodDictsSince mk.mGoals)
+  -- #2548: the stampers no longer run here.  This module's windows and the tables
+  -- they read are cut NOW, at the point the nine calls used to sit, and replayed by
+  -- `drainStampQueue` once the whole graph has been inferred — see `StampCtx` and
+  -- `moduleStampOrder`.  `setNumlitFloats ()` went with them (as `SSNumlitFloats`).
+  let _ = enqueueStampCtx mid implDecls
   schemes
 -- DRIVER-COLLAPSE Phase 2: pass the return-position method names (was `[]`) so
 -- resolveSite's RDict-case routes a RETURN-position method site RDictFwd (forward the
@@ -42277,6 +42153,173 @@ elabHarvestWorker mid seed accData accAll prog =
         ++ perRun.value.promotedRef.value)
   result
 
+-- ── #2548 / DICT §6.2 T4: the stamper order, written once ────────────────────
+-- One step per route-stamping resolver, plus the Float literal stamp.  #1116: the
+-- sequence is a VALUE, so the two schedules that run it (the graph-end drain and
+-- `elaborateDict`'s flat path) state their order in one vocabulary instead of
+-- hand-copying nine calls each.
+data StampStep =
+  | SSNumlitFloats
+  | SSReturnSites
+  | SSBinopSites
+  | SSUnopSites
+  | SSArithSites
+  | SSArgStamps
+  | SSRLocalSites
+  | SSRecDictApps
+  | SSDictApps
+  | SSMethodDicts
+
+-- THE order for the module graph, run once per module by `drainStampQueue`.
+moduleStampOrder : List StampStep
+moduleStampOrder = [
+  SSNumlitFloats,
+  SSReturnSites,
+  SSBinopSites,
+  SSUnopSites,
+  SSArithSites,
+  SSArgStamps,
+  SSRLocalSites,
+  SSRecDictApps,
+  SSDictApps,
+  SSMethodDicts,
+]
+
+-- `elaborateDict`'s order, NOT the one above, and the difference is load-bearing
+-- rather than accidental.  Two steps differ: the flat path runs `SSArgStamps` LAST
+-- (after the three dict-realizing steps) and has no `SSRLocalSites` step at all,
+-- because standalone-shadow RLocal sites are recorded only by the Module driver's
+-- cross-module shadow marking (`elaborateModules`' C5 mark set) — a single-file
+-- program has no importer to shadow into, so the channel is empty there by
+-- construction and the step would be a no-op.  `SSNumlitFloats` is likewise absent:
+-- on the Flat arm `checkBodyImpl` already stamps the literals unconditionally
+-- (its `Flat _` obligation arm), so running it again here would double-stamp.
+-- The two orders are therefore not a drift to be unified in this slice — unifying
+-- them would move the flat path's arg stamps ahead of its dict realization, which
+-- is a route change, not a schedule change.  They share this vocabulary and this
+-- runner, which is what #1116 asks for; they do not share a list.
+flatStampOrder : List StampStep
+flatStampOrder = [
+  SSReturnSites,
+  SSBinopSites,
+  SSUnopSites,
+  SSArithSites,
+  SSRecDictApps,
+  SSDictApps,
+  SSMethodDicts,
+  SSArgStamps,
+]
+
+-- Everything one module's stampers read, cut at the moment they used to run.
+--
+-- 🚨 `scPerRun`/`scToggles` are the WHOLE per-module records, captured by reference
+-- rather than field by field.  `resetState` installs a FRESH `PerRun` for the next
+-- module, so the record captured here is frozen from that point on and replaying it
+-- reproduces, exactly, the tables the per-module drain read — including the ones a
+-- graph-end read would silently get wrong (`funPredicateSlotsRef` is scoped to its
+-- module and its importers, so at graph end it is the ENTRY module's table, missing
+-- every earlier module's rows; `realizeRecDictApps` and `enclDictVarOf` read it).
+-- Naming a subset of fields here would make the drain's correctness depend on a
+-- reachability argument over `entail`'s transitive reads, which nothing checks.
+-- What is deliberately NOT captured is the tyvar substitution, which is not on
+-- `PerRun` at all: the drain therefore resolves every module's goals against the
+-- FINAL, whole-graph solution, which is the point of draining at quiescence.
+data StampCtx = StampCtx {
+  scModule : String,
+  scPerRun : PerRun,
+  scToggles : Toggles,
+  scImplDecls : List Decl,
+  scRpNames : List String,
+  scGoals : List Obligation,
+  scNumlits : List (Mono, Ref (Option Float), Int, Ref Route),
+}
+
+stampCtxOf : String ->
+  List Decl ->
+  List Obligation ->
+  List (Mono, Ref (Option Float), Int, Ref Route) ->
+  StampCtx
+stampCtxOf mid implDecls goals numlits = StampCtx {
+  scModule = mid,
+  scPerRun = perRun.value,
+  scToggles = toggles.value,
+  scImplDecls = implDecls,
+  scRpNames = returnPosMethodNames implDecls,
+  scGoals = goals,
+  scNumlits = numlits,
+}
+
+-- This module's windows, cut now — see `siteGoalsIn`.
+enqueueStampCtx : String -> List Decl -> Unit
+enqueueStampCtx mid implDecls =
+  let mk = currentModuleMarks ()
+  let ctx =
+    stampCtxOf
+      mid
+      implDecls
+      (goalsSince mk.mGoals)
+      (moduleWindow graphRun.value.numlitRefs mk.mNumlit)
+  graphRun.value.stampCtxs := ctx :: graphRun.value.stampCtxs.value
+
+runStampSteps : StampCtx -> List StampStep -> Unit
+runStampSteps _ [] = ()
+runStampSteps ctx (s :: rest) =
+  let _ = runStampStep ctx s
+  runStampSteps ctx rest
+
+runStampStep : StampCtx -> StampStep -> Unit
+runStampStep ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
+runStampStep ctx SSReturnSites =
+  resolveSites ctx.scRpNames (siteGoalsIn GKReturnSite ctx.scGoals)
+runStampStep ctx SSBinopSites =
+  resolveOpSites True (siteGoalsIn GKBinopSite ctx.scGoals)
+runStampStep ctx SSUnopSites =
+  resolveOpSites False (siteGoalsIn GKUnopSite ctx.scGoals)
+runStampStep ctx SSArithSites = resolveArithSites (arithGoalsIn ctx.scGoals)
+runStampStep ctx SSArgStamps =
+  resolveArgStamps (siteGoalsIn GKArgStamp ctx.scGoals)
+runStampStep ctx SSRLocalSites =
+  resolveRLocalSites ctx.scImplDecls (siteGoalsIn GKRLocalSite ctx.scGoals)
+runStampStep ctx SSRecDictApps = realizeRecDictApps (recDictAppsIn ctx.scGoals)
+runStampStep ctx SSDictApps =
+  resolveDictApps ctx.scImplDecls (dictAppsIn ctx.scGoals)
+runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
+
+-- #2548 (ARCH M3/Q2, DICT §6.2 T4): ONE ordered resolve pass over the whole graph,
+-- at quiescence.  Every module's goals are stamped after every module has been
+-- inferred, so a goal in an early module is decided against the final solution
+-- rather than against the solution as it stood when that module closed.
+--
+-- The per-module context is REPLAYED, not re-derived (see `StampCtx`), and restored
+-- afterwards so `dictPassModulesIfEnabled` — which runs next — sees the state the
+-- last module left, exactly as it does today.
+drainStampQueue : Unit -> Unit
+drainStampQueue _ =
+  let ctxs = reverseL graphRun.value.stampCtxs.value
+  let savedPerRun = perRun.value
+  let savedToggles = toggles.value
+  let savedModule = driverState.value.currentModuleRef.value
+  let savedSupers = driverState.value.superDeclsRef.value
+  let _ = runStampCtxs ctxs
+  graphRun.value.stampCtxs := []
+  perRun := savedPerRun
+  toggles := savedToggles
+  driverState.value.currentModuleRef := savedModule
+  driverState.value.superDeclsRef := savedSupers
+
+runStampCtxs : List StampCtx -> Unit
+runStampCtxs [] = ()
+runStampCtxs (ctx :: rest) =
+  perRun := ctx.scPerRun
+  toggles := ctx.scToggles
+  -- `givensHere` selects this module's bucket off `gGiven` by exactly this key
+  -- (#2547 unit 3), and `superDeclsRef` is the impl universe the stampers'
+  -- super-expansion reads — both are what `elabModuleStamp` set for this module.
+  driverState.value.currentModuleRef := ctx.scModule
+  driverState.value.superDeclsRef := ctx.scImplDecls
+  let _ = runStampSteps ctx moduleStampOrder
+  runStampCtxs rest
+
 -- #2543: everything one Module-arm sweep of `elaborateModules` needs, bundled so
 -- the promotion fixpoint can re-run the sweep with a grown dict-name set.
 data ElabSweep = ElabSweep {
@@ -42350,6 +42393,10 @@ elabSweep es grown =
       []
       core2
       modules2
+  -- #2548: quiescence.  Every module (core first) has been inferred and has queued
+  -- its stamping context; drain them all now, in module order, before the caller
+  -- hands the trees to `dictPassModulesIfEnabled`.
+  let _ = drainStampQueue ()
   (dictNames, core2, modules2)
 
 -- #2543 (ARCH E-2a): promotion discovery as a Module-arm fixpoint.  `grown` is the
