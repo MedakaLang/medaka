@@ -7732,16 +7732,6 @@ predicateSlotTableWithoutArgs entries =
 -- The impl-`requires` adapter keeps the dict parameter name beside the carrier rather
 -- than pretending it is part of predicate identity.  Unlike a function CSlot, this
 -- producer already owns the predicate's complete ordered bound-id vector.
-implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
-implReqPredicateSlot (dname, ids, p) = (
-  dname,
-  PredicateSlot {
-    psIface = p.iface,
-    psArgs = PSArgsKnown p.args,
-    psBoundIds = ids,
-  },
-)
-
 -- #991: every arm below is now LIVE — stamped by the producer that records the
 -- obligation, on the ONE storage shape (`UObligation`).  The three arms that read
 -- "impl channel, not yet ported" until #991 were dead because that channel stored a
@@ -9011,15 +9001,64 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 --
 -- Deliberately still per-module: `funPredicateSlotsRef` (keyed by bare binding NAME —
 -- graph-global it would collide across modules; it is seeded from and written back to
--- crossRun's tables per module already) and the impl-`requires` given table.
+-- crossRun's tables per module already).  It is NOT a given table: its readers are the
+-- DECLARED-slot consumers (`declaredConstraintFor`, `declaredConstraintIds`,
+-- `inferDictAtFound`, `goalIdsClaimed`) plus `enclDictVarOf`, which derives a dict-param
+-- name POSITIONALLY (`dictParamName encl <slot index>`) rather than reading a stored one.
 -- `activeDictVars` IS here: keyed by tyvar id, which the graph counter keeps unique, so
--- an entry can only ever match its own module's sites.  Its lookups became whole-graph
--- linear scans (`diff_compiler_perf_scaling` is the gate on that), which unit 3's
--- re-keying (`gGiven`) retires.  `activeDictPreds` is NOT here: a `PSArgsKnown` slot
--- over concrete monos (`Show Int`) carries no tyvar id, and `activeDictPredOf`'s
--- unscoped fallback (empty owner prefix) would match such an entry from an earlier
--- module — so it stays per-module on `PerRun` until unit 3 keys givens by module.
+-- an entry can only ever match its own module's sites.
 data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
+
+-- #2547 unit 3: ONE stored given — the predicate a dict parameter discharges, and the
+-- parameter's name.  The two per-module tables this replaces (`activeDictPreds`, keyed
+-- `(slot, dname)`, and `implReqPredicateSlots`, keyed `(dname, slot)`) held the same pair
+-- in opposite orders and were scanned by two helpers whose match tests were identical
+-- term for term (`implReqPick` vs `firstPredForEnclAt`).
+--
+-- The predicate identity is `PredicateSlot` — `psIface : IfaceRef` already carries
+-- `irOrigin` beside `irName`, and `predicateRequestMatchesSlot` already discriminates on
+-- it through `sameIfaceDecl`.  No identity type is introduced here: one that re-stated
+-- `IfaceRef`'s (name, origin) pair would be a second spelling of the same fact, and the
+-- vector half (`psArgs`) and the bound-id half (`psBoundIds`) are already on the slot.
+--
+-- The OWNER is not a field: every reader selects on the `$dict_<encl>_` prefix of
+-- [geDict], because a dict parameter's name IS its owner plus its slot index
+-- (`dictParamName`), and the residual reader that scans with an EMPTY prefix
+-- (`activeDictPredOf`'s unscoped fallback) needs the whole module's entries, not one
+-- binding's.  Splitting the owner out would make that fallback a second lookup shape.
+--
+-- [geMatch] is what makes ONE environment sound, and it is a property of the given,
+-- not a record of which table it came from.  MEASURED: merging the two tables with no
+-- such field loses `test/eval_typed_modules_fixtures/impl_requires_nonfunctor_sibling`
+-- to `runtime error [E-PANIC]: no matching impl for dispatch` — every other route
+-- golden in `diff_compiler_dict_semantics` (352 assertions) stays green, so an
+-- undifferentiated merge is a SILENT re-widening on every path that fixture does not
+-- cover.  See `GivenMatch`.
+data GivenEntry = GivenEntry {
+  geSlot : PredicateSlot,
+  geDict : String,
+  geMatch : GivenMatch,
+}
+
+-- May this given answer a goal on PREDICATE IDENTITY ALONE, or only when the asker also
+-- witnesses that the goal's dispatch variable is one the slot binds?
+--
+-- The distinction is the ARGUMENT VECTOR's precision.  `monoVecSameGiven` is an identity
+-- test on a vector with a structured position, but on an ALL-BARE vector it degenerates
+-- to raw tyvar-id equality at every position — so two `requires` slots of the same
+-- interface over different parameters (`requires Debug e, Debug a`) are indistinguishable
+-- to a predicate-only reader, and one answers for the other.  `containsI target
+-- psBoundIds` is the missing discriminator, which is why the id-witnessed rung may read
+-- these and the predicate-only rungs may not.
+data GivenMatch =
+  -- The vector carries a structured position (`registerPredGiven`'s all-bare guard) or
+  -- the given is a declared signature slot / one of its transitive supers
+  -- (`registerFunPredGiven`).  Matchable by predicate alone.
+  | GMPredicate
+  -- Every position is a bare tyvar: an impl `requires` slot, which `registerPredGiven`
+  -- deliberately refuses to register at all.  Readable only through a scan that supplies
+  -- a tyvar-id witness.
+  | GMIdWitnessed
 
 data GraphRun = GraphRun {
   tyvarCounter : Ref Int,
@@ -9032,6 +9071,14 @@ data GraphRun = GraphRun {
   -- deliberately NOT ported onto `UObligation` like `implObls` was.
   numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
   activeDictVars : Ref (List (Int, String)),
+  -- #2547 unit 3: the given environment, keyed by MODULE.  Graph lifetime, but NOT
+  -- graph-global visibility: every read goes through `givensHere`, which selects the
+  -- current module's bucket, so a given from module A cannot answer a goal in module B.
+  -- The module key is what reproduces the scoping the per-module `PerRun` re-mint used
+  -- to give these entries physically — `D-I5-names` bounds instance CANDIDACY, not name
+  -- visibility, so givens stay lexical.  Keying by module rather than by nothing is also
+  -- what keeps each scan the length of one module's givens instead of the graph's.
+  gGiven : Ref (OrdMap (List GivenEntry)),
   moduleRanges : Ref (List (String, GraphMarks)),
   -- the channel's length, maintained by `pushGoal` / `dropGoalsSince`, so a mark is
   -- O(1) — `goalsMark` is taken at every `let` and SCC bracket
@@ -9045,6 +9092,7 @@ freshGraphRun _ = GraphRun {
   goals = Ref [],
   numlitRefs = Ref [],
   activeDictVars = Ref [],
+  gGiven = Ref omEmpty,
   moduleRanges = Ref [],
   goalsN = Ref 0,
 }
@@ -9064,9 +9112,56 @@ copyGraphRun g = GraphRun {
   goals = Ref g.goals.value,
   numlitRefs = Ref g.numlitRefs.value,
   activeDictVars = Ref g.activeDictVars.value,
+  gGiven = Ref g.gGiven.value,
   moduleRanges = Ref g.moduleRanges.value,
   goalsN = Ref g.goalsN.value,
 }
+
+-- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
+-- per module by `checkBodyImpl` before any body is inferred and copied by
+-- `copyDriverState`, so both memo layers restore the key and the bucket together.
+givensHere : Unit -> List GivenEntry
+givensHere _ =
+  optionOr
+    []
+    (omLookup
+      driverState.value.currentModuleRef.value
+      graphRun.value.gGiven.value)
+
+-- The ONE given write.  Newest first, as both retired tables were, so every reader's
+-- first-match order is the write order it had before.
+pushGiven : GivenMatch -> PredicateSlot -> String -> Unit
+pushGiven gm slot dname =
+  let mid = driverState.value.currentModuleRef.value
+  let entry = GivenEntry { geSlot = slot, geDict = dname, geMatch = gm }
+  graphRun.value.gGiven :=
+    omInsert mid (entry :: givensHere ()) graphRun.value.gGiven.value
+
+-- What a rung declares it can soundly read out of the one environment.  This is the
+-- eligibility half of `GivenMatch`, and the only place the two interact.
+data GivenScope =
+  -- The rung matches on predicate identity alone, so an all-bare `requires` vector would
+  -- answer for a sibling slot of the same interface.  Skip those.
+  | GSPredicateOnly
+  -- The rung is the impl-`requires` rung: it is keyed on the `requires` slots and
+  -- supplies `containsI target psBoundIds` as the discriminator the bare vector lacks.
+  --
+  -- It reads GMIdWitnessed givens ONLY.  Widening it to the signature-channel givens
+  -- as well — which looks free, because `enclDictVarOf` runs ahead of it in
+  -- `activeDictVarOfEncl` applying a term-for-term identical test — loses
+  -- `impl_requires_nonfunctor_sibling` the same way an undifferentiated merge does:
+  -- `registerFunPredGiven` also registers each slot's TRANSITIVE SUPERS, which
+  -- `enclDictVarOf` never sees, so this rung would answer a super where today the answer
+  -- comes from `activeDictPredOf` one rung later, off a different first match.
+  | GSImplRequires
+
+givenInScope : GivenScope -> GivenEntry -> Bool
+givenInScope GSPredicateOnly g = match g.geMatch
+  GMPredicate => True
+  GMIdWitnessed => False
+givenInScope GSImplRequires g = match g.geMatch
+  GMIdWitnessed => True
+  GMPredicate => False
 
 -- Each channel's length as this module begins.
 graphMarksNow : Unit -> GraphMarks
@@ -9112,12 +9207,6 @@ data PerRun = PerRun {
   -- True while an IMPL or DEFAULT method body is being inferred — the scope in
   -- which registerLocalScheme records obligations (see its comment).
   inRigidityBodyRef : Ref Bool,
-  -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
-  -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
-  -- same predicate as another iff they have equal length and `monoSameGiven` holds at
-  -- every position, in order — see `monoVecSameGiven`.  Per-module, not on
-  -- `GraphRun`: see the note above `data GraphMarks`.
-  activeDictPreds : Ref (List (PredicateSlot, String)),
   curEffect : Ref EffRow,
   rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
   recordByNameRef : Ref (OrdMap RecordInfo),
@@ -9149,13 +9238,6 @@ data PerRun = PerRun {
   localBindRefs : Ref (List (String, Option Loc, Mono)),
   localSchemesOut : Ref (List (String, Option Loc, Scheme)),
   seedSchemesOut : Ref (List (String, Scheme)),
-  -- #1154 RESIDUAL: the impl-`requires` twin of `enclPreds`.  One entry per dict slot
-  -- an impl's `requires` opens: the tyvar ids the slot is keyed on, and the WHOLE
-  -- predicate that slot discharges.  `activeDictVars` above cannot answer a body's
-  -- method site on its own — every entry of `requires Ix a Char, Dbg2 a` carries the
-  -- SAME id `a`, so its first-match returns the LAST-registered slot for every method
-  -- in the body.  See `implReqDictVarOf`.
-  implReqPredicateSlots : Ref (List (String, PredicateSlot)),
   funPredicateSlotsRef : Ref (List (String, List PredicateSlot)),
   funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
   currentImportDefinersRef : Ref (List (String, String)),
@@ -9222,7 +9304,6 @@ data PerRun = PerRun {
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
-  activeDictPreds = Ref [],
   curEffect = Ref (EffRow [] None),
   rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -9252,7 +9333,6 @@ freshPerRun _ = PerRun {
   localBindRefs = Ref [],
   localSchemesOut = Ref [],
   seedSchemesOut = Ref [],
-  implReqPredicateSlots = Ref [],
   funPredicateSlotsRef = Ref [],
   funConstraintDeclaredRef = Ref [],
   currentImportDefinersRef = Ref [],
@@ -20876,29 +20956,24 @@ activeDictVarOfEncl (Some request) m encl =
 --
 -- A complete request uses one exact pass.  A miss is terminal at
 -- `activeDictVarOfEncl`; only an explicit no-predicate route may consult scalar state.
+--
+-- #2547 unit 3: the scan is `firstPredForEnclAt` — the id-gated given lookup — not a
+-- private `implReqPick`.  The two were term-for-term the same test over the same pair in
+-- opposite tuple orders; one given environment leaves one of them.
 implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
 implReqDictVarOf None _ _ = None
 implReqDictVarOf (Some request) m encl
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
-      let entries = perRun.value.implReqPredicateSlots.value
-      let pfx = "$dict_\{encl}_"
-      implReqPick (tyvarId cell) request pfx entries
+      firstPredForEnclAt
+        GSImplRequires
+        (tyvarId cell)
+        request
+        "$dict_\{encl}_"
+        (givensHere ())
     TApp a _ => implReqDictVarOf (Some request) a encl
     _ => None
-
-implReqPick : Int ->
-  PredicateRequest ->
-  String ->
-  List (String, PredicateSlot) ->
-  Option String
-implReqPick _ _ _ [] = None
-implReqPick target request pfx ((dname, slot) :: rest)
-  | startsWith pfx dname
-    && containsI target slot.psBoundIds
-    && predicateRequestMatchesSlot request slot = Some dname
-  | otherwise = implReqPick target request pfx rest
 
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 predicateSlotKnownArgs PSArgsUnknown = []
@@ -20986,7 +21061,7 @@ predicateRequestArgsMatch _ _ = True
 -- with the `.irName` projection removed.  No new channel, no new parameter: the
 -- identity was already in the tuple this lookup returns and was being thrown away one
 -- line later by `ifaceRefBare`.  PURE SUPPLY: this predicate's only consumers are
--- `enclSlotIndex`/`indexOfPredGo` and `implReqDictVarOf`/`implReqPick`, both of which
+-- `enclSlotIndex`/`indexOfPredGo` and `implReqDictVarOf`/`firstPredForEnclAt`, both of which
 -- compare `sp.iface.irName == p.iface.irName` — a NAME compare that cannot see an
 -- origin — so nothing selects differently today.  What it buys is that the goal side
 -- is no longer laundered through `OriginUnresolved`, which is the precondition for
@@ -32339,18 +32414,14 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
   -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
   -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
   -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
-  -- PURE SUPPLY: `implReqPreds`' only reader is `implReqPick`, which compares
-  -- `sp.iface.irName` against the goal's, so no slot is picked differently today.
-  let entry = (
-    dictParamName mname slot,
-    ids,
-    Predicate {
-      iface = IfaceRef { irName = iface, irOrigin = ro },
-      args = argMonos,
-    },
-  )
-  perRun.value.implReqPredicateSlots :=
-    implReqPredicateSlot entry :: perRun.value.implReqPredicateSlots.value
+  pushGiven
+    GMIdWitnessed
+    PredicateSlot {
+      psIface = reqIface,
+      psArgs = PSArgsKnown argMonos,
+      psBoundIds = ids,
+    }
+    (dictParamName mname slot)
   registerReqSlots mname implTvMap (slot + 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
@@ -32379,16 +32450,21 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- exactly, and must keep following it — see their own headers.
 --
 -- §6.1.3's rigid commit is preserved TWICE OVER, and the guard below is the load-bearing
--- one: `requires S a` is a bare-tyvar given, so it never reaches this registry at all, and
+-- one: `requires S a` is a bare-tyvar given, so this writer registers nothing for it, and
 -- the body's goal `S (List a)` finds no assumption ⇒ `inst` fires on the rigid goal ⇒ the
 -- general instance ⇒ 2, unchanged.  Even had it been registered, `monoSameGiven` compares
 -- structurally and would not match subject `a` against goal `List a` — only unification
 -- would, and this is deliberately not unification.  Pinned by
 -- test/build_diff_fixtures/impl_requires_structured_rigid_control.mdk.
 --
--- All-bare impl `requires` vectors stay on the historical scalar path.  Function
--- carriers have a distinct Known-slot writer (`registerSlotPredGivens`) because their
--- complete multi-parameter identity is required by EKNestedTop.
+-- #2547 unit 3: the guard is a `GivenMatch` decision now, not an absence.  The
+-- all-bare vector this arm refuses IS in `gGiven` — `registerReqSlots` pushes it as
+-- `GMIdWitnessed` — and what preserves the paragraph above is that every reader keyed on
+-- predicate identity alone scans `GSPredicateOnly` and so cannot see it.  Both halves must
+-- move together: pushing an all-bare vector as `GMPredicate`, or widening a
+-- `GSPredicateOnly` rung, re-opens exactly what this guard closes.  Function carriers have
+-- a distinct Known-slot writer (`registerSlotPredGivens`) because their complete
+-- multi-parameter identity is required by EKNestedTop.
 --
 -- ⚠️ #1956 WIDENS THAT SHARP EDGE TO MORE POSITIONS, and does not introduce a new one.
 -- A vector like `[Wrap a, b]` is admitted because SOME position is structured, but its
@@ -32409,8 +32485,7 @@ registerPredGiven iface args dname
       psArgs = PSArgsKnown args,
       psBoundIds = dedupI (flatMap monoTyvarIds args),
     }
-    perRun.value.activeDictPreds :=
-      (slot, dname) :: perRun.value.activeDictPreds.value
+    pushGiven GMPredicate slot dname
 
 monoIsBareTyvar : Mono -> Bool
 monoIsBareTyvar m = match normalize m
@@ -32465,21 +32540,28 @@ monoVecSameGiven _ _ = False
 -- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does.
 activeDictPredOf : PredicateRequest -> Mono -> String -> Option String
 activeDictPredOf request targetMono encl =
-  let preds = perRun.value.activeDictPreds.value
+  let preds = givensHere ()
   let local =
     if encl == "" then
       None
     else match request.prArgs
       PSArgsKnown _ => firstPredForEncl request "$dict_\{encl}_" preds
       PSArgsUnknown => match predicateTargetId targetMono
-        Some target => firstPredForEnclAt target request "$dict_\{encl}_" preds
+        Some target =>
+          firstPredForEnclAt
+            GSPredicateOnly
+            target
+            request
+            "$dict_\{encl}_"
+            preds
         None => None
   match local
     Some dname => Some dname
     None => match request.prArgs
       PSArgsKnown _ => firstPredForEncl request "" preds
       PSArgsUnknown => match predicateTargetId targetMono
-        Some target => firstPredForEnclAt target request "" preds
+        Some target =>
+          firstPredForEnclAt GSPredicateOnly target request "" preds
         None => None
 
 predicateTargetId : Mono -> Option Int
@@ -32489,37 +32571,40 @@ predicateTargetId m = match normalize m
   _ => None
 
 -- Function-carrier predicate evidence is lexical to [encl].  Unlike activeDictPredOf,
--- this lookup deliberately has no global fallback: activeDictPreds accumulates across
--- functions, so an unscoped hit could route stale evidence from a different body.
+-- this lookup deliberately has no global fallback: a module's givens accumulate across
+-- its functions, so an unscoped hit could route stale evidence from a different body.
 activeFunDictPredOf : PredicateRequest -> String -> Option String
 activeFunDictPredOf _ "" = None
 activeFunDictPredOf request encl =
-  firstPredForEncl
-    request
-    ("$dict_" ++ encl ++ "_")
-    perRun.value.activeDictPreds.value
+  firstPredForEncl request ("$dict_" ++ encl ++ "_") (givensHere ())
 
 firstPredForEncl : PredicateRequest ->
   String ->
-  List (PredicateSlot, String) ->
+  List GivenEntry ->
   Option String
 firstPredForEncl _ _ [] = None
-firstPredForEncl request pfx ((slot, ename) :: rest)
-  | startsWith pfx ename && predicateRequestMatchesSlot request slot =
-    Some ename
+firstPredForEncl request pfx (g :: rest)
+  | givenInScope GSPredicateOnly g
+    && startsWith pfx g.geDict
+    && predicateRequestMatchesSlot request g.geSlot = Some g.geDict
   | otherwise = firstPredForEncl request pfx rest
 
-firstPredForEnclAt : Int ->
+-- The id-witnessed scan.  [scope] is the rung's own declaration of what it may read —
+-- both rungs that reach here supply a tyvar-id witness, but only one of them is keyed on
+-- the givens that REQUIRE it.  See `GivenScope`.
+firstPredForEnclAt : GivenScope ->
+  Int ->
   PredicateRequest ->
   String ->
-  List (PredicateSlot, String) ->
+  List GivenEntry ->
   Option String
-firstPredForEnclAt _ _ _ [] = None
-firstPredForEnclAt target request pfx ((slot, ename) :: rest)
-  | containsI target slot.psBoundIds
-    && startsWith pfx ename
-    && predicateRequestMatchesSlot request slot = Some ename
-  | otherwise = firstPredForEnclAt target request pfx rest
+firstPredForEnclAt _ _ _ _ [] = None
+firstPredForEnclAt scope target request pfx (g :: rest)
+  | givenInScope scope g
+    && containsI target g.geSlot.psBoundIds
+    && startsWith pfx g.geDict
+    && predicateRequestMatchesSlot request g.geSlot = Some g.geDict
+  | otherwise = firstPredForEnclAt scope target request pfx rest
 
 -- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
 -- for a producer that can still supply OriginUnresolved.  Complete method requests do
@@ -32527,22 +32612,20 @@ firstPredForEnclAt target request pfx ((slot, ename) :: rest)
 activeFunDictPredOfResidual : String -> List Mono -> String -> Option String
 activeFunDictPredOfResidual _ _ "" = None
 activeFunDictPredOfResidual iface args encl =
-  firstPredForEnclResidual
-    iface
-    args
-    ("$dict_" ++ encl ++ "_")
-    perRun.value.activeDictPreds.value
+  firstPredForEnclResidual iface args ("$dict_" ++ encl ++ "_") (givensHere ())
 
 firstPredForEnclResidual : String ->
   List Mono ->
   String ->
-  List (PredicateSlot, String) ->
+  List GivenEntry ->
   Option String
 firstPredForEnclResidual _ _ _ [] = None
-firstPredForEnclResidual iface args pfx ((slot, ename) :: rest)
-  | slot.psIface.irName == iface
-    && startsWith pfx ename
-    && predicateRequestArgsMatch (PSArgsKnown args) slot.psArgs = Some ename
+firstPredForEnclResidual iface args pfx (g :: rest)
+  | givenInScope GSPredicateOnly g
+    && g.geSlot.psIface.irName == iface
+    && startsWith pfx g.geDict
+    && predicateRequestArgsMatch (PSArgsKnown args) g.geSlot.psArgs =
+    Some g.geDict
   | otherwise = firstPredForEnclResidual iface args pfx rest
 
 -- the interface a method NAME belongs to, for the predicate-keyed assum lookup.  A
@@ -34670,8 +34753,7 @@ registerFunPredGiven slot dname
 registerFunPredGivenSlots : List PredicateSlot -> String -> Unit
 registerFunPredGivenSlots [] _ = ()
 registerFunPredGivenSlots (slot :: rest) dname =
-  perRun.value.activeDictPreds :=
-    (slot, dname) :: perRun.value.activeDictPreds.value
+  pushGiven GMPredicate slot dname
   registerFunPredGivenSlots rest dname
 
 -- A dictionary supplied for one predicate also supplies every transitive
@@ -35902,17 +35984,21 @@ goalDefersOpenWorld iface args =
 -- gate alone would re-open exactly the S0-1 hole FIX-1 closed — a goal admitted to defer
 -- with no consumption-side answer, i.e. a dropped predicate and a type-confused dict at
 -- exit 0.  The invariant is that this gate admits EXACTLY what that registry can answer.
+-- #2547 unit 3: `GSPredicateOnly` is what still says so now that both registries share one
+-- environment — it selects exactly the `GMPredicate` entries, which are exactly the ones
+-- `registerPredGiven` / `registerFunPredGiven` write.
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
 goalMatchesGiven _ [] = False
 goalMatchesGiven iface args =
   anyGivenMatches
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-    perRun.value.activeDictPreds.value
+    (givensHere ())
 
-anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
+anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
 anyGivenMatches _ [] = False
-anyGivenMatches request ((slot, _) :: rest) =
-  predicateRequestMatchesSlot request slot || anyGivenMatches request rest
+anyGivenMatches request (g :: rest) =
+  givenInScope GSPredicateOnly g && predicateRequestMatchesSlot request g.geSlot
+    || anyGivenMatches request rest
 
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only

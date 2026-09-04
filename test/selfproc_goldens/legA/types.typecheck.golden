@@ -97,7 +97,7 @@ anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
-anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
+anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
 anyIn : List Int -> List Int -> Bool
@@ -897,9 +897,9 @@ firstIfaceMethodLoc : List IfaceMethod -> Option Loc
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstMid : List String -> String
 firstOrZero : List Int -> Int
-firstPredForEncl : PredicateRequest -> String -> List (PredicateSlot, String) -> Option String
-firstPredForEnclAt : Int -> PredicateRequest -> String -> List (PredicateSlot, String) -> Option String
-firstPredForEnclResidual : String -> List Mono -> String -> List (PredicateSlot, String) -> Option String
+firstPredForEncl : PredicateRequest -> String -> List GivenEntry -> Option String
+firstPredForEnclAt : GivenScope -> Int -> PredicateRequest -> String -> List GivenEntry -> Option String
+firstPredForEnclResidual : String -> List Mono -> String -> List GivenEntry -> Option String
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
@@ -943,6 +943,8 @@ funDomain : Mono -> Mono
 genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
+givenInScope : GivenScope -> GivenEntry -> Bool
+givensHere : Unit -> List GivenEntry
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 goalDefersOpenWorld : IfaceRef -> List Mono -> Bool
 goalHeadCon : List Mono -> Option HeadKey
@@ -1142,8 +1144,6 @@ implMethodEVars : ImplMethod -> List String
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
 implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
-implReqPick : Int -> PredicateRequest -> String -> List (String, PredicateSlot) -> Option String
-implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
 implRowHasReqs : List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
@@ -1735,6 +1735,7 @@ pushArithGoal : Ref Route -> Mono -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
+pushGiven : GivenMatch -> PredicateSlot -> String -> Unit
 pushGoal : Obligation -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushMethodDictGoal : PendingMethodDict -> Unit
