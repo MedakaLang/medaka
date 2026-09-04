@@ -69,11 +69,7 @@ import string.{join, toUpper, words}
 
 -- Render a row to a "|"-joined line, substituting the rowid for the PK column.
 renderRow : Option Int -> Row -> String
-renderRow pkIdx row = join "|" (renderCells (rowCellsWithIpk pkIdx row))
-
-renderCells : List Cell -> List String
-renderCells [] = []
-renderCells (c :: rest) = cellToString c :: renderCells rest
+renderRow pkIdx row = join "|" (map cellToString (rowCellsWithIpk pkIdx row))
 
 -- Dump the stored CREATE statement + all rows of a table.
 dumpTable : Db -> String -> <IO> Unit

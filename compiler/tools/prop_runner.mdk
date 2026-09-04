@@ -177,9 +177,7 @@ genTuple : List (String, TyDef) ->
   Int ->
   List Ty ->
   <e> List (Value e)
-genTuple _ _ _ [] = []
-genTuple tydefs subst depth (t :: rest) =
-  genForType tydefs subst depth t :: genTuple tydefs subst depth rest
+genTuple tydefs subst depth ts = map (genForType tydefs subst depth) ts
 
 genList : List (String, TyDef) ->
   List (String, Ty) ->

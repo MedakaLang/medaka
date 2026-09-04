@@ -2240,12 +2240,12 @@ runBuildPlainCmd a =
           Some o => o
           None => defaultOutPath target input
         match typecheckGate allowInternal root inputAbs
-          TGErr msg => dieMsg msg
+          Err msg => dieMsg msg
           -- Warnings BEFORE the emitter runs, so they precede clang's own output
           -- and any `built <in> -> <out>` line — the same order `check` uses and
           -- the order a reader scanning a build log expects.  They never change
           -- the exit code.
-          TGOk gateWarns =>
+          Ok gateWarns =>
             let _ = emitWarningLines gateWarns
             let perfTTc = now ()
             let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
@@ -2325,9 +2325,10 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- an ill-typed program that is garbage (the G1 bug), so we abort here on any
 -- type error.  Mirrors the OCaml driver's STEP-0 check gate.
 
--- G1 typecheck gate result: clean / a diagnostic (resolve or type error, or a
--- pre-typecheck read/load failure) whose message we surface verbatim.
--- ⚠️ `TGOk` CARRIES THE WARNINGS, and that is the whole reason it has a payload.
+-- G1 typecheck gate result, a `Result String (List String)`: `Ok warnings` /
+-- `Err diagnostic` (a resolve or type error, or a pre-typecheck read/load
+-- failure) whose message we surface verbatim.
+-- ⚠️ `Ok` CARRIES THE WARNINGS, and that is the whole reason it has a payload.
 -- `build`'s gate used to be a bare Bool-shaped verdict, so every warning the check
 -- it runs produced was computed and dropped — `medaka build` had NO warning surface
 -- at all, for any warning class.  That was invisible while the typecheck channel
@@ -2338,7 +2339,7 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 --
 -- ⚠️ RENDERED `String`s HERE, TRIPLES ON THE `run` PATH — an asymmetry that is a
 -- FACT ABOUT THIS PLAIN-TEXT CODE PATH, not the whole CLI. #1078 gave `medaka
--- build` a `--json` flag, but it does NOT flow through `typecheckGate`/`TGOk`
+-- build` a `--json` flag, but it does NOT flow through `typecheckGate`/`Ok`
 -- at all: `runBuildCmd` branches on `jsonMode` BEFORE reaching this function and
 -- routes to `runBuildJsonCmd` instead, which reuses `checkJsonFile` (the same
 -- structured pass `check --json` runs) for the front-end gate and wraps a
@@ -2348,8 +2349,7 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- routing `--json` through it, that payload must become triples and follow
 -- `finishRunEval`'s `pendingRunDiags` discipline, or it reproduces the bug that
 -- fix exists for.
-data TypecheckGate = TGOk (List String) | TGErr String
-
+--
 -- Load the entry + transitive imports and run the SAME front-end `medaka check`
 -- runs, reporting whether any error fired AND rendering it exactly as `check`
 -- does.  This must be the CHECK path, not the EMIT path (elaborateModules):
@@ -2358,54 +2358,54 @@ data TypecheckGate = TGOk (List String) | TGErr String
 -- like `"x" + 1` slips past hadTypeErrors and reaches the emitter, which fails
 -- with a confusing downstream `emitter failed …`.  We instead mirror checkRoute:
 -- surface the exact diagnostic `check` prints and abort BEFORE the emitter/clang.
--- Read/load failures become TGErr (surfaced as-is) so the caller mirrors
+-- Read/load failures become Err (surfaced as-is) so the caller mirrors
 -- runBuild/loadProgram's own diagnostics.
-typecheckGate : Bool -> String -> String -> <IO> TypecheckGate
+typecheckGate : Bool -> String -> String -> <IO> Result String (List String)
 typecheckGate allowInternal root input =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 input) ++ [stdlibDir]
-  match readPreludeFile rtPath
-    Err msg => TGErr msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => TGErr msg
-      Ok csrc => match readFile input
-        Err msg => TGErr msg
-        -- PARSE-ERROR-LOCATION Stage 1: a located parse diagnostic for the ENTRY.
-        -- An IMPORTED module's parse error is located by the loader itself (#100)
-        -- and rendered by moduleLoadErrText.
-        Ok tsrc => match parseResult tsrc
-          Err e => TGErr (ppParseError tsrc input e)
-          -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
-          -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
-          -- gave this gate BOTH halves of the misattribution at once: it parses
-          -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
-          -- no per-module path, so an imported module's resolve error printed as
-          -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
-          -- carries real spans and the modId → path map `pathMap` threads below.
-          Ok _ => match loadProgramFilesLocatedE (_ => None) input roots
-            Err lerr => TGErr (moduleLoadErrText tsrc input stdlibDir lerr)
-            Ok modsWithPath =>
-              let mods = map dropModPath modsWithPath
-              let pathMap = map modIdToPath modsWithPath
-              let trusted = projectTrustedMods input roots stdlibDir mods
-              -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-              -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-              -- one is stdlib-root ownership with NO `allow-internal` opt-out.
-              let (flatStdlib, ownedStdlib) =
-                stdlibOwnership input roots stdlibDir mods
-              let _ = setStdlibOwnership flatStdlib ownedStdlib
-              typecheckGateRoute
-                allowInternal
-                trusted
-                pathMap
-                roots
-                rsrc
-                csrc
-                tsrc
-                input
-                mods
+  do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile input
+    -- PARSE-ERROR-LOCATION Stage 1: a located parse diagnostic for the ENTRY.
+    -- An IMPORTED module's parse error is located by the loader itself (#100)
+    -- and rendered by moduleLoadErrText.  Neither this arm nor the loader arm
+    -- below is a passthrough bind — each RE-RENDERS its error against the entry
+    -- source — so they stay explicit `match`es rather than joining the chain.
+    match parseResult tsrc
+      Err e => Err (ppParseError tsrc input e)
+      -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
+      -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
+      -- gave this gate BOTH halves of the misattribution at once: it parses
+      -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
+      -- no per-module path, so an imported module's resolve error printed as
+      -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
+      -- carries real spans and the modId → path map `pathMap` threads below.
+      Ok _ => match loadProgramFilesLocatedE (_ => None) input roots
+        Err lerr => Err (moduleLoadErrText tsrc input stdlibDir lerr)
+        Ok modsWithPath =>
+          let mods = map dropModPath modsWithPath
+          let pathMap = map modIdToPath modsWithPath
+          let trusted = projectTrustedMods input roots stdlibDir mods
+          -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+          -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+          -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+          let (flatStdlib, ownedStdlib) =
+            stdlibOwnership input roots stdlibDir mods
+          let _ = setStdlibOwnership flatStdlib ownedStdlib
+          typecheckGateRoute
+            allowInternal
+            trusted
+            pathMap
+            roots
+            rsrc
+            csrc
+            tsrc
+            input
+            mods
 
 -- Route by module count.  A single loaded module (no non-core imports) runs the
 -- ACCURATE located check `medaka check` uses for single files — analyzeLocatedG
@@ -2452,7 +2452,7 @@ typecheckGateRoute : Bool ->
   String ->
   String ->
   List (String, List Decl) ->
-  <IO> TypecheckGate
+  <IO> Result String (List String)
 typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
@@ -2491,8 +2491,8 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
       let allWarns =
         allWarnTriples tsrc target diags
           ++ nonEmptyTriples [(target, tsrc, mainWarns)]
-      TGOk (flatMap renderTripleWarnings allWarns)
-    _ => TGErr (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+      Ok (flatMap renderTripleWarnings allWarns)
+    _ => Err (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
   -- S-1/#2234 (F-converge): live use (they feed `resolveModulesErrorsByFile`
   -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
@@ -2513,19 +2513,19 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
       -- what `medaka check` prints and to what `--json` reports.
       -- ⚠️ "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
       -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
-      -- module's warnings; this gate's `TGOk` payload carries EVERY module's
+      -- module's warnings; this gate's `Ok` payload carries EVERY module's
       -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
       -- incomparable overlap warns where `check` of the entry does not.  That is the
       -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
       -- not identity, and reading it as identity is how the next reader "restores"
       -- the entry-only scoping and re-silences the imported case.
-      (Some errText, _, _) => TGErr errText
+      (Some errText, _, _) => Err errText
       (None, projWarns, _) =>
         let _ = resetTypeErrorsSticky ()
         let (_, _, residual) = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
           True =>
-            TGErr
+            Err
               (locatedOrGeneric
                 allowInternal
                 trusted
@@ -2548,8 +2548,8 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
               None => []
             let allWarns =
               projWarns ++ nonEmptyTriples [(target, tsrc, mainWarns)]
-            TGOk (flatMap renderTripleWarnings allWarns)
-    _ => TGErr resDiags
+            Ok (flatMap renderTripleWarnings allWarns)
+    _ => Err resDiags
 
 -- Read `[-o <out>] [--target <native|wasm>]` off the parsed argv; the
 -- positionals are the input.  Default target is TNative (the LLVM/clang path).

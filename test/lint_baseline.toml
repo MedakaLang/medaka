@@ -18,32 +18,12 @@
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
-rule = "rule-clause-map"
-count = 4
-
-[[entry]]
-file = "compiler/backend/llvm_emit.mdk"
-rule = "rule-orelse-staircase"
-count = 1
-
-[[entry]]
-file = "compiler/backend/llvm_emit.mdk"
 rule = "rule-stdlib-reimpl"
 count = 3
 
 [[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
-rule = "rule-clause-map"
-count = 1
-
-[[entry]]
-file = "compiler/backend/trmc_analysis.mdk"
 rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
-file = "compiler/backend/wasm_emit.mdk"
-rule = "rule-orelse-staircase"
 count = 1
 
 [[entry]]
@@ -62,16 +42,6 @@ rule = "rule-stdlib-reimpl"
 count = 4
 
 [[entry]]
-file = "compiler/driver/medaka_cli.mdk"
-rule = "rule-clone-type"
-count = 1
-
-[[entry]]
-file = "compiler/entries/fuzz_gen_main.mdk"
-rule = "rule-clause-map"
-count = 1
-
-[[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
@@ -83,17 +53,7 @@ count = 1
 
 [[entry]]
 file = "compiler/frontend/exhaust.mdk"
-rule = "rule-orelse-staircase"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/exhaust.mdk"
 rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/lexer.mdk"
-rule = "rule-clause-map"
 count = 1
 
 [[entry]]
@@ -127,38 +87,8 @@ rule = "rule-stdlib-reimpl"
 count = 5
 
 [[entry]]
-file = "compiler/tools/check_policy.mdk"
-rule = "rule-clone-type"
-count = 1
-
-[[entry]]
-file = "compiler/tools/codemod.mdk"
-rule = "rule-clone-type"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lint.mdk"
-rule = "rule-orelse-staircase"
-count = 1
-
-[[entry]]
 file = "compiler/tools/lsp_harness.mdk"
 rule = "rule-stdlib-reimpl"
-count = 1
-
-[[entry]]
-file = "compiler/tools/mcp.mdk"
-rule = "rule-clause-map"
-count = 1
-
-[[entry]]
-file = "compiler/tools/prop_runner.mdk"
-rule = "rule-clause-map"
-count = 1
-
-[[entry]]
-file = "compiler/tools/refindex.mdk"
-rule = "rule-orelse-staircase"
 count = 1
 
 [[entry]]
@@ -175,11 +105,6 @@ count = 2
 file = "compiler/tools/snapshot.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
-
-[[entry]]
-file = "compiler/types/repr.mdk"
-rule = "rule-clause-map"
-count = 1
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -200,11 +125,6 @@ count = 2
 file = "compiler/types/typecheck.mdk"
 rule = "rule-stdlib-reimpl"
 count = 5
-
-[[entry]]
-file = "sqlite/main.mdk"
-rule = "rule-clause-map"
-count = 1
 
 [[entry]]
 file = "stdlib/string.mdk"

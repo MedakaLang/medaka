@@ -915,8 +915,7 @@ ppMonosShared ms =
 
 export
 ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
-ppEachShared _ _ [] = []
-ppEachShared ctx cnt (m :: rest) = ppGo ctx cnt 2 m :: ppEachShared ctx cnt rest
+ppEachShared ctx cnt ms = map (ppGo ctx cnt 2) ms
 
 -- pretty-print an AST type
 export

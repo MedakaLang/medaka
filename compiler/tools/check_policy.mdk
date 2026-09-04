@@ -516,6 +516,10 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- plugin output.  The run is forced before PolicyAccept is constructed, so a
 -- panic cannot print an acceptance verdict for an invocation that never
 -- completed.  Reject carries the full report; the run never happens.
+-- Not a `Result` clone worth collapsing: both arms carry a `String`, so
+-- `Result String String` would leave `runCheckPolicy`'s signature unable to say
+-- which String is the acceptance report and which the rejection.
+-- lint-disable-next-line rule-clone-type
 public export data PolicyOutcome = PolicyAccept String | PolicyReject String
 
 export

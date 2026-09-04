@@ -244,8 +244,7 @@ genTupElems ctx (ti :: rest) depth =
   genExpr ctx ti (depth - 1) :: genTupElems ctx rest depth
 
 genLeafElems : Ctx -> List Gty -> <Rand> List Expr
-genLeafElems _ [] = []
-genLeafElems ctx (ti :: rest) = genLeaf ctx ti :: genLeafElems ctx rest
+genLeafElems ctx ts = map (genLeaf ctx) ts
 
 -- dispatch on the target type (no scope-reuse).  NOTE: the native backend
 -- mis-lowers a `match` over Gty whose arms mix nullary constructors (GInt..GChar)

@@ -1,5 +1,5 @@
 # META
-source_lines=926
+source_lines=924
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -181,9 +181,7 @@ genTuple : List (String, TyDef) ->
   Int ->
   List Ty ->
   <e> List (Value e)
-genTuple _ _ _ [] = []
-genTuple tydefs subst depth (t :: rest) =
-  genForType tydefs subst depth t :: genTuple tydefs subst depth rest
+genTuple tydefs subst depth ts = map (genForType tydefs subst depth) ts
 
 genList : List (String, TyDef) ->
   List (String, Ty) ->
@@ -975,8 +973,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "VTuple") (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ts"))))
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "genUserOrFail") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ty")))
 (DTypeSig false "genTuple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "genTuple" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "rest"))))
+(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ts")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth"))) (EVar "ts")))
 (DTypeSig false "genList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "genList" (PWild PWild PWild PWild (PLit (LInt 0))) (EListLit))
 (DFunDef false "genList" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "t") (PVar "n")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
@@ -1209,8 +1206,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "VTuple") (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ts"))))
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "genUserOrFail") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ty")))
 (DTypeSig false "genTuple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "genTuple" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "rest"))))
+(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ts")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth"))) (EVar "ts")))
 (DTypeSig false "genList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "genList" (PWild PWild PWild PWild (PLit (LInt 0))) (EListLit))
 (DFunDef false "genList" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "t") (PVar "n")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
