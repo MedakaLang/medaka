@@ -1,0 +1,144 @@
+{- | Pure-Medaka PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2, HMAC per RFC 2104),
+   the password-hashing KDF for account credentials.
+
+   Pure function: no I/O, no clock, no entropy read in this module. The
+   salt is a caller-supplied `Array Int` — this module never generates
+   one; entropy generation is shell-side, a later slice's job.
+
+   Graded against RFC 7914 §11's published PBKDF2-HMAC-SHA-256 test
+   vectors (`pds/test/pbkdf2_test.mdk`, provenance in
+   `pds/test/VECTOR-PROVENANCE.txt`) — G5: nothing here is a
+   self-captured golden. -}
+
+import lib.sha256.{sha256}
+import array as A
+
+blockBytes : Int
+blockBytes = 64
+
+hashBytes : Int
+hashBytes = 32
+
+copyBytes : Array Int -> Array Int -> Int -> Int -> Unit
+copyBytes input out offset i =
+  if i >= arrayLength input then
+    ()
+  else
+    let () = A.setInPlace (offset + i) input[i] out
+    copyBytes input out offset (i + 1)
+
+copyBytesN : Array Int -> Array Int -> Int -> Int -> Int -> Unit
+copyBytesN input out offset count i =
+  if i >= count then
+    ()
+  else
+    let () = A.setInPlace (offset + i) input[i] out
+    copyBytesN input out offset count (i + 1)
+
+joined : Array Int -> Array Int -> Array Int
+joined prefix suffix =
+  let prefixLen = arrayLength prefix
+  let out = arrayMake (prefixLen + arrayLength suffix) 0
+  let () = copyBytes prefix out 0 0
+  let () = copyBytes suffix out prefixLen 0
+  out
+
+-- HMAC-SHA-256 for an ARBITRARY-length key (RFC 2104 §2: over-length keys
+-- are hashed down first, short keys zero-padded). Deliberately distinct
+-- from `pds/lib/hmac_sha256.mdk`'s `hmacSha256FixedKey`, which only
+-- accepts the signing layer's fixed 32-byte keys — PBKDF2's key is the
+-- caller's password, any length. Kept local rather than promoted to a
+-- shared module: this is the only `pds/lib` consumer of a variable-key
+-- HMAC today.
+normalizeKey : Array Int -> Array Int
+normalizeKey key = if arrayLength key > blockBytes then sha256 key else key
+
+fillKeyPad : Array Int -> Array Int -> Int -> Int -> Unit
+fillKeyPad key out pad i =
+  if i >= arrayLength key then
+    ()
+  else
+    let () = A.setInPlace i (bitXor key[i] pad) out
+    fillKeyPad key out pad (i + 1)
+
+keyPad : Array Int -> Int -> Array Int
+keyPad key pad =
+  let normalized = normalizeKey key
+  let out = arrayMake blockBytes pad
+  let () = fillKeyPad normalized out pad 0
+  out
+
+hmacSha256Var : Array Int -> Array Int -> Array Int
+hmacSha256Var key message =
+  let inner = sha256 (joined (keyPad key 0x36) message)
+  sha256 (joined (keyPad key 0x5c) inner)
+
+-- Big-endian 4-byte encoding of the PBKDF2 block index (RFC 2898 §5.2,
+-- `INT (i)`).
+int32Be : Int -> Array Int
+int32Be n = [|
+  bitAnd (shiftRight n 24) 255,
+  bitAnd (shiftRight n 16) 255,
+  bitAnd (shiftRight n 8) 255,
+  bitAnd n 255,
+|]
+
+xorInto : Array Int -> Array Int -> Int -> Unit
+xorInto acc u i =
+  if i >= arrayLength acc then
+    ()
+  else
+    let () = A.setInPlace i (bitXor acc[i] u[i]) acc
+    xorInto acc u (i + 1)
+
+-- Folds U_2 .. U_iterations into `acc` (already seeded with U_1), each
+-- `Uj = HMAC(P, U_{j-1})`, XORing every one in (RFC 2898 §5.2 `F`).
+foldU : Array Int -> Int -> Array Int -> Array Int -> Int -> Array Int
+foldU password iterations acc prevU j =
+  if j >= iterations then
+    acc
+  else
+    let u = hmacSha256Var password prevU
+    let () = xorInto acc u 0
+    foldU password iterations acc u (j + 1)
+
+-- One 32-byte PBKDF2 block `T_blockIndex` (RFC 2898 §5.2 `F(P, S, c, i)`).
+pbkdf2Block : Array Int -> Array Int -> Int -> Int -> Array Int
+pbkdf2Block password salt iterations blockIndex =
+  let u1 = hmacSha256Var password (joined salt (int32Be blockIndex))
+  let acc = arrayCopy u1
+  foldU password iterations acc u1 1
+
+buildBlocks : Array Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  Array Int
+buildBlocks password salt iterations dkLen total out blockIndex =
+  if blockIndex > total then
+    out
+  else
+    let block = pbkdf2Block password salt iterations blockIndex
+    let offset = (blockIndex - 1) * hashBytes
+    let remaining = dkLen - offset
+    let take = min remaining hashBytes
+    let () = copyBytesN block out offset take 0
+    buildBlocks password salt iterations dkLen total out (blockIndex + 1)
+
+-- | PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2). `salt` is caller-supplied — this
+--   function never draws entropy itself. `iterations` and `dkLen` (bytes)
+--   must both be at least 1.
+export
+pbkdf2HmacSha256 : Array Int -> Array Int -> Int -> Int -> Array Int
+pbkdf2HmacSha256 password salt iterations dkLen =
+  if iterations < 1 then
+    panic "pbkdf2: iterations must be >= 1"
+  else if dkLen < 1 then
+    panic "pbkdf2: dkLen must be >= 1"
+  else
+    let total = (dkLen + hashBytes - 1) / hashBytes
+    let out = arrayMake dkLen 0
+    buildBlocks password salt iterations dkLen total out 1

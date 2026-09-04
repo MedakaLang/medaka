@@ -640,3 +640,14 @@ source-url:    https://registry.npmjs.org/@atproto/lex-json/-/lex-json-0.1.6.tgz
 extraction:    pds/tools/gen_lexjson_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/lex-json@0.1.6, @atproto/lex-data@0.1.7, and @atproto/lex-cbor@0.1.6, and runs gen_lexjson_corpus.mjs. The generator builds representative AT Protocol data-model values (null, bools, ints, negative ints, byte strings of several lengths, nested maps/arrays, raw and dag-cbor CID links, and a map mixing a byte string with a nested link), encodes each with @atproto/lex-cbor's canonical DAG-CBOR encoder and @atproto/lex-json's lexStringify, and self-verifies each row round-trips through the reference libraries' own decode/parse before emitting it.
 retrieved:     2026-09-01
 consumer:      P4-B-IPLD-JSON (#2455 pds-phase4-record-api, lexicon-JSON<->DAG-CBOR mapping)
+
+[vector]
+file:          pds/test/vectors/rfc7914_pbkdf2_hmac_sha256.txt
+local-sha256:  f82d71820df6091d1b5c457fb24eaf034ff2824314fba43694a6cb9acff63f04
+kind:          published-artifact
+source:        RFC 7914, "The scrypt Password-Based Key Derivation Function", §11 "Test Vectors for PBKDF2 with HMAC-SHA-256"
+source-url:    https://www.rfc-editor.org/rfc/rfc7914.txt
+source-sha256: df55932f8b6a5d271f36a634d91a25903724e189ba6c120bf7257cd47f10b197
+extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc7914.txt | sed -n '631,643p' — the two PBKDF2-HMAC-SHA-256 vector blocks (P="passwd" c=1 and P="Password" c=80000, both dkLen=64) copied byte-verbatim, LF line endings, no edits; the expected-output literals in pds/test/pbkdf2_test.mdk were read back against this file
+retrieved:     2026-09-04
+consumer:      S-kdf (#2604 password hashing half, PBKDF2-HMAC-SHA-256)

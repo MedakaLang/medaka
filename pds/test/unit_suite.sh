@@ -1,7 +1,7 @@
 #!/bin/sh
-# In-language (`medaka test`) gate for pds/test/*_test.mdk (#2527: these 15
-# files, ~338 `test` decls of ECDSA/RFC 6979/secp256k1/field/scalar/HTTP
-# structural assertions, ran nowhere in CI).
+# In-language (`medaka test`) gate for pds/test/*_test.mdk (#2527: originally
+# these 15 files, ~338 `test` decls of ECDSA/RFC 6979/secp256k1/field/scalar/
+# HTTP structural assertions, ran nowhere in CI; S-kdf added pbkdf2_test).
 #
 # THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
 # indistinguishable from "this passed"): a `medaka test` file with ZERO
@@ -37,6 +37,7 @@ encodings_test:
 field_test:--native
 http_test:
 mst_test:
+pbkdf2_test:--native
 repo_tid_test:--native
 rfc6979_test:
 scalar_test:--native

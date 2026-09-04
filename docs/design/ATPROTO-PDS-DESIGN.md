@@ -258,6 +258,32 @@ interpreter on numeric code, which nothing currently measures. Any of these beco
 a filed `ws:perf` or `ws:emitter` issue is a return on the phase independent of the
 PDS ever shipping.
 
+### 4.2 Password hashing (PBKDF2-HMAC-SHA-256)
+
+Account bootstrap and `createSession` (Phase 4's "still owed" list) need to turn a
+user password into a storable credential without keeping the password itself. Chosen
+algorithm: **PBKDF2-HMAC-SHA-256** (`pds/lib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
+this server signs and serves one account, so there is no attacker-throughput budget
+that a memory-hard KDF is defending against, and PBKDF2-HMAC-SHA-256 reuses the
+already-audited `pds/lib/sha256.mdk` rather than adding a new primitive family. It is
+also RFC-vectored (RFC 7914 §11), keeping it inside G1's cross-implementation-agreed
+corpus discipline rather than resting on a self-captured golden (G5).
+
+The salt is always caller-supplied — `pbkdf2HmacSha256` draws no entropy and does no
+I/O itself; salt generation is the shell layer's job, in the slice that wires up
+account bootstrap.
+
+**Iteration count: 1,500.** Measured on this box (`medaka build -O2`, 32-byte `dkLen`):
+600,000 iterations — the current OWASP-recommended floor for PBKDF2-HMAC-SHA256 —
+takes **~70 s** here, because this is a pure-Medaka implementation with no hardware
+SHA extensions or vectorization, not a count anyone should read as a security
+recommendation for a tuned native implementation elsewhere. 20,000 iterations took
+~1.9 s (≈8,600–10,400 iterations/s, roughly linear); 1,500 iterations took
+~200–240 ms across three runs, the largest sample under the ~250 ms budget with
+headroom (S-kdf acceptance check 4). This number is revisited once the emitter's
+numeric/allocation performance on this workload (§4.1) is itself improved, or if a
+future slice moves the hot loop to a native `extern`.
+
 ---
 
 ## 5. The failure mode that matters, and the apparatus against it
