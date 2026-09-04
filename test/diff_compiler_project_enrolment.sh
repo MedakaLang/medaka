@@ -197,10 +197,16 @@ for p in $PROJECTS; do
   fi
 
   # ── CI ─────────────────────────────────────────────────────────────────────
-  ci_out="$(python3 - "$ROOT" "$p" <<'PY'
-import sys, glob, pathlib, re, shlex
+  ci_out="$(python3 - "$ROOT" "$p" "$(_native_rows)" <<'PY'
+import sys, fnmatch, glob, pathlib, re, shlex
 
 root, proj = sys.argv[1], sys.argv[2]
+
+# "<name> <run>" per line, from test/gate_native_rows.sh — the ONE parser for a
+# `kind = "native"` row (#2636). Parsed in the shell and handed down rather than
+# re-read here, so this arm cannot drift from the FLOOR arm above, which asks
+# the same helper the same question.
+native = [l.split(None, 1) for l in sys.argv[3].splitlines() if l.strip()]
 wfdir = pathlib.Path(root) / '.github' / 'workflows'
 wf_paths = sorted(wfdir.glob('*.yml')) + sorted(wfdir.glob('*.yaml'))
 
@@ -228,13 +234,18 @@ if not pats:
     print("ERROR no shard patterns could be read out of any workflow file")
     sys.exit(0)
 
-# Resolve every pattern token against BOTH roots, `.sh` only — this check's
-# FLOOR is `git ls-files "$p/test/*.sh"` (below), so a `kind = "native"` floor
-# gate is out of scope until one exists (#2591; the native-test-vehicle
-# sprint's own migration was deliberately NOT a project floor, so this arm
-# was untouched). run_gates.sh, build_oracles.sh --for, preflight's resolver
-# and the coverage gate all ALSO resolve a `kind = "native"` entry by registry
-# name; this script does not need to yet, because nothing here is one.
+# Resolve every pattern token two ways, because a gate is reached two ways.
+#
+#  * `kind = "exec"`: the token is a path stem under either root, so glob it as
+#    `.sh` — run_gates.sh's own two-glob rule.
+#  * `kind = "native"` (#2592): there is no `.sh` to glob. The token is matched
+#    against the registry NAME and the row's `run` module is the gate, exactly
+#    as run_gates.sh, build_oracles.sh --for and preflight's resolver do it. A
+#    token is a shell glob in all four, so fnmatch, not equality.
+#
+# Both arms key on the resolved repo-relative path being under `<proj>/test/`,
+# so a project whose floor gate is a native row is reported reached rather than
+# MISSING — which is what it would read as if only the `.sh` arm existed.
 hits = []
 for shard, pat in sorted(pats.items()):
     for tok in shlex.split(pat):
@@ -242,6 +253,9 @@ for shard, pat in sorted(pats.items()):
             rel = str(pathlib.Path(cand).relative_to(root))
             if rel.startswith(proj + '/test/'):
                 hits.append((shard, tok, rel))
+        for name, run in native:
+            if fnmatch.fnmatch(name, tok) and run.startswith(proj + '/test/'):
+                hits.append((shard, tok, run))
 
 if not hits:
     print("MISSING")

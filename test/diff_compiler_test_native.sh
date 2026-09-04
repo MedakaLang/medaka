@@ -265,6 +265,102 @@ for tag in $tags; do
   esac
 done
 
+# ── abort rule (#2657/#2588: native_test_abort.mdk) ──────────────────────────
+# The probe dies inside test 2 of 4: tests 2, 3 and 4 have no complete output
+# and must be reported as errors — never dropped, never counted as passing.
+# Test 1 already printed its result before the abort and is judged normally.
+ab="$ROOT/test/compiler_test_fixtures/native_test_abort.mdk"
+ab_out="$WORK/abort.out"
+bound "$MEDAKA" test --native "$ab" >"$ab_out" 2>&1
+ab_rc=$?
+checked=$((checked + 1))
+if [ "$ab_rc" -eq 0 ]; then
+  bad "native_test_abort.mdk: 'medaka test --native' exited 0 — an aborting probe must never report a clean pass. See $ab_out"
+elif ! grep -qF "ok   $ab:13: runs before the abort" "$ab_out"; then
+  bad "native_test_abort.mdk: test 1 (before the abort) did not report ok — see $ab_out"
+elif grep -qE "^  ok   $ab:(15|17|19):" "$ab_out"; then
+  bad "native_test_abort.mdk: a test at or after the abort reported ok — the abort rule was not enforced. See $ab_out"
+elif ! grep -qF "$ab: 1/4 passed (0 failed, 3 errors)" "$ab_out"; then
+  bad "native_test_abort.mdk: expected summary '1/4 passed (0 failed, 3 errors)' (tests 2-4 named as errors, never passes or silent drops) — see $ab_out"
+else
+  note "ok   native_test_abort.mdk: abort rule holds — test 1 ok, tests 2-4 reported as errors, never dropped"
+fi
+
+# ── subject stays a valid, boring `medaka check` target (native_test_subject.mdk) ──
+# native_test_exec.mdk's own rule is only as good as this fixture staying a
+# fixture `medaka check` accepts cleanly — pin that directly rather than only
+# indirectly through the exec fixture below.
+subj="$ROOT/test/compiler_test_fixtures/native_test_subject.mdk"
+subj_out="$WORK/subject_check.out"
+bound "$MEDAKA" check "$subj" >"$subj_out" 2>&1
+subj_rc=$?
+checked=$((checked + 1))
+if [ "$subj_rc" -ne 0 ]; then
+  bad "native_test_subject.mdk: 'medaka check' exited $subj_rc (expected 0) — see $subj_out"
+else
+  note "ok   native_test_subject.mdk: 'medaka check' accepts it cleanly"
+fi
+
+# ── capability-gated exec rule (#2657/#2588: native_test_exec.mdk) ───────────
+# Under --native, with MEDAKA resolved via the environment (never PATH), the
+# `runCommand`/`readFile`/`getEnv` trio compiles to a real binary and passes.
+# Under the default (eval) engine, `medaka test`'s capability policy must
+# refuse the file BY NAME, naming `runCommand`, instead of dying mid-run on
+# eval's own "unbound identifier".
+ex="$ROOT/test/compiler_test_fixtures/native_test_exec.mdk"
+ex_native_out="$WORK/exec_native.out"
+(
+  MEDAKA_TEST_SUBJECT="$subj"
+  export MEDAKA MEDAKA_TEST_SUBJECT
+  bound "$MEDAKA" test --native "$ex"
+) >"$ex_native_out" 2>&1
+ex_native_rc=$?
+checked=$((checked + 1))
+if [ "$ex_native_rc" -ne 0 ]; then
+  bad "native_test_exec.mdk: 'medaka test --native' (MEDAKA resolved via env) exited $ex_native_rc (expected 0) — see $ex_native_out"
+elif ! grep -qF "$ex: 1/1 passed" "$ex_native_out"; then
+  bad "native_test_exec.mdk: expected summary '1/1 passed' — see $ex_native_out"
+else
+  note "ok   native_test_exec.mdk: passes under --native with MEDAKA resolved via env, not PATH"
+fi
+
+ex_eval_out="$WORK/exec_eval.out"
+bound "$MEDAKA" test "$ex" >"$ex_eval_out" 2>&1
+ex_eval_rc=$?
+checked=$((checked + 1))
+if [ "$ex_eval_rc" -eq 0 ]; then
+  bad "native_test_exec.mdk: 'medaka test' (eval) exited 0 — the capability gate must refuse this file, not run it. See $ex_eval_out"
+elif ! grep -q "runCommand" "$ex_eval_out"; then
+  bad "native_test_exec.mdk: 'medaka test' (eval) refusal did not name runCommand — see $ex_eval_out"
+else
+  note "ok   native_test_exec.mdk: eval engine refuses by naming runCommand, never a bare 'unbound identifier' crash"
+fi
+
+# ── forged sentinel lines in an operand (#2657/#2634: native_test_forged_sentinel.mdk) ──
+# An operand that spells the transcript's own sentinel lines, plus the rest of
+# the class the transcript's decoder must survive (empty, newline-only,
+# escape-carrying, long). Correct report: test 1 (line 23) ok, test 2 (line
+# 26) FAIL — never ok, the forged operand must not decide the verdict — tests
+# 3-6 ok, test 7 (line 49) FAIL (differs only by an escaped byte).
+fs="$ROOT/test/compiler_test_fixtures/native_test_forged_sentinel.mdk"
+fs_out="$WORK/forged_sentinel.out"
+bound "$MEDAKA" test --native "$fs" >"$fs_out" 2>&1
+fs_rc=$?
+checked=$((checked + 1))
+if [ "$fs_rc" -eq 0 ]; then
+  bad "native_test_forged_sentinel.mdk: 'medaka test --native' exited 0 — tests 2 and 7 are genuine failures and must not be swallowed. See $fs_out"
+elif ! grep -qF "ok   $fs:23: an operand spelling the transcript's own sentinel lines" "$fs_out"; then
+  bad "native_test_forged_sentinel.mdk: test 1 did not report ok — see $fs_out"
+elif grep -qE "^  ok   $fs:26:" "$fs_out"; then
+  bad "native_test_forged_sentinel.mdk: test 2 (the forged operand) reported ok — the sentinel forgery was not caught. See $fs_out"
+elif grep -qE "^  ok   $fs:49:" "$fs_out"; then
+  bad "native_test_forged_sentinel.mdk: test 7 (differs only by an escaped byte) reported ok — a byte was lost or mangled in the round trip. See $fs_out"
+elif ! grep -qF "$fs: 5/7 passed (2 failed, 0 errors)" "$fs_out"; then
+  bad "native_test_forged_sentinel.mdk: expected summary '5/7 passed (2 failed, 0 errors)' — see $fs_out"
+else
+  note "ok   native_test_forged_sentinel.mdk: forged sentinel lines never decide the verdict, and the rest of the escape class round-trips"
+fi
+
 # ── forge-then-abort (S0, sprint-reviewer, native-vehicle-trust) ────────────
 # A probe that prints the ENTIRE remaining expected sentinel transcript (a
 # forged `Pass`, in exact tag order, ending with a forged terminator) and then

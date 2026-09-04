@@ -163,36 +163,42 @@ decodeValue _ = None
 -- in which `\\ \n \t \r \0 \"` are the only escapes.  Codepoint-indexed while
 -- the escaper is byte-oriented, which agrees: every escape it writes is ASCII
 -- and every other byte passes through untouched.
+--
+-- The scan walks an `Array Char` taken once up front rather than indexing the
+-- `String` per character: a codepoint index into a UTF-8 string resolves by
+-- rescanning from byte 0, so a per-character `stringSlice i (i + 1) s` costs
+-- O(n) each and the decode as a whole costs O(n²) — in a value whose length is
+-- chosen by the program under test.
 export
 unquoteLit : String -> Option String
-unquoteLit s
-  | stringLength s >= 2
-    && charAt s 0 == "\""
-    && charAt s (stringLength s - 1) == "\"" =
-    unquoteScan s 1 (stringLength s - 1) []
-  | otherwise = None
+unquoteLit s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  if n >= 2
+    && arrayGetUnsafe 0 cs == '"'
+    && arrayGetUnsafe (n - 1) cs == '"' then
+    unquoteScan cs 1 (n - 1) []
+  else
+    None
 
-charAt : String -> Int -> String
-charAt s i = stringSlice i (i + 1) s
-
-unquoteScan : String -> Int -> Int -> List String -> Option String
-unquoteScan s i end acc
-  | i >= end = Some (stringConcat (reverseL acc))
-  | charAt s i == "\\" =
+unquoteScan : Array Char -> Int -> Int -> List Char -> Option String
+unquoteScan cs i end acc
+  | i >= end = Some (stringFromChars (arrayFromList (reverseL acc)))
+  | arrayGetUnsafe i cs == '\\' =
     if i + 1 >= end then
       None
-    else match unescapeChar (charAt s (i + 1))
-      Some c => unquoteScan s (i + 2) end (c :: acc)
+    else match unescapeChar (arrayGetUnsafe (i + 1) cs)
+      Some c => unquoteScan cs (i + 2) end (c :: acc)
       None => None
-  | otherwise = unquoteScan s (i + 1) end (charAt s i :: acc)
+  | otherwise = unquoteScan cs (i + 1) end (arrayGetUnsafe i cs :: acc)
 
-unescapeChar : String -> Option String
-unescapeChar "n" = Some "\n"
-unescapeChar "t" = Some "\t"
-unescapeChar "r" = Some "\r"
-unescapeChar "0" = Some "\0"
-unescapeChar "\\" = Some "\\"
-unescapeChar "\"" = Some "\""
+unescapeChar : Char -> Option Char
+unescapeChar 'n' = Some '\n'
+unescapeChar 't' = Some '\t'
+unescapeChar 'r' = Some '\r'
+unescapeChar '0' = Some '\0'
+unescapeChar '\\' = Some '\\'
+unescapeChar '"' = Some '"'
 unescapeChar _ = None
 
 export

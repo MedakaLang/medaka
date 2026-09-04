@@ -1,5 +1,5 @@
 # META
-source_lines=790
+source_lines=816
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -21,10 +21,10 @@ stages=DESUGAR,MARK
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
 --      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
 --      `repeat`, and substring search via the host `stringIndexOf` (`indexOf`,
---      and `contains`/`split`/`replace*` derived from it);
+--      and `contains`/`replace*` derived from it);
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
---      or carve out `stringSlice`s: `trim*`, `words`, `reverse`, `capitalize`,
---      `toInt`;
+--      or carve out `stringSlice`s: `trim*`, `words`, `split`/`lines`,
+--      `reverse`, `capitalize`, `toInt`;
 --   3. `List Char` is avoided internally.
 --
 -- The collection functions (`split`/`words`/`lines`/`concat`/`join`/`unlines`/
@@ -656,14 +656,40 @@ splitAt n s = (take n s, drop n s)
    ["abc"] -}
 export
 split : String -> String -> List String
-split sep s = if sep == "" then [s] else splitGo (stringLength sep) sep s
+split sep s =
+  if sep == "" then
+    [s]
+  else
+    let a = toChars s
+    let sepA = toChars sep
+    splitFrom a (arrayLength a) sepA (arrayLength sepA) 0
 
-splitGo : Int -> String -> String -> List String
-splitGo sepLen sep s = match indexOf sep s
-  None => [s]
-  Some i =>
-    stringSlice 0 i s
-      :: splitGo sepLen sep (stringSlice (i + sepLen) (stringLength s) s)
+-- Decodes both operands once and carves each piece out of the array, so the
+-- whole split costs O(length of s) copying rather than one whole-suffix copy
+-- per separator: `stringSlice lo hi` walks the UTF-8 bytes from 0 to reach
+-- `lo`, so slicing a shrinking suffix is quadratic in the number of pieces.
+splitFrom : Array Char -> Int -> Array Char -> Int -> Int -> List String
+splitFrom a n sepA sepLen start = match sepFrom a n sepA sepLen start
+  None => [subChars a start n]
+  Some i => subChars a start i :: splitFrom a n sepA sepLen (i + sepLen)
+
+-- The first index at or after `i` where `sepA` occurs, or None.
+sepFrom : Array Char -> Int -> Array Char -> Int -> Int -> Option Int
+sepFrom a n sepA sepLen i
+  | i + sepLen > n = None
+  | sepAt a sepA sepLen i 0 = Some i
+  | otherwise = sepFrom a n sepA sepLen (i + 1)
+
+sepAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+sepAt a sepA sepLen i k
+  | k >= sepLen = True
+  | arrayGetUnsafe (i + k) a == arrayGetUnsafe k sepA =
+    sepAt a sepA sepLen i (k + 1)
+  | otherwise = False
+
+subChars : Array Char -> Int -> Int -> String
+subChars a lo hi =
+  stringFromChars (arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) a))
 
 {- | The lines of `s`, split on `\n`.
 
@@ -917,9 +943,15 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig true "splitAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "splitAt" ((PVar "n") (PVar "s")) (ETuple (EApp (EApp (EVar "take") (EVar "n")) (EVar "s")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "s"))))
 (DTypeSig true "split" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "split" ((PVar "sep") (PVar "s")) (EIf (EBinOp "==" (EVar "sep") (ELit (LString ""))) (EListLit (EVar "s")) (EApp (EApp (EApp (EVar "splitGo") (EApp (EVar "stringLength") (EVar "sep"))) (EVar "sep")) (EVar "s"))))
-(DTypeSig false "splitGo" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "splitGo" ((PVar "sepLen") (PVar "sep") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "sep")) (EVar "s")) (arm (PCon "None") () (EListLit (EVar "s"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EApp (EApp (EApp (EVar "splitGo") (EVar "sepLen")) (EVar "sep")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
+(DFunDef false "split" ((PVar "sep") (PVar "s")) (EIf (EBinOp "==" (EVar "sep") (ELit (LString ""))) (EListLit (EVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "sepA") (EApp (EVar "toChars") (EVar "sep"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "splitFrom") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "sepA")) (EApp (EVar "arrayLength") (EVar "sepA"))) (ELit (LInt 0)))))))
+(DTypeSig false "splitFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "splitFrom" ((PVar "a") (PVar "n") (PVar "sepA") (PVar "sepLen") (PVar "start")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "sepA")) (EVar "sepLen")) (EVar "start")) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "n")))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EApp (EVar "splitFrom") (EVar "a")) (EVar "n")) (EVar "sepA")) (EVar "sepLen")) (EBinOp "+" (EVar "i") (EVar "sepLen")))))))
+(DTypeSig false "sepFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DFunDef false "sepFrom" ((PVar "a") (PVar "n") (PVar "sepA") (PVar "sepLen") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "sepLen")) (EVar "n")) (EVar "None") (EIf (EApp (EApp (EApp (EApp (EApp (EVar "sepAt") (EVar "a")) (EVar "sepA")) (EVar "sepLen")) (EVar "i")) (ELit (LInt 0))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "sepA")) (EVar "sepLen")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "sepAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "sepAt" ((PVar "a") (PVar "sepA") (PVar "sepLen") (PVar "i") (PVar "k")) (EIf (EBinOp ">=" (EVar "k") (EVar "sepLen")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "k"))) (EVar "a")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "sepA"))) (EApp (EApp (EApp (EApp (EApp (EVar "sepAt") (EVar "a")) (EVar "sepA")) (EVar "sepLen")) (EVar "i")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "subChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "subChars" ((PVar "a") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "a"))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lines" ((PVar "s")) (EApp (EApp (EVar "map") (EVar "stripCR")) (EApp (EApp (EVar "split") (EVar "nl")) (EVar "s"))))
 (DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
@@ -1073,9 +1105,15 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig true "splitAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "splitAt" ((PVar "n") (PVar "s")) (ETuple (EApp (EApp (EVar "take") (EVar "n")) (EVar "s")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "s"))))
 (DTypeSig true "split" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "split" ((PVar "sep") (PVar "s")) (EIf (EBinOp "==" (EVar "sep") (ELit (LString ""))) (EListLit (EVar "s")) (EApp (EApp (EApp (EVar "splitGo") (EApp (EVar "stringLength") (EVar "sep"))) (EVar "sep")) (EVar "s"))))
-(DTypeSig false "splitGo" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "splitGo" ((PVar "sepLen") (PVar "sep") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "sep")) (EVar "s")) (arm (PCon "None") () (EListLit (EVar "s"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EApp (EApp (EApp (EVar "splitGo") (EVar "sepLen")) (EVar "sep")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
+(DFunDef false "split" ((PVar "sep") (PVar "s")) (EIf (EBinOp "==" (EVar "sep") (ELit (LString ""))) (EListLit (EVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "sepA") (EApp (EVar "toChars") (EVar "sep"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "splitFrom") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "sepA")) (EApp (EVar "arrayLength") (EVar "sepA"))) (ELit (LInt 0)))))))
+(DTypeSig false "splitFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "splitFrom" ((PVar "a") (PVar "n") (PVar "sepA") (PVar "sepLen") (PVar "start")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "sepA")) (EVar "sepLen")) (EVar "start")) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "n")))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EApp (EVar "splitFrom") (EVar "a")) (EVar "n")) (EVar "sepA")) (EVar "sepLen")) (EBinOp "+" (EVar "i") (EVar "sepLen")))))))
+(DTypeSig false "sepFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DFunDef false "sepFrom" ((PVar "a") (PVar "n") (PVar "sepA") (PVar "sepLen") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "sepLen")) (EVar "n")) (EVar "None") (EIf (EApp (EApp (EApp (EApp (EApp (EVar "sepAt") (EVar "a")) (EVar "sepA")) (EVar "sepLen")) (EVar "i")) (ELit (LInt 0))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "sepA")) (EVar "sepLen")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "sepAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "sepAt" ((PVar "a") (PVar "sepA") (PVar "sepLen") (PVar "i") (PVar "k")) (EIf (EBinOp ">=" (EVar "k") (EVar "sepLen")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "k"))) (EVar "a")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "sepA"))) (EApp (EApp (EApp (EApp (EApp (EVar "sepAt") (EVar "a")) (EVar "sepA")) (EVar "sepLen")) (EVar "i")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "subChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "subChars" ((PVar "a") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "a"))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lines" ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "stripCR")) (EApp (EApp (EVar "split") (EVar "nl")) (EVar "s"))))
 (DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
