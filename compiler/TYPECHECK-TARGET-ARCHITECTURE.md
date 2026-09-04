@@ -495,8 +495,8 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
    bespoke: the numeric-literal channel (#991 ask 3) and the obligation-check channels
    `obls`/`implObls` (`UObligation`, windowed per group).
 
-Next in order: #2548 (the whole-graph drain at quiescence over `goals` + `numlitRefs`,
-T4 reject as a `W-` warning per ruling 1; re-pin I5 class 3 first), unit 3, #2549.
+Step 5 unit 3 (`60a8989ef`) and #2548's whole-graph drain at quiescence (`a3536b419`) are
+both landed — see item 9. Next in order: #2549.
 
 9. **Ruling 8's measurement, re-run after #2547 unit 3 (`60a8989ef`) and #2548
    (`a3536b419`)** (`S-boundary-remeasure`): same six candidate boundaries (K, HM core, I,
