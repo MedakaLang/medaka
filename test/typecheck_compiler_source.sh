@@ -1079,13 +1079,29 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # Function, impl-`requires`, method, recursive, and cross-module consumers share
 # record-valued carriers. One complete predicate owns one dict slot; argument vectors
 # and method quantifier positions are fields of that slot, never parallel authorities.
+#
+# The impl-`requires` producer is `registerReqSlots`, which builds the slot in the SAME
+# op that registers the tyvar ids and stores the WHOLE argument vector on it
+# (`psArgs = PSArgsKnown argMonos`, `psBoundIds = ids`). That is #1318's invariant in the
+# form it actually takes today: `requires Ix a Char` must reach route selection with
+# `Char` intact, not as the pair ("Ix","a") a tyvar-keyed producer would leave behind.
+# The single stored given is `GivenEntry` on `GraphRun.gGiven`, written by the one
+# writer `pushGiven` and read only through `givensHere`; `GivenMatch`/`GivenScope` are
+# the soundness half of that consolidation — a vector that is ALL bare tyvars is
+# `GMIdWitnessed` and readable only by a rung that supplies a tyvar-id witness, so an
+# undifferentiated predicate-only reader cannot answer `Debug e` with `Debug a`.
+# `implReqPredicateSlot`/`implReqPick` and the two flat tables they scanned
+# (`activeDictPreds`, `implReqPredicateSlots`) are retired below: they were the SAME pair
+# in opposite orders, i.e. the split authority this ratchet exists to forbid.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
 data MethodPredicateSlot = MethodPredicateSlot {
 data PendingMethodDict = PendingMethodDict {
-implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
+registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
+      psArgs = PSArgsKnown argMonos,
+      psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
@@ -1093,7 +1109,19 @@ expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
-activeDictPreds : Ref (List (PredicateSlot, String))
+data GivenEntry = GivenEntry {
+  geSlot : PredicateSlot,
+  geMatch : GivenMatch,
+data GivenMatch =
+  | GMPredicate
+  | GMIdWitnessed
+gGiven : Ref (OrdMap (List GivenEntry)),
+givensHere : Unit -> List GivenEntry
+pushGiven : GivenMatch -> PredicateSlot -> String -> Unit
+data GivenScope =
+  | GSPredicateOnly
+  | GSImplRequires
+givenInScope : GivenScope -> GivenEntry -> Bool
 registerFunPredGiven : PredicateSlot -> String -> Unit
 activeFunDictPredOf : PredicateRequest -> String -> Option String
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
@@ -1105,11 +1133,11 @@ activeDictVarOfEncl (Some request) m encl =
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
 enclSlotIndex (Some request) target encl =
-implReqPick : Int ->
+implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
+firstPredForEnclAt : GivenScope ->
 entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
-anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
-implReqPredicateSlots : Ref (List (String, PredicateSlot))
+anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
 crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
@@ -1117,7 +1145,6 @@ crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List Predicat
 crossModuleMethodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
 crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot))
 perRun.value.funPredicateSlotsRef :=
-perRun.value.implReqPredicateSlots :=
 perRun.value.methodPredicateSlotsRef :=
 crossRun.value.crossModuleFunPredicateSlotsRef
 crossRun.value.crossModuleFunPredicateSlotsQualRef
@@ -1126,13 +1153,13 @@ crossRun.value.crossModuleMethodPredicateSlotsQualRef
 registerMethodConstraints : List String ->
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
-resolveMethodDicts : ImplBuckets -> List PendingMethodDict -> Unit
+resolveMethodDicts : List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
-methodPredicateRoutes : ImplBuckets ->
-methodPredicateRoute : ImplBuckets -> String -> PredicateSlot -> Route
-realizeRecDictApps : ImplBuckets -> List RecDictApp -> Unit
-recRoutes : ImplBuckets -> String -> Mono -> List PredicateSlot -> List Route
-recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
+methodPredicateRoutes : String -> List PredicateSlot -> List Route
+methodPredicateRoute : String -> PredicateSlot -> Route
+realizeRecDictApps : List RecDictApp -> Unit
+recRoutes : String -> Mono -> List PredicateSlot -> List Route
+recRoute : String -> Mono -> PredicateSlot -> Route
 scopePredicateSlots : List ((String, String), List PredicateSlot) ->
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
 attributeMethodModulePredicateSlots : String ->'
@@ -1188,9 +1215,9 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
 fi
 
 operator_owner_required='stampOpRouteVal : Bool ->
-let reqs = argImplDictRoutesForEncl
-entailInst implTable name m encl tag (EKOp isBinop _) =
-(stampOpRouteVal isBinop implTable encl name m tag, [])'
+argImplDictRoutesForEncl encl dictName tag m goals,
+entailInst name m encl tag (EKOp isBinop _) =
+(stampOpRouteVal isBinop encl name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"
@@ -1208,14 +1235,25 @@ printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = activeDictVarOf m' || {
   exit 1
 }
 
+# The four consumers are `indexOfPredGo` (the declared-slot index), `firstPredForEncl`
+# (the predicate-only scan), `firstPredForEnclAt` (the id-witnessed scan, serving BOTH
+# rungs through `GivenScope`) and `anyGivenMatches`. It was five while `implReqPick`
+# scanned `implReqPredicateSlots` with a test term-for-term identical to
+# `firstPredForEnclAt`'s; merging the two tables into `gGiven` merged the two scans, so
+# the drop from six to five is the split authority going away, not a consumer losing the
+# relation.
 predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_src" \
   | grep -cvE '^[[:space:]]*--')
-if [ "$predicate_relation_uses" -ne 6 ]; then
-  echo "FAIL: #1318 shared request/slot relation must serve all five identity consumers plus its definition (got $predicate_relation_uses)"
+if [ "$predicate_relation_uses" -ne 5 ]; then
+  echo "FAIL: #1318 shared request/slot relation must serve all four identity consumers plus its definition (got $predicate_relation_uses)"
   exit 1
 fi
 
 predicate_slot_retired='implReqPreds
+implReqPredicateSlot
+implReqPredicateSlots
+implReqPick
+activeDictPreds
 funConstraintsRef
 funConstraintIfacesRef
 funConstraintArgsRef

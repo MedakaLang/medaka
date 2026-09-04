@@ -1,0 +1,11 @@
+-- The interface and its two concrete instances, in a module of their own.
+-- `mix.mdk` (a SEPARATE module) declares the context-carrying function under
+-- test and imports this module for both the interface and the impls.
+export interface Tag2 a where
+  tagn : a -> Int
+
+export impl Tag2 Int where
+  tagn _ = 1
+
+export impl Tag2 Bool where
+  tagn _ = 2

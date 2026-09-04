@@ -40,7 +40,6 @@ implBodyLoc	Expr	4/41
 implCompletenessMsgsOfMap	Decl	1/15
 implDeclFact	Decl	2/15
 implDeclWithReqs	Decl	2/15
-implEntryOf	Decl	2/15
 implHeadGround	Decl	2/15
 implHeadParametric	Decl	2/15
 implHeadTagForIface	Decl	2/15

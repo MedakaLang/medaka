@@ -1,0 +1,22 @@
+-- The CONTEXT-CARRYING function under test, defined in a module OTHER than the
+-- one that declares `Tag2` and its impls (iface.mdk) -- the cross-module cell
+-- DICT-SEMANTICS §3's precedence paragraph has no coverage of, per this
+-- fixture's own TABLE row. `resetState` reminits `perRun` per module
+-- (`compiler/types/typecheck.mdk`), so `mix`'s two goals are elaborated in a
+-- run distinct from the one that registered the impls -- the shape under test.
+--
+-- `mix`'s own declared context is `Tag2 a`. Its body poses TWO goals:
+--   * `tagn x`      -- goal `Tag2 a`, LITERALLY the declared predicate. §3's
+--                       precedence paragraph applies DIRECTLY: `assum` fires,
+--                       forwarding the caller's own dict rather than
+--                       re-resolving through `inst`.
+--   * `tagn (True : Bool)` -- goal `Tag2 Bool`. `a` is a rigid skolem of
+--                       `mix`'s own scheme, not literally `Bool`, so matching
+--                       is structural and `assum` does NOT apply (§3: "given
+--                       `S a`, the goal `S (List a)` is not an assumption in
+--                       scope"). `inst` commits to `impl Tag2 Bool` instead.
+import iface.{Tag2, tagn}
+
+export
+mix : Tag2 a => a -> Int
+mix x = tagn x + tagn (True : Bool)

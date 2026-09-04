@@ -462,11 +462,21 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
 6. **Step 5 unit 1 done** (#2547): `GraphRun` — the deferred channels, the two counters and
    the tyvar-id-keyed given table (`activeDictVars`) are graph-lifetime; per-module drains
    take their slices from `GraphMarks` recorded at module start (`moduleRanges` is the
-   substrate step 6 reads). `funPredicateSlotsRef`, the impl-`requires` givens (bare-name
-   keyed) and the predicate-keyed `activeDictPreds` stay per-module — the last went to
-   `GraphRun` in the first cut and came back in review: a `PSArgsKnown` slot over concrete
-   monos carries no id the graph counter could scope, and `activeDictPredOf`'s unscoped
-   fallback would match an earlier module's given (unit 3's re-keying is the fix).
+   substrate step 6 reads). `funPredicateSlotsRef` stays per-module, and is not a given
+   table at all: it is the DECLARED-slot table, read by `declaredConstraintFor`,
+   `declaredConstraintIds`, `inferDictAtFound` and `goalIdsClaimed`, plus `enclDictVarOf`,
+   which derives a dict-param name positionally rather than reading a stored one.
+   **Step 5 unit 3 done** (#2547 / SC-2 / #1318): the two predicate-keyed given tables
+   (`activeDictPreds` and the impl-`requires` slots) are one module-keyed `gGiven` on
+   `GraphRun`. The module key is what supplies the scoping the per-module re-mint used to
+   give them physically — the objection unit 1 recorded (a `PSArgsKnown` slot over concrete
+   monos carries no id the graph counter could scope, so an unscoped fallback would match an
+   earlier module's given) is answered by the key carrying the module explicitly, not by
+   physical reset. Each entry carries `GivenMatch`, and each rung a `GivenScope`: an
+   all-bare `requires` vector is matchable only with a tyvar-id witness, because
+   `monoVecSameGiven` over it degenerates to raw id equality and `Debug e` would answer for
+   `Debug a`. Merging without that distinction was MEASURED to lose
+   `impl_requires_nonfunctor_sibling` while all 352 `dict_semantics` assertions stayed green.
 7. **Ruling 8's measurement, re-run after unit 1** with the survey's per-binding tags on
    the branch's tree: every candidate boundary (K, HM core, I, E, Sh, D) still references
    every other and reads state cells, so all stay gateway-owned regions — except that the
@@ -485,8 +495,28 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
    bespoke: the numeric-literal channel (#991 ask 3) and the obligation-check channels
    `obls`/`implObls` (`UObligation`, windowed per group).
 
-Next in order: #2548 (the whole-graph drain at quiescence over `goals` + `numlitRefs`,
-T4 reject as a `W-` warning per ruling 1; re-pin I5 class 3 first), unit 3, #2549.
+Step 5 unit 3 (`60a8989ef`) and #2548's whole-graph drain at quiescence (`a3536b419`) are
+both landed — see item 9. Next in order: #2549.
+
+9. **Ruling 8's measurement, re-run after #2547 unit 3 (`60a8989ef`) and #2548
+   (`a3536b419`)** (`S-boundary-remeasure`): same six candidate boundaries (K, HM core, I,
+   Sh, E, D), re-tagged by a name-pattern catalog over the file's ~1,454 top-level
+   bindings and cross-checked by grepping each boundary's own function bodies for (a) a
+   call to a `typecheck.mdk` top-level binding outside the boundary's own set and (b) a
+   direct reference to a live state-record field (`crossRun`/`perRun`/`graphRun`/
+   `driverState`/`GraphRun.goals`/`activeDictVars`/`typeErrors`/`typeErrorsSticky`/…).
+   Result: **no boundary is closed.** K 17/21, HM core 17/21, I 20/41, Sh 12/16, E 8/11, D
+   70/99 tagged functions each carry at least one outside call or a direct state-cell
+   read; every boundary also fails the `repr.mdk` bar (that file imports no `Ref` and
+   reads no cell — none of these six do). Neither #2547 unit 3 (the given-table rekey)
+   nor #2548 (the quiescence drain + `ImplBuckets` deletion) touched the general call
+   graph these boundaries close over — both moved specific table representations, not the
+   `infer`-depth coupling R3 originally measured. **D in particular is re-confirmed still
+   open** (70/99, reading `currentLoc`/`perRun`/`typeErrors`/`typeErrorsSticky`/`goals`/
+   `activeDictVars` directly) — R3's "no inbound dependency from inference" premise for D
+   stays falsified, consistent with `TYPECHECK-ARCHITECTURE.md` §7 item 4's own
+   withdrawal (#1120). No extraction taken; nothing moved. Full per-boundary command and
+   sample back-import edges: `S-boundary-remeasure`'s report.
 
 ### SA-11. Artifacts
 
