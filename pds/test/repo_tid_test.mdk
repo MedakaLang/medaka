@@ -6,6 +6,7 @@ import test.{expectEqual, expectTrue}
 import lib.nsid.{validateNsid}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
+  Tid,
   tidClockId,
   tidCompare,
   tidEncode,
@@ -14,10 +15,6 @@ import lib.tid.{
   tidParse,
   tidToString,
 }
-
-isErr : Result String a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
 
 errContains : String -> Result String a -> Bool
 errContains witness (Err message) = contains witness message

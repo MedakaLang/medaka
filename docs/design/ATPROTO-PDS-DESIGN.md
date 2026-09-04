@@ -258,6 +258,134 @@ interpreter on numeric code, which nothing currently measures. Any of these beco
 a filed `ws:perf` or `ws:emitter` issue is a return on the phase independent of the
 PDS ever shipping.
 
+### 4.2 Password hashing (PBKDF2-HMAC-SHA-256)
+
+Account bootstrap and `createSession` (Phase 4's "still owed" list) need to turn a
+user password into a storable credential without keeping the password itself. Chosen
+algorithm: **PBKDF2-HMAC-SHA-256** (`pds/lib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
+this server signs and serves one account, so there is no attacker-throughput budget
+that a memory-hard KDF is defending against, and PBKDF2-HMAC-SHA-256 reuses the
+already-audited `pds/lib/sha256.mdk` rather than adding a new primitive family. It is
+also RFC-vectored (RFC 7914 §11), keeping it inside G1's cross-implementation-agreed
+corpus discipline rather than resting on a self-captured golden (G5).
+
+The salt is always caller-supplied — `pbkdf2HmacSha256` draws no entropy and does no
+I/O itself; salt generation is the shell layer's job, in the slice that wires up
+account bootstrap.
+
+**Iteration count: 1,500.** Measured on this box (`medaka build -O2`, 32-byte `dkLen`):
+600,000 iterations — the current OWASP-recommended floor for PBKDF2-HMAC-SHA256 —
+takes **~70 s** here, because this is a pure-Medaka implementation with no hardware
+SHA extensions or vectorization, not a count anyone should read as a security
+recommendation for a tuned native implementation elsewhere. 20,000 iterations took
+~1.9 s (≈8,600–10,400 iterations/s, roughly linear); 1,500 iterations took
+~200–240 ms across three runs, the largest sample under the ~250 ms budget with
+headroom (S-kdf acceptance check 4). This number is revisited once the emitter's
+numeric/allocation performance on this workload (§4.1) is itself improved, or if a
+future slice moves the hot loop to a native `extern`.
+
+### 4.3 Session tokens (JWT, HS256)
+
+`createSession` hands the client a bearer token that `refreshSession` and every
+authenticated XRPC route then has to check. Chosen format: **JWT (RFC 7519) in the JWS
+Compact Serialization, signed with HS256** (`pds/lib/jwt.mdk`). JWT because the atproto
+client ecosystem already expects a compact bearer string here; HS256 because this
+server both mints and verifies its own tokens and nothing off-box ever verifies them,
+so a symmetric MAC is the whole requirement and an asymmetric signature would buy
+nothing. It is RFC-vectored (RFC 7520 §4.4's HS256 worked example), keeping it inside
+G1's cross-implementation-agreed corpus discipline rather than resting on a
+self-captured golden (G5). RFC 7515 A.1's HS256 example is not usable: its symmetric
+key is 64 bytes and `pds/lib/hmac_sha256.mdk` accepts only 32.
+
+**The key is a dedicated server secret, never the account's secp256k1 signing key.**
+That key authenticates commits to every other implementation on the network; its
+compromise is unrecoverable in a way a session-token compromise is not. Minting tokens
+with it would put it on a second, far more frequently exercised code path — every
+login, every refresh — for no interop gain, since no peer verifies our session tokens.
+The secret is generated as exactly 32 bytes at account bootstrap (the shell layer's
+job, a later slice) and lives beside the account record, not in the repo.
+
+**Claims: `sub`, `aud`, `jti`, `iat`, `nbf`, `exp`** — `sub` the account DID, `aud`
+the audience the token is good for, `jti` the token's own identifier, and the three
+RFC 7519 §4.1 NumericDate fields in seconds since the Unix epoch. `nbf` equals `iat`;
+this server mints no post-dated token. `nbf` is inclusive and `exp` exclusive.
+
+`jti` and the audience split both arrived with the session slice, and both are
+load-bearing rather than decorative. Without `jti`, two tokens minted for the same
+subject in the same second are the same string, and a server that identifies sessions
+by their tokens cannot then tell two sessions apart — a login while another login is
+in flight would silently join the first one's session, and rotating one refresh token
+would revoke the other's. `jti` is the request's own entropy, rendered as hex, so two
+tokens are distinct because they were minted by two requests and for no other reason.
+The audience differs between the two halves of a pair — the access token's audience is
+the PDS hostname, the refresh token's is `<hostname>#refresh` — so neither can be
+presented as the other: `verifyToken` grades the audience the ROUTE demands, and an
+access token on `refreshSession` is refused by exactly the check that refuses a token
+minted for a different server entirely.
+
+**Verification pins the algorithm rather than reading it.** A token's `alg` header is
+attacker-controlled input, so `verifyToken` always computes HS256 and then rejects any
+header claiming anything else — `"alg": "none"` is one instance of that family, not a
+separate case. The MAC is compared byte-wise with an XOR accumulator over the full
+length, no early return. `verifyToken` takes the current instant as a parameter and
+reads no clock, which is what lets `pds/test/jwt_test.mdk` place itself on either side
+of every window boundary; it lives in `pds/lib/`, so it declares no effect row.
+
+### 4.4 Sessions: what a bearer token is a credential FOR
+
+A verified signature inside its window is not on its own a credential here. The store
+holds an allow-list of open sessions — a fingerprint (SHA-256) of each of the pair's
+two tokens, and the refresh token's expiry — and `lib.server_core`'s seam requires the
+presented token's session to be OPEN as well as its signature to verify. That is what
+makes `deleteSession` a revocation rather than a promise of one: after a logout, an
+access token whose window has hours left is refused from the next request on, and a
+purely stateless check could not do that at all.
+
+Refreshing ROTATES: `refreshSession` removes the record its refresh token named and
+opens a new one on a fresh pair. The consumed token is removed rather than marked, so
+presenting it again finds no session and is refused — reuse detection with no extra
+state. The rotation replaces the whole record, access half included, so a client that
+refreshes is expected to use the access token it was just issued.
+
+**Sessions live only in memory, and a restart closes all of them.** They are not
+persisted: after a restart every previously issued token is refused and every client
+logs in again. That is a fail-CLOSED behavior and it is deliberate — the alternative,
+persisting session records, is a second on-disk file of security-relevant state with
+its own staleness and mode problems, for the benefit of not asking a client to log in
+after a server restart. The credential record IS persisted, because a server that
+forgot the account password on restart could not accept a login at all.
+
+**File modes are a real gap, stated plainly.** Medaka has no primitive that sets a
+file mode: `writeFile` is `fopen(path, "wb")`, and there is no `chmod`, no `umask`,
+and no mode argument anywhere in the runtime or the stdlib. So the generated session
+secret and the stored credential record land at 0644 — world-readable — and
+`pds/serve.mdk` says so loudly on stderr, naming the path and the mode, whenever it
+creates one. It never names the contents: a warning that quoted the secret would be a
+far larger disclosure than the mode it warns about. On a shared machine an operator
+should pre-create the file under their own umask and hand it in with `--token-secret`.
+This is a gap to close with a mode-taking write primitive, not a residual risk that
+has been accepted; the two available workarounds are both worse than saying so
+(shelling out to `chmod` leaves a real world-readable window between the create and
+the chmod and grants the server an `<Exec>` capability to protect one file).
+
+**The password never appears in an argument.** `--password-file PATH` is the only way
+one reaches the server: an argument value is visible in `ps` output to every user on
+the box. There is no interactive prompt, because no termios, tty, or echo-suppression
+primitive exists in the runtime or the stdlib and a prompt that echoed the password to
+the terminal would be worse than the file. A server with neither a stored credential
+nor `--password-file` refuses to start rather than starting and refusing every login,
+which would be indistinguishable from a working server until somebody tried to use it.
+
+**Every secret this server generates comes from `osEntropyBytes`** — the session
+secret, the credential salt, and the per-request nonce that identifies minted tokens.
+`randomInt` is a SplitMix64 generator seeded deterministically; a session secret drawn
+from it would be the same secret on every deployment, and forgeable from a public
+constant. `pds/test/lib_boundary.sh` also grades a source-shape property in the same
+region: no password, secret, salt, digest or credential may be interpolated into a
+string anywhere in `pds/lib`, `pds/shell` or `pds/serve.mdk`, with one ledgered
+exemption for the line in `lib.jwt` that assembles a token, where building that string
+is the entire job.
+
 ---
 
 ## 5. The failure mode that matters, and the apparatus against it
@@ -375,13 +503,16 @@ pure core stays reachable from every engine Phase 3 does not run on. The signatu
 half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
-**Loopback-only, unauthenticated, is deliberate, not an oversight.** `bindLoopback`
-takes a port and nothing else — no configuration path can move this server off
-`127.0.0.1` — and nothing in this phase authenticates a request; every one of the
-nine XRPC endpoints answers whoever can reach the socket. That is the intended shape
-of a phase with no session/auth story yet (Phase 4's "still owed" list, below):
-authentication is the gate on ever exposing this past loopback, not a Phase 3 gap to
-work around.
+**Loopback-only is deliberate, not an oversight.** `bindLoopback` takes a port and
+nothing else — no configuration path can move this server off `127.0.0.1`. §4.2-4.4
+below describe the auth seam this server now has: the three record writes and
+`getSession` require a valid access token, `refreshSession`/`deleteSession` require a
+valid refresh token, `createSession` is the public login that issues both, and the
+six reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only is the
+separate gate that remains: authentication makes the endpoints safe to answer, but
+nothing here hardens the socket for exposure past loopback (TLS, a non-loopback
+bind), which is not a Phase 3 or Phase 4 gap to work around but out of scope until a
+later phase takes it up.
 
 **Phase 4 — a standalone PDS.** *Pure half COMPLETE in the current tree
 (#1697); the rest is Phase-3-gated.*

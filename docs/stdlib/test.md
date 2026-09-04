@@ -265,6 +265,64 @@ Pass "" ""
 Fail "oops" "" ""
 ```
 
+## Reading an expectation
+
+### `expectationTag`
+
+```
+expectationTag : Expectation -> String
+```
+
+The name of the outcome's constructor, `"Pass"` or `"Fail"`.
+
+```medaka
+> expectationTag pass
+"Pass"
+> expectationTag (fail "not ready")
+"Fail"
+```
+
+### `expectationMessage`
+
+```
+expectationMessage : Expectation -> String
+```
+
+The failure message, empty for a `Pass`.
+
+```medaka
+> expectationMessage (fail "not ready")
+"not ready"
+> expectationMessage pass
+""
+```
+
+### `expectationExpected`
+
+```
+expectationExpected : Expectation -> String
+```
+
+The expected operand as the assertion rendered it.
+
+```medaka
+> expectationExpected (expectEqual 1 2)
+"1"
+```
+
+### `expectationActual`
+
+```
+expectationActual : Expectation -> String
+```
+
+The actual operand as the assertion rendered it.
+
+```medaka
+> expectationActual (expectEqual 1 2)
+"2"
+```
+
 ## Running tests
 
 ### `runTests`

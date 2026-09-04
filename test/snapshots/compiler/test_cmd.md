@@ -1,5 +1,5 @@
 # META
-source_lines=1924
+source_lines=1955
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -60,6 +60,7 @@ import driver.loader.{
   entrySearchRoots,
   canonicalPathId,
   readDeps,
+  findProjectRoot,
   findProjectRootOrSelf,
 }
 import driver.build_cmd.{readPreludeFile}
@@ -129,7 +130,7 @@ import support.util.{
   endsWith,
   splitOnChar,
 }
-import support.path.{dirOf}
+import support.path.{dirOf, baseOf}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -276,7 +277,7 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- run proceeds: which module was not type-checked, which disjunct of the
 -- predicate exempted it, and the `medaka check` command that WILL type-check it.
 -- This is deliberately a note, not a failure — exit codes are unchanged, because
--- test/ported/*.mdk and sqlite/test/*_test.mdk must keep exiting 0.
+-- test/ported/*.mdk must keep exiting 0.
 -- ⚠️ It goes to STDERR, not stdout: the doctest/prop/test reports on stdout are
 -- parsed for counts by `sqlite/test/inlang_test_oracle.sh` (`grep -c '^  ok   '`)
 -- and by `test/diff_compiler_ported.sh`, and a line injected into that stream
@@ -290,27 +291,33 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 --
 -- #1445/#2513: the exemption is narrowed by PATH, not just by decl shape —
 -- `isNewVehiclePath` below excludes the `[P-TEST-SIBLING]` `*_test.mdk`
--- convention (AGENTS.md) so a compiler-/stdlib-internal test sibling is always
--- type-checked, never silently swallowed the way `test/ported/*.mdk` and
--- `sqlite/test/*_test.mdk` deliberately still are.
+-- convention (AGENTS.md) so a test sibling that lives in the tree — under
+-- `compiler/`/`stdlib/`, or in a real project's own `test/` directory — is
+-- always type-checked, never silently swallowed the way `test/ported/*.mdk`
+-- deliberately still is.
 typecheckExempt : String -> List Decl -> String -> <IO> Bool
 typecheckExempt target userDecls tsrc
   | isNonEmptyL (extractExamples (collectComments tsrc)) = False
   | isNewVehiclePath target = False
   | otherwise = hasProps userDecls || hasTests userDecls
 
--- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling under
--- `compiler/` or `stdlib/` is the new in-tree test vehicle (S-2), and must not
--- inherit the `test`/`prop` exemption meant for the eval-vs-check divergence
--- corpus (`test/ported/*.mdk`, `sqlite/test/*_test.mdk`) — those predate this
--- convention, share only the suffix, and keep the exemption unchanged.  Scoped
--- by PATH so the two `_test.mdk` families stay distinguishable: suffix alone
--- cannot tell them apart.
+-- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling is the
+-- in-tree test vehicle (S-2), and must not inherit the `test`/`prop` exemption
+-- meant for the eval-vs-check divergence corpus (`test/ported/*.mdk`) — that
+-- corpus predates the convention and keeps the exemption unchanged, which it
+-- does for free: not one of its files carries the `_test.mdk` suffix
+-- (`git ls-files 'test/ported/*_test.mdk'` is empty).
 --
--- The path test is a `/`-delimited SEGMENT match over the CANONICALIZED target,
--- not a substring test over the string the CLI was handed.  Both halves are
--- load-bearing, and a bare `substringMatch "compiler/"` got each one wrong in
--- the opposite direction:
+-- The rule is the suffix AND one of two path shapes: a `compiler`/`stdlib`
+-- SEGMENT, or a real project's own `test/` directory.  The suffix alone is too
+-- wide — it also claims a scratch or synthetic `*_test.mdk` that belongs to no
+-- project at all, and a directory that merely CONTAINS the text `compiler` or
+-- `stdlib` in its name.
+--
+-- The segment half is a `/`-delimited SEGMENT match over the CANONICALIZED
+-- target, not a substring test over the string the CLI was handed.  Both halves
+-- are load-bearing, and a bare `substringMatch "compiler/"` got each one wrong
+-- in the opposite direction:
 --   • canonicalization, because the classification must not depend on the
 --     invocation FORM.  `medaka test compiler/types/x_test.mdk` and, from
 --     inside that directory, `medaka test x_test.mdk` name the same module; the
@@ -318,15 +325,24 @@ typecheckExempt target userDecls tsrc
 --     re-exempted the file the convention exists to guard.
 --   • segment matching, because `compiler`/`stdlib` must be real path
 --     components.  A tree under `…/mycompiler/…` or `…/newstdlib/…` contains
---     the substring without containing the directory, and the substring form
---     newly type-checked files (the sqlite corpus among them) that are
---     deliberately exempt.
+--     the substring without containing the directory.
 -- `canonicalizePath` returns its input unchanged on an unresolvable path, so an
 -- already-relative, already-`compiler/`-rooted target still classifies the same.
+--
+-- The project half (`underProjectTestDir`) covers the vehicles that live
+-- outside `compiler/`/`stdlib/` — `pds/test/*_test.mdk`,
+-- `sqlite/test/*_test.mdk` and any future project's — which are ordinary
+-- type-checkable code, not eval-vs-check divergence corpora: gating all 26
+-- tracked `*_test.mdk` files outside `compiler/`/`stdlib/` surfaced four type
+-- errors, every one of them ordinary (a missing `deriving`, an unimported type
+-- name, an under-general signature, an unannotated ambiguous literal).  It asks
+-- the filesystem instead of consulting a roster, so a project added later is in
+-- scope with no edit here ([W-PROJECT-BY-MANIFEST]) — the same live derivation
+-- `test/preflight.sh` and `test/diff_compiler_project_enrolment.sh` use.
 isNewVehiclePath : String -> <IO> Bool
 isNewVehiclePath target =
   if endsWith "_test.mdk" target then
-    hasVehicleSegment (canonicalizePath target)
+    hasVehicleSegment (canonicalizePath target) || underProjectTestDir target
   else
     False
 
@@ -337,6 +353,20 @@ hasVehicleSegment path =
     (filterList
       (seg => seg == "compiler" || seg == "stdlib")
       (splitOnChar '/' path))
+
+-- Does `target` sit directly in the `test/` directory of a REAL project — a
+-- directory named exactly `test` with a `medaka.toml` at or above it?  The
+-- manifest is what makes it a project ([W-PROJECT-BY-MANIFEST]); WHICH project
+-- is irrelevant, so nothing here enumerates them.  A scratch tree with no
+-- manifest anywhere above it answers `None` and keeps the exemption.
+underProjectTestDir : String -> <IO> Bool
+underProjectTestDir target =
+  let d = dirOf target
+  if baseOf d == "test" then match findProjectRoot d
+    Some _ => True
+    None => False
+  else
+    False
 
 doctestGate : String ->
   List String ->
@@ -462,6 +492,7 @@ skipReasonDecls userDecls
 -- given but every phase was already empty) stays the existing vacuous pass
 -- (P0-212, `test_cmd.mdk`'s zero-doctest note above) — this only fires when a
 -- filter was GIVEN and matched nothing anywhere.
+export
 filterMatchedNothing : Option String -> String -> List Decl -> Bool
 filterMatchedNothing None _ _ = False
 filterMatchedNothing (Some sub) tsrc userDecls =
@@ -1931,7 +1962,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "loadProgram" false) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRootOrSelf" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "loadProgram" false) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
@@ -1944,7 +1975,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -1955,9 +1986,11 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EVar "False")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EVar "False")))
 (DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
+(DTypeSig false "underProjectTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "underProjectTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EMatch (EApp (EVar "findProjectRoot") (EVar "d")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))) (EVar "False")))))
 (DTypeSig false "doctestGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls")))) (DoExpr (EVar "None"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "typecheckGateResult" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
@@ -1976,7 +2009,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "typecheckSkipNotice" ((PVar "target") (PVar "userDecls")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "note: typechecking was skipped for ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "\n  reason: the module declares "))) (EApp (EVar "display") (EApp (EVar "skipReasonDecls") (EVar "userDecls")))) (ELit (LString " and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString ""))))
 (DTypeSig false "skipReasonDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "skipReasonDecls" ((PVar "userDecls")) (EIf (EBinOp "&&" (EApp (EVar "hasTests") (EVar "userDecls")) (EApp (EVar "hasProps") (EVar "userDecls"))) (ELit (LString "`test \"…\"` and `prop \"…\"` decls")) (EIf (EApp (EVar "hasTests") (EVar "userDecls")) (ELit (LString "`test \"…\"` decls")) (EIf (EVar "otherwise") (ELit (LString "`prop \"…\"` decls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DTypeSig true "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "filterMatchedNothing" ((PCon "None") PWild PWild) (EVar "False"))
 (DFunDef false "filterMatchedNothing" ((PCon "Some" (PVar "sub")) (PVar "tsrc") (PVar "userDecls")) (EApp (EVar "not") (EBinOp "||" (EBinOp "||" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterExamplesByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterPropsByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "filterProps") (EVar "userDecls"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterTestsByName") (EApp (EVar "Some") (EVar "sub"))) (EApp (EVar "nativeRawTests") (EVar "tsrc")))))))
 (DTypeSig false "driveAll" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))
@@ -2171,7 +2204,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "loadProgram" false) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRootOrSelf" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "loadProgram" false) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
@@ -2184,7 +2217,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
-(DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -2195,9 +2228,11 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EVar "False")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EVar "False")))
 (DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
+(DTypeSig false "underProjectTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "underProjectTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EMatch (EApp (EVar "findProjectRoot") (EVar "d")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))) (EVar "False")))))
 (DTypeSig false "doctestGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls")))) (DoExpr (EVar "None"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "typecheckGateResult" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
@@ -2216,7 +2251,7 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DFunDef false "typecheckSkipNotice" ((PVar "target") (PVar "userDecls")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "note: typechecking was skipped for ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "\n  reason: the module declares "))) (EApp (EMethodRef "display") (EApp (EVar "skipReasonDecls") (EVar "userDecls")))) (ELit (LString " and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check "))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ""))))
 (DTypeSig false "skipReasonDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "skipReasonDecls" ((PVar "userDecls")) (EIf (EBinOp "&&" (EApp (EVar "hasTests") (EVar "userDecls")) (EApp (EVar "hasProps") (EVar "userDecls"))) (ELit (LString "`test \"…\"` and `prop \"…\"` decls")) (EIf (EApp (EVar "hasTests") (EVar "userDecls")) (ELit (LString "`test \"…\"` decls")) (EIf (EVar "otherwise") (ELit (LString "`prop \"…\"` decls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DTypeSig true "filterMatchedNothing" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "filterMatchedNothing" ((PCon "None") PWild PWild) (EVar "False"))
 (DFunDef false "filterMatchedNothing" ((PCon "Some" (PVar "sub")) (PVar "tsrc") (PVar "userDecls")) (EApp (EVar "not") (EBinOp "||" (EBinOp "||" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterExamplesByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterPropsByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "filterProps") (EVar "userDecls"))))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterTestsByName") (EApp (EVar "Some") (EMethodRef "sub"))) (EApp (EVar "nativeRawTests") (EVar "tsrc")))))))
 (DTypeSig false "driveAll" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))))

@@ -1,0 +1,517 @@
+{- | The four `com.atproto.server.*` session routes (#2604), driven in process
+   through the real registry, the real seam, and the real handler — one HTTP
+   request in, one HTTP response out, exactly as `pds/shell/server.mdk` drives
+   them over a socket.
+
+   Nothing here reaches into `lib.store`'s session list to assert a shape. A
+   session is only ever observed the way a client observes one: by presenting
+   a token and seeing what the server does with it. That is the property that
+   matters, and it is the one an implementation change can quietly break while
+   every structural assertion still passes.
+
+   `pds/test/serve_e2e.sh` drives the same four routes over a real socket
+   against the real binary; this file is the fast, deterministic half — it can
+   place a request at any instant, which is how the expiry cells below run
+   without waiting two hours. -}
+
+import json.{Json(..), get, jObject, parse, stringify}
+import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
+import test.{expectEqual, expectTrue}
+import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
+import lib.handlers.{pdsServer}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.store.{Store, storeEmpty, storeWithCredential, storeWithServerSecret}
+
+accountDidText : String
+accountDidText = "did:plc:s-sessions-test-account"
+
+accountHandleText : String
+accountHandleText = "alice.test"
+
+accountHostText : String
+accountHostText = "pds.test"
+
+password : String
+password = "s-sessions-test-password"
+
+account : Account
+account = match makeAccount accountDidText accountHandleText accountHostText
+  Ok made => made
+  Err message => panic "session_routes_test: account: \{message}"
+
+server : Server
+server = match pdsServer account
+  Ok made => made
+  Err message => panic "session_routes_test: server: \{message}"
+
+-- A fixed session secret. The seam only ever compares a MAC against it, so a
+-- fixture value is as good as an entropy-drawn one here; the real server
+-- draws its own from `osEntropyBytes` (`pds/serve.mdk`).
+testSecret : Array Int
+testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
+
+{- | The account credential, derived at the SHIPPED iteration count.
+
+   `pds/test/credential_test.mdk` derives cheaply because it is grading the
+   record; this file pays the real cost once, so that what the login cells
+   grade is the credential an operator's server would actually hold. -}
+credential : CredentialRecord
+credential =
+  let derived =
+    makeCredential
+      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
+      defaultIterations
+      password
+  match derived
+    Ok made => made
+    Err message => panic "session_routes_test: credential: \{message}"
+
+-- | A configured server's store: session secret and account credential, no
+-- repository. No session route touches the repository.
+configuredStore : Store
+configuredStore = match storeWithServerSecret testSecret storeEmpty
+  Ok withSecret => storeWithCredential credential withSecret
+  Err message => panic "session_routes_test: session secret: \{message}"
+
+-- | The same store with no credential at all, which is what a server that was
+-- never given a password would hold.
+credentiallessStore : Store
+credentiallessStore = match storeWithServerSecret testSecret storeEmpty
+  Ok withSecret => withSecret
+  Err message => panic "session_routes_test: session secret: \{message}"
+
+testInstant : Int
+testInstant = 1700000000
+
+nonceAt : Int -> Array Int
+nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
+
+{- | A request context at `instant`, identified by `seed`.
+
+   The seed becomes the minted tokens' `jti`, so two requests placed at the
+   same instant with different seeds mint DIFFERENT tokens — which is what the
+   real server gets from drawing a fresh nonce per request. Two requests with
+   the same seed at the same instant would mint the same token, and one cell
+   below relies on exactly that to prove the nonce is what separates them. -}
+contextAt : Int -> Int -> RequestContext
+contextAt instant seed =
+  RequestContext { nowSeconds = instant, nonce = nonceAt seed }
+
+-- # Requests and responses
+
+authOf : String -> String
+authOf "" = ""
+authOf token = "Authorization: Bearer \{token}\r\n"
+
+postJson : String -> String -> String -> Array Int
+postJson token nsid bodyJson =
+  toUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength (toUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
+
+postNoInput : String -> String -> Array Int
+postNoInput token nsid =
+  toUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
+
+getQuery : String -> String -> Array Int
+getQuery token nsid =
+  toUtf8
+    "GET /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
+
+loginJson : String -> String -> String
+loginJson identifier passwordText =
+  stringify
+    (jObject [
+      ("identifier", JString identifier),
+      ("password", JString passwordText),
+    ])
+
+-- The status line and, for a refusal, atproto's error code: the two things a
+-- client can act on. A token or a password never appears in either.
+outcome : Array Int -> String
+outcome bytes =
+  let text = fromUtf8 bytes
+  let status = match parse (bodyOf text)
+    Ok body => match get "error" body
+      Some (JString code) => code
+      _ => ""
+    Err _ => ""
+  if status == "" then statusLineOf text else "\{statusLineOf text} \{status}"
+
+statusLineOf : String -> String
+statusLineOf text = match split "\r\n" text
+  first :: _ => drop 9 first
+  [] => "no status line"
+
+bodyOf : String -> String
+bodyOf text = match indexOf "\r\n\r\n" text
+  Some at => drop (at + 4) text
+  None => ""
+
+-- | One string field of a response body, or `""`.
+field : String -> Array Int -> String
+field name bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get name body
+    Some (JString value) => value
+    _ => ""
+  Err _ => ""
+
+-- # Driving
+
+-- | One request against `store` at `context`, giving the store it left behind
+-- and the response bytes.
+send : RequestContext -> Store -> Array Int -> (Store, Array Int)
+send context store bytes = handleBytes server context store bytes
+
+createSessionNsid : String
+createSessionNsid = "com.atproto.server.createSession"
+
+refreshSessionNsid : String
+refreshSessionNsid = "com.atproto.server.refreshSession"
+
+deleteSessionNsid : String
+deleteSessionNsid = "com.atproto.server.deleteSession"
+
+getSessionNsid : String
+getSessionNsid = "com.atproto.server.getSession"
+
+createRecordNsid : String
+createRecordNsid = "com.atproto.repo.createRecord"
+
+-- | Log in with the right password at `instant`, identified by `seed`.
+login : Int -> Int -> Store -> (Store, Array Int)
+login instant seed store =
+  send
+    (contextAt instant seed)
+    store
+    (postJson "" createSessionNsid (loginJson accountHandleText password))
+
+{- | A logged-in session: the store holding it, its access token, and its
+   refresh token. Every cell below starts from one of these. -}
+loggedIn : (Store, String, String)
+loggedIn =
+  let (store, response) = login testInstant 1 configuredStore
+  (store, field "accessJwt" response, field "refreshJwt" response)
+
+sessionStore : Store
+sessionStore = match loggedIn
+  (store, _, _) => store
+
+accessToken : String
+accessToken = match loggedIn
+  (_, token, _) => token
+
+refreshToken : String
+refreshToken = match loggedIn
+  (_, _, token) => token
+
+-- # createSession
+
+test "a login with the right password is 200" =
+  let (_, response) = login testInstant 1 configuredStore
+  expectEqual (outcome response) "200 OK"
+
+test "a login is answered with the account's DID and handle" =
+  let (_, response) = login testInstant 1 configuredStore
+  expectEqual
+    (field "did" response ++ " " ++ field "handle" response)
+    "\{accountDidText} \{accountHandleText}"
+
+test "a login issues two different tokens" =
+  expectTrue
+    (accessToken /= "" && refreshToken /= "" && accessToken /= refreshToken)
+
+test "a login by DID is accepted as well as by handle" =
+  let (_, response) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson accountDidText password))
+  expectEqual (outcome response) "200 OK"
+
+-- atproto handles are domain names, and domain names are case-insensitive.
+test "a login by handle is case-insensitive" =
+  let (_, response) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson "ALICE.TEST" password))
+  expectEqual (outcome response) "200 OK"
+
+test "a login with the wrong password is refused" =
+  let (_, response) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+  expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
+
+{- | The three ways a login can fail are ONE answer, byte for byte. The
+   differences between them — is this identifier real, is this server
+   configured — are exactly what an attacker probing for an account is asking
+   about, and a client has no use for any of them. -}
+test "a wrong password and an unknown identifier are the same refusal" =
+  let (_, wrongPassword) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+  let (_, unknownIdentifier) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson "nobody.test" password))
+  expectEqual (fromUtf8 wrongPassword) (fromUtf8 unknownIdentifier)
+
+test "a login against a server with no credential is the same refusal" =
+  let (_, noCredential) =
+    send
+      (contextAt testInstant 1)
+      credentiallessStore
+      (postJson "" createSessionNsid (loginJson accountHandleText password))
+  let (_, wrongPassword) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+  expectEqual (fromUtf8 noCredential) (fromUtf8 wrongPassword)
+
+-- Nothing the client sent comes back. A refusal that quoted the identifier
+-- would put it in every log the response passes through on the way out.
+test "a refusal repeats neither the password nor the identifier" =
+  let (_, response) =
+    send
+      (contextAt testInstant 1)
+      configuredStore
+      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+  let text = fromUtf8 response
+  expectTrue (not (contains "not it" text) && not (contains "alice.test" text))
+
+test "two logins in the same second issue different tokens" =
+  let (_, first) = login testInstant 1 configuredStore
+  let (_, second) = login testInstant 2 configuredStore
+  expectTrue (field "accessJwt" first /= field "accessJwt" second)
+
+-- # The access token
+
+test "the access token reaches a gated route" =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      sessionStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (outcome response) "200 OK"
+
+test "getSession names the account the token belongs to" =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      sessionStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (field "did" response) accountDidText
+
+{- | An access token that was never issued by this server is refused even
+   though it is syntactically a bearer token. This is the seam's job, and it
+   is graded here as well as in `pds/test/auth_seam_test.mdk` because a
+   session route must not be a way around it. -}
+test "an invented token is refused" =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      sessionStore
+      (getQuery "not.a.token" getSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+test "a session opened on one store is unknown to another" =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      configuredStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+{- | Two hours on, the access token's own window has closed, and an open
+   session record does not keep it alive past it.
+
+   The refusal is `ExpiredToken`, not `InvalidToken`: it is atproto's own
+   distinction and the one a client acts on, because expiry is the case a
+   refresh fixes and a bad signature is not. -}
+test "the access token is refused after its window closes" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 7201) 3)
+      sessionStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized ExpiredToken"
+
+-- # refreshSession
+
+refreshed : (Store, Array Int)
+refreshed =
+  send
+    (contextAt (testInstant + 60) 4)
+    sessionStore
+    (postNoInput refreshToken refreshSessionNsid)
+
+rotatedStore : Store
+rotatedStore = match refreshed
+  (store, _) => store
+
+rotatedAccess : String
+rotatedAccess = match refreshed
+  (_, response) => field "accessJwt" response
+
+rotatedRefresh : String
+rotatedRefresh = match refreshed
+  (_, response) => field "refreshJwt" response
+
+test "a refresh with the session's refresh token is 200" = match refreshed
+  (_, response) => expectEqual (outcome response) "200 OK"
+
+test "a refresh issues a token pair that is not the one it replaced" =
+  expectTrue (rotatedAccess /= accessToken && rotatedRefresh /= refreshToken)
+
+test "the rotated access token reaches a gated route" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 60) 5)
+      rotatedStore
+      (getQuery rotatedAccess getSessionNsid)
+  expectEqual (outcome response) "200 OK"
+
+{- | The rotation invalidates the token it consumed. Presenting it again finds
+   no session and is refused — the reuse an attacker who stole a refresh token
+   would attempt costs them nothing to try and buys them nothing. -}
+test "the consumed refresh token is refused after the rotation" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 120) 6)
+      rotatedStore
+      (postNoInput refreshToken refreshSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+-- The rotation replaced the whole session, access half included: a client
+-- that refreshes has been issued a new access token and is expected to use it.
+test "the access token from before the rotation is refused after it" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 120) 6)
+      rotatedStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+test "an access token is refused on the refresh route" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 60) 4)
+      sessionStore
+      (postNoInput accessToken refreshSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+test "a refresh token is refused on an access-gated route" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 60) 4)
+      sessionStore
+      (getQuery refreshToken getSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+test "a refresh with no Authorization header is refused" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 60) 4)
+      sessionStore
+      (postNoInput "" refreshSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
+
+-- # deleteSession
+
+closed : (Store, Array Int)
+closed =
+  send
+    (contextAt (testInstant + 60) 7)
+    sessionStore
+    (postNoInput refreshToken deleteSessionNsid)
+
+closedStore : Store
+closedStore = match closed
+  (store, _) => store
+
+test "deleting the session is 200" = match closed
+  (_, response) => expectEqual (outcome response) "200 OK"
+
+{- | THE revocation property, and the reason a session list exists at all: the
+   access token the client was holding when it logged out is refused from the
+   next request on. Its signature is still good and its two-hour window is
+   still open — a stateless check would still accept it. -}
+test "the access token is refused after the session is deleted" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 61) 8)
+      closedStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+test "the refresh token is refused after the session is deleted" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 61) 8)
+      closedStore
+      (postNoInput refreshToken refreshSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+test "deleting the same session twice is refused the second time" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 61) 8)
+      closedStore
+      (postNoInput refreshToken deleteSessionNsid)
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+{- | A write is gated on the ACCESS token, so logging out closes the account's
+   repository to the client that logged out. The refusal is the seam's, and it
+   comes before the handler: this store holds no repository at all, so a
+   handler that ran would have answered `RepoNotFound`. -}
+test "a write with the deleted session's access token is refused first" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 61) 8)
+      closedStore
+      (postJson
+        accessToken
+        createRecordNsid
+        (stringify
+          (jObject [
+            ("repo", JString accountDidText),
+            ("collection", JString "app.bsky.feed.post"),
+            ("record", jObject [("text", JString "after logout")]),
+          ])))
+  expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+-- # Independence
+
+{- | Two logins are two sessions, and closing one leaves the other open. A
+   single-session server would answer this cell the same way as a correct one
+   right up until an account signed in twice. -}
+test "logging out of one session leaves another open" =
+  let (afterFirst, _) = login testInstant 1 configuredStore
+  let (twoSessions, secondResponse) = login testInstant 9 afterFirst
+  let secondAccess = field "accessJwt" secondResponse
+  let secondRefresh = field "refreshJwt" secondResponse
+  let (afterClose, _) =
+    send
+      (contextAt (testInstant + 1) 10)
+      twoSessions
+      (postNoInput refreshToken deleteSessionNsid)
+  let (_, response) =
+    send
+      (contextAt (testInstant + 1) 11)
+      afterClose
+      (getQuery secondAccess getSessionNsid)
+  expectTrue (secondRefresh /= refreshToken && outcome response == "200 OK")

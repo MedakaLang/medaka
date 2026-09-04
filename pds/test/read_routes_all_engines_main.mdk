@@ -24,7 +24,13 @@
 import json.{Json(..), jObject, get, parse}
 import string.{contains, fromUtf8, split, toUtf8}
 import lib.handlers.{pdsServer}
-import lib.server_core.{Account, Server, handleBytes, makeAccount}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
 import lib.store.{Store, storeEmpty, storeRepo, storeSize}
 
 accountDidText : String
@@ -49,6 +55,17 @@ mustServer : Server
 mustServer = match pdsServer mustAccount
   Ok server => server
   Err message => panic "read_routes: server setup failed: \{message}"
+
+{- | The instant every request in this file is placed at. `lib.server_core`
+   reads no clock, so each of its callers supplies one. -}
+{- | The per-request nonce every request in this file is placed at. Nothing
+   here drives a route that mints a token, so the value only has to be fixed;
+   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = 1700000000, nonce = testNonce }
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
@@ -127,7 +144,7 @@ check label ok detail =
 
 okCell : String -> Array Int -> String -> String -> <IO> Int
 okCell label request contentType expectedBody =
-  let (next, response) = handleBytes mustServer storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let ok =
     status == "200"
@@ -141,7 +158,7 @@ okCell label request contentType expectedBody =
 
 failCell : String -> Array Int -> String -> String -> <IO> Int
 failCell label request expectedStatus expectedCode =
-  let (next, response) = handleBytes mustServer storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let code = errorCode response
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next

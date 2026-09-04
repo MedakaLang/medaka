@@ -1,5 +1,5 @@
 # META
-source_lines=1596
+source_lines=1597
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -801,6 +801,7 @@ lookupReg k ((k2, v) :: rest) =
 -- ⚠️ THIS UNIT CHANGES NO ANSWER.  Every consumer projects straight back to
 -- the bare name, so a rigid head is still handed out as a dispatch key exactly
 -- as it was.  Whoever removes that must remove the ARM, not this inhabitant.
+-- lint-disable-next-line rule-clone-type
 public export data HeadKey =
   -- a real head type constructor: `TkIdent` when its declaring module is known
   -- (§8 I4's `(originModule, name)`) or the LANGUAGE provides it

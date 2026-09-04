@@ -1,0 +1,3 @@
+warning: [rule-clause-map] 'posDoubleAll' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as 'map double' (suggest-only)
+warning: [rule-clause-map] 'posScaleAll' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as 'map (scale k)' (suggest-only)
+warning: [rule-clause-map] 'posTagAll' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as 'map (tagWith n)' (suggest-only)

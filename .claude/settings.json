@@ -16,9 +16,6 @@
       "Bash(make agent-doc-symbols)",
       "Bash(make check-self)",
       "Bash(make snapshot-check)"
-    ],
-    "deny": [
-      "Read(./editors/vscode-medaka/package-lock.json)"
     ]
   },
   "hooks": {

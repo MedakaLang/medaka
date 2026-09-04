@@ -17,6 +17,7 @@ import lib.http.{
 import lib.resource_limits.{maxHttpRequestLineBytes}
 import lib.server_core.{
   Account,
+  RequestContext(..),
   Handler,
   Server,
   handle,
@@ -26,6 +27,7 @@ import lib.server_core.{
 }
 import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
 import lib.xrpc.{
+  AuthPolicy(..),
   Endpoint,
   InputPolicy(..),
   Registry,
@@ -64,25 +66,37 @@ registry : Registry
 registry =
   mustRegistry
     (makeRegistry [
-      mustEndpoint (queryEndpoint "com.example.query.fixed"),
-      mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
+      mustEndpoint (queryEndpoint "com.example.query.fixed" PublicRoute),
+      mustEndpoint
+        (procedureEndpoint "com.example.block.put" RawInput PublicRoute),
     ])
 
 handler : Handler
-handler store (QueryCall "com.example.query.fixed" _) =
+handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
+handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
   match storePut (cidForRaw bytes) bytes store
     Err message =>
       panic "server_core_test: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
-handler _ _ = panic "server_core_test: unexpected routed call"
+handler _ _ _ _ = panic "server_core_test: unexpected routed call"
 
 account : Account
 account =
   match makeAccount "did:plc:medakaservertest" "server.example" "pds.example"
     Ok value => value
     Err message => panic "server_core_test: account setup failed: \{message}"
+
+{- | The instant every request in this file is placed at. `lib.server_core`
+   reads no clock, so each of its callers supplies one. -}
+{- | The per-request nonce every request in this file is placed at. Nothing
+   here drives a route that mints a token, so the value only has to be fixed;
+   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = 1700000000, nonce = testNonce }
 
 server : Server
 server = makeServer account registry handler
@@ -184,28 +198,29 @@ test "direct configured handle preserves Store for a fixed query" =
   match parseRequest fixedQuery
     Err _ => expectTrue False
     Ok request =>
-      let (next, response) = handle server seededStore request
+      let (next, response) = handle server testContext seededStore request
       expectTrue
         (seedPreserved next
           && serializeResponse response
             == expectedTextResponse 200 "OK" "fixed")
 
 test "fixed raw request returns successor Store and exact response bytes" =
-  let (next, bytes) = handleBytes server storeEmpty fixedPut
+  let (next, bytes) = handleBytes server testContext storeEmpty fixedPut
   expectTrue
     (storeSize next == 1
       && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc")
       && bytes == expectedTextResponse 201 "Created" "stored")
 
 test "chunked raw request returns successor Store and exact response bytes" =
-  let (next, bytes) = handleBytes server storeEmpty chunkedPut
+  let (next, bytes) = handleBytes server testContext storeEmpty chunkedPut
   expectTrue
     (storeSize next == 1
       && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc")
       && bytes == expectedTextResponse 201 "Created" "stored")
 
 test "malformed framing returns exact 400 and preserves Store" =
-  let (next, bytes) = handleBytes server seededStore malformedRequest
+  let (next, bytes) =
+    handleBytes server testContext seededStore malformedRequest
   expectTrue
     (seedPreserved next
       && bytes
@@ -216,7 +231,7 @@ test "malformed framing returns exact 400 and preserves Store" =
           "Malformed HTTP request")
 
 test "unknown route returns exact 404 and preserves Store" =
-  let (next, bytes) = handleBytes server seededStore unknownRequest
+  let (next, bytes) = handleBytes server testContext seededStore unknownRequest
   expectTrue
     (seedPreserved next
       && bytes
@@ -227,7 +242,7 @@ test "unknown route returns exact 404 and preserves Store" =
           "Unknown XRPC method: com.example.query.unknown")
 
 test "resource excess returns exact 413 and preserves Store" =
-  let (next, bytes) = handleBytes server seededStore resourceRequest
+  let (next, bytes) = handleBytes server testContext seededStore resourceRequest
   expectTrue
     (seedPreserved next
       && bytes

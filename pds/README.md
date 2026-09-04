@@ -6,7 +6,9 @@ this tree: the pure core
 covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
-the nine atproto record/sync/identity endpoints plus the two well-known paths.
+the nine atproto record/sync/identity endpoints, the four session endpoints
+(`com.atproto.server.{createSession, refreshSession, deleteSession,
+getSession}`), plus the two well-known paths.
 Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
 `pds/serve.mdk` admits a configuration, rehydrates or initializes the account
 repository, and hands `pds/shell/server.mdk`'s accept loop a listener and the
@@ -18,10 +20,15 @@ process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
 `pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, every
 `pds/lib` export explicitly signed, and no such signature effect-bearing —
 the signature check is what stops an unannotated export from carrying an
-inferred effect row past the effect check). The bind address is loopback-only and
-nothing here authenticates a request — deliberately: authentication is the
-gate on ever exposing this server past loopback, not a gap in this phase. See
-`docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
+inferred effect row past the effect check). The bind address is loopback-only.
+Authentication now gates the writes and the three session routes that need
+it — the three record writes and `getSession` require a valid access token,
+`refreshSession`/`deleteSession` require a valid refresh token, and
+`createSession` is the public login that issues both — while the six reads,
+`resolveHandle`, and the two well-knowns stay public. Loopback-only remains
+the separate gate on exposing this server past localhost at all; hardening
+that path (TLS, a non-loopback bind) is tracked separately, not covered by
+this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
 

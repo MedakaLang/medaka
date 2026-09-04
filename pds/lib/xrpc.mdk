@@ -47,8 +47,27 @@ data EndpointKind =
   | ProcedureEndpoint InputPolicy
   | SubscriptionEndpoint
 
+{- | Whether a route may be reached with no credential at all.
+
+   This is a FIELD of every endpoint rather than a function of its
+   `EndpointKind`: "query is public, procedure is gated" happens to hold for
+   the nine routes registered today, but it is not the rule atproto states,
+   and a future public procedure would be silently gated (or a future private
+   query silently opened) by a classifier that pattern-matched the kind. Every
+   registration therefore names its own policy, and there is no default.
+
+   `RefreshRoute` is a THIRD class rather than a flavour of the second:
+   `com.atproto.server.{refreshSession, deleteSession}` are authenticated by
+   the session's REFRESH token, not its access token, which is what lets a
+   client whose access token has already expired still refresh or log out.
+   The two token classes carry different audiences, so a route has to say
+   which one it accepts and `lib.server_core`'s seam verifies against that
+   one alone — an access token presented to a refresh route is refused, and a
+   refresh token presented to any other gated route is refused. -}
+public export data AuthPolicy = PublicRoute | AuthenticatedRoute | RefreshRoute
+
 -- Constructors stay private so every entry has passed shared NSID admission.
-export data Endpoint = Endpoint String EndpointKind
+export data Endpoint = Endpoint String EndpointKind AuthPolicy
 
 -- The registry is intentionally list-backed and capped at 128 entries. This
 -- bounds duplicate admission and lookup even though both preserve order.
@@ -78,33 +97,50 @@ public export data XrpcCall =
 
 export data XrpcFailure = XrpcFailure Int String String Response
 
-public export data RouteResult = RouteCall XrpcCall | RouteFailure XrpcFailure
+{- | A routed call, carrying the auth policy the registry holds for it, or a
+   deterministic failure. The policy travels WITH the call because the seam
+   that must enforce it (`lib.server_core`'s `handle`) does not otherwise hold
+   the endpoint the router matched. -}
+public export data RouteResult =
+  | RouteCall AuthPolicy XrpcCall
+  | RouteFailure XrpcFailure
 
 maxRegistryEntries : Int
 maxRegistryEntries = 128
 
-makeEndpoint : String -> EndpointKind -> Result String Endpoint
-makeEndpoint nsid kind = match validateNsid nsid
-  Ok () => Ok (Endpoint nsid kind)
+makeEndpoint : String -> EndpointKind -> AuthPolicy -> Result String Endpoint
+makeEndpoint nsid kind auth = match validateNsid nsid
+  Ok () => Ok (Endpoint nsid kind auth)
   Err _ => Err "xrpc: invalid endpoint NSID"
 
--- | Register a GET query endpoint.
+-- | Register a GET query endpoint under an explicit auth policy.
 export
-queryEndpoint : String -> Result String Endpoint
-queryEndpoint nsid = makeEndpoint nsid QueryEndpoint
+queryEndpoint : String -> AuthPolicy -> Result String Endpoint
+queryEndpoint nsid auth = makeEndpoint nsid QueryEndpoint auth
 
--- | Register a POST procedure endpoint with an explicit body policy.
+-- | Register a POST procedure endpoint with explicit body and auth policies.
 export
-procedureEndpoint : String -> InputPolicy -> Result String Endpoint
-procedureEndpoint nsid policy = makeEndpoint nsid (ProcedureEndpoint policy)
+procedureEndpoint : String ->
+  InputPolicy ->
+  AuthPolicy ->
+  Result String Endpoint
+procedureEndpoint nsid policy auth =
+  makeEndpoint nsid (ProcedureEndpoint policy) auth
 
 -- | Register a known subscription route. Phase 2 reports it as unimplemented.
 export
-subscriptionEndpoint : String -> Result String Endpoint
-subscriptionEndpoint nsid = makeEndpoint nsid SubscriptionEndpoint
+subscriptionEndpoint : String -> AuthPolicy -> Result String Endpoint
+subscriptionEndpoint nsid auth = makeEndpoint nsid SubscriptionEndpoint auth
 
+-- | The admitted NSID this endpoint is keyed by.
+export
 endpointNsid : Endpoint -> String
-endpointNsid (Endpoint nsid _) = nsid
+endpointNsid (Endpoint nsid _ _) = nsid
+
+-- | The auth policy this endpoint was registered under.
+export
+endpointAuth : Endpoint -> AuthPolicy
+endpointAuth (Endpoint _ _ auth) = auth
 
 nameMember : String -> List String -> Bool
 nameMember _ [] = False
@@ -113,7 +149,7 @@ nameMember wanted (name :: rest) =
 
 validateEntries : List Endpoint -> List String -> Int -> Result String Unit
 validateEntries [] _ _ = Ok ()
-validateEntries ((Endpoint nsid _) :: rest) seen count =
+validateEntries ((Endpoint nsid _ _) :: rest) seen count =
   if count >= maxRegistryEntries then
     Err "xrpc: registry exceeds 128-entry resource limit"
   else if nameMember nsid seen then
@@ -127,6 +163,13 @@ makeRegistry : List Endpoint -> Result String Registry
 makeRegistry endpoints = do
   () <- validateEntries endpoints [] 0
   Ok (Registry endpoints)
+
+{- | Every registered endpoint, in registration order. This is what lets a
+   test derive the whole route set and its classifications from the registry
+   itself rather than from the list a diff happened to touch. -}
+export
+registryEndpoints : Registry -> List Endpoint
+registryEndpoints (Registry endpoints) = endpoints
 
 findEndpoint : String -> List Endpoint -> Option Endpoint
 findEndpoint _ [] = None
@@ -357,16 +400,17 @@ mediaMatches NoInput _ = False
 
 decodeProcedure : String ->
   InputPolicy ->
+  AuthPolicy ->
   List QueryParam ->
   Request ->
   RouteResult
-decodeProcedure nsid NoInput params request =
+decodeProcedure nsid NoInput auth params request =
   if requestBodyLength request > 0
     || hasBodyFraming (requestHeaders request) then
     invalidRequest "This procedure does not accept request body framing"
   else
-    RouteCall (ProcedureNoInputCall nsid params)
-decodeProcedure nsid RawInput params request =
+    RouteCall auth (ProcedureNoInputCall nsid params)
+decodeProcedure nsid RawInput auth params request =
   let size = requestBodyLength request
   match inputSizeFailure RawInput size
     Some failed => RouteFailure failed
@@ -375,8 +419,10 @@ decodeProcedure nsid RawInput params request =
       DuplicateMedia => mediaFailure DuplicateMedia
       InvalidMedia => mediaFailure InvalidMedia
       SelectedMedia media =>
-        RouteCall (ProcedureRawCall nsid params media (requestBody request))
-decodeProcedure nsid policy params request =
+        RouteCall
+          auth
+          (ProcedureRawCall nsid params media (requestBody request))
+decodeProcedure nsid policy auth params request =
   let size = requestBodyLength request
   match inputSizeFailure policy size
     Some failed => RouteFailure failed
@@ -392,28 +438,28 @@ decodeProcedure nsid policy params request =
           Err _ => invalidRequest "Request body is invalid for endpoint input"
           Ok decoded => match (policy, decoded)
             (JsonInput, JsonBody _ value) =>
-              RouteCall (ProcedureJsonCall nsid params value)
+              RouteCall auth (ProcedureJsonCall nsid params value)
             (TextInput, TextBody decodedMedia text) =>
-              RouteCall (ProcedureTextCall nsid params decodedMedia text)
+              RouteCall auth (ProcedureTextCall nsid params decodedMedia text)
             _ =>
               unsupportedMedia
                 "Request body media type does not match endpoint input"
 
 routeEndpoint : Endpoint -> Request -> List QueryParam -> RouteResult
-routeEndpoint (Endpoint nsid QueryEndpoint) request params =
+routeEndpoint (Endpoint nsid QueryEndpoint auth) request params =
   if requestMethod request /= "GET" then
     methodNotAllowed "XRPC query endpoints require GET"
   else if requestBodyLength request > 0
     || hasBodyFraming (requestHeaders request) then
     invalidRequest "XRPC query endpoints do not accept request body framing"
   else
-    RouteCall (QueryCall nsid params)
-routeEndpoint (Endpoint nsid (ProcedureEndpoint policy)) request params =
+    RouteCall auth (QueryCall nsid params)
+routeEndpoint (Endpoint nsid (ProcedureEndpoint policy) auth) request params =
   if requestMethod request /= "POST" then
     methodNotAllowed "XRPC procedure endpoints require POST"
   else
-    decodeProcedure nsid policy params request
-routeEndpoint (Endpoint nsid SubscriptionEndpoint) request _ =
+    decodeProcedure nsid policy auth params request
+routeEndpoint (Endpoint nsid SubscriptionEndpoint _) request _ =
   if requestMethod request /= "GET" then
     methodNotAllowed "XRPC subscription endpoints require GET"
   else
@@ -430,7 +476,7 @@ routeWellKnown wellKnown request =
     || hasBodyFraming (requestHeaders request) then
     invalidRequest "atproto well-known paths do not accept request body framing"
   else
-    RouteCall (WellKnownCall wellKnown)
+    RouteCall PublicRoute (WellKnownCall wellKnown)
 
 -- | Route one fully framed request through the immutable structural registry.
 export

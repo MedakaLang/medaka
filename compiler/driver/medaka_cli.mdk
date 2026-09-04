@@ -199,7 +199,7 @@ import eval.eval.{
   pendingRunDiags,
   progArgsRef,
 }
-import tools.test_cmd.{runTest, runTestReport}
+import tools.test_cmd.{runTest, runTestReport, filterMatchedNothing}
 import tools.prop_runner.{
   seedPropRng,
   PropResult,
@@ -3161,12 +3161,20 @@ runTestCmd argv0 =
                 ePutStrLn
                   "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
               exit 1
-            [target] =>
-              if jsonMode then
-                runTestJsonCmd engines cases filterOpt target
-              else match listDir target
-                Err _ => runTestOne engines cases filterOpt target
-                Ok _ => runTestManyTargets engines cases filterOpt [target]
+            [target] => match listDir target
+              Err _ =>
+                if jsonMode then
+                  runTestJsonCmd engines cases filterOpt target
+                else
+                  runTestOne engines cases filterOpt target
+              Ok _ =>
+                if jsonMode then
+                  let _ =
+                    ePutStrLn
+                      "medaka test --json: directory targets are not supported; pass a single file.mdk target"
+                  exit 1
+                else
+                  runTestManyTargets engines cases filterOpt [target]
             targets =>
               if jsonMode then
                 let _ =
@@ -3262,28 +3270,33 @@ runTestJsonCmd engines cases filterOpt target =
       Ok csrc => match readFile target
         Err e => dieMsg e
         Ok tsrc =>
-          let (typeError, runs, props, tests, typecheckSkipped) =
-            runTestReport
-              engines
-              rsrc
-              csrc
-              target
-              tsrc
-              stdlibDir
-              cases
-              filterOpt
-              True
-          let _ =
-            putStrLn
-              (stringify
-                (cliTestReportJson
-                  target
-                  typeError
-                  runs
-                  props
-                  tests
-                  typecheckSkipped))
-          if cliTestReportOk typeError runs props tests then () else exit 1
+          let userDecls = desugar (parse tsrc)
+          if filterMatchedNothing filterOpt tsrc userDecls then
+            dieMsg
+              "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
+          else
+            let (typeError, runs, props, tests, typecheckSkipped) =
+              runTestReport
+                engines
+                rsrc
+                csrc
+                target
+                tsrc
+                stdlibDir
+                cases
+                filterOpt
+                True
+            let _ =
+              putStrLn
+                (stringify
+                  (cliTestReportJson
+                    target
+                    typeError
+                    runs
+                    props
+                    tests
+                    typecheckSkipped))
+            if cliTestReportOk typeError runs props tests then () else exit 1
 
 cliTestReportOk : Option String ->
   List (Engine, RunResult) ->
@@ -3573,6 +3586,14 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
       False
     Ok (code, out, err) =>
       let _ = putStr out
+      -- `putStr` writes to buffered <Stdout>; `ePutStr`/`ePutStrLn` below write
+      -- straight through to unbuffered <Stderr>. Under a merged capture
+      -- (`2>&1`), the stderr write can hit disk before this file's still-
+      -- buffered stdout content flushes, splicing this file's DEAD notice
+      -- into the MIDDLE of an earlier or later file's own output. Flushing
+      -- here pins the ordering: this file's captured stdout is fully on disk
+      -- before any stderr write for it (or the next file) can occur.
+      let _ = flushStdout ()
       if code == 0 then
         True
       else

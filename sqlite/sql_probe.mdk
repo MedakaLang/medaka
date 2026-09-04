@@ -155,6 +155,7 @@ corpus = [
   "SELECT name FROM users WHERE id IN (SELECT uid FROM orders WHERE amount > 200 UNION SELECT id FROM users WHERE city = 'nyc')",
 ]
 
+-- lint-disable-next-line rule-clone-type
 data RT = RtOk | RtFail String
 
 -- parse → render → parse, and require the two `Select`s to be EQUAL.

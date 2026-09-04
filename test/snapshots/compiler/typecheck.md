@@ -2848,6 +2848,7 @@ data GoalKind =
 -- Where a goal's evidence lands once solved: today the `Ref Route` cell a site
 -- stamper writes, or the `Ref (List Route)` cell a dictionary-application carrier
 -- owns.  #2549 adds the evidence-id arm.
+-- lint-disable-next-line rule-clone-type
 data EvDest = EvRoute (Ref Route) | EvRoutes (Ref (List Route))
 
 -- What the kind's stamper needs beyond the destination.  The three dictionary
@@ -6607,14 +6608,13 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- states is now historical, kept because the doctests it justifies are still the
 -- sharpest evidence this block has:
 --
--- ZERO READERS, deliberately (construction only, per #1519's bar) — nothing
--- outside this block populates or reads `deIfaces`.  "Byte-identical" is
--- therefore WEAK evidence for this PR, exactly as A-3.2a's own header says of
--- `deData`: nothing reads the new field, so nothing could have moved a
--- judgment even if the construction were wrong.  The load-bearing checks are
--- the doctests below, which exercise the fold's output directly against a
--- discriminating two-module same-spelled-interface corpus (mirroring `IE`'s
--- `ieProbeEnv`), not the differential gates.
+-- AT LANDING, `deIfaces` had ZERO READERS (construction only, per #1519's
+-- bar), so "Byte-identical" was WEAK evidence at the time, exactly as
+-- A-3.2a's own header says of `deData`: an unread field means the
+-- construction could have been wrong without moving any judgment.  The
+-- load-bearing checks were the doctests below, which exercise the fold's
+-- output directly against a discriminating two-module same-spelled-interface
+-- corpus (mirroring `IE`'s `ieProbeEnv`), not the differential gates.
 --
 -- 🚨 THE `DL` MEASUREMENT §9.5 OWES — DISCHARGED, not cited-and-skipped.  A-3.4's
 -- own block above says A-3.2/A-3.3 "must measure their own projections; they
