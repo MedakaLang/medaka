@@ -24,10 +24,11 @@ process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
 the signature check is what stops an unannotated export from carrying an
 inferred effect row past the effect check). The bind address is loopback-only.
 Authentication now gates the writes and the three session routes that need
-it — the three record writes and `getSession` require a valid access token,
-`refreshSession`/`deleteSession` require a valid refresh token, and
-`createSession` is the public login that issues both — while the six reads,
-`resolveHandle`, and the two well-knowns stay public. Loopback-only remains
+it — the five record/blob writes and `getSession` require a valid access
+token, `refreshSession`/`deleteSession` require a valid refresh token, and
+`createSession` is the public login that issues both — while the eight
+reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only
+remains
 the separate gate on exposing this server past localhost at all; hardening
 that path (TLS, a non-loopback bind) is tracked separately, not covered by
 this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
@@ -49,11 +50,11 @@ this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
   secret-bearing") plus configured pure composition from request bytes to
   successor state and response bytes.
 - `pds/lib/handlers.mdk` — every atproto endpoint this PDS serves over that
-  state: the three record-write procedures
-  (`createRecord`/`putRecord`/`deleteRecord`), the six read/sync/identity
-  queries (`getRecord`/`listRecords`/`describeRepo`/`sync.getRepo`/
-  `sync.getLatestCommit`/`identity.resolveHandle`), and the two non-XRPC
-  well-known paths.
+  state: the five record/blob-write procedures
+  (`createRecord`/`putRecord`/`deleteRecord`/`applyWrites`/`uploadBlob`), the
+  eight read/sync/identity queries (`getRecord`/`listRecords`/`describeRepo`/
+  `sync.getRepo`/`sync.getLatestCommit`/`sync.getBlob`/`sync.listBlobs`/
+  `identity.resolveHandle`), and the two non-XRPC well-known paths.
 - `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
   stores blocks as flat sharded CID-to-bytes files (design row P7),
   `pds/shell/persist.mdk` persists and reloads the account repository's head
