@@ -18,6 +18,12 @@
 import io.{getEnvOr, runVerb}
 import test.{fail, pass, Expectation}
 
+-- `${MEDAKA:-$ROOT/medaka}`: a bare "medaka" fallback spawns whatever is on
+-- PATH, or nothing at all (exit 127) when the tree's binary is the only one
+-- that exists.
+medakaBin : <IO> String
+medakaBin = getEnvOr "MEDAKA" "\{getEnvOr "MEDAKA_ROOT" "."}/medaka"
+
 -- Reads the subject first so a missing fixture fails as a missing fixture,
 -- not as a confusing `medaka check` error about a path that is not there.
 checkPasses : <Exec "_", IO> Expectation
@@ -28,7 +34,7 @@ checkPasses =
       "test/compiler_test_fixtures/native_test_subject.mdk"
   match readFile subject
     Err e => fail "could not read the subject \{subject}: \{e}"
-    Ok _ => match runVerb (getEnvOr "MEDAKA" "medaka") ["check", subject]
+    Ok _ => match runVerb medakaBin ["check", subject]
       Err e => fail e
       Ok (0, _, _) => pass
       Ok (code, out, err) =>

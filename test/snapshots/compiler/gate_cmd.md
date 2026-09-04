@@ -1741,7 +1741,7 @@ candidatesFor root pattern = match gitLsFilesSh root ["ls-files"] pattern
 -- A project's floor gate is a native `run` under its OWN `test/` directory
 -- (`mq/test/check_test.mdk`, #2592), which this corpus does not reach and so
 -- gets no orphan protection. Widening to `*/test/*_test.mdk` would reach it
--- and would also sweep in ~31 `pds/test/*_test.mdk` and `sqlite/test/*_test.mdk`
+-- and would also sweep in ~29 `pds/test/*_test.mdk` and `sqlite/test/*_test.mdk`
 -- modules that are in-language test suites some project gate RUNS, not gates
 -- of their own — none is any entry's `run`, so every one would report
 -- unenrolled. A census cannot tell those two apart by path, so it stops where
