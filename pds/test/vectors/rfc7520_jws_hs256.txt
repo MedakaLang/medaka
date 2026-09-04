@@ -1,0 +1,40 @@
+   {
+     "kty": "oct",
+     "kid": "018c0ae5-4d9b-471b-bfd6-eef314bc7037",
+     "use": "sig",
+     "alg": "HS256",
+     "k": "hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg"
+   }
+
+                   Figure 5: HMAC SHA-256 Symmetric Key
+   {
+     "alg": "HS256",
+     "kid": "018c0ae5-4d9b-471b-bfd6-eef314bc7037"
+   }
+
+                   Figure 30: JWS Protected Header JSON
+
+   eyJhbGciOiJIUzI1NiIsImtpZCI6IjAxOGMwYWU1LTRkOWItNDcxYi1iZmQ2LW
+   VlZjMxNGJjNzAzNyJ9
+
+            Figure 31: JWS Protected Header, base64url-encoded
+
+   The JWS Protected Header (Figure 31) and JWS Payload (Figure 8) are
+   combined as described in [JWS] to produce the JWS Signing Input
+   (Figure 32).
+
+   eyJhbGciOiJIUzI1NiIsImtpZCI6IjAxOGMwYWU1LTRkOWItNDcxYi1iZmQ2LW
+   VlZjMxNGJjNzAzNyJ9
+   .
+   SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IH
+   lvdXIgZG9vci4gWW91IHN0ZXAgb250byB0aGUgcm9hZCwgYW5kIGlmIHlvdSBk
+   b24ndCBrZWVwIHlvdXIgZmVldCwgdGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcm
+   UgeW91IG1pZ2h0IGJlIHN3ZXB0IG9mZiB0by4
+
+                       Figure 32: JWS Signing Input
+   Performing the signature operation over the JWS Signing Input
+   (Figure 32) produces the JWS Signature (Figure 33).
+
+   s0h6KThzkfBBBkLspW1h84VsJZFTsPPqMDA7g1Md7p0
+
+                Figure 33: JWS Signature, base64url-encoded

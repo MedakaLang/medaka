@@ -651,3 +651,15 @@ source-sha256: df55932f8b6a5d271f36a634d91a25903724e189ba6c120bf7257cd47f10b197
 extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc7914.txt | sed -n '631,643p' — the two PBKDF2-HMAC-SHA-256 vector blocks (P="passwd" c=1 and P="Password" c=80000, both dkLen=64) copied byte-verbatim, LF line endings, no edits; the expected-output literals in pds/test/pbkdf2_test.mdk were read back against this file
 retrieved:     2026-09-04
 consumer:      S-kdf (#2604 password hashing half, PBKDF2-HMAC-SHA-256)
+
+[vector]
+file:          pds/test/vectors/rfc7520_jws_hs256.txt
+local-sha256:  f767b452c5268121aceb674343544a44aa6bdd3964c451de9508bb783a572d6d
+kind:          published-artifact
+source:        RFC 7520, "Examples of Protecting Content Using JSON Object Signing and Encryption (JOSE)", §3.5 Figure 5 (HMAC SHA-256 symmetric key) and §4.4 "HMAC-SHA2 Integrity Protection" Figures 30-33
+source-url:    https://www.rfc-editor.org/rfc/rfc7520.txt
+source-sha256: 14798c3b2d72e35375d5fb86d280a1e8df6109a6ee6cbfc091a0c57a8cc076c6
+source-note:   RFC 7515 A.1, the other published HS256 example, is NOT usable here: its symmetric key is 64 bytes and pds/lib/hmac_sha256.mdk's hmacSha256FixedKey panics on any key that is not exactly 32 ("hmac_sha256: expected a 32-byte key"). That panic is load-bearing and hash-pinned by pds/test/constant_time_signing.sh, so the vector was chosen to fit it rather than the reverse. RFC 7520 §3.5's key is exactly 32 bytes.
+extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc7520.txt | sed -n '531,539p;1201,1225p;1239,1244p' — Figure 5 (the JWK, whose "k" member is the 32-byte key), Figures 30/31 (protected header, JSON and base64url), Figure 32 (JWS Signing Input) and Figure 33 (JWS Signature) copied byte-verbatim, LF line endings, no edits. RFC 7520 §1.1 wraps its base64url figures across lines for readability; that wrapping is preserved here and unwrapped only in the pds/test/jwt_test.mdk literals, which were read back against this file.
+retrieved:     2026-09-04
+consumer:      S-jwt (#2604 token format half, JWT/HS256 session tokens)

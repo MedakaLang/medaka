@@ -1,7 +1,8 @@
 #!/bin/sh
 # In-language (`medaka test`) gate for pds/test/*_test.mdk (#2527: originally
 # these 15 files, ~338 `test` decls of ECDSA/RFC 6979/secp256k1/field/scalar/
-# HTTP structural assertions, ran nowhere in CI; S-kdf added pbkdf2_test).
+# HTTP structural assertions, ran nowhere in CI; S-kdf added pbkdf2_test,
+# S-jwt added jwt_test).
 #
 # THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
 # indistinguishable from "this passed"): a `medaka test` file with ZERO
@@ -12,11 +13,13 @@
 # ever silently stops finding the decls, the count drops to 0 and this gate
 # goes RED — which is the whole point.
 #
-# Most files run fine under the default (interpreted) engine. Three need the
-# native engine: field_test/scalar_test time out under the interpreter (pure
-# arithmetic volume), and repo_tid_test reaches an extern (buildCommit) the
+# Most files run fine under the default (interpreted) engine. The rest need
+# the native engine: field_test/scalar_test time out under the interpreter
+# (pure arithmetic volume), repo_tid_test reaches an extern (buildCommit) the
 # interpreter's capability policy does not bind — `medaka test` itself names
-# `--native` as the fix in its own error text for that last case.
+# `--native` as the fix in its own error text for that last case — and
+# pbkdf2_test/jwt_test are SHA-256 volume that runs several times faster
+# natively (jwt_test: 8.9s interpreted, 2.5s native).
 #
 # Run from the repo root. Requires a built native `medaka` ($MEDAKA / ./medaka).
 set -u
@@ -36,6 +39,7 @@ ecdsa_test:
 encodings_test:
 field_test:--native
 http_test:
+jwt_test:--native
 mst_test:
 pbkdf2_test:--native
 repo_tid_test:--native

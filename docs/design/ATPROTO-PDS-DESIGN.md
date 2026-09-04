@@ -284,6 +284,41 @@ headroom (S-kdf acceptance check 4). This number is revisited once the emitter's
 numeric/allocation performance on this workload (§4.1) is itself improved, or if a
 future slice moves the hot loop to a native `extern`.
 
+### 4.3 Session tokens (JWT, HS256)
+
+`createSession` hands the client a bearer token that `refreshSession` and every
+authenticated XRPC route then has to check. Chosen format: **JWT (RFC 7519) in the JWS
+Compact Serialization, signed with HS256** (`pds/lib/jwt.mdk`). JWT because the atproto
+client ecosystem already expects a compact bearer string here; HS256 because this
+server both mints and verifies its own tokens and nothing off-box ever verifies them,
+so a symmetric MAC is the whole requirement and an asymmetric signature would buy
+nothing. It is RFC-vectored (RFC 7520 §4.4's HS256 worked example), keeping it inside
+G1's cross-implementation-agreed corpus discipline rather than resting on a
+self-captured golden (G5). RFC 7515 A.1's HS256 example is not usable: its symmetric
+key is 64 bytes and `pds/lib/hmac_sha256.mdk` accepts only 32.
+
+**The key is a dedicated server secret, never the account's secp256k1 signing key.**
+That key authenticates commits to every other implementation on the network; its
+compromise is unrecoverable in a way a session-token compromise is not. Minting tokens
+with it would put it on a second, far more frequently exercised code path — every
+login, every refresh — for no interop gain, since no peer verifies our session tokens.
+The secret is generated as exactly 32 bytes at account bootstrap (the shell layer's
+job, a later slice) and lives beside the account record, not in the repo.
+
+**Claims: `sub`, `aud`, `iat`, `nbf`, `exp`** — `sub` the account DID, `aud` the
+server's own DID, and the three RFC 7519 §4.1 NumericDate fields in seconds since the
+Unix epoch. `nbf` equals `iat`; this server mints no post-dated token. `nbf` is
+inclusive and `exp` exclusive. Access and refresh tokens differ only in `exp` and in
+which routes accept them, so one claim set covers both.
+
+**Verification pins the algorithm rather than reading it.** A token's `alg` header is
+attacker-controlled input, so `verifyToken` always computes HS256 and then rejects any
+header claiming anything else — `"alg": "none"` is one instance of that family, not a
+separate case. The MAC is compared byte-wise with an XOR accumulator over the full
+length, no early return. `verifyToken` takes the current instant as a parameter and
+reads no clock, which is what lets `pds/test/jwt_test.mdk` place itself on either side
+of every window boundary; it lives in `pds/lib/`, so it declares no effect row.
+
 ---
 
 ## 5. The failure mode that matters, and the apparatus against it

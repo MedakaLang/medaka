@@ -1,0 +1,241 @@
+{- | JWT session tokens (RFC 7519) in the JWS Compact Serialization
+   (RFC 7515 §7.1), signed with HS256 (HMAC-SHA-256) over the server's own
+   symmetric secret.
+
+   Pure function: no I/O, no clock, no entropy read in this module. The
+   secret is a caller-supplied 32-byte `Array Int` and the current instant is
+   a caller-supplied `Int` (seconds since the Unix epoch) — `verifyToken`
+   never reads a clock, so a test can place itself at any instant and the
+   shell layer owns both the secret and the time source.
+
+   The secret is the SERVER's, deliberately not the account's secp256k1
+   signing key: that key authenticates commits to every other implementation
+   on the network, and a token-minting path is a second, much larger attack
+   surface on it for no interop gain, since nothing off-box ever verifies our
+   session tokens. See `docs/design/ATPROTO-PDS-DESIGN.md` §4.3.
+
+   `HS256` is pinned by the verifier, not read from the token. A token's own
+   `alg` header is attacker-controlled input; selecting the verification
+   algorithm from it is the classic algorithm-confusion forgery, of which
+   `"alg": "none"` is one instance. `verifyToken` always computes HS256 and
+   additionally rejects a header that claims anything else.
+
+   Graded against RFC 7520 §4.4's published HS256 worked example
+   (`pds/test/jwt_test.mdk`, provenance in
+   `pds/test/VECTOR-PROVENANCE.txt`) — G5: nothing here is a self-captured
+   golden. -}
+
+import base64.{decodeUrlSafe, encodeUrlSafe}
+import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
+import string.{fromUtf8, split, stripSuffix, toUtf8}
+import lib.hmac_sha256.{hmacSha256FixedKey}
+
+-- | The claim set this server mints and accepts. `iat`, `nbf`, and `exp` are
+--   seconds since the Unix epoch (RFC 7519 §2 "NumericDate").
+public export data Claims = Claims {
+  sub : String,
+  aud : String,
+  iat : Int,
+  nbf : Int,
+  exp : Int,
+}
+  deriving (Eq, Debug)
+
+-- | Why a token was refused. Every constructor is a rejection; there is no
+--   "accepted with warnings" state.
+public export data JwtError =
+  | JwtMalformed
+  | JwtUnsupportedAlg String
+  | JwtBadSignature
+  | JwtBadClaims String
+  | JwtNotYetValid
+  | JwtExpired
+  | JwtWrongSubject
+  | JwtWrongAudience
+  deriving (Eq, Debug)
+
+secretBytes : Int
+secretBytes = 32
+
+-- RFC 7515 §2 requires base64url with the trailing `=` omitted, while
+-- `base64.encodeUrlSafe`/`decodeUrlSafe` are RFC 4648 §5 and keep the
+-- padding, `decodeUrlSafe` rejecting any length that is not a multiple of
+-- four. These two adapt between the conventions.
+stripPadding : String -> String
+stripPadding s = match stripSuffix "=" s
+  Some shorter => stripPadding shorter
+  None => s
+
+-- These two share `base64.encode`/`decode`'s signature but not their
+-- alphabet or their padding convention, which is the whole reason they
+-- exist; rule-stdlib-reimpl compares declared signatures only, so it flags
+-- both — disabled for this file rather than delegated away.
+-- lint-disable-file rule-stdlib-reimpl
+b64uEncode : Array Int -> String
+b64uEncode bytes = stripPadding (encodeUrlSafe bytes)
+
+b64uDecode : String -> Result String (Array Int)
+b64uDecode s = match stringLength s % 4
+  0 => decodeUrlSafe s
+  2 => decodeUrlSafe "\{s}=="
+  3 => decodeUrlSafe "\{s}="
+  _ => Err "jwt: segment length is not a valid unpadded base64url length"
+
+-- XOR-accumulates across the whole array with no early return, so the number
+-- of byte comparisons does not depend on where the first difference is. The
+-- length check ahead of it is deliberate: lengths here are public (a
+-- truncated segment is visible in the token text), and comparing arrays of
+-- different lengths has no well-defined constant-time meaning.
+xorAccum : Array Int -> Array Int -> Int -> Int -> Int
+xorAccum a b i acc =
+  if i >= arrayLength a then
+    acc
+  else
+    xorAccum a b (i + 1) (bitOr acc (bitXor a[i] b[i]))
+
+ctEqBytes : Array Int -> Array Int -> Bool
+ctEqBytes a b =
+  if arrayLength a /= arrayLength b then False else xorAccum a b 0 0 == 0
+
+{- | The HS256 signature of a JWS Signing Input (RFC 7515 §5.1 step 5), as an
+     unpadded base64url string.
+
+     Exported so the RFC 7520 §4.4 worked example can grade this module
+     against a published signing input and signature directly, independently
+     of the header and claim shapes `mintToken` chooses. -}
+export
+hs256Signature : Array Int -> String -> String
+hs256Signature secret signingInput =
+  if arrayLength secret /= secretBytes then
+    panic "jwt: expected a 32-byte server secret"
+  else
+    b64uEncode (hmacSha256FixedKey secret (toUtf8 signingInput))
+
+headerJson : Json
+headerJson = jObject [("alg", JString "HS256"), ("typ", JString "JWT")]
+
+claimsJson : Claims -> Json
+claimsJson c = jObject [
+  ("sub", JString c.sub),
+  ("aud", JString c.aud),
+  ("iat", JInt c.iat),
+  ("nbf", JInt c.nbf),
+  ("exp", JInt c.exp),
+]
+
+b64uEncodeText : String -> String
+b64uEncodeText s = b64uEncode (toUtf8 s)
+
+{- | A signed token for `sub` and `aud`, valid from `issuedAt` until
+     `expiresAt` (both seconds since the Unix epoch). `nbf` is `issuedAt`:
+     this server mints no post-dated token. -}
+export
+mintToken : Array Int -> String -> String -> Int -> Int -> String
+mintToken secret sub aud issuedAt expiresAt =
+  let claims = Claims {
+    sub = sub,
+    aud = aud,
+    iat = issuedAt,
+    nbf = issuedAt,
+    exp = expiresAt,
+  }
+  let headerSeg = b64uEncodeText (stringify headerJson)
+  let claimsSeg = b64uEncodeText (stringify (claimsJson claims))
+  let signingInput = "\{headerSeg}.\{claimsSeg}"
+  "\{signingInput}.\{hs256Signature secret signingInput}"
+
+decodeSegmentJson : String -> Result String Json
+decodeSegmentJson segment = match b64uDecode segment
+  Err e => Err e
+  Ok bytes => parse (fromUtf8 bytes)
+
+-- The pinned algorithm check. The token's `alg` is only ever compared
+-- against the one this module already used; it never selects anything.
+checkAlg : String -> Result JwtError Unit
+checkAlg headerSeg = match decodeSegmentJson headerSeg
+  Err _ => Err JwtMalformed
+  Ok header => match map asString (get "alg" header)
+    Some (Some "HS256") => Ok ()
+    Some (Some other) => Err (JwtUnsupportedAlg other)
+    _ => Err (JwtUnsupportedAlg "")
+
+payloadJson : String -> Result JwtError Json
+payloadJson claimsSeg = match decodeSegmentJson claimsSeg
+  Err _ => Err JwtMalformed
+  Ok payload => Ok payload
+
+stringClaim : String -> Json -> Result JwtError String
+stringClaim name payload = match map asString (get name payload)
+  Some (Some s) => Ok s
+  _ => Err (JwtBadClaims name)
+
+intClaim : String -> Json -> Result JwtError Int
+intClaim name payload = match map asInt (get name payload)
+  Some (Some n) => Ok n
+  _ => Err (JwtBadClaims name)
+
+readClaims : Json -> Result JwtError Claims
+readClaims payload = do
+  sub <- stringClaim "sub" payload
+  aud <- stringClaim "aud" payload
+  iat <- intClaim "iat" payload
+  nbf <- intClaim "nbf" payload
+  exp <- intClaim "exp" payload
+  Ok Claims { sub = sub, aud = aud, iat = iat, nbf = nbf, exp = exp }
+
+-- `exp` is exclusive and `nbf` inclusive, per RFC 7519 §4.1.4/§4.1.5.
+checkWindow : Int -> Claims -> Result JwtError Claims
+checkWindow now c =
+  if now < c.nbf then
+    Err JwtNotYetValid
+  else if now >= c.exp then
+    Err JwtExpired
+  else
+    Ok c
+
+checkAudience : String -> String -> Claims -> Result JwtError Claims
+checkAudience expectedSub expectedAud c =
+  if c.sub /= expectedSub then
+    Err JwtWrongSubject
+  else if c.aud /= expectedAud then
+    Err JwtWrongAudience
+  else
+    Ok c
+
+verifySegments : Array Int ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  String ->
+  Result JwtError Claims
+verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg =
+  let expected = hs256Signature secret "\{headerSeg}.\{claimsSeg}"
+  if not (ctEqBytes (toUtf8 expected) (toUtf8 sigSeg)) then
+    Err JwtBadSignature
+  else match checkAlg headerSeg
+    Err algError => Err algError
+    Ok () => do
+      payload <- payloadJson claimsSeg
+      claims <- readClaims payload
+      inWindow <- checkWindow now claims
+      checkAudience expectedSub expectedAud inWindow
+
+{- | The claims of `token`, or why it was refused.
+
+     `now` is seconds since the Unix epoch, supplied by the caller — this
+     module reads no clock. The signature is checked before anything in the
+     token is parsed as JSON, and HS256 is pinned by this verifier rather
+     than read from the token's own header. -}
+export
+verifyToken : Array Int ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  Result JwtError Claims
+verifyToken secret expectedSub expectedAud now token = match split "." token
+  [headerSeg, claimsSeg, sigSeg] =>
+    verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg
+  _ => Err JwtMalformed

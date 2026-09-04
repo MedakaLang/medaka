@@ -1,0 +1,239 @@
+{- | Vector-graded tests for `pds/lib/jwt.mdk` (S-jwt, #2604 token format
+   half).
+
+   The signing input and signature literals below are hand-transcribed from
+   RFC 7520 §4.4's published HS256 worked example ("HMAC-SHA2 Integrity
+   Protection", the JOSE Cookbook) — not a self-captured golden (G5). The
+   raw figures, byte-exact from the RFC, are committed separately at
+   `pds/test/vectors/rfc7520_jws_hs256.txt`, ledgered in
+   `pds/test/VECTOR-PROVENANCE.txt`; the literals here were read back
+   against that file. RFC 7520 §1.1 wraps its base64url figures across lines
+   for readability, so Figure 31 and Figure 32's segments are unwrapped here
+   into single strings — the only edit.
+
+   RFC 7515 A.1 is NOT the vector used: its symmetric key is 64 bytes, and
+   `hmacSha256FixedKey` panics on any key that is not 32. RFC 7520's key
+   (§3.5 Figure 5) is exactly 32 bytes.
+
+   The forgery tests below mint their attack tokens WITH the secret in hand.
+   That is deliberate: an attacker without the secret is stopped by the MAC
+   alone, so a forgery corpus built that way would pass even with every
+   other check deleted. Handing the forger the secret is what makes the
+   algorithm pin, the expiry window, and the subject/audience checks each
+   individually load-bearing. -}
+
+import test.{expectEqual, expectTrue}
+import base64.{decodeUrlSafe, encodeUrlSafe}
+import string.{stripSuffix, toUtf8}
+import lib.jwt.{
+  Claims,
+  Claims(..),
+  JwtError,
+  JwtError(..),
+  hs256Signature,
+  mintToken,
+  verifyToken,
+}
+
+-- RFC 7520 §3.5 Figure 5, the `k` member verbatim. 43 base64url characters,
+-- decoding to exactly 32 bytes.
+rfcKeyB64 : String
+rfcKeyB64 = "hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg"
+
+-- Decoded from the RFC's own string rather than transcribed as byte
+-- literals, so there is one place a transcription error could hide and the
+-- length assertion below covers it.
+rfcKey : Array Int
+rfcKey = match decodeUrlSafe "\{rfcKeyB64}="
+  Ok bytes => bytes
+  Err _ => [||]
+
+-- RFC 7520 §4.4.2 Figure 32, unwrapped.
+rfcSigningInput : String
+rfcSigningInput =
+  "eyJhbGciOiJIUzI1NiIsImtpZCI6IjAxOGMwYWU1LTRkOWItNDcxYi1iZmQ2LWVlZjMxNGJjNzAzNyJ9"
+    ++ "."
+    ++ "SXTigJlzIGEgZGFuZ2Vyb3VzIGJ1c2luZXNzLCBGcm9kbywgZ29pbmcgb3V0IHlvdXIgZG9vci4g"
+    ++ "WW91IHN0ZXAgb250byB0aGUgcm9hZCwgYW5kIGlmIHlvdSBkb24ndCBrZWVwIHlvdXIgZmVldCwg"
+    ++ "dGhlcmXigJlzIG5vIGtub3dpbmcgd2hlcmUgeW91IG1pZ2h0IGJlIHN3ZXB0IG9mZiB0by4"
+
+-- RFC 7520 §4.4.2 Figure 33.
+rfcSignature : String
+rfcSignature = "s0h6KThzkfBBBkLspW1h84VsJZFTsPPqMDA7g1Md7p0"
+
+test "RFC 7520 §3.5 Figure 5: the symmetric key is 32 bytes" =
+  expectEqual (arrayLength rfcKey) 32
+
+test "RFC 7520 §4.4 Figure 32 signs to Figure 33 under HS256" =
+  expectEqual (hs256Signature rfcKey rfcSigningInput) rfcSignature
+
+-- ── forgery corpus ──────────────────────────────────────────────────────────
+
+subject : String
+subject = "did:plc:s-jwt-test-account"
+
+audience : String
+audience = "did:web:pds.example"
+
+issuedAt : Int
+issuedAt = 1000
+
+expiresAt : Int
+expiresAt = 2000
+
+-- Base64url without padding, per RFC 7515 §2. Kept local to the test rather
+-- than exported from `pds/lib/jwt.mdk`: a forger builds segments the library
+-- would never mint, so it must not borrow the library's own encoder for the
+-- header it is attacking.
+b64uSeg : String -> String
+b64uSeg s = dropEq (encodeUrlSafe (toUtf8 s))
+
+dropEq : String -> String
+dropEq s = match stripSuffix "=" s
+  Some shorter => dropEq shorter
+  None => s
+
+claimsText : String
+claimsText =
+  "{\"sub\":\"did:plc:s-jwt-test-account\",\"aud\":\"did:web:pds.example\","
+    ++ "\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
+
+-- A compact-serialization token over two already-encoded segments, signed
+-- with a genuine HS256 MAC — the forger has the secret.
+tokenOf : String -> String -> String
+tokenOf headerSeg claimsSeg =
+  let signingInput = "\{headerSeg}.\{claimsSeg}"
+  "\{signingInput}.\{hs256Signature rfcKey signingInput}"
+
+honestHeaderSeg : String
+honestHeaderSeg = b64uSeg "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
+
+-- A token whose protected header is `headerText` and whose signature is a
+-- genuine HS256 MAC over that header.
+forge : String -> String
+forge headerText = tokenOf (b64uSeg headerText) (b64uSeg claimsText)
+
+expectedClaims : Claims
+expectedClaims = Claims {
+  sub = subject,
+  aud = audience,
+  iat = issuedAt,
+  nbf = issuedAt,
+  exp = expiresAt,
+}
+
+check : String -> Result JwtError Claims
+check token = verifyToken rfcKey subject audience 1500 token
+
+goodToken : String
+goodToken = mintToken rfcKey subject audience issuedAt expiresAt
+
+test "a freshly minted token verifies inside its window" =
+  expectEqual (check goodToken) (Ok expectedClaims)
+
+test "the forge helper agrees with mintToken on the honest header" =
+  expectEqual
+    (check (forge "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"))
+    (Ok expectedClaims)
+
+test "alg: none is rejected even with a valid HS256 MAC over it" =
+  expectEqual
+    (check (forge "{\"alg\":\"none\"}"))
+    (Err (JwtUnsupportedAlg "none"))
+
+test "algorithm confusion: an HS512 header is rejected, not honored" =
+  expectEqual
+    (check (forge "{\"alg\":\"HS512\",\"typ\":\"JWT\"}"))
+    (Err (JwtUnsupportedAlg "HS512"))
+
+test "a header with no alg at all is rejected" =
+  expectEqual (check (forge "{\"typ\":\"JWT\"}")) (Err (JwtUnsupportedAlg ""))
+
+test "a truncated signature is rejected" =
+  expectEqual
+    (check (stringSlice 0 (stringLength goodToken - 4) goodToken))
+    (Err JwtBadSignature)
+
+test "a signature with its last character changed is rejected" =
+  let head = stringSlice 0 (stringLength goodToken - 1) goodToken
+  let last =
+    stringSlice (stringLength goodToken - 1) (stringLength goodToken) goodToken
+  let flipped = if last == "A" then "B" else "A"
+  expectEqual (check "\{head}\{flipped}") (Err JwtBadSignature)
+
+test "an empty signature segment is rejected" =
+  expectEqual
+    (check "\{honestHeaderSeg}.\{b64uSeg claimsText}.")
+    (Err JwtBadSignature)
+
+test "a tampered payload is rejected: the old MAC no longer covers it" =
+  let tamperedClaims =
+    "{\"sub\":\"did:plc:somebody-else\",\"aud\":\"did:web:pds.example\","
+      ++ "\"iat\":1000,\"nbf\":1000,\"exp\":2000}"
+  let mac = hs256Signature rfcKey "\{honestHeaderSeg}.\{b64uSeg claimsText}"
+  expectEqual
+    (check "\{honestHeaderSeg}.\{b64uSeg tamperedClaims}.\{mac}")
+    (Err JwtBadSignature)
+
+test "a token signed under a different secret is rejected" =
+  let otherSecret = arrayMake 32 7
+  expectEqual
+    (check (mintToken otherSecret subject audience issuedAt expiresAt))
+    (Err JwtBadSignature)
+
+test "an expired token is rejected" =
+  expectEqual
+    (verifyToken rfcKey subject audience expiresAt goodToken)
+    (Err JwtExpired)
+
+test "exp is exclusive: the last second before it still verifies" =
+  expectEqual
+    (verifyToken rfcKey subject audience (expiresAt - 1) goodToken)
+    (Ok expectedClaims)
+
+test "a not-yet-valid token is rejected" =
+  expectEqual
+    (verifyToken rfcKey subject audience (issuedAt - 1) goodToken)
+    (Err JwtNotYetValid)
+
+test "nbf is inclusive: the issuing second itself verifies" =
+  expectEqual
+    (verifyToken rfcKey subject audience issuedAt goodToken)
+    (Ok expectedClaims)
+
+test "a token for another subject is rejected" =
+  expectEqual
+    (verifyToken rfcKey "did:plc:somebody-else" audience 1500 goodToken)
+    (Err JwtWrongSubject)
+
+test "a token for another audience is rejected" =
+  expectEqual
+    (verifyToken rfcKey subject "did:web:other.example" 1500 goodToken)
+    (Err JwtWrongAudience)
+
+test "a two-segment token is rejected as malformed" =
+  expectEqual (check "aaaa.bbbb") (Err JwtMalformed)
+
+test "a four-segment token is rejected as malformed" =
+  expectEqual (check "\{goodToken}.extra") (Err JwtMalformed)
+
+test "a header segment that is not base64url is rejected" =
+  expectEqual (check (tokenOf "!!!!" (b64uSeg claimsText))) (Err JwtMalformed)
+
+test "a claims segment that is not JSON is rejected" =
+  expectEqual
+    (check (tokenOf honestHeaderSeg (b64uSeg "not json")))
+    (Err JwtMalformed)
+
+test "a claims object missing exp is rejected" =
+  let noExp =
+    "{\"sub\":\"did:plc:s-jwt-test-account\",\"aud\":\"did:web:pds.example\","
+      ++ "\"iat\":1000,\"nbf\":1000}"
+  expectEqual
+    (check (tokenOf honestHeaderSeg (b64uSeg noExp)))
+    (Err (JwtBadClaims "exp"))
+
+test "verification reads no clock: the same token verifies at any instant in its window" =
+  expectTrue
+    (verifyToken rfcKey subject audience 1001 goodToken
+      == verifyToken rfcKey subject audience 1999 goodToken)
