@@ -64,7 +64,7 @@ discipline" and Phase 146b remain open. **Target spec:**
 > `PPrefix (Some s)` for a Prefix label (unrecovered → `dtopFor label`, the domain ⊤);
 > `atomOfWritten` special-cases the universal hole `_` before domain dispatch so `<Env
 > _>` stays a recognized hole. Exercised via per-program `effect Env Set`/`effect Exec
-> Prefix` + local externs. Gate `test/effect_param_domain.sh` 6/0 (Env hole-fill + ∪
+> Prefix` + local externs. Gate `test/effect_param_domain_test.mdk` (6 assertions; Env hole-fill + ∪
 > djoin, Exec hole-fill, accept/reject); all canaries byte-identical; fixpoint C3a/C3b
 > YES; `unify_row`/escape/manifest untouched.
 > **AS-BUILT (2026-07-01) — the `getEnv`/`runCommand` re-annotation in
@@ -88,7 +88,7 @@ discipline" and Phase 146b remain open. **Target spec:**
 > dynamic paths → the hole stays unfilled → degrades to ⊤ (identical to the old
 > bare label) → escape-safe, ZERO golden churn. NO seed re-mint needed (effects
 > erase at runtime; emitted IR unchanged). Fixpoint C3a/C3b YES throughout. Gate:
-> `test/effect_builtin_param_domain.sh` (12/0) drives the real stdlib builtins
+> `test/effect_builtin_param_domain_test.mdk` (44 assertions) drives the real stdlib builtins
 > (no local extern shadowing).
 
 > **Design note — file-path domain refinement (for the soak tail): ✅ DONE
@@ -127,7 +127,7 @@ discipline" and Phase 146b remain open. **Target spec:**
 >   axes; brace-depth-aware split). **Manifest:** TOML inline table `Net = { host = "…",
 >   method = ["GET","POST"] }` (only `drenderN`/`atomToToml` arms added — extractor
 >   untouched).
-> - Gates: new `test/effect_product_domain.sh` 8/0; all canaries byte-identical
+> - Gates: new `test/effect_product_domain_test.mdk` (8 assertions); all canaries byte-identical
 >   (typecheck 12/0, check_policy 4/0+7/0, set 5/0, param 6/0, manifest 6/0, parse 27/0,
 >   llvm 181/0); fixpoint C3a/C3b YES. `unify_row`/escape/manifest-extractor/AST sealed.
 

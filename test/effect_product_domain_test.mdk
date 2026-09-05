@@ -1,0 +1,65 @@
+{- | Gate for the Product effect-refinement domain.
+
+   The fixtures define `Net = Host(Prefix) x Method(Set)` and exercise
+   pointwise confinement, missing-axis soundness, host lifting, Prefix
+   compatibility, and Product policies. The frozen reference compiler does
+   not parse Product domains, so the current native compiler is the sole arm. -}
+
+import effect_domain_test_support.{
+  expectCheckAccept,
+  expectCheckReject,
+  expectVerbExitStartsWith,
+  fixtureIn,
+}
+
+fixture : String -> <IO> String
+fixture name = fixtureIn "test/effect_product_fixtures" name
+
+test "Product accepts when Host and Method are independently confined" =
+  expectCheckAccept (fixture "prod_accept.mdk")
+
+test "Product rejects an out-of-prefix Host" = expectCheckReject (fixture
+  "prod_reject_host.mdk") [
+  "performs <FFI, Net Host=\"other.com/api\" Method={\"GET\"}>",
+]
+
+test "Product rejects an out-of-set Method" = expectCheckReject (fixture
+  "prod_reject_method.mdk") [
+  "performs <FFI, Net Host=\"idp.example.com/api\" Method={\"POST\"}>",
+]
+
+test "Product treats a missing inferred Method axis as top" = expectCheckReject
+  (fixture "prod_soundness.mdk")
+  ["performs <FFI, Net Host=\"idp.example.com/api\">"]
+
+test "a bare Product literal lifts into the Host axis" =
+  expectCheckAccept (fixture "prod_host_lift.mdk")
+
+test "a non-Product Prefix domain keeps its old behavior" =
+  expectCheckAccept (fixture "prod_compat_prefix.mdk")
+
+test "check-policy accepts a Product policy that admits both axes" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "prod_policy_plugin.mdk",
+      "--allow",
+      "Net=Host=\"idp.example.com/*\";Method={GET,POST},FFI",
+      "--fn",
+      "transform",
+    ]
+    0
+    "accepted"
+
+test "check-policy rejects a Product policy with a narrow Method axis" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "prod_policy_plugin.mdk",
+      "--allow",
+      "Net=Host=\"idp.example.com/*\";Method={GET},FFI",
+      "--fn",
+      "transform",
+    ]
+    1
+    "rejected"

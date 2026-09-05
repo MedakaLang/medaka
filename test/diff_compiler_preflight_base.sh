@@ -151,8 +151,56 @@ if PREFLIGHT_DRY=1 sh test/preflight.sh definitely-no-such-ref >/dev/null 2>&1; 
   fail "an unresolvable base exited 0 — a green that tested nothing over committed work."
 fi
 
+# ── 5. A shared native-gate helper must derive every declared consumer ───────
+printf 'test/effect_domain_test_support.mdk\n' > "$WORK/helper_changed.txt"
+helper_out="$(
+  cd "$ROOT" || exit 1
+  PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/helper_changed.txt" sh test/preflight.sh 2>&1
+)"
+for helper_gate in \
+  effect_builtin_param_domain_test.mdk \
+  effect_param_domain_test.mdk \
+  effect_product_domain_test.mdk \
+  effect_set_domain_test.mdk
+do
+  printf '%s\n' "$helper_out" | grep -q "^  GATE      test/$helper_gate$" ||
+    fail "shared native-gate helper did not derive test/$helper_gate"
+done
+printf '%s\n' "$helper_out" | grep -q '^  UNMAPPED  test/effect_domain_test_support.mdk$' &&
+  fail "shared native-gate helper is still reported UNMAPPED"
+
+# ── 6. Deleting a shared helper must still derive its surviving consumers ───
+# Add a native row whose importer names an absent helper. This is the post-delete
+# shape: the changed path no longer exists, while the consumer still does.
+cp "$ROOT/Makefile" "$WORK/Makefile" ||
+  fail "could not copy Makefile for deleted-helper fixture"
+cp "$ROOT/test/gates.toml" "$WORK/test/gates.toml" ||
+  fail "could not copy gate registry for deleted-helper fixture"
+cp "$ROOT"/test/*.sh "$WORK/test/" ||
+  fail "could not copy shell gates for deleted-helper fixture"
+cat >> "$WORK/test/gates.toml" <<'EOF'
+[[gate]]
+name = "native_consumer"
+kind = "native"
+run = "test/native_consumer_test.mdk"
+EOF
+cat > "$WORK/test/native_consumer_test.mdk" <<'EOF'
+import removed_test_support.{fixture}
+
+test "consumer" = fixture
+EOF
+printf 'test/removed_test_support.mdk\n' > "$WORK/helper_deleted.txt"
+deleted_helper_out="$(
+  cd "$WORK" || exit 1
+  PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/helper_deleted.txt" sh test/preflight.sh 2>&1
+))"
+printf '%s\n' "$deleted_helper_out" | grep -q '^  GATE      test/native_consumer_test.mdk$' ||
+  fail "deleted shared native-gate helper did not derive its surviving consumer. Got: $(printf '%s' "$deleted_helper_out" | tr '\n' ' ')"
+printf '%s\n' "$deleted_helper_out" | grep -q '^  UNMAPPED  test/removed_test_support.mdk$' &&
+  fail "deleted shared native-gate helper is reported UNMAPPED despite a surviving consumer"
+
 if [ "$fails" -ne 0 ]; then
   echo "diff_compiler_preflight_base: $fails assertion(s) FAILED"
   exit 1
 fi
-echo "diff_compiler_preflight_base: PASS (4 assertions)"
+echo "diff_compiler_preflight_base: PASS (6 assertions)"

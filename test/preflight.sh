@@ -1312,6 +1312,30 @@ while IFS= read -r f; do
         fi
       fi ;;
 
+    # ── shared support for native gates derives every consumer ────────────────
+    # A helper is executable only through the native gate-test files that import
+    # it, so changing the helper must run every importer. Keep the consumer set
+    # derived from live import references: effect_domain_test_support.mdk is
+    # currently shared by four rows, but that count is allowed to change. Scan
+    # importers even when the helper was deleted: surviving consumers are then
+    # the exact gates needed to expose the broken import.
+    test/*_test_support.mdk)
+      _ntmod="${f##*/}"
+      _ntmod="${_ntmod%.mdk}"
+      _nts=""
+      for _ntg in $(_native_gate_candidates); do
+        if _refs "$_ntg" "$_ntmod"; then
+          _nts="$_nts $_ntg"
+        fi
+      done
+      if [ -z "$_nts" ]; then
+        note_unmapped "$f"
+      else
+        for _g in $_nts; do
+          add "$(_pattern_for_gate "$_g")"
+        done
+      fi ;;
+
     # ── a changed `kind = "native"` gate's own `.mdk` runs itself (#2591, #2636) ──
     # The `.sh` self-run arm above is `.sh`-shaped only, so a changed
     # `test/*_test.mdk` never matched it — `_pattern_for_gate` already resolves a
