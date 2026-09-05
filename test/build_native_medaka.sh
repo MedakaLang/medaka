@@ -81,6 +81,113 @@ FORCE_EMITTER_REBUILD="${FORCE_EMITTER_REBUILD:-0}"
 # re-link (~55 s) over the binary it just downloaded. See stage B below.
 SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 
+# ---- PARALLEL CODEGEN (issue #2681) --------------------------------------------
+# EMITTER-ONLY, ON BY DEFAULT where the LLVM tools it needs are actually present.
+# Stage A's emitter link hands clang one ~17 MB IR module and gets one
+# single-threaded -O2 pipeline out of a 12-core box. When `llvm-split`/`opt`/`llc`
+# are discoverable, pcg_link splits that module into $MEDAKA_CODEGEN_PARTS
+# partitions, runs `opt -O2` + `llc -O2` on each IN PARALLEL, and hands clang the
+# resulting objects instead. Set MEDAKA_PARALLEL_CODEGEN=0 to force the single
+# `clang -O2` invocation; that is also what runs, silently, wherever the tools are
+# absent (CI runner layouts vary — see pcg_discover, and MEDAKA_LLVM_BINDIR there
+# for pointing this at a toolchain it would not find).
+#
+# Stage B's ./medaka link does NOT take this path. Measured on this box on
+# 2026-09-05, the two links behave differently:
+#   * For the EMITTER, the parallel path costs link time only. Its emitted IR is
+#     byte-identical either way, and it emits at the same SPEED — `time
+#     ./medaka_emitter <runtime> <core> compiler/driver/medaka_cli.mdk <compiler>
+#     <stdlib> > /dev/null`, 2 reps from a plain-built and from a parallel-8-built
+#     emitter: 92s vs 91s, i.e. no difference outside run-to-run noise on this box.
+#   * For the CLI it costs INTERPRETER RUNTIME, because medaka_cli.mdk's tree-walk
+#     interpreter is what every `medaka check`/`test`/`run` invocation executes —
+#     every gate and oracle in the tree pays this on every run, far more often than
+#     the CLI is relinked. Measured: `MEDAKA_STRICT=1 time ./medaka check
+#     compiler/driver/medaka_cli.mdk`, 3 reps each, same source, same day — plain
+#     -O2 CLI link avg 76.1s wall vs. parallel-codegen CLI link avg 80.3s wall,
+#     ~5.5% slower, consistently (every parallel rep slower than every plain rep).
+# The MECHANISM behind that regression is NOT established. Losing cross-partition
+# inlining is the obvious candidate, but a 3-partition link measured SLOWER at the
+# emit phase than an 8-partition one, which a monotone "fewer partitions, more
+# inlining, faster" story does not predict. What the decision rests on is the
+# measurement, not an explanation of it. The CLI link therefore always takes the
+# plain `clang -O2` path; $MEDAKA_PARALLEL_CODEGEN and $PCG_BIN below govern the
+# emitter link only.
+#
+# `opt -O2` ahead of `llc -O2` (rather than `llc -O2` alone) is deliberate, not
+# just architecturally reasoned: measured the same day on the CLI link, an
+# `llc`-only parallel link (skips the IR-level optimization pass entirely) is
+# ITSELF slower at runtime than the opt+llc parallel link — avg 87.3s wall vs.
+# 80.3s (2 reps each) — and slower again than plain -O2's 76.1s. Skipping `opt`
+# would not even trade correctness for speed; it loses on both.
+MEDAKA_PARALLEL_CODEGEN="${MEDAKA_PARALLEL_CODEGEN:-1}"
+# 8, on a 12-core box. The partitions run concurrently with nothing else in this
+# script (both links are serial points), but each opt/llc holds its own partition in
+# memory, and leaving ~4 cores idle keeps a concurrent build or the emitter's own GC
+# threads from contending. Raising it past the core count buys nothing; lowering it
+# to 1 is NOT the same as MEDAKA_PARALLEL_CODEGEN=0 (it still splits the module, so
+# it still gives up cross-partition inlining, for no parallelism at all).
+MEDAKA_CODEGEN_PARTS="${MEDAKA_CODEGEN_PARTS:-8}"
+
+# Where llvm-split/opt/llc live. $MEDAKA_LLVM_BINDIR, if set, is searched INSTEAD of
+# everything else — an operator knob for a toolchain in a nonstandard place, and the
+# seam that lets the fallback path be exercised rather than asserted (point it at a
+# directory without the tools). Otherwise: PATH first; then the versioned
+# Debian/Ubuntu directories, which put these tools OFF PATH (on this box only
+# /usr/bin/clang is on it); then the two Homebrew prefixes, for [B-DUAL-PLATFORM].
+# Highest version wins among the /usr/lib/llvm-* candidates. Prints the directory to
+# use, or returns nonzero when no single directory holds all three — a runner without
+# these tools must degrade to the plain clang path, never fail, so no layout is
+# hardcoded as the only place to look.
+pcg_discover() {
+  if [ -n "${MEDAKA_LLVM_BINDIR:-}" ]; then
+    if [ -x "$MEDAKA_LLVM_BINDIR/llvm-split" ] && [ -x "$MEDAKA_LLVM_BINDIR/opt" ] \
+       && [ -x "$MEDAKA_LLVM_BINDIR/llc" ]; then
+      printf '%s' "$MEDAKA_LLVM_BINDIR"
+      return 0
+    fi
+    return 1
+  fi
+  for _d in "" $(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -r) \
+            /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
+    if [ -z "$_d" ]; then
+      # PATH is searched per-TOOL, but $PCG_BIN is used as a single directory PREFIX
+      # for all three, so three independent `command -v` hits are not enough: a PATH
+      # with llvm-split in one directory and opt/llc in another would yield a
+      # $PCG_BIN where "$PCG_BIN/opt" does not exist, and the parallel link would
+      # fail hard instead of degrading to plain clang. Require the same directory,
+      # with the same -x triple-check every other candidate below uses; a split PATH
+      # falls through to the next candidate.
+      if command -v llvm-split >/dev/null 2>&1; then
+        _pd="$(dirname "$(command -v llvm-split)")"
+        if [ -x "$_pd/opt" ] && [ -x "$_pd/llc" ]; then
+          printf '%s' "$_pd"
+          return 0
+        fi
+      fi
+    elif [ -x "$_d/llvm-split" ] && [ -x "$_d/opt" ] && [ -x "$_d/llc" ]; then
+      printf '%s' "$_d"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PCG_BIN=""
+if [ "$MEDAKA_PARALLEL_CODEGEN" = "1" ]; then
+  PCG_BIN="$(pcg_discover || true)"
+fi
+# The one value every later reader asks for: which codegen path the EMITTER link
+# (stage A) will take. Folded into the emitter's build-cache key below, because two
+# emitter binaries built from identical source down the two paths are NOT the same
+# bytes. The CLI link (stage B) always takes the plain path (see PARALLEL CODEGEN
+# above) so its own key uses a fixed "plain" tag, never this variable.
+if [ -n "$PCG_BIN" ]; then
+  PCG_MODE="parallel-$MEDAKA_CODEGEN_PARTS"
+else
+  PCG_MODE="plain"
+fi
+
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping (opt-in)"; exit 2; }
 
 # Best-effort sweep of orphaned per-PID staging files (issue #1141): each of
@@ -293,6 +400,18 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 # emitter, FP_COMPILER for the CLI — plus the build-variant inputs that are NOT source
 # and therefore not in either fingerprint:
 #   * the clang -O level, which is genuinely different codegen;
+#   * $PCG_MODE, for the EMITTER key only — the codegen PATH and its partition count
+#     (see "PARALLEL CODEGEN" above). `plain` and `parallel-8` are different codegen
+#     of the same IR at the same -O level: the parallel path gives up cross-partition
+#     inlining, so the two produce binaries that behave identically but are not the
+#     same bytes. Without this component a box that flipped MEDAKA_PARALLEL_CODEGEN,
+#     or one that simply has the LLVM tools where another does not, would serve the
+#     other path's binary under this path's key — and any later measurement of the
+#     two paths against each other would be comparing one binary to itself. The CLI
+#     key uses a literal `plain` tag instead of $PCG_MODE: the CLI link never takes
+#     the parallel path (the measured ~5.5% interpreter-runtime regression is not
+#     worth paying on the binary every gate/oracle/`medaka check` runs — see
+#     "PARALLEL CODEGEN" above), so its key does not vary with the knob.
 #   * for the CLI only, $BUILD_COMMIT and $BUILD_DATE, which stage B bakes in as
 #     -DMEDAKA_SRC_COMMIT/-DMEDAKA_SRC_BUILD_DATE. Two commits can share one
 #     FP_COMPILER (a docs-only commit does), so keying on the fingerprint alone would
@@ -323,8 +442,8 @@ cache_tag() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
 # The -O defaults are spelled the same way the two clang invocations spell them, so a
 # key can never claim an optimization level the link did not use.
-EMITTER_KEY="emitter-$(cache_tag "$FP_FULL")-$(cache_tag "${EMITTER_OPT:--O2}")"
-CLI_KEY="medaka-$(cache_tag "$FP_COMPILER")-$(cache_tag "$FP_RUNTIME")-$(cache_tag "${CLI_OPT:--O2}")-$(cache_tag "$BUILD_COMMIT")-$(cache_tag "$BUILD_DATE")"
+EMITTER_KEY="emitter-$(cache_tag "$FP_FULL")-$(cache_tag "${EMITTER_OPT:--O2}")-$(cache_tag "$PCG_MODE")"
+CLI_KEY="medaka-$(cache_tag "$FP_COMPILER")-$(cache_tag "$FP_RUNTIME")-$(cache_tag "${CLI_OPT:--O2}")-plain-$(cache_tag "$BUILD_COMMIT")-$(cache_tag "$BUILD_DATE")"
 
 # Each entry is two files: <key>.bin (the binary) and <key>.sha (the digest of exactly
 # those stored bytes). Validation recomputes the digest BEFORE the entry is copied
@@ -468,6 +587,73 @@ esac
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# ---- pcg_link: the parallel half of PARALLEL CODEGEN (issue #2681) --------------
+#
+#   pcg_link <in.ll> <out-binary> <-O level> <errfile> [extra clang args ...]
+#
+# Split the module, `opt` + `llc` each partition concurrently, then let clang do the
+# final link — which is also where runtime/medaka_rt.c is compiled, so the trailing
+# args would reach that compile the same way they do on the plain path. Its ONE call
+# site is stage A's emitter link, which passes none: the provenance
+# -DMEDAKA_SRC_* defines belong to stage B's CLI link, and that link always takes the
+# plain path. Returns nonzero on any failure with the reason appended to
+# <errfile>; the one call site (stage A's emitter link) treats that exactly as it
+# treats a clang failure, so a partition that cannot be split or codegen'd is a hard
+# build failure, never a silent fallback to a binary built some other way. Stage B's
+# CLI link never calls this — see "PARALLEL CODEGEN" above.
+#
+# `-relocation-model=pic` is not optional: llc defaults to the static model, and the
+# resulting objects fail the PIE link with "relocation R_X86_64_32S ... can not be
+# used when making a PIE object". `-function-sections`/`-data-sections` are llc's
+# spelling of $GC_SECTION_CFLAGS, without which $GC_SECTION_LDFLAGS has nothing
+# per-symbol to strip and the section-level DCE of issue #120 quietly stops working.
+pcg_link() {
+  _ll="$1"; _pout="$2"; _popt="$3"; _perr="$4"
+  shift 4
+  _pdir="$WORK/pcg.$$"
+  rm -rf "$_pdir"
+  mkdir -p "$_pdir" || { echo "pcg: cannot create $_pdir" >>"$_perr"; return 1; }
+
+  if ! "$PCG_BIN/llvm-split" -j "$MEDAKA_CODEGEN_PARTS" -o "$_pdir/p" "$_ll" 2>>"$_perr"; then
+    echo "pcg: llvm-split failed" >>"$_perr"; return 1
+  fi
+
+  # One background job per partition. Each gets its OWN status and error file:
+  # POSIX `wait` reports only the last job's exit status, so a mid-list failure is
+  # otherwise invisible, and concurrent appends to one shared error file interleave.
+  # A missing status file counts as a failure, not as success.
+  _i=0
+  while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
+    (
+      if "$PCG_BIN/opt" "$_popt" "$_pdir/p$_i" -o "$_pdir/p$_i.opt.bc" 2>"$_pdir/p$_i.err" \
+         && "$PCG_BIN/llc" "$_popt" -filetype=obj -relocation-model=pic \
+              -function-sections -data-sections \
+              "$_pdir/p$_i.opt.bc" -o "$_pdir/p$_i.o" 2>>"$_pdir/p$_i.err"
+      then printf 'ok' > "$_pdir/p$_i.status"
+      else printf 'fail' > "$_pdir/p$_i.status"
+      fi
+    ) &
+    _i=$(( _i + 1 ))
+  done
+  wait
+
+  _objs=""
+  _i=0
+  while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
+    if [ "$(cat "$_pdir/p$_i.status" 2>/dev/null)" != "ok" ]; then
+      echo "pcg: partition $_i failed opt/llc:" >>"$_perr"
+      cat "$_pdir/p$_i.err" >>"$_perr" 2>/dev/null
+      return 1
+    fi
+    _objs="$_objs $_pdir/p$_i.o"
+    _i=$(( _i + 1 ))
+  done
+
+  # $_objs and the GC flag vars are deliberately unquoted word lists.
+  "$CC" -pthread "$_popt" "$@" $GC_SECTION_CFLAGS $GC_CFLAGS $_objs "$RT" $GC_LIBS \
+        "$GC_SECTION_LDFLAGS" -lm -o "$_pout" 2>>"$_perr"
+}
+
 trim_unit() {
   f="$1"
   if [ "$(tail -c 3 "$f" | od -An -tx1 | tr -d ' \n')" = "28290a" ]; then
@@ -504,6 +690,11 @@ emit_graph() {
 # Skip ONLY when the emitter exists AND its stamp says it was built from exactly this
 # compiler source AND runtime source (an up-to-date emitter re-emits byte-identically
 # anyway; runtime/*.c is linked into the emitter binary, so it counts too — issue #182).
+# It does NOT record the codegen path ($PCG_MODE), so flipping MEDAKA_PARALLEL_CODEGEN
+# on an unchanged tree keeps the emitter the OTHER path built; use
+# FORCE_EMITTER_REBUILD=1 when switching paths. (The stamp's content is asserted
+# byte-for-byte against a bare fingerprint by .github/actions/setup-medaka/action.yml,
+# so it cannot carry a second field without that assertion moving in lockstep.)
 # A build-cache hit above already wrote $SRC_STAMP, so it lands in this same skip arm.
 STAMP_FP=""
 [ -f "$SRC_STAMP" ] && STAMP_FP="$(cat "$SRC_STAMP" 2>/dev/null)"
@@ -541,9 +732,14 @@ else
   # 13, 12-core/32GB) on 2026-09-05, with the two emitter binaries built from
   # identical source and run directly (`time ./medaka_emitter <runtime> <core>
   # <target> <compiler> <stdlib> > out.ll`):
-  #   linking THIS binary: -O0 22.5s → -O2 74.3s (the "+3s once" framing no
-  #     longer holds at current codebase size — it's now a real ~52s cost, paid
-  #     once per emitter rebuild).
+  #   linking THIS binary: -O0 22.5s → -O2 55.2s (the "+3s once" framing no
+  #     longer holds at current codebase size — it's now a real ~33s cost, paid
+  #     once per emitter rebuild). 55.2s supersedes a 74.3s reading taken earlier
+  #     the same day: two later re-measurements of this same link, same box, same
+  #     day, read 52s and 55.2s. Reproduce by timing the link this stage performs:
+  #     `time FORCE_EMITTER_REBUILD=1 sh test/build_native_medaka.sh`, which is
+  #     also sensitive to which codegen path stage A takes — see "PARALLEL
+  #     CODEGEN" above.
   #   emitter re-emitting its OWN driver graph: -O0 23.1s → -O2 15.6s (~32%
   #     faster).
   #   emitting compiler/driver/medaka_cli.mdk: -O0 117.0s → -O2 85.9s (~27%
@@ -554,9 +750,22 @@ else
   #     oracles dilutes the emitter's own emit-speed win; not re-measured
   #     against the full 53-entry set, which is too slow to run locally per
   #     [L-SHARED-BOX]). EMITTER_OPT overrides.
-  if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
-    rm -f "$EMIT_NEW"
-    echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
+  if [ -n "$PCG_BIN" ]; then
+    echo "stage A: parallel codegen ($MEDAKA_CODEGEN_PARTS partitions, $PCG_BIN) -> $EMITTER ..."
+    if ! pcg_link "$EMIT_LL" "$EMIT_NEW" "${EMITTER_OPT:--O2}" "$WORK/emitA-cc.err"; then
+      rm -f "$EMIT_NEW"
+      echo "FAIL (parallel codegen, fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
+    fi
+  else
+    # Say so POSITIVELY. Without this line a plain-path build is indistinguishable
+    # in the log from a build of a script that has no parallel path at all, so
+    # "which codegen path did this build take" is only answerable from a log when
+    # the answer happens to be "parallel".
+    echo "stage A: plain clang ${EMITTER_OPT:--O2} link (parallel codegen disabled or its LLVM tools not found) -> $EMITTER ..."
+    if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
+      rm -f "$EMIT_NEW"
+      echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
+    fi
   fi
   mv "$EMIT_NEW" "$EMITTER"
   echo "stage A: rebuilt $EMITTER from current source."
@@ -573,7 +782,8 @@ CLI_STAMP_FP=""
 if [ "$CLI_STAMP_APPLIES" = "1" ] && [ -f "$CLI_STAMP" ]; then
   CLI_STAMP_FP="$(cat "$CLI_STAMP" 2>/dev/null)"
 fi
-if [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] && [ "$CLI_STAMP_APPLIES" = "1" ] \
+if [ "$FORCE_EMITTER_REBUILD" != "1" ] && [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] \
+   && [ "$CLI_STAMP_APPLIES" = "1" ] \
    && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ]; then
   echo "stage B: medaka up-to-date (compiler source fingerprint unchanged) — skipping rebuild."
 elif [ "$FORCE_EMITTER_REBUILD" != "1" ] && cache_get "$CLI_KEY" "$OUT"; then
@@ -609,6 +819,11 @@ else
   # dominates instead, opt out with CLI_OPT=-O0.
   # (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
   CLI_OPT="${CLI_OPT:--O2}"
+  # Always the plain single clang link — never pcg_link, even when $PCG_BIN is set
+  # for stage A. See the CLI runtime-regression measurement in "PARALLEL CODEGEN"
+  # above (2026-09-05): partitioning the CLI's own IR costs ~5.5% on every
+  # `medaka check`/`test`/`run` afterward, which is paid far more often than this
+  # link.
   echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
   # STALENESS STAMP (issue #89): bake the COMPILER-source fingerprint into ./medaka
   # so the CLI can warn when it is run against a NEWER compiler/ than it was built
