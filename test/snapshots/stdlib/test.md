@@ -1,5 +1,5 @@
 # META
-source_lines=390
+source_lines=454
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -16,7 +16,7 @@ stages=DESUGAR,MARK
 
 import list.{last}
 import math.{approxEq}
-import string.{lines, stripSuffix}
+import string.{contains, lines, startsWith, stripSuffix}
 
 {- | The result of one assertion.
 
@@ -199,6 +199,70 @@ expectWithin expected actual eps =
     Pass e a
   else
     Fail "expected \{a} within \{debug eps} of \{e}" e a
+
+missingTextNeedles : List String -> String -> List String
+missingTextNeedles needles actual =
+  filter (needle => not (contains needle actual)) needles
+
+{- | Passes when `actual` contains every string in `needles`.
+
+   An empty `needles` list passes. On failure, the message names the first
+   missing string while the operands retain the full requirement and text.
+
+   > expectationTag (expectTextContainsAll ["alpha", "gamma"] "alpha beta gamma")
+   "Pass"
+   > expectationMessage (expectTextContainsAll ["alpha", "delta"] "alpha beta gamma")
+   "expected text containing \"delta\"" -}
+export
+expectTextContainsAll : List String -> String -> Expectation
+expectTextContainsAll needles actual =
+  let expected = debug needles
+  match missingTextNeedles needles actual
+    [] => Pass expected actual
+    missing :: _ =>
+      Fail "expected text containing \{debug missing}" expected actual
+
+lineContainsAll : List String -> String -> Bool
+lineContainsAll needles line = match missingTextNeedles needles line
+  [] => True
+  _ => False
+
+{- | Passes when one line of `actual` contains every string in `needles`.
+
+   The strings must occur on the same line, in any order. This is useful for
+   binding a source location to its diagnostic instead of finding each in a
+   different part of a multi-error report.
+
+   > expectationTag (expectLineContainsAll ["file.mdk:3:", "bad type"] "error: file.mdk:3: bad type\nhelp")
+   "Pass"
+   > expectationTag (expectLineContainsAll ["file.mdk:3:", "bad type"] "file.mdk:3:\nbad type")
+   "Fail" -}
+export
+expectLineContainsAll : List String -> String -> Expectation
+expectLineContainsAll needles actual =
+  let expected = debug needles
+  if any (lineContainsAll needles) (lines actual) then
+    Pass expected actual
+  else
+    Fail "expected one line containing every required string" expected actual
+
+{- | Passes when `actual` begins with `prefix` and contains every string in
+   `needles`.
+
+   > expectationTag (expectTextStartsWithAndContains "accepted" ["Env"] "accepted: Env")
+   "Pass"
+   > expectationTag (expectTextStartsWithAndContains "accepted" ["Env"] "note: Env accepted")
+   "Fail" -}
+export
+expectTextStartsWithAndContains : String -> List String -> String -> Expectation
+expectTextStartsWithAndContains prefix needles actual =
+  let expected = "prefix \{debug prefix}, substrings \{debug needles}"
+  if not (startsWith prefix actual) then
+    Fail "expected text starting with \{debug prefix}" expected actual
+  else match missingTextNeedles needles actual
+    [] => Pass expected actual
+    missing :: _ =>
+      Fail "expected text containing \{debug missing}" expected actual
 
 -- The single normalizer for the trailing-Unit shapes the shell `strip_unit`
 -- helpers across test/*.sh disagree on: strips a trailing "()" suffix if
@@ -395,7 +459,7 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("math") ((mem "approxEq" false))))
-(DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripSuffix" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false) (mem "lines" false) (mem "startsWith" false) (mem "stripSuffix" false))))
 (DData Public "Expectation" () ((variant "Pass" (ConPos (TyCon "String") (TyCon "String"))) (variant "Fail" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "Expectation")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Pass" (PVar "__a0") (PVar "__a1")) (PCon "Pass" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "Fail" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "Fail" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "Expectation")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Pass" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Pass ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "Fail" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Fail ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2")))))))))
@@ -427,6 +491,16 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectNone" ((PVar "o")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "debug") (EVar "o"))) (DoExpr (EMatch (EVar "o") (arm (PCon "None") () (EApp (EApp (EVar "Pass") (ELit (LString "None"))) (EVar "a"))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected None but got ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))) (ELit (LString "None"))) (EVar "a")))))))
 (DTypeSig true "expectWithin" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Expectation")))))
 (DFunDef false "expectWithin" ((PVar "expected") (PVar "actual") (PVar "eps")) (EBlock (DoLet false false (PVar "e") (EApp (EVar "debug") (EVar "expected"))) (DoLet false false (PVar "a") (EApp (EVar "debug") (EVar "actual"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "approxEq") (EVar "expected")) (EVar "actual")) (EVar "eps")) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString " within "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "eps")))) (ELit (LString " of "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "e")) (EVar "a"))))))
+(DTypeSig false "missingTextNeedles" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "missingTextNeedles" ((PVar "needles") (PVar "actual")) (EApp (EApp (EVar "filter") (ELam ((PVar "needle")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "needle")) (EVar "actual"))))) (EVar "needles")))
+(DTypeSig true "expectTextContainsAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Expectation"))))
+(DFunDef false "expectTextContainsAll" ((PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EApp (EVar "debug") (EVar "needles"))) (DoExpr (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "actual")) (arm (PList) () (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual"))) (arm (PCons (PVar "missing") PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text containing ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "missing")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual")))))))
+(DTypeSig false "lineContainsAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "lineContainsAll" ((PVar "needles") (PVar "line")) (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "line")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "expectLineContainsAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Expectation"))))
+(DFunDef false "expectLineContainsAll" ((PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EApp (EVar "debug") (EVar "needles"))) (DoExpr (EIf (EApp (EApp (EVar "any") (EApp (EVar "lineContainsAll") (EVar "needles"))) (EApp (EVar "lines") (EVar "actual"))) (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual")) (EApp (EApp (EApp (EVar "Fail") (ELit (LString "expected one line containing every required string"))) (EVar "expected")) (EVar "actual"))))))
+(DTypeSig true "expectTextStartsWithAndContains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Expectation")))))
+(DFunDef false "expectTextStartsWithAndContains" ((PVar "prefix") (PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "prefix")))) (ELit (LString ", substrings "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "needles")))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "actual"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text starting with ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "prefix")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual")) (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "actual")) (arm (PList) () (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual"))) (arm (PCons (PVar "missing") PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text containing ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "missing")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual"))))))))
 (DTypeSig false "normalizeTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EMatch (EApp (EVar "last") (EApp (EVar "lines") (EVar "s"))) (arm (PCon "Some" (PLit (LString "0"))) () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s")))) (arm PWild () (EVar "s"))))))
 (DTypeSig false "diffLineMsg" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
@@ -468,7 +542,7 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 # MARK
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("math") ((mem "approxEq" false))))
-(DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripSuffix" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false) (mem "lines" false) (mem "startsWith" false) (mem "stripSuffix" false))))
 (DData Public "Expectation" () ((variant "Pass" (ConPos (TyCon "String") (TyCon "String"))) (variant "Fail" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "Expectation")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Pass" (PVar "__a0") (PVar "__a1")) (PCon "Pass" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "Fail" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "Fail" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "Expectation")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Pass" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Pass ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "Fail" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Fail ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2")))))))))
@@ -500,6 +574,16 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectNone" ((PVar "o")) (EBlock (DoLet false false (PVar "a") (EApp (EMethodRef "debug") (EVar "o"))) (DoExpr (EMatch (EVar "o") (arm (PCon "None") () (EApp (EApp (EVar "Pass") (ELit (LString "None"))) (EVar "a"))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected None but got ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))) (ELit (LString "None"))) (EVar "a")))))))
 (DTypeSig true "expectWithin" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Expectation")))))
 (DFunDef false "expectWithin" ((PVar "expected") (PVar "actual") (PVar "eps")) (EBlock (DoLet false false (PVar "e") (EApp (EMethodRef "debug") (EVar "expected"))) (DoLet false false (PVar "a") (EApp (EMethodRef "debug") (EVar "actual"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "approxEq") (EVar "expected")) (EVar "actual")) (EVar "eps")) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString " within "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "eps")))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "e")) (EVar "a"))))))
+(DTypeSig false "missingTextNeedles" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "missingTextNeedles" ((PVar "needles") (PVar "actual")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "needle")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "needle")) (EVar "actual"))))) (EVar "needles")))
+(DTypeSig true "expectTextContainsAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Expectation"))))
+(DFunDef false "expectTextContainsAll" ((PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EApp (EMethodRef "debug") (EVar "needles"))) (DoExpr (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "actual")) (arm (PList) () (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual"))) (arm (PCons (PVar "missing") PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text containing ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "missing")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual")))))))
+(DTypeSig false "lineContainsAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "lineContainsAll" ((PVar "needles") (PVar "line")) (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "line")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "expectLineContainsAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Expectation"))))
+(DFunDef false "expectLineContainsAll" ((PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EApp (EMethodRef "debug") (EVar "needles"))) (DoExpr (EIf (EApp (EApp (EDictApp "any") (EApp (EVar "lineContainsAll") (EVar "needles"))) (EApp (EVar "lines") (EVar "actual"))) (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual")) (EApp (EApp (EApp (EVar "Fail") (ELit (LString "expected one line containing every required string"))) (EVar "expected")) (EVar "actual"))))))
+(DTypeSig true "expectTextStartsWithAndContains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Expectation")))))
+(DFunDef false "expectTextStartsWithAndContains" ((PVar "prefix") (PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "prefix")))) (ELit (LString ", substrings "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "needles")))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "actual"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text starting with ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "prefix")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual")) (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "actual")) (arm (PList) () (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual"))) (arm (PCons (PVar "missing") PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text containing ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "missing")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual"))))))))
 (DTypeSig false "normalizeTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EMatch (EApp (EVar "last") (EApp (EVar "lines") (EVar "s"))) (arm (PCon "Some" (PLit (LString "0"))) () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s")))) (arm PWild () (EVar "s"))))))
 (DTypeSig false "diffLineMsg" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))

@@ -152,7 +152,7 @@ if PREFLIGHT_DRY=1 sh test/preflight.sh definitely-no-such-ref >/dev/null 2>&1; 
 fi
 
 # ── 5. A shared native-gate helper must derive every declared consumer ───────
-printf 'test/effect_domain_test_support.mdk\n' > "$WORK/helper_changed.txt"
+printf 'test/compiler_cli_test_support.mdk\n' > "$WORK/helper_changed.txt"
 helper_out="$(
   cd "$ROOT" || exit 1
   PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/helper_changed.txt" sh test/preflight.sh 2>&1
@@ -166,7 +166,7 @@ do
   printf '%s\n' "$helper_out" | grep -q "^  GATE      test/$helper_gate$" ||
     fail "shared native-gate helper did not derive test/$helper_gate"
 done
-printf '%s\n' "$helper_out" | grep -q '^  UNMAPPED  test/effect_domain_test_support.mdk$' &&
+printf '%s\n' "$helper_out" | grep -q '^  UNMAPPED  test/compiler_cli_test_support.mdk$' &&
   fail "shared native-gate helper is still reported UNMAPPED"
 
 # ── 6. Deleting a shared helper must still derive its surviving consumers ───
