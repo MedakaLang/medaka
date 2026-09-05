@@ -1,0 +1,36 @@
+{- | Gate for domain-directed inferred effect-parameter filling.
+
+   The fixtures declare local Set and Prefix domains and exercise literal
+   hole filling, Set union, and Prefix confinement through `medaka check`.
+   The frozen reference compiler has neither these domains nor the `_`
+   parameter syntax, so the current native compiler is the sole arm. -}
+
+import effect_domain_test_support.{
+  expectCheckAccept,
+  expectCheckReject,
+  fixtureIn,
+}
+
+fixture : String -> <IO> String
+fixture name = fixtureIn "effect_param_fixtures" name
+
+test "Env fills a singleton inside the declared Set bound" =
+  expectCheckAccept (fixture "env_hole_accept.mdk")
+
+test "Env rejects a singleton outside the declared Set bound" = expectCheckReject
+  (fixture "env_hole_reject.mdk")
+  ["performs <Env {\"HOME\"}>"]
+
+test "Env joins two inferred singleton parameters by Set union" =
+  expectCheckAccept (fixture "env_join_accept.mdk")
+
+test "Env rejects a joined Set outside the declared bound" = expectCheckReject
+  (fixture "env_join_reject.mdk")
+  ["performs <Env {\"A\", \"B\"}>"]
+
+test "Exec fills a concrete path inside the declared Prefix bound" =
+  expectCheckAccept (fixture "exec_hole_accept.mdk")
+
+test "Exec rejects a concrete path outside the declared Prefix bound" = expectCheckReject
+  (fixture "exec_hole_reject.mdk")
+  ["performs <Exec \"/usr/bin/ls\">"]

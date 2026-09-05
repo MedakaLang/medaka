@@ -14,74 +14,31 @@
    arm. Every assertion is therefore a property of the diagnostic text,
    not an agreement between two engines. -}
 
-import io.{getEnvOr, runVerb}
-import string.{contains, lines, startsWith, toLower}
-import test.{Expectation, fail, pass}
+import effect_domain_test_support.{
+  expectCheckAccept,
+  expectCheckReject,
+  fixtureIn,
+}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
 fixture : String -> <IO> String
-fixture name = "\{getEnvOr "MEDAKA_ROOT" "."}/test/effect_set_fixtures/\{name}"
-
--- stdout and stderr are concatenated because a diagnostic's stream
--- assignment is not what is under test here, and the shell gate this
--- replaces read the two as one via `2>&1`.  The exit code travels with the
--- text because an accept assertion phrased over the text alone ("no line
--- names an error") is satisfied by a spawn that produced NO text at all:
--- an unresolvable `medaka` exits 127 with a message that names no error,
--- and three of these five assertions would pass having compiled nothing.
-checkFixture : String -> <Exec "_", IO> Result String (Int, String)
-checkFixture name =
-  map
-    ((code, out, err) => (code, out ++ err))
-    (runVerb (getEnvOr "MEDAKA" "medaka") ["check", fixture name])
-
-rejectionLine : String -> Bool
-rejectionLine line =
-  let l = toLower line
-  contains "type error" l || contains "parse error" l || startsWith "error:" l
-
--- The first line naming an error, for a failure message. Absent one, the
--- caller is reporting a missing rejection, so say that rather than quote
--- an arbitrary line.
-firstErrorLine : String -> String
-firstErrorLine out = match filter (contains "error" << toLower) (lines out)
-  l :: _ => l
-  [] => "(no line mentioning an error)"
-
-expectAccept : String -> <Exec "_", IO> Expectation
-expectAccept name = match checkFixture name
-  Err e => fail "\{name}: could not run `medaka check`: \{e}"
-  Ok (code, out) =>
-    if code /= 0 then
-      fail "\{name}: expected accept, `medaka check` exited \{intToString code}"
-    else if any rejectionLine (lines out) then
-      fail "\{name}: expected accept, got \{debug (firstErrorLine out)}"
-    else
-      pass
-
-expectReject : String -> String -> <Exec "_", IO> Expectation
-expectReject name needle = match checkFixture name
-  Err e => fail "\{name}: could not run `medaka check`: \{e}"
-  Ok (_, out) =>
-    if contains needle out then
-      pass
-    else
-      fail
-        "\{name}: expected a rejection containing \{debug needle}, got \{debug (firstErrorLine out)}"
+fixture name = fixtureIn "effect_set_fixtures" name
 
 test "a set-shaped row annotation parses and typechecks" =
-  expectAccept "set_p4_parse_accept.mdk"
+  expectCheckAccept (fixture "set_p4_parse_accept.mdk")
 
 test "a body row inside the declared bound is accepted" =
-  expectAccept "set_subset_accept.mdk"
+  expectCheckAccept (fixture "set_subset_accept.mdk")
 
-test "a body row outside the declared bound is rejected, naming the row" =
-  expectReject "set_subset_reject.mdk" "performs <FFI, Foo {\"a\", \"b\"}>"
+test "a body row outside the declared bound is rejected, naming the row" = expectCheckReject
+  (fixture "set_subset_reject.mdk")
+  ["performs <FFI, Foo {\"a\", \"b\"}>"]
 
 test "a union past the cardinality cap saturates to the top row" =
-  expectAccept "set_cap_saturate.mdk"
+  expectCheckAccept (fixture "set_cap_saturate.mdk")
 
-test "a saturated bound still rejects a body performing the top row" =
-  expectReject "set_cap_saturate_ctrl.mdk" "performs <FFI, Foo>"
+test "a saturated bound still rejects a body performing the top row" = expectCheckReject
+  (fixture "set_cap_saturate_ctrl.mdk")
+  ["performs <FFI, Foo>"]

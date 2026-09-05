@@ -1,0 +1,234 @@
+{- | Gate for refined effect parameters on runtime builtins and externs.
+
+   The corpus exercises Set and Prefix hole filling for real runtime
+   builtins, manifest and policy rendering, FFI row honesty, the foreign ABI
+   crossable set, runtime-name constraints, and nullary aliases. The frozen
+   reference compiler lacks these effect-domain forms, so the current native
+   compiler is the sole arm. -}
+
+import effect_domain_test_support.{
+  expectCheckAccept,
+  expectCheckReject,
+  expectVerbExitStartsWith,
+  expectVerbExitStartsWithAndContains,
+  fixtureIn,
+  runMedaka,
+}
+import string.{trim}
+import test.{Expectation, expectEqualText, fail}
+
+fixture : String -> <IO> String
+fixture name = fixtureIn "effect_builtin_param_fixtures" name
+
+expectManifest : String -> String -> String -> <Exec "_", IO> Expectation
+expectManifest name fn expected =
+  match runMedaka ["manifest", fixture name, "--fn", fn]
+    Err e => fail "\{name}: could not run `medaka manifest`: \{e}"
+    Ok (code, out) =>
+      if code /= 0 then
+        fail
+          "\{name}: `medaka manifest` exited \{intToString code}: \{debug out}"
+      else
+        expectEqualText expected (trim out)
+
+test "Env builtin fills a singleton inside its Set bound" =
+  expectCheckAccept (fixture "env_hole_accept.mdk")
+
+test "Env builtin rejects a singleton outside its Set bound" = expectCheckReject
+  (fixture "env_hole_reject.mdk")
+  ["performs <Env {\"HOME\"}>"]
+
+test "Exec builtin fills a concrete path inside its Prefix bound" =
+  expectCheckAccept (fixture "exec_hole_accept.mdk")
+
+test "Exec builtin rejects a concrete path outside its Prefix bound" = expectCheckReject
+  (fixture "exec_hole_reject.mdk")
+  ["performs <Exec \"/usr/bin/ls\">"]
+
+test "FileRead builtin fills a concrete path inside its Prefix bound" =
+  expectCheckAccept (fixture "fileread_hole_accept.mdk")
+
+test "FileRead builtin rejects a concrete path outside its Prefix bound" = expectCheckReject
+  (fixture "fileread_hole_reject.mdk")
+  ["performs <FileRead \"/etc/app/config.toml\">"]
+
+test "FileWrite builtin fills a concrete path inside its Prefix bound" =
+  expectCheckAccept (fixture "filewrite_hole_accept.mdk")
+
+test "FileWrite builtin rejects a concrete path outside its Prefix bound" = expectCheckReject
+  (fixture "filewrite_hole_reject.mdk")
+  ["performs <FileWrite \"/var/log/app.log\">"]
+
+test "manifest renders a top-level FileRead Prefix as a TOML string" =
+  expectManifest
+    "fileread_hole_accept.mdk"
+    "readCfg"
+    "[package.capabilities]\nFileRead = \"/etc/app/*\""
+
+test "manifest renders a top-level Env Set as a TOML array" =
+  expectManifest
+    "env_hole_accept.mdk"
+    "readHome"
+    "[package.capabilities]\nEnv = [\"HOME\", \"PATH\"]"
+
+test "check-policy accepts a manifest-derived Env Set token" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "env_hole_accept.mdk",
+      "--allow",
+      "Env={HOME,PATH}",
+      "--fn",
+      "readHome",
+    ]
+    0
+    "accepted"
+
+test "check-policy rejects an Env Set token missing HOME" =
+  expectVerbExitStartsWithAndContains
+    "check-policy"
+    [fixture "env_hole_accept.mdk", "--allow", "Env={PATH}", "--fn", "readHome"]
+    1
+    "rejected"
+    ["Env {\"HOME\", \"PATH\"}"]
+
+test "IO does not subsume an FFI-performing body" = expectCheckReject (fixture
+  "ffi_io_reject.mdk") [
+  "performs <FFI \"libcurl*\">",
+]
+
+test "IO still subsumes an Exec-performing body" =
+  expectCheckAccept (fixture "exec_io_accept.mdk")
+
+-- The non-empty-row reject and the narrow accept distinguish the honesty
+-- rule from one that only rejects a bare empty row.
+test "an extern row missing FFI is rejected even when the row is non-empty" = expectCheckReject
+  (fixture "ffi_stamp_missing_reject.mdk")
+  [
+    "Foreign declaration 'ffiFetch' does not name the 'FFI' effect in its result row",
+  ]
+
+test "an empty caller row does not subsume a declared FFI row" =
+  expectCheckReject (fixture "ffi_stamp_bare_reject.mdk") ["performs <FFI>"]
+
+test "a caller explicitly naming FFI accepts a declared FFI row" =
+  expectCheckAccept (fixture "ffi_stamp_bare_accept.mdk")
+
+test "an extern row may name FFI beside its refined effect" =
+  expectCheckAccept (fixture "ffi_stamp_narrow_accept.mdk")
+
+test "the FFI boundary rejects a Tuple result" = expectCheckReject (fixture
+  "ffi_cross_tuple_reject.mdk") [
+  "Type '(Int, Int)' cannot cross the foreign-function boundary in extern 'ffiPair'",
+]
+
+test "the FFI boundary rejects a List parameter" = expectCheckReject (fixture
+  "ffi_cross_list_reject.mdk") [
+  "Type 'List Int' cannot cross the foreign-function boundary in extern 'ffiSum'",
+]
+
+test "the FFI boundary rejects an Array with non-Int elements" = expectCheckReject
+  (fixture "ffi_cross_array_elem_reject.mdk")
+  [
+    "Type 'Array String' cannot cross the foreign-function boundary in extern 'ffiWidths'",
+  ]
+
+test "the FFI boundary rejects a user ADT" = expectCheckReject (fixture
+  "ffi_cross_adt_reject.mdk") [
+  "Type 'Color' cannot cross the foreign-function boundary in extern 'ffiColorCode'",
+]
+
+-- The novel name proves the builtin-name exemption did not swallow every
+-- extern declaration.
+test "the FFI boundary rejects Ref under a novel extern name" = expectCheckReject
+  (fixture "ffi_cross_ref_reject.mdk")
+  [
+    "Type 'Ref Int' cannot cross the foreign-function boundary in extern 'ffiPeek'",
+  ]
+
+test "the FFI boundary rejects a function parameter" = expectCheckReject
+  (fixture "ffi_cross_fnparam_reject.mdk")
+  [
+    "Type 'Int -> <> Int' cannot cross the foreign-function boundary in extern 'ffiApply'",
+  ]
+
+test "the FFI boundary rejects a polymorphic extern at its own line" = expectCheckReject
+  (fixture "ffi_cross_poly_reject.mdk")
+  [
+    "ffi_cross_poly_reject.mdk:11:",
+    "Type 'a' cannot cross the foreign-function boundary in extern 'ffiWrapAll'",
+  ]
+
+test "Int crosses the FFI boundary" =
+  expectCheckAccept (fixture "ffi_cross_int_accept.mdk")
+
+test "Float crosses the FFI boundary" =
+  expectCheckAccept (fixture "ffi_cross_float_accept.mdk")
+
+test "Bool crosses the FFI boundary" =
+  expectCheckAccept (fixture "ffi_cross_bool_accept.mdk")
+
+test "Char crosses the FFI boundary" =
+  expectCheckAccept (fixture "ffi_cross_char_accept.mdk")
+
+test "String crosses the FFI boundary" =
+  expectCheckAccept (fixture "ffi_cross_string_accept.mdk")
+
+test "Array Int crosses the FFI boundary" =
+  expectCheckAccept (fixture "ffi_cross_arrayint_accept.mdk")
+
+test "Unit crosses the FFI boundary as C void" =
+  expectCheckAccept (fixture "ffi_cross_unit_accept.mdk")
+
+test "a compatible builtin-name redeclaration is exempt from the FFI guard" =
+  expectCheckAccept (fixture "ffi_cross_builtin_name_accept.mdk")
+
+test "a bare FFI library name is accepted" =
+  expectCheckAccept (fixture "ffi_libname_bare_accept.mdk")
+
+test "a wildcard FFI library name denotes the same set as the bare name" =
+  expectCheckAccept (fixture "ffi_libname_wildcard_accept.mdk")
+
+test "an empty FFI library pattern is rejected" = expectCheckReject (fixture
+  "ffi_libname_empty_reject.mdk") [
+  "the library pattern is empty",
+]
+
+-- These checks pair with the compatible builtin-name and honest-row accepts
+-- above so a broader ban cannot satisfy the rejection cells.
+test "a nullary extern is rejected because it has no row for FFI" = expectCheckReject
+  (fixture "ffi_nullary_reject.mdk")
+  ["Foreign declaration 'gNullary' has no arrow in its signature"]
+
+test "a builtin name with an incompatible signature is rejected" = expectCheckReject
+  (fixture "ffi_builtin_shadow_reject.mdk")
+  [
+    "Foreign declaration 'log' redeclares a built-in runtime name with an incompatible signature",
+  ]
+
+test "an extern cannot claim the runtime's mdk_ symbol namespace" = expectCheckReject
+  (fixture "ffi_reserved_prefix_reject.mdk")
+  ["Foreign declaration 'mdk_nil' claims a reserved name"]
+
+test "a builtin redeclaration cannot narrow the catalog effect row" = expectCheckReject
+  (fixture "ffi_catalog_narrow_reject.mdk")
+  [
+    "Foreign declaration 'getEnv' redeclares a built-in runtime name with a NARROWER effect row",
+  ]
+
+test "writeFile cannot be redeclared with an empty effect row" = expectCheckReject
+  (fixture "ffi_catalog_writefile_narrow_reject.mdk")
+  [
+    "Foreign declaration 'writeFile' redeclares a built-in runtime name with a NARROWER effect row",
+  ]
+
+test "a builtin redeclaration may preserve the catalog effect row" =
+  expectCheckAccept (fixture "ffi_catalog_honest_accept.mdk")
+
+test "a direct alias does not hide a nullary extern" = expectCheckReject
+  (fixture "ffi_nullary_alias_direct_reject.mdk")
+  ["Foreign declaration 'k' has no arrow in its signature"]
+
+test "a constrained alias does not hide a nullary extern" = expectCheckReject
+  (fixture "ffi_nullary_alias_constrained_reject.mdk")
+  ["Foreign declaration 'k' has no arrow in its signature"]

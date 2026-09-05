@@ -151,8 +151,26 @@ if PREFLIGHT_DRY=1 sh test/preflight.sh definitely-no-such-ref >/dev/null 2>&1; 
   fail "an unresolvable base exited 0 — a green that tested nothing over committed work."
 fi
 
+# ── 5. A shared native-gate helper must derive every declared consumer ───────
+printf 'test/effect_domain_test_support.mdk\n' > "$WORK/helper_changed.txt"
+helper_out="$(
+  cd "$ROOT" || exit 1
+  PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/helper_changed.txt" sh test/preflight.sh 2>&1
+)"
+for helper_gate in \
+  effect_builtin_param_domain_test.mdk \
+  effect_param_domain_test.mdk \
+  effect_product_domain_test.mdk \
+  effect_set_domain_test.mdk
+do
+  printf '%s\n' "$helper_out" | grep -q "^  GATE      test/$helper_gate$" ||
+    fail "shared native-gate helper did not derive test/$helper_gate"
+done
+printf '%s\n' "$helper_out" | grep -q '^  UNMAPPED  test/effect_domain_test_support.mdk$' &&
+  fail "shared native-gate helper is still reported UNMAPPED"
+
 if [ "$fails" -ne 0 ]; then
   echo "diff_compiler_preflight_base: $fails assertion(s) FAILED"
   exit 1
 fi
-echo "diff_compiler_preflight_base: PASS (4 assertions)"
+echo "diff_compiler_preflight_base: PASS (5 assertions)"

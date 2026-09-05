@@ -1,0 +1,93 @@
+{- | Shared process assertions for the effect-domain native gates.
+
+   These gates exercise the repository's `medaka` binary over fixture files.
+   Keeping process lookup, exit-code handling, and diagnostic matching here
+   prevents the four domain corpora from drifting into different definitions
+   of accept and reject. -}
+
+import io.{getEnvOr, runVerb}
+import string.{contains, lines, startsWith, toLower}
+import test.{Expectation, fail, pass}
+
+root : <IO> String
+root = getEnvOr "MEDAKA_ROOT" "."
+
+medakaBin : <IO> String
+medakaBin = getEnvOr "MEDAKA" "\{root}/medaka"
+
+export
+fixtureIn : String -> String -> <IO> String
+fixtureIn corpus name = "\{root}/test/\{corpus}/\{name}"
+
+export
+runMedaka : List String -> <Exec "_", IO> Result String (Int, String)
+runMedaka args =
+  map ((code, out, err) => (code, out ++ err)) (runVerb medakaBin args)
+
+rejectionLine : String -> Bool
+rejectionLine line =
+  let l = toLower line
+  contains "type error" l || contains "parse error" l || startsWith "error:" l
+
+firstErrorLine : String -> String
+firstErrorLine out = match filter (contains "error" << toLower) (lines out)
+  l :: _ => l
+  [] => "(no line mentioning an error)"
+
+missingNeedles : List String -> String -> List String
+missingNeedles needles out =
+  filter (needle => not (contains needle out)) needles
+
+export
+expectCheckAccept : String -> <Exec "_", IO> Expectation
+expectCheckAccept path = match runMedaka ["check", path]
+  Err e => fail "\{path}: could not run `medaka check`: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "\{path}: expected accept, `medaka check` exited \{intToString code}"
+    else if any rejectionLine (lines out) then
+      fail "\{path}: expected accept, got \{debug (firstErrorLine out)}"
+    else
+      pass
+
+export
+expectCheckReject : String -> List String -> <Exec "_", IO> Expectation
+expectCheckReject path needles = match runMedaka ["check", path]
+  Err e => fail "\{path}: could not run `medaka check`: \{e}"
+  Ok (_, out) => match missingNeedles needles out
+    [] => pass
+    missing :: _ =>
+      fail
+        "\{path}: expected a rejection containing \{debug missing}, got \{debug (firstErrorLine out)}"
+
+export
+expectVerbExitStartsWith : String ->
+  List String ->
+  Int ->
+  String ->
+  <Exec "_", IO> Expectation
+expectVerbExitStartsWith verb args expectedCode prefix =
+  expectVerbExitStartsWithAndContains verb args expectedCode prefix []
+
+export
+expectVerbExitStartsWithAndContains : String ->
+  List String ->
+  Int ->
+  String ->
+  List String ->
+  <Exec "_", IO> Expectation
+expectVerbExitStartsWithAndContains verb args expectedCode prefix needles =
+  match runMedaka (verb :: args)
+    Err e => fail "medaka \{verb}: could not run: \{e}"
+    Ok (code, out) =>
+      if code /= expectedCode then
+        fail
+          "medaka \{verb}: expected exit \{intToString expectedCode}, got \{intToString code}: \{debug out}"
+      else if startsWith prefix out then match missingNeedles needles out
+        [] => pass
+        missing :: _ =>
+          fail
+            "medaka \{verb}: expected output containing \{debug missing}, got \{debug out}"
+      else
+        fail
+          "medaka \{verb}: expected output starting with \{debug prefix}, got \{debug out}"
