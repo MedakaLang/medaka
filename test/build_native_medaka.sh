@@ -725,7 +725,8 @@ CLI_STAMP_FP=""
 if [ "$CLI_STAMP_APPLIES" = "1" ] && [ -f "$CLI_STAMP" ]; then
   CLI_STAMP_FP="$(cat "$CLI_STAMP" 2>/dev/null)"
 fi
-if [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] && [ "$CLI_STAMP_APPLIES" = "1" ] \
+if [ "$FORCE_EMITTER_REBUILD" != "1" ] && [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] \
+   && [ "$CLI_STAMP_APPLIES" = "1" ] \
    && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ]; then
   echo "stage B: medaka up-to-date (compiler source fingerprint unchanged) — skipping rebuild."
 elif [ "$FORCE_EMITTER_REBUILD" != "1" ] && cache_get "$CLI_KEY" "$OUT"; then

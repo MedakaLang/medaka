@@ -58,9 +58,12 @@ function importModId(line,   rest, path, n, parts, i) {
     path = substr(rest, 1, index(rest, ".{") - 1)
   } else if (index(rest, ".*") > 0) {
     path = substr(rest, 1, index(rest, ".*") - 1)
+  } else if (match(rest, /[ \t]+as[ \t]+/) > 0) {
+    # `m as A` names the whole dotted path `m`, same as `.{`/`.*` above —
+    # matches loader.mdk's `importModId` (`UseAlias ns _` -> `joinDot ns`).
+    path = substr(rest, 1, RSTART - 1)
   } else {
     sub(/--.*$/, "", rest)
-    sub(/[ \t]+as[ \t]+.*$/, "", rest)
     sub(/[ \t]+$/, "", rest)
     path = rest
     # Bare `import a.b.c` imports module `a.b`; `import a` imports module `a`.
