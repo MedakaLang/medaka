@@ -346,14 +346,18 @@ their final path, promoted via same-filesystem `mv`.
 `make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
 and that is FINE. Usually it is ~1 second: the build cache serves a binary another tree
 already built from this exact source, and only the FIRST worktree at a given source state
-pays a real build. That worst case is ~6 minutes (all three measured on this box, Debian 13,
-12-core/32GB, 2026-09-05, `time sh test/build_native_medaka.sh`: cache-served fresh worktree,
-no `./medaka`/`./medaka_emitter` present — **1.05s**; the same state with the cache forced off
-via `MEDAKA_BUILD_CACHE_DIR=` — **352.4s**; and a warm forced full rebuild,
-`FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the emitter already present —
-**272.0s**. Cold exceeds warm-forced by the ~80s seed bootstrap, which is the only ordering
-physically possible; a cold figure BELOW the warm-forced one means the cache or an existing
-emitter was live during the measurement. The stale "~31s" figure is off by an order of
+pays a real build. That worst case is ~5-6 minutes (re-measured on this box, Debian 13,
+12-core/32GB, 2026-09-05 — `S-codegen-cost-honest`, after the emitter link moved to parallel
+codegen while the CLI link stayed plain `clang -O2`, see "PARALLEL CODEGEN" in
+`test/build_native_medaka.sh` — `time sh test/build_native_medaka.sh`: the same state with the
+cache forced off via `MEDAKA_BUILD_CACHE_DIR=` (no `./medaka`/`./medaka_emitter` present, forcing
+the seed bootstrap) — **323.0s** (was 352.4s pre-parallel-codegen); and a warm forced full
+rebuild, `FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the emitter already present —
+**238.8s** (was 272.0s). Cold still exceeds warm-forced by ~84s, consistent with the seed
+bootstrap being the only ordering physically possible; a cold figure BELOW the warm-forced one
+means the cache or an existing emitter was live during the measurement. The cache-served
+fresh-worktree case (no `./medaka`/`./medaka_emitter` present, cache live) is unaffected by the
+codegen path and stays ~1s — not re-measured here. The stale "~31s" figure is off by an order of
 magnitude). Borrowing an emitter does not even save the rebuild
 (only the seed step). Reading another tree can trip the isolation classifier into a denial
 that blocks every later `make`. Rationale + the `[B-BORROW-EMITTER]` measurement: the
