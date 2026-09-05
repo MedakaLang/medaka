@@ -2332,7 +2332,7 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- G1 typecheck gate result, a `Result String (List String)`: `Ok warnings` /
 -- `Err diagnostic` (a resolve or type error, or a pre-typecheck read/load
 -- failure) whose message we surface verbatim.
--- ⚠️ `Ok` CARRIES THE WARNINGS, and that is the whole reason it has a payload.
+-- `Ok` CARRIES THE WARNINGS, and that is the whole reason it has a payload.
 -- `build`'s gate used to be a bare Bool-shaped verdict, so every warning the check
 -- it runs produced was computed and dropped — `medaka build` had NO warning surface
 -- at all, for any warning class.  That was invisible while the typecheck channel
