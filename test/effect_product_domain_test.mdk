@@ -5,7 +5,7 @@
    compatibility, and Product policies. The frozen reference compiler does
    not parse Product domains, so the current native compiler is the sole arm. -}
 
-import effect_domain_test_support.{
+import compiler_cli_test_support.{
   expectCheckAccept,
   expectCheckReject,
   expectVerbExitStartsWith,

@@ -225,6 +225,59 @@ Pass "1.0" "1.0005"
 Fail "expected 2.0 within 0.01 of 1.0" "1.0" "2.0"
 ```
 
+### `expectTextContainsAll`
+
+```
+expectTextContainsAll : List String -> String -> Expectation
+```
+
+Passes when `actual` contains every string in `needles`.
+
+An empty `needles` list passes. On failure, the message names the first
+missing string while the operands retain the full requirement and text.
+
+```medaka
+> expectationTag (expectTextContainsAll ["alpha", "gamma"] "alpha beta gamma")
+"Pass"
+> expectationMessage (expectTextContainsAll ["alpha", "delta"] "alpha beta gamma")
+"expected text containing \"delta\""
+```
+
+### `expectLineContainsAll`
+
+```
+expectLineContainsAll : List String -> String -> Expectation
+```
+
+Passes when one line of `actual` contains every string in `needles`.
+
+The strings must occur on the same line, in any order. This is useful for
+binding a source location to its diagnostic instead of finding each in a
+different part of a multi-error report.
+
+```medaka
+> expectationTag (expectLineContainsAll ["file.mdk:3:", "bad type"] "error: file.mdk:3: bad type\nhelp")
+"Pass"
+> expectationTag (expectLineContainsAll ["file.mdk:3:", "bad type"] "file.mdk:3:\nbad type")
+"Fail"
+```
+
+### `expectTextStartsWithAndContains`
+
+```
+expectTextStartsWithAndContains : String -> List String -> String -> Expectation
+```
+
+Passes when `actual` begins with `prefix` and contains every string in
+`needles`.
+
+```medaka
+> expectationTag (expectTextStartsWithAndContains "accepted" ["Env"] "accepted: Env")
+"Pass"
+> expectationTag (expectTextStartsWithAndContains "accepted" ["Env"] "note: Env accepted")
+"Fail"
+```
+
 ### `expectEqualText`
 
 ```

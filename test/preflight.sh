@@ -1308,7 +1308,7 @@ while IFS= read -r f; do
     # ── shared support for native gates derives every consumer ────────────────
     # A helper is executable only through the native gate-test files that import
     # it, so changing the helper must run every importer. Keep the consumer set
-    # derived from live import references: effect_domain_test_support.mdk is
+    # derived from live import references: compiler_cli_test_support.mdk is
     # currently shared by four rows, but that count is allowed to change. Scan
     # importers even when the helper was deleted: surviving consumers are then
     # the exact gates needed to expose the broken import.
