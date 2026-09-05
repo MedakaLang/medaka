@@ -54,6 +54,12 @@ function importModId(line,   rest, path, n, parts, i) {
   if (line !~ /^import[ \t]/) return ""
   rest = line
   sub(/^import[ \t]+/, "", rest)
+  # Strip the trailing comment BEFORE any branch below looks at `rest`: a comment
+  # can contain the substrings the branches key on (` as `, `.{`, `.*`), and a
+  # mis-branch here does not fail loudly — it yields a corrupted module id that the
+  # name-shape regex rejects, silently DROPPING a real import from the closure.
+  # That is the under-approximation direction this file's header forbids.
+  sub(/--.*$/, "", rest)
   if (index(rest, ".{") > 0) {
     path = substr(rest, 1, index(rest, ".{") - 1)
   } else if (index(rest, ".*") > 0) {
@@ -63,7 +69,6 @@ function importModId(line,   rest, path, n, parts, i) {
     # matches loader.mdk's `importModId` (`UseAlias ns _` -> `joinDot ns`).
     path = substr(rest, 1, RSTART - 1)
   } else {
-    sub(/--.*$/, "", rest)
     sub(/[ \t]+$/, "", rest)
     path = rest
     # Bare `import a.b.c` imports module `a.b`; `import a` imports module `a`.
