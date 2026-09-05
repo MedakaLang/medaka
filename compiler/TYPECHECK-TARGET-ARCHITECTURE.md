@@ -1,5 +1,21 @@
 # Typechecker Target Architecture — the ground-up design
 
+**Current destination (2026-09-05):** read
+[`TYPECHECK-CONTRACTS.md`](TYPECHECK-CONTRACTS.md) first. It specifies the solver,
+scope, evidence, publication and cache contracts, delivery owners and completion
+criteria. It governs those destination questions where the historical designs
+below disagree. This file retains the migration detail and dated landing ledger;
+language specs remain authoritative over both. The active M2 phase-one sprint
+#2667 and the existing warn-first/default-body rulings are preserved.
+
+**Historical-premise correction:** SA-3/SA-4/SA-9 and #2548's original body describe
+a route-table widening/re-pin prerequisite. The later
+[#2548 investigation](https://github.com/MedakaLang/medaka/issues/2548#issuecomment-5533167358)
+disproved it: the selector already used the graph-global environment, and the
+obsolete table was subsequently deleted. Do not schedule that widening or demand
+a new witness of the disproved premise. SA-10a is the dated landing record;
+issue closeout and the current tree determine what remains implemented.
+
 **Status:** PROPOSAL — the idealized architecture for the full type-system pipeline
 (resolve identity → declaration analysis → inference → entailment → elaboration →
 global checks), designed from the semantics in `docs/spec/DICT-SEMANTICS.md`,

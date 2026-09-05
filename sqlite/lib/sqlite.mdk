@@ -350,9 +350,12 @@ ciStep arr needle i n col depth started atColStart c
   | otherwise = ciGo arr needle (i + 1) n col depth started False
 
 -- Same predicate as json.mdk's isWs; importing all of json into sqlite for one
--- char check is disproportionate, so this stays a local copy.
+-- char check is disproportionate, so this stays a local copy. Also narrower
+-- than `string.isSpace` (space/tab/LF/CR only, vs. `charIsSpace`'s broader
+-- VT/FF) — matches json.mdk's restricted whitespace set on purpose, not a
+-- real duplicate of `string.isSpace`.
 isSpaceChar : Char -> Bool
--- lint-disable-next-line rule-duplicate-body
+-- lint-disable-next-line rule-duplicate-body, rule-stdlib-reimpl
 isSpaceChar c =
   charCode c == 32 || charCode c == 9 || charCode c == 10 || charCode c == 13
 

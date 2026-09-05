@@ -234,7 +234,7 @@ but obviously generic:
 - `splitOnChar`/`splitNl`/`stringSplitNewlines` (loader/doctest/repl) — string split (latent cluster, divergent impl).
 - `spaces`/`newlineStr` (printer:177) — indent builders (O(n) naive `++`; could use a repeat).
 - `boolToInt`/`boolEq`/`ordLt`/`ordGt` (eval) — tiny ADT projections; leave (trivial).
-- `listInit`/`times`/`mapMut` (fuzz_gen_main) — fuzzer-local combinators; leave.
+- `listInit`/`times` (fuzz_gen_main) — fuzzer-local combinators; leave.
 
 Leave (too trivial or too tied to one call site to be worth a cross-module import):
 `subClampZero`, `wrapIf`, `identityPM`, `slen`, `substr3`, `charToStr`.

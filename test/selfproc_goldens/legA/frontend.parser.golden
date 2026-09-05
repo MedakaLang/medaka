@@ -256,7 +256,6 @@ isOpenDelim : Token -> Bool
 isPlainIdentTok : Token -> Bool
 isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
-joinComma : List String -> String
 joinSemi : List String -> String
 kindArrowRest : KindAnn -> Token -> ParserE <> KindAnn
 kindAtomEmit : KindAnn -> ParserE <> KindAnn

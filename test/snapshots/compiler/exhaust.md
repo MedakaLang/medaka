@@ -1,5 +1,5 @@
 # META
-source_lines=1067
+source_lines=1071
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -839,6 +839,10 @@ clauseBodyLoc _ = None
 
 guardArmsLoc : List GuardArm -> Option Loc
 guardArmsLoc [] = None
+-- Not an `orElse` staircase: the last probe is this function's own recursion, and
+-- `orElse` is eager, so the rewrite would walk every remaining arm even when the
+-- first arm already carries the location.
+-- lint-disable-next-line rule-orelse-staircase
 guardArmsLoc ((GuardArm guards body) :: rest) = match clauseBodyLoc body
   Some l => Some l
   None => match guardCondsLoc guards

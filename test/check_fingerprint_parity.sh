@@ -108,4 +108,103 @@ fi
 
 echo "checked: build_native_medaka.sh's baked compiler-fingerprint == medaka_cli.mdk's"
 echo "liveSourceFingerprint on $ROOT/compiler — PASS (mirror agrees)."
+
+# ── ARM 2: the FP_FULL import-closure walker vs. the loader's real module graph ──
+#
+# FP_FULL no longer hashes all of compiler/ (#2680): it hashes the emitter's OWN
+# import closure, plus stdlib/**.mdk (#2682) and runtime/*.c. That closure is
+# computed by test/emitter_source_set.awk, a STATIC walker — src_fingerprint_full()
+# runs on the cold path with no ./medaka in existence, so it cannot ask the real
+# loader. So this is the SAME hand-synced-implementations hazard as arm 1, one
+# level up: a reimplementation of driver.loader's `directImports`/`findInRoots`
+# that can drift from the thing it models.
+#
+# The asymmetry is what makes this worth a gate rather than a comment. An
+# OVER-reporting walker costs an unnecessary rebuild. An UNDER-reporting one —
+# a new import form the regex misses, a module reached only through a shape the
+# walker does not parse — makes stage A report "up-to-date" about an emitter
+# built from source that is no longer on disk, which is the exact silent
+# wrongness #182 and #2682 both are.
+#
+# The loader's own answer comes from compiler/entries/module_closure_probe.mdk.
+# It is BUILT rather than `medaka run`, because the tree-walking interpreter
+# overflows its 25000-frame limit parsing a graph this size.
+echo
+echo "arm 2: FP_FULL import-closure walker vs. the loader's real module graph ..."
+
+# Derived from the script under test, never re-typed here: the two must name the
+# same entry and roots or this arm proves nothing about what actually gets hashed.
+FP_ENTRY="$(sed -n 's/^FP_ENTRY="\(.*\)"$/\1/p' "$ROOT/test/build_native_medaka.sh")"
+FP_ROOTS="$(sed -n 's/^FP_ROOTS="\(.*\)"$/\1/p' "$ROOT/test/build_native_medaka.sh")"
+if [ -z "$FP_ENTRY" ] || [ -z "$FP_ROOTS" ]; then
+  echo "FAIL: could not read FP_ENTRY/FP_ROOTS out of test/build_native_medaka.sh."
+  echo "      They are the entry + search roots FP_FULL's closure is taken over; if they"
+  echo "      moved or were renamed, this arm would silently check a different graph."
+  exit 1
+fi
+# The awk walker takes roots colon-separated; the probe takes them as argv words.
+FP_ROOTS_SPACED="$(printf '%s' "$FP_ROOTS" | tr ':' ' ')"
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+STATIC="$WORK/static.txt"
+# The walk and the sort are two statements, not one pipeline: `! cmd | sort` negates
+# the PIPELINE's status, which is sort's, so a walker exiting 1 would be absorbed and
+# reported later as a downstream symptom (an empty list) naming the wrong cause.
+if ! ( cd "$ROOT" && awk -v entry="$FP_ENTRY" -v roots="$FP_ROOTS" \
+         -f test/emitter_source_set.awk ) > "$WORK/static.raw"; then
+  echo "FAIL: test/emitter_source_set.awk could not walk $FP_ENTRY."
+  echo "      src_fingerprint_full() would fall back to hashing all of compiler/ — safe,"
+  echo "      but it means the narrowing this gate exists to protect is not in effect."
+  exit 1
+fi
+LC_ALL=C sort "$WORK/static.raw" > "$STATIC"
+
+PROBE_SRC="$ROOT/compiler/entries/module_closure_probe.mdk"
+PROBE_BIN="$WORK/module_closure_probe"
+if [ ! -f "$PROBE_SRC" ]; then
+  echo "FAIL: no $PROBE_SRC — this arm has nothing to ask the loader with."
+  exit 1
+fi
+[ -x "$ROOT/medaka_emitter" ] && export MEDAKA_EMITTER="$ROOT/medaka_emitter"
+# Redirected, not piped: `medaka build`'s exit code does not survive a pipe
+# (AGENTS.md [D-BUILD-PIPE]).
+if ! ( cd "$ROOT" && "$BIN" build "$PROBE_SRC" -o "$PROBE_BIN" ) > "$WORK/build.log" 2>&1; then
+  echo "FAIL: could not build $PROBE_SRC:"
+  sed 's/^/      | /' "$WORK/build.log"
+  exit 1
+fi
+
+LOADER="$WORK/loader.txt"
+if ! ( cd "$ROOT" && "$PROBE_BIN" "$FP_ENTRY" $FP_ROOTS_SPACED ) > "$LOADER".raw 2>"$WORK/probe.err"; then
+  echo "FAIL: $PROBE_SRC exited nonzero:"
+  sed 's/^/      | /' "$WORK/probe.err"
+  exit 1
+fi
+LC_ALL=C sort "$LOADER".raw > "$LOADER"
+
+# BOTH lists must be non-empty before `diff` is allowed to mean anything: two
+# empty files compare equal and would manufacture a pass out of a walker that
+# walked nothing and a probe that loaded nothing (#2682's first attempt did
+# exactly this with two empty IR dumps).
+if [ ! -s "$STATIC" ] || [ ! -s "$LOADER" ]; then
+  echo "FAIL: empty closure list — static=$(wc -l < "$STATIC") loader=$(wc -l < "$LOADER")."
+  echo "      A comparison of two empty lists is not a passing comparison."
+  exit 1
+fi
+
+if ! diff -u "$STATIC" "$LOADER" > "$WORK/closure.diff"; then
+  echo "FAIL: the static FP_FULL walker and driver.loader disagree on the import"
+  echo "      closure of $FP_ENTRY (-static +loader):"
+  sed 's/^/      | /' "$WORK/closure.diff"
+  echo "      A '-' line is a file FP_FULL hashes but the emitter never compiles"
+  echo "      (harmless, costs a rebuild). A '+' line is a file the emitter DOES"
+  echo "      compile that FP_FULL does NOT hash — stage A will report 'up-to-date'"
+  echo "      about an emitter built from source that has since changed."
+  exit 1
+fi
+
+echo "checked: test/emitter_source_set.awk == driver.loader's real closure of"
+echo "$FP_ENTRY ($(wc -l < "$STATIC" | tr -d ' ') modules) — PASS."
 exit 0

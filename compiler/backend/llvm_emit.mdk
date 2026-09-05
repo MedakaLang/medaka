@@ -1156,11 +1156,7 @@ sigsToMap t = omFromPairs (reverseL t) omEmpty
 -- the two diverge and only the replayed arity tracks the real `@mdk_<fn>` define.
 installDefArityMap : Emit -> List CBind -> Unit
 installDefArityMap e binds =
-  e.defArityMap := Some (omFromPairs (defArityPairs e binds) omEmpty)
-
-defArityPairs : Emit -> List CBind -> List (String, Int)
-defArityPairs _ [] = []
-defArityPairs e (b :: rest) = defArityPair e b :: defArityPairs e rest
+  e.defArityMap := Some (omFromPairs (map (defArityPair e) binds) omEmpty)
 
 defArityPair : Emit -> CBind -> (String, Int)
 defArityPair e (CBind name [CClause pats body]) =
@@ -2228,6 +2224,14 @@ escBytes (b :: rest) = "\\\{hex2 b}\{escBytes rest}"
 hex2 : Int -> String
 hex2 b = hexDigit (b / 16) ++ hexDigit (b % 16)
 
+-- Uppercase `A`-`F`, matching LLVM's own textual convention for `\HH` string
+-- escapes.  The WAT emitter's `hexDigitW` (backend/wasm_emit.mdk) is the same
+-- function over lowercase and stays separate on purpose: both grammars accept
+-- either case and assemble to identical bytes, but `wasm-tools print`
+-- normalizes escapes to lowercase, so only lowercase keeps emitted WAT equal to
+-- its own round-trip.  One shared case would therefore have to be lowercase,
+-- which would rewrite every `\HH` escape in the emitted LLVM IR text for no
+-- semantic gain.
 hexDigit : Int -> String
 hexDigit d
   | d < 10 = intToString d
@@ -5621,8 +5625,7 @@ methValDictNames _ = []
 
 -- the operand words for each captured dict name, looked up in the current emit env.
 capDictWords : Emit -> OrdMap (String, LTy) -> List String -> List String
-capDictWords _ _ [] = []
-capDictWords e env (d :: rest) = dictOperand e env d :: capDictWords e env rest
+capDictWords e env ds = map (dictOperand e env) ds
 
 -- emit the lifted method-value forwarder.  Captures (the dict words) load from
 -- `%clos` fields 1.. and rebind the route's dict name(s); the body re-emits the
@@ -7264,13 +7267,9 @@ argTagCollidingHeads e method groups raw =
     []
   else
     dupStrings
-      (groupHeadTags groups ++ rawHeadTags e.input.ifaceImplHeads iface raw)
+      (map groupTag groups ++ rawHeadTags e.input.ifaceImplHeads iface raw)
       []
       []
-
-groupHeadTags : List ImplGroup -> List String
-groupHeadTags [] = []
-groupHeadTags (g :: rest) = groupTag g :: groupHeadTags rest
 
 -- the head tycons the inheriting declared impls sit at, dropping any route word no
 -- declared impl of [iface] answers to (an empty decl-derived heads table, or a word
@@ -7742,9 +7741,7 @@ emitDictAppDirect e name allWords =
 
 -- the dict witness words for a constrained-function call's routes (note (j)).
 dictWordsOf : Emit -> OrdMap (String, LTy) -> List Route -> List String
-dictWordsOf _ _ [] = []
-dictWordsOf e env (r :: rest) =
-  dictWordOfRoute e env r :: dictWordsOf e env rest
+dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 
 -- one route -> its dict witness word (GAP 1, Option A — BOXED dict witness).
 -- A dict witness is a POINTER to a heap cell `[ i64 head_tag | i64 reqdict_0 | … ]`
@@ -8641,14 +8638,7 @@ headPat [] = PWild
 -- each (the Maranget priority).  CImplDefault entries (interface defaults) are
 -- skipped — they are the arg-tag fallback, never a lifted static-dispatch target.
 groupImpls : Emit -> List CImplEntry -> List ImplGroup
-groupImpls e entries =
-  mapMut (gatherGroup e entries) (distinctImplKeys entries [])
-
--- map an effectful function over a list (map is pure; gatherGroup now reads the method
--- arity table to eta-expand point-free impls, so the walk must be effectful).
-mapMut : (a -> b) -> List a -> List b
-mapMut _ [] = []
-mapMut f (x :: rest) = f x :: mapMut f rest
+groupImpls e entries = map (gatherGroup e entries) (distinctImplKeys entries [])
 
 -- the (method, key) keys of tagged entries, in first-seen order.
 distinctImplKeys : List CImplEntry ->
@@ -10093,6 +10083,10 @@ bindVarTy : Emit ->
   String ->
   OrdMap (String, LTy)
 bindVarTy e env x v body declName =
+  -- Not an `orElse` staircase: `orElse` is eager, so it would run the
+  -- `paramUseTy` walk over the whole arm body on every bind, including the
+  -- common case where the declared field type already answered.
+  -- lint-disable-next-line rule-orelse-staircase
   let ty = match fieldNameToLTy declName
     Some t => t
     None => match paramUseTy (sigMapOf e) [] x body

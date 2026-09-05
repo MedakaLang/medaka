@@ -107,6 +107,7 @@ import lib.select.{
   containsInSubquery,
 }
 import list.{reverse, get, sortBy, zip}
+import string.{contains}
 
 -- ---------------------------------------------------------------------------
 -- Refusal guard
@@ -125,7 +126,7 @@ refuseIfUnsupported (e :: rest) =
     refuseIfUnsupported rest
 
 containsWithoutRowid : String -> Bool
-containsWithoutRowid sql = stringContains (upperString sql) "WITHOUT ROWID"
+containsWithoutRowid sql = contains "WITHOUT ROWID" (upperString sql)
 
 upperString : String -> String
 upperString s =
@@ -144,32 +145,6 @@ upperCharsGo arr i n acc =
       Some x => x
       None => arr[i]
     upperCharsGo arr (i + 1) n (ch :: acc)
-
-stringContains : String -> String -> Bool
-stringContains haystack needle =
-  let h = stringToChars haystack
-  let nd = stringToChars needle
-  let hl = arrayLength h
-  let nl = arrayLength nd
-  if nl == 0 then True else stringContainsGo h hl nd nl 0
-
-stringContainsGo : Array Char -> Int -> Array Char -> Int -> Int -> Bool
-stringContainsGo h hl nd nl i =
-  if i + nl > hl then
-    False
-  else if charsMatchAt h nd i 0 nl then
-    True
-  else
-    stringContainsGo h hl nd nl (i + 1)
-
-charsMatchAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-charsMatchAt h nd hi ni nl =
-  if ni >= nl then
-    True
-  else if charCode h[hi + ni] == charCode nd[ni] then
-    charsMatchAt h nd hi (ni + 1) nl
-  else
-    False
 
 -- ---------------------------------------------------------------------------
 -- Spec helpers

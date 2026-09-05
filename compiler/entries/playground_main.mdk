@@ -129,6 +129,7 @@ import json.{
 }
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
+import entries.entry_support.{rootsOrDefault, desugarPair}
 import support.util.{startsWith}
 import types.repr.{Scheme}
 import types.typecheck.{
@@ -184,10 +185,6 @@ main = match args ()
   _ =>
     ePutStrLn
       "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
 
 -- ── driver ────────────────────────────────────────────────────────────────
 -- Read runtime + core, then run the front end ONCE.  Parse the user entry with
@@ -551,9 +548,6 @@ tripleHasDiag (_, _, ds) = nonEmptyDiags ds
 nonEmptyDiags : List Diag -> Bool
 nonEmptyDiags [] = False
 nonEmptyDiags _ = True
-
-desugarPair : (String, List Decl) -> (String, List Decl)
-desugarPair (mid, p) = (mid, desugar p)
 
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =

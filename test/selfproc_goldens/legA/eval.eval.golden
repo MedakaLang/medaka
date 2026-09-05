@@ -197,7 +197,6 @@ isDispatching : Value a -> Bool
 isMethodBinding : Value a -> Bool
 isNullary : List Pat -> Bool
 isPartial : Value a -> Bool
-joinComma : List String -> String
 joinSp : List String -> String
 keepCand : String -> Value a -> Bool
 keepOrAll : List (Value a) -> List (Value a) -> List (Value a)

@@ -28,7 +28,6 @@ findProjectRootOrSelf : String -> <IO> String
 findRootGo : String -> <IO> Option String
 importModId : UsePath -> String
 joinArrow : List String -> String
-joinComma : List String -> String
 joinPathL : String -> String -> String
 joinSlash : List String -> String
 keyBeforeEq : String -> String

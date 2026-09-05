@@ -168,14 +168,15 @@ ppValue (VChar c) = c
 ppValue (VBool True) = "true"
 ppValue (VBool False) = "false"
 ppValue VUnit = "()"
-ppValue (VTuple vs) = "(" ++ joinComma (map ppValue vs) ++ ")"
-ppValue (VList vs) = "[" ++ joinComma (map ppValue vs) ++ "]"
-ppValue (VArray vs) = "[|" ++ joinComma (map ppValue (arrayToListG vs)) ++ "|]"
+ppValue (VTuple vs) = "(" ++ joinWith ", " (map ppValue vs) ++ ")"
+ppValue (VList vs) = "[" ++ joinWith ", " (map ppValue vs) ++ "]"
+ppValue (VArray vs) =
+  "[|" ++ joinWith ", " (map ppValue (arrayToListG vs)) ++ "|]"
 ppValue (VCon name []) = displayCtorName name
 ppValue (VCon name vs) =
   "\{displayCtorName name} \{joinSp (map ppValueAtom vs)}"
 ppValue (VRecord name fields) =
-  "\{displayCtorName name} { \{joinComma (map ppField fields)} }"
+  "\{displayCtorName name} { \{joinWith ", " (map ppField fields)} }"
 ppValue (VRef cell) = "Ref(" ++ ppValue !cell ++ ")"
 ppValue (VClosure _ _ _) = "<closure>"
 ppValue (VClosureF _ _ _) = "<closure>"
@@ -228,9 +229,6 @@ stripModPrefix n i len
   | i + 2 > len = n
   | stringSlice i (i + 2) n == "__" = stringSlice (i + 2) len n
   | otherwise = stripModPrefix n (i + 1) len
-
-joinComma : List String -> String
-joinComma xs = joinWith ", " xs
 
 joinSp : List String -> String
 joinSp xs = joinWith " " xs

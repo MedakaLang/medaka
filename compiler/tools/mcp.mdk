@@ -1292,10 +1292,8 @@ lintPathsToDiagTriples : StdlibIndex ->
   List String ->
   List String ->
   <IO> List (String, String, List Diag)
-lintPathsToDiagTriples _ _ _ _ [] = []
-lintPathsToDiagTriples idx disable only deny (p :: rest) =
-  lintFileDiagTriple idx disable only deny p
-    :: lintPathsToDiagTriples idx disable only deny rest
+lintPathsToDiagTriples idx disable only deny paths =
+  map (lintFileDiagTriple idx disable only deny) paths
 
 anyTripleHasErr : List (String, String, List Diag) -> Bool
 anyTripleHasErr [] = False

@@ -1,5 +1,5 @@
 # META
-source_lines=985
+source_lines=984
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -919,8 +919,7 @@ ppMonosShared ms =
 
 export
 ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
-ppEachShared _ _ [] = []
-ppEachShared ctx cnt (m :: rest) = ppGo ctx cnt 2 m :: ppEachShared ctx cnt rest
+ppEachShared ctx cnt ms = map (ppGo ctx cnt 2) ms
 
 -- pretty-print an AST type
 export
@@ -1168,8 +1167,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "ppMonosShared" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String")))
 (DFunDef false "ppMonosShared" ((PVar "ms")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EVar "ppEachShared") (EVar "ctx")) (EVar "cnt")) (EVar "ms"))))))
 (DTypeSig true "ppEachShared" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ppEachShared" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ppEachShared" ((PVar "ctx") (PVar "cnt") (PCons (PVar "m") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "m")) (EApp (EApp (EApp (EVar "ppEachShared") (EVar "ctx")) (EVar "cnt")) (EVar "rest"))))
+(DFunDef false "ppEachShared" ((PVar "ctx") (PVar "cnt") (PVar "ms")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2)))) (EVar "ms")))
 (DTypeSig true "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
 (DFunDef false "ppTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
@@ -1379,8 +1377,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "ppMonosShared" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String")))
 (DFunDef false "ppMonosShared" ((PVar "ms")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EVar "ppEachShared") (EVar "ctx")) (EVar "cnt")) (EVar "ms"))))))
 (DTypeSig true "ppEachShared" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ppEachShared" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ppEachShared" ((PVar "ctx") (PVar "cnt") (PCons (PVar "m") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "m")) (EApp (EApp (EApp (EVar "ppEachShared") (EVar "ctx")) (EVar "cnt")) (EVar "rest"))))
+(DFunDef false "ppEachShared" ((PVar "ctx") (PVar "cnt") (PVar "ms")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2)))) (EVar "ms")))
 (DTypeSig true "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
 (DFunDef false "ppTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))

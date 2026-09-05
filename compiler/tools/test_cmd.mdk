@@ -118,6 +118,7 @@ import driver.diagnostics.{
   Diag,
   diagIsError,
 }
+export import support.util.{rootsOrDefault}
 import support.util.{
   listLen,
   joinNl,
@@ -134,11 +135,6 @@ import support.path.{dirOf, baseOf}
 -- files it names.
 substringMatch : String -> String -> Bool
 substringMatch needle haystack = isSome (stringIndexOf needle haystack)
-
-export
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault target [] = [dirOf target]
-rootsOrDefault _ roots = roots
 
 -- Returns True iff every doctest AND every prop passed.  A file that parses
 -- clean with zero doctests/props is vacuously True (nothing ran, nothing

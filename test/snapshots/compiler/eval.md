@@ -1,5 +1,5 @@
 # META
-source_lines=4854
+source_lines=4852
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -172,14 +172,15 @@ ppValue (VChar c) = c
 ppValue (VBool True) = "true"
 ppValue (VBool False) = "false"
 ppValue VUnit = "()"
-ppValue (VTuple vs) = "(" ++ joinComma (map ppValue vs) ++ ")"
-ppValue (VList vs) = "[" ++ joinComma (map ppValue vs) ++ "]"
-ppValue (VArray vs) = "[|" ++ joinComma (map ppValue (arrayToListG vs)) ++ "|]"
+ppValue (VTuple vs) = "(" ++ joinWith ", " (map ppValue vs) ++ ")"
+ppValue (VList vs) = "[" ++ joinWith ", " (map ppValue vs) ++ "]"
+ppValue (VArray vs) =
+  "[|" ++ joinWith ", " (map ppValue (arrayToListG vs)) ++ "|]"
 ppValue (VCon name []) = displayCtorName name
 ppValue (VCon name vs) =
   "\{displayCtorName name} \{joinSp (map ppValueAtom vs)}"
 ppValue (VRecord name fields) =
-  "\{displayCtorName name} { \{joinComma (map ppField fields)} }"
+  "\{displayCtorName name} { \{joinWith ", " (map ppField fields)} }"
 ppValue (VRef cell) = "Ref(" ++ ppValue !cell ++ ")"
 ppValue (VClosure _ _ _) = "<closure>"
 ppValue (VClosureF _ _ _) = "<closure>"
@@ -232,9 +233,6 @@ stripModPrefix n i len
   | i + 2 > len = n
   | stringSlice i (i + 2) n == "__" = stringSlice (i + 2) len n
   | otherwise = stripModPrefix n (i + 1) len
-
-joinComma : List String -> String
-joinComma xs = joinWith ", " xs
 
 joinSp : List String -> String
 joinSp xs = joinWith " " xs
@@ -4874,12 +4872,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValue" ((PCon "VBool" (PCon "True"))) (ELit (LString "true")))
 (DFunDef false "ppValue" ((PCon "VBool" (PCon "False"))) (ELit (LString "false")))
 (DFunDef false "ppValue" ((PCon "VUnit")) (ELit (LString "()")))
-(DFunDef false "ppValue" ((PCon "VTuple" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString ")"))))
-(DFunDef false "ppValue" ((PCon "VList" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString "]"))))
-(DFunDef false "ppValue" ((PCon "VArray" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppValue")) (EApp (EVar "arrayToListG") (EVar "vs"))))) (ELit (LString "|]"))))
+(DFunDef false "ppValue" ((PCon "VTuple" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString ")"))))
+(DFunDef false "ppValue" ((PCon "VList" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString "]"))))
+(DFunDef false "ppValue" ((PCon "VArray" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppValue")) (EApp (EVar "arrayToListG") (EVar "vs"))))) (ELit (LString "|]"))))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PList))) (EApp (EVar "displayCtorName") (EVar "name")))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PVar "vs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSp") (EApp (EApp (EVar "map") (EVar "ppValueAtom")) (EVar "vs"))))) (ELit (LString ""))))
-(DFunDef false "ppValue" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " { "))) (EApp (EVar "display") (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppField")) (EVar "fields"))))) (ELit (LString " }"))))
+(DFunDef false "ppValue" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " { "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppField")) (EVar "fields"))))) (ELit (LString " }"))))
 (DFunDef false "ppValue" ((PCon "VRef" (PVar "cell"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Ref(")) (EApp (EVar "ppValue") (EUnOp "!" (EVar "cell")))) (ELit (LString ")"))))
 (DFunDef false "ppValue" ((PCon "VClosure" PWild PWild PWild)) (ELit (LString "<closure>")))
 (DFunDef false "ppValue" ((PCon "VClosureF" PWild PWild PWild)) (ELit (LString "<closure>")))
@@ -4901,8 +4899,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "upperInitialName" ((PVar "n")) (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "A"))) (EBinOp "<=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "Z")))))
 (DTypeSig false "stripModPrefix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "stripModPrefix" ((PVar "n") (PVar "i") (PVar "len")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EVar "len")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "n")) (ELit (LString "__"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "len")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "stripModPrefix") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "joinComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinComma" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "xs")))
 (DTypeSig false "joinSp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSp" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "xs")))
 (DTypeSig false "arrayToListG" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -6396,12 +6392,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValue" ((PCon "VBool" (PCon "True"))) (ELit (LString "true")))
 (DFunDef false "ppValue" ((PCon "VBool" (PCon "False"))) (ELit (LString "false")))
 (DFunDef false "ppValue" ((PCon "VUnit")) (ELit (LString "()")))
-(DFunDef false "ppValue" ((PCon "VTuple" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString ")"))))
-(DFunDef false "ppValue" ((PCon "VList" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString "]"))))
-(DFunDef false "ppValue" ((PCon "VArray" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EApp (EVar "arrayToListG") (EVar "vs"))))) (ELit (LString "|]"))))
+(DFunDef false "ppValue" ((PCon "VTuple" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString ")"))))
+(DFunDef false "ppValue" ((PCon "VList" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString "]"))))
+(DFunDef false "ppValue" ((PCon "VArray" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EApp (EVar "arrayToListG") (EVar "vs"))))) (ELit (LString "|]"))))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PList))) (EApp (EVar "displayCtorName") (EVar "name")))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PVar "vs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinSp") (EApp (EApp (EMethodRef "map") (EVar "ppValueAtom")) (EVar "vs"))))) (ELit (LString ""))))
-(DFunDef false "ppValue" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppField")) (EVar "fields"))))) (ELit (LString " }"))))
+(DFunDef false "ppValue" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppField")) (EVar "fields"))))) (ELit (LString " }"))))
 (DFunDef false "ppValue" ((PCon "VRef" (PVar "cell"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Ref(")) (EApp (EVar "ppValue") (EUnOp "!" (EVar "cell")))) (ELit (LString ")"))))
 (DFunDef false "ppValue" ((PCon "VClosure" PWild PWild PWild)) (ELit (LString "<closure>")))
 (DFunDef false "ppValue" ((PCon "VClosureF" PWild PWild PWild)) (ELit (LString "<closure>")))
@@ -6423,8 +6419,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "upperInitialName" ((PVar "n")) (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "A"))) (EBinOp "<=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "Z")))))
 (DTypeSig false "stripModPrefix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "stripModPrefix" ((PVar "n") (PVar "i") (PVar "len")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EVar "len")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "n")) (ELit (LString "__"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "len")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "stripModPrefix") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "joinComma" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinComma" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "xs")))
 (DTypeSig false "joinSp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSp" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "xs")))
 (DTypeSig false "arrayToListG" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))

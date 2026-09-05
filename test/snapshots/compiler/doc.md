@@ -1,5 +1,5 @@
 # META
-source_lines=1672
+source_lines=1666
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -52,7 +52,7 @@ import frontend.ast.{
 }
 import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
-import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
+import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl, contains}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
@@ -781,7 +781,7 @@ extractFold bare ((decl, dp) :: rest) schemes origins tbl revEntries seen =
     None => match renderSig bare decl schemes
       None => extractFold bare rest schemes origins tbl revEntries seen
       Some (name, sigStr) =>
-        if memberStr name seen then
+        if contains name seen then
           extractFold bare rest schemes origins tbl revEntries seen
         else
           let doc = findDocForLine tbl line
@@ -837,7 +837,7 @@ foldExtras : List (String, DocEntry) ->
   (List DocEntry, List String)
 foldExtras [] revEntries seen = (revEntries, seen)
 foldExtras ((name, e) :: rest) revEntries seen =
-  if memberStr name seen then
+  if contains name seen then
     foldExtras rest revEntries seen
   else
     foldExtras rest (e :: revEntries) (name :: seen)
@@ -846,12 +846,6 @@ foldExtras ((name, e) :: rest) revEntries seen =
 letgroupOf : Decl -> Option (Bool, List LetBind)
 letgroupOf (DLetGroup isPub bindings) = Some (isPub, bindings)
 letgroupOf _ = None
-
-memberStr : String -> List String -> Bool
-memberStr _ [] = False
-memberStr x (y :: ys)
-  | x == y = True
-  | otherwise = memberStr x ys
 
 zipDoc : List a -> List b -> List (a, b)
 zipDoc [] _ = []
@@ -1680,7 +1674,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
@@ -1860,7 +1854,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "extractEntries" ((PVar "bare") (PVar "decls") (PVar "positions") (PVar "schemes") (PVar "origins") (PVar "comments")) (EBlock (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipDoc") (EVar "decls")) (EVar "positions"))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "pairs")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EListLit)) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EApp (EVar "fst") (EVar "result"))))))
 (DTypeSig false "extractFold" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))))))
 (DFunDef false "extractFold" (PWild (PList) PWild PWild PWild (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
-(DFunDef false "extractFold" ((PVar "bare") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "memberStr") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
+(DFunDef false "extractFold" ((PVar "bare") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
 (DTypeSig false "insertSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "insertSections" ((PList) (PVar "entries")) (EVar "entries"))
 (DFunDef false "insertSections" ((PCons (PTuple (PVar "l") (PVar "title")) (PVar "secs")) (PList)) (EBinOp "::" (EApp (EApp (EVar "sectionEntry") (EVar "l")) (EVar "title")) (EApp (EApp (EVar "insertSections") (EVar "secs")) (EListLit))))
@@ -1873,13 +1867,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "multiEntriesFor" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "origins") (PVar "tbl")) (EMatch (EApp (EVar "letgroupOf") (EVar "decl")) (arm (PCon "Some" (PTuple (PVar "isPub") (PVar "bindings"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "allLetgroupEntries") (EVar "isPub")) (EVar "bindings")) (EVar "line")) (EVar "schemes")) (EVar "tbl")))) (arm (PCon "None") () (EMatch (EApp (EVar "useGroupOf") (EVar "decl")) (arm (PCon "Some" (PVar "pm")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntries") (EVar "line")) (EVar "schemes")) (EVar "tbl")) (EVar "origins")) (EVar "pm")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "derivingEntries") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "tbl"))) (EApp (EVar "derivesOf") (EVar "decl"))))))))
 (DTypeSig false "foldExtras" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "foldExtras" ((PList) (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
-(DFunDef false "foldExtras" ((PCons (PTuple (PVar "name") (PVar "e")) (PVar "rest")) (PVar "revEntries") (PVar "seen")) (EIf (EApp (EApp (EVar "memberStr") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EVar "revEntries")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EBinOp "::" (EVar "e") (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))
+(DFunDef false "foldExtras" ((PCons (PTuple (PVar "name") (PVar "e")) (PVar "rest")) (PVar "revEntries") (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EVar "revEntries")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EBinOp "::" (EVar "e") (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))
 (DTypeSig false "letgroupOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind"))))))
 (DFunDef false "letgroupOf" ((PCon "DLetGroup" (PVar "isPub") (PVar "bindings"))) (EApp (EVar "Some") (ETuple (EVar "isPub") (EVar "bindings"))))
 (DFunDef false "letgroupOf" (PWild) (EVar "None"))
-(DTypeSig false "memberStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "memberStr" (PWild (PList)) (EVar "False"))
-(DFunDef false "memberStr" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "memberStr") (EVar "x")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "zipDoc" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "b")) (TyApp (TyCon "List") (TyTuple (TyVar "a") (TyVar "b"))))))
 (DFunDef false "zipDoc" ((PList) PWild) (EListLit))
 (DFunDef false "zipDoc" (PWild (PList)) (EListLit))
@@ -2084,7 +2075,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
@@ -2264,7 +2255,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "extractEntries" ((PVar "bare") (PVar "decls") (PVar "positions") (PVar "schemes") (PVar "origins") (PVar "comments")) (EBlock (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipDoc") (EVar "decls")) (EVar "positions"))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "pairs")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EListLit)) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EApp (EVar "fst") (EVar "result"))))))
 (DTypeSig false "extractFold" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))))))
 (DFunDef false "extractFold" (PWild (PList) PWild PWild PWild (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
-(DFunDef false "extractFold" ((PVar "bare") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "memberStr") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
+(DFunDef false "extractFold" ((PVar "bare") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
 (DTypeSig false "insertSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "insertSections" ((PList) (PVar "entries")) (EVar "entries"))
 (DFunDef false "insertSections" ((PCons (PTuple (PVar "l") (PVar "title")) (PVar "secs")) (PList)) (EBinOp "::" (EApp (EApp (EVar "sectionEntry") (EVar "l")) (EVar "title")) (EApp (EApp (EVar "insertSections") (EVar "secs")) (EListLit))))
@@ -2277,13 +2268,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "multiEntriesFor" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "origins") (PVar "tbl")) (EMatch (EApp (EVar "letgroupOf") (EVar "decl")) (arm (PCon "Some" (PTuple (PVar "isPub") (PVar "bindings"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "allLetgroupEntries") (EVar "isPub")) (EVar "bindings")) (EVar "line")) (EVar "schemes")) (EVar "tbl")))) (arm (PCon "None") () (EMatch (EApp (EVar "useGroupOf") (EVar "decl")) (arm (PCon "Some" (PVar "pm")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntries") (EVar "line")) (EVar "schemes")) (EVar "tbl")) (EVar "origins")) (EVar "pm")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "derivingEntries") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "tbl"))) (EApp (EVar "derivesOf") (EVar "decl"))))))))
 (DTypeSig false "foldExtras" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "foldExtras" ((PList) (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
-(DFunDef false "foldExtras" ((PCons (PTuple (PVar "name") (PVar "e")) (PVar "rest")) (PVar "revEntries") (PVar "seen")) (EIf (EApp (EApp (EVar "memberStr") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EVar "revEntries")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EBinOp "::" (EVar "e") (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))
+(DFunDef false "foldExtras" ((PCons (PTuple (PVar "name") (PVar "e")) (PVar "rest")) (PVar "revEntries") (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EVar "revEntries")) (EVar "seen")) (EApp (EApp (EApp (EVar "foldExtras") (EVar "rest")) (EBinOp "::" (EVar "e") (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))
 (DTypeSig false "letgroupOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind"))))))
 (DFunDef false "letgroupOf" ((PCon "DLetGroup" (PVar "isPub") (PVar "bindings"))) (EApp (EVar "Some") (ETuple (EVar "isPub") (EVar "bindings"))))
 (DFunDef false "letgroupOf" (PWild) (EVar "None"))
-(DTypeSig false "memberStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "memberStr" (PWild (PList)) (EVar "False"))
-(DFunDef false "memberStr" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "memberStr") (EVar "x")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "zipDoc" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "b")) (TyApp (TyCon "List") (TyTuple (TyVar "a") (TyVar "b"))))))
 (DFunDef false "zipDoc" ((PList) PWild) (EListLit))
 (DFunDef false "zipDoc" (PWild (PList)) (EListLit))

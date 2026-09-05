@@ -405,10 +405,14 @@ jobs:
             #                                    it invokes (NOT a standalone gate — see
             #                                    that script's header for why it rides
             #                                    inside this one)
-            #   check_fingerprint_parity.sh   -> nothing outside the closure (it diffs
+            #   check_fingerprint_parity.sh   -> test/emitter_source_set.awk, the static
+            #                                    closure walker its arm 2 runs (arm 2's
+            #                                    other two inputs — build_native_medaka.sh
+            #                                    and compiler/entries/module_closure_probe.mdk,
+            #                                    which it builds — are already
+            #                                    compiler_touched; arm 1 diffs
             #                                    build_native_medaka.sh against
-            #                                    compiler/driver/medaka_cli.mdk, both
-            #                                    already compiler_touched)
+            #                                    compiler/driver/medaka_cli.mdk)
             #   selfcompile_fixpoint.sh       -> nothing outside the closure (seed,
             #                                    runtime, stdlib, compiler)
             #   the oracle build              -> test/build_oracles.sh
@@ -416,6 +420,7 @@ jobs:
             case "$f" in
               test/must_fail_fixtures/*|test/MUST-FAIL-NOT-PINNABLE.txt) soundness_corpora=true ;;
               test/diff_compiler_must_fail.sh|test/check_fingerprint_parity.sh) soundness_corpora=true ;;
+              test/emitter_source_set.awk) soundness_corpora=true ;;
               test/typecheck_compiler_source.sh|test/registry_keying_ratchet.sh) soundness_corpora=true ;;
               test/selfcompile_fixpoint.sh|test/build_oracles.sh) soundness_corpora=true ;;
             esac

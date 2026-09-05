@@ -36,7 +36,7 @@ import support.timer.{
 }
 import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
-import support.path.{dirOf}
+import entries.entry_support.{rootsOrDefault, desugarPair}
 
 main : <IO> Unit
 main = match args ()
@@ -45,13 +45,6 @@ main = match args ()
   _ =>
     ePutStrLn
       "usage: MEDAKA_PERF=1 medaka run compiler/entries/profile_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
-
-desugarPair : (String, List Decl) -> (String, List Decl)
-desugarPair (mid, p) = (mid, desugar p)
 
 run : String -> String -> String -> List String -> <IO> Unit
 run runtimeP coreP entry roots = match readFile runtimeP

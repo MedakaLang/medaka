@@ -1,5 +1,5 @@
 # META
-source_lines=309
+source_lines=313
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -173,7 +173,11 @@ mapDeclsChanged xf (d :: ds) =
   (d2 :: ds2, c1 || c2)
 
 -- ── the `effect-labels` transform ────────────────────────────────────────────
--- Per-label action, parsed from `--strip`/`--rename`.
+-- Per-label action, parsed from `--strip`/`--rename`.  Not an `Option String`
+-- clone: the table is looked up with `lookupAssoc`, so `Option String` would make
+-- `applyAtom` read `Option (Option String)`, where `Some None` (label present,
+-- strip it) and `None` (label absent, leave it) are one typo apart.
+-- lint-disable-next-line rule-clone-type
 data EffAction = ADrop | ARename String
 
 mkEffectLabels : List String -> Result String (Decl -> (Decl, Bool))

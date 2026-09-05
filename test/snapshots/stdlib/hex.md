@@ -1,5 +1,5 @@
 # META
-source_lines=142
+source_lines=147
 stages=DESUGAR,MARK
 # SOURCE
 {- | Hexadecimal encoding and decoding of bytes.
@@ -11,6 +11,11 @@ stages=DESUGAR,MARK
 
 -- hex/base64 codec wrappers over a module-local decode share identical wrapper bodies by design.
 -- lint-disable-file rule-duplicate-body
+
+-- hex and base64 declare matching signatures for encode/encodeString/decode/decodeString (and
+-- hex's encodeUpper matches base64's encode) — a signature-only match between two distinct
+-- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
+-- lint-disable-file rule-stdlib-reimpl
 
 import array.{get, fromList}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
