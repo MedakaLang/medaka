@@ -1,5 +1,7 @@
 # Table case-fold fix + stale rejection-corpus labeling
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Two small, isolated fixes: (1) `findTable`/`findTableGo` case-insensitivity (F4 residual from
 `sql-parser-select.md`), and (2) re-partitioning `sqlite/inmem_sqlparse_probe.mdk`'s stale
 REJECTIONS list now that the engine grew `LIKE`, `BETWEEN`, and scalar `upper()`.

@@ -180,7 +180,7 @@ p1's program half + p1's prelude.o  -> 30    (correct)
 **(e) ⚠️ THE COUNTEREXAMPLE THAT KILLS THE NAIVE DESIGN.** A program's own **`impl`
 decls structurally rewrite core prelude function bodies.** Adding a single
 
-```medaka
+```medaka-nocheck: the shape of one added impl, with an elided body and over a Color type defined only in the surrounding prose
 impl Eq Color where
   eq a b = ...
 ```

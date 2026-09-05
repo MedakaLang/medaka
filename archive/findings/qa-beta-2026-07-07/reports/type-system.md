@@ -1,5 +1,7 @@
 # Type-system findings (adversarial QA, 2026-07-07)
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Binary: `$WT/medaka` (worktree `virtual-fluttering-meteor`). All repros under
 `scratchpad/probes/ts/`. Every finding reproduced twice.
 

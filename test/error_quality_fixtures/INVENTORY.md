@@ -1,5 +1,7 @@
 # INVENTORY — error-quality corpus baseline
 
+**Status:** LIVE. One row per gated fixture in test/error_quality_fixtures.
+
 One row per fixture. **Message** is a 1-line excerpt of the current stderr (or
 stdout warning) captured in the `.out` golden. **Observation** is a *neutral*
 note about the message as-is — NOT a grade. Captured against `./medaka` built

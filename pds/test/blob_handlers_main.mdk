@@ -1,0 +1,295 @@
+{- | The three blob routes graded against an EXTERNAL answer key.
+
+   `pds/test/blob_routes_test.mdk` drives the same three routes, but every
+   expected CID there is computed by `lib.blob.blobCid` — our encoder and our
+   decoder agreeing proves only that they are inverse. This driver replays
+   `pds/test/vectors/blob_reference_corpus.txt` instead: each row's payload
+   bytes are uploaded through the real `uploadBlob` route with the row's
+   declared MIME type, and the response's blob CID and whole `blob` ref JSON
+   are compared against the row's own columns, which the pinned official
+   `@atproto/lex-data` produced. Nothing in this file computes a CID.
+
+   The corpus rows are then read back through `getBlob` (exact bytes and
+   declared MIME type) and `listBlobs` (every uploaded CID, once), so the
+   three routes are graded end to end against the corpus rather than against
+   each other.
+
+   The corpus path is an argument, supplied by `pds/test/repo_vectors.sh` from
+   the provenance ledger's own `S-blob-core` row — this file never names the
+   corpus location itself. -}
+
+import hex.{decode}
+import io.{readLines}
+import json.{Json(..), get, parse, stringify}
+import list.{sort}
+import string.{contains, drop, fromUtf8, indexOf, split, startsWith, toUtf8}
+import lib.handlers.{pdsServer}
+import lib.jwt.{mintToken}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeEmpty,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
+
+accountDidText : String
+accountDidText = "did:plc:s-blob-handlers-corpus"
+
+accountHandleText : String
+accountHandleText = "blobs.example"
+
+accountHostText : String
+accountHostText = "pds.example"
+
+uploadBlobNsid : String
+uploadBlobNsid = "com.atproto.repo.uploadBlob"
+
+getBlobNsid : String
+getBlobNsid = "com.atproto.sync.getBlob"
+
+listBlobsNsid : String
+listBlobsNsid = "com.atproto.sync.listBlobs"
+
+-- A fixed secret, instant and nonce, for the reason every other handler
+-- driver in this directory gives: this file grades route answers, and a
+-- random secret would only make the transcript irreproducible.
+testSecret : Array Int
+testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
+
+testInstant : Int
+testInstant = 1700000000
+
+testContext : RequestContext
+testContext = RequestContext {
+  nowSeconds = testInstant,
+  nonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256),
+}
+
+account : Account
+account = match makeAccount accountDidText accountHandleText accountHostText
+  Ok made => made
+  Err message => panic "blob_handlers: account setup failed: \{message}"
+
+server : Server
+server = match pdsServer account
+  Ok made => made
+  Err message => panic "blob_handlers: server setup failed: \{message}"
+
+accessToken : String
+accessToken =
+  mintToken
+    testSecret
+    accountDidText
+    accountHostText
+    "blob_handlers-fixture-token"
+    (testInstant - 60)
+    (testInstant + 3600)
+
+-- | An empty store carrying the session this driver's uploads authenticate
+-- with. No repository: no blob route touches the repository half.
+authorizedStore : Store
+authorizedStore = match storeWithServerSecret testSecret storeEmpty
+  Ok next =>
+    storeSessionOpen
+      (sessionFingerprint accessToken)
+      (sessionFingerprint "blob_handlers: no refresh token in this fixture")
+      (testInstant + 3600)
+      next
+  Err message => panic "blob_handlers: session secret setup failed: \{message}"
+
+-- ── request framing ─────────────────────────────────────────────────────────
+
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right =
+  let leftSize = arrayLength left
+  arrayMakeWith (leftSize + arrayLength right) (i =>
+    if i < leftSize then left[i] else right[i - leftSize])
+
+postRaw : String -> Array Int -> Array Int
+postRaw mimeType body =
+  appendBytes
+    (toUtf8
+      "POST /xrpc/\{uploadBlobNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{accessToken}\r\nContent-Type: \{mimeType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n")
+    body
+
+getQuery : String -> String -> Array Int
+getQuery nsid query =
+  toUtf8
+    "GET /xrpc/\{nsid}\{query} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
+
+send : Store -> Array Int -> (Store, Array Int)
+send store bytes = handleBytes server testContext store bytes
+
+-- ── response reading ────────────────────────────────────────────────────────
+
+statusLineOf : Array Int -> String
+statusLineOf bytes = match split "\r\n" (fromUtf8 bytes)
+  first :: _ => drop 9 first
+  [] => "no status line"
+
+bodyText : Array Int -> String
+bodyText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at => drop (at + 4) (fromUtf8 bytes)
+  None => ""
+
+headText : Array Int -> String
+headText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at => fromUtf8 (arrayMakeWith at (i => bytes[i]))
+  None => fromUtf8 bytes
+
+hasContentType : String -> Array Int -> Bool
+hasContentType value bytes =
+  contains "content-type: \{value}\r\n" (headText bytes)
+
+-- | The raw bytes of a non-JSON success response body.
+rawBodyOf : Array Int -> Array Int
+rawBodyOf bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at =>
+    let start = at + 4
+    arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
+  None => [||]
+
+-- | The `blob` ref value of an `uploadBlob` response, re-rendered. The corpus
+-- column it is compared against was rendered by `@atproto/lex-json`, whose
+-- `blob` shape is field-ordered `$type`/`ref`/`mimeType`/`size`, so this is a
+-- byte-for-byte comparison of the whole ref, not a field subset.
+blobRefJsonText : Array Int -> String
+blobRefJsonText bytes = match parse (bodyText bytes)
+  Ok body => match get "blob" body
+    Some blob => stringify blob
+    None => "<missing:blob>"
+  Err message => "<unparsable:\{message}>"
+
+blobRefCidText : Array Int -> String
+blobRefCidText bytes = match parse (bodyText bytes)
+  Ok body => match get "blob" body
+    Some blob => match get "ref" blob
+      Some ref => match get "$link" ref
+        Some (JString link) => link
+        _ => "<missing:ref.$link>"
+      None => "<missing:ref>"
+    None => "<missing:blob>"
+  Err message => "<unparsable:\{message}>"
+
+stringEntries : List Json -> List String
+stringEntries [] = []
+stringEntries ((JString value) :: rest) = value :: stringEntries rest
+stringEntries (_ :: rest) = stringEntries rest
+
+listedCids : Array Int -> List String
+listedCids bytes = match parse (bodyText bytes)
+  Ok body => match get "cids" body
+    Some (JArray entries) => stringEntries (toList entries)
+    _ => []
+  Err _ => []
+
+-- ── corpus rows ─────────────────────────────────────────────────────────────
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "blob_handlers: malformed hex: \{message}"
+
+field : Int -> List String -> String
+field _ [] = panic "blob_handlers: corpus row is too short"
+field i (value :: rest) = if i <= 0 then value else field (i - 1) rest
+
+meaningful : String -> Bool
+meaningful line = line /= "" && not (startsWith "#" line)
+
+-- ── grading ─────────────────────────────────────────────────────────────────
+
+check : String -> Bool -> String -> <IO> Int
+check label ok detail =
+  if ok then
+    let () = println "BLOB \{label} PASS \{detail}"
+    1
+  else
+    let () = println "BLOB \{label} FAIL \{detail}"
+    0
+
+{- | Upload every corpus row through the real `uploadBlob` route, grading the
+   response's CID and whole `blob` ref against the row's own columns. Returns
+   the store every row has been uploaded into, and how many rows matched. -}
+uploadRows : List (List String) -> Store -> Int -> <IO> (Store, Int)
+uploadRows [] store passed = (store, passed)
+uploadRows (row :: rest) store passed =
+  let (next, response) =
+    send store (postRaw (field 1 row) (mustHex (field 2 row)))
+  let status = statusLineOf response
+  let cid = blobRefCidText response
+  let ref = blobRefJsonText response
+  let matched =
+    check
+      "upload-\{field 0 row}"
+      (status == "200 OK" && cid == field 3 row && ref == field 4 row)
+      "status=\{status} cid=\{cid} ref=\{ref}"
+  uploadRows rest next (passed + matched)
+
+{- | Read every corpus row back out through `getBlob`, addressed by the CID the
+   corpus declares rather than by anything this process computed. -}
+readRows : List (List String) -> Store -> Int -> <IO> Int
+readRows [] _ passed = passed
+readRows (row :: rest) store passed =
+  let (_, response) =
+    send
+      store
+      (getQuery getBlobNsid "?did=\{accountDidText}&cid=\{field 3 row}")
+  let status = statusLineOf response
+  let matched =
+    check
+      "getBlob-\{field 0 row}"
+      (status == "200 OK"
+        && rawBodyOf response == mustHex (field 2 row)
+        && hasContentType (field 1 row) response)
+      "status=\{status} bytes=\{intToString (arrayLength (rawBodyOf response))}"
+  readRows rest store (passed + matched)
+
+listCell : List (List String) -> Store -> <IO> Int
+listCell rows store =
+  let (_, response) =
+    send store (getQuery listBlobsNsid "?did=\{accountDidText}&limit=1000")
+  let listed = sort (listedCids response)
+  let expected = sort (map (row => field 3 row) rows)
+  check
+    "listBlobs-corpus-cids"
+    (listed == expected)
+    "listed=\{intToString (length listed)} expected=\{intToString (length expected)}"
+
+runRows : List (List String) -> <IO> Unit
+runRows [] = panic "blob_handlers: corpus carries no rows"
+runRows rows =
+  let expected = length rows
+  let (uploaded, external) = uploadRows rows authorizedStore 0
+  let () =
+    println
+      "external: \{intToString external}/\{intToString expected} official-atproto blob checks"
+  let reads = readRows rows uploaded 0 + listCell rows uploaded
+  let () =
+    println
+      "routes: \{intToString reads}/\{intToString (expected + 1)} corpus-graded blob route reads"
+  if external == expected && reads == expected + 1 then
+    println "TOTAL: PASS"
+  else
+    let () = println "TOTAL: FAIL"
+    exit 1
+
+runRead : Result String (List String) -> <IO> Unit
+runRead (Err message) = panic "blob_handlers: cannot read corpus: \{message}"
+runRead (Ok raw) =
+  runRows (map (line => split "\t" line) (filter meaningful raw))
+
+runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain [corpusPath] = runRead (readLines corpusPath)
+runMain _ = panic "usage: blob_handlers_main <ledger-owned-blob-corpus>"
+
+main : <IO, Env, FileRead "_"> Unit
+main = runMain (args ())

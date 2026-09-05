@@ -94,7 +94,7 @@ differential interpreter, not a product engine. Consequently:
 
 `compiler/ir/core_ir.mdk` defines `CProgram` as four lists:
 
-```medaka
+```medaka-nocheck: type-shape sketch naming CProgram's four list fields, not a declaration
 CProgram
   (List CBind)
   (List (String, Int))

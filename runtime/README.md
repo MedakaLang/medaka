@@ -1,5 +1,7 @@
 # `runtime/` — native C runtime for the LLVM backend
 
+**Status:** LIVE. Describes the C runtime beside it; the design record is compiler/RUNTIME-DESIGN.md.
+
 The C-ABI runtime that compiled Medaka links against. See
 [`../compiler/RUNTIME-DESIGN.md`](../compiler/RUNTIME-DESIGN.md) for the full
 extern-disposition strategy (all 71 primitives) and the value-representation +

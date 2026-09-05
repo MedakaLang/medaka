@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dist o2-survivor-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dist o2-survivor-census doc-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -256,6 +256,15 @@ comment-census:
 ##           ./medaka needed. Always exits 0: a census, not a gate.
 arch-census:
 	sh test/arch_census.sh
+
+## doc-census — report per-doc disposition over the doc corpus (#2300):
+##           last-edit date, syntax-example-corpus enrolment, DOC-LINK-
+##           EXCEPTIONS.txt FILE-tier enrolment, docs/README.md reachability,
+##           and a `**Status:**` banner check. Derived, not hand-maintained —
+##           see test/doc_census.sh's header. Pure git/text, no built
+##           ./medaka needed. Always exits 0: a census, not a gate.
+doc-census:
+	sh test/doc_census.sh
 
 ## o2-survivor-census — report-only census over test/o2_survivor_fixtures/
 ##           (#2357, LLVM arm): for each single-construct probe, emit

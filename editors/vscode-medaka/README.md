@@ -1,5 +1,7 @@
 # Medaka — VS Code extension
 
+**Status:** LIVE. Describes the VS Code extension beside it.
+
 Syntax highlighting and Language Server Protocol support for `.mdk` files.
 
 ## Install

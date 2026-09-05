@@ -1,5 +1,7 @@
 # QA findings — tooling-cli
 
+**Status:** CLOSED RECORD. Point-in-time QA sweep, 2026-07-07; kept for provenance, not current guidance.
+
 Binary: `$WT/medaka` where WT=/Users/val/medaka/.claude/worktrees/virtual-fluttering-meteor
 Probes: /private/tmp/claude-501/-Users-val-medaka/07db78cb-7807-4285-bb67-639494a218d2/scratchpad/probes/tooling-cli
 All findings reproduced twice.

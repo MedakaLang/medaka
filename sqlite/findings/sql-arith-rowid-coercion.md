@@ -1,5 +1,7 @@
 # SQL arithmetic TEXT→numeric coercion + the implicit `rowid` column
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Two SQLite-semantics behaviours added to `sqlite/lib/select.mdk`, each verified
 DIFFERENTIALLY against the real `sqlite3` CLI in `sqlite/test/sql_oracle.sh`
 (byte-for-byte) and under the interpreter in

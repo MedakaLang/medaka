@@ -1,5 +1,7 @@
 # Findings — SQL expression surface (`||`, LIKE, IN, BETWEEN, CASE, COALESCE, string fns)
 
+**Status:** CLOSED RECORD. Dated sqlite-dogfood write-up; kept for provenance, not current guidance.
+
 Task: fill in the missing SQL expression surface in `sqlite/lib/select.mdk` +
 `sqlite/lib/sqlparse.mdk`. Everything shipped (see the branch summary for the full
 list); this file is the pain-point log. Two real findings, both in the "surprising

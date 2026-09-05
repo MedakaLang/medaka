@@ -20,4 +20,5 @@ npm ci --ignore-scripts --prefix "$WORK"
 
 node "$ROOT/pds/tools/gen_repo_corpus.mjs" \
   "$WORK/node_modules" \
-  "$ROOT/pds/test/vectors/repo_reference_corpus.txt"
+  "$ROOT/pds/test/vectors/repo_reference_corpus.txt" \
+  "$ROOT/pds/test/vectors/repo_batch_reference_corpus.txt"
