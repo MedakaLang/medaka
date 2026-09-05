@@ -17,7 +17,7 @@ medakaBin = getEnvOr "MEDAKA" "\{root}/medaka"
 
 export
 fixtureIn : String -> String -> <IO> String
-fixtureIn corpus name = "\{root}/test/\{corpus}/\{name}"
+fixtureIn corpus name = "\{root}/\{corpus}/\{name}"
 
 export
 runMedaka : List String -> <Exec "_", IO> Result String (Int, String)

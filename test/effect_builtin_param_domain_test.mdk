@@ -19,7 +19,7 @@ import string.{stripSuffix}
 import test.{Expectation, fail, pass}
 
 fixture : String -> <IO> String
-fixture name = fixtureIn "effect_builtin_param_fixtures" name
+fixture name = fixtureIn "test/effect_builtin_param_fixtures" name
 
 stripTrailingNewlines : String -> String
 stripTrailingNewlines s = match stripSuffix "\n" s

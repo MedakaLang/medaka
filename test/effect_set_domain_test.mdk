@@ -24,7 +24,7 @@ import effect_domain_test_support.{
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
 fixture : String -> <IO> String
-fixture name = fixtureIn "effect_set_fixtures" name
+fixture name = fixtureIn "test/effect_set_fixtures" name
 
 test "a set-shaped row annotation parses and typechecks" =
   expectCheckAccept (fixture "set_p4_parse_accept.mdk")

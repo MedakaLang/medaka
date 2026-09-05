@@ -13,7 +13,7 @@ import effect_domain_test_support.{
 }
 
 fixture : String -> <IO> String
-fixture name = fixtureIn "effect_product_fixtures" name
+fixture name = fixtureIn "test/effect_product_fixtures" name
 
 test "Product accepts when Host and Method are independently confined" =
   expectCheckAccept (fixture "prod_accept.mdk")
