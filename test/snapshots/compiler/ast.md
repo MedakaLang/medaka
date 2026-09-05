@@ -1,5 +1,5 @@
 # META
-source_lines=2053
+source_lines=2064
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -921,10 +921,21 @@ public export data Route =
 -- `compiler/eval/eval.mdk` cannot import a typechecker-private cell, and a table it
 -- can read is the only shape that crosses that boundary.
 --
--- The key is SCOPED, never a bare program-global name: the `String` is the module
--- the site was recorded in, the `Int` its ordinal within the graph run.  Two modules
--- that each name a site `size` must not be able to answer each other's lookup, and a
--- bare-name key fails that silently rather than loudly.
+-- The `String` is the module the site was recorded in, the `Int` its ordinal within
+-- the graph run.  UNIQUENESS RESTS ON THE ORDINAL ALONE, not on the pair: `freshEvId`
+-- draws it from a graph-global monotone counter that `resetGraphState` deliberately
+-- carries across resets, and `evDictRoutes` indexes its array by that ordinal on its
+-- own.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
+-- answering when an entry comes back stamped by a module the node did not ask for.
+--
+-- The tripwire cannot fire for today's sole consumer, because an `EDictAt` carries
+-- the very id `freshEvId` stamped into its goal, so the comparison is a tautology at
+-- every live site.  It is still not dead weight, and a reader must not conclude from
+-- the ordinals' present uniqueness that the module half can be dropped: a memo layer
+-- that swapped a whole cell rather than rewinding it, or any change that made
+-- ordinals per-module, resurrects a stale or colliding ordinal — and a per-module
+-- scheme would destroy uniqueness silently, which is the case the module half is
+-- there to turn into a panic.
 public export data EvId = EvId String Int
 
 -- The two evidence shapes, one per destination arm a goal can have: a single site

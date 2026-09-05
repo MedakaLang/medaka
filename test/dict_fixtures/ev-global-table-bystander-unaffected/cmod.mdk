@@ -1,0 +1,25 @@
+-- The dictionary-bearing half of the graph. `tally` is the genuine dict-application
+-- source: it is CONSTRAINED, so every explicitly-imported occurrence of it records a
+-- goal and publishes an evidence entry (an `EvMany` route list) under a fresh `EvId`.
+-- Called at two different types below, so the graph carries more than one such entry
+-- and their ordinals are distinct.
+--
+-- `pick` is constrained and NEVER CALLED. It exists only to put the surface name
+-- `pick` into the marker's source-blind dict-name set, which is what drags umod's
+-- unrelated UNCONSTRAINED `pick` onto the `EDictAt` path in wmod. Deleting it as
+-- unused removes the #739 empty-routes site from this fixture without changing any
+-- printed value.
+export interface Sz a where
+  sz : a -> Int
+
+export impl Sz Int where
+  sz n = n
+
+export impl Sz Bool where
+  sz b = if b then 1 else 0
+
+export tally : Sz a => a -> Int
+tally x = sz x + 100
+
+export pick : Sz a => a -> Int
+pick x = sz x + 1

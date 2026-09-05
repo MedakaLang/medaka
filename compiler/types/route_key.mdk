@@ -146,18 +146,42 @@ import support.util.{joinWith, escStr}
 -- them would be unreachable from the other two, and `frontend/ast.mdk` (the only
 -- lower module) imports nothing and holds no state.
 --
--- The table is INSTALLED once per elaboration by the module that produces it, so
--- there is no per-driver install to forget; `evidenceRef` holding `None` means no
--- elaboration has run, which is why the lookup panics on it rather than answering
--- "no routes" — a driver that grew an `EDictAt` without an elaboration would
--- otherwise dispatch on an empty route list and be wrong in silence.
+-- Exactly one table is installed per elaboration, and every read of it completes
+-- before the next elaboration installs: `test_cmd`'s `runMulti` / `runSingle` / prop /
+-- `test` phases, `elaborateRun`'s async and plain arms, `runEmitWith`,
+-- `emitModulesWith`, `eval_autoprint_main.runElab` and `playground_main.runEmit` each
+-- elaborate, install, and finish reading before the next elaboration begins.  THAT
+-- INSTALL ORDERING IS THE PROTECTION, because only one of the three ways a lookup can
+-- miss is loud:
+--
+--   no table installed  -> panic.  `evidenceRef` holding `None` means no elaboration
+--                          has run; a driver that grew an `EDictAt` without one would
+--                          otherwise dispatch on an empty route list, wrong in silence.
+--   ordinal >= length   -> `[]`, silent.
+--   in-bounds `None`    -> `[]`, silent.  The legitimate #739 arm `evDictRoutes` below
+--                          documents.
+--
+-- Neither silent arm can be made loud without rejecting correct programs.  The array
+-- is sized `max(ordinal)+1` over the CURRENT elaboration's entries, so a legitimately
+-- unsolved `EDictAt` lands out of bounds when its id is the highest minted and lands
+-- in-bounds `None` when it is lower: a #739 miss and a stale read are indistinguishable
+-- by ordinal on both arms.
+--
+-- The cost of that is what a future reader needs to know.  A read that escaped the
+-- install ordering is NOT caught here.  Ordinals are monotone across the whole process
+-- while each install sizes the array to the CURRENT maximum, so such a read lands on a
+-- `None` slot (silent `[]`) or, where the ordinal ranges overlap under the same module
+-- id, on ANOTHER GOAL'S ROUTES — silently wrong, at exit 0.  Out of bounds is the least
+-- likely of the three, which is the opposite of what a bare `[]` there suggests.  One
+-- change to when a driver installs is all that separates this from an S0.
 --
 -- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
 -- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
 -- scan would be the List-as-a-map quadratic `compiler/AGENTS.md` records thirteen
--- instances of.  Ordinals are dense and graph-global (see `freshEvId`), so the
--- ordinal IS the index; the id's MODULE half is still compared on every hit, so a
--- cross-module ordinal collision is a panic and not a wrong answer.
+-- instances of.  Ordinals are graph-global (see `freshEvId`), so the ordinal IS the
+-- index and carries uniqueness by itself.  The id's MODULE half is compared on every
+-- hit as a tripwire, not as part of the key — see `EvId` in `frontend/ast.mdk` for why
+-- it cannot fire for today's consumer and must be kept anyway.
 evidenceRef : Ref (Option (Array (Option EvEntry)))
 evidenceRef = Ref None
 

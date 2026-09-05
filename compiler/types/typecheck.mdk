@@ -9164,9 +9164,12 @@ graphRun = Ref (freshGraphRun ())
 
 -- #2549 M2: the next evidence id for the module currently being inferred.  The
 -- module component comes from `driverState`, which `checkBodyImpl` sets once per
--- module before any body of it is inferred; the ordinal is this run's counter.  The
--- pair is what makes the key SCOPED — a bare ordinal would be a program-global name
--- and two modules' sites could answer each other's lookup with no error anywhere.
+-- module before any body of it is inferred; the ordinal is this run's counter.
+-- `evCounter` is graph-global and monotone, and `resetGraphState` carries it across
+-- every reset, so THE ORDINAL ALONE is what makes an id unique — the module half does
+-- not scope it, and `evDictRoutes` indexes on the ordinal without consulting it.
+-- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
+-- do not make ordinals per-module in the belief that the pair still separates them.
 --
 -- Both halves ride `GraphRun`, so the two memo layers rewind the counter and the goal
 -- channel TOGETHER (`copyGraphRun`): a hit can hand back an ordinal an abandoned
@@ -42571,9 +42574,13 @@ clearSweepCells _ =
   let g = graphRun.value
   let _ = clearGoalCells g.goals.value
   let _ = clearNumlitCells g.numlitRefs.value
-  -- The table is the cells' second rendering, so it is discarded on exactly the same
-  -- condition: evidence derived from a promotion set the fixpoint rejected must not
-  -- reach the sweep that replaces it.
+  -- NOT the same condition as the two calls above.  Those are needed because the cells
+  -- they clear live in the AST and outlive the graph reset; `evTable` is a `GraphRun`
+  -- field and does not — this function's only caller runs `resetCrossModuleState ()` on
+  -- the next line, which reaches `resetGraphState` and re-mints the field through
+  -- `freshGraphRun`.  So this write is unobservable today: defensive, not load-bearing.
+  -- It stays because fail-closed is this file's convention and because a reordering
+  -- that cleared without resetting would need it.
   g.evTable := []
 
 clearGoalCells : List Obligation -> Unit
