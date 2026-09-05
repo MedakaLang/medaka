@@ -1,5 +1,5 @@
 # META
-source_lines=928
+source_lines=924
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -29,7 +29,9 @@ import frontend.ast.{
   ConPayload(..),
 }
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
-import support.util.{listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL}
+import support.util.{
+  listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains
+}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `test_cmd.mdk`'s copy — not shared via
@@ -179,9 +181,7 @@ genTuple : List (String, TyDef) ->
   Int ->
   List Ty ->
   <e> List (Value e)
-genTuple _ _ _ [] = []
-genTuple tydefs subst depth (t :: rest) =
-  genForType tydefs subst depth t :: genTuple tydefs subst depth rest
+genTuple tydefs subst depth ts = map (genForType tydefs subst depth) ts
 
 genList : List (String, TyDef) ->
   List (String, Ty) ->
@@ -326,17 +326,13 @@ maxGenDepth = 24
 -- `subst`: a parameter bound to its own name (`Tree a` generated with `a`
 -- free) would make resolution loop, and a recursive occurrence always shows up
 -- as the ADT's own `TyCon` head anyway.
-memberStr : String -> List String -> Bool
-memberStr _ [] = False
-memberStr x (y :: rest) = x == y || memberStr x rest
-
 adtReaches : List (String, TyDef) -> List String -> String -> String -> Bool
 adtReaches tydefs seen src target =
   src == target || adtStepReaches tydefs seen src target
 
 adtStepReaches : List (String, TyDef) -> List String -> String -> String -> Bool
 adtStepReaches tydefs seen src target =
-  if memberStr src seen then
+  if contains src seen then
     False
   else match lookupAssoc src tydefs
     None => False
@@ -933,7 +929,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "PropParam" false) (mem "Ty" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -977,8 +973,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "VTuple") (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ts"))))
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "genUserOrFail") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ty")))
 (DTypeSig false "genTuple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "genTuple" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "rest"))))
+(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ts")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth"))) (EVar "ts")))
 (DTypeSig false "genList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "genList" (PWild PWild PWild PWild (PLit (LInt 0))) (EListLit))
 (DFunDef false "genList" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "t") (PVar "n")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
@@ -1005,13 +1000,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "recWeight0" () (ELit (LInt 6)))
 (DTypeSig false "maxGenDepth" (TyCon "Int"))
 (DFunDef false "maxGenDepth" () (ELit (LInt 24)))
-(DTypeSig false "memberStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "memberStr" (PWild (PList)) (EVar "False"))
-(DFunDef false "memberStr" ((PVar "x") (PCons (PVar "y") (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "memberStr") (EVar "x")) (EVar "rest"))))
 (DTypeSig false "adtReaches" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "adtReaches" ((PVar "tydefs") (PVar "seen") (PVar "src") (PVar "target")) (EBinOp "||" (EBinOp "==" (EVar "src") (EVar "target")) (EApp (EApp (EApp (EApp (EVar "adtStepReaches") (EVar "tydefs")) (EVar "seen")) (EVar "src")) (EVar "target"))))
 (DTypeSig false "adtStepReaches" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
-(DFunDef false "adtStepReaches" ((PVar "tydefs") (PVar "seen") (PVar "src") (PVar "target")) (EIf (EApp (EApp (EVar "memberStr") (EVar "src")) (EVar "seen")) (EVar "False") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EVar "tydefs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PCon "TDData" PWild (PVar "variants"))) () (EApp (EApp (EApp (EApp (EVar "anyVariantReaches") (EVar "tydefs")) (EBinOp "::" (EVar "src") (EVar "seen"))) (EVar "variants")) (EVar "target"))))))
+(DFunDef false "adtStepReaches" ((PVar "tydefs") (PVar "seen") (PVar "src") (PVar "target")) (EIf (EApp (EApp (EVar "contains") (EVar "src")) (EVar "seen")) (EVar "False") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EVar "tydefs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PCon "TDData" PWild (PVar "variants"))) () (EApp (EApp (EApp (EApp (EVar "anyVariantReaches") (EVar "tydefs")) (EBinOp "::" (EVar "src") (EVar "seen"))) (EVar "variants")) (EVar "target"))))))
 (DTypeSig false "anyVariantReaches" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "anyVariantReaches" (PWild PWild (PList) PWild) (EVar "False"))
 (DFunDef false "anyVariantReaches" ((PVar "tydefs") (PVar "seen") (PCons (PVar "v") (PVar "rest")) (PVar "target")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "variantReaches") (EVar "tydefs")) (EVar "seen")) (EVar "v")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "anyVariantReaches") (EVar "tydefs")) (EVar "seen")) (EVar "rest")) (EVar "target"))))
@@ -1170,7 +1162,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "PropParam" false) (mem "Ty" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -1214,8 +1206,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "VTuple") (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ts"))))
 (DFunDef false "genForType" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "genUserOrFail") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "ty")))
 (DTypeSig false "genTuple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "genTuple" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "rest"))))
+(DFunDef false "genTuple" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "ts")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth"))) (EVar "ts")))
 (DTypeSig false "genList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "genList" (PWild PWild PWild PWild (PLit (LInt 0))) (EListLit))
 (DFunDef false "genList" ((PVar "tydefs") (PVar "subst") (PVar "depth") (PVar "t") (PVar "n")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "tydefs")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
@@ -1242,13 +1233,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "recWeight0" () (ELit (LInt 6)))
 (DTypeSig false "maxGenDepth" (TyCon "Int"))
 (DFunDef false "maxGenDepth" () (ELit (LInt 24)))
-(DTypeSig false "memberStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "memberStr" (PWild (PList)) (EVar "False"))
-(DFunDef false "memberStr" ((PVar "x") (PCons (PVar "y") (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "memberStr") (EVar "x")) (EVar "rest"))))
 (DTypeSig false "adtReaches" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "adtReaches" ((PVar "tydefs") (PVar "seen") (PVar "src") (PVar "target")) (EBinOp "||" (EBinOp "==" (EVar "src") (EVar "target")) (EApp (EApp (EApp (EApp (EVar "adtStepReaches") (EVar "tydefs")) (EVar "seen")) (EVar "src")) (EVar "target"))))
 (DTypeSig false "adtStepReaches" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
-(DFunDef false "adtStepReaches" ((PVar "tydefs") (PVar "seen") (PVar "src") (PVar "target")) (EIf (EApp (EApp (EVar "memberStr") (EVar "src")) (EVar "seen")) (EVar "False") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EVar "tydefs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PCon "TDData" PWild (PVar "variants"))) () (EApp (EApp (EApp (EApp (EVar "anyVariantReaches") (EVar "tydefs")) (EBinOp "::" (EVar "src") (EVar "seen"))) (EVar "variants")) (EVar "target"))))))
+(DFunDef false "adtStepReaches" ((PVar "tydefs") (PVar "seen") (PVar "src") (PVar "target")) (EIf (EApp (EApp (EVar "contains") (EVar "src")) (EVar "seen")) (EVar "False") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EVar "tydefs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PCon "TDData" PWild (PVar "variants"))) () (EApp (EApp (EApp (EApp (EVar "anyVariantReaches") (EVar "tydefs")) (EBinOp "::" (EVar "src") (EVar "seen"))) (EVar "variants")) (EVar "target"))))))
 (DTypeSig false "anyVariantReaches" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "anyVariantReaches" (PWild PWild (PList) PWild) (EVar "False"))
 (DFunDef false "anyVariantReaches" ((PVar "tydefs") (PVar "seen") (PCons (PVar "v") (PVar "rest")) (PVar "target")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "variantReaches") (EVar "tydefs")) (EVar "seen")) (EVar "v")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "anyVariantReaches") (EVar "tydefs")) (EVar "seen")) (EVar "rest")) (EVar "target"))))

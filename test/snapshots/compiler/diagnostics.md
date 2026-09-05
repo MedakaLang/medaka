@@ -223,8 +223,8 @@ fixOfLocRepl (l, r) = Fix l r
 -- `emitLocatedWarnings` and `medaka build` had no warning surface at all, so a
 -- diagnostic demoted onto this channel became INVISIBLE on both — turning a
 -- formerly-loud reject into a silent accept on exactly the two verbs that execute
--- code.  F-3d threads them (`finishRunEval`'s `tcWarns`, `TGOk`'s payload,
--- `compiler/driver/medaka_cli.mdk`).  A future demotion should re-check that all
+-- code.  F-3d threads them (`finishRunEval`'s `tcWarns`, the typecheck-gate
+-- `Ok` payload, `compiler/driver/medaka_cli.mdk`).  A future demotion should re-check that all
 -- three verbs still surface it rather than assume this stays fixed.
 diagOfTypeWarning : TcDiag -> Diag
 diagOfTypeWarning (TcDiag code _ loc w help _) =

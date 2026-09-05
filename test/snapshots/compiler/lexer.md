@@ -1,5 +1,5 @@
 # META
-source_lines=2776
+source_lines=2775
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -1201,8 +1201,7 @@ normalizeMin : Int -> Int
 normalizeMin m = if m == indentSentinel then 0 else m
 
 stripLines : Int -> List String -> List String
-stripLines _ [] = []
-stripLines k (l :: rest) = stripLine k l :: stripLines k rest
+stripLines k ls = map (stripLine k) ls
 
 stripLine : Int -> String -> String
 stripLine k line =
@@ -3164,8 +3163,7 @@ collectComments s =
 (DTypeSig false "normalizeMin" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "normalizeMin" ((PVar "m")) (EIf (EBinOp "==" (EVar "m") (EVar "indentSentinel")) (ELit (LInt 0)) (EVar "m")))
 (DTypeSig false "stripLines" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "stripLines" (PWild (PList)) (EListLit))
-(DFunDef false "stripLines" ((PVar "k") (PCons (PVar "l") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "stripLine") (EVar "k")) (EVar "l")) (EApp (EApp (EVar "stripLines") (EVar "k")) (EVar "rest"))))
+(DFunDef false "stripLines" ((PVar "k") (PVar "ls")) (EApp (EApp (EVar "map") (EApp (EVar "stripLine") (EVar "k"))) (EVar "ls")))
 (DTypeSig false "stripLine" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "stripLine" ((PVar "k") (PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EApp (EApp (EApp (EVar "dropCharsToStr") (EVar "cs")) (EApp (EApp (EVar "minInt") (EVar "k")) (EVar "n"))) (EVar "n")))))
 (DTypeSig false "dropCharsToStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -3936,8 +3934,7 @@ collectComments s =
 (DTypeSig false "normalizeMin" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "normalizeMin" ((PVar "m")) (EIf (EBinOp "==" (EVar "m") (EVar "indentSentinel")) (ELit (LInt 0)) (EVar "m")))
 (DTypeSig false "stripLines" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "stripLines" (PWild (PList)) (EListLit))
-(DFunDef false "stripLines" ((PVar "k") (PCons (PVar "l") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "stripLine") (EVar "k")) (EVar "l")) (EApp (EApp (EVar "stripLines") (EVar "k")) (EVar "rest"))))
+(DFunDef false "stripLines" ((PVar "k") (PVar "ls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stripLine") (EVar "k"))) (EVar "ls")))
 (DTypeSig false "stripLine" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "stripLine" ((PVar "k") (PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EApp (EApp (EApp (EVar "dropCharsToStr") (EVar "cs")) (EApp (EApp (EVar "minInt") (EVar "k")) (EVar "n"))) (EVar "n")))))
 (DTypeSig false "dropCharsToStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))

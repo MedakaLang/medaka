@@ -258,10 +258,6 @@ mapIO_ f (x :: rest) =
   let _ = f x
   mapIO_ f rest
 
-mapMut : (a -> b) -> List a -> List b
-mapMut _ [] = []
-mapMut f (x :: rest) = f x :: mapMut f rest
-
 -- ── Process a declaration input ───────────────────────────────────────────
 processDeclInput : String -> <IO> Unit
 processDeclInput src =
@@ -279,7 +275,7 @@ processDeclInput src =
       let newNames = map fst newSchemes ++ map snd typeAnns
       accumulatedRef := !accumulatedRef ++ newDecls
       knownNamesRef := known ++ newNames
-      let newUserBindings = mapMut schemeToBinding newSchemes
+      let newUserBindings = map schemeToBinding newSchemes
       userBindingsRef := !userBindingsRef ++ newUserBindings
 
 printNewScheme : (String, Scheme) -> <IO> Unit

@@ -8,6 +8,7 @@
 
 import support.ordmap.{OrdMap, omLookup, omInsert, omEmpty}
 import support.opcount.{opBump}
+import support.path.{dirOf}
 import list.{reverse, zip}
 import string.{join, split, startsWith as stdStartsWith}
 
@@ -576,3 +577,10 @@ fallthroughName = "__fallthrough__"
 export
 noneHeadTag : String
 noneHeadTag = "__none__"
+
+-- Default a CLI verb's root list to the target file's own directory when none
+-- were given on argv.
+export
+rootsOrDefault : String -> List String -> List String
+rootsOrDefault target [] = [dirOf target]
+rootsOrDefault _ roots = roots

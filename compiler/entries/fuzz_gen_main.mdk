@@ -244,8 +244,7 @@ genTupElems ctx (ti :: rest) depth =
   genExpr ctx ti (depth - 1) :: genTupElems ctx rest depth
 
 genLeafElems : Ctx -> List Gty -> <Rand> List Expr
-genLeafElems _ [] = []
-genLeafElems ctx (ti :: rest) = genLeaf ctx ti :: genLeafElems ctx rest
+genLeafElems ctx ts = map (genLeaf ctx) ts
 
 -- dispatch on the target type (no scope-reuse).  NOTE: the native backend
 -- mis-lowers a `match` over Gty whose arms mix nullary constructors (GInt..GChar)
@@ -397,11 +396,6 @@ genData ctx name depth =
   match pick (adtVariants a)
     (con, ftys) => applyFields ctx depth (EVar con) ftys
 
--- mapM-style: like map but threads the Mut effect (fresh-name side effects)
-mapMut : (a -> <e> b) -> List a -> <e> List b
-mapMut _ [] = []
-mapMut f (y :: ys) = f y :: mapMut f ys
-
 zipScope : List String -> List Gty -> List (String, Gty)
 zipScope (n :: nr) (ty :: tr) = (n, ty) :: zipScope nr tr
 zipScope _ _ = []
@@ -429,7 +423,7 @@ genArm ctx t depth (con, ftys) =
 genMatch : Ctx -> Gadt -> Gty -> Int -> <Rand> Expr
 genMatch ctx scrutAdt t depth =
   let scrut = genData ctx (adtName scrutAdt) depth
-  let arms = mapMut (genArm ctx t depth) (adtVariants scrutAdt)
+  let arms = map (genArm ctx t depth) (adtVariants scrutAdt)
   EMatch scrut arms
 
 -- ── ADT declarations ────────────────────────────────────────────────────────

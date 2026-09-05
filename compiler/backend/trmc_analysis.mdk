@@ -165,8 +165,7 @@ freeVarsBinds b (_ :: rest) = freeVarsBinds b rest
 
 export
 bindNames : List CBind -> List String
-bindNames [] = []
-bindNames (b :: rest) = bindName b :: bindNames rest
+bindNames bs = map bindName bs
 
 export
 bindName : CBind -> String

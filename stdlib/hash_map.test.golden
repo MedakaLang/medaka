@@ -4,17 +4,17 @@ running doctests in stdlib/hash_map.mdk
   ok   stdlib/hash_map.mdk:72: size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
   ok   stdlib/hash_map.mdk:85: size (fromList [(1, 10), (2, 20)])
   ok   stdlib/hash_map.mdk:93: isEmpty (new () : HashMap Int Int)
-  ok   stdlib/hash_map.mdk:107: get 2 (fromList [(1, 10), (2, 20)])
-  ok   stdlib/hash_map.mdk:109: get 9 (fromList [(1, 10), (2, 20)])
-  ok   stdlib/hash_map.mdk:119: has 2 (fromList [(1, 10), (2, 20)])
-  ok   stdlib/hash_map.mdk:127: findWithDefault 0 9 (fromList [(1, 10)])
-  ok   stdlib/hash_map.mdk:267: toList (fromList [(5, 50)])
-  ok   stdlib/hash_map.mdk:275: keys (fromList [(5, 50)])
-  ok   stdlib/hash_map.mdk:283: values (fromList [(5, 50)])
-  ok   stdlib/hash_map.mdk:300: eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
-  ok   stdlib/hash_map.mdk:327: display (fromList [(2, 20), (1, 10)])
-  ok   stdlib/hash_map.mdk:329: display (new () : HashMap Int Int)
-  ok   stdlib/hash_map.mdk:341: (fromList [(1, 10), (2, 20)])[2]
+  ok   stdlib/hash_map.mdk:101: get 2 (fromList [(1, 10), (2, 20)])
+  ok   stdlib/hash_map.mdk:103: get 9 (fromList [(1, 10), (2, 20)])
+  ok   stdlib/hash_map.mdk:113: has 2 (fromList [(1, 10), (2, 20)])
+  ok   stdlib/hash_map.mdk:121: findWithDefault 0 9 (fromList [(1, 10)])
+  ok   stdlib/hash_map.mdk:261: toList (fromList [(5, 50)])
+  ok   stdlib/hash_map.mdk:269: keys (fromList [(5, 50)])
+  ok   stdlib/hash_map.mdk:277: values (fromList [(5, 50)])
+  ok   stdlib/hash_map.mdk:294: eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
+  ok   stdlib/hash_map.mdk:321: display (fromList [(2, 20), (1, 10)])
+  ok   stdlib/hash_map.mdk:323: display (new () : HashMap Int Int)
+  ok   stdlib/hash_map.mdk:335: (fromList [(1, 10), (2, 20)])[2]
 
 stdlib/hash_map.mdk: 16/16 passed
 Testing "Display HashMap is layout-independent" ... OK (100 tests)

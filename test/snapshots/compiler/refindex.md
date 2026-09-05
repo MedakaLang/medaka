@@ -1,5 +1,5 @@
 # META
-source_lines=1781
+source_lines=1785
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -376,6 +376,10 @@ pushOcc ctx uri loc key = match hmGetC ctx ctx.occ uri
 -- method" (definer-shadow) rule, and keeps the separate `nsMethod` key so F4
 -- (group-a-method's-impls) stays expressible.
 resolveVal : W -> List (List (String, String)) -> String -> String
+-- Not an `orElse` staircase: the probes are `hmGetC`, which BUMPS `opCnt` — the
+-- op count `test/diff_compiler_references_scaling.sh` ratchets on — so running
+-- them eagerly would change a measured signal, not just the reading order.
+-- lint-disable-next-line rule-orelse-staircase
 resolveVal (W ctx _ _ useEnv _) scope name = match lookupScope ctx name scope
   Some k => k
   None => match hmGetC ctx useEnv (nsVal ++ sep ++ name)

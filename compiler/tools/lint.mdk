@@ -4430,13 +4430,12 @@ matchToMapResult scrut (Arm pe ge be) (Arm po go bo)
 
 -- try both ctor-pairs in both arm orders.
 matchToMapPair : Expr -> Arm -> Arm -> Option Expr
-matchToMapPair scrut a1 a2 = match matchToMapOption scrut a1 a2
-  Some e => Some e
-  None => match matchToMapOption scrut a2 a1
-    Some e => Some e
-    None => match matchToMapResult scrut a1 a2
-      Some e => Some e
-      None => matchToMapResult scrut a2 a1
+matchToMapPair scrut a1 a2 =
+  orElse
+    (matchToMapOption scrut a1 a2)
+    (orElse
+      (matchToMapOption scrut a2 a1)
+      (orElse (matchToMapResult scrut a1 a2) (matchToMapResult scrut a2 a1)))
 
 -- detector (matches the RAW `EMatch`, never its `ELoc` wrapper).
 matchToMapOf : Expr -> Option Expr
