@@ -14,6 +14,7 @@
 -- `compiler/` deliberately avoids depending on `stdlib/`'s heavier surface
 -- for its own bootstrap path.
 
+import list.{reverse}
 import string.{split, startsWith, endsWith, contains}
 
 -- # Components
@@ -186,7 +187,11 @@ joinAll (s :: rest) = joinAllGo s rest
 -- > joinAll []
 -- ""
 
+-- Same declared signature as `string.join`, but folds via `joinPath`'s
+-- slash-normalizing join (collapses a trailing/leading `/` at each seam)
+-- rather than `join`'s literal separator insertion — not a real duplicate.
 joinAllGo : String -> List String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
 joinAllGo acc [] = acc
 joinAllGo acc (s :: rest) = joinAllGo (joinPath acc s) rest
 
@@ -230,6 +235,10 @@ isAbsolute path = startsWith "/" path
    None -}
 export
 stripPrefix : String -> String -> Option String
+-- Same declared signature as `string.stripPrefix`, but component-boundary
+-- aware (only strips at a `/` or the end of the path, per the doctest
+-- above) rather than a plain text-prefix strip — not a real duplicate.
+-- lint-disable-next-line rule-stdlib-reimpl
 stripPrefix prefix path =
   let plen = stringLength prefix
   if prefix == "" then
@@ -288,13 +297,6 @@ normGo abs (".." :: rest) (top :: acc2) =
   else
     normGo abs rest acc2
 normGo abs (s :: rest) acc = normGo abs rest (s :: acc)
-
-reverse : List a -> List a
-reverse xs = reverseGo xs []
-
-reverseGo : List a -> List a -> List a
-reverseGo [] acc = acc
-reverseGo (x :: rest) acc = reverseGo rest (x :: acc)
 
 -- ── Properties ───────────────────────────────────────────────────────────
 

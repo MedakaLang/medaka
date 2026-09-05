@@ -11709,11 +11709,10 @@ ctorTypeName prog name = match omLookup name (indexCtorTypesW (progIndex prog))
 -- (see `ordinalOfHead`, `emitWDispCell`, the TRMC `isBuiltinList` flag, `emitListRef`),
 -- the same discipline the struct-id fix uses.
 ctorOrdinal : Prog -> String -> Int
-ctorOrdinal prog name = match reservedCtorOrdinal name
-  Some o => o
-  None => match userCtorOrdinalW prog name
-    Some o => o
-    None => syntheticCtorOrdinal name
+ctorOrdinal prog name =
+  optionOr
+    (syntheticCtorOrdinal name)
+    (orElse (reservedCtorOrdinal name) (userCtorOrdinalW prog name))
 
 -- the DECLARATION-ORDER ordinal of a name IFF it is a user-declared ctor (present in
 -- the ctor table), else None so the caller falls back to a synthetic/reserved ordinal.

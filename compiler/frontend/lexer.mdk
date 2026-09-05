@@ -1197,8 +1197,7 @@ normalizeMin : Int -> Int
 normalizeMin m = if m == indentSentinel then 0 else m
 
 stripLines : Int -> List String -> List String
-stripLines _ [] = []
-stripLines k (l :: rest) = stripLine k l :: stripLines k rest
+stripLines k ls = map (stripLine k) ls
 
 stripLine : Int -> String -> String
 stripLine k line =

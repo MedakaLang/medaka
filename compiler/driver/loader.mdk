@@ -38,6 +38,7 @@ import support.util.{
   startsWith,
   endsWith,
   joinDot,
+  joinWith,
   lookupAssoc,
   splitNl,
   stringTrim,
@@ -465,7 +466,7 @@ export
 availableModulesText : String -> <IO> String
 availableModulesText stdlibDir = match availableModuleIds stdlibDir
   [] => ""
-  ids => stringConcat ["available modules: ", joinComma ids]
+  ids => stringConcat ["available modules: ", joinWith ", " ids]
 
 -- Render the hint SUFFIX appended to an `unknown module: <id>` CLI-text
 -- message, e.g. " — available modules: array, list, map, string".  `[]` (no
@@ -476,11 +477,6 @@ availableModulesHint : String -> <IO> String
 availableModulesHint stdlibDir = match availableModulesText stdlibDir
   "" => ""
   txt => " — " ++ txt
-
-joinComma : List String -> String
-joinComma [] = ""
-joinComma [x] = x
-joinComma (x :: xs) = stringConcat [x, ", ", joinComma xs]
 
 -- ── file resolution + parsing ──
 

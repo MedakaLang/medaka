@@ -21,8 +21,8 @@ import types.annotate.{annotateProgram}
 import driver.loader.{loadProgram}
 import ir.core_ir_eval.{cevalModulesOutput}
 import eval.eval.{ffiExternNamesRef}
-import support.path.{dirOf}
 import support.util.{isEmptyL, isNonEmptyL}
+import entries.entry_support.{rootsOrDefault}
 
 main = match args ()
   coreP :: "--ffi-reset-control" :: externEntry :: pureEntry :: roots =>
@@ -35,10 +35,6 @@ main = match args ()
   _ =>
     ePutStrLn
       "usage: medaka run compiler/entries/core_ir_modules_main.mdk <core.mdk> <entry.mdk> [root ...]"
-
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
 
 -- desugar + annotate each loaded module (the loader returns parsed-not-desugared
 -- decls); annotateProgram is the §2.0 EMIT pass, run per-module so each module's

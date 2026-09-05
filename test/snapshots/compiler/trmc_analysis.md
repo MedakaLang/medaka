@@ -1,5 +1,5 @@
 # META
-source_lines=1674
+source_lines=1673
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -169,8 +169,7 @@ freeVarsBinds b (_ :: rest) = freeVarsBinds b rest
 
 export
 bindNames : List CBind -> List String
-bindNames [] = []
-bindNames (b :: rest) = bindName b :: bindNames rest
+bindNames bs = map bindName bs
 
 export
 bindName : CBind -> String
@@ -1745,8 +1744,7 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest")))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "bindNames" ((PList)) (EListLit))
-(DFunDef false "bindNames" ((PCons (PVar "b") (PVar "rest"))) (EBinOp "::" (EApp (EVar "bindName") (EVar "b")) (EApp (EVar "bindNames") (EVar "rest"))))
+(DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindName" ((PCon "CBind" (PVar "name") PWild)) (EVar "name"))
 (DTypeSig true "patVars" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2202,8 +2200,7 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest")))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "bindNames" ((PList)) (EListLit))
-(DFunDef false "bindNames" ((PCons (PVar "b") (PVar "rest"))) (EBinOp "::" (EApp (EVar "bindName") (EVar "b")) (EApp (EVar "bindNames") (EVar "rest"))))
+(DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindName" ((PCon "CBind" (PVar "name") PWild)) (EVar "name"))
 (DTypeSig true "patVars" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))

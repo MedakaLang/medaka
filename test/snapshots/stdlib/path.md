@@ -1,5 +1,5 @@
 # META
-source_lines=314
+source_lines=316
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -18,6 +18,7 @@ stages=DESUGAR,MARK
 -- `compiler/` deliberately avoids depending on `stdlib/`'s heavier surface
 -- for its own bootstrap path.
 
+import list.{reverse}
 import string.{split, startsWith, endsWith, contains}
 
 -- # Components
@@ -190,7 +191,11 @@ joinAll (s :: rest) = joinAllGo s rest
 -- > joinAll []
 -- ""
 
+-- Same declared signature as `string.join`, but folds via `joinPath`'s
+-- slash-normalizing join (collapses a trailing/leading `/` at each seam)
+-- rather than `join`'s literal separator insertion — not a real duplicate.
 joinAllGo : String -> List String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
 joinAllGo acc [] = acc
 joinAllGo acc (s :: rest) = joinAllGo (joinPath acc s) rest
 
@@ -234,6 +239,10 @@ isAbsolute path = startsWith "/" path
    None -}
 export
 stripPrefix : String -> String -> Option String
+-- Same declared signature as `string.stripPrefix`, but component-boundary
+-- aware (only strips at a `/` or the end of the path, per the doctest
+-- above) rather than a plain text-prefix strip — not a real duplicate.
+-- lint-disable-next-line rule-stdlib-reimpl
 stripPrefix prefix path =
   let plen = stringLength prefix
   if prefix == "" then
@@ -293,13 +302,6 @@ normGo abs (".." :: rest) (top :: acc2) =
     normGo abs rest acc2
 normGo abs (s :: rest) acc = normGo abs rest (s :: acc)
 
-reverse : List a -> List a
-reverse xs = reverseGo xs []
-
-reverseGo : List a -> List a -> List a
-reverseGo [] acc = acc
-reverseGo (x :: rest) acc = reverseGo rest (x :: acc)
-
 -- ── Properties ───────────────────────────────────────────────────────────
 
 prop "normalize is idempotent" (p : String) =
@@ -317,6 +319,7 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
   else
     normalize (joinPath (dirname p) (basename p)) == normalize p
 # DESUGAR
+(DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirname" ((PVar "path")) (EApp (EApp (EVar "dirnameGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
@@ -370,15 +373,11 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DFunDef false "normGo" ((PVar "abs") (PCons (PLit (LString "..")) (PVar "rest")) (PList)) (EIf (EVar "abs") (EApp (EApp (EApp (EVar "normGo") (EVar "abs")) (EVar "rest")) (EListLit)) (EApp (EApp (EApp (EVar "normGo") (EVar "abs")) (EVar "rest")) (EListLit (ELit (LString ".."))))))
 (DFunDef false "normGo" ((PVar "abs") (PCons (PLit (LString "..")) (PVar "rest")) (PCons (PVar "top") (PVar "acc2"))) (EIf (EBinOp "==" (EVar "top") (ELit (LString ".."))) (EApp (EApp (EApp (EVar "normGo") (EVar "abs")) (EVar "rest")) (EBinOp "::" (ELit (LString "..")) (EBinOp "::" (ELit (LString "..")) (EVar "acc2")))) (EApp (EApp (EApp (EVar "normGo") (EVar "abs")) (EVar "rest")) (EVar "acc2"))))
 (DFunDef false "normGo" ((PVar "abs") (PCons (PVar "s") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "normGo") (EVar "abs")) (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
-(DTypeSig false "reverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
-(DFunDef false "reverse" ((PVar "xs")) (EApp (EApp (EVar "reverseGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "reverseGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "reverseGo" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "reverseGo" ((PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "reverseGo") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "acc"))))
 (DProp false "normalize is idempotent" ((pp "p" (TyCon "String"))) (EBinOp "==" (EApp (EVar "normalize") (EApp (EVar "normalize") (EVar "p"))) (EApp (EVar "normalize") (EVar "p"))))
 (DProp false "joinPath then split recovers both non-empty segments" ((pp "a" (TyCon "String")) (pp "b" (TyCon "String"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "b") (ELit (LString "")))) (EApp (EApp (EVar "contains") (ELit (LString "/"))) (EVar "a"))) (EApp (EApp (EVar "contains") (ELit (LString "/"))) (EVar "b"))) (EVar "True") (EBinOp "==" (EApp (EVar "segments") (EApp (EApp (EVar "joinPath") (EVar "a")) (EVar "b"))) (EListLit (EVar "a") (EVar "b")))))
 (DProp false "dirname ++ / ++ basename normalizes back to the original absolute path" ((pp "p" (TyCon "String"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isAbsolute") (EVar "p")))) (EVar "True") (EBinOp "==" (EApp (EVar "normalize") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirname") (EVar "p"))) (EApp (EVar "basename") (EVar "p")))) (EApp (EVar "normalize") (EVar "p")))))
 # MARK
+(DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dirname" ((PVar "path")) (EApp (EApp (EVar "dirnameGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
@@ -432,11 +431,6 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DFunDef false "normGo" ((PVar "abs") (PCons (PLit (LString "..")) (PVar "rest")) (PList)) (EIf (EMethodRef "abs") (EApp (EApp (EApp (EVar "normGo") (EMethodRef "abs")) (EVar "rest")) (EListLit)) (EApp (EApp (EApp (EVar "normGo") (EMethodRef "abs")) (EVar "rest")) (EListLit (ELit (LString ".."))))))
 (DFunDef false "normGo" ((PVar "abs") (PCons (PLit (LString "..")) (PVar "rest")) (PCons (PVar "top") (PVar "acc2"))) (EIf (EBinOp "==" (EVar "top") (ELit (LString ".."))) (EApp (EApp (EApp (EVar "normGo") (EMethodRef "abs")) (EVar "rest")) (EBinOp "::" (ELit (LString "..")) (EBinOp "::" (ELit (LString "..")) (EVar "acc2")))) (EApp (EApp (EApp (EVar "normGo") (EMethodRef "abs")) (EVar "rest")) (EVar "acc2"))))
 (DFunDef false "normGo" ((PVar "abs") (PCons (PVar "s") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "normGo") (EMethodRef "abs")) (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
-(DTypeSig false "reverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
-(DFunDef false "reverse" ((PVar "xs")) (EApp (EApp (EVar "reverseGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "reverseGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "reverseGo" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "reverseGo" ((PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "reverseGo") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "acc"))))
 (DProp false "normalize is idempotent" ((pp "p" (TyCon "String"))) (EBinOp "==" (EApp (EVar "normalize") (EApp (EVar "normalize") (EVar "p"))) (EApp (EVar "normalize") (EVar "p"))))
 (DProp false "joinPath then split recovers both non-empty segments" ((pp "a" (TyCon "String")) (pp "b" (TyCon "String"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "b") (ELit (LString "")))) (EApp (EApp (EVar "contains") (ELit (LString "/"))) (EVar "a"))) (EApp (EApp (EVar "contains") (ELit (LString "/"))) (EVar "b"))) (EVar "True") (EBinOp "==" (EApp (EVar "segments") (EApp (EApp (EVar "joinPath") (EVar "a")) (EVar "b"))) (EListLit (EVar "a") (EVar "b")))))
 (DProp false "dirname ++ / ++ basename normalizes back to the original absolute path" ((pp "p" (TyCon "String"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isAbsolute") (EVar "p")))) (EVar "True") (EBinOp "==" (EApp (EVar "normalize") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirname") (EVar "p"))) (EApp (EVar "basename") (EVar "p")))) (EApp (EVar "normalize") (EVar "p")))))

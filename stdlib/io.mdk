@@ -19,16 +19,22 @@ import string.{stripCR}
 {- | Writes a value to standard error with no trailing newline.
 
    The value is rendered with `display`, like `print`. -}
+-- Same declared signature as `core.print`, different stream (stderr via
+-- `ePutStr` vs. stdout via `putStr`) — not a real duplicate.
 export
 eprint : Display a => a -> <IO> Unit
+-- lint-disable-next-line rule-stdlib-reimpl
 eprint x = ePutStr (display x)
 
 {- | Writes a value to standard error, followed by a newline.
 
    The value is rendered with `display`, like `println`. Use it for
    diagnostics and errors so they do not mix with standard output. -}
+-- Same declared signature as `core.println`, different stream (stderr via
+-- `ePutStrLn` vs. stdout via `putStrLn`) — not a real duplicate.
 export
 eprintln : Display a => a -> <IO> Unit
+-- lint-disable-next-line rule-stdlib-reimpl
 eprintln x = ePutStrLn (display x)
 
 -- # Debug output
@@ -52,6 +58,7 @@ inspect x = putStrLn (debug x)
 -- CRLF files work) and the final empty line a trailing newline would
 -- otherwise produce.  `stripCR` is `string.stripCR`, imported.
 splitLines : String -> List String
+-- lint-disable-next-line rule-stdlib-reimpl
 splitLines s = match stringIndexOf "\n" s
   None => if s == "" then [] else [stripCR s]
   Some i =>

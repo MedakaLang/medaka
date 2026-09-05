@@ -96,12 +96,6 @@ export
 isEmpty : HashMap k v -> Bool
 isEmpty m = size m == 0
 
-bucketLookup : Eq k => k -> List (k, v) -> Option v
-bucketLookup _ [] = None
-bucketLookup key ((k, v) :: rest)
-  | key == k = Some v
-  | otherwise = bucketLookup key rest
-
 {- | The value at `key`, or `None` when the key is absent.
 
    > get 2 (fromList [(1, 10), (2, 20)])
@@ -112,7 +106,7 @@ export
 get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
 get key (HashMap buckets _) =
   let arr = !buckets
-  bucketLookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
+  L.lookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
 
 {- | Whether `key` is present.
 

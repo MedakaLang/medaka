@@ -2201,7 +2201,7 @@ effParamFor _ = deferPure None
 -- join Set elements into the `{a,b,c}` carrier form (commas separate; Set
 -- authority tokens contain no commas/braces).
 encodeSetParam : List String -> String
-encodeSetParam elems = "{" ++ joinComma elems ++ "}"
+encodeSetParam elems = "{" ++ joinWith "," elems ++ "}"
 
 -- WS-4: encode product axes into the carrier sentinel `@P{Axis=val;Axis=val}`
 -- (mirror of `encodeSetParam`; `decodeProductParam` in typecheck.mdk decodes it).
@@ -2216,9 +2216,6 @@ encodeAxis (name, v) = "\{name}=\{v}"
 
 joinSemi : List String -> String
 joinSemi xs = joinWith ";" xs
-
-joinComma : List String -> String
-joinComma xs = joinWith "," xs
 
 -- Zero or more `| name` tail variables.  Several make the row a JOIN (#821):
 -- `<Stdout | e | e2>` is the row of Stdout together with everything e or e2

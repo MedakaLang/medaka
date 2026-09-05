@@ -1,5 +1,5 @@
 # META
-source_lines=6105
+source_lines=6104
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -4434,13 +4434,12 @@ matchToMapResult scrut (Arm pe ge be) (Arm po go bo)
 
 -- try both ctor-pairs in both arm orders.
 matchToMapPair : Expr -> Arm -> Arm -> Option Expr
-matchToMapPair scrut a1 a2 = match matchToMapOption scrut a1 a2
-  Some e => Some e
-  None => match matchToMapOption scrut a2 a1
-    Some e => Some e
-    None => match matchToMapResult scrut a1 a2
-      Some e => Some e
-      None => matchToMapResult scrut a2 a1
+matchToMapPair scrut a1 a2 =
+  orElse
+    (matchToMapOption scrut a1 a2)
+    (orElse
+      (matchToMapOption scrut a2 a1)
+      (orElse (matchToMapResult scrut a1 a2) (matchToMapResult scrut a2 a1)))
 
 -- detector (matches the RAW `EMatch`, never its `ELoc` wrapper).
 matchToMapOf : Expr -> Option Expr
@@ -7524,7 +7523,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "matchToMapResult" (TyFun (TyCon "Expr") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "matchToMapResult" ((PVar "scrut") (PCon "Arm" (PVar "pe") (PVar "ge") (PVar "be")) (PCon "Arm" (PVar "po") (PVar "go") (PVar "bo"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "ge")) (EApp (EVar "isEmptyL") (EVar "go"))) (EApp (EApp (EVar "matchToMapErrPassthru") (EVar "pe")) (EVar "be"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "binder") (PVar "expr"))) (EApp (EApp (EApp (EVar "matchToMapCall") (EVar "binder")) (EVar "expr")) (EVar "scrut")))) (EApp (EApp (EApp (EVar "matchToMapTransform") (ELit (LString "Ok"))) (EVar "po")) (EVar "bo"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchToMapPair" (TyFun (TyCon "Expr") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "matchToMapPair" ((PVar "scrut") (PVar "a1") (PVar "a2")) (EMatch (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a2")) (EVar "a1")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a2")) (EVar "a1")))))))))
+(DFunDef false "matchToMapPair" ((PVar "scrut") (PVar "a1") (PVar "a2")) (EApp (EApp (EVar "orElse") (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "orElse") (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a2")) (EVar "a1"))) (EApp (EApp (EVar "orElse") (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a2")) (EVar "a1"))))))
 (DTypeSig false "matchToMapOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "matchToMapOf" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EApp (EApp (EApp (EVar "matchToMapPair") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchToMapOf" (PWild) (EVar "None"))
@@ -9359,7 +9358,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "matchToMapResult" (TyFun (TyCon "Expr") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "matchToMapResult" ((PVar "scrut") (PCon "Arm" (PVar "pe") (PVar "ge") (PVar "be")) (PCon "Arm" (PVar "po") (PVar "go") (PVar "bo"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "ge")) (EApp (EVar "isEmptyL") (EVar "go"))) (EApp (EApp (EVar "matchToMapErrPassthru") (EVar "pe")) (EVar "be"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "binder") (PVar "expr"))) (EApp (EApp (EApp (EVar "matchToMapCall") (EVar "binder")) (EVar "expr")) (EVar "scrut")))) (EApp (EApp (EApp (EVar "matchToMapTransform") (ELit (LString "Ok"))) (EVar "po")) (EVar "bo"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchToMapPair" (TyFun (TyCon "Expr") (TyFun (TyCon "Arm") (TyFun (TyCon "Arm") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "matchToMapPair" ((PVar "scrut") (PVar "a1") (PVar "a2")) (EMatch (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a2")) (EVar "a1")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a2")) (EVar "a1")))))))))
+(DFunDef false "matchToMapPair" ((PVar "scrut") (PVar "a1") (PVar "a2")) (EApp (EApp (EMethodRef "orElse") (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (EApp (EApp (EMethodRef "orElse") (EApp (EApp (EApp (EVar "matchToMapOption") (EVar "scrut")) (EVar "a2")) (EVar "a1"))) (EApp (EApp (EMethodRef "orElse") (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (EApp (EApp (EApp (EVar "matchToMapResult") (EVar "scrut")) (EVar "a2")) (EVar "a1"))))))
 (DTypeSig false "matchToMapOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "matchToMapOf" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EApp (EApp (EApp (EVar "matchToMapPair") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchToMapOf" (PWild) (EVar "None"))
