@@ -544,7 +544,9 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    proxy, cachegrind, both workloads ruling 7 names): every cell inside ±0.1%, against a ~25%
    soft ceiling. The deletions (`implInferEnabled`, the double typecheck, the promotion
    fixpoint, `eval`'s `Route` arms), unconditional solving, and the `EMethodAt` flip are
-   phase 2's, with its own review round.
+   phase 2's, with its own review round: **#2705**, which also carries the review round's
+   adjudicated residuals (the unread published tuple element, `copyGraphRun`'s anticipatory
+   field, the cumulative-ordinal array sizing, and the two silent miss arms of `evDictRoutes`).
 
 ### SA-11. Artifacts
 
