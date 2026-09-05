@@ -1,6 +1,6 @@
 # WS-4 Design — `Product` refinement domain (structure-aware `Net = Host(Prefix) × Method(Set)`)
 
-**Status:** IMPLEMENTED (verified done 2026-06-22 — `PProduct` arm in `compiler/types/typecheck.mdk:116`, `encodeProductParam` in `compiler/frontend/parser.mdk:1699`, `test/effect_product_domain.sh` gate exists). The design-pass recommendation to DEFER was superseded. **Roadmap item:**
+**Status:** IMPLEMENTED (verified done 2026-06-22 — `PProduct` arm in `compiler/types/typecheck.mdk:116`, `encodeProductParam` in `compiler/frontend/parser.mdk:1699`, `test/effect_product_domain_test.mdk` gate exists). The design-pass recommendation to DEFER was superseded. **Roadmap item:**
 [`EFFECTS-CONFORMANCE-ROADMAP.md`](../../docs/design/EFFECTS-CONFORMANCE-ROADMAP.md) §WS-4 (E2, "largest, last").
 **Spec:** [`EFFECTS-SEMANTICS.md`](../../docs/spec/EFFECTS-SEMANTICS.md) §2.1 domain interface, §2.3
 delimiter discipline, §2.5 row order, domain table (line 145). **Precedent:** WS-3
@@ -233,7 +233,7 @@ Doing so would re-interpret every existing `<Net "…">` and break the canary. I
 | `diff_compiler_typecheck` (12/0), `_error`, `_golden` | builtin `Net`=Prefix untouched; no inferred-row change on existing syntax |
 | `diff_compiler_check_policy` (4/0 + 7/0) | policy compare reaches `dsub`; `PPrefix`-vs-`PPrefix` path unchanged; oracle reads only Prefix |
 | `manifest_emit.sh` (6/0) | manifest emits Prefix params via the existing `PPrefix (Some s)` arm; product programs are new fixtures only |
-| `effect_set_domain.sh` (5/0), `effect_param_domain.sh` (6/0) | Set/Env/Exec arms untouched |
+| `effect_set_domain_test.mdk` (5 assertions), `effect_param_domain_test.mdk` (6 assertions) | Set/Env/Exec arms untouched |
 | `diff_compiler_parse` (27/0) | `<Net "x">`/`<Net {a,b}>`/`<Net _>` parse paths unchanged; product syntax is a new clause reached only by the new token shape |
 | `selfcompile_fixpoint` C3a/C3b | no AST/carrier shape change (sentinel reuse); ops are additive arms |
 | no-exfiltration adversarial corpus | product strictly *refines* — adds a method axis; host confinement is at-least as tight |
@@ -370,7 +370,7 @@ upper-name *label* lexical class — but this is a taste call worth surfacing.
 8. **policy/manifest** (`check_policy.mdk`) — `parsePolicyTok` (:110) product branch;
    TOML emit (:490) inline-table; allow-string emit (:563). These reach `dsub` for
    the compare — pointwise subsumption is inherited.
-9. **fixtures + gate** — new `test/effect_product_domain.sh`: host+method confinement
+9. **fixtures + gate** — new `test/effect_product_domain_test.mdk`: host+method confinement
    (accept narrow, reject host-sibling, reject method-not-in-set), a failing-before /
    passing-after probe, manifest round-trip. Add product cases ONLY as new fixtures
    (existing corpus untouched, §3).

@@ -9,16 +9,22 @@
 import effect_domain_test_support.{
   expectCheckAccept,
   expectCheckReject,
+  expectCheckRejectLine,
   expectVerbExitStartsWith,
   expectVerbExitStartsWithAndContains,
   fixtureIn,
   runMedaka,
 }
-import string.{trim}
-import test.{Expectation, expectEqualText, fail}
+import string.{stripSuffix}
+import test.{Expectation, fail, pass}
 
 fixture : String -> <IO> String
 fixture name = fixtureIn "effect_builtin_param_fixtures" name
+
+stripTrailingNewlines : String -> String
+stripTrailingNewlines s = match stripSuffix "\n" s
+  Some rest => stripTrailingNewlines rest
+  None => s
 
 expectManifest : String -> String -> String -> <Exec "_", IO> Expectation
 expectManifest name fn expected =
@@ -28,8 +34,11 @@ expectManifest name fn expected =
       if code /= 0 then
         fail
           "\{name}: `medaka manifest` exited \{intToString code}: \{debug out}"
+      else if expected == stripTrailingNewlines out then
+        pass
       else
-        expectEqualText expected (trim out)
+        fail
+          "\{name}: expected exact manifest \{debug expected}, got \{debug out}"
 
 test "Env builtin fills a singleton inside its Set bound" =
   expectCheckAccept (fixture "env_hole_accept.mdk")
@@ -152,7 +161,7 @@ test "the FFI boundary rejects a function parameter" = expectCheckReject
     "Type 'Int -> <> Int' cannot cross the foreign-function boundary in extern 'ffiApply'",
   ]
 
-test "the FFI boundary rejects a polymorphic extern at its own line" = expectCheckReject
+test "the FFI boundary rejects a polymorphic extern at its own line" = expectCheckRejectLine
   (fixture "ffi_cross_poly_reject.mdk")
   [
     "ffi_cross_poly_reject.mdk:11:",

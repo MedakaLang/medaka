@@ -235,9 +235,9 @@
 | `test/diff_native_stack.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL | 12975 | 124 | REWRITE: probe/static text becomes library calls [clang] |
 | `test/diff_net.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 2883 | 90 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `test/dist_install_smoke.sh` | OTHER | native | N | NO | NATIVE-KIND-RUNNER | 7198 | 92 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/effect_builtin_param_domain.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 5175 | 249 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
-| `test/effect_param_domain.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 716 | 80 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/effect_product_domain.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 1060 | 81 | WRAP: spawns ./medaka + diffs, module does the same |
+| `effect_builtin_param_domain.sh` → `test/effect_builtin_param_domain_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 5175 | 249 | WRAP: migrated to native test [clang] |
+| `effect_param_domain.sh` → `test/effect_param_domain_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 716 | 80 | WRAP: migrated to native test |
+| `effect_product_domain.sh` → `test/effect_product_domain_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 1060 | 81 | WRAP: migrated to native test |
 | `test/effect_set_domain.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 610 | 48 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/fuzz_diff.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE, EXTERNAL-TOOL | — | 273 | REWRITE: probe/static text becomes library calls [clang] |
 | `test/gen_docs_index.sh` | DOC-ROT | none | N | NO | NATIVE-KIND-RUNNER | — | 190 | REWRITE: probe/static text becomes library calls |
@@ -332,4 +332,3 @@
 | `test/diff_compiler_ported.sh` | INLANG-WRAPPER | interpreter | UNSURE | UNSURE | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, INVERTED-POLARITY | 2785 | 231 | UNSURE: the tests are already (T); the shell is a known-bug ledger + anti-vacuity floor that derived discovery may retire outright rather than migrate |
 | `test/diff_compiler_test.sh` | GOLDEN | interpreter | UNSURE | UNSURE | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 59668 | 326 | UNSURE: goldens are OCaml-era captures for a compiler that no longer exists; what the gate still proves must be settled before a destination is picked |
 | `test/tmc_census.sh` | STRUCTURAL-IR | multiple | UNSURE | UNSURE | NOT-A-CHECK | — | 209 | UNSURE: ledgered as a tool but exits nonzero on EMIT-FAIL/PINFAIL, i.e. a real gate wrapped by diff_compiler_tmc_parity; denominator membership unresolved |
-

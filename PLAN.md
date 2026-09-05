@@ -676,7 +676,7 @@ The last deferred item of the effect-and-capability conformance workstream — d
 - The Env(Set)/Exec(Prefix)/FileRead(Prefix)/FileWrite(Prefix) domains were already pre-registered in `seedEffectDomains`, so the flip needed NO registry edit and NO per-program `effect` decl — call-site α refinement fires automatically off the builtins (`getEnv "HOME"` → `<Env {"HOME"}>`; `readFile "/etc/app/x"` → `<FileRead "/etc/app/x">`).
 - Measured blast radius: tiny — 1 of ~300 file-IO call-sites passes a string literal; the rest pass dynamic paths → hole stays unfilled → degrades to ⊤ (identical to the old bare label) → escape-safe, ZERO golden churn.
 - NO seed re-mint needed (runtime.mdk is the extern catalog read at typecheck; effects erase at runtime → emitted IR unchanged). Fixpoint C3a/C3b YES throughout.
-- Gate: `test/effect_builtin_param_domain.sh` (12/0) drives the real stdlib builtins (no local extern shadowing) — Env/Exec/FileRead/FileWrite accept+reject + manifest render (Env array, FileRead string) + round-trip.
+- Gate: `test/effect_builtin_param_domain_test.mdk` (44 assertions) drives the real stdlib builtins (no local extern shadowing) — Env/Exec/FileRead/FileWrite accept+reject + manifest render (Env array, FileRead string) + round-trip.
 - **Remaining effect items (deferred, none OCaml-blocked):** WS-5 extern-row assurance (standing discipline, not a closeable code task); Wasm custom-section manifest emission (`backend/wasm_emit.mdk`, separate seam); Phase 146b user-facing parameterized effects (downstream, larger).
 
 ## Current status (2026-06-30) — Float-on-wasm hardening + type-lost-Float ROOT fix (`27969e7`)

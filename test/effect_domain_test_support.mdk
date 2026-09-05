@@ -54,11 +54,32 @@ export
 expectCheckReject : String -> List String -> <Exec "_", IO> Expectation
 expectCheckReject path needles = match runMedaka ["check", path]
   Err e => fail "\{path}: could not run `medaka check`: \{e}"
-  Ok (_, out) => match missingNeedles needles out
-    [] => pass
-    missing :: _ =>
+  Ok (code, out) =>
+    if code /= 1 then
+      fail "\{path}: expected reject, `medaka check` exited \{intToString code}"
+    else match missingNeedles needles out
+      [] => pass
+      missing :: _ =>
+        fail
+          "\{path}: expected a rejection containing \{debug missing}, got \{debug (firstErrorLine out)}"
+
+lineContainsAll : List String -> String -> Bool
+lineContainsAll needles line = match missingNeedles needles line
+  [] => True
+  _ => False
+
+export
+expectCheckRejectLine : String -> List String -> <Exec "_", IO> Expectation
+expectCheckRejectLine path needles = match runMedaka ["check", path]
+  Err e => fail "\{path}: could not run `medaka check`: \{e}"
+  Ok (code, out) =>
+    if code /= 1 then
+      fail "\{path}: expected reject, `medaka check` exited \{intToString code}"
+    else if any (lineContainsAll needles) (lines out) then
+      pass
+    else
       fail
-        "\{path}: expected a rejection containing \{debug missing}, got \{debug (firstErrorLine out)}"
+        "\{path}: expected one diagnostic line containing \{debug needles}, got \{debug (firstErrorLine out)}"
 
 export
 expectVerbExitStartsWith : String ->
