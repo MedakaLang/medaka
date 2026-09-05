@@ -46,7 +46,7 @@ import frontend.ast.{
 -- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
-import types.route_key.{implRouteKeyWord, funHeadTag}
+import types.route_key.{implRouteKeyWord, funHeadTag, evDictRoutes}
 import support.util.{
   contains,
   listLen,
@@ -1728,8 +1728,8 @@ eval env (EVarAt x addr) =
 eval env (EMethodAt name routeRef implRef methodRef) =
   evalMethodAt env name !routeRef !implRef !methodRef
 
-eval env (EDictAt name routesRef) =
-  applyDicts env (lookupEnv env name) !routesRef
+eval env (EDictAt name ev) =
+  applyDicts env (lookupEnv env name) (evDictRoutes ev)
 eval env (EApp f x) = apply (eval env f) (eval env x)
 eval env (ELam pats body) = VClosure env pats body
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2

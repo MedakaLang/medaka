@@ -395,7 +395,7 @@ singleArm _ _ _ [] = []
 singleArm rt core stdlibDir ((mid, path, decls) :: rest) =
   let sRoots = entrySearchRoots (dirOf path) ++ [stdlibDir]
   let rootId = singleRootId sRoots path
-  let (coreD, mods, _) = elaborateModules rt core [(rootId, decls)]
+  let (coreD, mods, _, _) = elaborateModules rt core [(rootId, decls)]
   claimsOf "single" "core" coreD
     ++ claimsOf "single" mid (flatMap snd mods)
     ++ singleArm rt core stdlibDir rest
@@ -412,7 +412,7 @@ graphArm : List Decl ->
   List (String, List Decl) ->
   (Int, Int, List (String, Int), List Claim)
 graphArm rt core modules =
-  let (coreD, mods, _) = elaborateModules rt core modules
+  let (coreD, mods, _, _) = elaborateModules rt core modules
   let cs =
     claimsOf "graph" "core" coreD ++ graphModClaims (map fst modules) mods
   (

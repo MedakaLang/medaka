@@ -1,0 +1,23 @@
+-- The dictionary USER. Two solved evidence entries and one deliberately-empty one
+-- live here, and NONE of the three reaches anything this fixture prints.
+--
+-- `wValue` calls the constrained `cmod.tally` at two different types, so the graph
+-- carries two `EDictAt` sites with genuine slot-ordered routes (`Sz Int`, `Sz Bool`).
+-- `wPicked` calls umod's unconstrained same-named `pick` through an EXPLICIT import,
+-- which is the #739 empty-routes arm -- see umod.mdk. The local-occurrence shape
+-- (s8-i1-samename-unconstrained-poly-callee's `use`) takes the bare-name path instead
+-- and is a different site; this one must be imported to reach the #739 arm.
+--
+-- HAND-DERIVED, for the header of main.mdk rather than for an assertion here:
+--   tally (7 : Int) = sz 7 + 100 = 107
+--   tally True      = sz True + 100 = 1 + 100 = 101
+--   wValue          = 208
+--   wPicked         = pick 3 = 3   (identity; a phantom dict slot here over-rejects)
+import cmod.{tally}
+import umod.{pick}
+
+export wValue : Int
+wValue = tally (7 : Int) + tally True
+
+export wPicked : Int
+wPicked = pick 3

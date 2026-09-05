@@ -147,7 +147,7 @@ argReqRoute : String -> String -> List (String, Mono) -> List Ty -> Int -> Int -
 argStampPairs : PendingEntry -> List (Int, String)
 arithEntry : Obligation -> List (Ref Route, Mono)
 arithGoalsIn : List Obligation -> List (Ref Route, Mono)
-armDictSites : Arm -> List (Ref (List Route))
+armDictSites : Arm -> List (List Route)
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armSites : Arm -> List (Ref Route)
@@ -455,7 +455,7 @@ collapsesTyvarsMsg : String -> Ty -> String
 collectAbstractRecordTypes : List Decl -> List String
 collectByParam : List String -> List (String, Mono) -> List Mono
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
-collectDictSites : Expr -> List (Ref (List Route))
+collectDictSites : Expr -> List (List Route)
 collectIfaceNames : List Decl -> List String
 collectMethodSites : Expr -> List (Ref Route)
 collectRowEffvarIds : List Mono -> List Int
@@ -704,7 +704,7 @@ doBindArgHint : String -> String
 doBindArgMsg : String -> String
 doChainIsDeferred : Expr -> Bool
 doRequiresMonadMsg : String
-doStmtDictSites : DoStmt -> List (Ref (List Route))
+doStmtDictSites : DoStmt -> List (List Route)
 doStmtEVars : DoStmt -> List String
 doStmtSites : DoStmt -> List (Ref Route)
 domainIsTupleOfArity : Mono -> Int -> Bool
@@ -757,7 +757,7 @@ elabPromotionFixpoint : ElabSweep -> List String -> (List Decl, List (String, Li
 elabSweep : ElabSweep -> List String -> (List String, List Decl, List (String, List Decl))
 elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
-elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, TcDiag))
+elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, TcDiag), List EvEntry)
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -795,6 +795,8 @@ eqIntList : List Int -> List Int -> Bool
 eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
+evEntriesOf : List Obligation -> List EvEntry
+evValueOf : EvDest -> EvVal
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
@@ -856,7 +858,7 @@ ffiStampModeOwned : CheckMode -> Bool
 ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
 ffiUnlabelledMsg : String -> String
 ffiWrittenRow : Ty -> List (String, Option String)
-fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
+fieldAssignDictSites : FieldAssign -> List (List Route)
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
@@ -921,6 +923,7 @@ freshEffMap : List String -> List (String, Ref Effvar)
 freshEffSubst : List Int -> List (Int, Ref Effvar)
 freshEffvar : Unit -> Ref Effvar
 freshEffvarAt : Int -> Ref Effvar
+freshEvId : Unit -> EvId
 freshGraphRun : Unit -> GraphRun
 freshPerRun : Unit -> PerRun
 freshSubst : List Int -> List (Int, Mono)
@@ -933,7 +936,7 @@ fromAstTypeApp : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin
 fromAstTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 funArity : Mono -> Int
-funClauseDictSites : FunClause -> List (Ref (List Route))
+funClauseDictSites : FunClause -> List (List Route)
 funClauseEVars : FunClause -> List String
 funClausePair : FunClause -> (List Pat, Expr)
 funClauseSites : FunClause -> List (Ref Route)
@@ -984,7 +987,7 @@ groupNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
 groupRefs : List (List Pat, Expr) -> List String
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
-guardDictSites : Guard -> List (Ref (List Route))
+guardDictSites : Guard -> List (List Route)
 guardEVars : Guard -> List String
 guardSites : Guard -> List (Ref Route)
 hadMatchWarnings : Unit -> Bool
@@ -1204,8 +1207,8 @@ inferDefinerShadowAppAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Ex
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
 inferDefinerShadowVarAppAt : TcEnv -> String -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferDefinerStandaloneVarAppAt : TcEnv -> String -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Option Loc -> Mono
-inferDictAt : TcEnv -> String -> Ref (List Route) -> Mono
-inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mono
+inferDictAt : TcEnv -> String -> EvId -> Mono
+inferDictAtFound : String -> EvId -> (Mono, List (Int, Mono)) -> Mono
 inferEach : TcEnv -> List Expr -> List Mono
 inferExpected : TcEnv -> Expr -> Mono -> Mono
 inferFieldAccess : TcEnv -> Expr -> String -> Ref String -> Mono
@@ -1372,7 +1375,7 @@ lastComponent : List String -> String
 launderEscapeFromLog : List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
 launderOpenActualArrow : EffRow -> List AbsorptionEvent -> List Atom
 leadInferredPred : (IfaceRef, List Int, List Mono) -> List (IfaceRef, Int, List Mono)
-letBindDictSites : LetBind -> List (Ref (List Route))
+letBindDictSites : LetBind -> List (List Route)
 letBindEVars : LetBind -> List String
 letBindName : LetBind -> String
 letBindNameTc : LetBind -> String
@@ -1731,7 +1734,7 @@ publicValNames : List Decl -> List String
 pureRow : EffRow
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
-pushArithGoal : Ref Route -> Mono -> Unit
+pushArithGoal : Ref Route -> Mono -> EvId -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
@@ -1781,6 +1784,7 @@ recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordCandIsType : Ident -> Ident -> String -> Bool
 recordDoMonadError : Loc -> Unit
+recordEvidence : List Obligation -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
@@ -2062,7 +2066,7 @@ siteGoals : GoalKind -> Int -> List PendingEntry
 siteGoalsIn : GoalKind -> List Obligation -> List PendingEntry
 siteObligation : GoalKind -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
-siteRDictNamesL : Ref (List Route) -> List String
+siteRDictNamesL : List Route -> List String
 sitesFor : String -> Map String (List a) -> List a
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef

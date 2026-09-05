@@ -1,0 +1,49 @@
+-- THE [T-GLOBAL-TABLE] FIXTURE for the published evidence table (#2549 M2).
+--
+-- `evidenceRef` (compiler/types/route_key.mdk) is a program-global table keyed by an
+-- `EvId`, and AGENTS.md's [T-GLOBAL-TABLE] names the required shape for a new one:
+-- "the construct is present but the assertion is about code that never touches it".
+-- Every other fixture in this corpus asserts a dispatch answer, so all of them read
+-- the table; a table that answered the wrong goal to the RIGHT question would keep
+-- them green. This fixture is the other half, and it is the only one here whose
+-- printed values are chosen to be independent of dispatch.
+--
+-- The graph is deliberately full of the construct. cmod declares an interface and two
+-- impls; wmod applies the constrained `cmod.tally` at two types, so two `EDictAt`
+-- sites publish real slot-ordered routes under distinct ordinals; umod contributes an
+-- unconstrained `pick` whose imported occurrence in wmod is the #739 arm, an `EDictAt`
+-- with NO entry in the table at all (the miss that must stay silent). Ordinals for all
+-- of those are minted from the same graph-global counter that numbers every other goal
+-- in the run, including the bystander's.
+--
+-- main prints ONLY bystander.mdk's values. bystander imports nothing, declares no
+-- interface, impls nothing and is monomorphic throughout, so no route lookup stands
+-- between its source and its answer. If the table ever answers one goal's id with
+-- another goal's routes -- the failure mode the module half of `EvId` is a tripwire
+-- for, and which no "the feature works" fixture can see -- these two numbers are what
+-- go wrong while every dispatch-asserting row in this file stays green.
+--
+-- SPEC ANSWER, hand-derived from the sources before any engine was run
+-- ([WT-GOLDEN-ENSHRINES]):
+--   bump (Tally 5)              = Tally 6
+--   bump (Tally 6)              = Tally 7
+--   bystanderValue              = 7
+--   bystanderTotal              = 7 * 3 = 21
+-- so: 7 then 21. Neither number contains a contribution from cmod, umod or wmod.
+--
+-- The dict-bearing bindings are forced but not printed, so the run genuinely executes
+-- the dictionary path it elaborates. Their hand-derived values (208 and 3) are
+-- recorded in wmod.mdk; they are NOT asserted here, on purpose.
+--
+-- The #739 site is carried by the VERDICT, not by a value: its symptom is a phantom
+-- obligation recorded off the bare-name collision, which makes run and build
+-- OVER-REJECT a valid program. This row pins ACCEPT on all three verbs, so that
+-- regression reds it; a wrong-value regression at that site could not.
+import wmod.{wValue, wPicked}
+import bystander.{bystanderValue, bystanderTotal}
+
+main =
+  let _ = wValue
+  let _ = wPicked
+  let _ = println bystanderValue
+  println bystanderTotal

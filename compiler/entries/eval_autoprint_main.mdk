@@ -56,5 +56,5 @@ runElab runtimeDecls coreDecls modules =
       modules
   -- the wrap's callee is a PRELUDE re-binding (autoPrintPinCore, #2185 / F1 / F2).
   let coreW = if fired then autoPrintPinCore coreDecls else coreDecls
-  let (coreE, modulesE, _) = elaborateModules runtimeDecls coreW modulesW
+  let (coreE, modulesE, _, _) = elaborateModules runtimeDecls coreW modulesW
   putStr (evalModulesOutput coreE modulesE)

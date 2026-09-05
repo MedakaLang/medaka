@@ -246,7 +246,7 @@ runEmitWith : String ->
 runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, residual) =
+  let (coreD, modules2, residual, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
   let _ = emitElaborationGate residual
   if shouldAutoPrintMain coreDecls modules then
@@ -282,7 +282,7 @@ emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Un
 emitModulesWith emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, residual) =
+  let (coreD, modules2, residual, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
   let _ = emitElaborationGate residual
   emitTail runtimeDecls coreD modules2

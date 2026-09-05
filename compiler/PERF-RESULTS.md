@@ -1033,3 +1033,149 @@ backend — see `docs/spec/WASM-SEMANTICS.md` §6). The caveats on how to read t
 per-stage numbers (DCE is exercised, the prelude constant is not subtracted, the run is
 single-file-only) live in `entries/profile_main.mdk` itself, beside the stages they
 describe, not here.
+
+## Baseline — memo-path analyze Ir, for ruling 7's ~25% soft ceiling (2026-09-04)
+
+Ruling 7 on #2549 (evidence-as-bindings / M2, recorded in
+`compiler/TYPECHECK-TARGET-ARCHITECTURE.md` § RULED item 7) lets step 7 of the typecheck
+refactor land only if the **memo-path** regression on *playground analyze* and on
+*`import list`* stays under a soft ceiling of about **25% Ir** — instructions, never wall
+time. This entry is the BEFORE half: the numbers the post-step-7 tree is compared against,
+plus the commands that produce them. Nothing here asserts or gates; it is a baseline.
+
+### The instrument, and why it is the honest proxy
+
+The playground runs the compiler as WasmGC under node, where cachegrind would count node,
+not the compiler. The native proxy is **`medaka lsp` driven over batch stdio**, because
+`compiler/tools/lsp.mdk` and `compiler/entries/playground_main.mdk` are the same shape on
+the two axes that decide this cost:
+
+* **The route.** `publishFor` (lsp.mdk) branches on `bufferHasImports` into
+  `analyzeLocated` / `analyzeProject`, exactly as `playground_main`'s `run` branches into
+  `analyzeSingle` / `analyzeMulti`. Both reach `checkCoreMemoized`
+  (`compiler/types/typecheck.mdk`) through the keyed prelude that
+  `compiler/driver/diagnostics.mdk` mints in `analyzeFrom` and `analyzeProject`.
+* **The session.** The memo layer and a session-lived dependency parse cache both survive
+  across analyses: `projectParseCache` in lsp.mdk, `playgroundParseCache` in
+  playground_main.mdk. One `medaka lsp` process serving a didOpen followed by N didChange
+  notifications is the same warm loop the playground host gets by re-entering `mdk_main`
+  on one live instance.
+
+A one-shot `medaka check` cannot supply the warm half at all: `check` takes exactly one
+file, so its process only ever performs one analyze and the memo can only miss.
+
+Ir is read with `test/perf_baseline.sh`'s `ir_of` method unchanged —
+`valgrind --tool=cachegrind --cache-sim=no --branch-sim=no` with
+`GC_INITIAL_HEAP_SIZE=1073741824` exported around the run.
+
+### Workloads
+
+**A — playground analyze.** The clean program `test/wasm/visitor_analyze_latency.mjs`
+already drives the playground's analyze with, so the Ir here and the latency that gate
+reports are readings of one workload:
+
+```
+add : Int -> Int -> Int
+add a b = a + b
+
+main = println (add 2 3)
+```
+
+**B — `import list`.** The same program plus the import ruling 7 names, so the multi-module
+`analyzeProject` route is the one under measurement:
+
+```
+import list.{range}
+
+add : Int -> Int -> Int
+add a b = a + b
+
+ys : List Int
+ys = range 1 3
+
+main = println (add 2 3)
+```
+
+### Reproducing
+
+One `medaka lsp` session is fed a framed JSON-RPC stream holding `initialize`, then N
+analyses (`didOpen`, then N-1 `didChange`, each perturbing the `add 2 3` literal so no
+identical-source short circuit can make a warm analyze free), then `shutdown`/`exit`. With
+`$REQ` that stream and `$ROOT` the repo root:
+
+```sh
+GC_INITIAL_HEAP_SIZE=1073741824 MEDAKA_ROOT=$ROOT MEDAKA_STRICT=1 \
+  valgrind --tool=cachegrind --cache-sim=no --branch-sim=no \
+  --cachegrind-out-file=/tmp/cg.out "$ROOT/medaka" lsp < "$REQ" >/dev/null 2>/tmp/vg.err
+grep -a 'I  *refs:' /tmp/vg.err | sed 's/.*I *refs: *//' | tr -d ' ,'
+```
+
+N = 0 (no didOpen) is the workload-independent session cost — process start plus the two
+`readPreludeFile` reads in `runLspServerFromEnv` (`compiler/driver/medaka_cli.mdk`). N = 1
+adds one COLD analyze (memo miss). Each further N adds one WARM analyze (memo hit). So
+`cold = Ir(1) - Ir(0)` and `warm = Ir(2) - Ir(1)`, with `Ir(3) - Ir(2)` as the check that
+the warm cost is flat.
+
+### The numbers
+
+Base `6525403291156daf3e6a49a701be979bb60857ef` (sprint branch `sprint/evidence-as-bindings`),
+Debian 13 / x86_64 box, `medaka` freshly built from that source. Two back-to-back runs per
+cell; the largest spread across all eight cells is 0.0016%, well inside the 0.01%
+self-consistency bar this kind of Ir measurement is expected to hold.
+
+| workload | N | run 1 | run 2 | spread |
+|---|---|---|---|---|
+| A | 0 | 265,448,308 | 265,450,149 | +0.00069% |
+| A | 1 | 506,249,217 | 506,241,397 | −0.00155% |
+| A | 2 | 565,954,212 | 565,954,592 | +0.00007% |
+| A | 3 | 625,618,032 | 625,620,771 | +0.00044% |
+| B | 0 | 265,454,140 | 265,449,905 | −0.00160% |
+| B | 1 | 747,632,768 | 747,637,239 | +0.00060% |
+| B | 2 | 839,648,588 | 839,650,384 | +0.00021% |
+| B | 3 | 931,615,613 | 931,604,809 | −0.00116% |
+
+Derived per-analyze cost, and the value a +25% regression would reach:
+
+| workload | analyze | Ir | +25% |
+|---|---|---|---|
+| A — playground clean | **cold** (memo miss) | **240,800,909** | 301,001,136 |
+| A — playground clean | **warm** (memo hit) | **59,704,995** | 74,631,244 |
+| B — `import list` | **cold** (memo miss) | **482,178,628** | 602,723,285 |
+| B — `import list` | **warm** (memo hit) | **92,015,820** | 115,019,775 |
+
+The second warm sample agrees with the first: A `Ir(3) − Ir(2)` = 59,663,820 (−0.07%),
+B = 91,967,025 (−0.05%). The memo is worth 4.03× on A and 5.24× on B per analyze, which is
+why ruling 7 grades the memo path rather than the front door.
+
+### Cross-checks on the proxy itself
+
+`compiler/entries/playground_main.mdk` builds and runs natively
+(`medaka build --allow-internal`), giving the real playground entry performing exactly one
+cold analyze in its own process — the same quantity as the LSP's N = 1 cell:
+
+| whole-process, one cold analyze | playground_main `analyze` | `medaka lsp` N = 1 | LSP over entry |
+|---|---|---|---|
+| A | 455,610,959 | 506,249,217 | +11.1% |
+| B | 702,900,419 | 747,632,768 | +6.4% |
+
+The LSP is the slightly more expensive of the two (JSON-RPC framing, `Docs`, the located
+prelude parse its handlers need) and therefore a mildly pessimistic proxy — not a cheaper
+one, which is the direction that would matter.
+
+Fixed costs, for reading the marginals above: `playground_main` with no arguments =
+4,296,078 Ir; `medaka --help` = 4,759,380 Ir. The LSP's 265.4M N = 0 cell is almost
+entirely the two prelude source reads, and it is workload-independent (the A and B cells
+agree to 0.002%).
+
+Front-door figures on the same tree, for scale — `medaka check` pays the whole one-shot
+cost and additionally re-derives what the LSP session keeps:
+
+```
+medaka check <workload A>   742,402,594 / 742,443,101
+medaka check <workload B>  1,208,183,069 / 1,208,185,349
+medaka check hello.mdk      740,492,836 / 740,345,100
+```
+
+The last row is directly comparable to `test/diff_compiler_check_ir_floor.sh`, whose live
+`CEIL_check` is 880,000,000 and whose most recent derivation (2026-09-02, PR #2491) records
+729,831,411 for its own tree. 740,492,836 sits 1.5% above that and 16% under the ceiling.

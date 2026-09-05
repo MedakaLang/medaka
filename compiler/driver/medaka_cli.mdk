@@ -90,7 +90,7 @@ import args.{
   usageExitCode,
   withStrictDash,
 }
-import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
+import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable}
 import frontend.parser.{
   parse,
   parseLocated,
@@ -2527,7 +2527,7 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
       (Some errText, _, _) => Err errText
       (None, projWarns, _) =>
         let _ = resetTypeErrorsSticky ()
-        let (_, _, residual) = elaborateModules rtD coreD modsD
+        let (_, _, residual, _) = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
           True =>
             Err
@@ -2890,7 +2890,7 @@ runRunCmd argv =
           match errs
             [] =>
               let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, _) = elaborateRun rtD coreD modsD
+              let (coreE, modsE, _, _) = elaborateRun rtD coreD modsD
               let perfTCheck = now ()
               let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
               -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
@@ -2950,7 +2950,7 @@ runRunCmd argv =
                 (Some errText, _, _) => runAbort errText
                 (None, projWarns, _) =>
                   let _ = resetTypeErrorsSticky ()
-                  let (coreE, modsE, residual) = elaborateRun rtD coreD modsD
+                  let (coreE, modsE, residual, _) = elaborateRun rtD coreD modsD
                   match hadTypeErrors ()
                     True =>
                       -- Belt-and-braces: anything only the emit/eval
@@ -3011,7 +3011,7 @@ modIdToPath (mid, path, _) = (mid, path)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (List Decl, List (String, List Decl), List (String, TcDiag))
+  <IO> (List Decl, List (String, List Decl), List (String, TcDiag), EvTable)
 elaborateRun rtD coreD modsD =
   let plain = elaborateModules rtD coreD modsD
   match asyncMainShapeError modsD

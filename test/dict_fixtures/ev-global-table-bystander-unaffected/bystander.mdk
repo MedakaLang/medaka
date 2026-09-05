@@ -1,0 +1,19 @@
+-- The module the assertion is about. It declares no interface, impls nothing,
+-- dispatches nothing, and imports nothing -- monomorphic `Tally` arithmetic only, so
+-- no occurrence in this file can consult the evidence table at all. Follows the
+-- `bystander.mdk` idiom of b1-xmod-distinct-spelled-iface-control.
+--
+-- Its two values are the ONLY things main.mdk prints. That is deliberate: a fixture
+-- that printed the dict users' answers would assert "the feature works", which is the
+-- assertion [T-GLOBAL-TABLE] says cannot catch a mis-keyed program-global table.
+export data Tally = Tally Int
+
+export bump : Tally -> Tally
+bump (Tally n) = Tally (n + 1)
+
+export bystanderValue : Int
+bystanderValue = match bump (bump (Tally 5))
+  Tally n => n
+
+export bystanderTotal : Int
+bystanderTotal = bystanderValue * 3

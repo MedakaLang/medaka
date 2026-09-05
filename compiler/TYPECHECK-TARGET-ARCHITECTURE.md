@@ -512,7 +512,7 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
    `obls`/`implObls` (`UObligation`, windowed per group).
 
 Step 5 unit 3 (`60a8989ef`) and #2548's whole-graph drain at quiescence (`a3536b419`) are
-both landed — see item 9. Next in order: #2549.
+both landed — see item 9. #2549 is landed for its first half only — see item 10.
 
 9. **Ruling 8's measurement, re-run after #2547 unit 3 (`60a8989ef`) and #2548
    (`a3536b419`)** (`S-boundary-remeasure`): same six candidate boundaries (K, HM core, I,
@@ -533,6 +533,36 @@ both landed — see item 9. Next in order: #2549.
    stays falsified, consistent with `TYPECHECK-ARCHITECTURE.md` §7 item 4's own
    withdrawal (#1120). No extraction taken; nothing moved. Full per-boundary command and
    sample back-import edges: `S-boundary-remeasure`'s report.
+
+10. **Step 7 landed HALF, 2026-09-05** (#2549 M2 phase 1, sprint `evidence-as-bindings`,
+   tracking #2667). The dispatch answer for DICTIONARY-APPLICATION sites is now published
+   data: `EvId`/`EvVal`/`EvEntry`/`EvTable` live beside `Route` in `compiler/frontend/ast.mdk`,
+   ids are minted at the five goal carriers, `elaborateModules` publishes an `EvTable`, and
+   `EDictAt String (Ref (List Route))` is `EDictAt String EvId`, read through an
+   ordinal-indexed `Array (Option EvEntry)` installed once per elaboration
+   (`compiler/types/route_key.mdk`). **`EMethodAt` is UNCHANGED and still carries three `Ref`
+   fields.** That half was attempted and refused on a measurement, not deferred on judgment:
+   `EMethodAt`'s first ref is not solver output but a PRE-PASS INPUT channel — `typecheck.mdk`'s
+   P0-18 arm seeds it at mint time with the mangled definer-shadow symbol (`EMethodAt bare
+   (Ref (RLocal n []))`, where `n` is `<mid>__x` and is recoverable from neither `bare` nor the
+   node), five inference-time sites read that seed before any goal exists, and the table is
+   installed only after inference. Replacing the seed with `RNone` fails the compiler's own
+   self-compile with an undefined-symbol link error. Two further facts a later reader needs:
+   `compiler/frontend/marker.mdk`'s `collectVars` DEREFERENCES that route (it is a DCE
+   reference walk, so a dropped reference is a link error, not a wrong value), and
+   `inferMethodAt`'s unbound-method recovery arm writes a final route while pushing NO goal, so
+   a goal-harvested table cannot be complete for that node. Flipping it needs either a
+   typechecker-private mint-time registry or a node-arity change to `EMethodAt String String
+   EvId`; neither is representation-only. **Any comparison carrier in the emitter arc that
+   reads dispatch shape must read this item, not step 7's plan text: the baseline for
+   `EDictAt` moved on this date and the baseline for `EMethodAt` did not.** Phase 1 cost,
+   measured as a two-arm Ir differential against the `origin/main` tip it merged (`medaka lsp`
+   proxy, cachegrind, both workloads ruling 7 names): every cell inside ±0.1%, against a ~25%
+   soft ceiling. The deletions (`implInferEnabled`, the double typecheck, the promotion
+   fixpoint, `eval`'s `Route` arms), unconditional solving, and the `EMethodAt` flip are
+   phase 2's, with its own review round: **#2705**, which also carries the review round's
+   adjudicated residuals (the unread published tuple element, `copyGraphRun`'s anticipatory
+   field, the cumulative-ordinal array sizing, and the two silent miss arms of `evDictRoutes`).
 
 ### SA-11. Artifacts
 

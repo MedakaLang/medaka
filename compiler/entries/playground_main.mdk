@@ -552,7 +552,7 @@ nonEmptyDiags _ = True
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _) =
+  let (coreD, modules2, _, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0

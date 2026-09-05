@@ -1,0 +1,9 @@
+-- UNCONSTRAINED binding sharing the surface name `pick` with cmod's constrained one.
+-- Its dict arity is 0. An explicitly-imported occurrence of it (wmod's) is the #739
+-- arm of `inferDictAtFound`: the name is in the dict-name set because of cmod, so the
+-- marker mints an `EDictAt` for it, but `declaredIds` is empty and the callee has a
+-- known import definer, so the arm records NO goal and the id reads back as empty
+-- routes. That is the one occurrence shape that leaves an `EDictAt` unrepresented in
+-- the evidence table.
+export pick : a -> a
+pick x = x

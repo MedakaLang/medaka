@@ -56,6 +56,10 @@ import frontend.ast.{
   firstTyLocList,
   Constraint(..),
   Route(..),
+  EvId(..),
+  EvVal(..),
+  EvEntry(..),
+  EvTable,
   Pat(..),
   RecPatField(..),
   Guard(..),
@@ -326,7 +330,12 @@ import types.registry.{
 -- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
-import types.route_key.{implRouteKeyWord, funHeadTag}
+import types.route_key.{
+  implRouteKeyWord,
+  funHeadTag,
+  installEvidence,
+  evDictRoutes,
+}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -2809,7 +2818,12 @@ data PendingEntry =
   -- ELoc was entered last (observed: the body of an unrelated impl three lines away).
   -- Each resolver loop republishes this span into `goalSiteLoc` so the min⊑ selector's
   -- ambiguity reject can point at the goal it was actually posed by.
-  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc)
+  -- #2549 M2: the 7th field is this site's EVIDENCE ID — the value-level name of
+  -- the association the 2nd field (the route cell) carries by pointer identity.
+  -- Minted where the carrier is built, which is the one point at which the marked
+  -- node and its cell are both in hand; the reader flip sources it from the node
+  -- itself instead, leaving everything downstream of here unchanged.
+  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc) EvId
 
 -- ── #2547 unit 2 (ARCH M1): one deferred-goal channel ─────────────────────────
 -- The route-stamped site goals used to live on five per-kind lists (`pendingSites`,
@@ -2861,6 +2875,10 @@ data GoalPayload =
 data Obligation = Obligation {
   oKind : GoalKind,
   oDest : EvDest,
+  -- #2549 M2: the identity this goal's solution is PUBLISHED under, alongside the
+  -- cell it is written through.  Carried in from the goal's carrier rather than
+  -- minted here, so the id names the site and not the moment the goal was queued.
+  oEv : EvId,
   oEncl : String,
   oLoc : Option Loc,
   oPayload : GoalPayload,
@@ -2884,9 +2902,10 @@ pushGoal o =
   g.goalsN := g.goalsN.value + 1
 
 siteObligation : GoalKind -> PendingEntry -> Obligation
-siteObligation k (PendingEntry name tagRef m encl site loc) = Obligation {
+siteObligation k (PendingEntry name tagRef m encl site loc ev) = Obligation {
   oKind = k,
   oDest = EvRoute tagRef,
+  oEv = ev,
   oEncl = encl,
   oLoc = loc,
   oPayload = GPSite name m site,
@@ -2896,10 +2915,11 @@ pushSiteGoal : GoalKind -> PendingEntry -> Unit
 pushSiteGoal k e = pushGoal (siteObligation k e)
 
 -- an arithmetic operator site: only its operand mono and its route cell
-pushArithGoal : Ref Route -> Mono -> Unit
-pushArithGoal dref m = pushGoal Obligation {
+pushArithGoal : Ref Route -> Mono -> EvId -> Unit
+pushArithGoal dref m ev = pushGoal Obligation {
   oKind = GKArithSite,
   oDest = EvRoute dref,
+  oEv = ev,
   oEncl = "",
   oLoc = None,
   oPayload = GPArith m,
@@ -2909,6 +2929,7 @@ pushDictApp : PendingDictApp -> Unit
 pushDictApp app = pushGoal Obligation {
   oKind = GKDictApp,
   oDest = EvRoutes app.pdaRoutesRef,
+  oEv = app.pdaEv,
   oEncl = app.pdaEncl,
   oLoc = app.pdaLoc,
   oPayload = GPDictApp app,
@@ -2918,19 +2939,22 @@ pushMethodDictGoal : PendingMethodDict -> Unit
 pushMethodDictGoal pmd = pushGoal Obligation {
   oKind = GKMethodDict,
   oDest = EvRoutes pmd.pmdRoutesRef,
+  oEv = pmd.pmdEv,
   oEncl = pmd.pmdEncl,
   oLoc = None,
   oPayload = GPMethodDict pmd,
 }
 
 pushRecDictAppGoal : RecDictApp -> Unit
-pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _)) = pushGoal Obligation {
-  oKind = GKRecDictApp,
-  oDest = EvRoutes routesRef,
-  oEncl = encl,
-  oLoc = None,
-  oPayload = GPRecDictApp r,
-}
+pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _ ev)) = pushGoal
+  Obligation {
+    oKind = GKRecDictApp,
+    oDest = EvRoutes routesRef,
+    oEv = ev,
+    oEncl = encl,
+    oLoc = None,
+    oPayload = GPRecDictApp r,
+  }
 
 -- the goals recorded since `mark` (a length of the channel: a module's start mark
 -- from `GraphMarks`, or a `let`/SCC bracket's own), newest first
@@ -2954,7 +2978,7 @@ siteGoalsIn k gs = flatMap siteEntry (goalsOfKindIn k gs)
 siteEntry : Obligation -> List PendingEntry
 siteEntry o = match o.oPayload
   GPSite name m site =>
-    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc]
+    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc o.oEv]
   _ => []
 
 evCell : EvDest -> Ref Route
@@ -7996,7 +8020,17 @@ uOblIsDecidableNow o =
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
 -- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
 data PendingDictApp = PendingDictApp {
+  -- #2549 M2: the goal's OWN cell, minted with the goal.  It used to be the
+  -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
+  -- carries `pdaEv` instead and the reader looks that up in the published table, so
+  -- this cell is private to the solver — the stampers' write target, read back once
+  -- by `recordEvidence` and by nothing outside this file.
   pdaRoutesRef : Ref (List Route),
+  -- #2549 M2: this application's evidence id, the same field `PendingEntry` carries
+  -- as its 7th and for the same reason.  Taken FROM THE NODE (`inferDictAt`), not
+  -- minted here, so the id names the occurrence rather than the moment the goal was
+  -- queued — that is what makes the node's lookup find this goal's answer.
+  pdaEv : EvId,
   pdaMonos : List Mono,
   pdaIfaces : List IfaceRef,
   pdaArgVecs : List (List Mono),
@@ -8019,6 +8053,8 @@ data PendingDictApp = PendingDictApp {
 -- identity or its arity, while non-colliding programs preserve the historical order.
 data PendingMethodDict = PendingMethodDict {
   pmdRoutesRef : Ref (List Route),
+  -- #2549 M2: this application's evidence id — see `pdaEv`.
+  pmdEv : EvId,
   pmdSlots : List PredicateSlot,
   pmdEncl : String,
 }
@@ -8191,7 +8227,8 @@ resetCrossModuleState _ =
 -- in scope in its body — rather than rebuilding one (which it cannot, the type is
 -- still the constraint variable).  Mirrors the reference's recursive_promoted_usages
 -- / realize_recursive_dict_apps (Phase 115/136).
-data RecDictApp = RecDictApp (Ref (List Route)) String String Mono
+-- #2549 M2: the 5th field is this application's evidence id — see `pdaEv`.
+data RecDictApp = RecDictApp (Ref (List Route)) String String Mono EvId
 
 -- the top-level fn whose body is currently being inferred ("" = none); captured
 -- into a deferred RecDictApp so its recursive calls forward the right dict param.
@@ -8391,7 +8428,8 @@ recordArgStamp name tagRef implRef idx mono
           am
           perRun.value.currentFn.value
           (SKArg implRef mono)
-          !currentLoc)
+          !currentLoc
+          (freshEvId ()))
     None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -8423,7 +8461,7 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
 resolveArgStamps : List PendingEntry -> Unit
 resolveArgStamps [] = goalSiteLoc := None
-resolveArgStamps ((PendingEntry name tagRef am encl kind loc) :: rest) =
+resolveArgStamps ((PendingEntry name tagRef am encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKArg implRef fullMono =>
@@ -9095,6 +9133,15 @@ data GraphRun = GraphRun {
   -- the channel's length, maintained by `pushGoal` / `dropGoalsSince`, so a mark is
   -- O(1) — `goalsMark` is taken at every `let` and SCC bracket
   goalsN : Ref Int,
+  -- #2549 M2: the ordinal source for this run's evidence ids.  Graph-global and
+  -- monotone, so `EvId <module> <ordinal>` is unique across the whole run without a
+  -- per-module reset — see `freshEvId`.
+  evCounter : Ref Int,
+  -- #2549 M2: the solved evidence, one entry per goal, appended by the graph-end
+  -- drain as each module's stampers finish.  It is a SECOND RENDERING of the routes
+  -- the stampers wrote into their cells, read back from those same cells, never an
+  -- independently-derived answer.
+  evTable : Ref EvTable,
 }
 
 freshGraphRun : Unit -> GraphRun
@@ -9108,13 +9155,45 @@ freshGraphRun _ = GraphRun {
   moduleRanges = Ref [],
   stampCtxs = Ref [],
   goalsN = Ref 0,
+  evCounter = Ref 0,
+  evTable = Ref [],
 }
 
 graphRun : Ref GraphRun
 graphRun = Ref (freshGraphRun ())
 
+-- #2549 M2: the next evidence id for the module currently being inferred.  The
+-- module component comes from `driverState`, which `checkBodyImpl` sets once per
+-- module before any body of it is inferred; the ordinal is this run's counter.
+-- `evCounter` is graph-global and monotone, and `resetGraphState` carries it across
+-- every reset, so THE ORDINAL ALONE is what makes an id unique — the module half does
+-- not scope it, and `evDictRoutes` indexes on the ordinal without consulting it.
+-- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
+-- do not make ordinals per-module in the belief that the pair still separates them.
+--
+-- Both halves ride `GraphRun`, so the two memo layers rewind the counter and the goal
+-- channel TOGETHER (`copyGraphRun`): a hit can hand back an ordinal an abandoned
+-- branch already minted, but never two live goals sharing one id, because the goals
+-- that consumed those ordinals were dropped with the channel.
+freshEvId : Unit -> EvId
+freshEvId _ =
+  let g = graphRun.value
+  let n = g.evCounter.value
+  g.evCounter := n + 1
+  EvId driverState.value.currentModuleRef.value n
+
+-- #2549 M2: the evidence ORDINAL survives this reset; nothing else does.  A reset
+-- drops the goal channel and the table, but it does NOT drop the marked trees, and
+-- since the `EDictAt` mint happens in the prePass — BEFORE the inference whose
+-- `checkBodyImpl` resets a Flat graph — restarting the ordinal at 0 here would
+-- re-issue ids the marked tree already carries, and two goals would publish under
+-- one name.  Monotone across resets, ids stay unique for as long as any tree
+-- holding one can still be read.
 resetGraphState : Unit -> Unit
-resetGraphState _ = graphRun := freshGraphRun ()
+resetGraphState _ =
+  let n = graphRun.value.evCounter.value
+  graphRun := freshGraphRun ()
+  graphRun.value.evCounter := n
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
 -- over the same value, so neither side's later writes reach the other.
@@ -9129,6 +9208,8 @@ copyGraphRun g = GraphRun {
   moduleRanges = Ref g.moduleRanges.value,
   stampCtxs = Ref g.stampCtxs.value,
   goalsN = Ref g.goalsN.value,
+  evCounter = Ref g.evCounter.value,
+  evTable = Ref g.evTable.value,
 }
 
 -- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
@@ -11318,7 +11399,7 @@ infer env (EVariantUpdate cname base fields) =
 infer env (EBlock stmts) = inferBlock env stmts
 infer env (EMethodAt name tagRef implRef methodRef) =
   inferMethodAt env name tagRef implRef methodRef
-infer env (EDictAt name routesRef) = inferDictAt env name routesRef
+infer env (EDictAt name ev) = inferDictAt env name ev
 infer env (EArrayLit es) = inferArrayLit env es
 infer env (ERangeList lo hi _) = inferIntRange env lo hi (tconBuiltin "List")
 infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
@@ -11507,7 +11588,8 @@ recordRLocalSite env name tagRef inst
         inst
         perRun.value.currentFn.value
         (SKRLocal (routeLocalSym !tagRef) True [] [] [])
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
@@ -11532,7 +11614,8 @@ recordRLocalSite env name tagRef inst
               dicts.sdMonos
               dicts.sdIfaces
               dicts.sdArgVecs)
-            !currentLoc)
+            !currentLoc
+            (freshEvId ()))
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -11673,6 +11756,7 @@ recordMethodDicts name methodRef subst =
     None => ()
     Some slots => pushMethodDictGoal PendingMethodDict {
       pmdRoutesRef = methodRef,
+      pmdEv = freshEvId (),
       pmdSlots = instantiateMethodPredicateSlots slots subst,
       pmdEncl = perRun.value.currentFn.value,
     }
@@ -11770,7 +11854,8 @@ recordSite name tagRef implRef methodType =
       stripped
       perRun.value.currentFn.value
       (SKReturn implRef methodType)
-      !currentLoc)
+      !currentLoc
+      (freshEvId ()))
   perRun.value.methodSiteFns :=
     consSiteFn
       perRun.value.currentFn.value
@@ -11783,10 +11868,10 @@ recordSite name tagRef implRef methodType =
 -- constraint monos so resolveDictApps can pick a dict route once the call's args
 -- pin those monos.  funConstraintsRef[f] gives f's constraint tyvar ids, mapped
 -- through the instantiation subst to this call's fresh vars.
-inferDictAt : TcEnv -> String -> Ref (List Route) -> Mono
-inferDictAt env name routesRef = match lookupVar env name
+inferDictAt : TcEnv -> String -> EvId -> Mono
+inferDictAt env name ev = match lookupVar env name
   None => panic ("unbound constrained fn: " ++ name)
-  Some scheme => inferDictAtFound name routesRef (instantiateTracked scheme)
+  Some scheme => inferDictAtFound name ev (instantiateTracked scheme)
 
 -- The callee's constraints are registered (funConstraintsRef has it) ⇒ a normal
 -- call: map each constraint id through the instantiation subst to this call's
@@ -12024,11 +12109,8 @@ hasImportDefiner name =
     Some _ => True
     None => False
 
-inferDictAtFound : String ->
-  Ref (List Route) ->
-  (Mono, List (Int, Mono)) ->
-  Mono
-inferDictAtFound name routesRef inst =
+inferDictAtFound : String -> EvId -> (Mono, List (Int, Mono)) -> Mono
+inferDictAtFound name ev inst =
   let q = qualConstraintFor name
   -- S-xmod-vector-supply (#1868/#1867): ONE resolution, two projections.  The slots and
   -- the argument vectors `zipSlotVecs` pairs them with below MUST come from the same
@@ -12045,8 +12127,12 @@ inferDictAtFound name routesRef inst =
   -- #739: an explicitly-imported callee with NO cross-module constraint (declaredIds empty
   -- and source-exact per Fix A above) is genuinely UNCONSTRAINED — it only reached this
   -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
-  -- exports a same-named CONSTRAINED fn (`p.f`).  It needs NO dict routing: leave routesRef
-  -- empty and return the plain instantiated type.  Neither branch below is safe here — the
+  -- exports a same-named CONSTRAINED fn (`p.f`).  It needs NO dict routing: record no
+  -- goal for [ev] at all — an id with no published entry reads back empty, which is the
+  -- answer this arm wants — and return the plain instantiated type.  This is the one
+  -- occurrence shape that leaves an `EDictAt` unrepresented in the evidence table, and
+  -- `evDictRoutes` is written to answer it rather than to fault.
+  -- Neither branch below is safe here — the
   -- `if` branch would record a phantom obligation off the bare-name collision, and the
   -- `else` (recursive) branch's realizeRecDictApps does its OWN source-blind bare-name
   -- funConstraintsRef lookup and would forward the wrong module's dict slot.
@@ -12075,7 +12161,8 @@ inferDictAtFound name routesRef inst =
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
     let _ = pushDictApp PendingDictApp {
-      pdaRoutesRef = routesRef,
+      pdaRoutesRef = Ref [],
+      pdaEv = ev,
       pdaMonos = monos,
       pdaIfaces = map (s => s.csIface) expanded,
       pdaArgVecs = argVecs,
@@ -12095,7 +12182,7 @@ inferDictAtFound name routesRef inst =
     fst inst
   else
     pushRecDictAppGoal
-      (RecDictApp routesRef name perRun.value.currentFn.value (fst inst))
+      (RecDictApp (Ref []) name perRun.value.currentFn.value (fst inst) ev)
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -13721,7 +13808,8 @@ recordBinopSite op dref m = match binopMethod op
         m
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   None => ()
 
 -- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
@@ -13735,7 +13823,7 @@ isArithBinop op = contains op ["+", "-", "*", "/", "%"]
 
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordArithSite op dref m
-  | isArithBinop op = pushArithGoal dref m
+  | isArithBinop op = pushArithGoal dref m (freshEvId ())
   | otherwise = ()
 
 -- Roadmap #18a: `++` is the surface operator for `Semigroup`'s `append`, so it
@@ -13774,7 +13862,8 @@ recordUnopSite op dref m = match unopMethod op
         m
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   None => ()
 
 -- The EUnOp analogue of inferBinopE: infer the single operand, record its
@@ -15634,7 +15723,8 @@ recordImporterShadowDicts env mname (r :: rest) tx =
           dicts.sdMonos
           dicts.sdIfaces
           dicts.sdArgVecs)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   recordImporterShadowDicts env mname rest tx
 
 -- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
@@ -15672,7 +15762,8 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
           dicts.sdMonos
           dicts.sdIfaces
           dicts.sdArgVecs)
-        !currentLoc)
+        !currentLoc
+        (freshEvId ()))
   recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
@@ -15915,7 +16006,8 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
             dicts.sdMonos
             dicts.sdIfaces
             dicts.sdArgVecs)
-          !currentLoc)
+          !currentLoc
+          (freshEvId ()))
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
     -- only arm whose route this stamp decides.  On the STANDALONE arm `ft` is the
@@ -15931,7 +16023,8 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
           xt
           perRun.value.currentFn.value
           (SKArg implRef (if dispatches then ft else xt))
-          !currentLoc)
+          !currentLoc
+          (freshEvId ()))
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
@@ -18799,7 +18892,7 @@ methodConstrainedPairs _ =
 -- the explanation.  Dropping was the earlier behaviour and it is why a `where` helper
 -- pinned by this channel got a bare mismatch with no help at all.
 argStampPairs : PendingEntry -> List (Int, String)
-argStampPairs (PendingEntry name _ am _ _ _) =
+argStampPairs (PendingEntry name _ am _ _ _ _) =
   map (id => (id, optionOr "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
 -- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
@@ -19643,7 +19736,7 @@ unifyClauses env v ((pats, body) :: rest) =
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
-  let (coreD, modules, _) =
+  let (coreD, modules, _, _) =
     elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
 
@@ -19707,14 +19800,21 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   -- differs from `moduleStampOrder` and why.  One Flat module is the whole graph, so
   -- there is no quiescence to defer to: it runs here, over this module's windows.
   let mk = currentModuleMarks ()
+  let flatGoals = goalsSince mk.mGoals
   let _ =
     runStampSteps
       (stampCtxOf
         driverState.value.currentModuleRef.value
         prog2
-        (goalsSince mk.mGoals)
+        flatGoals
         (moduleWindow graphRun.value.numlitRefs mk.mNumlit))
       flatStampOrder
+  -- #2549 M2: the Flat arm's own copy of what `runStampCtxs` does per module and
+  -- `dictPassModulesIfEnabled` then installs.  One Flat module is the whole graph,
+  -- so its window IS the table; without these two lines every `EDictAt` this arm
+  -- marked would resolve against an empty table and dispatch on no dicts at all.
+  let _ = recordEvidence flatGoals
+  let _ = installEvidence graphRun.value.evTable.value
   dictPass allNames prog2
 
 -- With no eligible names (the RKey-only / typed path), there is nothing to
@@ -19861,9 +19961,10 @@ anyMember [] _ = False
 anyMember (x :: xs) ys = contains x ys || anyMember xs ys
 
 -- rewrite each return-position method occurrence to EMethodAt, and each
--- constrained-fn occurrence (a name in [dictNames]) to EDictAt — both carry a
--- fresh ref the typechecker fills.  The two name sets are disjoint (interface
--- methods vs top-level functions).
+-- constrained-fn occurrence (a name in [dictNames]) to EDictAt.  EMethodAt carries
+-- fresh refs the typechecker fills; EDictAt carries a fresh evidence id the
+-- typechecker publishes an answer under (#2549 M2).  The two name sets are
+-- disjoint (interface methods vs top-level functions).
 --
 -- ⚠️ #2189: THE THREE NAME SETS ARE INDEXED, NOT SCANNED.  [rpNames]/[dictNames]
 -- grow with the program (one entry per interface method / per `=>`-constrained
@@ -19887,7 +19988,7 @@ prePassDict rpNames dictNames prog =
 rewriteRPDict : OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDict rpNames dictNames (EVar n)
   | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | omHasKey n dictNames = EDictAt n (Ref [])
+  | omHasKey n dictNames = EDictAt n (freshEvId ())
   | otherwise = EVar n
 rewriteRPDict _ _ e = e
 
@@ -19950,7 +20051,7 @@ rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDictArg rpNames dictNames argNames (EVar n)
   | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
   | omHasKey n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | omHasKey n dictNames = EDictAt n (Ref [])
+  | omHasKey n dictNames = EDictAt n (freshEvId ())
   | otherwise = EVar n
 rewriteRPDictArg _ _ _ e = e
 
@@ -20060,7 +20161,7 @@ rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
   | omHasKey n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (Ref [])
+  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (freshEvId ())
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
@@ -20289,7 +20390,7 @@ constraintNonParamVars typarams (Constraint { constraintArgs = args }) =
 
 resolveSites : List String -> List PendingEntry -> Unit
 resolveSites _ [] = goalSiteLoc := None
-resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc) :: rest) =
+resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKReturn implRef fullMono =>
@@ -20786,7 +20887,7 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
 resolveRLocalSites : List Decl -> List PendingEntry -> Unit
 resolveRLocalSites _ [] = goalSiteLoc := None
-resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc) :: rest) =
+resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
@@ -21134,7 +21235,7 @@ resolveArithSite dref m = match !dref
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
 resolveOpSites : Bool -> List PendingEntry -> Unit
 resolveOpSites _ [] = goalSiteLoc := None
-resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc) :: rest) =
+resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKOp inImpl => resolveOpSite isBinop method tagRef operandMono inImpl encl
@@ -26897,19 +26998,6 @@ ambiguousImplMsg iface =
 -- from a DIFFERENT impl's goal.  (`entailInst`'s EKArg arm binds its goals once for
 -- exactly this reason.)
 --
--- ⚠️ The iface-UNKNOWN arm (iface == "", the method-dict / untyped-fallback path) has
--- no interface and therefore no arity to give a vector meaning, so it stays SCALAR —
--- and `goals` is pinned to `[m]` there so the substitution is scalar too.  That is not
--- a special case bolted on: at `listLen goals == 1`, `headSubstWithParams h itys m [m]`
--- IS `matchTyMono h m` (augmentWithParams gates on `listLen paramMonos > 1`), so this
--- arm reduces to the pre-#1154 body term for term, algebraically.
---
--- ⚠️ Be precise about what that pin buys, because the obvious reading is wrong:
--- `selectReqImpl`'s `iface == ""` arm IGNORES [goals] entirely (it selects with
--- `findImplEntry … m`), so pinning `goals` there changes NOTHING about selection and is
--- inert on that consumer today.  Its only live effect is on the SUBSTITUTION, and it is
--- a FORWARD guard against the two drifting apart if that arm is ever made vector-aware.
---
 -- #1161 (F-3a-ii) CORRECTION.  This comment used to add: "the property this function
 -- actually rests on is NOT anything about `iface`: it is that **only `argReqRoute` ever
 -- supplies a non-empty [rest]** … if a second non-empty-[rest] caller appears, re-derive
@@ -26925,11 +27013,16 @@ ambiguousImplMsg iface =
 --   • selection and substitution still read the ONE `goals` binding, so §6 C2's
 --     "dispatched-to impl == context-discharged impl" holds per caller, not per callsite
 --     count.
--- The property this now rests on is therefore about the VALUE, not the caller census:
--- every caller either supplies `[]` (⇒ `goals == [m]`, byte-identical) or supplies a
--- vector under a non-empty `iface`.  A caller that supplies a non-empty [rest] with
--- `iface == ""` would be the shape to re-derive for; the `if iface == ""` pin below
--- neutralizes even that.
+-- The property this rests on is therefore about the VALUE, not the caller census: every
+-- caller either supplies `[]` (⇒ `m :: rest` is `[m]` unconditionally) or supplies a
+-- vector under a non-empty `iface`.  No caller supplies a non-empty [rest] with
+-- `iface == ""` — #2665 measured this directly rather than resting on the census alone:
+-- a panic planted on exactly that conjunction, swept over a full self-compile, `check`
+-- and `test` on every `stdlib`/`compiler` module, and the dict_semantics/engines/
+-- must_fail/eval_typed_modules gate corpora, fired zero times, while the same panic
+-- moved to a sibling arm known to be live fired on the first thing compiled.  [goals] no
+-- longer special-cases `iface == ""`: `m :: rest` already gives `[m]` whenever `rest`
+-- is `[]`, which is the only value `rest` takes there.
 argImplRequiresRoutes : IfaceRef ->
   String ->
   Mono ->
@@ -26941,7 +27034,7 @@ argImplRequiresRoutes iface encl m rest prevSize spent =
   -- #1576: the goal vector is bound BEFORE the fuse test now, because the fuse test
   -- reads it.  It is pure, so hoisting it costs a `monoSizes` walk on the limit-hit
   -- path and changes no answer.
-  let goals = if iface.irName == "" then [m] else m :: rest
+  let goals = m :: rest
   let size = monoSizes goals
   -- SHRINKING ⇒ free.  No parent (`prevSize == 0`, a seed) ⇒ not shrinking, by
   -- definition rather than by measurement: there is nothing to have shrunk from.
@@ -26954,9 +27047,7 @@ argImplRequiresRoutes iface encl m rest prevSize spent =
     -- call to this function, which is how §6 C2 ("the impl dispatched to and the impl
     -- whose context is discharged must be the same impl") is held by construction
     -- rather than by care.  The reason it carries no origin is written there; moving
-    -- one of these two without the other is the thing C2 forbids.  Its own `iface ==
-    -- ""` pin in the `goals` binding above is the same sentinel `selectReqImpl`
-    -- re-spells; both stay name-scoped.
+    -- one of these two without the other is the thing C2 forbids.
 
     Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
       Some subst =>
@@ -27119,7 +27210,7 @@ methodPredicateRoute encl slot = match slot.psArgs
 -- fully populated.
 realizeRecDictApps : List RecDictApp -> Unit
 realizeRecDictApps [] = ()
-realizeRecDictApps ((RecDictApp routesRef callee encl mono) :: rest) =
+realizeRecDictApps ((RecDictApp routesRef callee encl mono _) :: rest) =
   let slots =
     optionOr
       []
@@ -27460,8 +27551,8 @@ siteRDictName r = match !r
   RDictFwd d => [d]
   _ => []
 
-siteRDictNamesL : Ref (List Route) -> List String
-siteRDictNamesL r = flatMap routeRDictName !r
+siteRDictNamesL : List Route -> List String
+siteRDictNamesL rs = flatMap routeRDictName rs
 
 routeRDictName : Route -> List String
 routeRDictName (RDict d) = [d]
@@ -27539,16 +27630,22 @@ doStmtSites (DoFieldAssign _ _ e) = collectMethodSites e
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldAssignSites (FieldAssign _ e) = collectMethodSites e
 
--- mirror of collectMethodSites's structural walk, but collecting EDictAt's
--- route-LIST refs (`Ref (List Route)`) instead of EMethodAt's single route ref.
-collectDictSites : Expr -> List (Ref (List Route))
-collectDictSites (EDictAt _ rs) = [rs]
+-- mirror of collectMethodSites's structural walk, but collecting route LISTS
+-- instead of EMethodAt's single route ref.
+--
+-- #2549 M2: an `EDictAt`'s routes come from the published evidence table and an
+-- `EMethodAt`'s still from its cells, so this yields the route lists themselves
+-- rather than the cells that hold them.  Its one caller (`bodyRDictNames`)
+-- dereferenced every cell immediately anyway, so no writer downstream loses a cell
+-- it could have written.
+collectDictSites : Expr -> List (List Route)
+collectDictSites (EDictAt _ ev) = [evDictRoutes ev]
 -- D3b-1: an EMethodAt arg-position site carries its element-dict routes in the
 -- impl-/method-dicts route LISTS (not tagRef).  A nested `requires` impl whose
 -- body dispatches a method on its own element tyvar routes RDict $dict_<m>_<slot>
 -- here — scan both so implDictPassMethods' usesImplDict gate sees it and prepends
 -- the matching param.  [] on the golden path (resolveArgStamp never runs).
-collectDictSites (EMethodAt _ _ implR methR) = [implR, methR]
+collectDictSites (EMethodAt _ _ implR methR) = [!implR, !methR]
 collectDictSites (ELoc _ e) = collectDictSites e
 collectDictSites (EDoOrigin _ e) = collectDictSites e
 collectDictSites (EApp f x) = collectDictSites f ++ collectDictSites x
@@ -27581,28 +27678,28 @@ collectDictSites (EVariantUpdate _ e fs) =
   collectDictSites e ++ flatMap fieldAssignDictSites fs
 collectDictSites _ = []
 
-letBindDictSites : LetBind -> List (Ref (List Route))
+letBindDictSites : LetBind -> List (List Route)
 letBindDictSites (LetBind _ clauses) = flatMap funClauseDictSites clauses
 
-funClauseDictSites : FunClause -> List (Ref (List Route))
+funClauseDictSites : FunClause -> List (List Route)
 funClauseDictSites (FunClause _ body) = collectDictSites body
 
-armDictSites : Arm -> List (Ref (List Route))
+armDictSites : Arm -> List (List Route)
 armDictSites (Arm _ guards body) =
   flatMap guardDictSites guards ++ collectDictSites body
 
-guardDictSites : Guard -> List (Ref (List Route))
+guardDictSites : Guard -> List (List Route)
 guardDictSites (GBool e) = collectDictSites e
 guardDictSites (GBind _ e) = collectDictSites e
 
-doStmtDictSites : DoStmt -> List (Ref (List Route))
+doStmtDictSites : DoStmt -> List (List Route)
 doStmtDictSites (DoExpr e) = collectDictSites e
 doStmtDictSites (DoLet _ _ _ e) = collectDictSites e
 doStmtDictSites (DoBind _ e) = collectDictSites e
 doStmtDictSites (DoAssign _ e) = collectDictSites e
 doStmtDictSites (DoFieldAssign _ _ e) = collectDictSites e
 
-fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
+fieldAssignDictSites : FieldAssign -> List (List Route)
 fieldAssignDictSites (FieldAssign _ e) = collectDictSites e
 
 dictArityOf : String -> Int
@@ -40987,10 +41084,15 @@ export
 -- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
 -- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
 -- to this call.
+-- #2549 M2: the fourth component is the EVIDENCE TABLE — every goal this
+-- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
+-- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
+-- cell.  Nothing consumes it yet: the routes it carries are the same routes already
+-- stamped into the trees' own cells, so a caller that ignores it loses nothing.
 elaborateModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl), List (String, TcDiag))
+  (List Decl, List (String, List Decl), List (String, TcDiag), EvTable)
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
@@ -41172,7 +41274,12 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
     esRuntimeSeed = runtimeSeed,
   }
   let (coreD, modules2) = elabPromotionFixpoint sweep bareDictNames0
-  (coreD, modules2, stickyTypeErrorDiagsSince stickyBefore)
+  (
+    coreD,
+    modules2,
+    stickyTypeErrorDiagsSince stickyBefore,
+    graphRun.value.evTable.value,
+  )
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 
@@ -41275,6 +41382,12 @@ dictPassModulesIfEnabled : List String ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 dictPassModulesIfEnabled dictNames core2 modules2 =
+  -- #2549 M2: publish this sweep's solved evidence to the readers before anything
+  -- reads a route out of it.  Here rather than at `elaborateModules`' return
+  -- because `dictPass` is itself a reader (`bodyRDictNames`), and this is the
+  -- Module arm's one funnel into it — the fixpoint reaches this call only on the
+  -- sweep whose trees are final, so a discarded sweep never installs.
+  let _ = installEvidence graphRun.value.evTable.value
   let allModDecls = flatMap snd modules2
   let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
@@ -42309,7 +42422,23 @@ runStampCtxs (ctx :: rest) =
   driverState.value.currentModuleRef := ctx.scModule
   driverState.value.superDeclsRef := ctx.scImplDecls
   let _ = runStampSteps ctx moduleStampOrder
+  let _ = recordEvidence ctx.scGoals
   runStampCtxs rest
+
+-- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
+-- READ BACK OUT OF THE CELLS THEY WROTE.  Deriving the table any other way would make
+-- it a second answer that can disagree with the cells; derived this way it cannot.
+recordEvidence : List Obligation -> Unit
+recordEvidence gs =
+  let g = graphRun.value
+  g.evTable := evEntriesOf gs ++ g.evTable.value
+
+evEntriesOf : List Obligation -> EvTable
+evEntriesOf gs = map (o => EvEntry o.oEv (evValueOf o.oDest)) gs
+
+evValueOf : EvDest -> EvVal
+evValueOf (EvRoute r) = EvOne !r
+evValueOf (EvRoutes rs) = EvMany !rs
 
 -- #2543: everything one Module-arm sweep of `elaborateModules` needs, bundled so
 -- the promotion fixpoint can re-run the sweep with a grown dict-name set.
@@ -42444,7 +42573,15 @@ clearSweepCells : Unit -> Unit
 clearSweepCells _ =
   let g = graphRun.value
   let _ = clearGoalCells g.goals.value
-  clearNumlitCells g.numlitRefs.value
+  let _ = clearNumlitCells g.numlitRefs.value
+  -- NOT the same condition as the two calls above.  Those are needed because the cells
+  -- they clear live in the AST and outlive the graph reset; `evTable` is a `GraphRun`
+  -- field and does not — this function's only caller runs `resetCrossModuleState ()` on
+  -- the next line, which reaches `resetGraphState` and re-mints the field through
+  -- `freshGraphRun`.  So this write is unobservable today: defensive, not load-bearing.
+  -- It stays because fail-closed is this file's convention and because a reordering
+  -- that cleared without resetting would need it.
+  g.evTable := []
 
 clearGoalCells : List Obligation -> Unit
 clearGoalCells [] = ()
