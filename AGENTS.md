@@ -310,7 +310,8 @@ make medaka          # WARM (./medaka_emitter present): 2-stage rebuild from cur
 ```
 
 🚨 **[B-STALENESS] Every `./medaka` run compares a baked-in source fingerprint
-(`<root>/compiler/*.mdk`) to disk** (`checkSourceStaleness`, `compiler/driver/medaka_cli.mdk`).
+(`<root>/compiler/**.mdk` + `<root>/stdlib/**.mdk`, both excluding `*_test.mdk`) to disk**
+(`checkSourceStaleness`, `compiler/driver/medaka_cli.mdk`).
 Mismatch = binary built from older source. Default: warning only. **`MEDAKA_STRICT=1`** → hard
 `exit 1`. One site emits it: `grep -rn 'may be stale; rebuild' compiler/`.
 
@@ -343,7 +344,17 @@ their final path, promoted via same-filesystem `mv`.
 
 🚨 **[B-NO-BORROW-ISOLATED] In a worktree, never `cp` an emitter from another tree — just
 `make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
-and that is FINE; it cold-bootstraps for ~31s, and borrowing does not even save the rebuild
+and that is FINE. Usually it is ~1 second: the build cache serves a binary another tree
+already built from this exact source, and only the FIRST worktree at a given source state
+pays a real build. That worst case is ~6 minutes (all three measured on this box, Debian 13,
+12-core/32GB, 2026-09-05, `time sh test/build_native_medaka.sh`: cache-served fresh worktree,
+no `./medaka`/`./medaka_emitter` present — **1.05s**; the same state with the cache forced off
+via `MEDAKA_BUILD_CACHE_DIR=` — **352.4s**; and a warm forced full rebuild,
+`FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the emitter already present —
+**272.0s**. Cold exceeds warm-forced by the ~80s seed bootstrap, which is the only ordering
+physically possible; a cold figure BELOW the warm-forced one means the cache or an existing
+emitter was live during the measurement. The stale "~31s" figure is off by an order of
+magnitude). Borrowing an emitter does not even save the rebuild
 (only the seed step). Reading another tree can trip the isolation classifier into a denial
 that blocks every later `make`. Rationale + the `[B-BORROW-EMITTER]` measurement: the
 `sprint-orchestrator` skill.

@@ -8,15 +8,21 @@
 #     stage B: the fresh emitter compiles compiler/driver/medaka_cli.mdk -> ./medaka.
 #   Always-2-stage is correct; the rebuilt emitter's self-consistency is guaranteed
 #   separately by test/selfcompile_fixpoint.sh (not run here), so the warm loop is
-#   sound.  A CONTENT-FINGERPRINT short-circuit skips stage A when compiler/**.mdk
-#   AND runtime/*.c (the emitter links medaka_rt.c — e.g. floatToString feeds
-#   float-literal codegen, see issue #182) hash to what ./medaka_emitter was built
-#   from (can be disabled with FORCE_EMITTER_REBUILD=1).  See "Emitter provenance"
-#   below for why this is a hash and NOT a timestamp.
+#   sound.  A CONTENT-FINGERPRINT short-circuit skips stage A when everything that
+#   can change the emitter binary — its own import closure, stdlib/**.mdk, and
+#   runtime/*.c (it links medaka_rt.c; e.g. floatToString feeds float-literal
+#   codegen, issue #182) — hashes to what ./medaka_emitter was built from (can be
+#   disabled with FORCE_EMITTER_REBUILD=1).  See "Emitter provenance" below for
+#   why this is a hash and NOT a timestamp, and FP_FULL there for the file set.
 #
 #   COLD (no ./medaka_emitter — fresh clone): bootstrap emitter_v0 from the gzipped
 #   committed seed (test/bootstrap_from_seed.sh, TOLERANT — a lagging seed only WARNS,
 #   never aborts), then run the warm 2-stage rebuild from current source on top of it.
+#
+#   Either mode can be short-circuited further by the BUILD CACHE (see that section):
+#   a binary some other worktree already built from this exact source is copied into
+#   place instead of being rebuilt. It is an accelerator only — any miss, absent cache
+#   directory, or failed entry validation falls back to the build described above.
 #
 # Either way the result is a self-contained native `medaka` binary doing
 # check/fmt/new/build/run/test/repl/lsp with no OCaml at runtime OR build time.
@@ -35,10 +41,18 @@ CC="${CC:-clang}"
 STACK_SIZE="${STACK_SIZE:-0x20000000}"
 
 # Boehm collects when allocation since the last GC reaches ~heap size; the emitter
-# churns ~15 GB of transient garbage over a ~100 MB live set, so with the default
-# initial heap it collects ~110 times (~4 s of a ~6 s self-compile emit). A large
-# initial heap defers that to ~9 collections. These emitter runs are SERIAL (stage
-# A then B), so the extra RSS (~1 GB) doesn't contend. Measured: make medaka 16s→11s.
+# churns ~15 GB of transient garbage over a ~100 MB live set, so a small initial
+# heap forces far more collections during self-compile emit than a large one
+# does. A large initial heap defers most of that GC work. These emitter runs are
+# SERIAL (stage A then B), so the extra RSS (~1 GB) doesn't contend. Measured on
+# this box (Debian 13, 12-core/32GB) on 2026-09-05, `make medaka` on a forced
+# cache-miss full rebuild (FORCE_EMITTER_REBUILD=1, MEDAKA_BUILD_CACHE_DIR=):
+# GC_INITIAL_HEAP_SIZE unset (Boehm default) 288.4s → 1 GiB (this default) 268.3s
+# — about 7% faster, ~20s saved, at current codebase scale. The 1 GiB arm re-ran at
+# 272.0s later the same day, so treat ~4s as this box's run-to-run noise floor and
+# read the ~20s delta as signal only because it clears it. Re-derive with
+# `time sh test/build_native_medaka.sh` under each setting rather than trusting
+# this figure indefinitely.
 # (Not applied to the parallel oracle build, where 10× the RSS causes memory
 # pressure that erases the win — see test/build_oracles.sh.) User env value wins.
 export GC_INITIAL_HEAP_SIZE="${GC_INITIAL_HEAP_SIZE:-1073741824}"
@@ -51,6 +65,12 @@ DRIVER="$ROOT/compiler/entries/llvm_emit_modules_main.mdk"
 CLI="$ROOT/compiler/driver/medaka_cli.mdk"
 SELFHOST="$ROOT/compiler"
 STDLIB="$ROOT/stdlib"
+# The same entry + search roots emit_graph hands the emitter for stage A, spelled
+# repo-relative for test/emitter_source_set.awk (see FP_FULL below). The two must
+# name the same graph: the fingerprint's whole claim is that it covers everything
+# stage A actually compiles.
+FP_ENTRY="compiler/entries/llvm_emit_modules_main.mdk"
+FP_ROOTS="compiler:stdlib"
 FORCE_EMITTER_REBUILD="${FORCE_EMITTER_REBUILD:-0}"
 # OPT-IN, DEFAULT OFF (issue #1928 follow-up). When 1, stage B skips the clang link
 # of ./medaka if a `.medaka.srcstamp` beside it says it was already built from
@@ -71,6 +91,340 @@ command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skip
 # there is nothing here for a killed agent to get permanently stuck behind — so this
 # is pure hygiene, not correctness; failures are silently ignored (`|| true`).
 find "$ROOT" -maxdepth 1 \( -name 'medaka.new.*' -o -name 'medaka_emitter.new.*' -o -name '.medaka_emitter.srcstamp.new.*' -o -name '.medaka.srcstamp.new.*' \) -mtime +1 -delete 2>/dev/null || true
+
+# ── Emitter provenance: hash the SOURCE, never trust the MTIME ────────────────
+#
+# An emitter binary's provenance — WHICH SOURCE was it built from — cannot be read
+# off its mtime, and this bit every agent on every fresh worktree until 2026-07-13.
+#
+# The documented warm path is:  cp <other-tree>/medaka_emitter . && make medaka
+# `cp` stamps the copy with the CURRENT time, which is NEWER than every file that
+# `git worktree add` just checked out. So the old `find -newer "$EMITTER"` test found
+# nothing newer and concluded "emitter up-to-date — skipping rebuild" about a binary
+# that was, in SOURCE terms, arbitrarily old. It then handed that stale binary to
+# stage B, where it died on syntax it predated ("parse error"), and the build fell
+# back to a full COLD re-bootstrap from the seed — which additionally printed
+#   "C3a WARN: committed seed differs ... (lagging seed)"
+# an alarming, entirely unrelated message that sent agents hunting a seed bug that
+# was not there. (Concretely: an emitter predating b2990236 cannot parse
+# compiler/tools/snapshot.mdk, which now uses `import ... as ...`.)
+#
+# The mtime is not a weak signal here, it is an ACTIVELY INVERTED one: the staler the
+# emitter's origin, the fresher its copy time. So fingerprint the source it was built
+# from and keep that beside the binary. A copied-in emitter carries no stamp (the
+# stamp is gitignored and never travels with a `cp`), so it is correctly treated as
+# unknown-provenance and rebuilt — which is exactly the cheap stage-A emit that makes
+# the warm path warm.
+SRC_STAMP="$ROOT/.medaka_emitter.srcstamp"
+
+# The same idea, one stage down: WHICH SOURCE was ./medaka (the CLI) linked from.
+# Same reasoning as above — the mtime of a downloaded/copied-in ./medaka is an
+# inverted signal — so keep the COMPILER-source fingerprint beside it. This stamp
+# records FP_COMPILER, not FP_FULL, because that is exactly what stage B bakes into
+# the binary as -DMEDAKA_SRC_FP and what `liveSourceFingerprint` recomputes at
+# runtime ([B-STALENESS]); comparing anything else would compare the wrong thing.
+#
+# ⚠️ It describes the DEFAULT output path only. This script also gets called with an
+# explicit output path (test/refresh_seed.sh links into a `mktemp` file), and a build
+# that never wrote $ROOT/medaka must not leave a stamp vouching for it — that would be
+# a stale-binary skip, precisely the silent wrongness the stamp exists to prevent. So
+# both the read and the write below are gated on $OUT being the default path.
+CLI_STAMP="$ROOT/.medaka.srcstamp"
+CLI_STAMP_APPLIES=0
+[ "$OUT" = "$ROOT/medaka" ] && CLI_STAMP_APPLIES=1
+
+# sha256 where available (Linux coreutils / macOS `shasum`); `cksum` is the POSIX
+# floor. This is a staleness check, not a signature — a weak hash only risks a
+# missed rebuild, which FORCE_EMITTER_REBUILD=1 always overrides.
+hash_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
+  else cksum
+  fi
+}
+
+# Names AND contents, REPO-RELATIVE, so an add/rename/delete registers as loudly as
+# an edit and the stamp never bakes in an absolute worktree path.
+#
+# TWO fingerprints, because the value has two consumers with DIFFERENT scopes:
+#
+#   FP_FULL      = the emitter's OWN import closure + stdlib/**.mdk + runtime/*.c.
+#                  Drives the stage-A rebuild-skip and the
+#                  .medaka_emitter.srcstamp write, so its correct scope is
+#                  "everything that can change the emitter binary" — no more and
+#                  no less. The emitter links medaka_rt.c directly (see the clang
+#                  invocation below), so a codegen-affecting runtime change — e.g.
+#                  #57's floatToString formatting — must invalidate it (issue
+#                  #182); stdlib/ is compiled INTO it (emit_graph passes
+#                  $RUNTIME/$CORE and $STDLIB as a search root), so a
+#                  stdlib/core.mdk edit must too (issue #2682 — it did not, and
+#                  stage A reported "up-to-date" while the emitter kept the old
+#                  prelude). Conversely compiler/tools/**, compiler/entries/**
+#                  other than the emitter's own, and every other module OUTSIDE
+#                  that closure cannot reach the emitter binary at all, and used
+#                  to force a full ~4-minute rebuild for nothing (issue #2680).
+#
+#                  The closure itself comes from test/emitter_source_set.awk, a
+#                  STATIC walker — this runs on the cold path with no ./medaka in
+#                  existence, so it cannot ask the real loader. That makes it a
+#                  reimplementation of driver.loader's resolution and therefore
+#                  driftable: test/check_fingerprint_parity.sh diffs the walker's
+#                  list against the loader's own graph
+#                  (compiler/entries/module_closure_probe.mdk) on a built binary.
+#                  And it FAILS CLOSED — any walker failure falls back to hashing
+#                  the whole compiler tree, because an over-broad set costs one
+#                  unnecessary rebuild while an under-broad one silently vouches
+#                  for an emitter built from source that is no longer on disk.
+#
+#   FP_COMPILER  = compiler/**.mdk + stdlib/**.mdk.  Baked into ./medaka as
+#                  -DMEDAKA_SRC_FP (below) and recomputed at runtime by
+#                  `liveSourceFingerprint` in compiler/driver/medaka_cli.mdk,
+#                  which is documented as a byte-for-byte mirror hashing the
+#                  SAME find expression. The baked value MUST match that live
+#                  computation, else every ./medaka invocation warns "stale"
+#                  (and hard-fails under MEDAKA_STRICT=1). stdlib/ is compiled
+#                  INTO the CLI binary exactly as it is into the emitter (a
+#                  compiler/*.mdk module can import stdlib/*.mdk per
+#                  [T-STDLIB-IMPORT], and those imports get linked into
+#                  medaka_cli.ll at stage B) — issue #2682's other half: a
+#                  stdlib-only edit changed CLI behavior with the same "stage
+#                  reported up-to-date" silence FP_FULL already fixed for the
+#                  emitter, and SKIP_CLI_LINK_IF_FRESH would call the resulting
+#                  binary fresh forever. runtime/*.c stays OUT (it is not
+#                  Medaka source `liveSourceFingerprint` can read); do NOT fold
+#                  it in without also editing medaka_cli.mdk.
+#
+# Both fingerprints exclude `*_test.mdk`: a test sibling (compiler/types/registry_test.mdk
+# and peers) is never linked into the emitter or the CLI, so hashing one would make
+# editing a test rebuild the compiler and — because the baked FP_COMPILER is recomputed
+# at runtime — make every ./medaka invocation warn stale. medaka_cli.mdk's
+# `liveSourceFingerprint` carries the identical exclusion; the two must move together.
+# FORCE_EMITTER_REBUILD=1 overrides the FP_FULL skip regardless.
+src_fingerprint_compiler() {
+  ( cd "$ROOT" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print
+      find stdlib -name '*.mdk' -not -name '*_test.mdk' -print
+    } | LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s\n' "$f"
+      cat "$f"
+    done ) | hash_stream | cut -d' ' -f1
+}
+
+# The FP_FULL file set, one repo-relative path per line, LC_ALL=C sorted.
+# Run with $ROOT as cwd.
+#
+# The walker is skipped outright (not just on failure) when compiler/medaka.toml
+# grows a `[dependencies]` section: it models `findInRoots` only, so a declared
+# cross-project dep would resolve to a root it never searches and it would
+# UNDER-report the closure — the one direction that is unsafe.
+fp_full_file_list() {
+  _closure=""
+  if ! grep -q '^[[:space:]]*\[dependencies\]' compiler/medaka.toml 2>/dev/null; then
+    _closure="$(awk -v entry="$FP_ENTRY" -v roots="$FP_ROOTS" -f test/emitter_source_set.awk)" || _closure=""
+  fi
+  if [ -z "$_closure" ]; then
+    echo "note: emitter import-closure walk unavailable — hashing all of compiler/ for FP_FULL." >&2
+    _closure="$(find compiler -name '*.mdk' -not -name '*_test.mdk' -print)"
+  fi
+  { printf '%s\n' "$_closure"
+    find stdlib -name '*.mdk' -not -name '*_test.mdk' -print
+    find runtime -name '*.c' -print
+  } | LC_ALL=C sort -u
+}
+
+src_fingerprint_full() {
+  ( cd "$ROOT" && fp_full_file_list | while IFS= read -r f; do
+      printf '%s\n' "$f"
+      cat "$f"
+    done ) | hash_stream | cut -d' ' -f1
+}
+
+# runtime/*.c ALONE. Not a build input to any stage-skip decision — FP_FULL already
+# covers runtime/*.c for the emitter, and FP_COMPILER deliberately excludes it because
+# `liveSourceFingerprint` (a Medaka mirror) cannot read C. Its one consumer is $CLI_KEY
+# below: stage B LINKS $RT into ./medaka, so two trees differing only in an uncommitted
+# runtime/medaka_rt.c produce different binaries while sharing a FP_COMPILER, a
+# -O level, and a $BUILD_COMMIT (every dirty state collapses to the same `<sha>-dirty`).
+# Keying the CLI on $FP_FULL instead would be correct but over-broad: the CLI cache
+# would then miss on every compiler edit outside the emitter's own closure.
+src_fingerprint_runtime() {
+  ( cd "$ROOT" && find runtime -name '*.c' -print | LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s\n' "$f"
+      cat "$f"
+    done ) | hash_stream | cut -d' ' -f1
+}
+
+# Both fingerprints are computed HERE — above the cold-start bootstrap — because the
+# build cache below is keyed on them and must be able to answer "another tree already
+# built this exact emitter" BEFORE the seed bootstrap runs, which is the single most
+# expensive step on a fresh worktree. Neither computation needs a binary: they hash
+# source files, and the FP_FULL closure walker is the static awk one for exactly this
+# reason.
+FP_FULL="$(src_fingerprint_full)"
+FP_COMPILER="$(src_fingerprint_compiler)"
+FP_RUNTIME="$(src_fingerprint_runtime)"
+
+# VERSION PROVENANCE (issue #74 W8): commit + build date baked alongside
+# FP_COMPILER below, at the SAME clang link, so `medaka --version` can report
+# where a binary came from. Both degrade to empty on failure (a `.git`-less
+# dist tarball, or no `git`/`date` in PATH) — never error the build. Portable
+# across [B-DUAL-PLATFORM]: `git rev-parse --short` and `date -u +%Y-%m-%d`
+# behave identically on GNU/Linux and BSD/macOS.
+BUILD_COMMIT=""
+if command -v git >/dev/null 2>&1 && [ -e "$ROOT/.git" ]; then
+  BUILD_COMMIT="$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null)"
+  # #2514 review F-12: a modified tree otherwise reports a clean commit,
+  # which is exactly backwards for a field whose only purpose is triaging bug
+  # reports ("bug reports are useless without it", the S-3 mission this
+  # provenance string exists for) — a `-dirty` suffix is the difference
+  # between a usable and a misleading answer for every local/dev build.
+  if [ -n "$BUILD_COMMIT" ] && [ -n "$(cd "$ROOT" && git status --porcelain 2>/dev/null)" ]; then
+    BUILD_COMMIT="${BUILD_COMMIT}-dirty"
+  fi
+fi
+BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
+
+# ---- BUILD CACHE: a binary another tree already built, keyed on its provenance ---
+# (issue #2683.) A fresh worktree at a commit some other tree has already built pays a
+# file copy instead of the ~350 s cold bootstrap. The cache is a pure ACCELERATOR: on
+# a miss, a missing/unwritable cache dir, or an entry that fails validation, the script
+# takes exactly the path it took before this section existed.
+#
+# The key is the fingerprint that already decides what the binary IS — FP_FULL for the
+# emitter, FP_COMPILER for the CLI — plus the build-variant inputs that are NOT source
+# and therefore not in either fingerprint:
+#   * the clang -O level, which is genuinely different codegen;
+#   * for the CLI only, $BUILD_COMMIT and $BUILD_DATE, which stage B bakes in as
+#     -DMEDAKA_SRC_COMMIT/-DMEDAKA_SRC_BUILD_DATE. Two commits can share one
+#     FP_COMPILER (a docs-only commit does), so keying on the fingerprint alone would
+#     serve a binary whose `medaka --version` names a commit it was not built at —
+#     the exact triage field #2514 F-12 added the `-dirty` suffix to keep honest.
+#     The emitter bakes no such string, so its key stays purely source-derived and
+#     hits across commits and days; it is also the expensive half.
+#   * for the CLI only, $FP_RUNTIME — stage B links runtime/medaka_rt.c into ./medaka,
+#     and FP_COMPILER does not cover it. $BUILD_COMMIT cannot stand in: it renders every
+#     uncommitted tree state as one `<sha>-dirty` string, so without this component two
+#     worktrees at the same commit with different uncommitted runtime edits share a key.
+#     The emitter half needs no equivalent: $FP_FULL already folds runtime/*.c in.
+#
+# Storage lives under $MEDAKA_SCRATCH (the Makefile's own default, redeclared here
+# because the Makefile exports only TMPDIR) and never under /tmp, which is a RAM-backed
+# tmpfs on the dev box — a cache that evaporates under memory pressure is not a cache.
+# Set MEDAKA_BUILD_CACHE_DIR= (empty) to disable reads and writes entirely.
+MEDAKA_SCRATCH="${MEDAKA_SCRATCH:-/var/tmp/medaka-scratch}"
+CACHE_DIR="${MEDAKA_BUILD_CACHE_DIR-$MEDAKA_SCRATCH/medaka-build-cache}"
+# Entry count, not total bytes: every entry is one compiler binary of roughly the same
+# size, so a count is a size proxy that needs no per-file `stat` (whose flags differ
+# between Linux and macOS — [B-DUAL-PLATFORM]).
+CACHE_MAX="${MEDAKA_BUILD_CACHE_MAX:-8}"
+
+# Filename-safe rendering of a key component (hex digests and -O flags already are;
+# $BUILD_COMMIT/$BUILD_DATE come from git/date and could in principle not be).
+cache_tag() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
+
+# The -O defaults are spelled the same way the two clang invocations spell them, so a
+# key can never claim an optimization level the link did not use.
+EMITTER_KEY="emitter-$(cache_tag "$FP_FULL")-$(cache_tag "${EMITTER_OPT:--O2}")"
+CLI_KEY="medaka-$(cache_tag "$FP_COMPILER")-$(cache_tag "$FP_RUNTIME")-$(cache_tag "${CLI_OPT:--O2}")-$(cache_tag "$BUILD_COMMIT")-$(cache_tag "$BUILD_DATE")"
+
+# Each entry is two files: <key>.bin (the binary) and <key>.sha (the digest of exactly
+# those stored bytes). Validation recomputes the digest BEFORE the entry is copied
+# anywhere, so a truncated or half-written entry is detected and discarded rather than
+# installed as $EMITTER/$OUT — issue #2233's regression was precisely "a truncated
+# entry bricks the next build", and the fallback below must therefore be a real build
+# in the SAME invocation, not a warning and an exit.
+cache_get() {
+  _k="$1"; _dest="$2"
+  [ -n "$CACHE_DIR" ] || return 1
+  _ent="$CACHE_DIR/$_k.bin"; _sha="$CACHE_DIR/$_k.sha"
+  [ -f "$_ent" ] && [ -f "$_sha" ] || return 1
+  _want="$(cat "$_sha" 2>/dev/null)"
+  [ -n "$_want" ] || return 1
+  _got="$(hash_stream < "$_ent" 2>/dev/null | cut -d' ' -f1)"
+  if [ -z "$_got" ] || [ "$_got" != "$_want" ]; then
+    echo "  build cache: entry $_k is corrupt or truncated (digest mismatch) — discarding it and building for real."
+    rm -f "$_ent" "$_sha"
+    return 1
+  fi
+  # Same stage-beside-then-atomic-mv discipline as $EMITTER/$OUT (issue #1141): a
+  # concurrent build in this worktree must never observe a partially-copied binary at
+  # the final path.
+  _new="$_dest.new.$$"
+  rm -f "$_new"
+  cp "$_ent" "$_new" 2>/dev/null || { rm -f "$_new"; return 1; }
+  chmod +x "$_new" 2>/dev/null || true
+  mv "$_new" "$_dest" 2>/dev/null || { rm -f "$_new"; return 1; }
+  touch "$_ent" "$_sha" 2>/dev/null || true   # recency, for the eviction order below
+  return 0
+}
+
+# Populate. Called ONLY after a stage genuinely built a fresh binary — a cache hit
+# re-writes nothing. Failures here are silent and non-fatal: a cache that cannot be
+# written must not fail a build that has already succeeded.
+cache_put() {
+  _k="$1"; _src="$2"
+  [ -n "$CACHE_DIR" ] || return 0
+  mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+  _ent="$CACHE_DIR/$_k.bin"; _sha="$CACHE_DIR/$_k.sha"
+  # Already stored and intact: leave it alone rather than churning a file other builds
+  # may be reading.
+  if [ -f "$_ent" ] && [ -f "$_sha" ] \
+     && [ "$(hash_stream < "$_ent" 2>/dev/null | cut -d' ' -f1)" = "$(cat "$_sha" 2>/dev/null)" ]; then
+    return 0
+  fi
+  _entn="$_ent.new.$$"; _shan="$_sha.new.$$"
+  rm -f "$_entn" "$_shan"
+  cp "$_src" "$_entn" 2>/dev/null || { rm -f "$_entn"; return 0; }
+  # Digest the STORED copy, not the source: the digest must certify the bytes a future
+  # reader will actually read.
+  _h="$(hash_stream < "$_entn" 2>/dev/null | cut -d' ' -f1)"
+  [ -n "$_h" ] || { rm -f "$_entn"; return 0; }
+  printf '%s\n' "$_h" > "$_shan" 2>/dev/null || { rm -f "$_entn" "$_shan"; return 0; }
+  # Retire any stale digest first, then publish binary then digest: every intermediate
+  # state a concurrent reader can observe is either "no digest" or "digest matches the
+  # binary beside it", i.e. a clean miss or a valid hit, never a mismatched pair.
+  rm -f "$_sha"
+  mv "$_entn" "$_ent" 2>/dev/null && mv "$_shan" "$_sha" 2>/dev/null || { rm -f "$_entn" "$_shan"; return 0; }
+  echo "  build cache: stored $_k."
+  cache_evict
+}
+
+# Opportunistic eviction on write (no cron, no separate script — every stray .sh in the
+# tree is a `make preflight` gate candidate, [WEB-SH-IS-A-GATE]). Newest-first listing,
+# drop everything past $CACHE_MAX; cache_get touches an entry it serves, so the order is
+# least-recently-USED, not merely oldest-written.
+cache_evict() {
+  [ -n "$CACHE_DIR" ] || return 0
+  # Same hygiene as the $ROOT sweep near the top: a build killed between staging an
+  # entry and promoting it leaves a per-PID orphan that nothing else will ever claim.
+  find "$CACHE_DIR" -maxdepth 1 -name '*.new.*' -mtime +1 -delete 2>/dev/null || true
+  ls -t "$CACHE_DIR"/*.bin 2>/dev/null | {
+    _n=0
+    while IFS= read -r _e; do
+      _n=$((_n + 1))
+      [ "$_n" -le "$CACHE_MAX" ] && continue
+      rm -f "$_e" "${_e%.bin}.sha"
+      echo "  build cache: evicted $(basename "${_e%.bin}") (cache is capped at $CACHE_MAX entries)."
+    done
+  }
+  return 0
+}
+
+# The emitter read, deliberately AHEAD of the cold-start bootstrap: on a fresh worktree
+# a hit skips both the seed bootstrap and the stage-A rebuild. Not consulted when
+# FORCE_EMITTER_REBUILD=1 (that flag exists to force a real rebuild) nor when the local
+# emitter is already provably current (nothing to gain). On a hit we write $SRC_STAMP
+# immediately so the emitter carries the same provenance a real stage A would have left
+# it, and stage A's existing skip arm then fires on it.
+EMITTER_STAMP_FP=""
+[ -f "$SRC_STAMP" ] && EMITTER_STAMP_FP="$(cat "$SRC_STAMP" 2>/dev/null)"
+if [ "$FORCE_EMITTER_REBUILD" != "1" ] \
+   && ! { [ -x "$EMITTER" ] && [ "$EMITTER_STAMP_FP" = "$FP_FULL" ]; } \
+   && cache_get "$EMITTER_KEY" "$EMITTER"; then
+  echo "stage A: emitter restored from build cache ($EMITTER_KEY) — no seed bootstrap, no rebuild."
+  STAMP_NEW="$SRC_STAMP.new.$$"
+  printf '%s\n' "$FP_FULL" > "$STAMP_NEW"
+  mv "$STAMP_NEW" "$SRC_STAMP"
+fi
 
 # ---- COLD START: no native emitter yet -> bootstrap emitter_v0 from the seed ----
 # Tolerant: a lagging committed seed must NOT abort the build (it builds a working
@@ -146,131 +500,15 @@ emit_graph() {
 }
 
 
-# ── Emitter provenance: hash the SOURCE, never trust the MTIME ────────────────
-#
-# An emitter binary's provenance — WHICH SOURCE was it built from — cannot be read
-# off its mtime, and this bit every agent on every fresh worktree until 2026-07-13.
-#
-# The documented warm path is:  cp <other-tree>/medaka_emitter . && make medaka
-# `cp` stamps the copy with the CURRENT time, which is NEWER than every file that
-# `git worktree add` just checked out. So the old `find -newer "$EMITTER"` test found
-# nothing newer and concluded "emitter up-to-date — skipping rebuild" about a binary
-# that was, in SOURCE terms, arbitrarily old. It then handed that stale binary to
-# stage B, where it died on syntax it predated ("parse error"), and the build fell
-# back to a full COLD re-bootstrap from the seed — which additionally printed
-#   "C3a WARN: committed seed differs ... (lagging seed)"
-# an alarming, entirely unrelated message that sent agents hunting a seed bug that
-# was not there. (Concretely: an emitter predating b2990236 cannot parse
-# compiler/tools/snapshot.mdk, which now uses `import ... as ...`.)
-#
-# The mtime is not a weak signal here, it is an ACTIVELY INVERTED one: the staler the
-# emitter's origin, the fresher its copy time. So fingerprint the source it was built
-# from and keep that beside the binary. A copied-in emitter carries no stamp (the
-# stamp is gitignored and never travels with a `cp`), so it is correctly treated as
-# unknown-provenance and rebuilt — which is exactly the cheap stage-A emit that makes
-# the warm path warm.
-SRC_STAMP="$ROOT/.medaka_emitter.srcstamp"
-
-# The same idea, one stage down: WHICH SOURCE was ./medaka (the CLI) linked from.
-# Same reasoning as above — the mtime of a downloaded/copied-in ./medaka is an
-# inverted signal — so keep the COMPILER-source fingerprint beside it. This stamp
-# records FP_COMPILER, not FP_FULL, because that is exactly what stage B bakes into
-# the binary as -DMEDAKA_SRC_FP and what `liveSourceFingerprint` recomputes at
-# runtime ([B-STALENESS]); comparing anything else would compare the wrong thing.
-#
-# ⚠️ It describes the DEFAULT output path only. This script also gets called with an
-# explicit output path (test/refresh_seed.sh links into a `mktemp` file), and a build
-# that never wrote $ROOT/medaka must not leave a stamp vouching for it — that would be
-# a stale-binary skip, precisely the silent wrongness the stamp exists to prevent. So
-# both the read and the write below are gated on $OUT being the default path.
-CLI_STAMP="$ROOT/.medaka.srcstamp"
-CLI_STAMP_APPLIES=0
-[ "$OUT" = "$ROOT/medaka" ] && CLI_STAMP_APPLIES=1
-
-# sha256 where available (Linux coreutils / macOS `shasum`); `cksum` is the POSIX
-# floor. This is a staleness check, not a signature — a weak hash only risks a
-# missed rebuild, which FORCE_EMITTER_REBUILD=1 always overrides.
-hash_stream() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum
-  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
-  else cksum
-  fi
-}
-
-# Names AND contents, REPO-RELATIVE, so an add/rename/delete registers as loudly as
-# an edit and the stamp never bakes in an absolute worktree path.
-#
-# TWO fingerprints, because the value has two consumers with DIFFERENT scopes:
-#
-#   FP_FULL      = compiler/**.mdk + runtime/*.c.  Drives the stage-A rebuild-skip
-#                  and the .medaka_emitter.srcstamp write.  The emitter links
-#                  medaka_rt.c directly (see the clang invocation below), so a
-#                  codegen-affecting runtime change — e.g. #57's floatToString
-#                  formatting — must invalidate the emitter (issue #182). Before
-#                  this, only compiler/**.mdk was hashed, so a medaka_rt.c-only
-#                  change was invisible: stage A reported "up-to-date" and kept
-#                  emitting with the OLD linked runtime — a native≠native(rebuilt)
-#                  split that reads as a miscompile.
-#
-#   FP_COMPILER  = compiler/**.mdk ONLY.  Baked into ./medaka as -DMEDAKA_SRC_FP
-#                  (below) and recomputed at runtime by `liveSourceFingerprint` in
-#                  compiler/driver/medaka_cli.mdk, which is documented as a
-#                  byte-for-byte mirror hashing the SAME find expression. The
-#                  baked value MUST match that compiler-only computation, else every
-#                  ./medaka invocation warns "stale" (and hard-fails under
-#                  MEDAKA_STRICT=1). So the bake stays compiler-only; do NOT fold
-#                  runtime/*.c into it without also editing medaka_cli.mdk.
-#
-# Both fingerprints exclude `*_test.mdk`: a test sibling (compiler/types/registry_test.mdk
-# and peers) is never linked into the emitter or the CLI, so hashing one would make
-# editing a test rebuild the compiler and — because the baked FP_COMPILER is recomputed
-# at runtime — make every ./medaka invocation warn stale. medaka_cli.mdk's
-# `liveSourceFingerprint` carries the identical exclusion; the two must move together.
-# FORCE_EMITTER_REBUILD=1 overrides the FP_FULL skip regardless.
-src_fingerprint_compiler() {
-  ( cd "$ROOT" && find compiler -name '*.mdk' -not -name '*_test.mdk' -print | LC_ALL=C sort | while IFS= read -r f; do
-      printf '%s\n' "$f"
-      cat "$f"
-    done ) | hash_stream | cut -d' ' -f1
-}
-src_fingerprint_full() {
-  ( cd "$ROOT" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print; find runtime -name '*.c' -print; } | LC_ALL=C sort | while IFS= read -r f; do
-      printf '%s\n' "$f"
-      cat "$f"
-    done ) | hash_stream | cut -d' ' -f1
-}
-
 # ---- STAGE A (WARM): existing emitter rebuilds itself from CURRENT source --------
 # Skip ONLY when the emitter exists AND its stamp says it was built from exactly this
 # compiler source AND runtime source (an up-to-date emitter re-emits byte-identically
 # anyway; runtime/*.c is linked into the emitter binary, so it counts too — issue #182).
-FP_FULL="$(src_fingerprint_full)"
-FP_COMPILER="$(src_fingerprint_compiler)"
-
-# VERSION PROVENANCE (issue #74 W8): commit + build date baked alongside
-# FP_COMPILER below, at the SAME clang link, so `medaka --version` can report
-# where a binary came from. Both degrade to empty on failure (a `.git`-less
-# dist tarball, or no `git`/`date` in PATH) — never error the build. Portable
-# across [B-DUAL-PLATFORM]: `git rev-parse --short` and `date -u +%Y-%m-%d`
-# behave identically on GNU/Linux and BSD/macOS.
-BUILD_COMMIT=""
-if command -v git >/dev/null 2>&1 && [ -e "$ROOT/.git" ]; then
-  BUILD_COMMIT="$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null)"
-  # #2514 review F-12: a modified tree otherwise reports a clean commit,
-  # which is exactly backwards for a field whose only purpose is triaging bug
-  # reports ("bug reports are useless without it", the S-3 mission this
-  # provenance string exists for) — a `-dirty` suffix is the difference
-  # between a usable and a misleading answer for every local/dev build.
-  if [ -n "$BUILD_COMMIT" ] && [ -n "$(cd "$ROOT" && git status --porcelain 2>/dev/null)" ]; then
-    BUILD_COMMIT="${BUILD_COMMIT}-dirty"
-  fi
-fi
-BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
-
+# A build-cache hit above already wrote $SRC_STAMP, so it lands in this same skip arm.
 STAMP_FP=""
 [ -f "$SRC_STAMP" ] && STAMP_FP="$(cat "$SRC_STAMP" 2>/dev/null)"
 if [ "$FORCE_EMITTER_REBUILD" != "1" ] && [ -x "$EMITTER" ] && [ -n "$STAMP_FP" ] && [ "$STAMP_FP" = "$FP_FULL" ]; then
-  echo "stage A: emitter up-to-date (compiler + runtime source fingerprint unchanged) — skipping rebuild."
+  echo "stage A: emitter up-to-date (emitter-closure + stdlib + runtime source fingerprint unchanged) — skipping rebuild."
 else
   if [ "$FORCE_EMITTER_REBUILD" = "1" ]; then
     echo "stage A: FORCE_EMITTER_REBUILD=1 — rebuilding emitter from current source ..."
@@ -279,7 +517,7 @@ else
     # from another tree. Both are "provenance unknown" — rebuild rather than guess.
     echo "stage A: emitter provenance unknown (fresh bootstrap, or copied in from another tree) — rebuilding from current source ..."
   else
-    echo "stage A: compiler or runtime source changed since this emitter was built — rebuilding emitter from current source ..."
+    echo "stage A: emitter source (its import closure, stdlib, or runtime) changed since this emitter was built — rebuilding emitter from current source ..."
   fi
   EMIT_LL="$WORK/emitter.ll"
   if ! emit_graph "$EMIT_LL" "$WORK/emitA.err" "$DRIVER"; then
@@ -298,14 +536,31 @@ else
   rm -f "$EMIT_NEW"
   # Build the emitter — the compiler's WORKHORSE binary — at -O2. It is reused for
   # every emit downstream (oracle build's 53 entries, every `medaka build`, make
-  # medaka's own stage B), so clang -O2 (~+3s once vs -O0) buys ~30% faster emit
-  # each time (self-compile 5.4s→3.7s; oracle build 55s→48s). EMITTER_OPT overrides.
+  # medaka's own stage B), so an -O2 emitter emits noticeably faster than an -O0
+  # one, at the one-time cost of a slower link here. Measured on this box (Debian
+  # 13, 12-core/32GB) on 2026-09-05, with the two emitter binaries built from
+  # identical source and run directly (`time ./medaka_emitter <runtime> <core>
+  # <target> <compiler> <stdlib> > out.ll`):
+  #   linking THIS binary: -O0 22.5s → -O2 74.3s (the "+3s once" framing no
+  #     longer holds at current codebase size — it's now a real ~52s cost, paid
+  #     once per emitter rebuild).
+  #   emitter re-emitting its OWN driver graph: -O0 23.1s → -O2 15.6s (~32%
+  #     faster).
+  #   emitting compiler/driver/medaka_cli.mdk: -O0 117.0s → -O2 85.9s (~27%
+  #     faster).
+  #   oracle build (2-entry subset, `diff_compiler_parse*`, FORCE=1 JOBS=1 sh
+  #     test/build_oracles.sh --for 'diff_compiler_parse*'): -O0 17.3s → -O2
+  #     16.5s (~5% faster — the per-entry clang/link overhead of two small
+  #     oracles dilutes the emitter's own emit-speed win; not re-measured
+  #     against the full 53-entry set, which is too slow to run locally per
+  #     [L-SHARED-BOX]). EMITTER_OPT overrides.
   if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
     rm -f "$EMIT_NEW"
     echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
   fi
   mv "$EMIT_NEW" "$EMITTER"
   echo "stage A: rebuilt $EMITTER from current source."
+  cache_put "$EMITTER_KEY" "$EMITTER"
 fi
 
 # ---- STAGE B (WARM): the (fresh) emitter emits the medaka_cli graph -> ./medaka --
@@ -321,6 +576,18 @@ fi
 if [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] && [ "$CLI_STAMP_APPLIES" = "1" ] \
    && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ]; then
   echo "stage B: medaka up-to-date (compiler source fingerprint unchanged) — skipping rebuild."
+elif [ "$FORCE_EMITTER_REBUILD" != "1" ] && cache_get "$CLI_KEY" "$OUT"; then
+  # Reached even with SKIP_CLI_LINK_IF_FRESH unset: a cache hit costs a file copy, so
+  # there is nothing for the default "always relink" policy to buy here. The key pins
+  # the compiler source, the runtime source, the -O level and the two provenance strings
+  # stage B bakes in, so the served binary is the one this link would have produced.
+  #
+  # FORCE_EMITTER_REBUILD suppresses the hit even so, matching stage A's own guard: a
+  # cached ./medaka was emitted by whichever emitter held that key's source, so serving
+  # it here would pair a freshly rebuilt emitter with a CLI the OLD one produced —
+  # exactly the crossed-arm result [T-EMITTER-BENCH]'s two-rebuild protocol exists to
+  # rule out, and the flag's only purpose is to make both stages real.
+  echo "stage B: medaka restored from build cache ($CLI_KEY) — skipping the emit and the link."
 else
   CLI_LL="$WORK/medaka_cli.ll"
   echo "stage B: medaka_emitter -> medaka_cli.ll ..."
@@ -330,13 +597,16 @@ else
   trim_unit "$CLI_LL"
   [ -s "$CLI_LL" ] || { echo "FAIL: empty IR for medaka_cli.mdk"; cat "$WORK/emit.err"; exit 1; }
 
-  # The medaka CLI is built at -O0 by DEFAULT: make medaka is the hot compiler-dev
-  # loop and does NOT reuse the CLI (the diff gates run compiled test/bin oracles,
-  # not the CLI interpreter), so -O2 here would be a straight +~4s clang cost on the
-  # most frequent command. But `medaka run`/`test`/`check` DO run the CLI's tree-walk
-  # interpreter, which is ~2× faster at -O2 (medaka test 1.3s→0.65s). So for
-  # interpreter/doctest-heavy workflows, -O2 is the default (medaka test 1.3s→0.65s);
-  # for build-heavy loops where the +~4s clang cost dominates, opt out with CLI_OPT=-O0.
+  # `medaka run`/`test`/`check` run the CLI's tree-walk interpreter, which is
+  # noticeably faster at -O2, so -O2 is the default here (matching the emitter),
+  # even though clang linking the CLI itself at -O2 is a real one-time cost, not
+  # the old "+~4s" estimate: measured on this box (Debian 13, 12-core/32GB) on
+  # 2026-09-05, `clang` linking the SAME emitted medaka_cli IR: CLI_OPT=-O0
+  # 6.8s → CLI_OPT=-O2 94.6s. Interpreter speed itself, measured the same day
+  # with `MEDAKA_STRICT=1 time ./medaka test stdlib/list.mdk`: CLI_OPT=-O0
+  # 4.78s → CLI_OPT=-O2 2.44s — about 2x faster, at current stdlib/interpreter
+  # size. For build-heavy loops where the CLI's own ~88s extra link time
+  # dominates instead, opt out with CLI_OPT=-O0.
   # (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
   CLI_OPT="${CLI_OPT:--O2}"
   echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
@@ -344,11 +614,13 @@ else
   # so the CLI can warn when it is run against a NEWER compiler/ than it was built
   # from.  The -D hits ONLY this C compile of medaka_rt.c — never the emitter IR —
   # so it is fixpoint/seed-safe (the text IR is produced before clang runs).  We bake
-  # FP_COMPILER (compiler/**.mdk only), NOT FP_FULL: the driver's `liveSourceFingerprint`
-  # (compiler/driver/medaka_cli.mdk) recomputes a compiler-only hash at runtime and
-  # hard-fails a mismatch under MEDAKA_STRICT, so the baked value must stay byte-for-byte
-  # compiler-only.  FP_FULL (which folds in runtime/*.c for the emitter-rebuild trigger,
-  # issue #182) is written to .medaka_emitter.srcstamp below, a DIFFERENT consumer.
+  # FP_COMPILER (compiler/**.mdk + stdlib/**.mdk), NOT FP_FULL: the driver's
+  # `liveSourceFingerprint` (compiler/driver/medaka_cli.mdk) recomputes the SAME
+  # file set as a hash at runtime and hard-fails a mismatch under MEDAKA_STRICT,
+  # so the baked value must stay byte-for-byte identical to that live computation.
+  # FP_FULL (which additionally folds in runtime/*.c for the emitter-rebuild
+  # trigger, issue #182) is written to .medaka_emitter.srcstamp below, a
+  # DIFFERENT consumer.
   # Empty on paths that never set it (returns "" → the check silently skips).
   # $OUT.new.$$ is staged NEXT TO $OUT (never under $WORK — see the stage-A EMIT_NEW
   # comment above for why: cross-device mv is not atomic) so two concurrent `make
@@ -363,6 +635,7 @@ else
     echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
   fi
   mv "$OUT_NEW" "$OUT"
+  cache_put "$CLI_KEY" "$OUT"
 fi
 
 # Record WHICH SOURCE this emitter was built from — FP_FULL (compiler + runtime), so
