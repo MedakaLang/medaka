@@ -126,7 +126,7 @@ runSql path sql = match execSql path sql
 printCellRows : List (List Cell) -> <IO> Unit
 printCellRows [] = ()
 printCellRows (cells :: rest) =
-  println (join "|" (renderCells cells))
+  println (join "|" (map cellToString cells))
   printCellRows rest
 
 -- ---------------------------------------------------------------------------

@@ -38,7 +38,6 @@ import ir.core_ir_eval.{cevalModulesOutput}
 import entries.entry_support.{
   failWith, usageModules, rootsOrDefault, desugarPair
 }
-import support.path.{dirOf}
 
 main : <IO> Unit
 main = match args ()

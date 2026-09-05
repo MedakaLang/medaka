@@ -1,5 +1,5 @@
 # META
-source_lines=578
+source_lines=586
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -12,6 +12,7 @@ stages=DESUGAR,MARK
 
 import support.ordmap.{OrdMap, omLookup, omInsert, omEmpty}
 import support.opcount.{opBump}
+import support.path.{dirOf}
 import list.{reverse, zip}
 import string.{join, split, startsWith as stdStartsWith}
 
@@ -580,9 +581,17 @@ fallthroughName = "__fallthrough__"
 export
 noneHeadTag : String
 noneHeadTag = "__none__"
+
+-- Default a CLI verb's root list to the target file's own directory when none
+-- were given on argv.
+export
+rootsOrDefault : String -> List String -> List String
+rootsOrDefault target [] = [dirOf target]
+rootsOrDefault _ roots = roots
 # DESUGAR
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -742,9 +751,13 @@ noneHeadTag = "__none__"
 (DFunDef false "fallthroughName" () (ELit (LString "__fallthrough__")))
 (DTypeSig true "noneHeadTag" (TyCon "String"))
 (DFunDef false "noneHeadTag" () (ELit (LString "__none__")))
+(DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "rootsOrDefault" ((PVar "target") (PList)) (EListLit (EApp (EVar "dirOf") (EVar "target"))))
+(DFunDef false "rootsOrDefault" (PWild (PVar "roots")) (EVar "roots"))
 # MARK
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -904,3 +917,6 @@ noneHeadTag = "__none__"
 (DFunDef false "fallthroughName" () (ELit (LString "__fallthrough__")))
 (DTypeSig true "noneHeadTag" (TyCon "String"))
 (DFunDef false "noneHeadTag" () (ELit (LString "__none__")))
+(DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "rootsOrDefault" ((PVar "target") (PList)) (EListLit (EApp (EVar "dirOf") (EVar "target"))))
+(DFunDef false "rootsOrDefault" (PWild (PVar "roots")) (EVar "roots"))

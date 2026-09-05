@@ -32,7 +32,6 @@ import tools.refindex.{
 }
 import frontend.ast.{Loc(..)}
 import support.util.{sortUniqS, joinWith, splitOnChar, listLen}
-import support.path.{dirOf}
 import entries.entry_support.{rootsOrDefault}
 
 usage : String

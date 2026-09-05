@@ -21,7 +21,6 @@ import types.annotate.{annotateProgram}
 import driver.loader.{loadProgram}
 import ir.core_ir_eval.{cevalModulesOutput}
 import eval.eval.{ffiExternNamesRef}
-import support.path.{dirOf}
 import support.util.{isEmptyL, isNonEmptyL}
 import entries.entry_support.{rootsOrDefault}
 

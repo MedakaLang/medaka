@@ -13,8 +13,8 @@ import frontend.ast.{Decl}
 import types.typecheck.{TcDiag(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+export import support.util.{rootsOrDefault}
 import support.util.{splitLast}
-import support.path.{dirOf}
 import types.typecheck.{
   elaborateOne,
   elaborateModules,
@@ -145,11 +145,11 @@ driveModules runEmit = match args ()
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
 
-export
-rootsOrDefault : String -> List String -> List String
-rootsOrDefault entry [] = [dirOf entry]
-rootsOrDefault _ roots = roots
-
+-- Kept as a local one-liner in each of its three call sites (here,
+-- tools/test_cmd.mdk, driver/medaka_cli.mdk) rather than moved to
+-- support/util.mdk: it composes `desugar`, and support/util.mdk is imported
+-- BY frontend/desugar.mdk, so importing desugar back into support/util would
+-- be a module cycle.
 export
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)

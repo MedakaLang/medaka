@@ -17,7 +17,6 @@
 -- buffer override path is exercised by the LSP (lsp.mdk).
 
 import driver.diagnostics.{analyzeProjectToLines}
-import support.path.{dirOf}
 import entries.entry_support.{rootsOrDefault}
 
 main = match args ()

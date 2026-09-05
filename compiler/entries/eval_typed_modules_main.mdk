@@ -23,7 +23,6 @@ import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{elaborateModules}
 import eval.eval.{evalModulesOutput}
-import support.path.{dirOf}
 import entries.entry_support.{rootsOrDefault, desugarPair}
 
 main = match args ()

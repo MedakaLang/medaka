@@ -36,7 +36,6 @@ import support.timer.{
 }
 import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
-import support.path.{dirOf}
 import entries.entry_support.{rootsOrDefault, desugarPair}
 
 main : <IO> Unit
