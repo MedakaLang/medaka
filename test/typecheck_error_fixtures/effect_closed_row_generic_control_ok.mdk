@@ -1,0 +1,24 @@
+-- Control for effect_closed_row_generic_launder: the same generic and the same
+-- higher-order callback shape, with EQUAL contravariant rows on both arguments
+-- (`coerce cb2 cb2`), applied to a genuinely pure callback under an honest
+-- signature.  Passing closures through an invariant type variable, declaring a
+-- row on a parameter's parameter, and calling the result are all legitimate;
+-- only the two DIFFERENT rows of the launder fixture are not.
+f0 : Unit -> <> Unit
+f0 u = ()
+
+cb2 : (Unit -> <> Unit) -> Int
+cb2 f =
+  let _ = f ()
+  0
+
+coerce : a -> a -> a
+coerce x y = y
+
+honest : (Unit -> <> Unit) -> Int
+honest = coerce cb2 cb2
+
+main : <> Unit
+main =
+  let _ = honest f0
+  ()

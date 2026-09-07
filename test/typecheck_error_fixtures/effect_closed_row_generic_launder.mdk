@@ -1,0 +1,27 @@
+-- #2557: two CLOSED arrow rows with different atoms meet in a CONTRAVARIANT
+-- position through a plain generic.  `coerce` equates cb3 and cb2, whose
+-- callback parameters carry <IO> and <> respectively; no re-open happens at a
+-- parameter position, so the CLOSED~CLOSED row arm is the only check there,
+-- and it must reject.  Otherwise `hidden` has cb3's type and cb2's body, and
+-- `main` performs <IO> under a pure signature.
+emit : Unit -> <IO> Unit
+emit u = emit u
+
+cb2 : (Unit -> <> Unit) -> Int
+cb2 f =
+  let _ = f ()
+  0
+
+cb3 : (Unit -> <IO> Unit) -> Int
+cb3 g = 1
+
+coerce : a -> a -> a
+coerce x y = y
+
+hidden : (Unit -> <IO> Unit) -> Int
+hidden = coerce cb3 cb2
+
+main : <> Unit
+main =
+  let _ = hidden emit
+  ()

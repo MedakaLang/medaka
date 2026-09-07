@@ -1,0 +1,1 @@
+TYPE ERROR: Function whose parameter admits only <> used where one whose parameter admits <IO> is expected: a caller could pass it an argument performing <IO>, which it would run under a <> row. Declare that parameter with <IO> (or wider), or pass a function whose parameter admits <IO>.
