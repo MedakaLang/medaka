@@ -1,0 +1,5 @@
+cb2 : (Unit -> Unit) -> Int
+coerce : a -> a -> a
+f0 : Unit -> Unit
+honest : (Unit -> Unit) -> Int
+main : Unit
