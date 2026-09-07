@@ -2141,6 +2141,7 @@ modules:typecheck
 nestedparens:parse
 nestedparens:fmt
 nestedparens:lint
+xref:lint
 "
 KNOWN_TCEIL_match_typecheck="4.6";    KNOWN_TFIXED_match_typecheck="2.60"
 KNOWN_TCEIL_listlit_typecheck="4.8";  KNOWN_TFIXED_listlit_typecheck="2.60"
@@ -2169,6 +2170,24 @@ KNOWN_TCEIL_manydefs_lint="4.3";      KNOWN_TFIXED_manydefs_lint="2.60"
 # file-wide convention): drop under it and #349/#350/#352 are fixed and this entry
 # must be promoted out.
 KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
+# xref:lint (TIME). MEASURED BAND: QUICK (xref @ 2000->4000->8000, min-of-5, heap
+# pinned), six samples across two hosts - r1 2.80/3.01/3.04/3.14/3.26/3.32,
+# r2 3.37/3.48/3.57/3.69/3.72/3.92. Every r2 clears the generic 3.0 threshold, and this
+# arm is ALREADY the stabilised min-of-5 measurement, so the band is this stage's cost on
+# this shape rather than sampling noise: ungraded it reds at random, and the row it reds
+# is never the one a change is under test for.
+# NOTE: DEEP (nightly, xref @ 4000->8000->16000) is NOT MEASURED here. Ceiling 5.6 is
+# taken from KNOWN_TCEIL_xref_emit above rather than fitted to QUICK alone, because the
+# same two-band relation holds on this shape (QUICK's r2 IS DEEP's r1), which places
+# DEEP's r2 near 4.5 by that entry's own observed ratio; 5.6 clears the QUICK top (3.92)
+# by 1.68 and that estimate by ~1.1. State WHICH BAND you measured if you re-derive
+# either number.
+# TFIXED grades r2 ONLY (the PROMOTE branch compares r2), so r1's wider spread does not
+# threaten it: 2.60 sits 0.77 under the observed r2 floor (3.37) - the same margin
+# manydefs:lint carries against the same floor - so a quiet runner cannot false-PROMOTE.
+# Promotes out when the lint per-file cost on a wide cross-reference shape is linear;
+# that is the same underlying cost manydefs:lint (#956) ledgers on a different shape.
+KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.60"
 # modules:typecheck (TIME) — see the block above KNOWN_SLOW_TIME for the sample band.
 # Ceiling 4.2 clears its top (3.21) by ~31%.
 #
