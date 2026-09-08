@@ -1038,13 +1038,13 @@ shard = "gates_2"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/inlang_test_oracle.sh"
+kind = "native"
+migration = "done"
+run = "sqlite/test/inlang_test_oracle_test.mdk"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
-toolchain = ["sqlite3"]
+toolchain = []
 
 [[gate]]
 name = "sqlite/test/join_oracle"
