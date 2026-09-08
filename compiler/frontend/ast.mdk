@@ -934,14 +934,24 @@ public export data Route =
 -- there to turn into a panic.
 public export data EvId = EvId String Int
 
--- The two evidence shapes, one per destination arm a goal can have: a single site
--- route, or a dictionary application's slot-ordered route list.
--- The arity distinction is the point, so `Result` cannot stand in for it: `EvOne`
--- and `EvMany` are two evidence SHAPES, not a success and a failure, and an empty
--- `EvMany` (a dictionary application with no slots) is a legitimate solution
--- rather than an error.  Mirrors `EvDest`, whose arms these two answer.
+-- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
+-- can have: a single site route, or a dictionary application's slot-ordered route
+-- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
+-- `EMethodAt` node's three answers (its dispatch route, the selected impl's
+-- `requires` dicts, the method's own `=>` dicts) in the order the node's three
+-- cells used to hold them.  One node can be the destination of zero goals (the
+-- unbound-method recovery arm writes a final route without pushing one) or three
+-- (the return-site, arg-stamp and RLocal goals share its first cell), so the node,
+-- not the goal, is the unit the reader looks up.
+-- The arity distinction is the point, so `Result` cannot stand in for it: these
+-- are evidence SHAPES, not a success and a failure, and an empty `EvMany` (a
+-- dictionary application with no slots) is a legitimate solution rather than an
+-- error.  `EvOne`/`EvMany` mirror `EvDest`, whose arms they answer.
 -- lint-disable-next-line rule-clone-type
-public export data EvVal = EvOne Route | EvMany (List Route)
+public export data EvVal =
+  | EvOne Route
+  | EvMany (List Route)
+  | EvMethod Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 
@@ -1119,15 +1129,30 @@ public export data Expr =
   -- `n`, lower/mangle strip it to `EVar n`, so all dump/IR gates stay byte-identical.
   -- Only ever lives in the transient tree typecheck infers; never reaches emit/eval.
   | EVarId String Int
-  -- Return-position method occurrence (pure/empty/…) rewritten by the self-hosted
-  -- typecheck's pre-pass: method name + a mutable route the typechecker resolves.
+  -- Method occurrence (return-position `pure`/`empty`/…, arg-position dispatch,
+  -- or a standalone shadow) rewritten by the self-hosted typecheck's pre-pass:
+  -- the method name, the pre-pass SEED, and the identity under which the solver
+  -- publishes this occurrence's answer (`EvMethod`, read through `evMethodRoutes`
+  -- in `compiler/types/route_key.mdk`).  Only appears in the typed eval pipeline,
+  -- never in parse/mark output.
+  --
+  -- The seed is a pre-pass INPUT, not solver output, which is why it rides the
+  -- node rather than the table: on the emit path the mark pass rewrites a MANGLED
+  -- definer-shadow standalone `<mid>__x` into `EMethodAt "x" "<mid>__x" ev`, so the
+  -- typechecker can dispatch on the bare name where the receiver has an impl and
+  -- fall back to the standalone symbol where it has none, and the DCE reference
+  -- walk (`compiler/frontend/marker.mdk`) can keep that symbol alive without
+  -- consulting the solver.  "" everywhere else.  It is only ever a symbol or "",
+  -- never a route.
+  --
+  -- The published answer has three parts, in this order.  The dispatch route:
   -- RKey = the concrete impl's head type — or, when two impls share that head type
   -- (TYPECHECK-AUDIT C7), the canonical impl key (`iface|args|name`); eval narrows the
   -- VMulti by matching EITHER against each candidate's head tag or its key.  RDict =
   -- the enclosing constrained function's dict parameter (read at runtime, then
-  -- narrow).  Only appears in the typed eval pipeline, never in parse/mark output.
+  -- narrow).  RLocal = the standalone shadow, seeded from the second field.
   --
-  -- The second ref carries the SELECTED impl's `requires` dicts (the reference's
+  -- The second part carries the SELECTED impl's `requires` dicts (the reference's
   -- res_impl_dicts): when the route resolves to a parametric impl with a `requires`
   -- (e.g. `impl Default (List a) requires Default a`), each constraint becomes one
   -- route, eval folds them onto the narrowed impl value as leading args so the
@@ -1135,7 +1160,7 @@ public export data Expr =
   -- `def = [def]`).  Empty for every ordinary site (no requires) — eval's fold is a
   -- no-op then.  Single-level only (`def : List Int`); nested dicts are residual #5.
   --
-  -- The THIRD ref carries the method's OWN method-level-constraint dicts (the
+  -- The THIRD part carries the method's OWN method-level-constraint dicts (the
   -- reference's res_method_dicts): a method whose signature has a `=>` constraint
   -- over a tyvar that is NOT the interface param (the canonical case is
   -- `foldMap : Monoid m => (a -> m) -> t a -> m`, where `Monoid m` constrains the
@@ -1145,7 +1170,7 @@ public export data Expr =
   -- dict_pass prepends to the method's default body / impl clauses, so a
   -- return-position ref inside that body (`empty` in foldMap's default) reads the
   -- caller-supplied dict.  Empty for every ordinary site — eval's fold is a no-op.
-  | EMethodAt String (Ref Route) (Ref (List Route)) (Ref (List Route))
+  | EMethodAt String String EvId
   -- Constrained-function occurrence (`f` where `f : C a => …`) rewritten by the
   -- same pre-pass: the function name + the identity under which the solver
   -- publishes this occurrence's routes, one per `=>` constraint.  Eval applies the
@@ -1967,7 +1992,7 @@ mapTyInExpr _ (EVarAt n a) = (EVarAt n a, False)
 -- missing while this traversal lived in `tools/codemod.mdk`, where only
 -- freshly-PARSED trees — which never hold an `EVarId` — ever reached it.)
 mapTyInExpr _ (EVarId n i) = (EVarId n i, False)
-mapTyInExpr _ (EMethodAt n r1 r2 r3) = (EMethodAt n r1 r2 r3, False)
+mapTyInExpr _ (EMethodAt n seed ev) = (EMethodAt n seed ev, False)
 mapTyInExpr _ (EDictAt n r) = (EDictAt n r, False)
 mapTyInExpr f (ELoc l e) =
   let (e2, c) = mapTyInExpr f e

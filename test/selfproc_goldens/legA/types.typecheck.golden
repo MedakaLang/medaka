@@ -660,6 +660,7 @@ definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverIsDictVar : String -> Mono -> Bool
 definerRowsOf : List (String, (String, String)) -> List (String, String)
 definerShadowArgHead : Expr -> Option (String, Ref Route, Ref (List Route))
+definerShadowArgHeadCell : String -> EvCell -> Option (String, Ref Route, Ref (List Route))
 definerShadowHeadType : TcEnv -> String -> Expr -> Mono
 definerShadowSpineArgAt : Expr -> Option (String, Ref Route, Ref (List Route), Expr, List Expr)
 definerShadowSpineVarAt : Expr -> Option (String, Expr, List Expr)
@@ -798,6 +799,7 @@ eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
 evEntriesOf : List Obligation -> List EvEntry
+evOrdinal : EvId -> Int
 evValueOf : EvDest -> EvVal
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
@@ -1236,6 +1238,7 @@ inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMemberClauses : TcEnv -> Option Mono -> Mono -> List (List Pat, Expr) -> List Atom
 inferMembers : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (String, Mono) -> Unit
 inferMethodAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
+inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitMethod : TcEnv -> Scheme -> Ref Route -> Mono
@@ -1455,6 +1458,10 @@ mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (S
 methodArgs : Ty -> List Ty
 methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+methodCellDicts : EvCell -> List (List Route)
+methodCellEntries : Unit -> List EvEntry
+methodCellEntriesFrom : Array (Option EvCell) -> Int -> List EvEntry -> List EvEntry
+methodCellOf : EvId -> EvCell
 methodConstrainedPairs : Unit -> List (Int, String)
 methodConstraintNameOf : List String -> IfaceMethod -> List String
 methodConstraintNames : List Decl -> List String
@@ -1485,6 +1492,8 @@ methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int,
 methodTyOf : String -> List IfaceMethod -> Option Ty
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 minLevelOf : List (Ref Effvar) -> Int
+mintMethodCell : String -> EvId
+mintMethodCellWith : Route -> List Route -> EvId
 mintParamReprs : List Kind -> List Mono
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
@@ -1730,6 +1739,7 @@ pubTopFnNames : List Decl -> List String
 publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
+publishEvidence : Unit -> Unit
 pureRow : EffRow
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
