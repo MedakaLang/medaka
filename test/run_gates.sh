@@ -50,8 +50,13 @@ NCPU="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 # hides that latency — but too much (outer=NCPU × inner) causes scheduling spikes.
 # Measured sweet spot on a 10-core box: outer≈0.6·NCPU, inner=3 (stable ~34s full
 # suite vs 47s at outer=NCPU vs 125s fully serial). Tune with JOBS/INNER_JOBS.
-JOBS="${JOBS:-$(( (NCPU * 3 + 2) / 5 ))}"
-[ "${JOBS:-0}" -ge 2 ] 2>/dev/null || JOBS=2
+# The floor below applies only to the DERIVED default (guards the small-box
+# integer-division underflow in the formula above) — it must never override an
+# explicit caller JOBS, since callers pass JOBS=1 deliberately to force a
+# genuinely serial run (e.g. to rule out cross-gate contention on a flake).
+_default_jobs=$(( (NCPU * 3 + 2) / 5 ))
+[ "$_default_jobs" -ge 2 ] 2>/dev/null || _default_jobs=2
+JOBS="${JOBS:-$_default_jobs}"
 INNER_JOBS="${INNER_JOBS:-3}"
 
 # ── PER-GATE COST TRANSPORT (#2178, S-1-S-cost-record) ────────────────────────
