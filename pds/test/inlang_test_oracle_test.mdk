@@ -1,0 +1,298 @@
+{- | Floor gate for the in-language (`medaka test`) `pds/` suite, migrated
+   from `pds/test/inlang_test_oracle.sh` and `pds/test/unit_suite.sh` under
+   #2592 — the two scripts drove the same corpus with different engine lists
+   and different guards, so they are one module now (#2662).
+
+   It asserts that the pure-Medaka `test "…"` / `prop "…"` suites under
+   `pds/test/*_test.mdk` are DISCOVERED and PASS. No external oracle is
+   needed; each suite is spawned as its own `medaka test` run.
+
+   THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
+   indistinguishable from "this passed"): a `medaka test` file with zero
+   assertions exits 0 — vacuously green. So exit 0 alone is not enough.
+   Every suite's executed-assertion count (`summary.passed` from `medaka
+   test --json`) must meet the per-file floor committed below, the corpus's
+   total must be nonzero, and every `pds/test/*_test.mdk` file must have a
+   roster row — an unrostered file fails this gate rather than going
+   uncounted. -}
+
+import io.{runVerb}
+import json.{asInt, get, parse}
+import list.{lookup, somes}
+import string.{endsWith, stripSuffix}
+import test.{Expectation(..)}
+import test_process.{medakaBin, underRoot}
+
+{- | Which engine a suite is spawned under, and why.
+
+   The two native reasons stay distinguishable because they drain on
+   different events: a `NativeCapability` row drains when the file stops
+   statically reaching an extern the interpreter does not bind, a
+   `NativeSpeed` row when the interpreter gets fast enough to carry it. A
+   single undifferentiated "native" list cannot say which of those to
+   re-check. -}
+data Engine = Eval | NativeCapability | NativeSpeed
+
+-- The extra `medaka test` arguments a suite is spawned with.
+engineArgs : Engine -> List String
+engineArgs Eval = []
+engineArgs NativeCapability = ["--native"]
+engineArgs NativeSpeed = ["--native"]
+
+-- How a suite's engine is named in a passing assertion's report.
+engineLabel : Engine -> String
+engineLabel Eval = "eval"
+engineLabel NativeCapability = "native (capability)"
+engineLabel NativeSpeed = "native (speed)"
+
+{- | The roster: file stem, the assertion-count floor it commits, and the
+   engine it runs under.
+
+   A floor is the count committed when the row was written, never a
+   recomputation: adding tests only raises the real count (`>= floor` still
+   passes), while removing them, or a discovery regression, drops below the
+   floor and fails. Raise one floor when you add tests to that file; never
+   regenerate all 21 from a fresh run, which would turn the guard into a
+   tautology.
+
+   The engine column is the measured assignment (sprint
+   `suites-the-vehicle-runs`, slice 1, both arms timed serially on one box),
+   not either retired script's inherited list — the two disagreed about
+   `field_test` and `scalar_test`, which cost this gate several minutes of
+   interpreter time per run.
+
+   `NativeCapability` (4 files): the eval arm REFUSES the file outright
+   ("reaches the extern `buildCommit` … No test was run"), so it is not a
+   timing question — every one of these reaches `buildCommit` through
+   `lib.repo`'s call graph, which the interpreter's capability policy does
+   not bind.
+
+   `NativeSpeed` (5 files): eval completes but is materially slower —
+   `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both past a
+   180 s timeout vs 2.5 s / 18.0 s, and the two JWT/PBKDF2 files roughly
+   4-5x. -}
+suites : List (String, (Int, Engine))
+suites = [
+  ("skeleton_test", (2, Eval)),
+  ("http_test", (74, Eval)),
+  ("xrpc_test", (29, Eval)),
+  ("server_core_test", (11, Eval)),
+  ("encodings_test", (29, Eval)),
+  ("dagcbor_cid_test", (12, Eval)),
+  ("mst_test", (12, Eval)),
+  ("car_store_test", (14, Eval)),
+  ("repo_tid_test", (9, NativeCapability)),
+  ("field_test", (30, NativeSpeed)),
+  ("scalar_test", (38, NativeSpeed)),
+  ("sign_key_test", (11, Eval)),
+  ("secp256k1_point_test", (8, Eval)),
+  ("rfc6979_test", (4, Eval)),
+  ("ecdsa_test", (2, Eval)),
+  ("pbkdf2_test", (4, NativeSpeed)),
+  ("jwt_test", (26, NativeSpeed)),
+  ("credential_test", (20, NativeSpeed)),
+  ("session_routes_test", (29, NativeCapability)),
+  ("auth_seam_test", (31, NativeCapability)),
+  ("blob_routes_test", (15, NativeCapability)),
+]
+
+{- | Exclusion ledger: file stem paired with the reason it is not run today,
+   which must name a tracking issue. Empty, and kept empty-but-present so
+   that the next exclusion is a row rather than a new mechanism.
+
+   An excluded file still needs a `suites` row: it stays rostered (so the
+   closure check below does not flag it) and its floor stays committed (so
+   restoring it does not need the number rediscovered). -}
+excluded : List (String, String)
+excluded = []
+
+rosterNames : List String
+rosterNames = map fst suites
+
+-- This gate's own file: it lives under `pds/test/` and matches `*_test.mdk`
+-- like every suite it grades, but it is not itself a suite in `suites`, so
+-- the roster-closure check below must not flag it.
+ownName : String
+ownName = "inlang_test_oracle_test"
+
+{- | Runs `medaka test <name>.mdk --json` under the suite's engine and
+   returns the executed-assertion count from the JSON envelope's
+   `summary.passed`, or an error naming what went wrong (spawn failure,
+   nonzero exit, or a summary the parser could not find).
+
+   The count comes from `--json` rather than the human transcript, so a
+   change to the transcript's shape cannot silently zero it. -}
+runSuite : String -> Engine -> <Exec "_", IO> Result String Int
+runSuite name engine =
+  let path = underRoot "pds/test/\{name}.mdk"
+  let args = ["test"] ++ engineArgs engine ++ [path, "--json"]
+  match runVerb medakaBin args
+    Err e => Err "could not run `medaka test \{path}`: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "\{path}: medaka test (\{engineLabel engine}) exited \{intToString code} — an assertion failed, or the file did not run: \{debug (out ++ err)}"
+      else match parse out
+        Err e => Err "\{path}: --json output did not parse: \{e}"
+        Ok j => match get "summary" j
+          None => Err "\{path}: no \"summary\" in --json output"
+          Some summary => match get "passed" summary
+            None => Err "\{path}: no \"summary.passed\" in --json output"
+            Some p => match asInt p
+              None => Err "\{path}: \"summary.passed\" is not an integer"
+              Some n => Ok n
+
+{- | Every suite run exactly once, shared by every assertion below —
+   top-level nullary bindings are memoized, so a spawn placed here and read
+   from two `test` decls executes once, not twice. An excluded suite is not
+   spawned at all. -}
+results : <Exec "_", IO> List (String, (Int, Result String Int))
+results =
+  map
+    ((name, (floor, engine)) => match lookup name excluded
+      Some _ => (name, (floor, Ok floor))
+      None => (name, (floor, runSuite name engine)))
+    suites
+
+{- | Grades one suite's floor. The message names the file and both numbers
+   on a miss; a run that failed outright reports the spawn's own text
+   instead, so a broken assertion inside a suite is never mistaken for a
+   count that merely fell short. -}
+floorExpectation : String -> <Exec "_", IO> Expectation
+floorExpectation name = match lookup name excluded
+  Some reason => Pass "ledgered exclusion" "skipped: \{reason}"
+  None => match lookup name results
+    None => Fail "pds/test/\{name}.mdk has no `results` entry" "" ""
+    Some (floor, Err e) =>
+      Fail e "\{intToString floor} assertions" "spawn/run error"
+    Some (floor, Ok ran) =>
+      if ran >= floor then
+        Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
+      else
+        Fail
+          "pds/test/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+          "\{intToString floor} assertions"
+          "\{intToString ran} assertions"
+
+test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
+  floorExpectation "skeleton_test"
+
+test "pds/test/http_test.mdk executed >= 74 assertions" =
+  floorExpectation "http_test"
+
+test "pds/test/xrpc_test.mdk executed >= 29 assertions" =
+  floorExpectation "xrpc_test"
+
+test "pds/test/server_core_test.mdk executed >= 11 assertions" =
+  floorExpectation "server_core_test"
+
+test "pds/test/encodings_test.mdk executed >= 29 assertions" =
+  floorExpectation "encodings_test"
+
+test "pds/test/dagcbor_cid_test.mdk executed >= 12 assertions" =
+  floorExpectation "dagcbor_cid_test"
+
+test "pds/test/mst_test.mdk executed >= 12 assertions" =
+  floorExpectation "mst_test"
+
+test "pds/test/car_store_test.mdk executed >= 14 assertions" =
+  floorExpectation "car_store_test"
+
+test "pds/test/repo_tid_test.mdk executed >= 9 assertions" =
+  floorExpectation "repo_tid_test"
+
+test "pds/test/field_test.mdk executed >= 30 assertions" =
+  floorExpectation "field_test"
+
+test "pds/test/scalar_test.mdk executed >= 38 assertions" =
+  floorExpectation "scalar_test"
+
+test "pds/test/sign_key_test.mdk executed >= 11 assertions" =
+  floorExpectation "sign_key_test"
+
+test "pds/test/secp256k1_point_test.mdk executed >= 8 assertions" =
+  floorExpectation "secp256k1_point_test"
+
+test "pds/test/rfc6979_test.mdk executed >= 4 assertions" =
+  floorExpectation "rfc6979_test"
+
+test "pds/test/ecdsa_test.mdk executed >= 2 assertions" =
+  floorExpectation "ecdsa_test"
+
+test "pds/test/pbkdf2_test.mdk executed >= 4 assertions" =
+  floorExpectation "pbkdf2_test"
+
+test "pds/test/jwt_test.mdk executed >= 26 assertions" =
+  floorExpectation "jwt_test"
+
+test "pds/test/credential_test.mdk executed >= 20 assertions" =
+  floorExpectation "credential_test"
+
+test "pds/test/session_routes_test.mdk executed >= 29 assertions" =
+  floorExpectation "session_routes_test"
+
+test "pds/test/auth_seam_test.mdk executed >= 31 assertions" =
+  floorExpectation "auth_seam_test"
+
+test "pds/test/blob_routes_test.mdk executed >= 15 assertions" =
+  floorExpectation "blob_routes_test"
+
+-- # Non-vacuity
+
+ranCountOf : (String, (Int, Result String Int)) -> Int
+ranCountOf (_, (_, Ok n)) = n
+ranCountOf (_, (_, Err _)) = 0
+
+totalRan : <Exec "_", IO> Int
+totalRan = sum (map ranCountOf results)
+
+test "pds in-language suite ran at least one assertion" =
+  if totalRan > 0 then
+    Pass "> 0 assertions" "\{intToString totalRan} assertions"
+  else
+    Fail
+      "no assertions ran at all across the pds in-language suite"
+      "> 0 assertions"
+      "0 assertions"
+
+{- # Roster closure
+
+   Both retired scripts iterated a hand-maintained roster, and one of them
+   (`unit_suite.sh`) had no closure check at all — which is why
+   `blob_routes_test.mdk` was absent from its list entirely while it printed
+   PASS. Every `_test.mdk` file under `pds/test/` must have a row in
+   `suites` above. -}
+
+testStem : String -> Option String
+testStem name =
+  if endsWith "_test.mdk" name then stripSuffix ".mdk" name else None
+
+unrosteredFiles : <FileRead "_", IO> Result String (List String)
+unrosteredFiles = match listDir (underRoot "pds/test")
+  Err e => Err "could not list pds/test: \{e}"
+  Ok names =>
+    let stems = somes (map testStem names)
+    Ok (filter (n => n /= ownName && not (elem n rosterNames)) stems)
+
+test "every pds/test/*_test.mdk file has a `suites` roster row" =
+  match unrosteredFiles
+    Err e => Fail e "no unrostered files" "listDir failed"
+    Ok [] => Pass "no unrostered files" "no unrostered files"
+    Ok extras =>
+      Fail
+        "unrostered pds/test/*_test.mdk file(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today"
+        "no unrostered files"
+        "\{debug extras}"
+
+-- An exclusion ledger naming a file with no `suites` row would skip a suite
+-- that was never graded in the first place, and would read as coverage.
+danglingExclusions : List String
+danglingExclusions = filter (n => not (elem n rosterNames)) (map fst excluded)
+
+test "every `excluded` row names a rostered suite" = match danglingExclusions
+  [] => Pass "no dangling exclusions" "no dangling exclusions"
+  extras =>
+    Fail
+      "`excluded` names file(s) with no `suites` row: \{debug extras}"
+      "no dangling exclusions"
+      "\{debug extras}"
