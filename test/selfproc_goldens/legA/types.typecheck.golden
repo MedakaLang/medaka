@@ -289,7 +289,7 @@ checkCallObligations : Bool -> List Decl -> List UObligation -> Unit
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : ImplEnv -> Int -> Bool -> Unit
-checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> List (String, Scheme)
+checkCoreMemoized : Option (Int, Int) -> MarkSets -> List String -> List Decl -> List (String, Scheme) -> List (String, Scheme)
 checkDeclaredKinds : List Decl -> Unit
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
@@ -307,6 +307,7 @@ checkGradedImplHeadDecl : ClassEnv -> Int -> Decl -> Unit
 checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeads : ClassEnv -> Int -> List Decl -> Unit
 checkGradedImplTys : ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
+checkGraphFinish : Unit -> Unit
 checkHeadKinds : String -> List String -> List (Option KindAnn) -> List Ty -> Unit
 checkHeadKindsGo : String -> List String -> List Ty -> List String -> List (Option KindAnn) -> Unit
 checkIfaceHeadKinds : String -> List String -> List (Option KindAnn) -> List IfaceMethod -> Unit
@@ -340,8 +341,8 @@ checkModulesEntryFullSplitK : Option (Int, Int) -> List Decl -> List Decl -> Lis
 checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
-checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
+checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List (String, List Decl))
+checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List (String, List Decl))
 checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
@@ -1220,7 +1221,6 @@ inferFieldOfRecord : Mono -> String -> RecordInfo -> String -> Mono
 inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
 inferImplBodies : TcEnv -> List Decl -> List String -> List Decl -> Unit
-inferImplBodiesIfEnabledIn : TcEnv -> List Decl -> List Decl -> Unit
 inferImplMethod : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
 inferImplMethods : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
 inferInfix : TcEnv -> String -> Expr -> Expr -> Mono
@@ -1431,8 +1431,13 @@ mangledCtorShaped : Array Char -> Int -> Int -> Bool
 mangledHeadCandidates : String -> String -> List (String, RecordInfo)
 mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
 mapLocalSchemes : List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
+markCore : MarkSets -> List String -> List Decl -> List Decl
+markDictNames : List String -> List Decl -> List (String, List Decl) -> List String
+markGraph : MarkSets -> List String -> List Decl -> List (String, List Decl) -> (List String, List Decl, List (String, List Decl))
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
+markSetsOf : List Decl -> List (String, List Decl) -> List Decl -> MarkSets
+markUnits : MarkSets -> List String -> List (String, List Decl) -> List (String, List Decl)
 matchCol0Type : Mono -> Option TabKey
 matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) -> List (a, b) -> List (c, b) -> Option (List (c, b))
 matchStep : Ty -> Mono -> MStep String Ty Mono
@@ -1819,6 +1824,7 @@ recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
 recordResultMono : RecordInfo -> Mono
 recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
+recordShadowStandaloneObls : String -> List (Int, Mono) -> Unit
 recordSigConstraintArgs : List Ty -> List (String, Mono) -> List (Int, Mono) -> Option (List Mono)
 recordSigConstraintObls : List Constraint -> List (String, Mono) -> List (Int, Mono) -> Unit
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono

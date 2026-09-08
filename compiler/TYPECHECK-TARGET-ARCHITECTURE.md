@@ -564,6 +564,49 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    adjudicated residuals (the unread published tuple element, `copyGraphRun`'s anticipatory
    field, the cumulative-ordinal array sizing, and the two silent miss arms of `evDictRoutes`).
 
+11. **Step 7 phase 2, first two units, 2026-09-08** (#2705, branch `typecheck-rearch-2`).
+   **The `EMethodAt` flip landed**: `EMethodAt String String EvId` (name, the pre-pass
+   SEED — the mangled definer-shadow symbol or "" — and the evidence id), per #2705's
+   shape 2 with the entry minted PER NODE.  `EvVal` gains `EvMethod Route (List Route)
+   (List Route)`; `evMethodRoutes` (`route_key.mdk`) is the reader and every miss panics.
+   The solver's working cells moved to a typechecker-private ordinal-indexed array
+   (`GraphRun.evCells`, minted with the node, carried across `resetGraphState`); the
+   published table is derived from those cells at each publish, which now happens
+   before AND after `dictPass` (its three mints).  `eval`, lowering and the DCE walk read
+   no cell; item 10's "`EMethodAt` is UNCHANGED" no longer holds for a comparison carrier.
+   Behaviour-preserving on the whole route-contract gate set; independent adversarial
+   review found no S0/S1 and no measurable Ir change.
+   **Unconditional solving landed and `implInferEnabled` is deleted**: every Module-arm
+   driver marks (`markSetsOf`, one computation for `check` and `elaborateModules`), runs
+   impl-body inference and BOTH obligation channels, cuts its stamping context in
+   `checkModuleFullImpl`, and drains at graph end (`checkGraphFinish`; `elabSweep` on the
+   elaborate side).  The two memo layers drain a memoized prefix (core; each recorded
+   chain step) before its snapshot — MEASURED: with the contexts left in the snapshot
+   the `import list` warm analyze cost +39% Ir against ruling 7's ~25%; drained, +19.6%
+   (`playground clean` warm +20.0%; cold analyzes +62%/+36%, the once-per-process cost
+   of core being solved on the check path).  What the drain raises is NOT reported by a
+   check driver and does not arm the sticky gate there: a 3,386-file corpus census found
+   it wrong on accepted programs in 33 files (D1-undefaulted `Num` literals in test/prop
+   bodies — #2646's owed step — `panic "…"` #2315, and route-side re-unification
+   duplicates); reporting is the T4 census of ruling 1, on that measured set.  Two
+   check-side holes the unification exposed and closed: a definer-shadow occurrence
+   (`add x y = x + y` beside `Num`'s `add`) took the method path, which records dict
+   SLOTS but never the standalone's scheme obligations — `add "a" "b"` passed `check` at
+   exit 0 until `recordShadowStandaloneObls` instantiated them as the `EVar` path does
+   (the elaborate driver had always had this hole, hidden by the double typecheck); and
+   the message heuristics (`appSpineName`, the `do`-bind callee test, `renderCallArg`,
+   `eagerRefs`) were blind to the marked node shapes.  The Flat arm's core impl-body
+   inference call is gone (a no-op on the one Flat entry that elaborates, spurious
+   `T-AMBIGUOUS-INSTANCE` on the Flat check entries).  The marked definer-shadow arm
+   raised the same domain mismatch twice (call site and receiver) on every reject — hidden
+   while only the emit path marked — and its signatured standalone branch now unifies once,
+   as its unmarked twin does.  Remaining check-output delta over the corpus, final: two
+   definer-shadow rejects whose `No impl` moves one column, from the application to the
+   callee.  Not landed:
+   the double typecheck per `run`/`build` and the promotion fixpoint — the drivers still
+   differ in rendering and in growing the dict-name set, which is what those two units
+   remove.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
