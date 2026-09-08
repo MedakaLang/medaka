@@ -602,7 +602,17 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    while only the emit path marked — and its signatured standalone branch now unifies once,
    as its unmarked twin does.  Remaining check-output delta over the corpus, final: two
    definer-shadow rejects whose `No impl` moves one column, from the application to the
-   callee.  Not landed:
+   callee.  The independent review of this unit (2026-09-08) is why the schemes-only query
+   driver (`checkModules`: LSP hover/completion, the linear-time perf gate) marks but does
+   NOT solve — a solve there needs the prefix impl universe (`accAll ++ prog`, the concat
+   #154 PR-C removed) and MEASURED as reddening `diff_compiler_perf_scaling`'s `modules` row
+   (4.48 against a 4.2 ceiling); #2719 owns the memoized solve that makes that path one
+   driver with the rest.  The same review names the two prefix drains for what they are: a
+   SECOND resolution schedule §S forbids, kept only as the memo layers' closure assumption,
+   and something the double-typecheck unit or #2719 has to fold back into one.  Two
+   pre-existing S1s it found on both arms are filed: #2721 (an impl body dispatching on the
+   impl's own type parameter with no `requires` is accepted and dies at runtime) and #2722
+   (engine divergence on a constrained cross-module standalone shadow).  Not landed:
    the double typecheck per `run`/`build` and the promotion fixpoint — the drivers still
    differ in rendering and in growing the dict-name set, which is what those two units
    remove.

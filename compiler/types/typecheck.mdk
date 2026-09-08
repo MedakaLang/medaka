@@ -16207,11 +16207,11 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
   -- The STANDALONE arm with a written signature mirrors its unmarked twin
   -- (`inferDefinerStandaloneVarAppAt`'s `Some smono` branch): ONE unification of the
   -- standalone's type against the applied spine, at the call site.  Running the
-  -- domain enforcement AND `inferApp` here raised the same mismatch twice (once at
-  -- the call site, once at the receiver), which the emit path never showed and the
-  -- check path started showing the day it marked (#2705).  `ft` IS the standalone's
-  -- instantiation on this arm (`definerShadowHeadType`), so nothing is lost by not
-  -- re-deriving it from the signature.
+  -- domain enforcement AND `inferApp` here raises the same mismatch twice (once at
+  -- the call site, once at the receiver), and every driver reports from this arm
+  -- now.  `ft` IS the standalone's instantiation on this arm
+  -- (`definerShadowHeadType`), so nothing is lost by not re-deriving it from the
+  -- signature.
   match if dispatches || isDictVar then None else standaloneShadowScheme name
     Some _ =>
       currentLoc := dloc
@@ -28776,9 +28776,10 @@ checkBodyImpl seed mode prog0 =
       let _ = scopeShadowsCore ()
       -- No impl-body inference over `coreProgS` here: the one Flat entry that
       -- elaborates (`checkProgramSeeded`, via `elaborateDict`) passes an EMPTY core
-      -- and carries the prelude inside `prog0S`, so the call was a no-op there; on
-      -- the Flat CHECK entries (a real prelude split) it MEASURES as spurious
-      -- `T-AMBIGUOUS-INSTANCE` rejects (`diff_compiler_flat_vs_onemodule`, 8 rows).
+      -- and carries the prelude inside `prog0S`, so there is nothing to walk; on the
+      -- Flat CHECK entries (a real prelude split) re-inferring core's parametric impl
+      -- bodies against the user program raises spurious `T-AMBIGUOUS-INSTANCE`
+      -- rejects (`diff_compiler_flat_vs_onemodule` pins the accepting rows).
       let _ = inferDefaultBodiesIfEnabled preludeBodyEnv coreProgS
       let _ = inferPropBodies preludeBodyEnv coreProgS
       let _ = inferTestBodies preludeBodyEnv coreProgS
@@ -40235,7 +40236,7 @@ checkCoreMemoized key ms dictNames coreDecls runtimeSeed =
 checkModulesPreamble : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme), List (String, List Decl))
+  (List (String, Scheme), List (String, Scheme), List (String, List Decl) -> List (String, List Decl))
 checkModulesPreamble runtimeDecls coreDecls modules =
   checkModulesPreambleK None runtimeDecls coreDecls modules
 
@@ -40245,7 +40246,7 @@ checkModulesPreambleK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme), List (String, List Decl))
+  (List (String, Scheme), List (String, Scheme), List (String, List Decl) -> List (String, List Decl))
 checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   let _ = resetCrossModuleState ()
   -- #1111 A-2.5b: derive the graph's method-identity index over the whole
@@ -40305,12 +40306,15 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   let ms = markSetsOf coreDecls modules declEnvs.deAllDecls
   -- the core pass, memoized under the caller's prelude key — see `checkCoreMemoized`.
   -- Core is marked inside the miss arm: a hit REPLACES `graphRun` with the snapshot,
-  -- so cells minted before it would be lost — which is also why the user modules
-  -- are marked only after it.
+  -- so cells minted before it would be lost.  The user modules are NOT marked here
+  -- for the same reason, one memo layer down: `checkModulesDiagsChain` restores a
+  -- recorded prefix's `graphRun` AFTER this preamble, and a cell minted for a suffix
+  -- module before that restore would index an older, shorter table — the driver
+  -- marks what it checks, at the point it checks it, with the marker returned here.
   let dictNames = markDictNames ms.msBareDictNames coreDecls modules
   let coreSchemes =
     checkCoreMemoized preludeKey ms dictNames coreDecls runtimeSeed
-  (runtimeSeed, coreSchemes, markUnits ms dictNames modules)
+  (runtimeSeed, coreSchemes, markUnits ms dictNames)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
 -- `schemes` twice — once as the pubV source foldModules needs, once as the payload
@@ -40352,13 +40356,16 @@ cmCheckWorker : String ->
   List Decl ->
   List Decl ->
   (List (String, Scheme), List (String, Scheme))
-cmCheckWorker mid seed accData accAll prog =
-  -- #2705: the impl universe is the real one (`accAll ++ prog`, as `elabWorker` and
-  -- `cmEntryWorker` build it), not `[]`: this module's stamping context is cut inside
-  -- `checkModuleFullImpl` now, and its resolvers read the universe for the
-  -- receiver-grounded shadow/`requires` answers — an empty one would make the drain
-  -- reject correct programs with a missing-impl diagnostic.
-  let schemes = checkModuleFullImpl mid seed accData (accAll ++ prog) prog
+cmCheckWorker mid seed accData _accAll prog =
+  -- #2705: this is the SCHEMES-ONLY query driver — LSP hover/completion
+  -- (`projectEntrySchemes`) and the linear-time perf gate — and it does NOT solve:
+  -- it types the marked tree (`checkBodyImpl` directly, so no stamping context is
+  -- queued) and reads schemes off inference.  A solve here would need the impl
+  -- universe (`accAll ++ prog`, the concat #154 PR-C removed from this path; MEASURED
+  -- to red `diff_compiler_perf_scaling`'s `modules` row at 4.48 against a 4.2
+  -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
+  -- makes this path one driver with the others is #2719.
+  let schemes = checkBodyImpl seed (Module mid accData []) prog
   (schemes, schemes)
 
 -- check every module in dependency order against a shared prelude + runtime.
@@ -40373,30 +40380,27 @@ checkModules runtimeDecls coreDecls0 modules0 =
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, modules2) =
+  let (runtimeSeed, coreSchemes, marker) =
     checkModulesPreamble runtimeDecls coreDecls modules
-  -- #154 PR-C: cmCheckWorker reads no accData (checkModuleFull → Module path, where
-  -- checkBodyImpl binds it `_` and never reads it), so that concat is pure waste here
-  -- and wantData=False threads it unchanged.  #2705: accAll IS read now — it is the
-  -- impl universe the module's stamping context captures — so wantAll=True, as on
-  -- the other three drivers (O(|prog|) per module: the accumulator grows on the right).
-  let out =
-    foldModules
-      False
-      True
-      cmCheckWorker
-      (_last mid schemes rest => (mid, schemes) :: rest)
-      []
-      (runtimeSeed ++ coreSchemes)
-      coreSchemes
-      []
-      []
-      coreDecls
-      modules2
-  -- #2705: this driver reports no per-module diagnostics; the drain's still arm the
-  -- sticky gate every caller of this driver reads (`hadTypeErrors`).
-  let _ = checkGraphFinish ()
-  out
+  -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
+  -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param), so
+  -- both concats are pure waste here — the residual O(modules^2) the PR-A review found.
+  -- wantData=wantAll=False threads them unchanged (no copy) and the `[] []` initials keep
+  -- the dead values empty → the whole perf-gate `checkModules` path is O(N).  #2705: this
+  -- driver marks but does not solve — see `cmCheckWorker` — so it queues nothing and
+  -- drains nothing.
+  foldModules
+    False
+    False
+    cmCheckWorker
+    (_last mid schemes rest => (mid, schemes) :: rest)
+    []
+    (runtimeSeed ++ coreSchemes)
+    coreSchemes
+    []
+    []
+    []
+    (marker modules)
 
 -- ── per-module ISOLATED diagnostics (the analyzeProject typecheck stage) ────
 -- Like checkModuleFull but ALSO harvests THIS module's type diagnostics: it shares the
@@ -40665,7 +40669,7 @@ checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsK None runtimeDecls coreDecls0 modules0
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, modules2) =
+  let (runtimeSeed, coreSchemes, marker) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
   let steps = match !moduleChainMemoRef
@@ -40690,7 +40694,11 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
       accAll
       results
       (dropN n stepKeys)
-      (dropN n modules2)
+      -- #2705: the suffix is marked HERE, after the prefix restore above replaced
+      -- `graphRun` — a cell minted before that restore would index the older, shorter
+      -- table and `methodCellOf` would panic on the next analyze.  The restored
+      -- prefix keeps its own cells (they ride the snapshot).
+      (marker (dropN n modules))
   moduleChainMemoRef := Some
     ChainMemo {
       chKey = fullKey,
@@ -40765,11 +40773,11 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
       -- #2705: drain what is queued (this module's context, and the contexts of
       -- any un-keyed modules before it) BEFORE the snapshot, so a hit restores a
       -- graph with an empty queue and a memoized prefix is solved once per edit of
-      -- its source rather than once per keystroke.  MEASURED: with the contexts
-      -- left in the snapshot, the `import list` warm analyze cost +39% Ir against
-      -- ruling 7's ~25% ceiling.  This treats a recorded prefix as closed at its
-      -- own end — the closure this memo already assumes by snapshotting its
-      -- solution here.
+      -- its source rather than once per keystroke (a replayed prefix solve is what
+      -- puts the warm analyze over ruling 7's Ir ceiling).  This treats a recorded
+      -- prefix as closed at its own end — the closure this memo already assumes by
+      -- snapshotting its solution here — and it is a second resolution schedule
+      -- beside the graph-end one; folding the two back into one is #2719's.
       let _ = checkGraphFinish ()
       let step = ChainStep {
         csKey = k,
@@ -40797,8 +40805,9 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, modules2) =
+  let (runtimeSeed, coreSchemes, marker) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
+  let modules2 = marker modules
   -- #154 PR-C: cmDiagsWorker reads BOTH accData (buildOracle `prog ++ accData` +
   -- runFinalChecks) and accAll (checkModuleFullImpl implDecls + runFinalChecks), and both
   -- are order-observable (oracle first-wins, runFinalChecks scan order), so both concats
@@ -40961,8 +40970,9 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) =
     stampGraphTyOrigins effectiveCoreDecls0 effectiveModules0
-  let (runtimeSeed, coreSchemes, modules2) =
+  let (runtimeSeed, coreSchemes, marker) =
     checkModulesPreambleK effectivePreludeKey runtimeDecls coreDecls modules
+  let modules2 = marker modules
   -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
   -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
   -- witness, not the perf-gate path).
@@ -42624,12 +42634,11 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 -- `hadTypeErrors` right after its check pass): the sticky cells are rolled back
 -- across the drain exactly as `elabPromotionFixpoint` rolls a discarded sweep
 -- back.  On the elaborate side they stay live and `elaborateModules` returns them
--- as its residual.  A census over 3,386 corpus files at this change found them
--- wrong on accepted programs in 33 files: `T-AMBIGUOUS-INSTANCE` on a `Num`
--- literal a test/prop body never defaulted (the D1 quiescence step #2646 names as
--- owed), on `panic "…"` (#2315), and route-side re-unification duplicates on
--- programs the obligation channel already rejected.  Reporting them is the T4
--- census ruling 1 asks for, taken on that measured set — not this driver's call.
+-- as its residual.  They are not a verdict yet: a resolver rejects as ambiguous a
+-- `Num` literal a test/prop body never defaulted (the D1 quiescence step #2646
+-- names as owed) and `panic "…"` (#2315), and re-unifies at a site the obligation
+-- channel already rejected.  Whether and how they are reported is the T4 census
+-- ruling 1 asks for (#2705), not this driver's call.
 checkGraphFinish : Unit -> Unit
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky

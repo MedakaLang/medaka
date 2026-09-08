@@ -341,8 +341,8 @@ checkModulesEntryFullSplitK : Option (Int, Int) -> List Decl -> List Decl -> Lis
 checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List (String, List Decl))
-checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List (String, List Decl))
+checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List (String, List Decl) -> List (String, List Decl))
+checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List (String, List Decl) -> List (String, List Decl))
 checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
