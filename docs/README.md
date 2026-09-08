@@ -135,6 +135,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`set.md`](stdlib/set.md) | set | — |
 | [`string.md`](stdlib/string.md) | string | — |
 | [`test.md`](stdlib/test.md) | test | — |
+| [`test_process.md`](stdlib/test_process.md) | test_process | — |
 | [`time.md`](stdlib/time.md) | time | — |
 | [`toml.md`](stdlib/toml.md) | toml | — |
 | [`validation.md`](stdlib/validation.md) | validation | — |
