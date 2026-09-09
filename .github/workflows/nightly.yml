@@ -140,6 +140,52 @@ jobs:
           job-name: "perf_scaling DEEP (the N=16000 bands ci.yml cannot afford)"
           gate-label: "perf_scaling DEEP"
 
+  # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
+  stage-ir-scaling-full:
+    name: "stage_ir_scaling FULL (the six shapes the merge tier cannot afford)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      - name: Build the oracles stage_ir_scaling needs
+        run: FORCE=1 sh test/build_oracles.sh --for 'diff_compiler_stage_ir_scaling'
+
+      # ⚠️ THIS JOB IS THE OTHER HALF OF A REQUIRED GATE, NOT AN EXTRA.
+      #
+      # ci.yml's `gates` matrix runs this gate at its DEFAULT tier (`merge`), which
+      # grades `match` + `modules` — one shape per profiler, both grading paths. The
+      # other six shapes (xref vchain constrained wideiface guardwild scoperefs) are
+      # graded here, at STAGE_IR_TIER=full. Grading all eight costs ~11 min of
+      # Callgrind and made this gate the indivisible floor of the `gates` matrix
+      # (`medaka gate balance --check` named it as such at pole/floor 1.000).
+      #
+      # Two ledgered ceilings live ONLY in this job's half: #2125's guardwild ceiling
+      # and #2172's scoperefs attribution. A red here is a real quadratic (or a
+      # PROMOTE — a fixed one that needs its KNOWN_SLOW row removed), so like
+      # perf-scaling-deep this job FAILS the nightly rather than filing quietly.
+      - name: stage_ir_scaling, all eight shapes
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+          STAGE_IR_TIER: "full"
+        run: sh test/diff_compiler_stage_ir_scaling.sh
+
+      - name: File or update the known-red issue on failure
+        if: failure() || cancelled()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "stage_ir_scaling FULL (the six shapes the merge tier cannot afford)"
+          gate-label: "stage_ir_scaling FULL"
+
   # Charter clause: N4 (docs/ops/CI-ARCHITECTURE.md §3.6 — advisory / non-blocking by construction — files a finding rather than gating the diff).
   fuzz-diff:
     name: fuzz_diff (bounded nightly sweep; findings are FILED, not failed)

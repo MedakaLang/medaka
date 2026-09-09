@@ -3376,7 +3376,7 @@ name = "diff_compiler_stage_ir_scaling"
 area = "infra"
 shard = "gates_5"
 project = "compiler"
-tiers = ["merge"]
+tiers = ["merge", "nightly/STAGE_IR_TIER=full"]
 cost = "heavy"
 kind = "exec"
 migration = "shell:instrumentation"
