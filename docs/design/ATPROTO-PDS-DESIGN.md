@@ -541,6 +541,32 @@ validation (`validate: true` is refused), `describeRepo`'s `didDoc` (no DID
 resolver, so any document would be invented), `sync.getRepo`'s `since` (no
 incremental sync), and `validationStatus`.
 
+**Read-path cost bounds (#2478).** Every read route above is a `PublicRoute` —
+unauthenticated by the atproto spec, not by omission — so the cost of serving
+one is a cost a stranger chooses. Three of them once did work proportional to
+the whole account per response. `listRecords` selects on the MST's paths and
+reads a record's block only for the entries it actually returns; `describeRepo`
+answers `collections` from paths alone; and `listBlobs` lists CIDs through a
+byte-free blob-half view instead of copying every blob. The paths themselves are
+still walked, because `lib.mst` holds its entries as a flat sorted list with no
+range query, so a page still costs one cheap pass over the account's keys — a
+smaller residual, tracked separately, not the byte-proportional cost #2478 named.
+
+`com.atproto.sync.getRepo` is the exception, and deliberately so: **a full CAR
+export is inherently proportional to the repository, and the only bound
+available is how often it may be called.** The endpoint's contract is the whole
+repository as one CAR, so no per-request bound short of refusing the route can
+make it sublinear; and the P14 seam is
+`handle : Server -> Store -> Request -> (Store, Response)`, which returns a
+`Response` **value**, so streaming the CAR is not expressible in the pure core
+at all — it would require the response to become a stream the shell pulls from,
+i.e. abandoning the seam that makes the core all-engine and doctestable. What
+bounds `getRepo` is therefore rate limiting alone: the per-identity request
+allowance #2612 installs, with `maxCarBytes` (64 MiB,
+`pds/lib/resource_limits.mdk`) capping any single export. A deployment that
+exposes this server past loopback must have that limiter in place; `getRepo`
+without it is an unauthenticated request for the entire account, repeatable.
+
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
 sibling of (never inside) the repository's `<data>/blocks`, sharded on the
 first byte of the CID's multihash digest exactly like the block store —

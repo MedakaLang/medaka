@@ -85,8 +85,9 @@ import lib.repo.{
   repoCreate,
   repoDelete,
   repoExportCar,
+  repoDecodeEntry,
+  repoEntries,
   repoLatestCommit,
-  repoList,
   repoLookup,
   repoMutationCommit,
   repoMutationState,
@@ -113,6 +114,7 @@ import lib.server_core.{
 import lib.store.{
   Store,
   sessionFingerprint,
+  storeBlobCids,
   storeBlobEntries,
   storeBlobMimeType,
   storeCredential,
@@ -929,36 +931,44 @@ lookupRecord path repo = match repoLookup path repo
   Err message => Err (invalidRequest "Repository read rejected: \{message}")
   Ok found => Ok found
 
-listAllEntries : Repo -> Result Response (List (Array Int, Cid, DagCbor))
-listAllEntries repo = match repoList repo
+{- | Decode the records of an ALREADY-SELECTED page, and no others.
+
+   Every listing route used to decode the whole repository and then throw the
+   tail away, so serving one page cost the account. Selection now happens on
+   `repoEntries`' paths, which name a record's block without reading it, and
+   this is the only place a listing route touches a record's bytes. -}
+pageRecords : Repo ->
+  List (String, Cid) ->
+  Result Response (List (String, DagCbor))
+pageRecords _ [] = Ok []
+pageRecords repo ((rkey, cid) :: rest) = match repoDecodeEntry cid repo
   Err message => Err (invalidRequest "Repository listing rejected: \{message}")
-  Ok entries => Ok entries
+  Ok value => do
+    values <- pageRecords repo rest
+    Ok ((rkey, value) :: values)
 
 splitRecordPath : Array Int -> Option (String, String)
 splitRecordPath path = match split "/" (fromUtf8 path)
   [collection, rkey] => Some (collection, rkey)
   _ => None
 
-{- | The `(rkey, record)` pairs of one collection, in the repository's own
+{- | The `(rkey, block)` pairs of one collection, in the repository's own
    ascending key order (`lib.mst` keeps entries sorted, so this is already the
-   ascending half of atproto's `reverse` parameter). -}
-collectionEntries : String ->
-  List (Array Int, Cid, DagCbor) ->
-  List (String, DagCbor)
-collectionEntries _ [] = []
-collectionEntries wanted ((path, _, value) :: rest) = match splitRecordPath path
+   ascending half of atproto's `reverse` parameter). No record is read: the
+   pairs name blocks, which is all ordering, the cursor and the limit need. -}
+collectionKeys : String -> List (Array Int, Cid) -> List (String, Cid)
+collectionKeys _ [] = []
+collectionKeys wanted ((path, cid) :: rest) = match splitRecordPath path
   Some (collection, rkey) =>
     if collection == wanted then
-      (rkey, value) :: collectionEntries wanted rest
+      (rkey, cid) :: collectionKeys wanted rest
     else
-      collectionEntries wanted rest
-  None => collectionEntries wanted rest
+      collectionKeys wanted rest
+  None => collectionKeys wanted rest
 
-distinctCollections : List (Array Int, Cid, DagCbor) ->
-  List String ->
-  List String
+distinctCollections : List (Array Int, Cid) -> List String -> List String
 distinctCollections [] seen = reverseOnto seen []
-distinctCollections ((path, _, _) :: rest) seen = match splitRecordPath path
+distinctCollections ((path, _) :: rest) seen = match splitRecordPath path
   Some (collection, _) =>
     if nameSeen collection seen then
       distinctCollections rest seen
@@ -1038,14 +1048,14 @@ requireLimit params = do
         else
           Ok limit
 
-orderEntries : Bool -> List (String, DagCbor) -> List (String, DagCbor)
+orderEntries : Bool -> List (String, a) -> List (String, a)
 orderEntries True entries = entries
 orderEntries False entries = reverseOnto entries []
 
 {- | Drop everything up to and including the cursor. The list is already sorted
    in the requested direction, so "sorts after the cursor" is exactly the
    remainder of the page the cursor ended. -}
-afterCursor : Bool -> String -> List (String, DagCbor) -> List (String, DagCbor)
+afterCursor : Bool -> String -> List (String, a) -> List (String, a)
 afterCursor _ _ [] = []
 afterCursor ascending cursor ((rkey, value) :: rest) =
   let keep = if ascending then rkey > cursor else rkey < cursor
@@ -1054,16 +1064,7 @@ afterCursor ascending cursor ((rkey, value) :: rest) =
   else
     afterCursor ascending cursor rest
 
-takeLimit : Int -> List (String, DagCbor) -> List (String, DagCbor)
-takeLimit _ [] = []
-takeLimit limit (entry :: rest) =
-  if limit <= 0 then [] else entry :: takeLimit (limit - 1) rest
-
-entryCount : List (String, DagCbor) -> Int
-entryCount [] = 0
-entryCount (_ :: rest) = 1 + entryCount rest
-
-lastRkey : String -> List (String, DagCbor) -> String
+lastRkey : String -> List (String, a) -> String
 lastRkey fallback [] = fallback
 lastRkey _ [(rkey, _)] = rkey
 lastRkey fallback (_ :: rest) = lastRkey fallback rest
@@ -1096,20 +1097,25 @@ applyListRecords account store params = do
   limit <- requireLimit params
   ascending <- requireReverse params
   cursor <- optionalParam "cursor" params
-  entries <- listAllEntries repo
-  let ordered = orderEntries ascending (collectionEntries collection entries)
+  let ordered =
+    orderEntries ascending (collectionKeys collection (repoEntries repo))
   let remaining = match cursor
     None => ordered
     Some text => afterCursor ascending text ordered
-  let page = takeLimit limit remaining
+  -- ONE entry past the page settles whether a further page exists, which is
+  -- the only thing the discarded tail was ever asked, so the page plus that
+  -- one entry is as far as selection reaches.
+  let probe = take (limit + 1) remaining
+  let keys = take limit probe
+  page <- pageRecords repo keys
   views <- recordViews account collection page
   -- A cursor is emitted only when a further page exists, so a client that gets
   -- none knows it has seen the whole collection.
-  if entryCount remaining > entryCount page then
+  if length probe > length keys then
     Ok
       (jObject [
         ("records", jArray views),
-        ("cursor", JString (lastRkey "" page)),
+        ("cursor", JString (lastRkey "" keys)),
       ])
   else
     Ok (jObject [("records", jArray views)])
@@ -1128,12 +1134,13 @@ applyDescribeRepo account store params = do
   repo <- requireConfiguredRepo store
   target <- requiredParam "repo" params
   () <- requireHostedIdentifier "repo" account target
-  entries <- listAllEntries repo
+  -- `collections` needs the paths and nothing else, so no record is decoded.
+  let collections = distinctCollections (repoEntries repo) []
   Ok
     (jObject [
       ("did", JString (accountDid account)),
       ("handle", JString (accountHandle account)),
-      ("collections", jArray (map JString (distinctCollections entries []))),
+      ("collections", jArray (map JString collections)),
       ("handleIsCorrect", JBool True),
     ])
 
@@ -1211,22 +1218,22 @@ requireBlobLimit params = do
         else
           Ok limit
 
-blobCidTexts : List (Cid, Array Int) -> List String
-blobCidTexts entries = map ((cid, _) => cidToString cid) entries
-
 {- | Blobs are also independent of the repository half here; `since` (a
    revision cursor into the repository, not the blob half) is refused as
    unimplemented rather than silently ignored, the same policy
    `rejectUnimplementedParam` already applies to `getRepo`'s `since`.
 
    The listed CIDs are SORTED by their base32 text before the cursor is
-   applied, because the cursor is compared as base32 text. `storeBlobEntries`
-   yields entries in `lib.blockstore`'s own key order, which is the HEX of the
+   applied, because the cursor is compared as base32 text. `storeBlobCids`
+   yields CIDs in `lib.blockstore`'s own key order, which is the HEX of the
    raw CID bytes, and hex order and base32-of-the-same-bytes order are
    different relations. Paginating one order with a cursor drawn from the
    other lets a client walk past a blob whose text sorts before the cursor,
-   and never see it again. Sorting here leaves `blockStoreEntries`' order
-   alone for its other callers. -}
+   and never see it again. Sorting here leaves `blockStoreCids`' order
+   alone for its other callers.
+
+   The CIDs come without their bytes: this route reports which blobs exist, and
+   `storeBlobEntries` would copy every blob in the account to say so. -}
 applyListBlobs : Account -> Store -> List QueryParam -> Result Response Json
 applyListBlobs account store params = do
   target <- requiredParam "did" params
@@ -1234,7 +1241,7 @@ applyListBlobs account store params = do
   () <- rejectUnimplementedParam "since" params
   limit <- requireBlobLimit params
   cursor <- optionalParam "cursor" params
-  let allCids = sort (blobCidTexts (storeBlobEntries store))
+  let allCids = sort (map cidToString (storeBlobCids store))
   let remaining = match cursor
     None => allCids
     Some text => filter (> text) allCids

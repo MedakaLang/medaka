@@ -574,6 +574,13 @@ export
 repoMutationCommit : RepoMutation -> RepoCommit
 repoMutationCommit (RepoMutation _ commit) = commit
 
+decodeAt : Cid -> BlockStore -> Result String DagCbor
+decodeAt cid store = match blockStoreGet cid store
+  None => Err "repo: missing graph record block"
+  Some bytes => match dagCborDecode bytes
+    Err message => Err "repo: invalid stored record: \{message}"
+    Ok value => Ok value
+
 -- | Look up and strictly decode one record.
 export
 repoLookup : Array Int -> Repo -> Result String (Option DagCbor)
@@ -581,11 +588,22 @@ repoLookup path (Repo _ _ _ tree store _) = do
   () <- validatePath path
   match mstLookup path tree
     None => Ok None
-    Some cid => match blockStoreGet cid store
-      None => Err "repo: missing graph record block"
-      Some bytes => match dagCborDecode bytes
-        Err message => Err "repo: invalid stored record: \{message}"
-        Ok value => Ok (Some value)
+    Some cid => map Some (decodeAt cid store)
+
+{- | The current entries in canonical path order, naming each record's block
+   without reading or decoding it.
+
+   A route that answers with one page pairs this with `repoDecodeEntry` on the
+   page's entries alone, so the cost of the answer is the page and not the
+   repository; `repoList` is this plus a decode of every entry. -}
+export
+repoEntries : Repo -> List (Array Int, Cid)
+repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
+
+-- | Strictly decode the record one `repoEntries` entry names.
+export
+repoDecodeEntry : Cid -> Repo -> Result String DagCbor
+repoDecodeEntry cid (Repo _ _ _ _ store _) = decodeAt cid store
 
 -- | List canonical path order with decoded current records.
 export
@@ -597,11 +615,9 @@ listRecords : List (Array Int, Cid) ->
   List (Array Int, Cid, DagCbor) ->
   Result String (List (Array Int, Cid, DagCbor))
 listRecords [] _ acc = Ok (reverse acc)
-listRecords ((path, cid) :: rest) store acc = match blockStoreGet cid store
-  None => Err "repo: missing graph record block"
-  Some bytes => match dagCborDecode bytes
-    Err message => Err "repo: invalid stored record: \{message}"
-    Ok value => listRecords rest store ((path, cid, value) :: acc)
+listRecords ((path, cid) :: rest) store acc = match decodeAt cid store
+  Err message => Err message
+  Ok value => listRecords rest store ((path, cid, value) :: acc)
 
 cidMember : Cid -> List Cid -> Bool
 cidMember _ [] = False
