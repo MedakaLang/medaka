@@ -188,6 +188,7 @@ import types.typecheck.{
   resetTypeErrorsSticky,
   hadTypeErrors,
   TcDiag,
+  ElabResult,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
@@ -3026,7 +3027,7 @@ modIdToPath (mid, path, _) = (mid, path)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)
+  <IO> ElabResult
 elaborateRun rtD coreD modsD =
   let plain = elaborateModules rtD coreD modsD
   match asyncMainShapeError modsD
@@ -3050,9 +3051,7 @@ elaborateRun rtD coreD modsD =
 -- been constructed (the wrap strips `main`'s signature and applies a row-open
 -- driver), so what the residual gate carries in practice is the graph-end
 -- drain's diagnostics and the core pass's, which no per-module list holds.
-plainPerModuleOf : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable) ->
-  (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable) ->
-  (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)
+plainPerModuleOf : ElabResult -> ElabResult -> ElabResult
 plainPerModuleOf (_, _, perMod, _, _) (coreW, modsW, _, residualW, evW) =
   (coreW, modsW, perMod, residualW, evW)
 

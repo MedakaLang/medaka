@@ -41899,20 +41899,12 @@ allModuleLines ((mid, ss) :: rest) =
   "## MODULE " ++ mid :: schemeLines ss ++ allModuleLines rest
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────
--- The multi-module analog of `elaborate`: the composition of `checkModules`
--- (per-module-frame typecheck, dependency-first) and the EMethodAt route-
--- stamping `elaborate` does single-module.  prePasses the prelude + every module
--- (rewriting return-position method occurrences to EMethodAt over the WHOLE
--- program's RP method set), typechecks each module in dependency order (seeded
--- like checkModules), and STAMPS each module's route refs from its now-resolved
--- result types.  Returns the SAME trees (refs filled) so evalModules can route
--- return-position dispatch (`pure`/`andThen` — the Parser monad) by RKey instead
--- of the untyped arg-tag fallback.  RKey-only (dictNames = []): the bootstrap
--- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
--- and no pendingDictApps / pendingRecDictApps to resolve.
-export
--- The third component is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per
--- user module in load order, with the whole-graph coherence verdict attached to the
+-- `ElabResult` is what a multi-module elaboration returns: the core decls, the
+-- elaborated modules, and three diagnostic/evidence views over the same run.
+-- The first component is the elaborated CORE decls (prelude, post dict-pass).
+-- The second is the elaborated user MODULES, in load order, trees refs filled.
+-- The third is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per user
+-- module in load order, with the whole-graph coherence verdict attached to the
 -- entry module — the same list `checkModulesDiagsK` returns, produced by the same
 -- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
 -- `recordTypeError` writes both channels, so every per-module error is in the
@@ -41923,23 +41915,32 @@ export
 -- residual to gate on `hadTypeErrors` — never both.
 -- #2544 (M4): the fourth component is the RESIDUAL — every diagnostic this
 -- elaboration recorded and left standing, tagged with its module id, per goal with
--- its own `Loc`, in push order.
--- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
--- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
--- to this call.
+-- its own `Loc`, in push order.  Callers that gate on `hadTypeErrors` render it
+-- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
+-- same list the sticky channel holds, cut to this call.
 -- #2549 M2: the fifth component is the EVIDENCE TABLE — every goal this
 -- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
 -- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
 -- cell.  Nothing consumes it yet: the routes it carries are the same routes already
 -- stamped into the trees' own cells, so a caller that ignores it loses nothing.
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)
+
+-- The multi-module analog of `elaborate`: the composition of `checkModules`
+-- (per-module-frame typecheck, dependency-first) and the EMethodAt route-
+-- stamping `elaborate` does single-module.  prePasses the prelude + every module
+-- (rewriting return-position method occurrences to EMethodAt over the WHOLE
+-- program's RP method set), typechecks each module in dependency order (seeded
+-- like checkModules), and STAMPS each module's route refs from its now-resolved
+-- result types.  Returns the SAME trees (refs filled) so evalModules can route
+-- return-position dispatch (`pure`/`andThen` — the Parser monad) by RKey instead
+-- of the untyped arg-tag fallback.  RKey-only (dictNames = []): the bootstrap
+-- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
+-- and no pendingDictApps / pendingRecDictApps to resolve.  Return shape: `ElabResult`.
+export
 elaborateModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl,
-    List (String, List Decl),
-    List (String, (List TcDiag, List TcDiag)),
-    List (String, TcDiag),
-    EvTable)
+  ElabResult
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
