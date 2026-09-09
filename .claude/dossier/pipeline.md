@@ -1,9 +1,10 @@
 ## [P-DOCTEST-RESIDUAL] `compiler/tools/doctest.mdk` module-identity residual (#1223)
 
 ⚠️ **NOT two drivers.** This row said "prelude-only → single-file" until 2026-07-30, which
-reads as a second elaboration path and is false: `runSingle` routes a no-import file
-*"through the SAME multi-module path as an import-bearing one — the 1-module wrappers"*
-(its own comment), and both arms of `runChosen` reach `elaborateModules`.
+reads as a second elaboration path and is false: the prelude-only arm routes a no-import
+file through the degenerate 1-module list `[(rootId, decls)]`, and every arm of
+`runChosen` reaches `elaborateModules` — the doctest arm through the 1-module wrapper
+`elaborateOne`, the prop and `test "…"` arms through `prepareSingle`.
 
 What the no-import arm actually carries is a residual **flatten** — the prelude is
 concatenated into the user's decl list rather than being a node — which is why it must
@@ -13,22 +14,24 @@ Both are workarounds for the flatten; under DICT §7.1 U1 (prelude is a node) a 
 2-node graph needs neither, since SHADOW S1's per-module scoping already answers them.
 
 ⚠️ **A third residual existed here, not of the flatten, and it is now PARTIALLY fixed**
-(ARCH E-5, #1521, owns but does not close #1223): `runSingle` used to stamp its one node
-under a synthetic id, `"__user__"`, hardcoded at four sites, while `loadProgram` stamped
-the same file under its loader-derived id — one declaration, two identities in a single
-`medaka test <dir>` process (#1223, S2). `runSingle`/`runPropsSingle`/`runTestDeclsSingle`/
-`propsReportSingle` now compute `canonicalPathId` (`driver/loader.mdk`) — the SAME
+(ARCH E-5, #1521, owns but does not close #1223): the prelude-only doctest path used to
+stamp its one node under a synthetic id, `"__user__"`, hardcoded at four sites, while the
+loader stamped the same file under its loader-derived id — one declaration, two identities
+in a single `medaka test <dir>` process (#1223, S2). Every prelude-only arm — `runChosen`'s
+`DtSingle` clause for doctests, `prepareSingle` for the prop and `test "…"` phases — now
+computes `canonicalPathId` (`driver/loader.mdk`) through the shared `singleRootId`: the SAME
 last-containing-root, round-trip-guarded convention a sibling's import canonicalizes
-through — over roots derived from the target's own directory.
+through, over roots derived from the target's own directory.
 
 ⚠️ A first pass at this fix used plain `moduleIdOfPath` (first-root) instead, which agrees
 with the loader only when a project has ONE root and still diverged the moment a target sat
 below its own `medaka.toml` — caught in adversarial review before merge (#1526); see
 `test/origin_fixtures/nested` for the discriminating fixture.
 
-Orthogonal to the flatten: `runSingle` was already on the Module path; only the node's NAME
-was wrong. **This closes only the NO-IMPORT case.** `driver/loader.mdk:662-669` documents a
-separate, still-open residual for IMPORT-BEARING files (`runMulti`, untouched by this fix):
+Orthogonal to the flatten: the prelude-only arm was already on the Module path; only the
+node's NAME was wrong. **This closes only the NO-IMPORT case.** `driver/loader.mdk:662-669`
+documents a separate, still-open residual for IMPORT-BEARING files (`prepareMulti`'s
+`loadProgramFilesLocatedE`, untouched by this fix):
 an entry's own id is first-root while the same file reached as another target's dependency
 is last-root — MEASURED still reproducing (`test/origin_entry_residual_fixture`, pinned as
 `diff_compiler_origin_agreement.sh`'s `entry_residual` section). #1223 stays OPEN.

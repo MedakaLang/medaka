@@ -307,12 +307,10 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- Doctest presence still wins over the `test`/`prop` exemption (same precedence
 -- as before the factor-out).
 --
--- Under one elaboration the exemption can no longer SKIP the typecheck — the
--- trees the phases evaluate come out of it — so what it now suppresses is the
--- VERDICT: an exempt module elaborates, its diagnostics are not rendered, and
--- it runs.  That is what it always did observably (the phases' own elaboration
--- already accumulated and discarded those diagnostics), so exit codes and both
--- streams are unchanged.
+-- The exemption suppresses the VERDICT, not the typecheck: the phases evaluate
+-- trees that come out of an elaboration, so an exempt module is still
+-- elaborated — its diagnostics are simply not rendered, and it runs.  Exit
+-- codes and both streams are unchanged by the exemption.
 --
 -- #1445/#2513: the exemption is narrowed by PATH, not just by decl shape —
 -- `isNewVehiclePath` below excludes the `[P-TEST-SIBLING]` `*_test.mdk`
@@ -503,13 +501,12 @@ filterMatchedNothing (Some sub) tsrc userDecls =
       || isNonEmptyL (filterTestsByName (Some sub) (nativeRawTests tsrc)))
 
 -- ── one load, one elaboration per invocation ────────────────────────────────
--- `medaka test` used to load the module graph up to four times — the gate's own
--- `analyzeProject`, then once per phase — and typecheck it as many times.  The
--- import-bearing arm now loads once, with the LOCATED loader (so diagnostics
--- carry real spans and per-module paths where the placeholder-loc `loadProgram`
--- the phases called carried neither), injects the doctest synth decls once, and
--- elaborates once for all three phases.  Where the gate's verdict comes from is
--- `prepareMulti`'s own question, answered below.
+-- An import-bearing target loads its graph once, with the LOCATED loader, and
+-- the three phases share one elaboration of it.  The located loader is not
+-- optional: a diagnostic raised while a phase EVALUATES — a doctest panic, an
+-- ambiguous dispatch — carries the span of the tree it was evaluating, so the
+-- placeholder-loc `loadProgram` renders those as `:0:0:`.  Where the gate's
+-- verdict comes from is `prepareMulti`'s own question, answered below.
 --
 -- The synth `__dt_i__` bindings are ordinary top-level `DFunDef`s and the prop
 -- and `test "…"` phases select their bodies by decl SHAPE out of the elaborated
@@ -537,42 +534,60 @@ data DoctestTrees =
   | DtPair TestPair
   | DtSingle (List Decl) (List Decl) String (List String) (List Decl)
 
+-- What `prepareMulti` hands back beside the gate verdict.  On the no-doctest
+-- arm, and on a load failure, the trees are already in hand — the elaboration
+-- that produced the gate IS the phases' input.  On the doctest arm the gate is a
+-- separate pass, so the phases' elaboration has not happened yet and this
+-- carries what it needs: the caller forces it only once it knows a phase will
+-- run, which is what keeps a `--filter` typo from paying for a whole-graph
+-- elaboration.
+--
+-- Forcing is the ONLY thing the filter may influence.  Which constructor this is
+-- depends on doctest presence alone; if `--filter` could reach that choice it
+-- would choose the gate's driver, and the two drivers do not have to agree.
+data Prepared =
+  | PreparedPair TestPair
+  | PreparedInject (List (String, String, List Decl)) (List Decl)
+
 -- Load + elaborate, once, for an import-bearing target: the gate text (None when
 -- the module type-checks, or is exempt) beside the trees the three phases share.
 --
--- ⚠️ THE GATE NEVER READS THE DOCTEST-INJECTED TREE.  A doctest EXPRESSION is
--- not required to type-check as a pure top-level binding, and `stdlib/async.mdk`
--- is the standing witness: its `runAsyncIO (…)` examples perform `<Clock>`, so
--- the synthesized `__dt_i__ = debug (…)` bindings the doctest phase evaluates
--- are rejected as an effectful value where `<>` is allowed.  Gating on the
--- injected tree turns that module from 11/11 passing into a type-error exit 1 —
--- a verdict flip, not a stricter reading of the same rule.
+-- THE GATE MUST NOT READ THE DOCTEST-INJECTED TREE.  A doctest EXPRESSION is not
+-- required to type-check as a pure top-level binding — `stdlib/async.mdk`'s
+-- `runAsyncIO (…)` examples perform `<Clock>`, so the synthesized
+-- `__dt_i__ = debug (…)` bindings are an effectful value where `<>` is allowed —
+-- and a module's doctests are not part of what `medaka check` accepts.  Reading
+-- the injected tree would therefore reject modules `check` accepts.
 --
--- So the gate's SOURCE depends on whether there are doctests, and the two arms
--- are chosen on measured cost, not symmetry:
+-- So the gate's source depends on whether the module has doctests:
 --
---   no doctests   the injected tree IS the graph as written, so one elaboration
---                 is both the gate and the phases' input.  Its per-module
---                 diagnostics (element 3) go through `projectDiagsFromTc`.
+--   no doctests   the tree the phases need IS the graph as written, so one
+--                 elaboration is both the gate and their input, and the gate is
+--                 that elaboration's own per-module diagnostics (element 3 of
+--                 `elaborateModules`' tuple) through `projectDiagsFromTc`.
 --   doctests      the phases need the injected tree and the gate must not read
---                 it, so the two cannot be the same pass.  The gate is then the
---                 MEMOIZED check driver over the graph as written
---                 (`projectDiagsLoaded`, sharing the prelude and module-chain
---                 memos `check` mints) rather than a second `elaborateModules`:
---                 a second elaboration measured +1.8% Ir on
---                 `medaka test stdlib/map.mdk` where the check driver measures
---                 a reduction, because elaboration also marks, dict-passes and
---                 publishes an evidence table that a verdict does not read.
+--                 it, so the two cannot be one pass, and the gate is the check
+--                 driver over the graph already loaded (`projectDiagsLoaded`,
+--                 keyed into the prelude and module-chain memos `check` mints).
+--
+-- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
+-- takes decides whether it type-checks — and adding a doctest, or a `--filter`
+-- that matches none, would move it between them.  `elabWorker` and
+-- `cmDiagsWorker` both pass `accAll ++ prog` (types/typecheck.mdk); if that ever
+-- diverges again, this split is unsound and both arms must move to one driver.
 prepareMulti : String ->
   String ->
   String ->
   List String ->
   Bool ->
   List Decl ->
-  <IO> (Option String, TestPair)
+  <IO> (Option String, Prepared)
 prepareMulti rsrc csrc target roots exempt synthDecls =
   match loadProgramFilesLocatedE (_ => None) target roots
-    Err le => (loadGate exempt target le, TestPairErr (loadErrorMessage le))
+    Err le => (
+      loadGate exempt target le,
+      PreparedPair (TestPairErr (loadErrorMessage le)),
+    )
     Ok mods => elaborateFor rsrc csrc target roots mods exempt synthDecls
 
 elaborateFor : String ->
@@ -582,26 +597,33 @@ elaborateFor : String ->
   List (String, String, List Decl) ->
   Bool ->
   List Decl ->
-  <IO> (Option String, TestPair)
+  <IO> (Option String, Prepared)
 elaborateFor rsrc csrc _target _roots mods exempt [] =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   match elaborateModules runtimeDecls coreDecls (desugaredModPairs mods)
     (coreE, modulesE, perModule, _, _) => (
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
-      uncurryPair (mangleCtorCollisionsPair (coreE, modulesE)),
+      PreparedPair (uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))),
     )
-elaborateFor rsrc csrc target roots mods exempt synthDecls =
-  let runtimeDecls = desugaredPrelude rsrc
-  let coreDecls = desugaredPrelude csrc
-  -- The gate runs FIRST, so the injected elaboration below is still the last
-  -- writer of the typechecker's whole-graph state, as the phases' elaboration
-  -- has always been.
-  let gate = gateOfCheck exempt rsrc csrc target roots mods
+elaborateFor rsrc csrc target roots mods exempt synthDecls = (
+  gateOfCheck exempt rsrc csrc target roots mods,
+  PreparedInject mods synthDecls,
+)
+
+-- Build the phases' trees.  The injected elaboration runs AFTER the gate, so it
+-- is still the last writer of the typechecker's whole-graph state — the position
+-- a phase elaboration has always held.
+forcePrepared : String -> String -> Prepared -> <IO> TestPair
+forcePrepared _ _ (PreparedPair pair) = pair
+forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
-  match elaborateModules runtimeDecls coreDecls injected
+  match (elaborateModules
+    (desugaredPrelude rsrc)
+    (desugaredPrelude csrc)
+    injected)
     (coreE, modulesE, _, _, _) =>
-      (gate, uncurryPair (mangleCtorCollisionsPair (coreE, modulesE)))
+      uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))
 
 -- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
 -- invocation already loaded, keyed into the same prelude and module-chain memos
@@ -713,11 +735,12 @@ driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt user
     (Some errText, _) =>
       let _ = ePutStrLn (typecheckGateFail target errText)
       False
-    (None, pair) =>
+    (None, prepared) =>
       if filterMatchedNothing filterOpt tsrc userDecls then
         let _ = filterMatchedNothingNotice target
         False
       else
+        let pair = forcePrepared rsrc csrc prepared
         let doctestsOk =
           runDoctests
             engines
@@ -975,7 +998,7 @@ pcHasFoldable (_ :: rest) = pcHasFoldable rest
 -- making the injection robust to both relative and absolute target paths and
 -- to nested module ids like "lib.probe" vs bare ids like "probe".
 --
--- ⚠️ This is the SAME hazard `singleRootId`/`canonicalPathId` (ARCH E-5, above)
+-- This is the SAME hazard `singleRootId`/`canonicalPathId` (ARCH E-5, above)
 -- exists to close, not a contradiction of it.  This function
 -- sidesteps recomputation entirely (position, not a recomputed id) because it
 -- must MATCH an id the loader ALREADY minted for the multi-module entry
@@ -1507,28 +1530,30 @@ reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt inc
     prepareMulti rsrc csrc target roots exempt (buildSynthDecls synthResults)
   match prepared
     (Some errText, _) => (Some errText, [], [], [], False)
-    (None, pair) => (
-      None,
-      doctestReport
-        engines
-        (DtPair pair)
-        target
-        tsrc
-        userDecls
-        examples
-        synthResults,
-      propsReport pair target tsrc userDecls cases filterOpt,
-      reportTestDecls
-        includeTestDecls
-        engines
-        pair
-        runtimeDecls
-        target
-        tsrc
-        userDecls
-        filterOpt,
-      exempt,
-    )
+    (None, prepared) =>
+      let pair = forcePrepared rsrc csrc prepared
+      (
+        None,
+        doctestReport
+          engines
+          (DtPair pair)
+          target
+          tsrc
+          userDecls
+          examples
+          synthResults,
+        propsReport pair target tsrc userDecls cases filterOpt,
+        reportTestDecls
+          includeTestDecls
+          engines
+          pair
+          runtimeDecls
+          target
+          tsrc
+          userDecls
+          filterOpt,
+        exempt,
+      )
 
 -- The prelude-only arm: the prop and `test "…"` phases share one elaboration,
 -- and neither it nor the doctest arm's flat tree is built for a module that

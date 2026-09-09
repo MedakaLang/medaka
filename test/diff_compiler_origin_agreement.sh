@@ -70,8 +70,8 @@
 # its loader id — exactly what `medaka test <dir>` did to one declaration in
 # one process, and the golden used to carry the resulting CONFLICT rows as a
 # PINNED open defect. E-5 changed `compiler/tools/test_cmd.mdk`'s single-file
-# (no-import) drivers (`runSingle`/`runPropsSingle`/`runTestDeclsSingle`/
-# `propsReportSingle`) to compute `canonicalPathId` (`driver/loader.mdk`) —
+# (no-import) arms (`runChosen`'s `DtSingle` clause and `prepareSingle`, both
+# through `singleRootId`) to compute `canonicalPathId` (`driver/loader.mdk`) —
 # `canonicalModId`'s last-containing-root, round-trip-guarded convention,
 # generalized from an import spelling to a raw path — instead of hardcoding
 # `"__user__"`, via the newly EXPORTED `singleRootId`. This probe's `single`
@@ -460,9 +460,9 @@ if [ "$fixtures" -eq 0 ]; then
 fi
 
 # ── ENTRY-vs-DEPENDENCY residual (loader.mdk:662-669) — PINNED, NOT #1223's fix ──
-# ARCH E-5 (#1521) closed #1223 for NO-IMPORT single-target files (`runSingle` and
-# friends now compute `canonicalPathId`, matching the loader's dependency
-# convention). It does NOT reach the loader's OWN pre-existing, documented
+# ARCH E-5 (#1521) closed #1223 for NO-IMPORT single-target files (every
+# prelude-only arm now computes `canonicalPathId` through `singleRootId`, matching
+# the loader's dependency convention). It does NOT reach the loader's OWN documented
 # residual: an ENTRY module's id is `moduleIdOfPath` (first-root), while the SAME
 # module reached as a DEPENDENCY of another target's graph is `canonicalModId`
 # (last-root) — `loader.mdk:662-669`'s own words, "pinned nowhere" until this
