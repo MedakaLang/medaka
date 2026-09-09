@@ -9444,6 +9444,11 @@ data PerRun = PerRun {
   -- True while an IMPL or DEFAULT method body is being inferred — the scope in
   -- which registerLocalScheme records obligations (see its comment).
   inRigidityBodyRef : Ref Bool,
+  -- #2705 / S2-DECL (d): method occurrences whose bare spelling has two or more
+  -- admitted declarations in this module's scope — (name, the occurrence's
+  -- instantiated method type, its location), checked by `checkAdmittedOccObls`
+  -- once the receiver has grounded.  See `recordImplObligation`.
+  admittedOccObls : Ref (List (String, Mono, Option Loc)),
   curEffect : Ref EffRow,
   rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
   recordByNameRef : Ref (OrdMap RecordInfo),
@@ -9541,6 +9546,7 @@ data PerRun = PerRun {
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
+  admittedOccObls = Ref [],
   curEffect = Ref (EffRow [] None),
   rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -15006,6 +15012,20 @@ recordImplObligation x mono
   -- (importer ∪ definer) — so either alone would miss one path's shadows.
   | contains x perRun.value.definerShadowNamesRef.value
     || contains x driverState.value.standaloneValuesRef.value = mono
+  -- A bare spelling with TWO OR MORE admitted declarations in this module's scope
+  -- (S2-DECL (d), `admittedIfacesFor`) names no single interface: the row
+  -- `methodIfaceParamsRef` holds for it is the last-write-wins floor S2-DECL (e)
+  -- forbids reading as an answer, so an obligation built from it would be a coin
+  -- flip — and the impl channel checks it on every driver (#2705).  MEASURED:
+  -- `A.ff (A.mkA 0)` beside `import x1277_b as B`, both interfaces declaring `ff`,
+  -- rejected `No impl of Fb for H` on `run`/`build` once the alias renamer fanned
+  -- both aliases into bare `ff`.  The obligation is recorded against the whole
+  -- admitted SET instead (`pushAdmittedOccObl`) and decided by (d) at module end.
+  -- Dispatch is unaffected (the route is decided by receiver identity, not by
+  -- this row); the occurrence carrying the identity it resolved to is #1898's.
+  | listLen (admittedIfacesFor x) >= 2 =
+    let _ = pushAdmittedOccObl x mono
+    mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
     Some (iface, typarams, mty, _) =>
@@ -15086,6 +15106,74 @@ recordImplObligation x mono
 -- exactly once, at the call site.  [s] is that caller's own lookupVar scheme, tested
 -- for monomorphism.  Returns [mono] unchanged in every case (recordImplObligation
 -- always returns its argument), so the check path's return value is byte-identical.
+-- #2705 / S2-DECL (d) for OBLIGATIONS.  An occurrence whose bare spelling has two or
+-- more admitted declarations records no single-interface obligation
+-- (`recordImplObligation`); it is decided here, after inference has grounded its
+-- receiver, by the same per-declaration (receiver argument, impl query) pairs the
+-- importer-shadow arms use (`admittedDeclHits`), read off the occurrence's own
+-- instantiated method type: at least one admitted declaration with an impl at the
+-- receiver's head is the accept ((d) bullet 2 — distinct interfaces cannot share an
+-- impl, so agreement is on the one that exists); none is the reject ((d) bullet 3);
+-- an unanswerable receiver (no dispatch index, under-applied, or still ungrounded)
+-- defers, exactly as `AdmittedVerdict` does — this clause narrows acceptance and may
+-- not do so on a receiver whose head is unknown.
+pushAdmittedOccObl : String -> Mono -> Unit
+pushAdmittedOccObl name mono =
+  perRun.value.admittedOccObls :=
+    (name, mono, !currentLoc) :: perRun.value.admittedOccObls.value
+
+checkAdmittedOccObls : Unit -> Unit
+checkAdmittedOccObls _ =
+  let env = perRun.value.bodyImplEnvRef.value
+  let _ =
+    map
+      (o => checkAdmittedOccObl env o)
+      (reverseL perRun.value.admittedOccObls.value)
+  ()
+
+checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
+checkAdmittedOccObl env (name, mono, loc) =
+  let ifs = admittedIfacesFor name
+  match admittedMonoHitters env name ifs mono
+    None => ()
+    Some True => ()
+    Some False =>
+      let recv = match admittedReceiverMono name ifs mono
+        Some at => ppMono at
+        None => "this receiver"
+      pushTypeErrorAt
+        "T-NO-IMPL"
+        loc
+        "No impl of \{joinWith " or " (map (ir => ir.irName) ifs)} for \{recv}; write an impl of one of them for it."
+
+-- `Some True` if any admitted declaration's impl query hits; `Some False` if every
+-- one can be asked and none hits; `None` if any one cannot be asked.
+admittedMonoHitters : ImplEnv -> String -> List IfaceRef -> Mono -> Option Bool
+admittedMonoHitters _ _ [] _ = Some False
+admittedMonoHitters env name (ir :: rest) mono =
+  match admittedMonoHits env name ir mono
+    None => None
+    Some True => Some True
+    Some False => admittedMonoHitters env name rest mono
+
+-- `admittedDeclHits` over the occurrence's instantiated method TYPE rather than an
+-- applied argument list: the receiver is the domain at the declaration's own dispatch
+-- index.
+admittedMonoHits : ImplEnv -> String -> IfaceRef -> Mono -> Option Bool
+admittedMonoHits env name ir mono = do
+  k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  at <- nthArgMono k mono
+  hk <- headTyconMono at
+  Some (ieImplExistsForHeadOf env name hk (Some ir))
+
+-- The receiver named in the reject: the first admitted declaration's own receiver
+-- argument (they all grounded, or the verdict would have deferred).
+admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
+admittedReceiverMono _ [] _ = None
+admittedReceiverMono name (ir :: _) mono = do
+  k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  nthArgMono k mono
+
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordMethodObligationGuarded env name s mono =
   if lookupLocalFlag env name || isMonoScheme s then
@@ -28913,6 +29001,7 @@ checkBodyImpl seed mode prog0 =
       let _ =
         checkCallObligations False fullUniverse perRun.value.obls.items.value
       let _ = setNumlitFloats ()  -- PLAN.md #11: stamp Float-typed int literals
+      let _ = checkAdmittedOccObls ()
       ()
     Module _ _ _ =>
       -- #1112 A-3.4 PR2: the obligation universe is now the `IE` projection bound ONCE
@@ -28935,6 +29024,7 @@ checkBodyImpl seed mode prog0 =
       let _ =
         checkCallObligationsU True obUniv perRun.value.implObls.items.value
       let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
+      let _ = checkAdmittedOccObls ()
       ()
   perRun.value.localSchemesOut :=
     mapLocalSchemes perRun.value.localBindRefs.value

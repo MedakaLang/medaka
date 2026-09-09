@@ -27,6 +27,9 @@ admittedIdxMax : String -> List IfaceRef -> Option Int
 admittedIfaceFor : String -> Option IfaceRef
 admittedIfaceSets : List Decl -> Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> Map String (List IfaceRef) -> Map String (List IfaceRef)
 admittedIfacesFor : String -> List IfaceRef
+admittedMonoHits : ImplEnv -> String -> IfaceRef -> Mono -> Option Bool
+admittedMonoHitters : ImplEnv -> String -> List IfaceRef -> Mono -> Option Bool
+admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
 admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
 aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
 aliasArgBindings : List (String, Ref Effvar) -> List (String, Mono) -> List String -> List Kind -> List Ty -> (List (String, Ref Effvar), List (String, Mono))
@@ -281,6 +284,8 @@ censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperSlotsVecOf : List Decl -> VecObl -> List VecObl
 chainGo : List (String, Scheme) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, (List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List TcDiag, List TcDiag)), List ChainStep)
 chainPrefix : List ChainStep -> List (Option String) -> Int -> List ChainStep -> Option ChainStep -> (List ChainStep, Option ChainStep)
+checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
+checkAdmittedOccObls : Unit -> Unit
 checkAnnotTooGeneral : Ty -> List Mono -> Unit
 checkArgEffVarCoverage : Option String -> List (String, List Kind) -> String -> Ty -> Unit
 checkArgEffVars : Option String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
@@ -1746,6 +1751,7 @@ publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
 publishEvidence : Unit -> Unit
 pureRow : EffRow
+pushAdmittedOccObl : String -> Mono -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
