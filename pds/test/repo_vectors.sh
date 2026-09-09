@@ -144,7 +144,7 @@ grep -F -q 'setup: 4/4 transcript writes replayed through the seam' "$WORK/reads
 grep -F -q 'READ sync-getRepo-car-bytes PASS' "$WORK/reads.out" || fail 'read handlers missed the three-way CAR byte equality'
 grep -F -q 'READ sync-getLatestCommit PASS' "$WORK/reads.out" || fail 'read handlers missed the pinned latest commit'
 grep -F -q 'READ getRecord-deleted-medaka-a PASS error=RecordNotFound' "$WORK/reads.out" || fail 'read handlers missed the deleted-record refusal'
-grep -F -q 'reads: 12/12 corpus-graded read routes' "$WORK/reads.out" || fail 'read-handler route count is incomplete'
+grep -F -q 'reads: 17/17 corpus-graded read routes' "$WORK/reads.out" || fail 'read-handler route count is incomplete'
 [ "$(tail -1 "$WORK/reads.out")" = 'TOTAL: PASS' ] || fail 'read-handler driver did not end in TOTAL: PASS'
 
 # ── the applyWrites batch: N operations, ONE signed commit ──────────────────
@@ -226,4 +226,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 12 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads'

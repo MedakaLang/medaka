@@ -6,12 +6,15 @@ import lib.http.{
   DecodedBody(..),
   Header,
   HttpFrame(..),
+  HttpParseFailure(..),
+  HttpScan,
   QueryParam(..),
   Request,
   Response,
   decodeRequestBody,
   headerName,
   headerValue,
+  httpScanStart,
   makeHeader,
   makeResponse,
   mediaTypeSubtype,
@@ -27,6 +30,7 @@ import lib.http.{
   requestTarget,
   requestTrailers,
   scanRequestBoundary,
+  scanRequestBoundaryFrom,
   serializeResponse,
 }
 import lib.resource_limits.{
@@ -760,3 +764,78 @@ test "trailing bytes frame the first request instead of failing the buffer" =
     HttpFramedAt at =>
       expectTrue (at == arrayLength simpleGet && isErr (parseRequest stream))
     _ => expectTrue False
+
+-- A resumable scan and a whole-buffer scan are the same framer, so they have to
+-- return the same verdict for every prefix a client could stop at. A boundary
+-- the two disagreed on would be a request the server frames differently from
+-- the one it parses, which is request smuggling.
+
+sameFailure : HttpParseFailure -> HttpParseFailure -> Bool
+sameFailure (HttpMalformed left) (HttpMalformed right) = left == right
+sameFailure (HttpResourceExcess left) (HttpResourceExcess right) = left == right
+sameFailure _ _ = False
+
+sameFrame : HttpFrame -> HttpFrame -> Bool
+sameFrame HttpNeedMore HttpNeedMore = True
+sameFrame (HttpFramedAt left) (HttpFramedAt right) = left == right
+sameFrame (HttpFrameFailed left) (HttpFrameFailed right) =
+  sameFailure left right
+sameFrame _ _ = False
+
+-- Deliver `input` in `step`-byte increments from `size`, comparing the resumed
+-- verdict at each prefix against a scan of that same prefix from scratch.
+resumeAgreesGo : Array Int -> Int -> Int -> Int -> HttpScan -> Bool
+resumeAgreesGo input start step size scan =
+  let buf = prefix input size
+  let (resumed, next) = scanRequestBoundaryFrom buf start scan
+  let agrees = sameFrame resumed (scanRequestBoundary buf start)
+  if size >= arrayLength input then
+    agrees
+  else
+    agrees
+      && resumeAgreesGo
+        input
+        start
+        step
+        (min (arrayLength input) (size + step))
+        next
+
+resumeAgrees : Int -> Int -> Array Int -> Bool
+resumeAgrees start step input =
+  resumeAgreesGo input start step (min start (arrayLength input)) httpScanStart
+
+allResumeAgree : Int -> List (Array Int) -> Bool
+allResumeAgree _ [] = True
+allResumeAgree step (input :: rest) =
+  resumeAgrees 0 step input && allResumeAgree step rest
+
+resumeCorpus : List (Array Int)
+resumeCorpus =
+  corpus
+    ++ [
+      toUtf8
+        "POST /x HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n3;a=b\r\nabc\r\n2\r\nde\r\n0\r\nX-Done: 1\r\n\r\n",
+      toUtf8
+        "POST /x HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 5\r\nX-Pad:\t sp \t\r\n\r\nab\rcd",
+      appendBytes pipelined chunked,
+      toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\n\r",
+      toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r",
+      toUtf8 "GET / HTTP/1.1\r",
+      toUtf8 "GET",
+    ]
+
+test "a resumed scan matches a whole-buffer scan one byte at a time" =
+  expectTrue (allResumeAgree 1 resumeCorpus)
+
+test "a resumed scan matches a whole-buffer scan at other increments" =
+  expectTrue
+    (allResumeAgree 2 resumeCorpus
+      && allResumeAgree 3 resumeCorpus
+      && allResumeAgree 7 resumeCorpus
+      && allResumeAgree 4096 resumeCorpus)
+
+test "a resumed scan matches a whole-buffer scan from a pipelined offset" =
+  expectTrue
+    (resumeAgrees (arrayLength simpleGet) 1 pipelined
+      && resumeAgrees (arrayLength simpleGet) 1 (appendBytes pipelined chunked)
+      && resumeAgrees (arrayLength simpleGet) 3 (appendBytes pipelined chunked))

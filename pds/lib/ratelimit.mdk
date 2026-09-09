@@ -1,0 +1,298 @@
+{- | Client-identity derivation and the pure rate-limit decision (#2612, PURE
+   half only — nothing here is enforced; the shell wires this in next).
+
+   The step function is `(state, identity, class, now) -> (state, verdict)`.
+   `now` is a plain `Int` argument, never a `Clock` effect: `pds/lib/` may
+   import no effect (`pds/test/lib_boundary.sh`), and threading time through
+   the call is what keeps the decision itself testable at exact instants
+   instead of by waiting on a real clock.
+
+   FIXED WINDOW, not a token bucket: the allowance for an identity resets the
+   moment `now / rateLimitWindowSeconds` (the window index) changes. That
+   needs no floating-point leak rate or per-tick refill state — the whole
+   state per identity per class is one counter, and the window index those
+   counters belong to is held once for the whole table rather than once per
+   row. Retirement is therefore exact AND free: the counters of a window
+   that has passed are unreachable the instant the index moves, and the
+   table they lived in is dropped whole, in constant time, by the first
+   decision of the next window. No decision ever walks the table.
+
+   IDENTITY: the last hop of `X-Forwarded-For`, parsed only when the caller
+   states the connection's peer is a configured trusted proxy — never from
+   the socket peer itself, which is always the front proxy under P5 and
+   which the runtime has no extern to read anyway. An untrusted peer, a
+   missing header, or a last hop that is not IPv4/IPv6-shaped all fall back
+   to one shared `direct` identity: a spoofable identity is worse than one
+   shared bucket, because it hands an attacker every other client's bucket
+   to evict. -}
+
+import list.{head, reverse}
+import map.{Map(..), get, set}
+import string.{
+  contains,
+  fromChar,
+  fromUtf8,
+  isDigit,
+  split,
+  toChars,
+  toInt,
+  toLower,
+  trim,
+  utf8ByteLength,
+}
+import lib.http.{Header, headerName, headerValue}
+import lib.nsid.{sameNsidIdentity}
+import lib.resource_limits.{
+  maxConnectionsPerWindow,
+  maxCreateSessionPerWindow,
+  maxRepoExportsPerWindow,
+  maxRequestsPerWindow,
+  maxWritesPerWindow,
+  rateLimitWindowSeconds,
+}
+
+-- | Opaque: the only way to produce one is `identifyClient`/`directIdentity`,
+-- so a caller cannot manufacture an identity that bypassed trust checking.
+export data ClientIdentity = ClientIdentity String
+
+-- | The shared bucket for every request whose peer is untrusted, or whose
+-- `X-Forwarded-For` is absent or unparseable.
+export
+directIdentity : ClientIdentity
+directIdentity = ClientIdentity "direct"
+
+-- | The bucket key this identity counts against — for logging/headers only;
+-- the value is opaque data everywhere else in this module's own API.
+export
+identityLabel : ClientIdentity -> String
+identityLabel (ClientIdentity label) = label
+
+public export data RateLimitClass =
+  | ConnectionsClass
+  | RequestsClass
+  | WritesClass
+  | CreateSessionClass
+  | RepoExportClass
+
+public export data RateLimitVerdict = Admitted | Refused
+
+{- | Opaque, resource-bounded: the `Int` is the window index every row in the
+   map belongs to, and rows are only ever written at the caller's own window
+   index, so the whole table ages out together. A decision whose window index
+   differs from the state's therefore starts from an empty table — never one
+   row per identity ever seen — and the bound is again "at most one row per
+   identity active in the current window".
+
+   The index is held once for the table rather than once per row so that
+   retirement costs one comparison instead of a walk: a per-row index forces
+   whoever prunes to visit every row, which puts the count of OTHER clients
+   seen this window into the cost of serving one request. -}
+export data RateLimitState = RateLimitState Int (Map String ClientCounters)
+
+data ClientCounters = ClientCounters Int Int Int Int Int
+-- connections used, requests used, writes used, createSession used,
+-- repo exports used
+
+-- | No window has been entered yet, so any first decision starts fresh: the
+-- index cannot collide with a real `now / rateLimitWindowSeconds`, which is
+-- never negative.
+export
+initRateLimitState : RateLimitState
+initRateLimitState = RateLimitState (0 - 1) Tip
+
+export
+classAllowance : RateLimitClass -> Int
+classAllowance ConnectionsClass = maxConnectionsPerWindow
+classAllowance RequestsClass = maxRequestsPerWindow
+classAllowance WritesClass = maxWritesPerWindow
+classAllowance CreateSessionClass = maxCreateSessionPerWindow
+classAllowance RepoExportClass = maxRepoExportsPerWindow
+
+-- | The pure decision. Same identity, same class: refused while `used >=
+-- classAllowance class`, admitted again once `now` crosses into a fresh
+-- window index for that identity.
+export
+step : RateLimitState ->
+  ClientIdentity ->
+  RateLimitClass ->
+  Int ->
+  (RateLimitState, RateLimitVerdict)
+step (RateLimitState stateWindow table) (ClientIdentity key) limitClass now =
+  let windowIdx = now / rateLimitWindowSeconds
+  let live = if stateWindow == windowIdx then table else Tip
+  let current = match get key live
+    Some counters => counters
+    None => emptyCounters
+  if classUsed limitClass current >= classAllowance limitClass then
+    (RateLimitState windowIdx (set key current live), Refused)
+  else
+    (
+      RateLimitState windowIdx (set key (bumpClass limitClass current) live),
+      Admitted,
+    )
+
+emptyCounters : ClientCounters
+emptyCounters = ClientCounters 0 0 0 0 0
+
+classUsed : RateLimitClass -> ClientCounters -> Int
+classUsed ConnectionsClass (ClientCounters c _ _ _ _) = c
+classUsed RequestsClass (ClientCounters _ r _ _ _) = r
+classUsed WritesClass (ClientCounters _ _ w _ _) = w
+classUsed CreateSessionClass (ClientCounters _ _ _ s _) = s
+classUsed RepoExportClass (ClientCounters _ _ _ _ x) = x
+
+bumpClass : RateLimitClass -> ClientCounters -> ClientCounters
+bumpClass ConnectionsClass (ClientCounters c r wr s x) =
+  ClientCounters (c + 1) r wr s x
+bumpClass RequestsClass (ClientCounters c r wr s x) =
+  ClientCounters c (r + 1) wr s x
+bumpClass WritesClass (ClientCounters c r wr s x) =
+  ClientCounters c r (wr + 1) s x
+bumpClass CreateSessionClass (ClientCounters c r wr s x) =
+  ClientCounters c r wr (s + 1) x
+bumpClass RepoExportClass (ClientCounters c r wr s x) =
+  ClientCounters c r wr s (x + 1)
+
+-- | `RateLimit-Remaining` for a class, without mutating state: for response
+-- headers, computed AFTER the `step` call it accompanies so it reflects the
+-- count that call just admitted or refused. Applies `step`'s own window test
+-- read-only, so a table left over from a prior window reads as unused rather
+-- than as whatever it held before it aged out.
+export
+remainingInClass : RateLimitState ->
+  ClientIdentity ->
+  RateLimitClass ->
+  Int ->
+  Int
+remainingInClass (RateLimitState stateWindow table) (ClientIdentity key) limitClass now =
+  let windowIdx = now / rateLimitWindowSeconds
+  let used =
+    if stateWindow /= windowIdx then
+      0
+    else match get key table
+      Some counters => classUsed limitClass counters
+      None => 0
+  let remaining = classAllowance limitClass - used
+  if remaining < 0 then 0 else remaining
+
+-- | The write procedures a lower allowance applies to: they cost signing
+-- work (or, for `uploadBlob`, disk), unlike a plain read.
+export
+isWriteNsid : String -> Bool
+isWriteNsid nsid =
+  sameNsidIdentity nsid "com.atproto.repo.createRecord"
+    || sameNsidIdentity nsid "com.atproto.repo.putRecord"
+    || sameNsidIdentity nsid "com.atproto.repo.deleteRecord"
+    || sameNsidIdentity nsid "com.atproto.repo.applyWrites"
+    || sameNsidIdentity nsid "com.atproto.repo.uploadBlob"
+
+-- | `createSession` gets its own, lower allowance: it costs a
+-- credential-guessing attempt, not just signing work.
+export
+isCreateSessionNsid : String -> Bool
+isCreateSessionNsid nsid =
+  sameNsidIdentity nsid "com.atproto.server.createSession"
+
+{- | The procedures whose single response is a whole-repository CAR, and which
+   therefore need `maxRepoExportsPerWindow` on top of the shared request
+   allowance: one call's output is bounded by `maxCarBytes` alone, so a count
+   of requests cannot bound what the route emits.
+
+   `com.atproto.sync.getRepo` is the only such procedure today. A route that
+   serializes the whole block graph belongs here; one that serializes a single
+   record or blob does not, since each of those is already bounded per call by
+   its own body ceiling. -}
+export
+isRepoExportNsid : String -> Bool
+isRepoExportNsid nsid = sameNsidIdentity nsid "com.atproto.sync.getRepo"
+
+{- | The operator's assertion that this process's peer is a configured trusted
+   proxy (`--trusted-proxy`), carried as its own type rather than as a `Bool`.
+
+   Every other per-request flag on the charging path is also a boolean, and one
+   of them crossed with this one charges the wrong identity while every gate
+   still passes. A distinct type is what makes that crossing a compile error
+   instead of a silent mischarge, so this must not be collapsed back to `Bool`
+   for brevity. -}
+public export data TrustedProxy = TrustedProxy Bool
+
+-- | Derive the caller's identity for this request. The trust assertion is
+-- supplied by the caller (`--trusted-proxy`'s value, tested once at
+-- configuration); this module never inspects a socket.
+export
+identifyClient : TrustedProxy -> List Header -> ClientIdentity
+identifyClient (TrustedProxy isTrustedPeer) headers =
+  if not isTrustedPeer then
+    directIdentity
+  else match xffLastHop headers
+    Some address => ClientIdentity address
+    None => directIdentity
+
+isXffHeader : Header -> Bool
+isXffHeader h = headerName h == "x-forwarded-for"
+
+{- | Repeated `X-Forwarded-For` fields are one chain, not a contradiction: a
+   reverse proxy APPENDS its view of the peer rather than replacing what it
+   received, and RFC 7230 makes a repeated field equivalent to one
+   comma-joined field in field order, which `lib.http` preserves. So the last
+   hop of the LAST field is the hop the nearest trusted proxy wrote, exactly
+   as it is within a single field.
+
+   Reading a second field as "malformed, use the shared bucket" would be an
+   escape hatch rather than a penalty: the shared bucket is a DIFFERENT
+   bucket, so a client whose own bucket was exhausted could win a fresh
+   allowance by sending its address twice. -}
+xffLastHop : List Header -> Option String
+xffLastHop headers = match head (reverse (filter isXffHeader headers))
+  Some nearest => lastHopToken (fromUtf8 (headerValue nearest))
+  None => None
+
+lastHopToken : String -> Option String
+lastHopToken raw =
+  let tokens = map trim (split "," raw)
+  match head (reverse tokens)
+    Some candidate => if isAddressToken candidate then Some candidate else None
+    None => None
+
+isAddressToken : String -> Bool
+isAddressToken token = isIPv4Address token || isIPv6Address token
+
+isIPv4Address : String -> Bool
+isIPv4Address token =
+  let parts = split "." token
+  length parts == 4 && all isDecOctet parts
+
+isDecOctet : String -> Bool
+isDecOctet part =
+  let len = utf8ByteLength part
+  len >= 1
+    && len <= 3
+    && all isDigit (toChars part)
+    && (match toInt part
+      Some value => value >= 0 && value <= 255
+      None => False)
+
+-- | Loose on purpose: this only has to reject non-address garbage
+-- ("not-an-address", empty, punctuation), not validate a fully compliant
+-- IPv6 literal — the value is a rate-limit bucket key, not a routed address.
+isIPv6Address : String -> Bool
+isIPv6Address token =
+  utf8ByteLength token > 0
+    && contains ":" token
+    && (all isHexOrColonChar (toChars token) || hasMappedIPv4Tail token)
+
+{- | The IPv4-mapped form a dual-stack proxy emits (`::ffff:198.51.100.7`):
+   hex-or-colon groups, then a dotted quad. It is neither hex-only (the dots)
+   nor a bare quad (the colons), so a check of only those two shapes rejects
+   it — and rejecting it collapses every client behind such a proxy into the
+   one shared `direct` bucket, turning the per-client limiter into a global
+   one with the trust flag correctly set. -}
+hasMappedIPv4Tail : String -> Bool
+hasMappedIPv4Tail token = match reverse (split ":" token)
+  tail :: groups =>
+    isIPv4Address tail
+      && all (group => all isHexOrColonChar (toChars group)) groups
+  [] => False
+
+isHexOrColonChar : Char -> Bool
+isHexOrColonChar c = contains (toLower (fromChar c)) "0123456789abcdef:"

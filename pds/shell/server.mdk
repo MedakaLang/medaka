@@ -2,9 +2,9 @@
    HTTP/1.1 lifecycle around the pure protocol core.
 
    Nothing here knows what a request means. Bytes arrive from a socket, are
-   framed by `lib.http`'s `scanRequestBoundary` and by nothing else, are handed
-   whole to `lib.server_core`'s `handleBytes`, and the response bytes it returns
-   go back out. The successor `Store` is persisted through `shell.persist`
+   framed by `lib.http`'s `scanRequestBoundaryFrom` and by nothing else, are
+   handed whole to `lib.server_core`'s `handleBytes`, and the response bytes it
+   returns go back out. The successor `Store` is persisted through `shell.persist`
    and `shell.blobfile` and then published into the one `Ref Store` every
    connection task shares.
 
@@ -15,21 +15,46 @@
    Every per-connection bound lives here rather than in `lib.resource_limits`
    because each is a `Duration` or a socket-scheduling count, neither of which
    the pure core can express. The one bound this module does NOT own is the
-   per-request byte ceiling: `scanRequestBoundary` already refuses a buffer past
-   `maxHttpRequestBytes`, so re-checking it here would be a second, divergent
-   answer to a question `lib.http` has already settled. -}
+   per-request byte ceiling: `scanRequestBoundaryFrom` already refuses a buffer
+   past `maxHttpRequestBytes`, so re-checking it here would be a second,
+   divergent answer to a question `lib.http` has already settled. -}
 
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
 import lib.http.{
+  Header,
   HttpFrame(..),
+  HttpParseFailure,
+  HttpScan,
+  Request,
+  httpScanStart,
+  makeHeader,
   parseRequestAt,
+  requestHeaders,
   requestKeepAlive,
-  scanRequestBoundary,
+  Response,
+  scanRequestBoundaryFrom,
   serializeResponse,
 }
+import lib.ratelimit.{
+  ClientIdentity,
+  RateLimitClass(..),
+  RateLimitState,
+  RateLimitVerdict(..),
+  TrustedProxy,
+  classAllowance,
+  directIdentity,
+  identifyClient,
+  initRateLimitState,
+  isCreateSessionNsid,
+  isRepoExportNsid,
+  isWriteNsid,
+  remainingInClass,
+  step,
+}
 import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
+import lib.resource_limits.{rateLimitWindowSeconds}
 import lib.server_core.{RequestContext(..), Server, handleBytes}
 import lib.store.{
   Store,
@@ -39,11 +64,17 @@ import lib.store.{
   storeRepo,
   storeSize,
 }
-import lib.xrpc.{xrpcErrorResponse}
+import lib.xrpc.{
+  rateLimitFailureWithHeaders,
+  requestNsid,
+  xrpcErrorResponse,
+  xrpcFailureResponse,
+}
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileWrite}
 import shell.persist.{persistSave}
+import string.{toUtf8}
 import time.{Duration, now, seconds}
 
 -- | How long one connection may stay silent between reads before it is closed.
@@ -204,109 +235,312 @@ persistRepo dir repo = do
   blocks <- repoExportBlocks repo
   persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
 
+-- One rate-limit decision, taken against every class this request must
+-- clear: `ConnectionsClass` only on a connection's first framed request (a
+-- kept-alive connection is "opened" once, not once per pipelined request),
+-- `RequestsClass` always, and `WritesClass`/`CreateSessionClass`/
+-- `RepoExportClass` when the routed NSID is one of the write procedures,
+-- `createSession`, or a whole-repository export. A refusal at an earlier
+-- class in the list short-circuits: a request already being refused should
+-- not also spend a later class's budget it never reached.
+data RateLimitAdmission =
+  | RequestAdmitted RateLimitState
+  | RequestRefused RateLimitState RateLimitClass
+
+-- | What every request that reached the framer clears, whatever it routes to
+-- and whether or not it parsed.
+baseClasses : Bool -> List RateLimitClass
+baseClasses firstRequest =
+  (if firstRequest then [ConnectionsClass] else []) ++ [RequestsClass]
+
+-- | The extra classes the routed procedure adds. A request that did not parse
+-- has no routed procedure and so adds none.
+nsidClasses : Result HttpParseFailure Request -> List RateLimitClass
+nsidClasses (Err _) = []
+nsidClasses (Ok request) = match requestNsid request
+  None => []
+  Some name =>
+    (if isWriteNsid name then [WritesClass] else [])
+      ++ (if isCreateSessionNsid name then [CreateSessionClass] else [])
+      ++ (if isRepoExportNsid name then [RepoExportClass] else [])
+
+{- | The classes one framed request is charged against, and — below — the
+   identity it is charged to.
+
+   No two arguments on this path share a type: the trust assertion is a
+   `TrustedProxy`, the first-request flag a `Bool`, the parse outcome a
+   `Result`. That is a constraint on any future edit here, not an accident of
+   spelling. A charge decided from several same-typed positional flags is
+   wrong-but-plausible when two are crossed, and a crossed charge is a 429 for
+   the wrong client that no output distinguishes from a correct one — so the
+   only thing that can catch it is the type checker. -}
+admissionClasses : Bool ->
+  Result HttpParseFailure Request ->
+  List RateLimitClass
+admissionClasses firstRequest parsed =
+  baseClasses firstRequest ++ nsidClasses parsed
+
+-- | An unparseable request carries no headers this module may trust, so it is
+-- charged to the shared `direct` bucket rather than to a reconstructed
+-- identity. Garbage is not the shape a legitimate client sends, so a shared
+-- ceiling on it costs a well-behaved client nothing.
+admissionIdentity : TrustedProxy ->
+  Result HttpParseFailure Request ->
+  ClientIdentity
+admissionIdentity _ (Err _) = directIdentity
+admissionIdentity trustedProxy (Ok request) =
+  identifyClient trustedProxy (requestHeaders request)
+
+admitClasses : RateLimitState ->
+  ClientIdentity ->
+  Int ->
+  List RateLimitClass ->
+  RateLimitAdmission
+admitClasses state _ _ [] = RequestAdmitted state
+admitClasses state identity nowSeconds (cls :: rest) =
+  match step state identity cls nowSeconds
+    (next, Refused) => RequestRefused next cls
+    (next, Admitted) => admitClasses next identity nowSeconds rest
+
+classMessage : RateLimitClass -> String
+classMessage ConnectionsClass =
+  "too many connections for this identity in the current window"
+classMessage RequestsClass =
+  "too many requests for this identity in the current window"
+classMessage WritesClass =
+  "too many write requests for this identity in the current window"
+classMessage CreateSessionClass =
+  "too many createSession attempts for this identity in the current window"
+classMessage RepoExportClass =
+  "too many repository exports for this identity in the current window"
+
+intHeader : String -> Int -> Header
+intHeader name value = match makeHeader name (toUtf8 "\{value}")
+  Ok header => header
+  Err message => panic "serve: internal rate-limit header error: \{message}"
+
+-- `RateLimit-Reset` needs no state, only `now` and the shared window length:
+-- every class resets on the same window boundary.
+rateLimitHeaderList : RateLimitState ->
+  ClientIdentity ->
+  RateLimitClass ->
+  Int ->
+  List Header
+rateLimitHeaderList state identity cls nowSeconds = [
+  intHeader "ratelimit-limit" (classAllowance cls),
+  intHeader
+    "ratelimit-remaining"
+    (remainingInClass state identity cls nowSeconds),
+  intHeader
+    "ratelimit-reset"
+    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
+]
+
+-- | `None` admits; `Some` is the 429 to send instead of doing any real work.
+-- Every buffer that reached the framer is charged, a parse failure included:
+-- answering one costs a parse and a response, so an uncharged failure is a
+-- work channel with no ceiling on it at all.
+applyRateLimit : Ref RateLimitState ->
+  ClientIdentity ->
+  List RateLimitClass ->
+  Int ->
+  Option Response
+applyRateLimit limiterRef identity classes nowSeconds =
+  match admitClasses !limiterRef identity nowSeconds classes
+    RequestAdmitted next =>
+      let () = limiterRef := next
+      None
+    RequestRefused next cls =>
+      let () = limiterRef := next
+      Some
+        (xrpcFailureResponse
+          (rateLimitFailureWithHeaders
+            (classMessage cls)
+            (rateLimitHeaderList next identity cls nowSeconds)))
+
 {- | Accept connections until the listener fails or is closed, running each on
-   its own task, never more than `maxConcurrentConnections` at a time. -}
+   its own task, never more than `maxConcurrentConnections` at a time.
+   `trustedProxy` is `--trusted-proxy`'s value, unchanged for the life of the
+   listener: whether this process's peer is a configured trusted proxy is an
+   operator assertion about the deployment, not a per-connection fact this
+   process can observe. -}
 export
 runServer : Server ->
   String ->
   Ref Store ->
   Listener ->
+  TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-runServer server dir storeRef lis = defer
+runServer server dir storeRef lis trustedProxy = defer
   active <- liftIO (u => Ref 0)
-  acceptLoop server dir storeRef lis active
+  limiterRef <- liftIO (u => Ref initRateLimitState)
+  acceptLoop server dir storeRef lis active limiterRef trustedProxy
 
 acceptLoop : Server ->
   String ->
   Ref Store ->
   Listener ->
   Ref Int ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-acceptLoop server dir storeRef lis active = defer
+acceptLoop server dir storeRef lis active limiterRef trustedProxy = defer
   accepted <- A.accept lis
-  acceptStep server dir storeRef lis active accepted
+  acceptStep server dir storeRef lis active limiterRef trustedProxy accepted
 
 acceptStep : Server ->
   String ->
   Ref Store ->
   Listener ->
   Ref Int ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Result String Connection ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-acceptStep _ _ _ _ _ (Err message) = deferPure (Err message)
-acceptStep server dir storeRef lis active (Ok conn) =
+acceptStep _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
+acceptStep server dir storeRef lis active limiterRef trustedProxy (Ok conn) =
   if !active >= maxConcurrentConnections then defer
     _ <- A.close conn
-    acceptLoop server dir storeRef lis active
+    acceptLoop server dir storeRef lis active limiterRef trustedProxy
   else
     let () = active := !active + 1
     defer
-      _ <- spawn (serveConnection server dir storeRef conn active)
-      acceptLoop server dir storeRef lis active
+      _ <- spawn
+        (serveConnection
+          server
+          dir
+          storeRef
+          limiterRef
+          trustedProxy
+          conn
+          active)
+      acceptLoop server dir storeRef lis active limiterRef trustedProxy
 
 -- The counter is decremented on every exit path because the close and the
 -- decrement are the continuation of the loop, not something inside it.
 serveConnection : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Connection ->
   Ref Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> Unit
-serveConnection server dir storeRef conn active = defer
-  _ <- connectionLoop server dir storeRef conn [||]
+serveConnection server dir storeRef limiterRef trustedProxy conn active = defer
+  _ <- connectionLoop server dir storeRef limiterRef trustedProxy conn [||] True
   _ <- A.close conn
   liftIO (u => active := !active - 1)
 
 {- | Serve requests over one connection until it closes, fails, or times out.
    `pending` is what a previous request left behind: a pipelined client sends
    the next request in the same packet as the last, so the loop scans what it
-   already holds before it reads anything more. -}
+   already holds before it reads anything more. `firstRequest` is True only
+   for the connection's own first framed request — it is what makes
+   `ConnectionsClass` a per-connection charge rather than a per-request one. -}
 connectionLoop : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Connection ->
   Array Int ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-connectionLoop server dir storeRef conn pending = defer
-  deadline <- deadlineAfter requestTimeout
-  frameLoop server dir storeRef conn deadline pending
+connectionLoop server dir storeRef limiterRef trustedProxy conn pending firstRequest =
+  defer
+    deadline <- deadlineAfter requestTimeout
+    frameLoop
+      server
+      dir
+      storeRef
+      limiterRef
+      trustedProxy
+      conn
+      deadline
+      pending
+      httpScanStart
+      firstRequest
 
--- `scanRequestBoundary` is the ONLY notion of a complete request in this
--- module: nothing here inspects a byte of the buffer on its own.
+-- `scanRequestBoundaryFrom` is the ONLY notion of a complete request in this
+-- module: nothing here inspects a byte of the buffer on its own. The `HttpScan`
+-- it hands back is carried to the next read so that a trickling client costs
+-- what it sent rather than what it has sent so far; it is opaque here, and a
+-- new request starts from `httpScanStart` in `connectionLoop` because
+-- `respond` hands the next request a buffer rebased on its own first byte.
 frameLoop : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Connection ->
   Wait ->
   Array Int ->
+  HttpScan ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-frameLoop server dir storeRef conn deadline buf =
-  match scanRequestBoundary buf 0
-    HttpFramedAt boundary => respond server dir storeRef conn buf boundary
-    HttpFrameFailed _ => rejectBuffer server dir storeRef conn buf
-    HttpNeedMore => defer
+frameLoop server dir storeRef limiterRef trustedProxy conn deadline buf scan firstRequest =
+  match scanRequestBoundaryFrom buf 0 scan
+    (HttpFramedAt boundary, _) =>
+      respond
+        server
+        dir
+        storeRef
+        limiterRef
+        trustedProxy
+        conn
+        buf
+        boundary
+        firstRequest
+    (HttpFrameFailed _, _) =>
+      rejectBuffer server dir storeRef limiterRef conn buf firstRequest
+    (HttpNeedMore, resumed) => defer
       late <- expired deadline
       if late then
         deferPure (Err "request deadline exceeded")
       else
-        readMore server dir storeRef conn deadline buf
+        readMore
+          server
+          dir
+          storeRef
+          limiterRef
+          trustedProxy
+          conn
+          deadline
+          buf
+          resumed
+          firstRequest
 
 readMore : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Connection ->
   Wait ->
   Array Int ->
+  HttpScan ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-readMore server dir storeRef conn deadline buf = defer
-  received <- A.recvWithin idleTimeout conn readChunkBytes
-  match received
-    Err message => deferPure (Err message)
-    Ok bytes =>
-      if arrayLength bytes == 0 then
-        deferPure (endOfStream buf)
-      else
-        frameLoop server dir storeRef conn deadline (buf ++ bytes)
+readMore server dir storeRef limiterRef trustedProxy conn deadline buf scan firstRequest =
+  defer
+    received <- A.recvWithin idleTimeout conn readChunkBytes
+    match received
+      Err message => deferPure (Err message)
+      Ok bytes =>
+        if arrayLength bytes == 0 then
+          deferPure (endOfStream buf)
+        else
+          frameLoop
+            server
+            dir
+            storeRef
+            limiterRef
+            trustedProxy
+            conn
+            deadline
+            (buf ++ bytes)
+            scan
+            firstRequest
 
 -- A peer that closes between requests has finished; one that closes part way
 -- through a request has not.
@@ -314,45 +548,153 @@ endOfStream : Array Int -> Result String Unit
 endOfStream buf =
   if arrayLength buf == 0 then Ok () else Err "connection closed mid-request"
 
+-- The rate-limit decision is taken here, once per framed request, because
+-- this is the one place that holds both the parsed `Request` (headers, for
+-- `identifyClient`, and target, for the routed NSID) and the point of
+-- admission: a refusal is answered without ever calling `applyRequest`, so a
+-- rate-limited request costs a parse and a `step`, not a store transition.
 respond : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
   Connection ->
   Array Int ->
   Int ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-respond server dir storeRef conn buf boundary =
-  let keepAlive = frameKeepAlive buf boundary
-  let rest = sliceClamped boundary (arrayLength buf) buf
+respond server dir storeRef limiterRef trustedProxy conn buf boundary firstRequest =
   defer
-    response <- liftIO (u =>
-      applyRequest server dir storeRef (sliceClamped 0 boundary buf))
-    sent <- A.sendAllWithin writeTimeout conn response
+    nowSeconds <- liftIO (u => floatToInt (now ()))
+    respondAt
+      server
+      dir
+      storeRef
+      limiterRef
+      trustedProxy
+      conn
+      buf
+      boundary
+      firstRequest
+      nowSeconds
+
+respondAt : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
+  Connection ->
+  Array Int ->
+  Int ->
+  Bool ->
+  Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+respondAt server dir storeRef limiterRef trustedProxy conn buf boundary firstRequest nowSeconds =
+  let parsed = parseRequestAt buf 0 boundary
+  let keepAlive = match parsed
+    Ok request => requestKeepAlive request
+    Err _ => False
+  let rest = sliceClamped boundary (arrayLength buf) buf
+  let charged =
+    applyRateLimit
+      limiterRef
+      (admissionIdentity trustedProxy parsed)
+      (admissionClasses firstRequest parsed)
+      nowSeconds
+  match charged
+    Some refusal =>
+      sendAndContinue
+        server
+        dir
+        storeRef
+        limiterRef
+        trustedProxy
+        conn
+        rest
+        keepAlive
+        (serializeResponse refusal)
+    None => defer
+      response <- liftIO (u =>
+        applyRequest server dir storeRef (sliceClamped 0 boundary buf))
+      sendAndContinue
+        server
+        dir
+        storeRef
+        limiterRef
+        trustedProxy
+        conn
+        rest
+        keepAlive
+        response
+
+sendAndContinue : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
+  Connection ->
+  Array Int ->
+  Bool ->
+  Array Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+sendAndContinue server dir storeRef limiterRef trustedProxy conn rest keepAlive responseBytes =
+  defer
+    sent <- A.sendAllWithin writeTimeout conn responseBytes
     match sent
       Err message => deferPure (Err message)
       Ok () =>
         if keepAlive then
-          connectionLoop server dir storeRef conn rest
+          connectionLoop
+            server
+            dir
+            storeRef
+            limiterRef
+            trustedProxy
+            conn
+            rest
+            False
         else
           deferPure (Ok ())
-
--- The framed region is re-read for its keep-alive disposition through
--- `parseRequestAt`, which parses exactly the region `scanRequestBoundary`
--- framed, so the two cannot disagree about where the request ends.
-frameKeepAlive : Array Int -> Int -> Bool
-frameKeepAlive buf boundary = match parseRequestAt buf 0 boundary
-  Ok request => requestKeepAlive request
-  Err _ => False
 
 -- An unframeable buffer is still answered, by the same pure core: `handleBytes`
 -- classifies it 400 or 413 exactly as it classifies a whole buffer handed to it
 -- by any other caller. The connection then closes.
+--
+-- It is charged first, against the shared `direct` identity: a buffer no framer
+-- can complete carries nothing this module may trust as an identity, and
+-- answering it is still work. `baseClasses` and not `admissionClasses` because
+-- there is no routed procedure to add a class for.
 rejectBuffer : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
   Connection ->
   Array Int ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-rejectBuffer server dir storeRef conn buf = defer
-  response <- liftIO (u => applyRequest server dir storeRef buf)
-  A.sendAllWithin writeTimeout conn response
+rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
+  nowSeconds <- liftIO (u => floatToInt (now ()))
+  rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds
+
+rejectBufferAt : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  Connection ->
+  Array Int ->
+  Bool ->
+  Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds =
+  let charged =
+    applyRateLimit
+      limiterRef
+      directIdentity
+      (baseClasses firstRequest)
+      nowSeconds
+  match charged
+    Some refusal =>
+      A.sendAllWithin writeTimeout conn (serializeResponse refusal)
+    None => defer
+      response <- liftIO (u => applyRequest server dir storeRef buf)
+      A.sendAllWithin writeTimeout conn response
