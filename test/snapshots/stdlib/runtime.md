@@ -1,5 +1,5 @@
 # META
-source_lines=637
+source_lines=636
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -131,21 +131,20 @@ extern getEnv : String -> <Env "_"> Option String
 -- | The absolute path of the running executable.
 extern executablePath : Unit -> <Env> String
 
--- Compiler-source fingerprint this binary was built from, baked at C-compile
--- time by test/build_native_medaka.sh (-DMEDAKA_SRC_FP).  "" on any build
--- path that does not bake it (cold seed bootstrap, oracle builds, a shipped
--- binary).  The CLI recomputes the same fingerprint over the live compiler/
+-- Compiler-source fingerprint this binary was built from, stamped in at link
+-- time by test/build_native_medaka.sh through a generated provenance object.
+-- "" on any build path that links no such object (cold seed bootstrap, oracle
+-- builds, `medaka build`, a shipped binary).  The CLI recomputes the same fingerprint over the live compiler/
 -- sources and warns when they diverge (the staleness guard).  Native-only.
 extern buildFingerprint : Unit -> <Env> String
 
--- Short commit hash this binary was built from, baked the same way as
--- `buildFingerprint` (-DMEDAKA_SRC_COMMIT). "" when not baked, or when the
--- build tree had no `.git` (e.g. a packaged dist tarball). Native-only.
+-- Short commit hash this binary was built from, stamped the same way as
+-- `buildFingerprint`. "" when not stamped, or when the build tree had no
+-- `.git` (e.g. a packaged dist tarball). Native-only.
 extern buildCommit : Unit -> <Env> String
 
--- UTC build date (YYYY-MM-DD) this binary was built on, baked the same way
--- as `buildFingerprint` (-DMEDAKA_SRC_BUILD_DATE). "" when not baked.
--- Native-only.
+-- UTC build date (YYYY-MM-DD) this binary was built on, stamped the same way
+-- as `buildFingerprint`. "" when not stamped. Native-only.
 extern buildDate : Unit -> <Env> String
 
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit

@@ -1808,47 +1808,49 @@ long long mdk_executable_path(long long unit_ignored) {
   return mdk_str_cstr(buf);
 }
 
-/* buildFingerprint : Unit -> String — the compiler-source fingerprint THIS
- * binary was built from.  test/build_native_medaka.sh computes it (find
- * compiler -name '*.mdk' | sort | hash names+contents) and bakes it into the
- * ./medaka link with -DMEDAKA_SRC_FP=<hex>.  The `-D` reaches ONLY this C
- * compile of medaka_rt.c — never the emitter IR — so it is fixpoint/seed-safe.
- * Empty on every path that does not bake it (cold seed bootstrap, oracle
- * builds, a shipped/relocated binary); the driver reads "" as "skip the check"
- * (issue #89). */
-#define MDK_FP_STR2(x) #x
-#define MDK_FP_STR(x) MDK_FP_STR2(x)
+/* BUILD PROVENANCE: three stamps this file READS and never itself defines.
+ *
+ * buildFingerprint : Unit -> String is the compiler-source fingerprint THIS
+ * binary was built from (find compiler -name '*.mdk' | sort | hash
+ * names+contents); buildCommit / buildDate are its siblings (issue #74 W8).
+ * All three default to "" here, weakly, and test/build_native_medaka.sh
+ * overrides them for ./medaka by linking one generated object that defines them
+ * strongly. The driver reads "" as "skip the check" (issue #89), which is what
+ * every path that links no such object gets: the cold seed bootstrap, the
+ * emitter, oracle builds, `medaka build`, a shipped or relocated binary.
+ *
+ * WEAK GLOBALS AND A SEPARATE TRANSLATION UNIT, not the -D defines this used to
+ * take, because the value changes on every compiler edit and this file is inside
+ * the ThinLTO unit: a define baked here changed the runtime's summary hash, which
+ * sits in the cache key of every partition that imports from the runtime, i.e.
+ * all of them. Measured, same partitions and same one-module edit, varying only
+ * the fingerprint: unchanged 4s and 5 of 73 cache entries written; changed 23s
+ * and all 73. Compiling this file outside the LTO unit instead would also fix
+ * the cache and cost ~7.7% of interpreter runtime. Weak-vs-strong is resolved by
+ * the linker before LTO runs — the bitcode symbol is marked preempted, so LTO
+ * cannot fold the "" away — and holds for lld and for Apple's ld alike, so
+ * there is no platform arm here.
+ *
+ * These are ARRAYS, not pointers, and the strong definitions may be longer: a
+ * string object takes its defining TU's size, which is the ordinary C spelling
+ * for this and keeps the read a single load with no indirection. */
+__attribute__((weak)) const char mdk_build_fingerprint_str[] = "";
+__attribute__((weak)) const char mdk_build_commit_str[] = "";
+__attribute__((weak)) const char mdk_build_date_str[] = "";
+
 long long mdk_build_fingerprint(long long unit_ignored) {
   (void)unit_ignored;
-#ifdef MEDAKA_SRC_FP
-  return mdk_str_cstr(MDK_FP_STR(MEDAKA_SRC_FP));
-#else
-  return mdk_str_cstr("");
-#endif
+  return mdk_str_cstr(mdk_build_fingerprint_str);
 }
 
-/* buildCommit / buildDate : Unit -> String — sibling stamps to
- * buildFingerprint (issue #74 W8), baked by the SAME test/build_native_medaka.sh
- * clang link (-DMEDAKA_SRC_COMMIT / -DMEDAKA_SRC_BUILD_DATE), each already a
- * quoted C string literal (unlike MEDAKA_SRC_FP, so no MDK_FP_STR wrapping
- * needed here). Empty on every path that does not bake them, same contract
- * as buildFingerprint. */
 long long mdk_build_commit(long long unit_ignored) {
   (void)unit_ignored;
-#ifdef MEDAKA_SRC_COMMIT
-  return mdk_str_cstr(MEDAKA_SRC_COMMIT);
-#else
-  return mdk_str_cstr("");
-#endif
+  return mdk_str_cstr(mdk_build_commit_str);
 }
 
 long long mdk_build_date(long long unit_ignored) {
   (void)unit_ignored;
-#ifdef MEDAKA_SRC_BUILD_DATE
-  return mdk_str_cstr(MEDAKA_SRC_BUILD_DATE);
-#else
-  return mdk_str_cstr("");
-#endif
+  return mdk_str_cstr(mdk_build_date_str);
 }
 
 /* statFile : String -> Result String (Int, Bool, Bool, Float).

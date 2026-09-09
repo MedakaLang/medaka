@@ -120,17 +120,17 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # why $MEDAKA_CODEGEN_JOBS is a separate knob: the two used to be one variable, and
 # tying the partition count to the core count is what made the cache useless.
 #
-# 🚨 A REAL EDIT-REBUILD STILL PAYS THE COLD PRICE, for a reason that has nothing to
-# do with partitioning: stage B compiles runtime/medaka_rt.c INSIDE the LTO unit with
-# -DMEDAKA_SRC_FP=$FP_COMPILER, and that fingerprint changes on ANY compiler source
-# edit. Every partition imports from the runtime, so the runtime's summary hash is in
-# every partition's cache key. Measured on the same partitions with the same edit,
-# varying only the define: same define — 4s, 5 entries written, 68 reused; different
-# define — 23s, 73 written, 0 reused. Taking the runtime OUT of the LTO unit fixes the
-# cache (3s, 5 written) and costs ~7.7% of interpreter runtime in 3 interleaved reps,
-# which is the trade the naive-split arm below already lost, so it is not taken here.
-# The fix is to give the provenance defines a translation unit of their own, outside
-# the LTO unit; that needs runtime source, not this script.
+# 🚨 NOTHING PER-BUILD MAY ENTER THE LTO UNIT, or the cache above is worthless. The
+# three build-provenance stamps used to: stage B baked them into runtime/medaka_rt.c
+# with -DMEDAKA_SRC_FP=$FP_COMPILER and friends, that fingerprint changes on ANY
+# compiler source edit, and every partition imports from the runtime, so the
+# runtime's summary hash was in every partition's key. Measured on the same
+# partitions with the same edit, varying only the define: unchanged — 4s, 5 entries
+# written, 68 reused; changed — 23s, 73 written, 0 reused. They now live in a
+# generated three-line provenance.c compiled WITHOUT -flto (see stage B), which
+# leaves medaka_rt.c byte-identical across builds. Compiling medaka_rt.c itself
+# outside the LTO unit would have fixed the cache too and cost ~7.7% of interpreter
+# runtime over 3 interleaved reps — the trade the naive-split arm below already lost.
 #
 # Measured on this box (Debian 13, 12-core/32GB) on 2026-09-08, on the real emitted
 # CLI IR (34.6 MB):
@@ -314,8 +314,8 @@ SRC_STAMP="$ROOT/.medaka_emitter.srcstamp"
 # The same idea, one stage down: WHICH SOURCE was ./medaka (the CLI) linked from.
 # Same reasoning as above — the mtime of a downloaded/copied-in ./medaka is an
 # inverted signal — so keep the COMPILER-source fingerprint beside it. This stamp
-# records FP_COMPILER, not FP_FULL, because that is exactly what stage B bakes into
-# the binary as -DMEDAKA_SRC_FP and what `liveSourceFingerprint` recomputes at
+# records FP_COMPILER, not FP_FULL, because that is exactly what stage B stamps into
+# the binary through its provenance object and what `liveSourceFingerprint` recomputes at
 # runtime ([B-STALENESS]); comparing anything else would compare the wrong thing.
 #
 # ⚠️ It describes the DEFAULT output path only. This script also gets called with an
@@ -370,8 +370,8 @@ hash_stream() {
 #                  unnecessary rebuild while an under-broad one silently vouches
 #                  for an emitter built from source that is no longer on disk.
 #
-#   FP_COMPILER  = compiler/**.mdk + stdlib/**.mdk.  Baked into ./medaka as
-#                  -DMEDAKA_SRC_FP (below) and recomputed at runtime by
+#   FP_COMPILER  = compiler/**.mdk + stdlib/**.mdk.  Stamped into ./medaka by the
+#                  generated provenance object (stage B) and recomputed at runtime by
 #                  `liveSourceFingerprint` in compiler/driver/medaka_cli.mdk,
 #                  which is documented as a byte-for-byte mirror hashing the
 #                  SAME find expression. The baked value MUST match that live
@@ -497,8 +497,8 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 #     comparing one binary to itself. Both links take the path now, so both keys
 #     carry it; the CLI key's former literal `plain` tag described a CLI link that
 #     no longer exists.
-#   * for the CLI only, $BUILD_COMMIT and $BUILD_DATE, which stage B bakes in as
-#     -DMEDAKA_SRC_COMMIT/-DMEDAKA_SRC_BUILD_DATE. Two commits can share one
+#   * for the CLI only, $BUILD_COMMIT and $BUILD_DATE, which stage B stamps in
+#     alongside the fingerprint. Two commits can share one
 #     FP_COMPILER (a docs-only commit does), so keying on the fingerprint alone would
 #     serve a binary whose `medaka --version` names a commit it was not built at —
 #     the exact triage field #2514 F-12 added the `-dirty` suffix to keep honest.
@@ -876,9 +876,9 @@ pcg_partition() {
 # Partition the module by source module, compile each partition to ThinLTO bitcode
 # concurrently, then let clang drive one ThinLTO link — which is also where
 # runtime/medaka_rt.c is compiled, so the trailing args reach that compile exactly
-# as they do on the plain path. Stage B passes its -DMEDAKA_SRC_* provenance defines
-# that way; with -flto=thin the C file becomes thin bitcode too, and the defines
-# still apply because they are consumed by the C front end before any of that.
+# as they do on the plain path. Stage B passes its provenance object that way; with
+# -flto=thin the C file becomes thin bitcode too, while that object stays a plain
+# one, which is the point of it (see stage B).
 #
 # Returns nonzero on any failure with the reason appended to <errfile>; both call
 # sites treat that exactly as they treat a clang failure, so a partition that
@@ -1097,7 +1097,7 @@ fi
 # and every other caller keep relinking exactly as before. The opt-in skip below is
 # symmetric with stage A's — same fingerprint helpers, same stamp file pattern, same
 # "no stamp = unknown provenance = rebuild" fallback — but it compares FP_COMPILER,
-# because that is what stage B actually bakes into the binary (-DMEDAKA_SRC_FP).
+# because that is what stage B actually stamps into the binary.
 CLI_STAMP_FP=""
 if [ "$CLI_STAMP_APPLIES" = "1" ] && [ -f "$CLI_STAMP" ]; then
   CLI_STAMP_FP="$(cat "$CLI_STAMP" 2>/dev/null)"
@@ -1163,21 +1163,37 @@ else
   # partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
   OUT_NEW="$OUT.new.$$"
   rm -f "$OUT_NEW"
-  # The three -D defines are pcg_link's trailing args, which it threads to the
-  # final clang — the same command that compiles $RT — so they reach medaka_rt.c
-  # identically on both paths.
+  # PROVENANCE OBJECT: the three stamps live in their OWN translation unit, built
+  # here and linked into ./medaka alone. runtime/medaka_rt.c declares them weak and
+  # empty, so every other consumer of that file — stage A, bootstrap_from_seed.sh,
+  # selfcompile_fixpoint.sh, build_cmd.mdk's rt.o for user builds — links no
+  # provenance object and reads "", which is the contract those paths already had.
+  #
+  # It is compiled WITHOUT -flto for the reason the whole codegen path exists: these
+  # three strings change on every compiler edit, and anything inside the LTO unit
+  # that changes puts a fresh ThinLTO cache key on every partition importing it.
+  # medaka_rt.c stays in the LTO unit (taking it out cost ~7.7% of interpreter
+  # runtime); only this three-line file leaves. See "PARALLEL CODEGEN" above.
+  PROV_C="$WORK/provenance.c"
+  PROV_O="$WORK/provenance.o"
+  printf 'const char mdk_build_fingerprint_str[] = "%s";\nconst char mdk_build_commit_str[] = "%s";\nconst char mdk_build_date_str[] = "%s";\n' \
+    "$FP_COMPILER" "$BUILD_COMMIT" "$BUILD_DATE" > "$PROV_C"
+  if ! "$CC" -c -O2 $GC_SECTION_CFLAGS "$PROV_C" -o "$PROV_O" 2>"$WORK/prov.err"; then
+    rm -f "$OUT_NEW"
+    echo "FAIL (clang provenance.c): $(cat "$WORK/prov.err")"; exit 1
+  fi
+  # $PROV_O is pcg_link's trailing arg, which it threads to the final clang, so it
+  # reaches the link identically on both paths.
   LINK_B_T0="$(date +%s)"
   if [ -n "$PCG_BIN" ]; then
     echo "stage B: $PCG_MODE codegen ($MEDAKA_CODEGEN_JOBS jobs, $PCG_BIN) -> $OUT ..."
-    if ! pcg_link "$CLI_LL" "$OUT_NEW" "$CLI_OPT" "$WORK/cc.err" \
-         "-DMEDAKA_SRC_FP=$FP_COMPILER" "-DMEDAKA_SRC_COMMIT=\"$BUILD_COMMIT\"" \
-         "-DMEDAKA_SRC_BUILD_DATE=\"$BUILD_DATE\""; then
+    if ! pcg_link "$CLI_LL" "$OUT_NEW" "$CLI_OPT" "$WORK/cc.err" "$PROV_O"; then
       rm -f "$OUT_NEW"
       echo "FAIL ($PCG_MODE codegen, medaka): $(cat "$WORK/cc.err")"; exit 1
     fi
   else
     echo "stage B: plain clang(medaka_cli.ll, $CLI_OPT) link (parallel codegen disabled or its LLVM tools not found) -> $OUT ..."
-    if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" "-DMEDAKA_SRC_COMMIT=\"$BUILD_COMMIT\"" "-DMEDAKA_SRC_BUILD_DATE=\"$BUILD_DATE\"" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
+    if ! "$CC" -pthread "$CLI_OPT" "$PROV_O" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
       rm -f "$OUT_NEW"
       echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
     fi
