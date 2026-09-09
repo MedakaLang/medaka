@@ -261,9 +261,14 @@ export
 maxRequestsPerWindow : Int
 maxRequestsPerWindow = 3000
 
+-- Placeholder pending real traffic data, like its three siblings above and
+-- below — kept low enough that a real signed write's cost (MST update,
+-- commit signing, disk persistence) still fits many multiples of the
+-- ceiling inside one window, rather than a number chosen only to look
+-- generous.
 export
 maxWritesPerWindow : Int
-maxWritesPerWindow = 300
+maxWritesPerWindow = 60
 
 export
 maxCreateSessionPerWindow : Int

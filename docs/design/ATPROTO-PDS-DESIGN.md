@@ -567,6 +567,40 @@ allowance #2612 installs, with `maxCarBytes` (64 MiB,
 exposes this server past loopback must have that limiter in place; `getRepo`
 without it is an unauthenticated request for the entire account, repeatable.
 
+**Rate limiting: what Caddy does and what this process does (#2612).** Caddy
+(P5) terminates TLS and reverse-proxies plaintext HTTP to the Medaka process
+on localhost; it never sees an atproto identity, an NSID, or a session — only
+connections and bytes. That is exactly the layer a blunt, protocol-blind
+ceiling belongs at (a global connection/rate cap, independent of who is
+asking or what they are asking for), and it is Caddy's job, not this
+process's: nothing in `pds/` reimplements it. What this process owns is the
+opposite half — a limit that KNOWS the caller's identity and the request's
+class, which no reverse proxy in front of it can. `pds/shell/server.mdk`
+charges every request against a `RateLimitState` (`pds/lib/ratelimit.mdk`)
+kept in one fixed window (`rateLimitWindowSeconds`, `pds/lib/
+resource_limits.mdk`) per four independent classes: a `ConnectionsClass`
+charge once per accepted connection, a `RequestsClass` charge on every
+request, and two narrower classes layered on top of `RequestsClass` rather
+than replacing it — `WritesClass` for the write NSIDs (`createRecord`,
+`putRecord`, `deleteRecord`, `applyWrites`, `uploadBlob`) and
+`CreateSessionClass` for `createSession` alone, since login attempts are a
+credential-guessing surface every other route is not. A refusal answers 429
+with `error: "RateLimitExceeded"` and the IETF `RateLimit-*` response
+headers (`ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`) naming
+the exceeded class's own ceiling, not a blended figure.
+
+The identity a request is charged against comes from the last hop of
+`X-Forwarded-For` — but ONLY when the operator passes `--trusted-proxy`,
+asserting that this process's peer IS the configured reverse proxy (Caddy,
+in the deployment this document describes). There is no way for this
+process to verify that assertion itself (no `getpeername`-equivalent in
+this runtime); without the flag, every request is charged against one
+shared `"direct"` identity bucket regardless of its source address, which
+is deliberately the SAFER default — a forwarded-for header trusted by
+default would let any client claim any identity's budget for itself, or
+spend a stranger's. `pds/README.md` documents the operator-facing half of
+this: when to pass the flag and what happens without it.
+
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
 sibling of (never inside) the repository's `<data>/blocks`, sharded on the
 first byte of the CID's multihash digest exactly like the block store —

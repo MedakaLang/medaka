@@ -40,6 +40,7 @@ import string.{
   utf8ByteLength,
 }
 import lib.http.{Header, headerName, headerValue}
+import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
@@ -138,6 +139,47 @@ bumpClass WritesClass (ClientCounters w c r wr s) =
   ClientCounters w c r (wr + 1) s
 bumpClass CreateSessionClass (ClientCounters w c r wr s) =
   ClientCounters w c r wr (s + 1)
+
+-- | `RateLimit-Remaining` for a class, without mutating state: for response
+-- headers, computed AFTER the `step` call it accompanies so it reflects the
+-- count that call just admitted or refused. Mirrors `step`'s own window
+-- pruning read-only, so a row from a prior window reads as unused rather than
+-- as whatever it held before it aged out.
+export
+remainingInClass : RateLimitState ->
+  ClientIdentity ->
+  RateLimitClass ->
+  Int ->
+  Int
+remainingInClass (RateLimitState table) (ClientIdentity key) limitClass now =
+  let windowIdx = now / rateLimitWindowSeconds
+  let used = match get key table
+    Some counters =>
+      if counterWindow counters == windowIdx then
+        classUsed limitClass counters
+      else
+        0
+    None => 0
+  let remaining = classAllowance limitClass - used
+  if remaining < 0 then 0 else remaining
+
+-- | The write procedures a lower allowance applies to: they cost signing
+-- work (or, for `uploadBlob`, disk), unlike a plain read.
+export
+isWriteNsid : String -> Bool
+isWriteNsid nsid =
+  sameNsidIdentity nsid "com.atproto.repo.createRecord"
+    || sameNsidIdentity nsid "com.atproto.repo.putRecord"
+    || sameNsidIdentity nsid "com.atproto.repo.deleteRecord"
+    || sameNsidIdentity nsid "com.atproto.repo.applyWrites"
+    || sameNsidIdentity nsid "com.atproto.repo.uploadBlob"
+
+-- | `createSession` gets its own, lower allowance: it costs a
+-- credential-guessing attempt, not just signing work.
+export
+isCreateSessionNsid : String -> Bool
+isCreateSessionNsid nsid =
+  sameNsidIdentity nsid "com.atproto.server.createSession"
 
 -- | Derive the caller's identity for this request. `isTrustedPeer` is
 -- supplied by the caller (slice 4's `--trusted-proxy` configuration test

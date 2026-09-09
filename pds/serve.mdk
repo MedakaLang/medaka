@@ -116,6 +116,9 @@ serveSpec = spec "serve" [
   value ["--data"] "DIR" "existing directory holding the persisted repository",
   intValue ["--port"] "N" "loopback TCP port to bind; 0 picks a free one",
   switch ["--init"] "create the genesis repository in an empty data directory",
+  switch
+    ["--trusted-proxy"]
+    "trust this connection's peer to be the reverse proxy in front of it, and read the client identity `X-Forwarded-For` names for rate limiting; without it every request shares one identity bucket",
 ]
 
 abort : String -> <Stderr> Unit
@@ -368,7 +371,7 @@ openRepo True dir did keyBytes secret =
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, and the port. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Result String (Server, Store, String, Int)
+  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Result String (Server, Store, String, Int, Bool)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -386,7 +389,13 @@ configure parsed = do
   credential <- resolveCredential parsed dir
   withBlobs <- loadBlobs (storeFromRepo repo) dir
   withSecret <- storeWithServerSecret sessionSecret withBlobs
-  Ok (server, storeWithCredential credential withSecret, dir, port)
+  Ok (
+    server,
+    storeWithCredential credential withSecret,
+    dir,
+    port,
+    flag "--trusted-proxy" parsed,
+  )
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting
@@ -405,32 +414,35 @@ announce : Int ->
   Store ->
   String ->
   Server ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-announce port lis store dir server = defer
+announce port lis store dir server trustedProxy = defer
   _ <- liftIO (u => ready port)
   storeRef <- liftIO (u => Ref store)
-  outcome <- runServer server dir storeRef lis
+  outcome <- runServer server dir storeRef lis trustedProxy
   liftIO (u => reportOutcome outcome)
 
 bound : Server ->
   Store ->
   String ->
+  Bool ->
   Result String Listener ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-bound _ _ _ (Err message) = liftIO (u => abort "serve: bind failed: \{message}")
-bound server store dir (Ok lis) = defer
+bound _ _ _ _ (Err message) =
+  liftIO (u => abort "serve: bind failed: \{message}")
+bound server store dir trustedProxy (Ok lis) = defer
   port <- liftIO (u => listenPort lis)
   match port
     Err message =>
       liftIO (u => abort "serve: listener port unavailable: \{message}")
-    Ok given => announce given lis store dir server
+    Ok given => announce given lis store dir server trustedProxy
 
-start : Result String (Server, Store, String, Int) ->
+start : Result String (Server, Store, String, Int, Bool) ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port)) = defer
+start (Ok (server, store, dir, port, trustedProxy)) = defer
   listener <- liftIO (u => bindLoopback port)
-  bound server store dir listener
+  bound server store dir trustedProxy listener
 
 main : Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout> Unit
 main = defer

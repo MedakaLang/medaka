@@ -202,11 +202,23 @@ mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
 
 errorResponse : Int -> String -> String -> String -> Response
 errorResponse status reason code message =
+  errorResponseWithHeaders status reason code message []
+
+-- | Same envelope as `errorResponse`, with response fields beyond
+-- `content-type` supplied by the caller — the seam `rateLimitFailureWithHeaders`
+-- uses to attach `RateLimit-*` fields without a second JSON-body builder.
+errorResponseWithHeaders : Int ->
+  String ->
+  String ->
+  String ->
+  List Header ->
+  Response
+errorResponseWithHeaders status reason code message extraHeaders =
   let body =
     toUtf8
       (stringify
         (jObject [("error", JString code), ("message", JString message)]))
-  match makeResponse status reason [mustJsonHeader] body
+  match makeResponse status reason (mustJsonHeader :: extraHeaders) body
     Ok response => response
     Err detail => panic "xrpc: internal response construction error: \{detail}"
 
@@ -239,6 +251,25 @@ export
 rateLimitFailure : String -> XrpcFailure
 rateLimitFailure message =
   failureValue 429 "Too Many Requests" "RateLimitExceeded" message
+
+-- | Same refusal as `rateLimitFailure`, carrying the `RateLimit-*` response
+-- fields the caller computed for the class it refused (`RateLimit-Limit`,
+-- `RateLimit-Remaining`, `RateLimit-Reset` — `pds/shell/server.mdk` builds
+-- these from `lib.ratelimit`, which owns the allowance and window state this
+-- module never sees).
+export
+rateLimitFailureWithHeaders : String -> List Header -> XrpcFailure
+rateLimitFailureWithHeaders message extraHeaders =
+  XrpcFailure
+    429
+    "RateLimitExceeded"
+    message
+    (errorResponseWithHeaders
+      429
+      "Too Many Requests"
+      "RateLimitExceeded"
+      message
+      extraHeaders)
 
 methodNotAllowed : String -> RouteResult
 methodNotAllowed = failure 405 "Method Not Allowed" "MethodNotAllowed"
@@ -302,6 +333,22 @@ export
 wellKnownPath : WellKnown -> String
 wellKnownPath WellKnownDidDocument = didDocumentPath
 wellKnownPath WellKnownAtprotoDid = atprotoDidPath
+
+{- | The XRPC method NSID a request targets, if it targets one at all — for a
+   caller that must classify a request BEFORE registry lookup or auth, such
+   as `pds/shell/server.mdk`'s per-class rate limiting, which has to decide
+   the write/`createSession` allowance without doing a second, divergent
+   routing pass. This is the same `xrpcPath` classification `routeRequest`
+   itself matches on, not a new one: it duplicates no admission or auth
+   logic, since NSID syntax and endpoint existence are unrelated to which
+   allowance a request costs against. -}
+export
+requestNsid : Request -> Option String
+requestNsid request = match parseTargetQuery request
+  Err _ => None
+  Ok (path, _) => match xrpcPath path
+    XrpcPath nsid => Some nsid
+    _ => None
 
 hasBodyFraming : List Header -> Bool
 hasBodyFraming [] = False

@@ -558,6 +558,39 @@ tampered blob file is rejected at load; an oversize blob is refused with zero
 files written to disk; and each of the four kinds of residue above is skipped
 by a server that starts and still serves every undamaged blob.
 
+## Rate limiting and `--trusted-proxy` (#2612)
+
+`pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
+its caller's identity exceeds one of four independent per-window allowances
+(`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
+`maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
+all placeholders pending real traffic data, refilled every
+`rateLimitWindowSeconds`). The refusal carries `error: "RateLimitExceeded"`
+and the three IETF `RateLimit-*` response headers naming the exceeded
+class's own limit, remaining count, and seconds to reset — never a blended
+figure across classes. This is layered UNDER Caddy (see
+`docs/design/ATPROTO-PDS-DESIGN.md` § "Rate limiting: what Caddy does and
+what this process does"), which owns the blunt, identity-blind ceiling in
+front of it; this process is the only layer that knows which caller is
+asking and what kind of request it made.
+
+**Pass `--trusted-proxy` only when this process's peer genuinely is your
+reverse proxy** — Caddy, in the deployment this design targets — configured
+to set `X-Forwarded-For` itself and to strip any such header an inbound
+client tried to supply. With the flag, each caller is identified by the
+last hop of that header, so two different visitors get two different
+budgets. **This is an operator assertion, not something the flag causes to
+be checked**: this runtime has no way to confirm a TCP peer's identity
+(no `getpeername`-equivalent), so passing the flag without a proxy in front
+that actually sanitizes the header lets any direct client forge
+`X-Forwarded-For` and either claim another identity's remaining budget or
+spend it down on that identity's behalf. Without the flag (the default),
+every caller — proxied or not — shares one `"direct"` identity bucket; that
+is the safe default for a loopback-bound process with nothing in front of
+it yet, and it is why exposing this server past loopback without deciding
+this flag first exposes the WHOLE deployment's allowance to a single
+requester's mistake or abuse, not just one visitor's.
+
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 
 `pds/lib/scalar.mdk` is arithmetic modulo the secp256k1 **group order**
