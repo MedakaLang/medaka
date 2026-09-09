@@ -510,11 +510,18 @@ ledgerComment line = trim line == "" || startsWith "#" (trimLeft line)
 {- | The rows of a `|`-separated ledger, with the pinned signatures starting
    at field `pinAt` and everything before them read as metadata.
 
-   A line with fewer than three fields is not a row, matching what both
-   ledger files' own headers require of one. -}
-ledgerRows : Int -> String -> List Row
+   A non-comment, non-blank line with fewer than three fields is a FAILURE
+   naming the line, never a skip. Dropping it would hide a truncated row from
+   BOTH grading and the rot check — a ledger row that pins nothing and is
+   answerable to nothing, which is how a ledger becomes a skip-list. -}
+ledgerRows : Int -> String -> Result String (List Row)
 ledgerRows pinAt text =
-  somes (map (rowOf pinAt) (filter (l => not (ledgerComment l)) (lines text)))
+  let candidates = filter (l => not (ledgerComment l)) (lines text)
+  match filter (l => isNone (rowOf pinAt l)) candidates
+    [] => Ok (somes (map (rowOf pinAt) candidates))
+    bad :: _ =>
+      Err
+        "malformed row (a row needs at least 3 `|`-separated fields): \{debug bad}"
 
 rowOf : Int -> String -> Option Row
 rowOf pinAt line =
@@ -714,7 +721,9 @@ corpusUnits = map (ds => sort (map basename ds)) (fixtureDirs corpus)
 readLedger : String -> Int -> <FileRead "_", IO> Result String (List Row)
 readLedger path pinAt = match readFile path
   Err e => Err "could not read \{path}: \{e}"
-  Ok text => Ok (ledgerRows pinAt text)
+  Ok text => match ledgerRows pinAt text
+    Err e => Err "\{path}: \{e}"
+    Ok rows => Ok rows
 
 test "every case declares an entry with at least two import clauses" =
   match corpusUnits
@@ -764,13 +773,31 @@ test "neither ledger names a case that is not in the corpus" = match corpusUnits
           map
             (u =>
               "  \{name} names case \{debug u}, which does not exist under test/import_order_fixtures/")
-            (missingUnits Some units (map (r => r.rowCase) rows))
+            (missingUnits Some (map (r => r.rowCase) rows) units)
       match (stale "test/IMPORT-ORDER-LEDGER.txt" orderRows
         ++ stale "test/EMITTER-VERDICT-LEDGER.txt" emitRows)
         [] => pass
         failures => fail "stale ledger row(s):\n\{unlines failures}"
 
-test "the answer does not depend on import-clause order" = match corpusUnits
+{- | A missing `medaka_emitter` makes every `emitVerdictFor` answer
+   `emit=127:noir`, so every ledgered DISAGREE row observes AGREE and reads as
+   DRAINED — pointing a reader at deleting four live rows for four open bugs.
+   Named as a precondition instead, before any row is graded. -}
+emitterPrecondition : <FileRead "_", IO> Option String
+emitterPrecondition =
+  let bin = emitterBin
+  if fileExists bin then
+    None
+  else
+    Some "missing native emitter: \{bin} (make medaka)"
+
+test "the answer does not depend on import-clause order" =
+  match emitterPrecondition
+    Some why => fail why
+    None => gradedCorpus
+
+gradedCorpus : <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+gradedCorpus = match corpusUnits
   Err e => fail "\{corpus}: \{e}"
   Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
     (Err e, _) => fail e

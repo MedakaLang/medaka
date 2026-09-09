@@ -1,5 +1,5 @@
 # META
-source_lines=216
+source_lines=223
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -125,8 +125,11 @@ filesOnly (p :: rest) = match isFile p
    > fixtureFiles "stdlib/no-such-fixture-doctest-dir"
    Err "No such file or directory"
 
-   > map length (fixtureFiles "test/effect_set_fixtures")
-   Ok 5 -}
+   Every result is a path under `root`. The shape is asserted rather than
+   the count, for the same reason as `fixtureDirs`' doctest below.
+
+   > map (all (contains "/effect_set_fixtures/")) (fixtureFiles "test/effect_set_fixtures")
+   Ok True -}
 export
 fixtureFiles : String -> <FileRead "_"> Result String (List String)
 fixtureFiles root = match walkDir root
@@ -152,8 +155,12 @@ dirsOnly (p :: rest) = match isDir p
    > fixtureDirs "stdlib/no-such-fixture-doctest-dir"
    Err "No such file or directory"
 
-   > map length (fixtureDirs "test/import_order_fixtures")
-   Ok 24 -}
+   Every result is a path under `root`. The shape is asserted rather than
+   the count: a count of somebody else's corpus written down here breaks
+   this module every time that corpus grows.
+
+   > map (all (contains "/import_order_fixtures/")) (fixtureDirs "test/import_order_fixtures")
+   Ok True -}
 export
 fixtureDirs : String -> <FileRead "_"> Result String (List String)
 fixtureDirs root = match listDir root

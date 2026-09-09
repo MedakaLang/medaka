@@ -50,6 +50,10 @@ runProbe target = match readFile target
     match examples
       [] => putStrLn "  (no doctests found)"
       _ =>
+        -- strictEmit = True is the exemption predicate's own answer on this
+        -- arm: it is reached only when `examples` is non-empty, and doctest
+        -- presence makes a module non-exempt outright (`typecheckExempt`,
+        -- `compiler/tools/test_cmd.mdk`).
         report
           target
           (runNativeDoctests
@@ -57,7 +61,8 @@ runProbe target = match readFile target
             tsrc
             userDecls
             examples
-            (buildSynthResults examples))
+            (buildSynthResults examples)
+            True)
 
 -- Same rendering as `medaka test`'s own doctest phase — deliberately, through
 -- the SAME printer (`tools/doctest.mdk`): the point of Stage 3's differential is

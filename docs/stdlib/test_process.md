@@ -265,8 +265,12 @@ The other half of `unrosteredUnits`: a roster or exemption row naming a
 unit that was renamed or deleted still reads as coverage, and only this
 reports it.
 
+The roster is argument 2 in both, matching `unrosteredUnits`. The two
+share a type, so an argument order that differed between them would make
+a swapped call a silent `[]` — "no orphans", green — rather than an error.
+
 ```medaka
-> missingUnits testFileStem ["a_test.mdk"] ["a_test", "b_test"]
+> missingUnits testFileStem ["a_test", "b_test"] ["a_test.mdk"]
 ["b_test"]
 ```
 

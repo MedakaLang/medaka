@@ -112,9 +112,12 @@ tested nothing.
 Err "No such file or directory"
 ```
 
+Every result is a path under `root`. The shape is asserted rather than
+the count, for the same reason as `fixtureDirs`' doctest below.
+
 ```medaka
-> map length (fixtureFiles "test/effect_set_fixtures")
-Ok 5
+> map (all (contains "/effect_set_fixtures/")) (fixtureFiles "test/effect_set_fixtures")
+Ok True
 ```
 
 ### `fixtureDirs`
@@ -134,9 +137,13 @@ corpus needs this instead.
 Err "No such file or directory"
 ```
 
+Every result is a path under `root`. The shape is asserted rather than
+the count: a count of somebody else's corpus written down here breaks
+this module every time that corpus grows.
+
 ```medaka
-> map length (fixtureDirs "test/import_order_fixtures")
-Ok 24
+> map (all (contains "/import_order_fixtures/")) (fixtureDirs "test/import_order_fixtures")
+Ok True
 ```
 
 ### `expectUnitCount`

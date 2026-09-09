@@ -931,7 +931,8 @@ runChosenOn : Engine ->
 runChosenOn EngInterp trees _target _tsrc _userDecls examples synthResults =
   runChosen trees examples synthResults
 runChosenOn EngNative _trees target tsrc userDecls examples synthResults =
-  runNativeDoctests target tsrc userDecls examples synthResults
+  let exempt = typecheckExempt target userDecls tsrc
+  runNativeDoctests target tsrc userDecls examples synthResults (not exempt)
 
 -- The interpreter arm.  `DtPair` is the one elaboration the whole invocation
 -- shares; `DtSingle` elaborates HERE — this is the first point that knows the
@@ -1280,7 +1281,11 @@ runTestDeclsNative : String -> String -> List Decl -> Option String -> <IO> Bool
 runTestDeclsNative target tsrc userDecls filterOpt =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
   let _ = putStrLn ("running tests in " ++ target)
-  reportNativeTests target tests (runNativeTests target tsrc userDecls tests)
+  let exempt = typecheckExempt target userDecls tsrc
+  reportNativeTests
+    target
+    tests
+    (runNativeTests target tsrc userDecls tests (not exempt))
 
 nativeRawTests : String -> List (String, Int, Expr)
 nativeRawTests tsrc = collectTests (parseLocated tsrc)
@@ -1812,7 +1817,8 @@ testDeclsReportOn EngInterp (TestPair coreM modsM) runtimeDecls target tsrc user
     (rootTestsOf filterOpt tsrc modsM userDecls)
 testDeclsReportOn EngNative _pair _runtimeDecls target tsrc userDecls filterOpt =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
-  zipTestResults tests (runNativeTests target tsrc userDecls tests)
+  let exempt = typecheckExempt target userDecls tsrc
+  zipTestResults tests (runNativeTests target tsrc userDecls tests (not exempt))
 
 zipTestResults : List (String, Int, Expr) ->
   List ExResult ->

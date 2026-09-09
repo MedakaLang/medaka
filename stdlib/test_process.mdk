@@ -288,14 +288,18 @@ unrosteredUnits namer known entries =
    unit that was renamed or deleted still reads as coverage, and only this
    reports it.
 
-   > missingUnits testFileStem ["a_test.mdk"] ["a_test", "b_test"]
+   The roster is argument 2 in both, matching `unrosteredUnits`. The two
+   share a type, so an argument order that differed between them would make
+   a swapped call a silent `[]` — "no orphans", green — rather than an error.
+
+   > missingUnits testFileStem ["a_test", "b_test"] ["a_test.mdk"]
    ["b_test"] -}
 export
 missingUnits : (String -> Option String) ->
   List String ->
   List String ->
   List String
-missingUnits namer entries wanted =
+missingUnits namer wanted entries =
   let present = somes (map namer entries)
   filter (n => not (elem n present)) wanted
 
@@ -324,4 +328,4 @@ missingTestFiles : String ->
   <FileRead "_"> Result String (List String)
 missingTestFiles dir wanted = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
-  Ok names => Ok (missingUnits testFileStem names wanted)
+  Ok names => Ok (missingUnits testFileStem wanted names)

@@ -979,17 +979,27 @@ structuralRow entry note = Graded {
 binName : String -> String
 binName entry = replaceAll "/" "_" entry
 
+{- | The grades that mean "graded, and fine". An ALLOWLIST, deliberately: a
+   `Mode` arm added later (which this module's header invites) must be RED
+   until it is named here, not green by omission. -}
+gradePasses : String -> Bool
+gradePasses grade = grade == "-" || grade == "ok" || grade == "n/a"
+
 gradeOne : String -> Row -> <Exec "_", FileRead "_", IO> Graded
 gradeOne scratch r =
   let entrypath = "\{corpus}/\{r.entry}"
+  let binPath = "\{scratch}/\{binName r.entry}.bin"
   match readFile entrypath
     Err e => structuralRow r.entry "missing fixture file: \{e}"
-    Ok _ => match checkRunBuild entrypath "\{scratch}/\{binName r.entry}.bin"
+    Ok _ => match checkRunBuild entrypath binPath
       Err e => structuralRow r.entry e
       Ok a =>
         let checkV = verdictOf a.checkCode
         let runV = verdictOf a.runCode
-        let buildV = verdictOf a.buildCode
+        -- A `build` ACCEPT must have produced a binary: exit 0 alone would
+        -- let a `NONE`-mode row pin ACCEPT over a build that emitted nothing.
+        let buildV =
+          if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
         let grade = gradeValue r.mode r.pinned a
         Graded {
           entry = r.entry,
@@ -1001,8 +1011,7 @@ gradeOne scratch r =
             checkV == r.expCheck
               && runV == r.expRun
               && buildV == r.expBuild
-              && grade /= "DIFF"
-              && grade /= "WRONG",
+              && gradePasses grade,
           note = "",
         }
 

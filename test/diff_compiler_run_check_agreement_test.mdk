@@ -44,7 +44,7 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{Agreement(..), checkRunBuild, verdictOf}
-import fs.{fixtureFiles}
+import fs.{expectUnitCount, fixtureFiles}
 import io.{runVerb}
 import list.{somes, sort}
 import path.{dirname, stem}
@@ -200,7 +200,17 @@ test "every fixture pins exactly one of ACCEPT or REJECT" = match mdkFixtures
       (length entries)
       (somes (map pinnedVerdict entries))
 
+{- | The declared size of the corpus. This is the WEAKER floor — the corpus
+   has no roster naming its fixtures one by one, so a count is all there is
+   to check against, and it catches a corpus that silently shrank (the
+   anti-vacuity floor only catches one that emptied). Growing the corpus is
+   expected: raise this number in the same commit that adds the fixture. -}
+declaredFixtureCount : Int
+declaredFixtureCount = 148
+
 test "check, run and build agree with every fixture's pinned verdict and value" =
   match mdkFixtures
     Err e => fail "\{corpus}: \{e}"
-    Ok entries => sweep entries
+    Ok entries => match expectUnitCount declaredFixtureCount entries
+      Err e => fail "\{corpus}: \{e} — see `declaredFixtureCount`"
+      Ok _ => sweep entries

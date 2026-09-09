@@ -175,16 +175,23 @@ definesMain (_ :: rest) = definesMain rest
 --
 -- The build environment (repo root, `medaka`, `CC`) is read here rather than
 -- taken as parameters, mirroring `medaka build`'s own `runBuildPlainCmd`.
+--
+-- `strictEmit` is the caller's `typecheckExempt` answer, negated — see
+-- `tools/native_test_decls.mdk`'s twin.  A module with doctests is never
+-- exempt (doctest presence wins over the `test`/`prop` exemption), so this
+-- arm's callers pass `True` today; the parameter exists so the two probe
+-- runners answer the exemption the same way rather than by coincidence.
 export
 runNativeDoctests : String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
+  Bool ->
   <IO> RunResult
-runNativeDoctests target tsrc userDecls examples synthResults =
+runNativeDoctests target tsrc userDecls examples synthResults strictEmit =
   buildDetailsFrom
-    (nativeRendered target tsrc userDecls examples synthResults)
+    (nativeRendered target tsrc userDecls examples synthResults strictEmit)
     synthResults
     examples
 
@@ -195,8 +202,9 @@ nativeRendered : String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
+  Bool ->
   <IO> Result String (List (Result String String))
-nativeRendered target tsrc userDecls examples synthResults =
+nativeRendered target tsrc userDecls examples synthResults strictEmit =
   match nativeSkipReason target userDecls
     Some reason => Err reason
     None => match makeTempDir ()
@@ -210,7 +218,8 @@ nativeRendered target tsrc userDecls examples synthResults =
         -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.  Same shape as
         -- `build_cmd.mdk`'s `runBuildNative`.
-        let rendered = runInTmp target tsrc examples synthResults tmpDir nonce
+        let rendered =
+          runInTmp target tsrc examples synthResults tmpDir nonce strictEmit
         let _ = cleanupTempDir tmpDir
         rendered
 
@@ -255,15 +264,24 @@ runInTmp : String ->
   List (Result String (List Decl)) ->
   String ->
   String ->
+  Bool ->
   <IO> Result String (List (Result String String))
-runInTmp target tsrc examples synthResults tmpDir nonce =
+runInTmp target tsrc examples synthResults tmpDir nonce strictEmit =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "dt_probe"
   let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
   match writeFile entryPath (probeSource nonce tsrc examples synthResults)
     Err e => Err "native doctest runner: could not write the probe source: \{e}"
     Ok _ =>
-      buildAndRun target entryPath outPath tmpDir examples synthResults nonce
+      buildAndRun
+        target
+        entryPath
+        outPath
+        tmpDir
+        examples
+        synthResults
+        nonce
+        strictEmit
 
 buildAndRun : String ->
   String ->
@@ -272,8 +290,9 @@ buildAndRun : String ->
   List Example ->
   List (Result String (List Decl)) ->
   String ->
+  Bool ->
   <IO> Result String (List (Result String String))
-buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
+buildAndRun target entryPath outPath tmpDir examples synthResults nonce strictEmit =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
   let cc = envOr "CC" "clang"
@@ -282,8 +301,9 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
   -- exact case Stage 0 added that parameter for.  `compiler`/`stdlib` are
   -- appended by `runBuildNativeRoots` itself.
   let extraRoots = entrySearchRoots (dirOf target)
-  -- strictEmit = True: same reason as the `test` probe's, same seam (#2679) —
-  -- see runBuildNativeRoots.
+  -- strictEmit: same reason as the `test` probe's, same seam (#2679) — see
+  -- runBuildNativeRoots.  Scoped by the caller's typecheck exemption, so an
+  -- exempted target keeps the warn-first emit path.
   match (runBuildNativeRoots
     root
     medaka
@@ -293,7 +313,7 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
     tmpDir
     False
     extraRoots
-    True)
+    strictEmit)
     Err rep =>
       Err
         "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"
