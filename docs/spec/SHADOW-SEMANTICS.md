@@ -1945,12 +1945,23 @@ multi-module directories), and for each it drives all three paths and asserts:
 It was stale by more than a factor of two, and it PROPAGATED** — the figure was
 copied forward into issue text and into a task brief, where it was used to size
 the blast radius of a spec ruling against this corpus. **Do not write the count
-here.** Derive it, and keep the two numbers distinct: `ls test/shadow_fixtures/ |
-wc -l` gives the fixture-**unit** count, the gate's own `ok   coverage:` line
-prints the same number as it grades it, and the gate's final tally reports
-**assertions**, which is units **plus one** (the coverage self-audit). At
-2026-08-06 those were **36** and **37** respectively — recorded as a dated
+here.** Derive it, and keep the two numbers distinct:
+
+- `ls test/shadow_fixtures/ | wc -l` gives the fixture-**unit** count.
+- `grep -c 'entry = "' test/diff_compiler_shadow_semantics_test.mdk` gives the
+  **graded-row** count, which is the larger of the two: a unit may be pinned by
+  more than one row.
+
+At 2026-09-09 those were **76** and **85** respectively — recorded as a dated
 observation, not as a fact this page maintains.
+
+Neither number is readable from the gate's output any more. The `.sh` printed
+an `ok   coverage:` line and one line per graded row; the native gate-test that
+replaced it renders its census only inside a **failure** message, because
+`medaka test --native` parses the probe's stdout as a sentinel transcript and
+absorbs body output. A green run prints two passing `test` declarations and
+nothing else, so the tally is **2**, not units-plus-one. Derive from the source,
+per the commands above.
 
 - the **verdict** — `check`, `run`, and `build` each ACCEPT or REJECT exactly as
   the cell specifies; and

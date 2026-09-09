@@ -337,7 +337,7 @@ changed) and stop to investigate rather than blindly re-mint.*
 - **`diff_compiler_build`** — native build path byte-identical.
 - **`diff_construct_coverage` + `test/build_construct_coverage.sh`** — construct coverage stays
   139/0.
-- **`test/diff_compiler_run_check_agreement_test.mdk`** — stays **14/0**.
+- **`test/diff_compiler_run_check_agreement.sh`** — stays **14/0**.
 - **`diff_compiler_eval*`** — eval/run path unaffected (it already works; must stay so).
 - **`test/selfcompile_fixpoint.sh` C3a/C3b** — emitter self-compile fixpoint YES against the
   committed seed.
