@@ -1013,8 +1013,30 @@ implMethodNamed name (ImplMethod n _ _) = n == name
 
 synthFromDefault : IfaceMethod -> ImplMethod
 synthFromDefault (IfaceMethod n _ (Some (MethodDefault ps body)) _) =
-  ImplMethod n ps body
+  ImplMethod n ps (freshenExprCells body)
 synthFromDefault (IfaceMethod n _ None _) = ImplMethod n [] (EVar n)
+
+-- Give a COPIED expression its own resolution cells.  Several Expr nodes carry a
+-- `Ref` that a later pass stamps from the node's grounded operand type — the
+-- route cell on `EBinOp`/`EUnOp`/`ENumLit`, the Float-literal cell on `ENumLit`,
+-- the resolved record/container name on `EFieldAccess`/`EIndex`/`ESlice`/
+-- `ERecordUpdate`.  A default body handed unchanged to N impls would reach ONE
+-- cell per site from all N specializations, so whichever receiver type grounds
+-- first decides codegen for every other: `impl Keyed Int` stamps `<` as RScalar
+-- "Int" and `impl Keyed Float`'s copy then emits `icmp` over boxed pointers.
+-- Each cell keeps the value the original holds; only the sharing is broken.
+freshenExprCells : Expr -> Expr
+freshenExprCells body = mapExpr freshenNodeCells body
+
+freshenNodeCells : Expr -> Expr
+freshenNodeCells (EBinOp op a b r) = EBinOp op a b (Ref !r)
+freshenNodeCells (EUnOp op a r) = EUnOp op a (Ref !r)
+freshenNodeCells (ENumLit n fr rr lx) = ENumLit n (Ref !fr) (Ref !rr) lx
+freshenNodeCells (EFieldAccess e0 n r) = EFieldAccess e0 n (Ref !r)
+freshenNodeCells (EIndex e0 i r) = EIndex e0 i (Ref !r)
+freshenNodeCells (ESlice e0 lo hi incl r) = ESlice e0 lo hi incl (Ref !r)
+freshenNodeCells (ERecordUpdate e0 fs r) = ERecordUpdate e0 fs (Ref !r)
+freshenNodeCells e = e
 
 concatMapDecl : (Decl -> List Decl) -> List Decl -> List Decl
 concatMapDecl f prog = concatLists (map f prog)

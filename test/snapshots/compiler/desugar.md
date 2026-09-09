@@ -1,5 +1,5 @@
 # META
-source_lines=1145
+source_lines=1167
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1017,8 +1017,30 @@ implMethodNamed name (ImplMethod n _ _) = n == name
 
 synthFromDefault : IfaceMethod -> ImplMethod
 synthFromDefault (IfaceMethod n _ (Some (MethodDefault ps body)) _) =
-  ImplMethod n ps body
+  ImplMethod n ps (freshenExprCells body)
 synthFromDefault (IfaceMethod n _ None _) = ImplMethod n [] (EVar n)
+
+-- Give a COPIED expression its own resolution cells.  Several Expr nodes carry a
+-- `Ref` that a later pass stamps from the node's grounded operand type — the
+-- route cell on `EBinOp`/`EUnOp`/`ENumLit`, the Float-literal cell on `ENumLit`,
+-- the resolved record/container name on `EFieldAccess`/`EIndex`/`ESlice`/
+-- `ERecordUpdate`.  A default body handed unchanged to N impls would reach ONE
+-- cell per site from all N specializations, so whichever receiver type grounds
+-- first decides codegen for every other: `impl Keyed Int` stamps `<` as RScalar
+-- "Int" and `impl Keyed Float`'s copy then emits `icmp` over boxed pointers.
+-- Each cell keeps the value the original holds; only the sharing is broken.
+freshenExprCells : Expr -> Expr
+freshenExprCells body = mapExpr freshenNodeCells body
+
+freshenNodeCells : Expr -> Expr
+freshenNodeCells (EBinOp op a b r) = EBinOp op a b (Ref !r)
+freshenNodeCells (EUnOp op a r) = EUnOp op a (Ref !r)
+freshenNodeCells (ENumLit n fr rr lx) = ENumLit n (Ref !fr) (Ref !rr) lx
+freshenNodeCells (EFieldAccess e0 n r) = EFieldAccess e0 n (Ref !r)
+freshenNodeCells (EIndex e0 i r) = EIndex e0 i (Ref !r)
+freshenNodeCells (ESlice e0 lo hi incl r) = ESlice e0 lo hi incl (Ref !r)
+freshenNodeCells (ERecordUpdate e0 fs r) = ERecordUpdate e0 fs (Ref !r)
+freshenNodeCells e = e
 
 concatMapDecl : (Decl -> List Decl) -> List Decl -> List Decl
 concatMapDecl f prog = concatLists (map f prog)
@@ -1522,8 +1544,19 @@ desugar prog =
 (DTypeSig false "implMethodNamed" (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "Bool"))))
 (DFunDef false "implMethodNamed" ((PVar "name") (PCon "ImplMethod" (PVar "n") PWild PWild)) (EBinOp "==" (EVar "n") (EVar "name")))
 (DTypeSig false "synthFromDefault" (TyFun (TyCon "IfaceMethod") (TyCon "ImplMethod")))
-(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EVar "body")))
+(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EVar "freshenExprCells") (EVar "body"))))
 (DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "None") PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EListLit)) (EApp (EVar "EVar") (EVar "n"))))
+(DTypeSig false "freshenExprCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "freshenExprCells" ((PVar "body")) (EApp (EApp (EVar "mapExpr") (EVar "freshenNodeCells")) (EVar "body")))
+(DTypeSig false "freshenNodeCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "freshenNodeCells" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "a")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "ENumLit" (PVar "n") (PVar "fr") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "fr")))) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
+(DFunDef false "freshenNodeCells" ((PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "e0")) (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EVar "e0")) (EVar "i")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "e0")) (EVar "fs")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PVar "e")) (EVar "e"))
 (DTypeSig false "concatMapDecl" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "concatMapDecl" ((PVar "f") (PVar "prog")) (EApp (EVar "concatLists") (EApp (EApp (EVar "map") (EVar "f")) (EVar "prog"))))
 (DTypeSig false "concatLists" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a"))))
@@ -1952,8 +1985,19 @@ desugar prog =
 (DTypeSig false "implMethodNamed" (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "Bool"))))
 (DFunDef false "implMethodNamed" ((PVar "name") (PCon "ImplMethod" (PVar "n") PWild PWild)) (EBinOp "==" (EVar "n") (EVar "name")))
 (DTypeSig false "synthFromDefault" (TyFun (TyCon "IfaceMethod") (TyCon "ImplMethod")))
-(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EVar "body")))
+(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EVar "freshenExprCells") (EVar "body"))))
 (DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "None") PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EListLit)) (EApp (EVar "EVar") (EVar "n"))))
+(DTypeSig false "freshenExprCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "freshenExprCells" ((PVar "body")) (EApp (EApp (EVar "mapExpr") (EVar "freshenNodeCells")) (EVar "body")))
+(DTypeSig false "freshenNodeCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "freshenNodeCells" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "a")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "ENumLit" (PVar "n") (PVar "fr") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "fr")))) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
+(DFunDef false "freshenNodeCells" ((PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "e0")) (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EVar "e0")) (EVar "i")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "e0")) (EVar "fs")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
+(DFunDef false "freshenNodeCells" ((PVar "e")) (EVar "e"))
 (DTypeSig false "concatMapDecl" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "concatMapDecl" ((PVar "f") (PVar "prog")) (EApp (EVar "concatLists") (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "prog"))))
 (DTypeSig false "concatLists" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a"))))
