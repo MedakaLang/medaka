@@ -1,0 +1,7 @@
+-- #2798: an imported module's static type error must still envelope under
+-- `run --json` (the multi-module arm, `elaboratedProjectDiags`'s `Some
+-- errText` case) — same shape as the single-file cases, attributed to the
+-- IMPORTING module's own file rather than the entry's.
+import xmod2798.lib.{bad}
+
+main = println bad
