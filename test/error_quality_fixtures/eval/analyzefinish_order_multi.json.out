@@ -1,8 +1,1 @@
-error: test/error_quality_fixtures/eval/analyzefinish_order_multi.mdk:5:35: cannot derive 'Bogus' for 'Widget'; supported: Eq, Ord, Debug, Display, Generic, Hashable
-  |
-5 | data Widget = Widget Int deriving (Bogus)
-  |                                    ^
-error: test/error_quality_fixtures/eval/analyzefinish_order_multi.mdk:14:6: No impl of Num for String
-  |
-14 | bad = 1 + "x"
-  |       ^
+{"files":[{"file":"test/error_quality_fixtures/eval/analyzefinish_order_multi.mdk","diagnostics":[{"code":"R-CANNOT-DERIVE","kind":"resolve","message":"cannot derive 'Bogus' for 'Widget'; supported: Eq, Ord, Debug, Display, Generic, Hashable","range":{"end":{"character":40,"line":4},"start":{"character":35,"line":4}},"severity":1,"source":"medaka"},{"code":"T-NO-IMPL","kind":"type","message":"No impl of Num for String","range":{"end":{"character":13,"line":13},"start":{"character":6,"line":13}},"severity":1,"source":"medaka"}]}]}
