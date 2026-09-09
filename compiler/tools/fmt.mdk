@@ -75,6 +75,13 @@ import support.util.{
   joinNl,
 }
 
+-- ── `medaka fmt`'s three output modes ─────────────
+-- Rewrite the file, print the formatted text, or only report that it differs.
+-- Only `FmtWrite` mutates; the other two are read-only, which is why the
+-- default is `FmtCheck`.  The flags that select one are parsed by the verb in
+-- `compiler/driver/medaka_cli.mdk`.
+public export data FmtMode = FmtWrite | FmtStdout | FmtCheck
+
 -- ── State ─────────────────────────────────────────
 -- pieces : output fragments, REVERSED (cons-prepend, reverse+concat at end)
 -- cs     : remaining captured comments, source order

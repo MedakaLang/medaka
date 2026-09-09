@@ -27,7 +27,7 @@ import tools.snapshot.{
   parseStages,
   SnapMode(..),
 }
-import tools.fmt.{formatSource}
+import tools.fmt.{formatSource, FmtMode(..)}
 import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
@@ -288,7 +288,19 @@ import tools.codemod.{
   codemodWarnDecls,
   codemodListing,
   codemodSource,
+  CodeMode(..),
 }
+import tools.lint_cmd.{
+  lintCacheCtx,
+  runLintJsonCmd,
+  lintFilesToDiagTriples,
+  baselineFileCodes,
+  runCrossFileReport,
+  runCrossFileReportCached,
+  resolveLintTargets,
+  lintFilesGo,
+}
+import support.cli_targets.{lintTargetExists, expandLintTarget}
 import tools.check_policy.{
   runCheckPolicy,
   PolicyArgs(..),
@@ -1673,8 +1685,6 @@ tripleHasDiags _ = True
 -- `listDir`; skips dotfiles/dot-dirs; no test/-exclusion, matching lint's
 -- own behavior) and formats every `.mdk` found, aggregating exit codes the
 -- way `medaka lint`'s multi-file path does (any error → exit 1).
-data FmtMode = FmtWrite | FmtStdout | FmtCheck
-
 fmtHelpText : String
 fmtHelpText = stringConcat [
   "medaka fmt — Format .mdk file(s)\n", "\n", "Usage:\n",
@@ -1887,8 +1897,6 @@ fmtOne mode file = match readFile file
 -- is a plain exit-code check; `--write` rewrites only files that actually change;
 -- `--stdout` prints one file's result (original text if unchanged).  A bare
 -- `medaka codemod` lists the registry and exits 2.
-data CodeMode = CmDry | CmWrite | CmStdout
-
 codemodHelpText : String
 codemodHelpText = stringConcat [
   "medaka codemod — Apply a named source-preserving AST transform\n", "\n",
@@ -4117,106 +4125,6 @@ runLintCmd argv0 =
       None => ()
     if perFileErr || crossErr then exit 1
 
--- Resolve `--cache` to `Some (cacheDir, ruleSetStamp)`, or `None` to run
--- uncached.  TWO reasons this declines, both deliberate (#395):
---
---   * `--fix` (and `--json`, which never reaches here) is out of v1 scope. --fix
---     REWRITES the files whose content is the cache key, and ESLint's
---     --cache+--fix is a known sharp edge; --json is a separate per-file path.
---     Combining --cache with either is a silent no-op, not an error.
---   * `crossFileCacheSound` is False — someone added a second cross-file rule,
---     whose per-file inputs nothing caches.  Under --cache that rule would
---     SILENTLY NOT RUN.  So --cache turns itself off instead, costing a slower
---     lint rather than a wrong one.  (No warning: this is a correct, quiet
---     fallback, and a lint that prints compiler-internal chatter to stdout would
---     break every caller that diffs its output.)
---
--- The cache dir hangs off the project root — the same `medaka.toml` walk-up the
--- rest of the CLI uses, which falls back to the cwd when there is no manifest
--- (the repo root case: `medaka lint compiler stdlib sqlite` runs where no
--- medaka.toml sits, and lands the cache at the repo root, which is what the
--- pre-commit hook wants).  A cache dir that resolves somewhere unexpected costs
--- misses, never wrong answers.
---
--- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
--- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
--- runtime (`buildStdlibIndex`), content `ruleSetStamp`'s binary hash never
--- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
--- file's cached findings silently answering with the pre-edit stdlib —
--- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it
--- into every shard's stamp (rather than skipping caching only for this one
--- rule) is the smaller fix: shards are per-FILE, not per-rule, so declining
--- caching "for this rule" would mean declining it for every file, which is
--- declining it outright.
-lintCacheCtx : Bool -> Bool -> <IO> Option (String, String)
-lintCacheCtx False _ = None
-lintCacheCtx True True = None
-lintCacheCtx True False
-  | not crossFileCacheSound = None
-  | otherwise =
-    let root = findProjectRootOrSelf (canonicalizePath ".")
-    let binStamp = ruleSetStamp ()
-    -- An empty stamp means the binary could not be read, so the rule set cannot
-    -- be identified — the one input that makes a hit meaningful is missing.
-    -- Decline rather than share a cache across unknown rule sets.
-    if binStamp == "" then
-      None
-    else
-      Some (cacheDirOf root, "\{binStamp}.\{stdlibFingerprint}")
-
--- `medaka lint --json`: run the lint pipeline over every resolved target file
--- and emit the SAME `{"files":[{"file":...,"diagnostics":[...]}]}` envelope
--- `medaka check --json` emits (via `cjAllToJson`) — one schema for both
--- surfaces (#249).  Each `Finding` becomes a `Diag` via `findingToDiag`
--- (inside `lintFileDiagTriple`), which stamps the lint RULE NAME into the
--- diagnostic's `code` field.  Cross-file rules do not participate (JSON mode
--- is per-file, mirroring `check --json`'s own per-file shape); `--fix` is
--- ignored here.  Exit 1 iff any diagnostic is a hard error (severity 1) —
--- matches `runCheckJsonCmd`'s convention.
-runLintJsonCmd : StdlibIndex ->
-  List String ->
-  List String ->
-  List String ->
-  Option (String, LintBaseline) ->
-  List String ->
-  <IO> Unit
-runLintJsonCmd idx disableNames onlyNames denyNames baseCtx files =
-  let triples =
-    lintFilesToDiagTriples idx disableNames onlyNames denyNames baseCtx files
-  let _ = putStr (cjAllToJson triples)
-  if anyList cjLintTripleHasErr triples then exit 1
-
--- Sequence `lintFileDiagTriple` over every target file, in order.  Mirrors
--- `lintFilesGo`'s explicit recursion — this codebase sequences an `<IO>`
--- list traversal by hand, not via `map` over an effectful function.
-lintFilesToDiagTriples : StdlibIndex ->
-  List String ->
-  List String ->
-  List String ->
-  Option (String, LintBaseline) ->
-  List String ->
-  <IO> List (String, String, List Diag)
-lintFilesToDiagTriples _ _ _ _ _ [] = []
-lintFilesToDiagTriples idx disable only deny baseCtx (f :: rest) =
-  applyBaselineTriple baseCtx (lintFileDiagTriple idx disable only deny f)
-    :: lintFilesToDiagTriples idx disable only deny baseCtx rest
-
--- The `--json` half of the baseline promotion.  Reports the same stderr lines
--- the text path does: stdout stays exactly one JSON document (C4), so a machine
--- consumer that only reads the envelope still sees the promoted severity, and a
--- human reading the terminal still learns which count moved.
-applyBaselineTriple : Option (String, LintBaseline) ->
-  (String, String, List Diag) ->
-  <IO> (String, String, List Diag)
-applyBaselineTriple None triple = triple
-applyBaselineTriple (Some (cwd, base)) (path, src, diags) =
-  let key = baselineKeyOf cwd path
-  let _ = reportBaselineViolations key (baselineDiagViolations base key diags)
-  (path, src, applyBaselineToDiags base key diags)
-
-cjLintTripleHasErr : (String, String, List Diag) -> Bool
-cjLintTripleHasErr (_, _, diags) = anyList diagIsError diags
-
 -- ── the lint baseline (#2619) ────────────────────────────────────────────────
 --
 -- `--baseline` is the third promotion channel after `--deny` and inline
@@ -4258,27 +4166,6 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
     None
   Ok base => Some (cwd, base)
 
-applyBaselineFindings : Option (String, LintBaseline) ->
-  String ->
-  List Finding ->
-  <IO> List Finding
-applyBaselineFindings None _ findings = findings
-applyBaselineFindings (Some (cwd, base)) target findings =
-  let key = baselineKeyOf cwd target
-  let _ =
-    reportBaselineViolations
-      key
-      (baselineViolations base key (map findingRuleOf findings))
-  applyBaselineToFindings base key findings
-
--- On stderr, beside the promoted findings on stdout: the finding text says what
--- the rule found, this says which count moved and what it was allowed to be.
-reportBaselineViolations : String -> List (String, Int, Option Int) -> <IO> Unit
-reportBaselineViolations _ [] = ()
-reportBaselineViolations key (v :: rest) =
-  let _ = ePutStrLn "medaka lint: baseline: \{baselineViolationLine key v}"
-  reportBaselineViolations key rest
-
 -- `--write-baseline`: regenerate the file from THIS run rather than reporting
 -- against it.  Counts are read off the same per-file diagnostic triples the
 -- `--json` surface emits, so what gets pinned is exactly what a report would
@@ -4301,101 +4188,6 @@ runLintWriteBaselineCmd idx disableNames onlyNames denyNames cwd out files =
     Ok _ =>
       ePutStrLn
         "medaka lint: wrote \{out} from \{intToString (listLen files)} file(s)"
-
-baselineFileCodes : String ->
-  (String, String, List Diag) ->
-  (String, List String)
-baselineFileCodes cwd (path, _, diags) =
-  (baselineKeyOf cwd path, map diagCodeOf diags)
-
--- Run the cross-file rule tier over the whole set, REUSING the parses the per-file
--- pass already produced (#394 — this used to call `parseLintFiles`, re-reading and
--- re-parsing every target, plus `readLintSrcs` for a third read of the same bytes).
--- Findings render AFTER the per-file output under a `cross-file:` header.
--- --only/--disable are honored inside `runCrossFileRules`; --deny promotion is
--- applied here (mirrors the per-file path).  Returns whether any finding is an
--- error severity (feeds the exit code).
-runCrossFileReport : List String ->
-  List String ->
-  List String ->
-  List (String, String, Positions, List Decl) ->
-  <IO> Bool
-runCrossFileReport disableNames onlyNames denyNames parsed =
-  let triples = map parsedToTriple parsed
-  let raw = runCrossFileRules onlyNames disableNames triples
-  -- Honor inline `-- lint-disable-*` directives on cross-file findings too:
-  -- each finding anchors to its own file, so filter against that file's own
-  -- directives (recovered from its source) before the CLI flag filters.
-  let suppressed = applySuppressionsMulti (map parsedToSrc parsed) raw
-  reportCrossFindings (applyFindingDeny denyNames suppressed)
-
--- The --cache counterpart of `runCrossFileReport` (#395).  Identical in every
--- observable way; the ONLY difference is its input, because a cache hit has no
--- parse to give the tier:
---   * findings come from `runCrossFileRulesFromOccs` over every file's
---     occurrences — cached ones and freshly-computed ones alike — instead of
---     from `runCrossFileRules` over parses.  Both run the SAME `dupJoin`.
---   * directives are the entries' own (already parsed, cached or fresh) rather
---     than re-lexed from source.
---
--- ⚠️ THE JOIN RUNS EVERY TIME, over ALL files.  Only its per-file INPUTS are
--- cached.  A duplicate-body finding names file A because of file B, so caching
--- these findings would leave A's finding standing after B stopped duplicating
--- it — A is unchanged, so A hits.  Scenario 3 of
--- test/diff_compiler_lint_cache.sh is exactly that edit and exists to catch
--- anyone who tries it.  Callers must have checked `crossFileCacheSound`
--- (`lintCacheCtx` does).
-runCrossFileReportCached : List String ->
-  List String ->
-  List String ->
-  List LintEntry ->
-  <IO> Bool
-runCrossFileReportCached disableNames onlyNames denyNames entries =
-  let raw =
-    runCrossFileRulesFromOccs onlyNames disableNames (flatMap entryOccs entries)
-  let suppressed = applySuppressionsMultiDirs (map entryDirTable entries) raw
-  reportCrossFindings (applyFindingDeny denyNames suppressed)
-
-entryOccs : LintEntry -> List (String, Int, String, String)
-entryOccs e = e.dupOccs
-
-entryDirTable : LintEntry -> (String, List Directive)
-entryDirTable e = (e.path, e.directives)
-
--- Shared tail of both cross-file report paths: render (after the per-file
--- output, under a `cross-file:` header) and report whether anything was an
--- error.  One renderer, so the cached and uncached paths cannot format
--- differently.
-reportCrossFindings : List Finding -> <IO> Bool
-reportCrossFindings [] = False
-reportCrossFindings findings =
-  let _ = putStrLn ""
-  let _ = putStrLn "cross-file:"
-  let _ = putStrLn (joinNl (map renderCrossFinding findings))
-  anyList isFindingError findings
-
--- Render one cross-file finding.  The file path lives in the finding's loc; pass
--- it as the diagnostic's file (src="" → header-only, no carat, so output stays
--- deterministic across the whole file set).
-renderCrossFinding : Finding -> String
-renderCrossFinding f = ppDiagCliSrc "" (locFileOf f.loc) (findingToDiag f)
-
-locFileOf : Option Loc -> String
-locFileOf (Some (Loc file _ _ _ _)) = file
-locFileOf None = ""
-
--- Read each readable target's source into `(path, src)` for inline-directive
--- recovery in the cross-file report path.  Unreadable files are skipped.
--- Projections off the threaded (path, src, Positions, decls) quad (#394): the
--- cross-file rule tier wants (path, Positions, decls), and the inline-directive
--- suppression pass wants (path, src).  Both used to be re-derived from disk by
--- `parseLintFiles` / `readLintSrcs`, which this replaces.
-parsedToTriple : (String, String, Positions, List Decl) ->
-  (String, Positions, List Decl)
-parsedToTriple (path, _, pos, decls) = (path, pos, decls)
-
-parsedToSrc : (String, String, Positions, List Decl) -> (String, String)
-parsedToSrc (path, src, _, _) = (path, src)
 
 -- #1173 rejected the SPACE form of `--disable`/`--only`/`--deny` outright,
 -- because the old `lintTargets` skipped any `--`-prefixed token without
@@ -4431,17 +4223,6 @@ assertLintRuleNames names =
         "medaka lint: unknown rule \{joinWith ", " bad} (known: \{joinWith ", " allRuleNames})"
     exit 1
 
--- #1173: a lint target that is neither a listable directory nor a readable
--- file used to fall through `expandLintTarget`'s `Err _ => [target]` arm as a
--- literal path, which `lintFileDiagTriple` then reads via `readFileSafe` — the
--- same "" -on-error helper `checkJsonFile` uses — so a nonexistent path parsed
--- as EMPTY SOURCE and reported a clean 0-diagnostic result at exit 0. Fail
--- loudly up front instead (mirrors `assertSnapshotTargetsExist` above).
-lintTargetExists : String -> <IO> Bool
-lintTargetExists t = match listDir t
-  Ok _ => True
-  Err _ => fileExists t
-
 -- C3's "found nothing is a failure" arm for `lint`, mirroring `fmt`'s and
 -- `codemod`'s wording exactly so the three verbs answer the empty case with one
 -- message as well as one (stream, code) pair.  Distinct from
@@ -4460,266 +4241,6 @@ assertLintTargetsExist targets =
   else
     let _ = ePutStrLn "medaka lint: these targets do not exist:"
     dieMsg (joinNl (map (m => "  \{m}") missing))
-
--- Resolve file args to a concrete list of .mdk paths.
--- Empty args → project root mode (find medaka.toml, list top-level .mdk files).
--- Each non-empty arg is expanded individually: a path listDir succeeds on is
--- treated as a directory (recursively collected); else it's kept as a literal
--- file path. This applies uniformly whether one or many targets are given, so
--- `medaka lint dirA dirB` expands BOTH dirs (not just the first).
-resolveLintTargets : List String -> <IO> List String
-resolveLintTargets [] =
-  let cwd = canonicalizePath "."
-  match findProjectRoot cwd
-    None =>
-      let _ =
-        ePutStrLn
-          "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths"
-      let _ = exit 1
-      []
-    Some root => collectMdkFiles root
-resolveLintTargets targets = flatMap expandLintTarget targets
-
--- One target: a listable path is a directory (recursively collect its .mdk
--- files); otherwise a literal file path, kept as-is.
-expandLintTarget : String -> <IO> List String
-expandLintTarget target = match listDir target
-  Ok _ => collectMdkFiles target
-  Err _ => [target]
-
--- Join a directory path with an entry name (handles trailing slash).
-lintPathJoin : String -> String -> String
-lintPathJoin dir name =
-  if endsWith "/" dir then dir ++ name else "\{dir}/\{name}"
-
--- Recursively collect every `.mdk` file under `dir`, sorted (deterministic).
--- Walks SUBDIRECTORIES; skips dot-entries (dotfiles AND dot-directories like
--- `.git`/`.claude`).  A failed top-level `listDir` reports once and yields [].
-collectMdkFiles : String -> <IO> List String
-collectMdkFiles dir = match listDir dir
-  Err msg =>
-    let _ = ePutStrLn "medaka lint: cannot list directory \{dir}: \{msg}"
-    []
-  Ok _ => sortUniqS (collectMdkFilesRec dir)
-
-collectMdkFilesRec : String -> <IO> List String
-collectMdkFilesRec dir = match listDir dir
-  Err _ => []
-  Ok entries => collectMdkEntries dir (filterNonDot entries)
-
-collectMdkEntries : String -> List String -> <IO> List String
-collectMdkEntries _ [] = []
-collectMdkEntries dir (name :: rest) =
-  collectMdkEntry dir name ++ collectMdkEntries dir rest
-
--- One entry: a listable path is a subdirectory (recurse); otherwise a file,
--- kept iff it ends in `.mdk`.  Mirrors the dir/file discriminator used elsewhere
--- (listDir Ok = dir, Err = file).
-collectMdkEntry : String -> String -> <IO> List String
-collectMdkEntry dir name =
-  let full = lintPathJoin dir name
-  match listDir full
-    Ok _ => collectMdkFilesRec full
-    Err _ => if endsWith ".mdk" name then [full] else []
-
--- Drop dot-entries (dotfiles and dot-directories) from a listDir result.
-filterNonDot : List String -> List String
-filterNonDot [] = []
-filterNonDot (n :: rest)
-  | startsWith "." n = filterNonDot rest
-  | otherwise = n :: filterNonDot rest
-
--- Fold over file list, running lint on each.  acc = whether any SevError seen.
--- Returns (anyError, entries, parsedFiles).
---
--- `entries` is every readable target's LintEntry — the per-file lint result
--- (findings + duplicate-body occurrences + inline directives), however obtained.
--- Under --cache these are what gets persisted, and the dirty ones are the files
--- that actually had to be linted this run.
---
--- `parsedFiles` is threaded to the cross-file tier so it need not re-read/re-parse
--- the same targets (#394); it is empty in --fix mode, which runs no cross-file
--- rules, and empty under --cache, where a cache HIT has no parse to hand on and
--- the tier is reached from `entries` instead.  Not accumulating it under --cache
--- is also why a warm run holds no decls in memory.
---
--- The per-file printing order is unchanged: each file's report is emitted
--- (strictly) before the recursion.
-lintFilesGo : StdlibIndex ->
-  Bool ->
-  Bool ->
-  List String ->
-  List String ->
-  List String ->
-  Option (String, LintBaseline) ->
-  Option (String, String) ->
-  List String ->
-  Bool ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintFilesGo _ _ _ _ _ _ _ _ [] acc = (acc, [], [])
-lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
-  if fixMode then
-    let hadErr = lintOneFileFix onlyNames disableNames f
-    lintFilesGo
-      idx
-      fixMode
-      multiFile
-      disableNames
-      onlyNames
-      denyNames
-      baseCtx
-      cacheCtx
-      rest
-      (acc || hadErr)
-  else
-    let (hadErr, entries, parsed) =
-      lintOneFileReport
-        idx
-        multiFile
-        disableNames
-        onlyNames
-        denyNames
-        baseCtx
-        cacheCtx
-        f
-    let (restErr, restEntries, restParsed) =
-      lintFilesGo
-        idx
-        fixMode
-        multiFile
-        disableNames
-        onlyNames
-        denyNames
-        baseCtx
-        cacheCtx
-        rest
-        (acc || hadErr)
-    (restErr, entries ++ restEntries, parsed ++ restParsed)
-
--- Lint a single file in report mode.
--- multiFile=False: output is byte-for-byte identical to single-file v1 behavior.
--- multiFile=True: prints "path:" header before findings (only when there are findings).
--- Returns (hadError, parsed) where `parsed` is a 0-or-1 element list carrying this
--- file's (path, src, Positions, decls) for the cross-file tier to REUSE — empty
--- when the file could not be read (mirroring the old parseLintFiles/readLintSrcs
--- skip-unreadable behavior).  Handing the parse out rather than letting the
--- cross-file tier redo it is issue #394: the tier used to `parseLintFiles` (a full
--- re-read + re-parse of every target, 11.4% of a whole-tree lint's runtime) AND
--- `readLintSrcs` (a THIRD read of the same bytes) after this pass had already read
--- and parsed each file. Memory-neutral: runCrossFileReport already materialised
--- every triple at once.
-lintOneFileReport : StdlibIndex ->
-  Bool ->
-  List String ->
-  List String ->
-  List String ->
-  Option (String, LintBaseline) ->
-  Option (String, String) ->
-  String ->
-  <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target =
-  match readFile target
-    Err msg =>
-      let _ = ePutStrLn msg
-      (True, [], [])
-    Ok src =>
-      let (entry, parsed) = lintEntryOf idx cacheCtx target src
-      -- Suppress findings silenced by inline `-- lint-disable-*` directives before
-      -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
-      -- and uncached paths render from THIS one expression over the entry, so a
-      -- hit and a miss cannot print different things: the only difference between
-      -- them is where `entry` came from.
-      let allFindings = applySuppressionsDirs entry.directives entry.findings
-      let filtered =
-        applyFindingFilters disableNames onlyNames denyNames allFindings
-      let findings = applyBaselineFindings baseCtx target filtered
-      let srcLines = srcLinesArr src
-      let output =
-        joinNl
-          (map (f => ppDiagCliLines srcLines target (findingToDiag f)) findings)
-      let hasOutput = stringLength output > 0
-      let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
-      let _ = if hasOutput then putStrLn output
-      (anyList isFindingError findings, [entry], parsed)
-
--- One file's lint result, from the cache when it can be trusted and from a real
--- parse otherwise.  Also returns the parse for the #394 cross-file reuse — empty
--- on a cache hit (there is no parse) and, deliberately, empty whenever the cache
--- is on at all, since that path does not consume it.
---
--- The `--cache` decision, in full: a HIT requires the shard to decode, and to
--- agree on the format version, the rule-set stamp, the path, AND the content
--- hash.  Anything else is a miss.  `lint_cache.decodeEntry` owns that check;
--- this function only decides when to ask.
-lintEntryOf : StdlibIndex ->
-  Option (String, String) ->
-  String ->
-  String ->
-  <IO> (LintEntry, List (String, String, Positions, List Decl))
-lintEntryOf idx None target src =
-  let (entry, pos, decls) = lintFileFresh idx target src "" False
-  (entry, [(target, src, pos, decls)])
-lintEntryOf idx (Some (cacheDir, stamp)) target src =
-  let hash = contentHashOf src
-  match loadEntry cacheDir stamp target hash
-    Some hit => (hit, [])
-    None =>
-      let (entry, _, _) = lintFileFresh idx target src hash True
-      (entry, [])
-
--- Parse and lint a file for real: the miss path, and the whole of the uncached
--- path.  The returned entry is `dirty` — it is this run's work and its shard (if
--- any) needs writing.
---
--- `wantOccs` exists because Medaka is STRICT: an unconditional `fileDupOccs`
--- here would make every UNCACHED run compute each body's `structuralKey` twice
--- — once for this field and once inside `runCrossFileRules`, which walks the
--- parses itself — and that key is an `exprSexp` of every eligible body, i.e.
--- the single most expensive thing the cross-file tier does.  So the field is
--- filled only on the path that consumes it (--cache, via
--- runCrossFileReportCached); the uncached path leaves it empty and keeps
--- reaching the tier through the parses, exactly as before #395.
-lintFileFresh : StdlibIndex ->
-  String ->
-  String ->
-  String ->
-  Bool ->
-  <IO> (LintEntry, Positions, List Decl)
-lintFileFresh idx target src hash wantOccs =
-  let (decls, pos) = parseWithPositionsLocated src
-  (
-    LintEntry {
-      path = target,
-      contentHash = hash,
-      findings = lintProgram idx allRules target src pos decls,
-      dupOccs = if wantOccs then fileDupOccs (target, pos, decls) else [],
-      directives = collectDirectives src,
-      dirty = True,
-    },
-    pos,
-    decls,
-  )
-
--- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
-lintOneFileFix : List String -> List String -> String -> <IO> Bool
-lintOneFileFix onlyNames disableNames target = match readFile target
-  Err msg =>
-    let _ = ePutStrLn msg
-    True
-  Ok src =>
-    let (decls, pos) = parseWithPositions src
-    let (newSrc, n) = applyFixes onlyNames disableNames src decls pos
-    if newSrc == src then
-      let _ = putStrLn ("fixed 0 finding(s) in " ++ target)
-      False
-    else match writeFile target newSrc
-      Err msg =>
-        let _ = ePutStrLn "\{target}: \{msg}"
-        let _ = exit 1
-        True
-      Ok _ =>
-        let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
-        False
 
 -- ── snapshot ──────────────────────────────────────────────────────────────
 -- `medaka snapshot [--check | --new | --bless] [--out <dir>] [--isolate] <paths...>`

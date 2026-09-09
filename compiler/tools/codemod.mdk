@@ -60,6 +60,12 @@ import support.util.{
 
 -- ── public types ───────────────────────────────────────────────────────────
 
+-- What a codemod run does with the rewritten text.  `CmDry` is the default and
+-- writes nothing, so idempotence is a plain exit-code check; only `CmWrite`
+-- mutates, and only for files that actually change.  The flags that select one
+-- are parsed by the verb in `compiler/driver/medaka_cli.mdk`.
+public export data CodeMode = CmDry | CmWrite | CmStdout
+
 -- A registered codemod.  `mk` parses the codemod-specific CLI arguments and
 -- returns EITHER an error message OR the per-decl transform `Decl -> (Decl,
 -- Bool)` (the Bool = "this decl changed").  `warn`, given the same args plus a
