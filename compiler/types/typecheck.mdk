@@ -255,9 +255,10 @@ import support.ordmap.{
   omMapValues,
   omSize,
 }
-import list.{replicate}
+import list.{replicate, drop}
 import support.util.{
   listLen,
+  matchingStepPrefix,
   lookupAssoc,
   contains,
   endsWith,
@@ -12761,7 +12762,7 @@ expandSupersFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    expandSupersFix allDecls next (dropN (listLen acc) next)
+    expandSupersFix allDecls next (drop (listLen acc) next)
 
 -- S-slot-key-vector (#1866): keyed on the WHOLE PREDICATE — slot AND argument vector — so
 -- the vector DOES participate in the arity decision.  `(Ix a Char, Ix a Bool) => …` is two
@@ -12853,15 +12854,6 @@ filterMaybeIds : List (Option Int) -> List Int
 filterMaybeIds [] = []
 filterMaybeIds ((Some x) :: rest) = x :: filterMaybeIds rest
 filterMaybeIds (None :: rest) = filterMaybeIds rest
-
--- U1b (#1482): one polymorphic drop, replacing the byte-identical `dropPairs` /
--- `dropVecObls` pair (the payload widening would otherwise have made it three).
-dropN : Int -> List a -> List a
-dropN n xs
-  | n <= 0 = xs
-  | otherwise = match xs
-    [] => []
-    _ :: rest => dropN (n - 1) rest
 
 -- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
 -- deliberately — this key feeds the dedup that decides how many dict slots a constrained
@@ -36955,7 +36947,7 @@ censusSuperCloseFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    censusSuperCloseFix allDecls next (dropN (listLen acc) next)
+    censusSuperCloseFix allDecls next (drop (listLen acc) next)
 
 censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperSlotsOf allDecls (iface, id) =
@@ -36982,7 +36974,7 @@ censusSuperCloseVecFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    censusSuperCloseVecFix allDecls next (dropN (listLen acc) next)
+    censusSuperCloseVecFix allDecls next (drop (listLen acc) next)
 
 -- the direct super vectors of one (iface, ids) predicate: the interface's typarams map
 -- POSITIONALLY onto ids (so a multi-param super carries the right per-arg ids, not a
@@ -41305,7 +41297,8 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []
-  let (kept, restored) = chainPrefix steps stepKeys (listLen modules) [] None
+  let (kept, restored) =
+    matchingStepPrefix (st => st.csKey) steps stepKeys (listLen modules)
   let (depEnv, accData, accAll, results) = match restored
     None => ([], publicDataDecls coreDecls, coreDecls, [])
     Some st =>
@@ -41323,13 +41316,13 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
       accData
       accAll
       results
-      (dropN n stepKeys)
+      (drop n stepKeys)
       -- #2705: each suffix module is marked as it is checked (`checkBodyImpl`), i.e.
       -- after the prefix restore above replaced `graphRun` — a cell minted before
       -- that restore would index the older, shorter table and `methodCellOf` would
       -- panic on the next analyze.  The restored prefix keeps its own cells (they
       -- ride the snapshot).
-      (dropN n modules)
+      (drop n modules)
   moduleChainMemoRef := Some
     ChainMemo {
       chKey = fullKey,
@@ -41339,28 +41332,6 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   -- module, and any module after the last recorded step) — see `chainGo`.
   let _ = checkGraphFinish ()
   attachCoherenceConflict (reverseL finalResults)
-
--- The longest prefix of `steps` whose keys match `keys` positionally, never
--- covering the last of `total` modules.  Returns (matching steps in order, the
--- last matching step).
-chainPrefix : List ChainStep ->
-  List (Option String) ->
-  Int ->
-  List ChainStep ->
-  Option ChainStep ->
-  (List ChainStep, Option ChainStep)
-chainPrefix [] _ _ acc last = (reverseL acc, last)
-chainPrefix _ [] _ acc last = (reverseL acc, last)
-chainPrefix (st :: sts) (k :: ks) total acc last =
-  if listLen acc + 1 >= total then
-    (reverseL acc, last)
-  else match k
-    Some key =>
-      if key == st.csKey then
-        chainPrefix sts ks total (st :: acc) (Some st)
-      else
-        (reverseL acc, last)
-    None => (reverseL acc, last)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `foldModules True True cmModuleWorker cmDiagsCollect`
