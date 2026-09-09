@@ -168,9 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call i64 @mdk_impl_Flag_eq(i64 1, i64 1)
   %t1 = ashr i64 %t0, 1
   %t2 = icmp ne i64 %t1, 0
@@ -188,6 +190,7 @@ end3:
   call void @mdk_print_int(i64 %t6)
   ret i32 0
 }
+; mdk-module impl:Flag_eq
 define i64 @mdk_impl_Flag_eq(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64

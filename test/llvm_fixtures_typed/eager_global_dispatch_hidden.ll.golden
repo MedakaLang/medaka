@@ -168,15 +168,19 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   store i64 85, ptr @mdk_g_base
+; mdk-module program
   %t0 = call i64 @mdk_force_cell()
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_int(i64 %t1)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_force_cell() {
 entry:
   %t0 = load i8, ptr @mdk_gs_cell
@@ -194,6 +198,7 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_cell
   ret i64 %t2
 }
+; mdk-module impl:Bool_mk
 define i64 @mdk_impl_Bool_mk(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -205,7 +210,11 @@ decend1:
   ret i64 %t3
 }
 
+; mdk-module program
 @mdk_g_cell = global i64 0
+; mdk-module program
 @mdk_gs_cell = global i8 0
+; mdk-module program
 @mdk_g_base = global i64 0
+; mdk-module program
 @.gname.cell = private unnamed_addr constant [5 x i8] c"\63\65\6C\6C\00"

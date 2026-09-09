@@ -168,11 +168,14 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call i64 @mdk_array_make(i64 11, i64 15)
   store i64 %t0, ptr @mdk_g_a
+; mdk-module program
   %t1 = load i64, ptr @mdk_g_a
   %t2 = ashr i64 5, 1
   %t3 = inttoptr i64 %t1 to ptr
@@ -184,4 +187,5 @@ entry:
   call void @mdk_print_int(i64 %t8)
   ret i32 0
 }
+; mdk-module program
 @mdk_g_a = global i64 0

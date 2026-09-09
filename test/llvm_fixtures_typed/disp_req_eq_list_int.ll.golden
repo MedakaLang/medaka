@@ -168,9 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -213,7 +215,7 @@ entry:
   %t22 = getelementptr i8, ptr %t20, i64 16
   store i64 %t19, ptr %t22
   %t23 = ptrtoint ptr %t20 to i64
-  %t24 = call i64 @mdk_impl_MyList_eq(i64 ptrtoint (ptr @mdk_dc_0 to i64), i64 %t11, i64 %t23)
+  %t24 = call i64 @mdk_impl_MyList_eq(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 %t11, i64 %t23)
   %t25 = ashr i64 %t24, 1
   %t26 = icmp ne i64 %t25, 0
   %t28 = alloca i64
@@ -230,12 +232,14 @@ end27:
   call void @mdk_print_int(i64 %t30)
   ret i32 0
 }
+; mdk-module impl:Int_eq
 define i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_value_eq(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
+; mdk-module impl:MyList_eq
 define i64 @mdk_impl_MyList_eq(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
@@ -358,7 +362,9 @@ decend1:
   ret i64 %t71
 }
 
-@mdk_dc_0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
+@mdk_dc_program_0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
 define i64 @mdk_disp_eq_0_2(i64 %dict, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %dict to ptr

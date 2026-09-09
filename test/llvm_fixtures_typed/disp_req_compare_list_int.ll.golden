@@ -168,9 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -199,7 +201,7 @@ entry:
   %t14 = getelementptr i8, ptr %t12, i64 16
   store i64 %t11, ptr %t14
   %t15 = ptrtoint ptr %t12 to i64
-  %t16 = call i64 @mdk_impl_MyList_compare(i64 ptrtoint (ptr @mdk_dc_0 to i64), i64 %t7, i64 %t15)
+  %t16 = call i64 @mdk_impl_MyList_compare(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 %t7, i64 %t15)
   %t17 = alloca i64
   %t20 = and i64 %t16, 1
   %t21 = icmp eq i64 %t20, 1
@@ -239,6 +241,7 @@ decend18:
   call void @mdk_print_int(i64 %t33)
   ret i32 0
 }
+; mdk-module impl:Int_compare
 define i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_value_lt(i64 %arg0, i64 %arg1)
@@ -258,6 +261,7 @@ else7:
   ret i64 3
 }
 
+; mdk-module impl:MyList_compare
 define i64 @mdk_impl_MyList_compare(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
@@ -430,7 +434,9 @@ decend1:
   ret i64 %t97
 }
 
-@mdk_dc_0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
+@mdk_dc_program_0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
 define i64 @mdk_disp_compare_0_2(i64 %dict, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %dict to ptr

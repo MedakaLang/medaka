@@ -168,9 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call i64 @mdk_impl_Int_compare(i64 7, i64 11)
   %t1 = alloca i64
   %t4 = and i64 %t0, 1
@@ -211,6 +213,7 @@ decend2:
   call void @mdk_print_int(i64 %t17)
   ret i32 0
 }
+; mdk-module impl:Int_compare
 define i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_value_lt(i64 %arg0, i64 %arg1)
@@ -230,6 +233,7 @@ else7:
   ret i64 3
 }
 
+; mdk-module impl:Tag_compare
 define i64 @mdk_impl_Tag_compare(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64

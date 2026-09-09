@@ -168,20 +168,23 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_myClamp(i64 ptrtoint (ptr @mdk_dc_0 to i64), i64 1, i64 21, i64 199)
+; mdk-module program
+  %t0 = call i64 @mdk_myClamp(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 1, i64 21, i64 199)
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_int(i64 %t1)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_myClamp(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
 entry:
   %t0 = call ptr @mdk_alloc(i64 40)
   store i64 1, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @mdk_lam1 to i64), ptr %t1
+  store i64 ptrtoint (ptr @mdk_lam_program_1 to i64), ptr %t1
   %t2 = getelementptr i8, ptr %t0, i64 16
   store i64 %arg1, ptr %t2
   %t3 = getelementptr i8, ptr %t0, i64 24
@@ -197,14 +200,17 @@ entry:
   ret i64 %t10
 }
 
+; mdk-module impl:Int_lt
 define i64 @mdk_impl_Int_lt(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_value_lt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-@mdk_dc_0 = internal constant [1 x i64] [i64 193460240]
-define i64 @mdk_lam1(i64 %clos, i64 %arg0) {
+; mdk-module program
+@mdk_dc_program_0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
+define i64 @mdk_lam_program_1(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16

@@ -168,10 +168,12 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_blend(i64 ptrtoint (ptr @mdk_dc_0 to i64))
+; mdk-module program
+  %t0 = call i64 @mdk_blend(i64 ptrtoint (ptr @mdk_dc_program_0 to i64))
   %t1 = call ptr @mdk_alloc(i64 16)
   store i64 12884901888, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
@@ -187,12 +189,14 @@ entry:
   call void @mdk_print_int(i64 %t10)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_sidesOf(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
+; mdk-module program
 define i64 @mdk_unbox(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -227,6 +231,7 @@ decend1:
   ret i64 %t17
 }
 
+; mdk-module program
 define i64 @mdk_blend(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
@@ -248,6 +253,7 @@ entry:
   ret i64 %t15
 }
 
+; mdk-module impl:Tri_sides
 define i64 @mdk_impl_Tri_sides(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -276,6 +282,7 @@ decend1:
   ret i64 %t11
 }
 
+; mdk-module impl:Tri_tag
 define i64 @mdk_impl_Tri_tag(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -304,6 +311,7 @@ decend1:
   ret i64 %t11
 }
 
+; mdk-module impl:Wrap_sides
 define i64 @mdk_impl_Wrap_sides(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
@@ -339,7 +347,9 @@ decend1:
   ret i64 %t18
 }
 
-@mdk_dc_0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
+; mdk-module program
+@mdk_dc_program_0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
+; mdk-module program
 define i64 @mdk_disp_sides_0_1(i64 %dict, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %dict to ptr

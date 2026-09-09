@@ -168,10 +168,13 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  call void @mdk_print_str(i64 ptrtoint (ptr @.strc.0 to i64))
+; mdk-module program
+  call void @mdk_print_str(i64 ptrtoint (ptr @.strc.program.0 to i64))
   ret i32 0
 }
-@.strc.0 = private unnamed_addr constant { i64, i64, i64, [13 x i8] } { i64 1, i64 12, i64 12, [13 x i8] c"\74\79\70\65\64\20\73\74\72\69\6E\67\00" }
+; mdk-module program
+@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [13 x i8] } { i64 1, i64 12, i64 12, [13 x i8] c"\74\79\70\65\64\20\73\74\72\69\6E\67\00" }

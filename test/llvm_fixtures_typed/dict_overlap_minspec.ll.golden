@@ -168,9 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call i64 @mdk_force_theVal()
   %t1 = call i64 @mdk_unbox(i64 %t0)
   %t2 = call i64 @mdk_unbox(i64 %t1)
@@ -178,6 +180,7 @@ entry:
   call void @mdk_print_int(i64 %t3)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_force_$memo_Int_def() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_Int_def
@@ -195,6 +198,7 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_Int_def
   ret i64 %t2
 }
+; mdk-module $memo_zZDefault_7c
 define i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
@@ -212,6 +216,7 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
   ret i64 %t2
 }
+; mdk-module program
 define i64 @mdk_force_theVal() {
 entry:
   %t0 = load i8, ptr @mdk_gs_theVal
@@ -224,11 +229,12 @@ lz_forcing:
   unreachable
 lz_unforced:
   store i8 1, ptr @mdk_gs_theVal
-  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc_0 to i64))
+  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc_program_0 to i64))
   store i64 %t2, ptr @mdk_g_theVal
   store i8 2, ptr @mdk_gs_theVal
   ret i64 %t2
 }
+; mdk-module program
 define i64 @mdk_unbox(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -263,11 +269,13 @@ decend1:
   ret i64 %t17
 }
 
+; mdk-module impl:Int_def
 define i64 @mdk_impl_Int_def() {
 entry:
   ret i64 15
 }
 
+; mdk-module impl:zZDefault_7c__28_Box_20_a_29__7c__def
 define i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %arg0) {
 entry:
   %t0 = call i64 @mdk_disp_def_0_0(i64 %arg0)
@@ -279,6 +287,7 @@ entry:
   ret i64 %t3
 }
 
+; mdk-module impl:zZDefault_7c__28_Box_20_Int_29__7c__def
 define i64 @mdk_impl_zZDefault_7c__28_Box_20_Int_29__7c__def() {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
@@ -289,16 +298,27 @@ entry:
   ret i64 %t2
 }
 
+; mdk-module program
 @mdk_g_$memo_Int_def = global i64 0
+; mdk-module program
 @mdk_gs_$memo_Int_def = global i8 0
+; mdk-module $memo_zZDefault_7c
 @mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = global i64 0
+; mdk-module $memo_zZDefault_7c
 @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = global i8 0
+; mdk-module program
 @mdk_g_theVal = global i64 0
+; mdk-module program
 @mdk_gs_theVal = global i8 0
+; mdk-module program
 @.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
+; mdk-module $memo_zZDefault_7c
 @.gname.$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = private unnamed_addr constant [46 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
+; mdk-module program
 @.gname.theVal = private unnamed_addr constant [7 x i8] c"\74\68\65\56\61\6C\00"
-@mdk_dc_0 = internal constant [1 x i64] [i64 -308483285326192921]
+; mdk-module program
+@mdk_dc_program_0 = internal constant [1 x i64] [i64 -308483285326192921]
+; mdk-module program
 define i64 @mdk_disp_def_0_0(i64 %dict) {
 entry:
   %t0 = inttoptr i64 %dict to ptr

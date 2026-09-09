@@ -168,9 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
+; mdk-module program
   %t0 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -213,6 +215,7 @@ entry:
   store double %t28, ptr %t30
   %t31 = ptrtoint ptr %t29 to i64
   store i64 %t31, ptr @mdk_g_letDes
+; mdk-module program
   %t32 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t32
   %t33 = getelementptr i8, ptr %t32, i64 8
@@ -248,6 +251,7 @@ entry:
   call void @mdk_print_float(double %t54)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_addP(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -301,6 +305,7 @@ decend1:
   ret i64 %t34
 }
 
+; mdk-module program
 define double @mdk_addP__fw(i64 %arg0) {
 entry:
   %t0 = alloca i64
@@ -357,4 +362,5 @@ decend1:
   ret double %t37
 }
 
+; mdk-module program
 @mdk_g_letDes = global i64 0
