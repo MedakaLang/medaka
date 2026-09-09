@@ -117,5 +117,49 @@ Err "No such file or directory"
 Ok 5
 ```
 
+### `fixtureDirs`
+
+```
+fixtureDirs : String -> <FileRead _> Result String (List String)
+```
+
+Every top-level subdirectory of `root`, non-recursive, with the same
+anti-vacuity floor as `fixtureFiles`. For a corpus where each fixture unit
+is a whole directory (several files under one name) rather than a single
+file — `fixtureFiles` filters directories out, so a directory-shaped
+corpus needs this instead.
+
+```medaka
+> fixtureDirs "stdlib/no-such-fixture-doctest-dir"
+Err "No such file or directory"
+```
+
+```medaka
+> map length (fixtureDirs "test/import_order_fixtures")
+Ok 24
+```
+
+### `expectUnitCount`
+
+```
+expectUnitCount : Int -> List a -> Result String Unit
+```
+
+`Err` unless `units` has exactly `want` elements — the weaker floor for
+a corpus with no wired roster to check against: it catches a corpus that
+grew or shrank, but not which unit changed. Prefer `unrosteredUnits` /
+`missingUnits` (`test_process.mdk`) whenever a roster exists to check
+against instead.
+
+```medaka
+> expectUnitCount 2 ["a", "b"]
+Ok ()
+```
+
+```medaka
+> expectUnitCount 3 ["a", "b"]
+Err "expected 3 units, found 2"
+```
+
 ## Instances
 

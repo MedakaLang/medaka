@@ -289,6 +289,8 @@ Filesystem helpers built on the host file primitives.
 - [`mkdirAll`](fs.md#mkdirall)
 - [`walkDir`](fs.md#walkdir)
 - [`fixtureFiles`](fs.md#fixturefiles)
+- [`fixtureDirs`](fs.md#fixturedirs)
+- [`expectUnitCount`](fs.md#expectunitcount)
 
 ## [`hash_map`](hash_map.md)
 
@@ -818,6 +820,8 @@ Assertions for a test that runs a program.
 - [`expectSpawnOkLine`](test_process.md#expectspawnokline)
 - [`testFileStem`](test_process.md#testfilestem)
 - [`testAssertionCount`](test_process.md#testassertioncount)
+- [`unrosteredUnits`](test_process.md#unrosteredunits)
+- [`missingUnits`](test_process.md#missingunits)
 - [`unrosteredTestFiles`](test_process.md#unrosteredtestfiles)
 - [`missingTestFiles`](test_process.md#missingtestfiles)
 

@@ -159,6 +159,42 @@ transcript's shape cannot silently zero it. A suite that exits nonzero is
 an `Err`, never a count, because a failed assertion is not a smaller
 number of passing ones.
 
+### `unrosteredUnits`
+
+```
+unrosteredUnits : (String -> Option String) -> List String -> List String -> List String
+```
+
+The units `namer` finds among `entries` that are absent from `known`.
+
+The general form behind `unrosteredTestFiles`: `namer` turns one
+directory entry into the unit name a roster spells, or `None` when the
+entry names no unit at all, so an entry that is not a unit (an unrelated
+file, a fixture directory's own helper file) is silently skipped rather
+than counted as a stray one.
+
+```medaka
+> unrosteredUnits testFileStem ["a_test"] ["a_test.mdk", "b_test.mdk", "readme.md"]
+["b_test"]
+```
+
+### `missingUnits`
+
+```
+missingUnits : (String -> Option String) -> List String -> List String -> List String
+```
+
+The names in `wanted` that `namer` finds in none of `entries`.
+
+The other half of `unrosteredUnits`: a roster or exemption row naming a
+unit that was renamed or deleted still reads as coverage, and only this
+reports it.
+
+```medaka
+> missingUnits testFileStem ["a_test.mdk"] ["a_test", "b_test"]
+["b_test"]
+```
+
 ### `unrosteredTestFiles`
 
 ```

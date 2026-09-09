@@ -1,5 +1,5 @@
 # META
-source_lines=227
+source_lines=259
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -200,6 +200,41 @@ testAssertionCount path extraArgs =
               None => Err "\{path}: \"summary.passed\" is not an integer"
               Some n => Ok n
 
+{- | The units `namer` finds among `entries` that are absent from `known`.
+
+   The general form behind `unrosteredTestFiles`: `namer` turns one
+   directory entry into the unit name a roster spells, or `None` when the
+   entry names no unit at all, so an entry that is not a unit (an unrelated
+   file, a fixture directory's own helper file) is silently skipped rather
+   than counted as a stray one.
+
+   > unrosteredUnits testFileStem ["a_test"] ["a_test.mdk", "b_test.mdk", "readme.md"]
+   ["b_test"] -}
+export
+unrosteredUnits : (String -> Option String) ->
+  List String ->
+  List String ->
+  List String
+unrosteredUnits namer known entries =
+  filter (n => not (elem n known)) (somes (map namer entries))
+
+{- | The names in `wanted` that `namer` finds in none of `entries`.
+
+   The other half of `unrosteredUnits`: a roster or exemption row naming a
+   unit that was renamed or deleted still reads as coverage, and only this
+   reports it.
+
+   > missingUnits testFileStem ["a_test.mdk"] ["a_test", "b_test"]
+   ["b_test"] -}
+export
+missingUnits : (String -> Option String) ->
+  List String ->
+  List String ->
+  List String
+missingUnits namer entries wanted =
+  let present = somes (map namer entries)
+  filter (n => not (elem n present)) wanted
+
 {- | The `*_test.mdk` stems in `dir` that are absent from `known`.
 
    `known` is the caller's roster plus whatever it deliberately exempts, so
@@ -212,8 +247,7 @@ unrosteredTestFiles : String ->
   <FileRead "_"> Result String (List String)
 unrosteredTestFiles dir known = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
-  Ok names =>
-    Ok (filter (n => not (elem n known)) (somes (map testFileStem names)))
+  Ok names => Ok (unrosteredUnits testFileStem known names)
 
 {- | The stems in `wanted` that name no `*_test.mdk` file in `dir`.
 
@@ -226,9 +260,7 @@ missingTestFiles : String ->
   <FileRead "_"> Result String (List String)
 missingTestFiles dir wanted = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
-  Ok names =>
-    let present = somes (map testFileStem names)
-    Ok (filter (n => not (elem n present)) wanted)
+  Ok names => Ok (missingUnits testFileStem names wanted)
 # DESUGAR
 (DUse false (UseGroup ("io") ((mem "getEnvOr" false) (mem "runVerb" false))))
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
@@ -251,10 +283,14 @@ missingTestFiles dir wanted = match listDir dir
 (DFunDef false "testFileStem" ((PVar "name")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "name")) (EApp (EApp (EVar "stripSuffix") (ELit (LString ".mdk"))) (EVar "name")) (EVar "None")))
 (DTypeSig true "testAssertionCount" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec") "IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "args") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json"))))) (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "medakaBin") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "medakaBin")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString " — an assertion failed, or the file did not run: "))) (EApp (EVar "display") (EApp (EVar "debug") (EBinOp "++" (EVar "out") (EVar "err"))))) (ELit (LString "")))) (EMatch (EApp (EVar "parse") (EVar "out")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": --json output did not parse: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "summary"))) (EVar "j")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": no \"summary\" in --json output"))))) (arm (PCon "Some" (PVar "summary")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "passed"))) (EVar "summary")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": no \"summary.passed\" in --json output"))))) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "asInt") (EVar "p")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": \"summary.passed\" is not an integer"))))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))))))))))))))))
+(DTypeSig true "unrosteredUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unrosteredUnits" ((PVar "namer") (PVar "known") (PVar "entries")) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "known"))))) (EApp (EVar "somes") (EApp (EApp (EVar "map") (EVar "namer")) (EVar "entries")))))
+(DTypeSig true "missingUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "missingUnits" ((PVar "namer") (PVar "entries") (PVar "wanted")) (EBlock (DoLet false false (PVar "present") (EApp (EVar "somes") (EApp (EApp (EVar "map") (EVar "namer")) (EVar "entries")))) (DoExpr (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "present"))))) (EVar "wanted")))))
 (DTypeSig true "unrosteredTestFiles" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "unrosteredTestFiles" ((PVar "dir") (PVar "known")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EApp (EVar "Ok") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "known"))))) (EApp (EVar "somes") (EApp (EApp (EVar "map") (EVar "testFileStem")) (EVar "names"))))))))
+(DFunDef false "unrosteredTestFiles" ((PVar "dir") (PVar "known")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "unrosteredUnits") (EVar "testFileStem")) (EVar "known")) (EVar "names"))))))
 (DTypeSig true "missingTestFiles" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "missingTestFiles" ((PVar "dir") (PVar "wanted")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EBlock (DoLet false false (PVar "present") (EApp (EVar "somes") (EApp (EApp (EVar "map") (EVar "testFileStem")) (EVar "names")))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "present"))))) (EVar "wanted"))))))))
+(DFunDef false "missingTestFiles" ((PVar "dir") (PVar "wanted")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "missingUnits") (EVar "testFileStem")) (EVar "names")) (EVar "wanted"))))))
 # MARK
 (DUse false (UseGroup ("io") ((mem "getEnvOr" false) (mem "runVerb" false))))
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
@@ -277,7 +313,11 @@ missingTestFiles dir wanted = match listDir dir
 (DFunDef false "testFileStem" ((PVar "name")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "name")) (EApp (EApp (EVar "stripSuffix") (ELit (LString ".mdk"))) (EVar "name")) (EVar "None")))
 (DTypeSig true "testAssertionCount" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec") "IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "args") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json"))))) (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "medakaBin") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "medakaBin")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString " — an assertion failed, or the file did not run: "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EBinOp "++" (EVar "out") (EVar "err"))))) (ELit (LString "")))) (EMatch (EApp (EVar "parse") (EVar "out")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": --json output did not parse: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "summary"))) (EVar "j")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": no \"summary\" in --json output"))))) (arm (PCon "Some" (PVar "summary")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "passed"))) (EVar "summary")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": no \"summary.passed\" in --json output"))))) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "asInt") (EVar "p")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": \"summary.passed\" is not an integer"))))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))))))))))))))))
+(DTypeSig true "unrosteredUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unrosteredUnits" ((PVar "namer") (PVar "known") (PVar "entries")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "known"))))) (EApp (EVar "somes") (EApp (EApp (EMethodRef "map") (EVar "namer")) (EVar "entries")))))
+(DTypeSig true "missingUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "missingUnits" ((PVar "namer") (PVar "entries") (PVar "wanted")) (EBlock (DoLet false false (PVar "present") (EApp (EVar "somes") (EApp (EApp (EMethodRef "map") (EVar "namer")) (EVar "entries")))) (DoExpr (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "present"))))) (EVar "wanted")))))
 (DTypeSig true "unrosteredTestFiles" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "unrosteredTestFiles" ((PVar "dir") (PVar "known")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EApp (EVar "Ok") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "known"))))) (EApp (EVar "somes") (EApp (EApp (EMethodRef "map") (EVar "testFileStem")) (EVar "names"))))))))
+(DFunDef false "unrosteredTestFiles" ((PVar "dir") (PVar "known")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "unrosteredUnits") (EVar "testFileStem")) (EVar "known")) (EVar "names"))))))
 (DTypeSig true "missingTestFiles" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "missingTestFiles" ((PVar "dir") (PVar "wanted")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EBlock (DoLet false false (PVar "present") (EApp (EVar "somes") (EApp (EApp (EMethodRef "map") (EVar "testFileStem")) (EVar "names")))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "present"))))) (EVar "wanted"))))))))
+(DFunDef false "missingTestFiles" ((PVar "dir") (PVar "wanted")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not list ")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "names")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "missingUnits") (EVar "testFileStem")) (EVar "names")) (EVar "wanted"))))))

@@ -196,6 +196,41 @@ testAssertionCount path extraArgs =
               None => Err "\{path}: \"summary.passed\" is not an integer"
               Some n => Ok n
 
+{- | The units `namer` finds among `entries` that are absent from `known`.
+
+   The general form behind `unrosteredTestFiles`: `namer` turns one
+   directory entry into the unit name a roster spells, or `None` when the
+   entry names no unit at all, so an entry that is not a unit (an unrelated
+   file, a fixture directory's own helper file) is silently skipped rather
+   than counted as a stray one.
+
+   > unrosteredUnits testFileStem ["a_test"] ["a_test.mdk", "b_test.mdk", "readme.md"]
+   ["b_test"] -}
+export
+unrosteredUnits : (String -> Option String) ->
+  List String ->
+  List String ->
+  List String
+unrosteredUnits namer known entries =
+  filter (n => not (elem n known)) (somes (map namer entries))
+
+{- | The names in `wanted` that `namer` finds in none of `entries`.
+
+   The other half of `unrosteredUnits`: a roster or exemption row naming a
+   unit that was renamed or deleted still reads as coverage, and only this
+   reports it.
+
+   > missingUnits testFileStem ["a_test.mdk"] ["a_test", "b_test"]
+   ["b_test"] -}
+export
+missingUnits : (String -> Option String) ->
+  List String ->
+  List String ->
+  List String
+missingUnits namer entries wanted =
+  let present = somes (map namer entries)
+  filter (n => not (elem n present)) wanted
+
 {- | The `*_test.mdk` stems in `dir` that are absent from `known`.
 
    `known` is the caller's roster plus whatever it deliberately exempts, so
@@ -208,8 +243,7 @@ unrosteredTestFiles : String ->
   <FileRead "_"> Result String (List String)
 unrosteredTestFiles dir known = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
-  Ok names =>
-    Ok (filter (n => not (elem n known)) (somes (map testFileStem names)))
+  Ok names => Ok (unrosteredUnits testFileStem known names)
 
 {- | The stems in `wanted` that name no `*_test.mdk` file in `dir`.
 
@@ -222,6 +256,4 @@ missingTestFiles : String ->
   <FileRead "_"> Result String (List String)
 missingTestFiles dir wanted = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
-  Ok names =>
-    let present = somes (map testFileStem names)
-    Ok (filter (n => not (elem n present)) wanted)
+  Ok names => Ok (missingUnits testFileStem names wanted)
