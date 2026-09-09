@@ -65,6 +65,51 @@ cannot be read.
 Lines are split on `\n`, with a `\r` before it removed. A trailing
 newline does not produce a final empty line.
 
+### `ownerOnlyMode`
+
+```
+ownerOnlyMode : Int
+```
+
+The permission bits of a file only its owner may read or write:
+`rw-------`, `0600` as `chmod` spells it.
+
+`writeFilePrivate` writes at this mode, and `isPrivateMode` accepts it.
+
+### `isPrivateMode`
+
+```
+isPrivateMode : Int -> Bool
+```
+
+Whether permission bits keep a file to its owner: no group and no other
+bit is set. `fileMode` reports the bits to grade.
+
+A secret at any wider mode is readable by another account on the same
+host, so a program that reads one should refuse it rather than warn.
+
+```medaka
+> isPrivateMode ownerOnlyMode
+True
+> isPrivateMode 420
+False
+> isPrivateMode 448
+True
+```
+
+### `writeFilePrivate`
+
+```
+writeFilePrivate : String -> String -> <FileWrite _> Result String Unit
+```
+
+Writes a string to a file that only its owner may read or write, at
+`ownerOnlyMode`.
+
+The contents never exist at a wider mode, and an existing file at a wider
+one is narrowed before they are written, so this is the way to write a
+secret.
+
 ## Commands
 
 ### `runCommandOk`

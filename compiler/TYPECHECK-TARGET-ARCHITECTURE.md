@@ -685,7 +685,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    from its KNOWN-BAD `2 2` to the spec answer `1 2` — a value change, made on the
    fixture's own instruction, that does not close #1182/#1265 (a bare occurrence with two
    admitted declarations has no spelling to tell apart).  (c) `run`'s and `build`'s
-   multi-module arms render the per-module list through `typecheckPass`'s factored tail and
+   multi-module arms render the per-module list through `typecheckDiagsFold` (the pass's factored tail) and
    keep the `hadTypeErrors` residual gate (rendering the residual directly rather than
    re-running `analyzeProject`).  Measured: `run` of a multi-module program −34.4% Ir; the
    1,082-comparison `check`+`run` corpus moves at exactly the 1182 cell plus one located
@@ -745,7 +745,52 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
    `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
    `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
-   carry, and `registry_keying_ratchet` should be the place that says so.
+   carry, and `registry_keying_ratchet`'s check 6 (#2796) is that place.
+15. **`check` typechecks once, and the analyze path stops re-resolving its unchanged prefix,
+   2026-09-09** (the batch after #2793).  (a) `check`'s multi-module arm no longer runs the
+   entry driver after the diagnostics chain: the chain's per-module payload carries
+   `(schemes, errs, warns)` through `ChainStep`, the terminal report is a projection over it
+   (`checkModulesEntryFromDiags`, `runCheckModulesFromDiags`), `entryExhaust` stays, and
+   `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`.  `check` of a multi-module
+   graph −25% Ir (`stdlib/json.mdk`, `compiler/driver/medaka_cli.mdk`); `stdlib/map.mdk`
+   imports only `core` and is single-file-routed, so it cannot show the drop.  The
+   mint-after-restore law holds here for a stronger reason than `mainSchemeRef`'s: schemes
+   from a replayed step are never read — the report takes the terminal module's, which the
+   memo never covers.  Still on the single-file arm and hover: `checkModulesEntryReport`,
+   `checkModulesEntryHasErrors`, `checkModulesEntryFull`; genuinely caller-less now:
+   `runCheckModules`, `checkModulesHasErrors` (S5 deletes exactly those two).  (b) #2719 (a3):
+   after item 14, `resolvePass` was 41% of a warm LSP analyze (66% at 20 modules), and the cost
+   was not desugar but `buildEnvMM` rebuilding the PRELUDE's scope — three prelude-sized maps
+   from empty — once per module per analyze (~4.3M Ir each).  The prelude half is a
+   `PreludeScope` under the same prelude key as item 14's memo and the same invariant (every
+   field a pure function of the prelude's decls), derived once per module by `resolveModuleG`
+   and handed to `buildEnvMM` (4.34M → 1.12M per module; the `programIsCore` arm still builds
+   its three from empty).  `resolvePass` itself is memoized per module under the chain's
+   module-step prefix plus the trust settings (the #1362 class; `matchingStepPrefix` in
+   `support/util.mdk` is the one prefix rule for both memos), and its second whole-graph
+   desugar, built and discarded, is gone.  Warm analyze −36% to −65% across the six measured
+   workloads; the one-shot verbs drop 0–1.2%.  `diff_compiler_lsp` case 6 drives a 3-module
+   project through seven `didChange` states, including an imported module rewritten on disk,
+   against a cold `check --json` of each state — the first gate in the tree that exercises
+   either memo family's multi-module warm path; it fails on a key mutated to the module id.
+   (c) The review of (b) found the exposure the shared desugar tree created: `desugarModule`'s
+   memo was keyed on the module's SOURCE alone, but the loader rewrites each `import` target
+   for the package that owns the path, so two byte-identical modules in two packages are two
+   different trees, and the second resolved against the first one's imports — a genuine
+   `R-PRIVATE-NAME` went silent on `check --json`, the LSP, MCP and `medaka test` (the
+   typecheck half had carried the same exposure since the memo existed).  The key is path +
+   source; `cross_project_fixtures/samesrc` pins the reject.  Still open: the 24-entry MRU
+   cliff in the parse and desugar caches (#2797: 2.4M → 46.9M per analyze past 24 modules)
+   and, behind it, the loader's 64-entry source table (`loadedSourcesLimit`): both prefix memos
+   key on the loaded source, so past 64 modules the earliest entries are evicted first and the
+   replayable prefix collapses to empty — the marginal warm cost per module steps from ~6.5M
+   to ~15.7M between 65 and 67 modules, and the compiler's own graph is 76 (the two limits
+   have to move together),
+   `sugValues`/`sugTypes` built unconditionally on the clean path, `medaka test`'s no-doctest
+   arm passing no prelude key (so no hoist there), and `run --json` printing prose for a
+   static error (#2798).  Also in this batch: the writer-set contract of item 14 is enforced
+   by `registry_keying_ratchet`'s check 6 (#2796), `ElabResult` names the elaboration's
+   5-tuple, and `analyzeFinish`'s diagnostic order is pinned in three gates.
 
 ### SA-11. Artifacts
 

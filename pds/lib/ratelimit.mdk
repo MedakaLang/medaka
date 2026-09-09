@@ -7,15 +7,25 @@
    the call is what keeps the decision itself testable at exact instants
    instead of by waiting on a real clock.
 
-   FIXED WINDOW, not a token bucket: the allowance for an identity resets the
-   moment `now / rateLimitWindowSeconds` (the window index) changes. That
-   needs no floating-point leak rate or per-tick refill state — the whole
-   state per identity per class is one counter, and the window index those
-   counters belong to is held once for the whole table rather than once per
-   row. Retirement is therefore exact AND free: the counters of a window
-   that has passed are unreachable the instant the index moves, and the
-   table they lived in is dropped whole, in constant time, by the first
-   decision of the next window. No decision ever walks the table.
+   SLIDING WINDOW over two fixed windows, not a token bucket and not one
+   fixed window (#2775). A single fixed window admits the whole allowance
+   just before `now / rateLimitWindowSeconds` changes and the whole
+   allowance again just after, so a caller straddling a boundary draws twice
+   the nominal rate over a window's worth of seconds while every counter
+   reads as within budget. The decision here therefore charges the current
+   window's own count PLUS the share of the previous window's count that has
+   not yet slid out of view: at `elapsed` seconds into a window, that share
+   is `(window - elapsed) / window` of it. A caller that spends its whole
+   allowance at the end of one window is refused at the start of the next,
+   and regains budget gradually as the boundary recedes.
+
+   That costs one extra table, not a leak rate or per-tick refill state: the
+   whole state per identity per class is still one counter, and the window
+   index those counters belong to is held once for the pair of tables rather
+   than once per row. Retirement stays exact AND free — the table two
+   windows old is unreachable the instant the index moves, and it is dropped
+   whole, in constant time, by the first decision of the new window. No
+   decision ever walks a table.
 
    IDENTITY: the last hop of `X-Forwarded-For`, parsed only when the caller
    states the connection's peer is a configured trusted proxy — never from
@@ -76,18 +86,21 @@ public export data RateLimitClass =
 
 public export data RateLimitVerdict = Admitted | Refused
 
-{- | Opaque, resource-bounded: the `Int` is the window index every row in the
-   map belongs to, and rows are only ever written at the caller's own window
-   index, so the whole table ages out together. A decision whose window index
-   differs from the state's therefore starts from an empty table — never one
-   row per identity ever seen — and the bound is again "at most one row per
-   identity active in the current window".
+{- | Opaque, resource-bounded: the `Int` is the window index the SECOND map
+   belongs to, and the first map is the window before it. Rows are only ever
+   written into the current-window table at the caller's own window index, so
+   each table ages out whole. A decision one window on demotes the current
+   table to previous and starts a fresh one; a decision further on than that
+   starts from two empty tables — never one row per identity ever seen — and
+   the bound is "at most one row per identity active in each of the two
+   windows in view".
 
-   The index is held once for the table rather than once per row so that
+   The index is held once for the pair rather than once per row so that
    retirement costs one comparison instead of a walk: a per-row index forces
    whoever prunes to visit every row, which puts the count of OTHER clients
    seen this window into the cost of serving one request. -}
-export data RateLimitState = RateLimitState Int (Map String ClientCounters)
+export data RateLimitState =
+  | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters)
 
 data ClientCounters = ClientCounters Int Int Int Int Int
 -- connections used, requests used, writes used, createSession used,
@@ -98,7 +111,7 @@ data ClientCounters = ClientCounters Int Int Int Int Int
 -- never negative.
 export
 initRateLimitState : RateLimitState
-initRateLimitState = RateLimitState (0 - 1) Tip
+initRateLimitState = RateLimitState (0 - 1) Tip Tip
 
 export
 classAllowance : RateLimitClass -> Int
@@ -108,26 +121,70 @@ classAllowance WritesClass = maxWritesPerWindow
 classAllowance CreateSessionClass = maxCreateSessionPerWindow
 classAllowance RepoExportClass = maxRepoExportsPerWindow
 
--- | The pure decision. Same identity, same class: refused while `used >=
--- classAllowance class`, admitted again once `now` crosses into a fresh
--- window index for that identity.
+{- | The two tables in view at `windowIdx`, given the pair a state holds and
+   the index they were written at: the same pair while the index has not
+   moved, the current one demoted to previous one window on, and two empty
+   tables once the state is older than that. -}
+tablesInView : Int ->
+  Int ->
+  Map String ClientCounters ->
+  Map String ClientCounters ->
+  (Map String ClientCounters, Map String ClientCounters)
+tablesInView stateWindow windowIdx previous current =
+  if stateWindow == windowIdx then
+    (previous, current)
+  else if stateWindow + 1 == windowIdx then
+    (current, Tip)
+  else
+    (Tip, Tip)
+
+countersFor : String -> Map String ClientCounters -> ClientCounters
+countersFor key table = match get key table
+  Some counters => counters
+  None => emptyCounters
+
+{- | What one identity has spent on one class over the window ENDING at
+   `elapsed` seconds into the current window: everything charged in this
+   window, plus the fraction of the previous window still inside it.
+
+   Integer arithmetic throughout, and the division truncates, so the carried
+   share is never rounded up — the estimate errs toward admitting rather than
+   toward refusing a caller who has not in fact exceeded anything. -}
+slidingUsed : RateLimitClass -> Int -> ClientCounters -> ClientCounters -> Int
+slidingUsed limitClass elapsed previous current =
+  classUsed limitClass current
+    + classUsed limitClass previous
+      * (rateLimitWindowSeconds - elapsed)
+      / rateLimitWindowSeconds
+
+-- | The pure decision. Same identity, same class: refused while the sliding
+-- count over the trailing window is at or past `classAllowance class`,
+-- admitted again as the charges behind it slide out of view.
 export
 step : RateLimitState ->
   ClientIdentity ->
   RateLimitClass ->
   Int ->
   (RateLimitState, RateLimitVerdict)
-step (RateLimitState stateWindow table) (ClientIdentity key) limitClass now =
+step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key) limitClass now =
   let windowIdx = now / rateLimitWindowSeconds
-  let live = if stateWindow == windowIdx then table else Tip
-  let current = match get key live
-    Some counters => counters
-    None => emptyCounters
-  if classUsed limitClass current >= classAllowance limitClass then
-    (RateLimitState windowIdx (set key current live), Refused)
+  let elapsed = now % rateLimitWindowSeconds
+  let (previous, current) =
+    tablesInView stateWindow windowIdx previousTable currentTable
+  let previousCounters = countersFor key previous
+  let currentCounters = countersFor key current
+  let used = slidingUsed limitClass elapsed previousCounters currentCounters
+  if used >= classAllowance limitClass then
+    (
+      RateLimitState windowIdx previous (set key currentCounters current),
+      Refused,
+    )
   else
     (
-      RateLimitState windowIdx (set key (bumpClass limitClass current) live),
+      RateLimitState
+        windowIdx
+        previous
+        (set key (bumpClass limitClass currentCounters) current),
       Admitted,
     )
 
@@ -155,23 +212,26 @@ bumpClass RepoExportClass (ClientCounters c r wr s x) =
 
 -- | `RateLimit-Remaining` for a class, without mutating state: for response
 -- headers, computed AFTER the `step` call it accompanies so it reflects the
--- count that call just admitted or refused. Applies `step`'s own window test
--- read-only, so a table left over from a prior window reads as unused rather
--- than as whatever it held before it aged out.
+-- count that call just admitted or refused. Applies `step`'s own sliding
+-- count read-only, so the number a client is told matches the number the
+-- next decision will act on.
 export
 remainingInClass : RateLimitState ->
   ClientIdentity ->
   RateLimitClass ->
   Int ->
   Int
-remainingInClass (RateLimitState stateWindow table) (ClientIdentity key) limitClass now =
+remainingInClass (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key) limitClass now =
   let windowIdx = now / rateLimitWindowSeconds
+  let elapsed = now % rateLimitWindowSeconds
+  let (previous, current) =
+    tablesInView stateWindow windowIdx previousTable currentTable
   let used =
-    if stateWindow /= windowIdx then
-      0
-    else match get key table
-      Some counters => classUsed limitClass counters
-      None => 0
+    slidingUsed
+      limitClass
+      elapsed
+      (countersFor key previous)
+      (countersFor key current)
   let remaining = classAllowance limitClass - used
   if remaining < 0 then 0 else remaining
 

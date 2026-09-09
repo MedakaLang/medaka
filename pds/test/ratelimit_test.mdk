@@ -79,14 +79,75 @@ saturatedFor identity =
     maxCreateSessionPerWindow
 
 -- (a) the allowance refills over time: same identity refused once its
--- window's allowance is spent, admitted again once `now` crosses into the
--- next window.
-test "createSession allowance refuses at the limit and refills next window" =
+-- allowance is spent, admitted again once the window it was spent in has
+-- slid entirely out of view. Two whole windows on, not one: the charges of
+-- the window just past are still inside the trailing window a decision at
+-- the boundary looks at, which is the whole of (a2) below.
+test "createSession allowance refuses at the limit and refills once its window has slid out" =
   let saturated = saturatedFor directIdentity
   let (_, atLimit) = step saturated directIdentity CreateSessionClass 0
-  let (_, nextWindow) =
+  let (_, laterWindow) =
+    step
+      saturated
+      directIdentity
+      CreateSessionClass
+      (2 * rateLimitWindowSeconds)
+  expectAll [
+    expectTrue (isRefused atLimit),
+    expectTrue (isAdmitted laterWindow),
+  ]
+
+-- (a2) #2775: the boundary is not a free refill. A fixed window admits the
+-- whole allowance in the second before its index changes and the whole
+-- allowance again in the second after, so a caller straddling the boundary
+-- draws twice the nominal rate over one window's worth of seconds while
+-- every counter reads as within budget.
+--
+-- Both halves are asserted against the SAME instants, and every instant is
+-- supplied here rather than read from a clock: the property is about where
+-- `now` falls relative to a window boundary, so a test that waited on a real
+-- clock would be asserting something about when it happened to run.
+test "a caller at twice the nominal rate is refused across a window boundary" =
+  let spent =
+    exhaust
+      initRateLimitState
+      directIdentity
+      CreateSessionClass
+      (rateLimitWindowSeconds - 1)
+      maxCreateSessionPerWindow
+  let (_, justAfter) =
+    step spent directIdentity CreateSessionClass rateLimitWindowSeconds
+  expectTrue (isRefused justAfter)
+
+test "a caller at the nominal rate is admitted across the same boundary" =
+  let paced =
+    exhaust
+      initRateLimitState
+      directIdentity
+      CreateSessionClass
+      (rateLimitWindowSeconds - 1)
+      (maxCreateSessionPerWindow / 2)
+  let (_, justAfter) =
+    step paced directIdentity CreateSessionClass rateLimitWindowSeconds
+  expectTrue (isAdmitted justAfter)
+
+-- The budget comes back in proportion to how far the boundary has receded,
+-- not all at once: an identity that spent everything at the start of one
+-- window is refused at the next boundary and admitted half a window later.
+test "a spent allowance returns in proportion as the boundary recedes" =
+  let saturated = saturatedFor directIdentity
+  let (_, atBoundary) =
     step saturated directIdentity CreateSessionClass rateLimitWindowSeconds
-  expectAll [expectTrue (isRefused atLimit), expectTrue (isAdmitted nextWindow)]
+  let (_, halfWayOn) =
+    step
+      saturated
+      directIdentity
+      CreateSessionClass
+      (rateLimitWindowSeconds + rateLimitWindowSeconds / 2)
+  expectAll [
+    expectTrue (isRefused atBoundary),
+    expectTrue (isAdmitted halfWayOn),
+  ]
 
 test "an identity under its allowance is admitted" =
   let (_, verdict) = step initRateLimitState directIdentity RequestsClass 0

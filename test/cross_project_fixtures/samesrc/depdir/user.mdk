@@ -1,0 +1,5 @@
+import helper.{h}
+
+export
+q : Int
+q = h

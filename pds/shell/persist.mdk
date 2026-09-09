@@ -20,11 +20,46 @@
    `rename` visible before the block writes it was ordered after. -}
 
 import fs.{mkdirAll}
+import hex.{encode}
+import io.{writeFilePrivate}
 import lib.cid.{Cid, cidFromString, cidToString}
+import lib.credential.{
+  CredentialRecord,
+  credentialDigest,
+  credentialIterations,
+  credentialSalt,
+}
 import shell.blockfile.{blockFileRead, blockFileWrite}
 
 blocksDir : String -> String
 blocksDir dir = "\{dir}/blocks"
+
+-- | Where the account's password credential is kept beneath `dir`.
+export
+credentialPath : String -> String
+credentialPath dir = "\{dir}/credential"
+
+-- The stored credential: iteration count, salt, and derived key, one per line.
+-- The password is not among them and was never held here.
+credentialText : CredentialRecord -> String
+credentialText record =
+  "\{intToString (credentialIterations record)}\n\{encode (credentialSalt record)}\n\{encode (credentialDigest record)}\n"
+
+{- | Write the account's password credential beneath `dir`, at mode 0600.
+
+   Both the first-run bootstrap (`pds/serve.mdk`) and the rehash a login
+   performs when the stored record predates today's iteration count
+   (`pds/shell/server.mdk`) go through here, so there is one spelling of the
+   credential file's layout and one place its mode is decided. The mode is not
+   advisory: `pds/serve.mdk` refuses to read a secret file any wider back. -}
+export
+persistCredential : String ->
+  CredentialRecord ->
+  <FileWrite "_"> Result String Unit
+persistCredential dir record =
+  match writeFilePrivate (credentialPath dir) (credentialText record)
+    Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
+    Ok () => Ok ()
 
 headPath : String -> String
 headPath dir = "\{dir}/head"

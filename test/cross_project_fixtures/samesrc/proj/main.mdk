@@ -1,0 +1,4 @@
+import user.{q}
+import d.user as DU
+
+main = println (intToString (q + DU.q))

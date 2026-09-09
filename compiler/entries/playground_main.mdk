@@ -417,7 +417,7 @@ mainShapeError decls = match findMainFunDef decls
 -- producer on BOTH arms that reach here, after this call site was written:
 --   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
 --     (#2155's SET-OR-CLEAR write);
---   * multi module  — `analyzeProject` → `typecheckPass` → `cmDiagsCollect` →
+--   * multi module  — `analyzeProject` → `typecheckPassFull` → `cmDiagsCollect` →
 --     `setMainSchemeIfEntry` (#2246's).
 -- Both run BEFORE this point on every path that reaches it, and nothing between
 -- them and here writes the ref (`desugaredPrelude` and `desugarPair` are pure;

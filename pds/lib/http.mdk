@@ -1091,6 +1091,18 @@ export
 httpScanStart : HttpScan
 httpScanStart = HttpScan 0 (PhaseLine 0)
 
+{- | Whether a scan that has not yet framed a request is still inside the
+   request line or the header fields — that is, the request's header section
+   has not been terminated. Only this module can answer it, `ScanPhase` being
+   private, and a caller that budgets the header phase apart from the body
+   (`pds/shell/server.mdk`) has no other way to tell the two apart. A scan
+   that already framed a request reports False: its header section ended. -}
+export
+httpScanInHeaders : HttpScan -> Bool
+httpScanInHeaders (HttpScan _ (PhaseLine _)) = True
+httpScanInHeaders (HttpScan _ (PhaseFields _ _ _ _ _)) = True
+httpScanInHeaders (HttpScan _ (PhaseBody _ _)) = False
+
 scanVerdict : Array Int ->
   Int ->
   HttpScan ->
