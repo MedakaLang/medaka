@@ -245,20 +245,26 @@ decend18:
 ; mdk-module impl:Int_compare
 define i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call i64 @mdk_value_lt(i64 %arg0, i64 %arg1)
-  %t1 = ashr i64 %t0, 1
-  %t2 = icmp ne i64 %t1, 0
-  br i1 %t2, label %then3, label %else3
-then3:
+  %t0 = icmp slt i64 %arg0, %arg1
+  %t1 = zext i1 %t0 to i64
+  %t2 = shl i64 %t1, 1
+  %t3 = or i64 %t2, 1
+  %t4 = ashr i64 %t3, 1
+  %t5 = icmp ne i64 %t4, 0
+  br i1 %t5, label %then6, label %else6
+then6:
   ret i64 1
-else3:
-  %t4 = call i64 @mdk_value_gt(i64 %arg0, i64 %arg1)
-  %t5 = ashr i64 %t4, 1
-  %t6 = icmp ne i64 %t5, 0
-  br i1 %t6, label %then7, label %else7
-then7:
+else6:
+  %t7 = icmp sgt i64 %arg0, %arg1
+  %t8 = zext i1 %t7 to i64
+  %t9 = shl i64 %t8, 1
+  %t10 = or i64 %t9, 1
+  %t11 = ashr i64 %t10, 1
+  %t12 = icmp ne i64 %t11, 0
+  br i1 %t12, label %then13, label %else13
+then13:
   ret i64 5
-else7:
+else13:
   ret i64 3
 }
 
