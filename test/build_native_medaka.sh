@@ -335,7 +335,7 @@ src_fingerprint_compiler() {
 fp_full_file_list() {
   _closure=""
   if ! grep -q '^[[:space:]]*\[dependencies\]' compiler/medaka.toml 2>/dev/null; then
-    _closure="$(awk -v entry="$FP_ENTRY" -v roots="$FP_ROOTS" -f test/emitter_source_set.awk)" || _closure=""
+    _closure="$(awk -v entry="$FP_ENTRY" -v roots="$FP_ROOTS" -f test/emitter_source_set.awk /dev/null)" || _closure=""
   fi
   if [ -z "$_closure" ]; then
     echo "note: emitter import-closure walk unavailable — hashing all of compiler/ for FP_FULL." >&2

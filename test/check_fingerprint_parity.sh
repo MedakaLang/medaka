@@ -153,7 +153,7 @@ STATIC="$WORK/static.txt"
 # the PIPELINE's status, which is sort's, so a walker exiting 1 would be absorbed and
 # reported later as a downstream symptom (an empty list) naming the wrong cause.
 if ! ( cd "$ROOT" && awk -v entry="$FP_ENTRY" -v roots="$FP_ROOTS" \
-         -f test/emitter_source_set.awk ) > "$WORK/static.raw"; then
+         -f test/emitter_source_set.awk /dev/null ) > "$WORK/static.raw"; then
   echo "FAIL: test/emitter_source_set.awk could not walk $FP_ENTRY."
   echo "      src_fingerprint_full() would fall back to hashing all of compiler/ — safe,"
   echo "      but it means the narrowing this gate exists to protect is not in effect."
