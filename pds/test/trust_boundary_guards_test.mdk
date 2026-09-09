@@ -33,42 +33,29 @@
    dropping a row lowers `length results` below `cellFloor` and fails the
    floor check rather than silently running fewer cases. -}
 
-import io.{runVerb}
 import list.{lookup}
-import string.{contains, unwords}
 import test.{Expectation(..)}
-import test_process.{expectSpawnFails, medakaBin, underRoot}
+import test_process.{
+  expectSpawnFails,
+  expectSpawnOkLine,
+  medakaBin,
+  underRoot,
+}
 
 probe : <IO> String
 probe = underRoot "pds/test/guard_probes_main.mdk"
 
-{- | Passes when spawning the probe under `caseName` exits 0 AND its output
-   contains `wantLine`. The CONTROL half of the grading: `test_process`
-   carries the PANIC half (`expectSpawnFails`) but nothing that also
-   requires a successful exit's output to contain a substring, so this
-   composes `runVerb` directly, the same shape `expectSpawnFails` uses. -}
+{- | Passes when spawning the probe under `caseName` exits 0 AND one whole
+   line of its output equals `wantLine`. The CONTROL half of the grading;
+   `expectSpawnFails` is the PANIC half.
+
+   Whole-line, not substring: the retired script graded these with
+   `grep -q "^…$"`, and a substring accepts a probe that printed
+   `NOT OK sha256-edges len=32` for the line `OK sha256-edges len=32`, which
+   is the exact inversion a control case exists to catch. -}
 expectControlCase : String -> String -> <Exec "_", IO> Expectation
 expectControlCase caseName wantLine =
-  let args = ["run", probe, caseName]
-  let line = unwords (medakaBin :: args)
-  let want = "exit 0, output containing \{debug wantLine}"
-  match runVerb medakaBin args
-    Err e => Fail "could not run `\{line}`: \{e}" want "no spawn"
-    Ok (code, out, err) =>
-      let text = out ++ err
-      let got = "exit \{intToString code}, output \{debug text}"
-      if code /= 0 then
-        Fail
-          "`\{line}` exited \{intToString code}, expected 0: \{debug text}"
-          want
-          got
-      else if contains wantLine text then
-        Pass want got
-      else
-        Fail
-          "`\{line}` exited 0 but its output does not contain \{debug wantLine}: \{debug text}"
-          want
-          got
+  expectSpawnOkLine medakaBin ["run", probe, caseName] wantLine
 
 -- The eight cells, verbatim from RUN-PDS0-036 / #1727: case name paired
 -- with its grading shape and the exact text that must appear. `Err` is a

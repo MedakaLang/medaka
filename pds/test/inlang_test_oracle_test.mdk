@@ -12,16 +12,18 @@
    assertions exits 0 — vacuously green. So exit 0 alone is not enough.
    Every suite's executed-assertion count (`summary.passed` from `medaka
    test --json`) must meet the per-file floor committed below, the corpus's
-   total must be nonzero, and every `pds/test/*_test.mdk` file must have a
-   roster row — an unrostered file fails this gate rather than going
-   uncounted. -}
+   total must be nonzero, and every `pds/test/*_test.mdk` file must either
+   have a roster row or a reasoned `exempt` row — a file that has neither
+   fails this gate rather than going uncounted. -}
 
-import io.{runVerb}
-import json.{asInt, get, parse}
 import list.{lookup, somes}
-import string.{endsWith, stripSuffix}
 import test.{Expectation(..)}
-import test_process.{medakaBin, underRoot}
+import test_process.{
+  missingTestFiles,
+  testAssertionCount,
+  underRoot,
+  unrosteredTestFiles,
+}
 
 {- | Which engine a suite is spawned under, and why.
 
@@ -39,7 +41,8 @@ engineArgs Eval = []
 engineArgs NativeCapability = ["--native"]
 engineArgs NativeSpeed = ["--native"]
 
--- How a suite's engine is named in a passing assertion's report.
+-- How a suite's engine is named in this gate's own failure message, so a
+-- spawn error says which arm produced it.
 engineLabel : Engine -> String
 engineLabel Eval = "eval"
 engineLabel NativeCapability = "native (capability)"
@@ -55,11 +58,10 @@ engineLabel NativeSpeed = "native (speed)"
    regenerate all 21 from a fresh run, which would turn the guard into a
    tautology.
 
-   The engine column is the measured assignment (sprint
-   `suites-the-vehicle-runs`, slice 1, both arms timed serially on one box),
-   not either retired script's inherited list — the two disagreed about
-   `field_test` and `scalar_test`, which cost this gate several minutes of
-   interpreter time per run.
+   The engine column is the measured assignment, not either retired
+   script's inherited list — the two disagreed about `field_test` and
+   `scalar_test`, which cost this gate several minutes of interpreter time
+   per run.
 
    `NativeCapability` (4 files): the eval arm REFUSES the file outright
    ("reaches the extern `buildCommit` … No test was run"), so it is not a
@@ -102,57 +104,69 @@ suites = [
 
    An excluded file still needs a `suites` row: it stays rostered (so the
    closure check below does not flag it) and its floor stays committed (so
-   restoring it does not need the number rediscovered). -}
+   restoring it does not need the number rediscovered). It is not spawned,
+   and it contributes nothing to the assertion total — an exclusion that
+   still counted its own floor would let a fully excluded roster report a
+   green corpus of assertions that never ran. -}
 excluded : List (String, String)
 excluded = []
 
 rosterNames : List String
 rosterNames = map fst suites
 
--- This gate's own file: it lives under `pds/test/` and matches `*_test.mdk`
--- like every suite it grades, but it is not itself a suite in `suites`, so
--- the roster-closure check below must not flag it.
-ownName : String
-ownName = "inlang_test_oracle_test"
+{- | The files under `pds/test/` that match `*_test.mdk` but are not suites
+   this gate grades, each paired with the reason it is not one.
 
-{- | Runs `medaka test <name>.mdk --json` under the suite's engine and
-   returns the executed-assertion count from the JSON envelope's
-   `summary.passed`, or an error naming what went wrong (spawn failure,
-   nonzero exit, or a summary the parser could not find).
+   A row is licensed only for a gate-test in its own right: a file with its
+   own `run =` entry in `test/gates.toml`, which CI therefore executes
+   directly rather than through this roster. Anything else under
+   `pds/test/` is a suite and belongs in `suites` — that is what keeps a new
+   test file from being added silently, since a file in neither list fails
+   the closure check below. The guard after it fails if a row here names a
+   file that is not on disk, so a rename cannot leave the roster quietly
+   open. -}
+exempt : List (String, String)
+exempt = [
+  (
+    "inlang_test_oracle_test",
+    "this gate itself; `test/gates.toml` runs it as `pds/test/inlang_test_oracle`",
+  ),
+  (
+    "trust_boundary_guards_test",
+    "a gate-test, not a suite: it spawns `guard_probes_main.mdk` one case per process, and `test/gates.toml` runs it as `pds/test/trust_boundary_guards`",
+  ),
+]
 
-   The count comes from `--json` rather than the human transcript, so a
-   change to the transcript's shape cannot silently zero it. -}
+exemptNames : List String
+exemptNames = map fst exempt
+
+{- | Runs a suite under its engine and returns its executed-assertion count,
+   or an error naming the engine and what went wrong.
+
+   The engine is named because the two arms fail differently: a capability
+   refusal from the eval arm and a genuine assertion failure both surface as
+   a nonzero exit, and only the label says which arm was asked. -}
 runSuite : String -> Engine -> <Exec "_", IO> Result String Int
 runSuite name engine =
   let path = underRoot "pds/test/\{name}.mdk"
-  let args = ["test"] ++ engineArgs engine ++ [path, "--json"]
-  match runVerb medakaBin args
-    Err e => Err "could not run `medaka test \{path}`: \{e}"
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err
-          "\{path}: medaka test (\{engineLabel engine}) exited \{intToString code} — an assertion failed, or the file did not run: \{debug (out ++ err)}"
-      else match parse out
-        Err e => Err "\{path}: --json output did not parse: \{e}"
-        Ok j => match get "summary" j
-          None => Err "\{path}: no \"summary\" in --json output"
-          Some summary => match get "passed" summary
-            None => Err "\{path}: no \"summary.passed\" in --json output"
-            Some p => match asInt p
-              None => Err "\{path}: \"summary.passed\" is not an integer"
-              Some n => Ok n
+  match testAssertionCount path (engineArgs engine)
+    Err e => Err "\{path} (\{engineLabel engine}): \{e}"
+    Ok n => Ok n
 
-{- | Every suite run exactly once, shared by every assertion below —
-   top-level nullary bindings are memoized, so a spawn placed here and read
-   from two `test` decls executes once, not twice. An excluded suite is not
-   spawned at all. -}
+{- | Every non-excluded suite run exactly once, shared by every assertion
+   below — top-level nullary bindings are memoized, so a spawn placed here
+   and read from two `test` decls executes once, not twice.
+
+   An excluded suite is absent from this list entirely rather than present
+   with a stand-in count, so it cannot be summed into `totalRan`. -}
 results : <Exec "_", IO> List (String, (Int, Result String Int))
 results =
-  map
-    ((name, (floor, engine)) => match lookup name excluded
-      Some _ => (name, (floor, Ok floor))
-      None => (name, (floor, runSuite name engine)))
-    suites
+  somes
+    (map
+      ((name, (floor, engine)) => match lookup name excluded
+        Some _ => None
+        None => Some (name, (floor, runSuite name engine)))
+      suites)
 
 {- | Grades one suite's floor. The message names the file and both numbers
    on a miss; a run that failed outright reports the spawn's own text
@@ -255,34 +269,60 @@ test "pds in-language suite ran at least one assertion" =
       "> 0 assertions"
       "0 assertions"
 
+-- The count `totalRan` sums over is the count of suites actually spawned.
+-- The retired `unit_suite.sh` skipped an excluded suite before touching its
+-- running total, and this keeps that: an exclusion may lower what the gate
+-- proves, but it may never raise what the gate claims.
+spawnedCount : <Exec "_", IO> Int
+spawnedCount = length results
+
+expectedSpawnCount : Int
+expectedSpawnCount = length suites - length excluded
+
+test "an `excluded` suite is neither spawned nor counted" =
+  if spawnedCount == expectedSpawnCount then
+    Pass
+      "\{intToString expectedSpawnCount} suites spawned"
+      "\{intToString spawnedCount} suites spawned"
+  else
+    Fail
+      "\{intToString spawnedCount} suites were spawned, expected \{intToString expectedSpawnCount} (\{intToString (length suites)} rostered less \{intToString (length excluded)} excluded) — an excluded suite is contributing a phantom count"
+      "\{intToString expectedSpawnCount} suites spawned"
+      "\{intToString spawnedCount} suites spawned"
+
 {- # Roster closure
 
    Both retired scripts iterated a hand-maintained roster, and one of them
    (`unit_suite.sh`) had no closure check at all — which is why
    `blob_routes_test.mdk` was absent from its list entirely while it printed
-   PASS. Every `_test.mdk` file under `pds/test/` must have a row in
-   `suites` above. -}
-
-testStem : String -> Option String
-testStem name =
-  if endsWith "_test.mdk" name then stripSuffix ".mdk" name else None
+   PASS. Every `_test.mdk` file under `pds/test/` must therefore be
+   accounted for: a row in `suites` above, or a reasoned row in `exempt`. -}
 
 unrosteredFiles : <FileRead "_", IO> Result String (List String)
-unrosteredFiles = match listDir (underRoot "pds/test")
-  Err e => Err "could not list pds/test: \{e}"
-  Ok names =>
-    let stems = somes (map testStem names)
-    Ok (filter (n => n /= ownName && not (elem n rosterNames)) stems)
+unrosteredFiles =
+  unrosteredTestFiles (underRoot "pds/test") (rosterNames ++ exemptNames)
 
-test "every pds/test/*_test.mdk file has a `suites` roster row" =
+test "every pds/test/*_test.mdk file has a `suites` or `exempt` row" =
   match unrosteredFiles
     Err e => Fail e "no unrostered files" "listDir failed"
     Ok [] => Pass "no unrostered files" "no unrostered files"
     Ok extras =>
       Fail
-        "unrostered pds/test/*_test.mdk file(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today"
+        "unaccounted pds/test/*_test.mdk file(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today, or an `exempt` row saying why it is not a suite"
         "no unrostered files"
         "\{debug extras}"
+
+phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions = missingTestFiles (underRoot "pds/test") exemptNames
+
+test "every `exempt` row names a file that exists" = match phantomExemptions
+  Err e => Fail e "no phantom exemptions" "listDir failed"
+  Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+  Ok extras =>
+    Fail
+      "`exempt` names pds/test file(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a file of that name"
+      "no phantom exemptions"
+      "\{debug extras}"
 
 -- An exclusion ledger naming a file with no `suites` row would skip a suite
 -- that was never graded in the first place, and would read as coverage.

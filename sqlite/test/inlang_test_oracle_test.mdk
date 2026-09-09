@@ -12,17 +12,19 @@
    assertions exits 0 — vacuously green. So exit 0 alone is not enough. Every
    suite's executed-assertion count (`summary.passed` from `medaka test
    --json`) must meet a per-file floor committed below, the corpus's total
-   must be nonzero, and every `sqlite/test/*_test.mdk` file must have a
-   roster row — an unrostered file fails this gate rather than going
-   uncounted (the sqlite script never had this last check; see the roster
-   test below). -}
+   must be nonzero, and every `sqlite/test/*_test.mdk` file must either have
+   a roster row or a reasoned `exempt` row — a file with neither fails this
+   gate rather than going uncounted (the sqlite script never had this last
+   check; see the roster test below). -}
 
-import io.{runVerb}
-import json.{asInt, get, parse}
-import list.{lookup, somes}
-import string.{endsWith, stripSuffix}
+import list.{lookup}
 import test.{Expectation(..)}
-import test_process.{medakaBin, underRoot}
+import test_process.{
+  missingTestFiles,
+  testAssertionCount,
+  underRoot,
+  unrosteredTestFiles,
+}
 
 -- file:floor pairs — floor = the assertion count committed today. Adding
 -- tests only raises the real count (>= floor still passes); removing them,
@@ -44,35 +46,35 @@ suites = [
 rosterNames : List String
 rosterNames = map fst suites
 
--- This gate's own file: it lives under `sqlite/test/` and matches
--- `*_test.mdk` like every suite it grades, but it is not itself a suite in
--- `suites`, so the roster-closure check below must not flag it.
-ownName : String
-ownName = "inlang_test_oracle_test"
+{- | The files under `sqlite/test/` that match `*_test.mdk` but are not
+   suites this gate grades, each paired with the reason it is not one.
 
--- Runs `medaka test <name>.mdk --json` under the default (eval) engine and
--- returns the executed-assertion count from the JSON envelope's
--- `summary.passed`, or an error naming what went wrong (spawn failure,
--- nonzero exit, or a summary the parser could not find). Reads the count
--- from `--json` rather than the human transcript, per F4.
+   A row is licensed only for a gate-test in its own right: a file with its
+   own `run =` entry in `test/gates.toml`, which CI therefore executes
+   directly rather than through this roster. Anything else under
+   `sqlite/test/` is a suite and belongs in `suites` — that is what keeps a
+   new test file from being added silently, since a file in neither list
+   fails the closure check below. Only this gate is exempt today; the list is
+   a list rather than a single name because a second gate-test landing beside
+   it must be a deliberate row, not a mechanism change. -}
+exempt : List (String, String)
+exempt = [
+  (
+    "inlang_test_oracle_test",
+    "this gate itself; `test/gates.toml` runs it as `sqlite/test/inlang_test_oracle`",
+  ),
+]
+
+exemptNames : List String
+exemptNames = map fst exempt
+
+-- Runs one suite under the default (eval) engine and returns its
+-- executed-assertion count, or an error naming the file and what went wrong.
 runSuite : String -> <Exec "_", IO> Result String Int
 runSuite name =
-  let path = underRoot "sqlite/test/\{name}.mdk"
-  match runVerb medakaBin ["test", path, "--json"]
-    Err e => Err "could not run `medaka test \{path}`: \{e}"
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err
-          "\{path}: medaka test exited \{intToString code}: \{debug (out ++ err)}"
-      else match parse out
-        Err e => Err "\{path}: --json output did not parse: \{e}"
-        Ok j => match get "summary" j
-          None => Err "\{path}: no \"summary\" in --json output"
-          Some summary => match get "passed" summary
-            None => Err "\{path}: no \"summary.passed\" in --json output"
-            Some p => match asInt p
-              None => Err "\{path}: \"summary.passed\" is not an integer"
-              Some n => Ok n
+  match testAssertionCount (underRoot "sqlite/test/\{name}.mdk") []
+    Err e => Err "sqlite/test/\{name}.mdk: \{e}"
+    Ok n => Ok n
 
 -- Every suite run exactly once, shared by every assertion below —
 -- top-level nullary bindings are memoized (a spawn placed in a shared
@@ -145,25 +147,31 @@ test "sqlite in-language suite ran at least one assertion" =
 -- # Roster closure — THE NEW PROPERTY (#2592): the retired script iterated
 -- its own SUITES roster only, so a new `sqlite/test/*_test.mdk` with no row
 -- went uncounted rather than failing the gate. This closes that gap: every
--- `_test.mdk` file under `sqlite/test/` must have a row in `suites` above.
-
-testStem : String -> Option String
-testStem name =
-  if endsWith "_test.mdk" name then stripSuffix ".mdk" name else None
+-- `_test.mdk` file under `sqlite/test/` is accounted for by a row in
+-- `suites` above or a reasoned row in `exempt`.
 
 unrosteredFiles : <FileRead "_", IO> Result String (List String)
-unrosteredFiles = match listDir (underRoot "sqlite/test")
-  Err e => Err "could not list sqlite/test: \{e}"
-  Ok names =>
-    let stems = somes (map testStem names)
-    Ok (filter (n => n /= ownName && not (elem n rosterNames)) stems)
+unrosteredFiles =
+  unrosteredTestFiles (underRoot "sqlite/test") (rosterNames ++ exemptNames)
 
-test "every sqlite/test/*_test.mdk file has a `suites` roster row" =
+test "every sqlite/test/*_test.mdk file has a `suites` or `exempt` row" =
   match unrosteredFiles
     Err e => Fail e "no unrostered files" "listDir failed"
     Ok [] => Pass "no unrostered files" "no unrostered files"
     Ok extras =>
       Fail
-        "unrostered sqlite/test/*_test.mdk file(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today"
+        "unaccounted sqlite/test/*_test.mdk file(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today, or an `exempt` row saying why it is not a suite"
         "no unrostered files"
         "\{debug extras}"
+
+phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions = missingTestFiles (underRoot "sqlite/test") exemptNames
+
+test "every `exempt` row names a file that exists" = match phantomExemptions
+  Err e => Fail e "no phantom exemptions" "listDir failed"
+  Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+  Ok extras =>
+    Fail
+      "`exempt` names sqlite/test file(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a file of that name"
+      "no phantom exemptions"
+      "\{debug extras}"
