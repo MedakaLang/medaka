@@ -1,5 +1,5 @@
 # META
-source_lines=4206
+source_lines=4207
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -4029,8 +4029,9 @@ snapshotStages a = match flagValue "--stages" a
 -- the non-flag args minus every value-taking flag's VALUE, and `flagValue` is
 -- the first-occurrence read `snapFlagValue` performed.
 
--- dirname on a POSIX path (mirrors build_cmd.dirOf, kept local to avoid an extra
--- import of a non-exported helper).
+-- dirname on a POSIX path.  A deliberate duplicate of `support/path.mdk`'s
+-- `dirOf`, on the same license as that file's own `lsp.mdk` duplicate: too
+-- small to be worth the coupling.  Keep the two bodies identical.
 dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 

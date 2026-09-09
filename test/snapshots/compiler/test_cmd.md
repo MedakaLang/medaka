@@ -1,5 +1,5 @@
 # META
-source_lines=2399
+source_lines=2400
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -2273,8 +2273,9 @@ cliTestReportJson path typeError runs props tests typecheckSkipped =
       ])
 
 -- #2589 item 2: roster-completeness for `*_test.mdk` discovery. The recursive
--- walk (`expandLintTarget`/`collectMdkFiles`, called from
--- `medaka_cli.mdk`'s `runTestManyTargets`) already finds every
+-- walk (`expandLintTarget`/`collectMdkFiles` in
+-- `compiler/support/cli_targets.mdk`, called from `medaka_cli.mdk`'s
+-- `runTestManyTargets`) already finds every
 -- `_test.mdk` sibling on disk by extension alone — it cannot structurally
 -- miss one (§4's "already walks `_test.mdk` siblings like any other .mdk").
 -- What it CAN miss is a file that is git-TRACKED but absent from the walked

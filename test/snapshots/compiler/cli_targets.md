@@ -1,5 +1,5 @@
 # META
-source_lines=82
+source_lines=83
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/support/cli_targets.mdk — the shared CLI TARGET walk.
@@ -13,8 +13,9 @@ stages=DESUGAR,MARK
 -- consumers and no owning stage.
 --
 -- No argv lives here.  Flag vocabulary, rejection and help text stay with each
--- verb (`test/diff_compiler_cli_reject_floor.sh`'s unrouted-arm scan covers
--- `compiler/driver` and `compiler/tools`, not `compiler/support`).
+-- verb.  That is a convention, not something a gate enforces from this side:
+-- `test/diff_compiler_cli_reject_floor.sh`'s unrouted-arm scan reads all of
+-- `compiler/` except `entries/`, so it would see a flag literal here too.
 --
 -- The diagnostics still say "medaka lint:" because that is the wording every
 -- caller shipped before the walk was shared; changing it would change bytes.

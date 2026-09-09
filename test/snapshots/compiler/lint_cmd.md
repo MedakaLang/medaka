@@ -1,5 +1,5 @@
 # META
-source_lines=508
+source_lines=512
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -7,11 +7,15 @@ stages=DESUGAR,MARK
 -- Everything the verb does once its flags are already parsed: resolving the
 -- target set, the per-file pass (fresh or from the `--cache` shards), the
 -- cross-file tier, baseline promotion at application time, and the `--json`
--- envelope.  `medaka_cli.mdk` keeps the argv surface — `lintHelpText`,
--- `lintArgSpec`, `runLintCmd` and the flag/target assertions — because those
--- are the callers of `requireArgs`/`optDefault`/`dieMsg`, which are defined
--- there and shared with the other verbs; importing them here would make
--- `driver` -> `tools` -> `driver` a cycle the loader rejects.
+-- envelope.  `medaka_cli.mdk` keeps `runLintCmd` and the flag/target
+-- assertions because they call `requireArgs`/`optDefault`/`dieMsg`, which are
+-- defined there and shared with the other verbs; importing them here would
+-- make `driver` -> `tools` -> `driver` a cycle the loader rejects.
+-- `lintHelpText`/`lintArgSpec` are spec VALUES, not callers, so the cycle does
+-- not pin them: they stay only because the two gates that police argv surfaces
+-- name `medaka_cli.mdk` in their `sources`.  `test` resolved this the other
+-- way (`tools/test_cmd.mdk` holds `testHelpText`/`testArgSpec`, and both gates'
+-- `sources` name it); the two verbs are deliberately not symmetric yet.
 --
 -- Rule implementations are not here either: they live in `tools/lint.mdk`
 -- (`Rule`/`CrossFileRule`), the cache format in `tools/lint_cache.mdk`, and

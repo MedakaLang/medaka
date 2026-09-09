@@ -1,5 +1,5 @@
 # META
-source_lines=575
+source_lines=576
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_registry.mdk — the gate registry that `medaka gate` (`gate_cmd.mdk`)
@@ -44,7 +44,8 @@ import support.util.{splitOnChar}
 -- `migration` is this gate's DESTINATION under the testing-architecture epic
 -- (#2600): where the check ends up, or the named prerequisite that has to be
 -- discharged before a destination can be picked.  It is a required string on
--- every entry, one of eight values (checked below):
+-- every entry, one of eight values (checked by `migrationClassOk` in
+-- `compiler/tools/gate_cmd.mdk`):
 --
 --   native-wrap            a native gate module invokes the existing script and
 --                          asserts on it; the script's LOGIC survives verbatim.

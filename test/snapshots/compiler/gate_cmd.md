@@ -1521,7 +1521,7 @@ gateTiersErrors g
   | otherwise = tierTokensErrors g.name g.tiers
 
 -- Check 10 (#2591): every entry's `migration` is one of the eight destinations
--- the schema comment above defines.  `migration` is a required TOML string with
+-- the schema comment in `compiler/tools/gate_registry.mdk` defines.  `migration` is a required TOML string with
 -- no enum check at parse time, exactly like `cost` before check 8 — and a
 -- migration value nothing recognizes is worse than a typo'd cost, because the
 -- whole point of the field is that a wave of the epic can select on it.  A
