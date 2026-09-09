@@ -635,20 +635,31 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   let emitProg0 = if useNative then emitter2 else medaka
   let emitArgs0 =
     if useNative then emitArgsBase else "run" :: emitter :: emitArgsBase
+  -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
+  -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
+  -- total; these sub-rows decompose it (prelude-bc + emit-ir + rt-obj + clang) so
+  -- a slow build names its own culprit instead of reporting one opaque number.
+  let perfOn = perfEnabled ()
+  -- The prelude/program split, decided ONCE here — before the emit — so that the
+  -- emit-half choice and the link can never disagree, which would be a
+  -- half-linked binary.  See the prelude ThinLTO bitcode cache below (#2730) for
+  -- what it costs, what it saves, and every way it falls open to the whole-module
+  -- path.  The `medaka run <entry>` emitter fallback is excluded: its IR is a
+  -- function of the compiler SOURCES this key does not hash.
+  let tBc0 = now ()
+  let preludeLto =
+    if useNative then preludeBcPlan cc root emitProg0 tmpDir else None
+  let tBc1 = now ()
+  let _ = emitPhase perfOn "prelude-bc" (tBc1 - tBc0) (preludeBcNote preludeLto)
   -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the prelude half.  When a
   -- prebuilt prelude.o is on offer, tell the emitter to emit THIS PROGRAM ONLY
   -- (declaring what prelude.o defines): 88% of a small program's IR is prelude, and
   -- clang -O2 re-optimises all of it on every build.  See preludeObjOf below.
   let (emitProg, emitArgs) =
-    if preludeObjOf () == "" then
-      (emitProg0, emitArgs0)
-    else
+    if isSome preludeLto || preludeObjOf () /= "" then
       withEmitHalf "program" emitProg0 emitArgs0
-  -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
-  -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
-  -- total; these sub-rows decompose it (emit-ir + rt-obj + clang) so a slow build
-  -- names its own culprit instead of reporting one opaque 1.4 s number.
-  let perfOn = perfEnabled ()
+    else
+      (emitProg0, emitArgs0)
   let tEmit0 = now ()
   let emitRes = runCommand emitProg emitArgs
   let tEmit1 = now ()
@@ -700,6 +711,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 tmpDir
                 ffiRoot
                 (readForeignLibs ffiRoot)
+                preludeLto
             let (keptIr, keepNotes) =
               if effectiveKeepIr keepIrCli then
                 keepIrOutcome (outPath ++ ".ll") ir
@@ -885,13 +897,22 @@ clangLink : String ->
   String ->
   String ->
   List (String, String) ->
+  Option (String, List String) ->
   <IO> Result BuildReport BuildReport
-clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs =
+clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs preludeLto =
   let libErr = foreignLibErr cc tmpDir projRoot libs
   if libErr /= "" then
     buildErr libErr
   else
-    clangLinkGo cc rtC llPath outPath inputAbs tmpDir (libLinkFlags libs)
+    clangLinkGo
+      cc
+      rtC
+      llPath
+      outPath
+      inputAbs
+      tmpDir
+      (libLinkFlags libs)
+      preludeLto
 
 -- `-L<dir>`/`-l<name>` for each declared library, in declaration order.  A
 -- library with no search directory contributes `-l<name>` alone.
@@ -1251,8 +1272,9 @@ clangLinkGo : String ->
   String ->
   String ->
   List String ->
+  Option (String, List String) ->
   <IO> Result BuildReport BuildReport
-clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
+clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags preludeLto =
   clangLinkTimed
     cc
     rtC
@@ -1261,6 +1283,7 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
     inputAbs
     tmpDir
     libFlags
+    preludeLto
     (perfEnabled ())
     (now ())
 
@@ -1271,10 +1294,11 @@ clangLinkTimed : String ->
   String ->
   String ->
   List String ->
+  Option (String, List String) ->
   Bool ->
   Float ->
   <IO> Result BuildReport BuildReport
-clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
+clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags preludeLto perfOn tLink0 =
   match detectGC cc tmpDir
     None => buildErr (libgcMissingError ())
     Some (gcCflags, gcLibs) =>
@@ -1333,12 +1357,19 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
       -- purpose and NOT the default for `--release`: separate objects cannot inline
       -- prelude functions into user code without LTO.  Proven output-identical
       -- inline-vs-prebuilt by test/diff_compiler_prelude_obj.sh.
+      --
+      -- SINCE #2730 that object is no longer the only split: when nothing named
+      -- MEDAKA_PRELUDE_OBJ, `preludeBcPlan` (below) may have resolved a cached
+      -- prelude half as ThinLTO BITCODE instead, in which case the link is handed
+      -- the bitcode plus `-flto=thin`, both module summaries reach the linker,
+      -- and prelude bodies still inline into user code — the one thing the object
+      -- split cannot do.  The two are mutually exclusive by construction:
+      -- preludeBcPlan returns None whenever MEDAKA_PRELUDE_OBJ names a file.
       let preludeObj = preludeObjOf ()
-      let objInputs =
-        if preludeObj == "" then
-          [llPath, rtInput]
-        else
-          [llPath, preludeObj, rtInput]
+      let (preludeInputs, ltoFlags) = match preludeLto
+        Some (bcPath, flags) => ([bcPath], flags)
+        None => (if preludeObj == "" then [] else [preludeObj], [])
+      let objInputs = [llPath] ++ preludeInputs ++ [rtInput]
       -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
       -- worker thread via GC_pthread_create, so it self-provisions its stack: no
       -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
@@ -1348,6 +1379,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
         [optFlag, "-pthread"]
           ++ gcSectionsCflags
           ++ gcCflags
+          ++ ltoFlags
           ++ objInputs
           ++ libFlags
           ++ gcLibs
@@ -1382,6 +1414,300 @@ preludeObjOf _ =
 withEmitHalf : String -> String -> List String -> (String, List String)
 withEmitHalf half prog args =
   ("env", ["MEDAKA_EMIT_HALF=\{half}", prog] ++ args)
+
+-- ---- the prelude ThinLTO bitcode cache (issue #2730) -----------------------
+-- The prelude is 88% of a small program's IR and clang -O2 re-optimises all of
+-- it on every build of every program (measured: 1.20 s of hello-world's 2.05 s).
+-- The sibling MEDAKA_PRELUDE_OBJ fast path removes that cost but pays for it in
+-- the emitted program, because a separate OBJECT cannot be inlined into user
+-- code: measured over test/bench_fixtures/*, `dispatch` grew 23,568 -> 28,424
+-- bytes and its runtime 0.20 -> 0.34 s.  That is why prelude.o is opt-in and is
+-- not, and must not become, the default.
+--
+-- ThinLTO BITCODE is the same saving without that cost.  The prelude half is
+-- compiled once to a `.bc` and cached; the program half is emitted per build;
+-- the LINK is handed BOTH, so the linker still sees both module summaries and
+-- prelude bodies still inline into user code.  Re-measured on this box over the
+-- same fixtures, whole-module -O2 vs cached-bitcode ThinLTO: `dispatch` 31,816
+-- -> 13,608 bytes and 0.46 -> 0.18 s, `fib` 0.57 -> 0.52 s, `intsum` 0.04 ->
+-- 0.05 s — smaller and no slower everywhere, which an object file is not.
+--
+-- CACHE KEY.  Same discipline as rtObjCacheKey above and NOT
+-- `liveSourceFingerprint`: what we hash is exactly what the bitcode is a
+-- function of — the cc name, `cc --version`, the compile flag list, the EMITTER
+-- BINARY's contents (it is what turns source into this IR), and the contents of
+-- the only two sources the prelude half is emitted from, stdlib/runtime.mdk and
+-- stdlib/core.mdk.  The same known gaps rtObjCacheKey documents (an in-place
+-- header/toolchain upgrade that leaves `cc --version` untouched) apply here.
+-- gcCflags are deliberately NOT in the key or the compile: they are `-I` include
+-- paths, inert when the input is LLVM IR rather than C.
+--
+-- FAIL-OPEN, ALWAYS.  Every failure path returns None, and None means the
+-- whole-module path — byte-for-byte today's behavior.  No cache problem, absent
+-- lld, unwritable directory or failed emit may fail a build that would otherwise
+-- succeed.  The decision is taken ONCE, before the emit, precisely so that the
+-- emit-half choice and the link can never disagree about which path is on.
+--
+-- Escape hatches: MEDAKA_PARALLEL_CODEGEN=0 forces the plain whole-module path
+-- (same switch name and meaning as test/build_native_medaka.sh's);
+-- MEDAKA_NO_OBJ_CACHE / MEDAKA_CACHE_DIR act through objCacheDir as before; an
+-- explicit MEDAKA_PRELUDE_OBJ still wins outright, so every existing CI caller
+-- keeps its exact behavior.
+
+-- Where ld.lld lives, or "" when the ThinLTO link is unavailable here.  The
+-- search order mirrors pcg_discover in test/build_native_medaka.sh rather than
+-- inventing a second probe: MEDAKA_LLVM_BINDIR INSTEAD of everything else (the
+-- operator knob, and the seam that lets the plain-clang fallback be exercised by
+-- pointing it at a directory without the tools), then PATH, then the versioned
+-- Debian/Ubuntu directories that keep ld.lld off PATH, then the two Homebrew
+-- prefixes for [B-DUAL-PLATFORM].  On Darwin no tool directory is needed at all
+-- — Apple's own `ld` drives `-flto=thin` and ld64.lld does not reliably link
+-- system frameworks — so the marker "system-ld" is returned instead of a path.
+lldBinDir : Unit -> <IO> String
+lldBinDir _ =
+  let script = stringConcat [
+    "if [ \"$(uname -s)\" = Darwin ]; then\n",
+    "  if [ -n \"${MEDAKA_LLVM_BINDIR:-}\" ] && [ ! -d \"$MEDAKA_LLVM_BINDIR\" ]; then exit 1; fi\n",
+    "  printf 'system-ld'; exit 0\n",
+    "fi\n",
+    "if [ -n \"${MEDAKA_LLVM_BINDIR:-}\" ]; then\n",
+    "  [ -x \"$MEDAKA_LLVM_BINDIR/ld.lld\" ] || exit 1\n",
+    "  printf '%s' \"$MEDAKA_LLVM_BINDIR\"; exit 0\n",
+    "fi\n",
+    "if command -v ld.lld >/dev/null 2>&1; then\n",
+    "  printf '%s' \"$(dirname \"$(command -v ld.lld)\")\"; exit 0\n",
+    "fi\n",
+    "for d in $(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -r) /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do\n",
+    "  if [ -x \"$d/ld.lld\" ]; then printf '%s' \"$d\"; exit 0; fi\n",
+    "done\n",
+    "exit 1\n",
+  ]
+  match runCommand "sh" ["-c", script, "sh"]
+    -- fail-open-by-design: no lld discoverable -> "" -> the whole-module path.
+    Ok (0, out, _) => stringTrim out
+    _ => ""
+
+-- The link-side ThinLTO flags.  No --thinlto-jobs: the LTO unit here is two
+-- modules, so the backend's concurrency changes nothing worth a knob, and lld's
+-- own default is the box's hardware concurrency.  No explicit cache policy
+-- either — lld's default (prune after a week) is the one we would have written,
+-- and a malformed policy string is a HARD link error, which this path must never
+-- be able to cause.
+ltoLinkFlags : String -> String -> List String
+ltoLinkFlags lldDir cacheDir =
+  if lldDir == "system-ld" then
+    ["-flto=thin", "-Wl,-cache_path_lto,\{cacheDir}"]
+  else
+    [
+      "-flto=thin",
+      "-fuse-ld=\{joinPath lldDir "ld.lld"}",
+      "-Wl,--thinlto-cache-dir=\{cacheDir}",
+    ]
+
+-- The cache key — see the CACHE KEY note above for what is hashed and why.
+-- Shelled out through the same three-way sha256sum/shasum/cksum fallback chain
+-- rtObjCacheKey uses, with every path passed as a POSITIONAL ARGUMENT rather
+-- than interpolated into the script text.  "" on any failure.
+preludeBcCacheKey : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> String
+preludeBcCacheKey cc root emitProg optFlag tmpDir =
+  let flagsPath = joinPath tmpDir "preludebc_flags"
+  let flagsText =
+    joinWith " " ([optFlag, "-pthread", "-flto=thin"] ++ gcSectionsCflags)
+      ++ "\n"
+  match writeFile flagsPath flagsText
+    Err _ => ""
+    Ok _ =>
+      let script = stringConcat [
+        "{ printf '%s\\n' \"$1\"; \"$1\" --version 2>/dev/null; ",
+        "cat \"$2\" \"$3\" \"$4\" \"$5\"; } | ",
+        "{ if command -v sha256sum >/dev/null 2>&1; then sha256sum; ",
+        "elif command -v shasum >/dev/null 2>&1; then shasum -a 256; ",
+        "else cksum; fi; } | cut -d' ' -f1",
+      ]
+      let args = [
+        "-c",
+        script,
+        "sh",
+        cc,
+        flagsPath,
+        emitProg,
+        joinPath root "stdlib/runtime.mdk",
+        joinPath root "stdlib/core.mdk",
+      ]
+      match runCommand "sh" args
+        -- fail-open-by-design: "" on any failure (caller then skips the cache).
+        Ok (0, out, _) => stringTrim out
+        _ => ""
+
+-- Sanity-check a cache HIT before trusting it, for the same reason rtObjUsable
+-- exists: population is write-then-rename, so a truncated entry needs a crash
+-- mid-writeback — but if that happens the file still EXISTS at the expected
+-- path and the next build fails inside the linker, pointing nowhere near the
+-- cache.  LLVM bitcode's magic is the two ASCII bytes "BC", which needs no tool
+-- to check, so unlike rtObjUsable there is no "tool absent -> accept" arm.  A
+-- rejected entry is repopulated over (mktemp + `mv -f`) and so self-repairs.
+preludeBcUsable : String -> <IO> Bool
+preludeBcUsable bcPath =
+  let script = stringConcat [
+    "[ -s \"$1\" ] || exit 1\n",
+    "[ \"$(dd if=\"$1\" bs=1 count=2 2>/dev/null)\" = BC ]\n",
+  ]
+  match runCommand "sh" ["-c", script, "sh", bcPath]
+    -- fail-open-by-design: unreadable or not bitcode -> reject -> repopulate.
+    Ok (0, _, _) => True
+    _ => False
+
+-- Cache MISS: emit the prelude half (MEDAKA_EMIT_HALF=prelude, the same stub
+-- entry and the same roots emitPreludeObjIn uses — DCE is off in that mode, so
+-- what lands here is the WHOLE prelude and not what the stub reached) and
+-- compile it to ThinLTO bitcode.  The cache directory is created FIRST, before
+-- the emit: on a cache dir that can never be created (MEDAKA_CACHE_DIR pointed
+-- somewhere unwritable) the fall-open is then free, instead of paying a ~0.3 s
+-- prelude emit on every build only to discard it.
+populatePreludeBc : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> String
+populatePreludeBc cc root emitProg optFlag dir bcPath tmpDir =
+  let stubPath = joinPath tmpDir "prelude_bc_entry.mdk"
+  let llPath = joinPath tmpDir "prelude_half.ll"
+  match mkdirOk dir
+    -- fail-open-by-design (every arm): "" -> the whole-module path.
+    False => ""
+    True => match writeFile stubPath "main = ()\n"
+      Err _ => ""
+      Ok _ =>
+        let emitArgs = [
+          joinPath root "stdlib/runtime.mdk",
+          joinPath root "stdlib/core.mdk",
+          stubPath,
+          tmpDir,
+          joinPath root "compiler",
+          joinPath root "stdlib",
+        ]
+        let (emitP, emitA) = withEmitHalf "prelude" emitProg emitArgs
+        match runCommand emitP emitA
+          Ok (0, irRaw, _) =>
+            let ir = stripTrailingUnit irRaw
+            if stringLength ir == 0 then
+              ""
+            else match writeFile llPath ir
+              Err _ => ""
+              Ok _ => compilePreludeBc cc optFlag dir bcPath llPath
+          _ => ""
+
+-- `mkdir -p`, as a Bool — the one question populatePreludeBc asks before it
+-- spends anything.
+mkdirOk : String -> <IO> Bool
+mkdirOk dir = match runCommand "mkdir" ["-p", dir]
+  Ok (0, _, _) => True
+  _ => False
+
+-- Compile the emitted prelude half to bitcode inside the cache dir via mktemp +
+-- atomic same-filesystem `mv`, exactly as populateRtObj does — a racing build
+-- either sees the old absence and repeats the work, or sees a finished entry,
+-- never a partial one.  `-x ir` because the input is textual LLVM IR.
+compilePreludeBc : String -> String -> String -> String -> String -> <IO> String
+compilePreludeBc cc optFlag dir bcPath llPath =
+  match runCommand "mktemp" [joinPath dir "preludebc_XXXXXX"]
+    -- fail-open-by-design (every arm): "" -> the whole-module path.
+    Ok (0, tOut, _) =>
+      let tmpBc = stringTrim tOut
+      if tmpBc == "" then
+        ""
+      else
+        let ccArgs =
+          [optFlag, "-pthread"]
+            ++ gcSectionsCflags
+            ++ ["-flto=thin", "-c", "-x", "ir", llPath, "-o", tmpBc]
+        match runCommand cc ccArgs
+          Ok (0, _, _) => match runCommand "mv" ["-f", tmpBc, bcPath]
+            Ok (0, _, _) =>
+              -- Opportunistic eviction on write, same as populateRtObj: the age
+              -- sweep is shape-agnostic and these `.bc` entries are the second
+              -- entry class it was sized for.
+              let _ = sweepStaleObjCacheEntries dir
+              bcPath
+            _ =>
+              let _ = removeFile tmpBc
+              ""
+          _ =>
+            let _ = removeFile tmpBc
+            ""
+    _ => ""
+
+-- The ONE reader, consulted before the emit so that the emit-half choice and the
+-- link cannot disagree.  Some (bitcode path, link flags) = take the split path;
+-- None = the whole-module path, unchanged.
+preludeBcPlan : String ->
+  String ->
+  String ->
+  String ->
+  <IO> Option (String, List String)
+preludeBcPlan cc root emitProg tmpDir =
+  if envOr "MEDAKA_PARALLEL_CODEGEN" "1" == "0" then
+    None
+  else if preludeObjOf () /= "" then
+    None
+  else if not (fileExists emitProg) then
+    None
+  else
+    let dir = objCacheDir ()
+    if dir == "" then
+      None
+    else
+      let lldDir = lldBinDir ()
+      if lldDir == "" then
+        None
+      else
+        preludeBcPlanIn cc root emitProg tmpDir dir lldDir
+
+-- The body once every "is this path even available here" question has been
+-- answered — split out only to keep the guard chain above readable.
+preludeBcPlanIn : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> Option (String, List String)
+preludeBcPlanIn cc root emitProg tmpDir dir lldDir =
+  let optFlag = clangOptFlag
+  let key = preludeBcCacheKey cc root emitProg optFlag tmpDir
+  if key == "" then
+    None
+  else
+    let bcPath = joinPath dir "prelude-\{key}.bc"
+    let hit = if fileExists bcPath then preludeBcUsable bcPath else False
+    let got =
+      if hit then
+        -- Refresh the entry's mtime on every hit so sweepStaleObjCacheEntries
+        -- ages out only entries this box has genuinely stopped using.
+        let _ = runCommand "touch" [bcPath]
+        bcPath
+      else
+        populatePreludeBc cc root emitProg optFlag dir bcPath tmpDir
+    if got == "" then
+      None
+    else
+      let ltoDir = joinPath dir "thinlto"
+      let _ = runCommand "mkdir" ["-p", ltoDir]
+      Some (got, ltoLinkFlags lldDir ltoDir)
+
+-- The `[perf] prelude-bc` row's ops field: which path this build took, so the
+-- row is self-explaining in a log.
+preludeBcNote : Option (String, List String) -> String
+preludeBcNote (Some (bc, _)) = "cache \{bc}"
+preludeBcNote None = "off (whole module)"
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with

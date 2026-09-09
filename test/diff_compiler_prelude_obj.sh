@@ -1,5 +1,6 @@
 #!/bin/sh
-# diff_compiler_prelude_obj.sh — PROOF GATE for the MEDAKA_PRELUDE_OBJ build fast path.
+# diff_compiler_prelude_obj.sh — PROOF GATE for both SPLIT-PRELUDE build paths: the
+# MEDAKA_PRELUDE_OBJ object (issue #118) and the cached ThinLTO bitcode (issue #2730).
 #
 # `medaka build` normally hands clang the WHOLE module: on a nine-line fixture that
 # is 11,841 lines of IR, 88% of which (270 of 281 defines) is the prelude — and
@@ -8,9 +9,15 @@
 # the object via MEDAKA_PRELUDE_OBJ, so a per-program build only compiles the
 # program's own code plus its `@mdk_disp_*` dispatchers.
 #
-# That is only sound if the two link paths — the whole module inline, vs the split
-# prelude.o + program half — produce a program that BEHAVES THE SAME.  This gate
-# makes that proof permanent.
+# Since #2730 the same split happens by DEFAULT with the shared half as ThinLTO
+# bitcode rather than an object, which keeps the cross-module inlining the object
+# gives up.  Both are the same soundness bet: one shared half, built once from
+# stdlib/core.mdk alone, serving a program it has never seen.
+#
+# That is only sound if all three link paths — the whole module inline, the split
+# prelude.o + program half, and the split prelude.bc + program half — produce a
+# program that BEHAVES THE SAME.  This gate makes that proof permanent, with the
+# WHOLE-MODULE build as the reference arm both split arms are compared against.
 #
 # WHY OUTPUT-IDENTITY, NOT BYTE-IDENTITY (unlike its sibling diff_compiler_rt_obj.sh):
 # the rt-obj fast path compiles the SAME C to the SAME object, so the binaries are
@@ -32,7 +39,7 @@
 # programs a stale prelude.o would get wrong.
 #
 # Usage:  sh test/diff_compiler_prelude_obj.sh
-# Exit:   0 if every (fixture, opt) pair produces identical output inline-vs-prebuilt;
+# Exit:   0 if every (fixture, opt, split-arm) triple matches the whole-module reference;
 #         1 on any divergence or build failure;
 #         2 if the native medaka/emitter is missing, no C compiler, or libgc is
 #           absent (opt-in skip, same discipline as the other LLVM gates).
@@ -58,7 +65,7 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # Impl-heavy on purpose (see the header): each of these defines impls of prelude
 # interfaces and routes them through prelude generics, which is the only shape a
 # stale/over-baked prelude.o can get wrong.  Kept small — this is a correctness
-# tripwire, not a coverage sweep, and each entry is TWO builds × TWO opt levels.
+# tripwire, not a coverage sweep, and each entry is THREE builds × TWO opt levels.
 #
 # `interface_impl` earns its place twice over: its interface has exactly ONE impl,
 # which is the WS-1b sole-impl direct-call shape — the one that must NOT be baked
@@ -98,27 +105,51 @@ for OPT in -O0 -O2; do
     label="$(basename "$src" .mdk)"
     inline="$W/$label$OPT.inline"
     prebuilt="$W/$label$OPT.prebuilt"
-    if ! MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$inline" >/dev/null 2>&1; then
+    bitcode="$W/$label$OPT.bitcode"
+    # MEDAKA_PARALLEL_CODEGEN=0 pins the reference arm to the WHOLE-MODULE link.
+    # Since #2730 an ordinary `medaka build` may split the prelude off as cached
+    # ThinLTO bitcode by DEFAULT, and a reference arm that also split would leave
+    # this gate comparing two split builds with each other — it would still pass
+    # while proving nothing about the thing it exists to prove, which is that a
+    # prelude built ONCE, from stdlib/core.mdk alone, serves a program it has
+    # never seen.  The reference must be the unsplit build.
+    if ! MEDAKA_PARALLEL_CODEGEN=0 MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$inline" >/dev/null 2>&1; then
       echo "FAIL: inline build failed ($label $OPT)"; fail=$((fail+1)); continue
     fi
+    "$inline" > "$W/$label$OPT.inline.out" 2>&1; rc_i=$?
+    # Two split arms, both against that same unsplit reference: the OBJECT
+    # (MEDAKA_PRELUDE_OBJ, issue #118) and the cached ThinLTO BITCODE (#2730,
+    # the default path).  They fail in the same ways for the same reasons — a
+    # per-program dispatcher leaking into the shared half, or a prelude body
+    # baking in an impl decision — so both are held to the same fixtures.
     if ! MEDAKA_PRELUDE_OBJ="$pobj" MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$prebuilt" >/dev/null 2>&1; then
       echo "FAIL: prebuilt build failed ($label $OPT)"; fail=$((fail+1)); continue
     fi
-    "$inline"   > "$W/$label$OPT.inline.out"   2>&1; rc_i=$?
-    "$prebuilt" > "$W/$label$OPT.prebuilt.out" 2>&1; rc_p=$?
-    checked=$((checked+1))
-    if [ "$rc_i" -eq "$rc_p" ] && cmp -s "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out"; then
-      same=$((same+1))
-      printf 'ok   %-28s %s  same output (exit %d)\n' "$label" "$OPT" "$rc_i"
-    else
-      fail=$((fail+1))
-      printf 'FAIL %-28s %s  inline(exit %d) vs prebuilt(exit %d) DIVERGED\n' "$label" "$OPT" "$rc_i" "$rc_p"
-      diff "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out" | head -10
+    if ! MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$bitcode" >/dev/null 2>&1; then
+      echo "FAIL: bitcode build failed ($label $OPT)"; fail=$((fail+1)); continue
     fi
+    "$prebuilt" > "$W/$label$OPT.prebuilt.out" 2>&1; rc_p=$?
+    "$bitcode"  > "$W/$label$OPT.bitcode.out"  2>&1; rc_b=$?
+    for arm in prebuilt bitcode; do
+      case "$arm" in
+        prebuilt) rc_a=$rc_p ;;
+        *)        rc_a=$rc_b ;;
+      esac
+      checked=$((checked+1))
+      if [ "$rc_i" -eq "$rc_a" ] && cmp -s "$W/$label$OPT.inline.out" "$W/$label$OPT.$arm.out"; then
+        same=$((same+1))
+        printf 'ok   %-28s %s %-8s same output (exit %d)\n' "$label" "$OPT" "$arm" "$rc_i"
+      else
+        fail=$((fail+1))
+        printf 'FAIL %-28s %s %-8s inline(exit %d) vs %s(exit %d) DIVERGED\n' \
+          "$label" "$OPT" "$arm" "$rc_i" "$arm" "$rc_a"
+        diff "$W/$label$OPT.inline.out" "$W/$label$OPT.$arm.out" | head -10
+      fi
+    done
   done
 done
 
-printf '\n%d/%d fixture-builds behave identically inline-vs-prebuilt (%d checked)\n' \
+printf '\n%d/%d split-half builds behave identically against the whole-module reference (%d checked)\n' \
   "$same" "$checked" "$checked"
 
 # EXIT STATUS — gated EXPLICITLY on $fail, for the reason spelled out at the foot of
@@ -135,7 +166,7 @@ printf '\n%d/%d fixture-builds behave identically inline-vs-prebuilt (%d checked
 # real failures: a regression reported as "not run".  A gate that observed failures
 # must FAIL, whether or not it also managed to compare anything.
 if [ "$fail" -ne 0 ]; then
-  printf 'FAILED: %d fixture-build(s) diverged inline-vs-prebuilt (or failed to build)\n' "$fail" >&2
+  printf 'FAILED: %d split-half build(s) diverged from the whole-module reference (or failed to build)\n' "$fail" >&2
   exit 1
 fi
 
