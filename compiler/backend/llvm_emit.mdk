@@ -306,8 +306,9 @@ data GapMode = Strict | Record
 -- would answer a lookup for `%t5` in another and the indirect call would
 -- saturate with the WRONG arity.  That per-define clearing is what keeps the
 -- SSA-register-keyed entries sound.  The constant-global-keyed entries need no
--- such protection on their own: `@mdk_cc_N`'s `N` comes from `freshId`, a
--- counter that is never reset (unlike the per-define `%tN` one), so no two
+-- such protection on their own: `@mdk_cc_<scope>_N`'s `<scope>_N` comes from
+-- `freshId`, which never repeats a (scope, N) pair within an emission (unlike the
+-- per-define `%tN` counter, which restarts), so no two
 -- closure-construction sites can ever mint the same word regardless of which
 -- define reads it — the per-define clearing is redundant safety for this
 -- subset, not the reason it's sound.
@@ -336,8 +337,9 @@ data GapMode = Strict | Record
 -- closure cell's word — the same mixed key domain as `e.closureArity` above
 -- (`emitGroupBind` calls the very same `emitConstClosureA` / `emitClosureAllocA`
 -- to build the cell and reuses the resulting word `w` as this table's key too),
--- so the same split applies: entries keyed by a `ptrtoint (ptr @mdk_cc_N to i64)`
--- constant can never collide, `N` coming from `freshId`'s never-reset counter,
+-- so the same split applies: entries keyed by a
+-- `ptrtoint (ptr @mdk_cc_<scope>_N to i64)`
+-- constant can never collide, the `<scope>_N` word coming from `freshId`,
 -- while entries keyed by a raw `%tN` SSA register still depend on the
 -- PER-DEFINE scoping — `beginDefine` clears it, `endDefine` restores it.
 -- The value is the lifted define's symbol and its arity.  An entry is written by
@@ -801,7 +803,7 @@ data LTy =
   -- back to an i64 word (escape coercion); only `emitFloatLeaf` consumes it raw.
   | LTFloatU
 
--- emitter state: a fresh-name counter, the output lines (accumulated in REVERSE
+-- emitter state: the per-scope fresh-name counters, the output lines (accumulated in REVERSE
 -- — prepend is O(1); reverseL'd once at the end restores program order), the
 -- set of known top-level FUNCTION names, so a `CApp` head can be
 -- distinguished as a direct call to `@mdk_<name>` vs an unsupported higher-order
@@ -944,7 +946,15 @@ ifaceIdArityRow (m, (_, ifaceWord, arity)) =
 
 data Emit = Emit {
   input : EmitInput,
-  counter : Ref Int,
+  -- the gensym id every per-scope counter starts from (`EmitStateConfig.counter0`
+  -- — 0 for the prelude half, `programHalfIdBase` for the program half).
+  counter0 : Int,
+  -- the scope every lifted name minted right now is attributed to, and the value
+  -- the `; mdk-module` marker carries: a module id (`frontend_lexer`), an impl
+  -- group's own key (`impl:List_eq`), or `program`.
+  curModule : Ref String,
+  -- one gensym counter PER scope, keyed by `curModule`'s word.
+  counters : Ref (OrdMap Int),
   buf : Ref (List String),
   fnNames : Ref (List String),
   sigs : Ref (List (String, FnSig)),
@@ -983,6 +993,9 @@ data Emit = Emit {
   ctorOrdinalMap : Ref (Option (OrdMap Int)),
   typeIdMap : Ref (Option (OrdMap Int)),
   dispCache : Ref (List String),
+  -- constant dict / closure cells already emitted, keyed by `constCellKey`
+  -- (scope word + initializer text), so a cell is deduped only WITHIN the scope
+  -- that minted it — see `constCellKey`.
   dictConstCache : Ref (List (String, String)),
   closConstCache : Ref (List (String, String)),
   floatFwSet : Ref (List (String, (Int, List Int))),
@@ -1003,10 +1016,27 @@ data FnSig = FnSig (List LTy) LTy
 -- ── emitter plumbing ────────────────────────────────────────────────────────
 -- TWO gensym namespaces (issue #118, "per-define deterministic numbering"):
 --
---   * `freshId` — the MODULE-GLOBAL counter (`e.counter`).  Feeds every name that
---     must be unique across the whole LLVM module: `@.strc.N` string constants,
---     `@mdk_dc_N` constant dict cells, and every lifted-define name
---     (`@mdk_lamN`, `@mdk_eta_*`, `@mdk_pap_*`, `@mdk_methval_*`, …).  NEVER reset.
+--   * `freshId` — the PER-SCOPE counter (`e.counters`, keyed by the scope WORD,
+--     the same string the name carries).  Feeds every name that must be unique
+--     across the whole LLVM module: `@.strc.<scope>.N` string constants,
+--     `@mdk_dc.<scope>.N` constant dict cells, and every lifted-define name
+--     (`@mdk_lam.<scope>.N`, `@mdk_eta_<f>.<scope>.N`, `@mdk_pap_*`,
+--     `@mdk_methval_*`, …).  A scope is an emitting MODULE id, an impl group's
+--     own key, or `program` (`setScope*` below).  Uniqueness comes from the
+--     (scope, N) PAIR, which is why every minted name carries both;
+--     `mangleScoped` is the one place that spelling lives and all 20 mint sites
+--     call it.  Each scope's counter starts at `e.counter0` and counts up within
+--     the scope; it is never reset within one emission.
+--
+--     THE PARSE RULE, and why the separator is `.`: a minted name is
+--     `<family>[_<subject>] "." <scope> "." <N>`.  Both `<family>_<subject>` and
+--     `<scope>` contain `_` freely (`mdk_eta_core__fst`, `frontend_lexer`), so an
+--     `_` separator would not be injective — `mdk_eta_a_b_c_1` could split three
+--     ways.  `.` is legal in an unquoted LLVM identifier and is OUTSIDE the
+--     mangled alphabet: `private_mangle.safeChar` admits only `[A-Za-z0-9_]`, so
+--     neither a sanitized subject nor an `injectiveIdent` image nor a scope word
+--     can contain one.  Splitting from the RIGHT at the last two `.` therefore
+--     recovers (subject, scope, N) exactly, whatever the subject holds.
 --
 --   * `freshLocal` — the PER-DEFINE counter (`e.defineCounter`).  Feeds `%tN` SSA
 --     registers (`freshReg`) and block labels (`then{N}`, `divok{N}`, `clause{N}`,
@@ -1017,12 +1047,83 @@ data FnSig = FnSig (List LTy) LTy
 -- Reset by `beginDefine` at the top of every `define`; saved+restored by
 -- `endDefine` around the side-buffer swap that emits a lifted define INSIDE
 -- another define's emission (see `defineScope` below).
+--
+-- #2726: scoping `freshId` per module is what makes a one-module source edit a
+-- one-module text edit.  With ONE never-reset counter, adding a lambda to
+-- `frontend/lexer.mdk` shifted every id minted after it and renamed 2,892 of the
+-- compiler's 13,922 defines; per scope, it renames one.
 freshId : Emit -> Int
 freshId e =
-  let c = e.counter
-  let n = !c
-  c := n + 1
+  -- keyed on the WORD, not on `!e.curModule`: the word is what the emitted name
+  -- carries, so two scopes that share a word must share a counter or they would
+  -- mint the same name twice.
+  let k = scopeWord e
+  let n = optionOr e.counter0 (omLookup k !e.counters)
+  e.counters := omInsert k (n + 1) !e.counters
   n
+
+-- The current scope as an LLVM-name-safe word.  `curModule` may hold an impl
+-- group's key (`impl:List_eq`), and `:` is not in LLVM's unquoted-identifier set,
+-- so the NAME form maps it to `_` while the marker keeps the readable spelling.
+scopeWord : Emit -> String
+scopeWord e = scopeWordOf !e.curModule
+
+scopeWordOf : String -> String
+scopeWordOf s = match stringIndexOf ":" s
+  Some i => "\{stringSlice 0 i s}_\{stringSlice (i + 1) (stringLength s) s}"
+  None => s
+
+-- THE gensym spelling, in one place: the `.<scope>.<id>` tail every minted name
+-- ends with (parse rule + why `.`: the `freshId` header above).
+mangleScoped : Emit -> String
+mangleScoped e = ".\{scopeWord e}.\{intToString (freshId e)}"
+
+-- ── scope attribution (#2726) ───────────────────────────────────────────────
+-- The module id of a top-level bind: the text before its FIRST `__`, the
+-- universal per-module mangling every bind name carries
+-- (`mdk_types_typecheck__foo`, `@mdk_g_frontend_parser__peekP`).  A name with no
+-- `__` at all comes from a SINGLE-module emission, where the driver mangles
+-- nothing and there is no module to name — those fall to `program`, which is
+-- exactly the one-counter behaviour such a program had before this change.
+scopeProgram : String
+scopeProgram = "program"
+
+moduleIdOf : String -> String
+moduleIdOf name = match stringIndexOf "__" name
+  Some 0 => scopeProgram
+  Some i => stringSlice 0 i name
+  None => scopeProgram
+
+setScope : Emit -> String -> Unit
+setScope e s = e.curModule := s
+
+-- Run `act` attributed to `program` and restore the demanding scope afterwards.
+-- The two callers are the demand-emitted WHOLE-PROGRAM entities — a dispatcher
+-- and an interface default — each emitted once, from inside whichever module's
+-- body first needs it.  Drawing their gensyms from that module's counter would
+-- make one module's ids depend on another module's demand order, which is the
+-- coupling #2726 exists to remove.
+withProgramScope : Emit -> (Unit -> Unit) -> Unit
+withProgramScope e act =
+  let saved = !e.curModule
+  let _ = setScope e scopeProgram
+  let _ = act ()
+  setScope e saved
+
+-- attribute what follows to the module that owns `bindName`.
+setScopeOfBind : Emit -> String -> Unit
+setScopeOfBind e bind = setScope e (moduleIdOf bind)
+
+-- The marker line that precedes every TOP-LEVEL entity, naming the scope its
+-- gensyms were drawn from.  `;` is LLVM's line comment, so it is inert IR and a
+-- pure partitioning aid for the consumer (#2727/#2752).
+--
+-- Column 0 is load-bearing: a consumer keys on `^; mdk-module` to find entity
+-- boundaries, so a marker inside a define's body would read as a boundary that is
+-- not one (#2753 review S3-9).  There are none: this is called only from
+-- `beginDefine` and `emitGlobal`, both of which write at top level.
+markScope : Emit -> Unit
+markScope e = emit e "; mdk-module \{!e.curModule}"
 
 freshLocal : Emit -> Int
 freshLocal e =
@@ -1042,7 +1143,8 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 -- way or `%t5` in one function would answer a lookup for `%t5` in another (a
 -- wrong closure arity at an indirect call = silent miscompile).  Not every entry
 -- needs this protection — a `ptrtoint (ptr @mdk_cc_N to i64)` constant key is
--- already globally unique (`N` from the never-reset `freshId`) regardless of
+-- already globally unique (its `<scope>_N` word is minted once by `freshId`,
+-- which never repeats a pair within an emission) regardless of
 -- scoping — but clearing per define costs nothing on that subset and is load-
 -- bearing on the `%tN`-keyed one, so all three tables are scoped uniformly.
 --
@@ -1050,11 +1152,19 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 data DefScope =
   | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int)))
 
--- start a fresh `define` scope, returning the enclosing one (for `endDefine`).
+-- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
+--
+-- #2726: this is also the ONE place the `; mdk-module` marker is written for a
+-- `define`.  Every `define` line in this file is emitted immediately after a
+-- `beginDefine` call and nowhere else (25 of each), so marking here gives
+-- exactly one marker per define, in the right buffer: at a side-buffer swap the
+-- caller has already redirected `e.buf` before calling, so the marker lands at
+-- the head of the spliced lifted define rather than in the enclosing one.
 beginDefine : Emit -> DefScope
 beginDefine e =
   let saved =
     DefScope !e.defineCounter !e.closureArity !e.closureRetTy !e.directFn
+  let _ = markScope e
   e.defineCounter := 0
   e.closureArity := []
   e.closureRetTy := []
@@ -2165,7 +2275,7 @@ emitLit e (LString s) =
   let bytes = strBytes s
   let n = lengthS bytes
   let cpc = arrayLength (stringToChars s)
-  let gid = ".strc." ++ intToString (freshId e)
+  let gid = ".strc" ++ mangleScoped e
   let _ =
     emitGlobal
       e
@@ -2182,8 +2292,11 @@ emitLit e _ = gapE e "non-Int/Float/Bool/String/Char/Unit literal"
 -- the lifted-lambda defines also use — LLVM module-item order is irrelevant, so a
 -- `@.str.N = … constant …` appended after @main is sound (same discipline as the
 -- lifted `define`s).
+-- #2726: `lams` is reversed on the way out, so consing the marker AFTER the line
+-- puts it BEFORE the line in the emitted text.
 emitGlobal : Emit -> String -> Unit
-emitGlobal e line = lamsRef e := line :: (lamsRef e).value
+emitGlobal e line =
+  lamsRef e := line :: "; mdk-module \{!e.curModule}" :: (lamsRef e).value
 
 -- the raw UTF-8 bytes of a string literal, in order.  `stringToChars` yields the
 -- source codepoints; `utf8Bytes` re-encodes each to its UTF-8 byte sequence, so the
@@ -4704,7 +4817,7 @@ anyInList (x :: xs) ys = if contains x ys then True else anyInList xs ys
 -- way, and the flag only registers it as a direct-call target (`e.directFn`).
 emitGroupBind : Emit -> OrdMap (String, LTy) -> CBind -> Bool -> (String, LTy)
 emitGroupBind e env (CBind name clauses) direct =
-  let lamName = "mdk_lam" ++ intToString (freshId e)
+  let lamName = "mdk_lam" ++ mangleScoped e
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv env (removeStr name (dedupS (clausesFreeVars name clauses)))
@@ -4962,7 +5075,7 @@ knotAlloc : Emit ->
   (List KnotCell, OrdMap (String, LTy))
 knotAlloc _ env _ [] = ([], env)
 knotAlloc e env cellEnv ((CBind name clauses) :: rest) =
-  let lamName = "mdk_lam" ++ intToString (freshId e)
+  let lamName = "mdk_lam" ++ mangleScoped e
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv cellEnv (removeStr name (dedupS (clausesFreeVars name clauses)))
@@ -5566,7 +5679,7 @@ emitMethodValue e env name route implRoutes methRoutes =
   else
     let capNames = methValDictNames route
     let capWords = capDictWords e env capNames
-    let lamName = "mdk_methval_\{name}_\{intToString (freshId e)}"
+    let lamName = "mdk_methval_\{name}\{mangleScoped e}"
     let _ =
       emitMethodValDefine
         e
@@ -5683,7 +5796,7 @@ emitDictValue e env name routes =
       emitDictApp e env name routes []
     else
       let dictWords = dictWordsOf e env routes
-      let lamName = "mdk_dictval_\{name}_\{intToString (freshId e)}"
+      let lamName = "mdk_dictval_\{name}\{mangleScoped e}"
       let _ = emitDictValDefine e lamName name (lengthS dictWords) valArity
       emitClosureAllocA e lamName valArity dictWords
   else
@@ -5744,7 +5857,7 @@ emitMethodPap e env name route implRoutes methRoutes argOps arity =
   let capNames = dedupS (routeDictNames [] (route :: implRoutes ++ methRoutes))
   let dictWords = capDictWords e env capNames
   let remaining = arity - lengthS argOps
-  let lamName = "mdk_methpap_\{name}_\{intToString (freshId e)}"
+  let lamName = "mdk_methpap_\{name}\{mangleScoped e}"
   let _ =
     emitMethodPapDefine
       e
@@ -6040,7 +6153,7 @@ emitPapClosure : Emit -> String -> List String -> Int -> (String, LTy)
 emitPapClosure e fname argOps arity =
   let supplied = lengthS argOps
   let remaining = arity - supplied
-  let papName = "mdk_pap_\{fname}_\{intToString (freshId e)}"
+  let papName = "mdk_pap_\{fname}\{mangleScoped e}"
   let _ = emitPapDefine e papName fname supplied remaining
   emitClosureAlloc e papName remaining argOps
 
@@ -6084,7 +6197,7 @@ emitPapClosureIndirect : Emit -> String -> List String -> Int -> (String, LTy)
 emitPapClosureIndirect e cw argOps arity =
   let supplied = lengthS argOps
   let remaining = arity - supplied
-  let papName = "mdk_pap_ind_" ++ intToString (freshId e)
+  let papName = "mdk_pap_ind" ++ mangleScoped e
   let _ = emitPapDefineIndirect e papName supplied remaining
   emitClosureAllocA e papName remaining (cw :: argOps)
 
@@ -6258,23 +6371,38 @@ emitHalfPrelude = 1
 emitHalfProgram : Int
 emitHalfProgram = 2
 
--- The gensym-id base for the PROGRAM half.  `freshId` (the module-global counter)
--- names every LIFTED define — `@mdk_lamN`, `@mdk_eta*_N`, `@mdk_pap_*_N` — and
+-- The gensym-id base for the PROGRAM half.  `freshId` names every LIFTED define —
+-- `@mdk_lam_<scope>_N`, `@mdk_eta_*_<scope>_N`, `@mdk_pap_*` — and
 -- those have external linkage, so if the two halves drew from the same range they
 -- would collide on a symbol name (loudly, at link).  The halves are emitted by two
 -- INDEPENDENT emitter runs, so give them disjoint ranges: the prelude half counts
--- up from 0, the program half from this base.  `preludeIdSpaceGuard` turns the
+-- up from 0, the program half from this base.  #2726 made the counter PER SCOPE,
+-- which does not weaken the argument and does not strengthen it either: the two
+-- halves can emit the same scope (the program half re-walks the prelude's own
+-- bodies, `emitAsDeclares`), so the disjoint id ranges — not the scope word — stay
+-- the thing that separates the names.  Every scope therefore starts at
+-- `counter0`.  `preludeIdSpaceGuard` turns the
 -- "0 .. base is enough for the prelude" assumption into a build-time check rather
 -- than a hope — emitting core.mdk whole draws ~500 ids, four orders of magnitude
--- below the base.
+-- below the base — and it must check EVERY scope's counter, since any one of them
+-- crossing the base is a collision.
 programHalfIdBase : Int
 programHalfIdBase = 1000000
 
 preludeIdSpaceGuard : Emit -> Unit
 preludeIdSpaceGuard e =
-  if e.input.emitHalf == emitHalfPrelude && !e.counter >= programHalfIdBase then
+  if e.input.emitHalf == emitHalfPrelude then
+    preludeIdSpaceGuardGo e (omKeys !e.counters)
+
+preludeIdSpaceGuardGo : Emit -> List String -> Unit
+preludeIdSpaceGuardGo _ [] = ()
+preludeIdSpaceGuardGo e (k :: rest) =
+  let n = optionOr e.counter0 (omLookup k !e.counters)
+  if n >= programHalfIdBase then
     panic
-      "prelude-object emit exhausted its gensym id space (\{intToString !e.counter} >= \{intToString programHalfIdBase}) — raise programHalfIdBase in llvm_emit.mdk"
+      "prelude-object emit exhausted its gensym id space (scope '\{k}': \{intToString n} >= \{intToString programHalfIdBase}) — raise programHalfIdBase in llvm_emit.mdk"
+  else
+    preludeIdSpaceGuardGo e rest
 
 -- The PRELUDE-owned symbols, installed by the emit driver in PROGRAM-half mode
 -- (mode 2 only — in mode 1 every decl in the program IS the prelude).  Derived by
@@ -6411,10 +6539,11 @@ ensureDispatcherEmitted e fname name nmw nargs =
     -- re-walks the prelude's own bodies (emitAsDeclares), so it reaches this exact
     -- (name, nmw, nargs) site and DEFINES every dispatcher the prelude declares: the
     -- demand set is derived, never encoded, and a mismatch is a LOUD undefined symbol.
-    if e.input.emitHalf == emitHalfPrelude then
-      emitGlobal e "declare i64 @\{fname}(\{dispParamDecls nmw nargs})"
-    else
-      emitDispatcherDefine e fname name nmw nargs
+    withProgramScope e (_ =>
+      if e.input.emitHalf == emitHalfPrelude then
+        emitGlobal e "declare i64 @\{fname}(\{dispParamDecls nmw nargs})"
+      else
+        emitDispatcherDefine e fname name nmw nargs)
 
 -- emit the shared dispatcher define.  Same side-buffer swap every other lifted define
 -- uses (emitMethodValDefine/emitDictValDefine): redirect `buf`, emit, splice into
@@ -7796,7 +7925,8 @@ emitDictCell e headTag reqWords =
 -- constant` module global and pass `ptrtoint (ptr @g to i64)` — eliminating the
 -- per-invocation allocation that dominated dispatch-heavy polymorphic loops (~4×
 -- on a tight `Ord` loop; broad — every constant dict across stdlib/compiler/user
--- code). Deduped by initializer content so identical dicts share one global.
+-- code). Deduped by initializer content WITHIN one scope, so identical dicts in
+-- one module share a global and two modules get one apiece (`constCellKey`).
 
 -- every dict word is a compile-time constant (not a runtime %register): a literal
 -- tag, "0" (RNone), or a `ptrtoint`-of-global constant-expr (a nested const dict).
@@ -7816,13 +7946,28 @@ emitConstDictCell e headTag reqWords =
   let n = lengthS reqWords
   let initBody =
     "[\{intToString (n + 1)} x i64] [i64 \{intToString headTag}\{constDictReqInits reqWords}]"
-  match lookupAssoc initBody !e.dictConstCache
+  let key = constCellKey e initBody
+  match lookupAssoc key !e.dictConstCache
     Some gname => "ptrtoint (ptr @" ++ gname ++ " to i64)"
     None =>
-      let gname = "mdk_dc_" ++ intToString (freshId e)
+      let gname = "mdk_dc" ++ mangleScoped e
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
-      e.dictConstCache := (initBody, gname) :: !e.dictConstCache
+      e.dictConstCache := (key, gname) :: !e.dictConstCache
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
+
+-- The constant-cell cache key.  #2753 review S2-1: keying on the initializer text
+-- ALONE made the caches program-global while the names they mint are per-scope,
+-- so the first module to need a body owned the cell and every later module
+-- referenced it — 217 cross-partition references on the CLI IR, and a one-line
+-- edit to `frontend/desugar.mdk` moved 25 of 77 partitions.  Prefixing the scope
+-- word confines a cell to the scope that minted it: a duplicate `internal
+-- constant` per scope instead of one shared global.  Sound because consumers
+-- LOAD the cell's fields and nothing compares cell addresses (the layout is
+-- byte-identical to `emitDictCell`'s heap cell, which is per-call anyway).
+-- `|` is outside `private_mangle.safeChar`'s alphabet, so it cannot occur in a
+-- scope word and the two components can never blur.
+constCellKey : Emit -> String -> String
+constCellKey e initBody = "\{scopeWord e}|\{initBody}"
 
 -- the operand word a dict parameter name is bound to in the emit env.
 dictOperand : Emit -> OrdMap (String, LTy) -> String -> String
@@ -7864,12 +8009,23 @@ dictOperand e env d = match omLookup d env
 data ImplGroup =
   | ImplGroup String String String (List Int) Int (List (List Pat, CExpr))
 
+-- #2726: the gensym scope of an impl group — its OWN emitted symbol, prefixed so
+-- the marker reads as what it is (`impl:List_eq`) and can never be confused with
+-- a module id.  `scopeWordOf` maps the `:` out again for the LLVM name form.
+implGroupScope : ImplGroup -> String
+implGroupScope (ImplGroup method _ symTag _ _ _) = "impl:\{symTag}_\{method}"
+
 emitImpls : Emit -> List CImplEntry -> Unit
 emitImpls e entries = emitGroups e (groupImpls e entries)
 
 emitGroups : Emit -> List ImplGroup -> Unit
 emitGroups _ [] = ()
 emitGroups e (g :: rest) =
+  -- #2726: an impl group gets its OWN scope, not a module's.  Its module is not
+  -- in the emitter's inputs at all — `DImpl.implOrigin` is the identity of the
+  -- INTERFACE the impl names, not of the module that wrote the impl — and a
+  -- per-group scope is in any case more local than any bucket it could share.
+  let _ = setScope e (implGroupScope g)
   -- PROGRAM half (issue #118): same treatment as a prelude fn bind — see emitFns.
   let _ =
     if hiddenImplGroup e g then
@@ -7971,7 +8127,7 @@ ensureDefaultEmitted e fname tag method entry =
     ()
   else
     let _ = markDefaultEmitted e fname
-    emitDefaultDefine e fname tag method entry
+    withProgramScope e (_ => emitDefaultDefine e fname tag method entry)
 
 emitDefaultDefine : Emit -> String -> String -> String -> CImplEntry -> Unit
 emitDefaultDefine e fname tag method entry =
@@ -8821,12 +8977,13 @@ emitClosureAllocA e lamName arity captureWords =
 -- cannot be back-patched, so that path keeps its per-entry alloc by design).
 -- `__mdk_apply` only reads the cell; a PAP is a separate freshly-allocated cell.
 --
--- Cached by initializer content in its own cache (NOT `dictConstCache` — different
+-- Cached by `constCellKey` in its own cache (NOT `dictConstCache` — different
 -- value domain, and sharing it would let a dict and a closure alias one global).
 -- ⚠️ In practice this cache can never HIT: `lamName` is always minted from
--- `freshId` at the call site (`emitGroupBind`'s `mdk_lam<id>`, `emitLamGo`'s and
--- `emitLamPat`'s own `mdk_lam<id>` for a capture-free user lambda, each
--- eta-wrapper's `mdk_eta_<name>_<id>` / `mdk_etac_<name>_<id>`), so `initBody`'s
+-- `freshId` at the call site (`emitGroupBind`'s `mdk_lam.<scope>.<id>`,
+-- `emitLamGo`'s and `emitLamPat`'s own for a capture-free user lambda, each
+-- eta-wrapper's `mdk_eta_<name>.<scope>.<id>` / `mdk_etac_<name>.<scope>.<id>`),
+-- so `initBody`'s
 -- `ptrtoint` operand is globally unique per closure and no two initializers can
 -- ever match.  Measured cost of the miss-only lookups (re-measured after S-1
 -- routed capture-free user lambdas through this path too, not just eta-wrappers):
@@ -8839,12 +8996,13 @@ emitConstClosureCell : Emit -> String -> Int -> String
 emitConstClosureCell e lamName arity =
   let codePtr = "ptrtoint (ptr @" ++ lamName ++ " to i64)"
   let initBody = "[2 x i64] [i64 \{intToString arity}, i64 \{codePtr}]"
-  match lookupAssoc initBody !e.closConstCache
+  let key = constCellKey e initBody
+  match lookupAssoc key !e.closConstCache
     Some gname => "ptrtoint (ptr @" ++ gname ++ " to i64)"
     None =>
-      let gname = "mdk_cc_" ++ intToString (freshId e)
+      let gname = "mdk_cc" ++ mangleScoped e
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
-      e.closConstCache := (initBody, gname) :: !e.closConstCache
+      e.closConstCache := (key, gname) :: !e.closConstCache
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
 -- emitConstClosureCell + the same `e.closureArity` bookkeeping `emitClosureAllocA`
@@ -8882,7 +9040,7 @@ emitLam e env pats body =
 
 emitLamGo : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamGo e env pats body =
-  let lamName = "mdk_lam" ++ intToString (freshId e)
+  let lamName = "mdk_lam" ++ mangleScoped e
   let pnames = patVarNames pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
@@ -8903,7 +9061,7 @@ emitLamGo e env pats body =
 
 emitLamPat : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamPat e env pats body =
-  let lamName = "mdk_lam" ++ intToString (freshId e)
+  let lamName = "mdk_lam" ++ mangleScoped e
   let pnames = patVarNames pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
@@ -8938,7 +9096,7 @@ emitRecLamGo : Emit ->
   CExpr ->
   (String, LTy)
 emitRecLamGo e env f pats body =
-  let lamName = "mdk_lam" ++ intToString (freshId e)
+  let lamName = "mdk_lam" ++ mangleScoped e
   let pnames = patVarNames pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
@@ -8958,7 +9116,7 @@ emitRecLamPat : Emit ->
   CExpr ->
   (String, LTy)
 emitRecLamPat e env f pats body =
-  let lamName = "mdk_lam" ++ intToString (freshId e)
+  let lamName = "mdk_lam" ++ mangleScoped e
   let pnames = patVarNames pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
@@ -9062,7 +9220,7 @@ removeStr x (y :: ys) = if x == y then removeStr x ys else y :: removeStr x ys
 emitEtaClosure : Emit -> String -> (String, LTy)
 emitEtaClosure e fname =
   let arity = fnArity e fname
-  let lamName = "mdk_eta_\{fname}_\{intToString (freshId e)}"
+  let lamName = "mdk_eta_\{fname}\{mangleScoped e}"
   let _ = emitEtaDefine e lamName fname arity
   emitConstClosure e lamName arity
 
@@ -9115,7 +9273,7 @@ emitCtorApp e name argOps arity
 emitCtorPap : Emit -> String -> List String -> Int -> (String, LTy)
 emitCtorPap e name argOps arity =
   let remaining = arity - lengthS argOps
-  let lamName = "mdk_ctorpap_\{name}_\{intToString (freshId e)}"
+  let lamName = "mdk_ctorpap_\{name}\{mangleScoped e}"
   let _ = emitCtorPapDefine e lamName name arity (lengthS argOps)
   emitClosureAllocA e lamName remaining argOps
 
@@ -9153,7 +9311,7 @@ emitCtorPapDefine e lamName name arity supplied =
 emitCtorEtaClosure : Emit -> String -> (String, LTy)
 emitCtorEtaClosure e name =
   let arity = ctorArity e name
-  let lamName = "mdk_etac_\{name}_\{intToString (freshId e)}"
+  let lamName = "mdk_etac_\{name}\{mangleScoped e}"
   let _ = emitCtorEtaDefine e lamName name arity
   emitConstClosure e lamName arity
 
@@ -9239,7 +9397,7 @@ emitEtaDefine e lamName fname arity =
 -- arrow count), so no per-family arity is hardcoded.
 emitExternEtaClosure : Emit -> String -> (String, LTy)
 emitExternEtaClosure e name =
-  let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
+  let lamName = "mdk_eta_\{name}\{mangleScoped e}"
   let _ = emitExternEtaDefine e lamName name (externArity e name)
   emitConstClosure e lamName (externArity e name)
 
@@ -9254,7 +9412,7 @@ emitExternEtaClosure e name =
 -- param and is eta-saturated at the define by etaSaturateMethodBody.)
 emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
-  let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
+  let lamName = "mdk_eta_\{name}\{mangleScoped e}"
   let _ = emitMethodEtaDefine e lamName name (methodArityOfInput e name)
   emitConstClosure e lamName (methodArityOfInput e name)
 
@@ -9319,7 +9477,7 @@ emitExternEtaDefine e lamName name arity =
 -- declared signature (`ffiExternArity`).
 emitFfiEtaClosure : Emit -> String -> (String, LTy)
 emitFfiEtaClosure e name =
-  let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
+  let lamName = "mdk_eta_\{name}\{mangleScoped e}"
   let _ = emitFfiEtaDefine e lamName name (ffiExternArity e name)
   emitConstClosure e lamName (ffiExternArity e name)
 
@@ -10520,6 +10678,7 @@ ptag _ = "?"
 emitFns : Emit -> List CBind -> Unit
 emitFns _ [] = ()
 emitFns e (b :: rest) =
+  let _ = setScopeOfBind e (bindName b)
   -- PROGRAM half (issue #118): a prelude bind's define already lives in prelude.o,
   -- so emit it, keep the side effects, and ship only its `declare`.
   let _ =
@@ -12125,6 +12284,7 @@ initGlobalsRegReady (b :: rest) =
 emitGlobalDecls : Emit -> List CBind -> Unit
 emitGlobalDecls _ [] = ()
 emitGlobalDecls e (b :: rest) =
+  let _ = setScopeOfBind e (bindName b)
   -- PRELUDE half (issue #118): a top-level value's storage is DEFINED (and, in
   -- source order, INITIALISED) by `@mdk_program_main`, which lives in the program
   -- half — so prelude.o only declares it.  Defining it in both halves would be a
@@ -13835,7 +13995,9 @@ buildEmitState : EmitStateConfig ->
 buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   let e = Emit {
     input = input,
-    counter = Ref cfg.counter0,
+    counter0 = cfg.counter0,
+    curModule = Ref scopeProgram,
+    counters = Ref omEmpty,
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
@@ -13939,6 +14101,9 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
 -- source order) followed by `main`'s own body and the type-directed print.
 emitProgramMain : Emit -> List CBind -> Unit
 emitProgramMain e groups =
+  -- `@mdk_program_main` itself is a whole-program entity; the per-bind
+  -- initializers inside its prologue re-scope themselves (emitTopGlobals).
+  let _ = setScope e scopeProgram
   let _ = beginDefine e
   let _ = emit e "define i32 @mdk_program_main(i32 %argc, ptr %argv) {"
   let _ = emit e "entry:"
@@ -14022,6 +14187,15 @@ emitLines e (line :: rest) =
 emitTopGlobals : Emit -> List CBind -> Unit
 emitTopGlobals _ [] = ()
 emitTopGlobals e ((CBind name [CClause [] body]) :: rest) =
+  -- #2753 review S2-1: the prologue stays in `@mdk_program_main`'s own scope,
+  -- NOT each bind's module.  An initializer is emitted INSIDE this define, so
+  -- everything it lifts — a const cell, a `@.strc.` literal, a lambda — is
+  -- REFERENCED from here; attributing the lifted entity to the bind's module put
+  -- its definition in one partition and its only reference in another, which is
+  -- exactly the leak that made a one-module edit move 25 of 77 partitions.
+  -- Owning them here costs the prologue's ids a shared counter (a value-bind edit
+  -- renumbers all of them) and costs no locality at all, because every one of
+  -- them already lived or died with this single partition.
   let (v, ty) = emitExpr e omEmpty body
   let _ = emit e "  store i64 \{v}, ptr @mdk_g_\{name}"
   let _ = markGlobalInit e name ty
@@ -14057,6 +14231,9 @@ emitLazyForces e binds = emitLazyForcesGo e (lazyValBinds e binds)
 emitLazyForcesGo : Emit -> List CBind -> Unit
 emitLazyForcesGo _ [] = ()
 emitLazyForcesGo e ((CBind name [CClause [] body]) :: rest) =
+  -- an ordinary forcer is its bind's module; the synthesized `$memo_<Tag>_<m>`
+  -- cells carry no `__` and fall to `program` through `moduleIdOf`.
+  let _ = setScopeOfBind e name
   let _ = emitForceFn e name body
   emitLazyForcesGo e rest
 emitLazyForcesGo e (_ :: rest) = emitLazyForcesGo e rest

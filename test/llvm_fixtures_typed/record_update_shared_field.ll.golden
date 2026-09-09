@@ -168,11 +168,12 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  store i64 ptrtoint (ptr @mdk_dc_0 to i64), ptr @mdk_g_sel
-  %t0 = call i64 @mdk_withGroupBy(i64 7, i64 ptrtoint (ptr @mdk_dc_1 to i64))
+  store i64 ptrtoint (ptr @mdk_dc.program.0 to i64), ptr @mdk_g_sel
+  %t0 = call i64 @mdk_withGroupBy(i64 7, i64 ptrtoint (ptr @mdk_dc.program.1 to i64))
   store i64 %t0, ptr @mdk_g_agg
   %t1 = load i64, ptr @mdk_g_agg
   %t2 = inttoptr i64 %t1 to ptr
@@ -210,6 +211,7 @@ entry:
   call void @mdk_print_int(i64 %t33)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_withGroupBy(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %arg1 to ptr
@@ -225,7 +227,11 @@ entry:
   ret i64 %t6
 }
 
+; mdk-module program
 @mdk_g_sel = global i64 0
+; mdk-module program
 @mdk_g_agg = global i64 0
-@mdk_dc_0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
-@mdk_dc_1 = internal constant [3 x i64] [i64 4294967296, i64 1, i64 3]
+; mdk-module program
+@mdk_dc.program.0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
+; mdk-module program
+@mdk_dc.program.1 = internal constant [3 x i64] [i64 4294967296, i64 1, i64 3]

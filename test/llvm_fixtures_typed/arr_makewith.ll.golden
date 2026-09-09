@@ -168,6 +168,7 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
@@ -186,11 +187,11 @@ mw_cond4:
 mw_body4:
   %t8 = shl i64 %t6, 1
   %t9 = or i64 %t8, 1
-  %t10 = inttoptr i64 ptrtoint (ptr @mdk_cc_1 to i64) to ptr
+  %t10 = inttoptr i64 ptrtoint (ptr @mdk_cc.program.1 to i64) to ptr
   %t11 = getelementptr i8, ptr %t10, i64 8
   %t12 = load i64, ptr %t11
   %t13 = inttoptr i64 %t12 to ptr
-  %t14 = call i64 %t13(i64 ptrtoint (ptr @mdk_cc_1 to i64), i64 %t9)
+  %t14 = call i64 %t13(i64 ptrtoint (ptr @mdk_cc.program.1 to i64), i64 %t9)
   %t15 = add i64 %t6, 1
   %t16 = mul i64 %t15, 8
   %t17 = getelementptr i8, ptr %t3, i64 %t16
@@ -212,11 +213,14 @@ mw_done4:
   call void @mdk_print_int(i64 %t27)
   ret i32 0
 }
+; mdk-module program
 @mdk_g_a = global i64 0
-define i64 @mdk_lam0(i64 %clos, i64 %arg0) {
+; mdk-module program
+define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
 entry:
   %t0 = call i64 @mdk_num_mul(i64 %arg0, i64 %arg0)
   ret i64 %t0
 }
 
-@mdk_cc_1 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam0 to i64)]
+; mdk-module program
+@mdk_cc.program.1 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam.program.0 to i64)]
