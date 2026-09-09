@@ -2790,7 +2790,7 @@ seedAbstractRecordTypes coreDecls modules =
   let abstracts =
     collectAbstractRecordTypes coreDecls
       ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules
-  driverState.value.abstractRecordTypesRef := abstracts
+  driverState.value.abstractRecordTypesRef := namesToSet abstracts omEmpty
 
 -- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
 -- tuple/record shapes (return-position sites, arg-position stamps, operator sites,
@@ -7260,19 +7260,19 @@ data DriverState = DriverState {
   graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
   graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
   declEnvsRef : Ref DeclEnvs,
-  abstractRecordTypesRef : Ref (List String),
+  abstractRecordTypesRef : Ref (OrdMap Unit),
   argDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
   dictEligibleRef : Ref (List String),
   dictEligibleSetRef : Ref (OrdMap Unit),
   mangledShadowMapRef : Ref (List (String, String)),
   mangledFunDefsPresentRef : Ref Bool,
-  userIfaceNamesRef : Ref (List String),
+  userIfaceNamesRef : Ref (OrdMap Unit),
   coherenceUserDecls : Ref (List Decl),
-  stdlibOwnedModsRef : Ref (List String),
+  stdlibOwnedModsRef : Ref (OrdMap Unit),
   flatEntryIsStdlibRef : Ref Bool,
   builtinExternNamesRef : Ref (OrdMap (String, List (String, Option String))),
   superDeclsRef : Ref (List Decl),
-  standaloneValuesRef : Ref (List String),
+  standaloneValuesRef : Ref (OrdMap Unit),
   methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
   matchOracle : Ref Oracle,
   matchWarnings : Ref (List TcDiag),
@@ -7299,19 +7299,19 @@ freshDriverState _ = DriverState {
   graphIfaceMethodsRef = Ref omEmpty,
   graphCtorExportsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
-  abstractRecordTypesRef = Ref [],
+  abstractRecordTypesRef = Ref omEmpty,
   argDispatchIdxByIdRef = Ref [],
   dictEligibleRef = Ref [],
   dictEligibleSetRef = Ref omEmpty,
   mangledShadowMapRef = Ref [],
   mangledFunDefsPresentRef = Ref False,
-  userIfaceNamesRef = Ref [],
+  userIfaceNamesRef = Ref omEmpty,
   coherenceUserDecls = Ref [],
-  stdlibOwnedModsRef = Ref [],
+  stdlibOwnedModsRef = Ref omEmpty,
   flatEntryIsStdlibRef = Ref False,
   builtinExternNamesRef = Ref omEmpty,
   superDeclsRef = Ref [],
-  standaloneValuesRef = Ref [],
+  standaloneValuesRef = Ref omEmpty,
   methodDispatchIdxByIdRef = Ref [],
   matchOracle = Ref (buildOracle []),
   matchWarnings = Ref [],
@@ -9351,12 +9351,12 @@ data PerRun = PerRun {
   dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
   dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
   aliasTableRef : Ref (List (TabKey, (List String, Ty))),
-  shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
+  shadowStandaloneSchemesRef : Ref (OrdMap Scheme),
   ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1/L2: the Module arm's interface-method schemes under an identity key; read by `pickSchemesByDecl` (checkBodyImpl step 21)
   numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
   numLitFromIntParamsRef : Ref (Option (IfaceRef, List String, Ty, List (String, List Kind))),  -- #2157: the IDENTITY-selected companion of the line above — the PRELUDE `Num`'s own `fromInt` obligation row (iface, typarams, declared Ty, graded scope), seeded from the SAME decl list by the SAME `sameIfaceDecl` test.  `inferNumLitMethod`'s obligation anchor; it never consults the bare-name `methodIfaceParamsRef`.
-  definerShadowNamesRef : Ref (List String),
-  definerShadowSigsRef : Ref (List (String, Ty)),
+  definerShadowNamesRef : Ref (OrdMap Unit),
+  definerShadowSigsRef : Ref (OrdMap Ty),
   bodyImplEnvRef : Ref ImplEnv,
   methodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
   methodAdmittedIfacesRef : Ref (OrdMap (List IfaceRef)),
@@ -9375,8 +9375,8 @@ data PerRun = PerRun {
   seedSchemesOut : Ref (List (String, Scheme)),
   funPredicateSlotsRef : Ref (List (String, List PredicateSlot)),
   funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
-  currentImportDefinersRef : Ref (List (String, String)),
-  currentImportOriginsRef : Ref (List (String, String)),
+  currentImportDefinersRef : Ref (OrdMap String),
+  currentImportOriginsRef : Ref (OrdMap String),
   importedSchemeOblsRef : Ref (OrdMap (List VecObl)),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
   obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
   absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
@@ -9398,7 +9398,7 @@ data PerRun = PerRun {
   methodShadowNamesRef : Ref (OrdMap Unit),
   flatShadowScopingRef : Ref Bool,
   flatCoreFnNamesRef : Ref (OrdMap Unit),
-  flatUserShadowNamesRef : Ref (List String),
+  flatUserShadowNamesRef : Ref (OrdMap Unit),
   groupConstraintMonosRef : Ref (List (String, Mono)),
   fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
@@ -9448,12 +9448,12 @@ freshPerRun _ = PerRun {
   dataParamPolarityRef = Ref [],
   dataParamRowAtomsRef = Ref [],
   aliasTableRef = Ref [],
-  shadowStandaloneSchemesRef = Ref [],
+  shadowStandaloneSchemesRef = Ref omEmpty,
   ifaceMethodSchemesByIdRef = Ref [],
   numLitFromIntSchemeRef = Ref None,
   numLitFromIntParamsRef = Ref None,
-  definerShadowNamesRef = Ref [],
-  definerShadowSigsRef = Ref [],
+  definerShadowNamesRef = Ref omEmpty,
+  definerShadowSigsRef = Ref omEmpty,
   bodyImplEnvRef = Ref emptyImplEnv,
   methodIfaceParamsRef = Ref omEmpty,
   methodAdmittedIfacesRef = Ref omEmpty,
@@ -9470,8 +9470,8 @@ freshPerRun _ = PerRun {
   seedSchemesOut = Ref [],
   funPredicateSlotsRef = Ref [],
   funConstraintDeclaredRef = Ref [],
-  currentImportDefinersRef = Ref [],
-  currentImportOriginsRef = Ref [],
+  currentImportDefinersRef = Ref omEmpty,
+  currentImportOriginsRef = Ref omEmpty,
   importedSchemeOblsRef = Ref omEmpty,
   obls = wNew (),
   absorptions = wNew (),  -- #839 2a: resets per module for free via this whole-record re-mint
@@ -9487,7 +9487,7 @@ freshPerRun _ = PerRun {
   methodShadowNamesRef = Ref omEmpty,
   flatShadowScopingRef = Ref False,
   flatCoreFnNamesRef = Ref omEmpty,
-  flatUserShadowNamesRef = Ref [],
+  flatUserShadowNamesRef = Ref omEmpty,
   groupConstraintMonosRef = Ref [],
   fieldOwnerModulesRef = Ref omEmpty,
   fieldOwnerReachRef = Ref omEmpty,
@@ -11597,7 +11597,7 @@ recordRLocalSite env name tagRef inst
         (SKRLocal (routeLocalSym !tagRef) True [] [] [])
         !currentLoc
         (freshEvId ()))
-  | not (contains name driverState.value.standaloneValuesRef.value) = ()
+  | not (omHasKey name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
     Some idx => match nthArgMono idx inst
@@ -11630,7 +11630,7 @@ recordRLocalSite env name tagRef inst
 -- DEFINER shadow's comes from the env (under the mangled symbol on the emit path).
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneSchemeFor env name sym =
-  match lookupAssoc name perRun.value.shadowStandaloneSchemesRef.value
+  match omLookup name perRun.value.shadowStandaloneSchemesRef.value
     Some s => Some s
     None => lookupVar env (if sym == "" then name else sym)
 
@@ -11969,11 +11969,9 @@ qualConstraintKey name =
   map
     (src => (
       src,
-      optionOr
-        name
-        (lookupAssoc name perRun.value.currentImportOriginsRef.value),
+      optionOr name (omLookup name perRun.value.currentImportOriginsRef.value),
     ))
-    (lookupAssoc name perRun.value.currentImportDefinersRef.value)
+    (omLookup name perRun.value.currentImportDefinersRef.value)
 
 -- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
 -- pre-U1b `declaredConstraintFor` returned as its first component.
@@ -12112,7 +12110,7 @@ clampPrefix slots (Some (CDPLen k)) = CDPLen (minI k (listLen slots))
 -- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
 hasImportDefiner : String -> Bool
 hasImportDefiner name =
-  match lookupAssoc name perRun.value.currentImportDefinersRef.value
+  match omLookup name perRun.value.currentImportDefinersRef.value
     Some _ => True
     None => False
 
@@ -12473,7 +12471,7 @@ zipSlotVecs (s :: rest) (v :: vs) = (s, v) :: zipSlotVecs rest vs
 -- gets `[]` too, i.e. exactly today's singleton-goal behaviour.
 superSlotsOfV : List Decl -> (CSlot, List Mono) -> List (CSlot, List Mono)
 superSlotsOfV allDecls (s, vec)
-  | not (contains s.csIface.irName driverState.value.userIfaceNamesRef.value) =
+  | not (omHasKey s.csIface.irName driverState.value.userIfaceNamesRef.value) =
     []  -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
   | otherwise = match ifaceSupersOf allDecls s.csIface.irName
     None => []
@@ -13013,7 +13011,7 @@ resolveFieldRecord te fname = match headTyconNameMono te
     None => match lookupRecordByMangledHead te r fname
       Some pair => Some pair
       None =>
-        if contains r driverState.value.abstractRecordTypesRef.value then
+        if omHasKey r driverState.value.abstractRecordTypesRef.value then
           let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
           None
         else
@@ -14873,8 +14871,8 @@ recordImplObligation x mono
   -- Check BOTH refs: the single-file check path (checkProgram) sets only
   -- `definerShadowNamesRef`, while the multi-module path sets `standaloneValuesRef`
   -- (importer ∪ definer) — so either alone would miss one path's shadows.
-  | contains x perRun.value.definerShadowNamesRef.value
-    || contains x driverState.value.standaloneValuesRef.value = mono
+  | omHasKey x perRun.value.definerShadowNamesRef.value
+    || omHasKey x driverState.value.standaloneValuesRef.value = mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
     Some (iface, typarams, mty, _) =>
@@ -14986,8 +14984,8 @@ recordNumLitObligationGuarded env s mono =
 
 recordNumLitImplObligation : Mono -> Mono
 recordNumLitImplObligation mono
-  | contains "fromInt" perRun.value.definerShadowNamesRef.value
-    || contains "fromInt" driverState.value.standaloneValuesRef.value = mono
+  | omHasKey "fromInt" perRun.value.definerShadowNamesRef.value
+    || omHasKey "fromInt" driverState.value.standaloneValuesRef.value = mono
   | otherwise = match perRun.value.numLitFromIntParamsRef.value
     None => mono
     Some (iface, typarams, mty, _) =>
@@ -15463,8 +15461,8 @@ shadowStandaloneSpineHeadAt env f =
 -- the impl universe at all, so they are typaram-agnostic (ifaceMethodName).
 isShadowStandalone : String -> Bool
 isShadowStandalone name =
-  contains name driverState.value.standaloneValuesRef.value
-    && isSome (lookupAssoc name perRun.value.shadowStandaloneSchemesRef.value)
+  omHasKey name driverState.value.standaloneValuesRef.value
+    && isSome (omLookup name perRun.value.shadowStandaloneSchemesRef.value)
     && singleTyparamIfaceMethod name
 
 -- True iff [name]'s interface (in methodIfaceParamsRef) takes exactly ONE type
@@ -15579,7 +15577,7 @@ inferShadowStandaloneArm : TcEnv ->
   Mono ->
   Mono
 inferShadowStandaloneArm env mname tagRefs f x tx =
-  match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  match omLookup mname perRun.value.shadowStandaloneSchemesRef.value
     Some sscheme =>
       let smono = instantiate sscheme
       let r = freshVar ()
@@ -15680,7 +15678,7 @@ inferShadowStandaloneArmAt : TcEnv ->
   Mono ->
   Mono
 inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx =
-  match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  match omLookup mname perRun.value.shadowStandaloneSchemesRef.value
     Some sscheme =>
       let smono = instantiate sscheme
       let r = unifySpineResult smono (map snd pre ++ [tx])
@@ -15706,7 +15704,7 @@ inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx =
 -- headTyconMono still says None and the old ordinary-app arm runs, byte-identically.
 importerShadowDomain : String -> Option Mono
 importerShadowDomain mname =
-  match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  match omLookup mname perRun.value.shadowStandaloneSchemesRef.value
     None => None
     Some s => match normalize (instantiate s)
       TFun a _ _ => Some a
@@ -15718,7 +15716,7 @@ importerShadowDomain mname =
 -- verbatim (nthFunDomain 0 on a TFun matches its first arm exactly).
 importerShadowDomainAt : String -> Int -> Option Mono
 importerShadowDomainAt mname k =
-  match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  match omLookup mname perRun.value.shadowStandaloneSchemesRef.value
     None => None
     Some s => nthFunDomain k (instantiate s)
 
@@ -15736,7 +15734,7 @@ recordImporterShadowDicts env mname (r :: rest) tx =
   -- the interface method) — see shadowStandaloneDictsWith.
   let dicts =
     shadowStandaloneDictsWith
-      (lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value)
+      (omLookup mname perRun.value.shadowStandaloneSchemesRef.value)
       mname
       (routeLocalSym !r)
       tx
@@ -15775,7 +15773,7 @@ recordImporterShadowDictsAt _ _ [] _ _ = ()
 recordImporterShadowDictsAt env mname (r :: rest) ats tx =
   let dicts =
     shadowStandaloneDictsWithSp
-      (lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value)
+      (omLookup mname perRun.value.shadowStandaloneSchemesRef.value)
       mname
       (routeLocalSym !r)
       ats
@@ -16093,7 +16091,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
 -- S8; the S7 violation d11 pinned).
 isDefinerShadow : String -> Bool
 isDefinerShadow name =
-  ifaceMethodName name && contains name perRun.value.definerShadowNamesRef.value
+  ifaceMethodName name && omHasKey name perRun.value.definerShadowNamesRef.value
 
 -- S2 (THE INVERSION, 2026-07-14; SHADOW-INVERSION-DESIGN.md): True iff the shadow [name]
 -- applied to a receiver of type [xt] should DISPATCH to the interface method rather than
@@ -16277,7 +16275,7 @@ unifyStandaloneDomain dom xt dloc =
 -- parameter is the one the receiver occupies.  `k = 0` is the pre-#1815 behavior.
 standaloneShadowDomainAt : String -> Int -> Option Mono
 standaloneShadowDomainAt name k =
-  match lookupAssoc name perRun.value.definerShadowSigsRef.value
+  match omLookup name perRun.value.definerShadowSigsRef.value
     None => None
     Some ty => nthFunDomain k (instantiate (sigToScheme ty))
 
@@ -16310,7 +16308,7 @@ maybeStandaloneValueMono : String -> Option Mono
 maybeStandaloneValueMono name
   | toggles.value.shadowHeadCtxRef.value = None
   | ifaceMethodName name
-    && contains name perRun.value.definerShadowNamesRef.value =
+    && omHasKey name perRun.value.definerShadowNamesRef.value =
     standaloneShadowScheme name
   | not (singleTyparamIfaceMethod name) = None
   | otherwise = importerStandaloneValueScheme name
@@ -16333,7 +16331,7 @@ maybeStandaloneValueMono name
 -- carries no mangled sym, or when the standalone scheme is unavailable.
 -- ⚠️ #724: the gate is PER SHADOW KIND (emitValueShadowGate), mirroring the check-path
 -- maybeStandaloneValueMono's per-arm split exactly — NOT one blanket singleTyparamIfaceMethod.
--- The classifier is isDefinerShadow (`contains name definerShadowNamesRef`, the SAME test the
+-- The classifier is isDefinerShadow (`omHasKey name definerShadowNamesRef`, the SAME test the
 -- check path uses), NOT shadowStandaloneSchemesRef membership: that ref is standaloneSchemeFor's
 -- scheme-SOURCE selector and an importer occurrence is not reliably in it at this pin, so keying
 -- on it mis-grounds i10's multi-typaram importer app head to a garbage-pointer build.
@@ -16373,7 +16371,7 @@ maybeStandaloneValueMonoEmit env name tagRef
 -- #724: the per-shadow-kind gate for the emit-path value-position pin, mirroring the
 -- check-path maybeStandaloneValueMono's per-arm split (definer arm typaram-agnostic; importer
 -- arm singleTyparam-scoped, Fork 1).  The definer/importer classifier is isDefinerShadow —
--- `contains name definerShadowNamesRef`, which holds BARE names on EVERY path (the emit path
+-- `omHasKey name definerShadowNamesRef`, which holds BARE names on EVERY path (the emit path
 -- recovers the mangled local funDef through the mangle map, buildDefinerShadows) and NEVER
 -- holds an imported standalone, so it is the reliable test (its header, :5717).  ⚠️ It is NOT
 -- shadowStandaloneSchemesRef membership: that ref is standaloneSchemeFor's SCHEME-SOURCE
@@ -16416,7 +16414,7 @@ standaloneValuePinned : String -> Bool
 standaloneValuePinned name
   | toggles.value.shadowHeadCtxRef.value = False
   | ifaceMethodName name
-    && contains name perRun.value.definerShadowNamesRef.value =
+    && omHasKey name perRun.value.definerShadowNamesRef.value =
     isSome (standaloneShadowScheme name)
   | not (singleTyparamIfaceMethod name) = False
   | otherwise = isSome (importerStandaloneValueScheme name)
@@ -16427,9 +16425,7 @@ standaloneValuePinned name
 -- permissive method scheme) exactly as before.
 importerStandaloneValueScheme : String -> Option Mono
 importerStandaloneValueScheme name =
-  map
-    instantiate
-    (lookupAssoc name perRun.value.shadowStandaloneSchemesRef.value)
+  map instantiate (omLookup name perRun.value.shadowStandaloneSchemesRef.value)
 
 -- P0-19: a definer-shadow standalone's full declared scheme (`Int -> Int`), freshly
 -- instantiated.  None when the standalone has no top-level signature (nothing to pin —
@@ -16439,7 +16435,7 @@ standaloneShadowScheme : String -> Option Mono
 standaloneShadowScheme name =
   map
     (ty => instantiate (sigToScheme ty))
-    (lookupAssoc name perRun.value.definerShadowSigsRef.value)
+    (omLookup name perRun.value.definerShadowSigsRef.value)
 
 -- P0-19: peel an application head to a definer-shadow interface-method occurrence on
 -- the UN-MARKED path (the `check` pipeline runs no marker, so the head is a bare
@@ -16451,11 +16447,11 @@ definerShadowVarHead : Expr -> Option String
 definerShadowVarHead (ELoc _ f) = definerShadowVarHead f
 definerShadowVarHead (EVar name)
   | ifaceMethodName name
-    && contains name perRun.value.definerShadowNamesRef.value = Some name
+    && omHasKey name perRun.value.definerShadowNamesRef.value = Some name
   | otherwise = None
 definerShadowVarHead (EVarId name _)
   | ifaceMethodName name
-    && contains name perRun.value.definerShadowNamesRef.value = Some name
+    && omHasKey name perRun.value.definerShadowNamesRef.value = Some name
   | otherwise = None
 definerShadowVarHead _ = None
 
@@ -16859,13 +16855,13 @@ recordStandaloneSigObligationsSp name sym ats =
 -- the standalone's declared signature Ty, under whichever key this path stores it.
 standaloneShadowSigTy : String -> String -> Option Ty
 standaloneShadowSigTy name sym =
-  match lookupAssoc name perRun.value.definerShadowSigsRef.value
+  match omLookup name perRun.value.definerShadowSigsRef.value
     Some ty => Some ty
     None =>
       if sym == "" then
         None
       else
-        lookupAssoc sym perRun.value.definerShadowSigsRef.value
+        omLookup sym perRun.value.definerShadowSigsRef.value
 
 -- every `=>` constraint in the signature.  Recurses the spine like constraintVarNamesTy
 -- rather than matching only the top node, so an effect-annotated sig still yields them.
@@ -20992,7 +20988,7 @@ resolveRLocalSite prog name tagRef am encl sym monos ifaces argVecs =
     -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
     -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
     None =>
-      if contains name perRun.value.definerShadowNamesRef.value then
+      if omHasKey name perRun.value.definerShadowNamesRef.value then
         tagRef := RLocal sym (routesOfMonosTopV prog encl monos ifaces argVecs)
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
@@ -24489,7 +24485,7 @@ export
 setStdlibOwnership : Bool -> List String -> Unit
 setStdlibOwnership flatEntry mods =
   driverState.value.flatEntryIsStdlibRef := flatEntry
-  driverState.value.stdlibOwnedModsRef := mods
+  driverState.value.stdlibOwnedModsRef := namesToSet mods omEmpty
 
 -- #2445 S-1: arm/disarm the TEST-ONLY unpin hatch.  The whole argument for it, and the
 -- reason empty must read as OFF, is on [localPinPairs] — the one site that reads this.
@@ -28214,8 +28210,8 @@ checkBodyImpl seed mode prog0 =
           crossRun.value.universeFunNamesRef.value
           prog0)
   let sigs = sigsOf prog
-  perRun.value.definerShadowNamesRef := definerShadows
-  perRun.value.definerShadowSigsRef := sigs
+  perRun.value.definerShadowNamesRef := namesToSet definerShadows omEmpty
+  perRun.value.definerShadowSigsRef := omFromPairs (reverseL sigs) omEmpty
   -- #154 PR1 seeded a SECOND impl-existence table here — `shadowKeyTableRef`, from
   -- `buildKeyTable fullUniverse` on Flat and from the cumulative `universeKeyBucketsRef`
   -- on Module.  ARCH B-2.1-g repointed all three of its boolean existence reads onto the
@@ -28249,7 +28245,7 @@ checkBodyImpl seed mode prog0 =
   let _ = match mode
     Flat coreProg =>
       perRun.value.flatShadowScopingRef := declsNonEmpty coreProg
-      perRun.value.flatUserShadowNamesRef := definerShadows
+      perRun.value.flatUserShadowNamesRef := namesToSet definerShadows omEmpty
       perRun.value.flatCoreFnNamesRef :=
         namesToSet (map fst (funDefs coreProg)) omEmpty
       ()
@@ -28257,9 +28253,11 @@ checkBodyImpl seed mode prog0 =
     -- arm need this module's identity, and the arm can no longer discard it.
     Module mid _ _ =>
       driverState.value.standaloneValuesRef :=
-        dedup (importerShadows ++ definerShadows)
+        namesToSet (importerShadows ++ definerShadows) omEmpty
       perRun.value.shadowStandaloneSchemesRef :=
-        pickStandaloneSchemes importerShadows seed
+        omFromPairs
+          (reverseL (pickStandaloneSchemes importerShadows seed))
+          omEmpty
       -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
       -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
       driverState.value.methodDispatchIdxByIdRef :=
@@ -28311,11 +28309,13 @@ checkBodyImpl seed mode prog0 =
       -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
       -- must not be derived by two independent walks that could admit different rows.
       let admitted = importDefinersOf prog
-      perRun.value.currentImportDefinersRef := definerRowsOf admitted
-      perRun.value.currentImportOriginsRef := originRowsOf admitted
+      perRun.value.currentImportDefinersRef :=
+        omFromPairs (reverseL (definerRowsOf admitted)) omEmpty
+      perRun.value.currentImportOriginsRef :=
+        omFromPairs (reverseL (originRowsOf admitted)) omEmpty
       -- #1114 (#845): this module's imported SCHEME CONTEXTS, keyed by local spelling.
       -- `reverseL` before `omFromPairs` so the FIRST entry wins a duplicate key, matching
-      -- the first-match `lookupAssoc` policy of the three sibling tables set just above
+      -- the first-match policy of the sibling tables set just above
       -- (`omFromPairs` is last-write-wins; see its own note in support/ordmap.mdk).
       let _ =
         setRef
@@ -32833,7 +32833,7 @@ ffiStampModeOwned (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
 ffiStampModeOwned (Module "__user__" _ _) =
   not driverState.value.flatEntryIsStdlibRef.value
 ffiStampModeOwned (Module mid _ _) =
-  not (contains mid driverState.value.stdlibOwnedModsRef.value)
+  not (omHasKey mid driverState.value.stdlibOwnedModsRef.value)
 
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
 --
@@ -34284,7 +34284,7 @@ allCoreFns (m :: rest)
 scopeShadowsForGroup : List String -> Unit
 scopeShadowsForGroup members
   | not perRun.value.flatShadowScopingRef.value = ()
-  | flatGroupIsCore members = perRun.value.definerShadowNamesRef := []
+  | flatGroupIsCore members = perRun.value.definerShadowNamesRef := omEmpty
   | otherwise =
     perRun.value.definerShadowNamesRef :=
       perRun.value.flatUserShadowNamesRef.value
@@ -34292,7 +34292,7 @@ scopeShadowsForGroup members
 scopeShadowsCore : Unit -> Unit
 scopeShadowsCore _ =
   if perRun.value.flatShadowScopingRef.value then
-    perRun.value.definerShadowNamesRef := []
+    perRun.value.definerShadowNamesRef := omEmpty
 
 scopeShadowsUser : Unit -> Unit
 scopeShadowsUser _ =
@@ -41232,7 +41232,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let _ = driverState.value.superDeclsRef := allDecls  -- WS-1b: interfaces in scope before the first sweep
   let _ =
     driverState.value.userIfaceNamesRef :=
-      collectIfaceNames (flatMap snd modules)  -- WS-1b: gate super-expansion to user interfaces
+      namesToSet (collectIfaceNames (flatMap snd modules)) omEmpty  -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
   driverState.value.argDispatchIdxByIdRef := argDispatchIndicesById allDecls
   -- #1351 L5 (CONTRACT): the NAME SET only — `prePassDictArg` wants the names, not the
