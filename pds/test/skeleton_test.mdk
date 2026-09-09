@@ -1,5 +1,5 @@
 -- | Anti-rot sanity floor for the whole `pds/` in-language test harness.
---   `pds/test/inlang_test_oracle.sh` counts the assertions
+--   `pds/test/inlang_test_oracle_test.mdk` counts the assertions
 --   that actually ran here and fails if the count drops below the committed
 --   floor — that is what catches a discovery regression instead of a silent
 --   vacuous-green pass.

@@ -241,6 +241,45 @@ evRoutesOf : EvVal -> List Route
 evRoutesOf (EvMany rs) = rs
 evRoutesOf (EvOne _) =
   panic "evidence table: a dictionary application solved to a single route"
+evRoutesOf (EvMethod _ _ _) =
+  panic
+    "evidence table: a dictionary application answered by a method occurrence"
+
+-- The answer published for a method occurrence: its dispatch route, the selected
+-- impl's `requires` dicts and the method's own `=>` dicts — the three cells an
+-- `EMethodAt` node used to carry, in that order.
+--
+-- Unlike `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
+-- one entry per `EMethodAt` node at the moment it constructs the node and
+-- publishes every one of them, so an id with no entry can only mean the table
+-- installed is not the one this node's elaboration published — the install-
+-- ordering hazard the header above describes, surfaced instead of answered with
+-- an unrouted dispatch.
+export
+evMethodRoutes : EvId -> (Route, List Route, List Route)
+evMethodRoutes (EvId m i) = match !evidenceRef
+  None =>
+    panic
+      "evidence table: no elaboration has published one (looking up method \{m}#\{intToString i})"
+  Some arr =>
+    if i >= arrayLength arr then
+      panic
+        "evidence table: method occurrence \{m}#\{intToString i} was never published"
+    else match arrayGetUnsafe i arr
+      None =>
+        panic
+          "evidence table: method occurrence \{m}#\{intToString i} was never published"
+      Some (EvEntry (EvId m2 _) v) =>
+        if m2 == m then
+          evMethodOf v
+        else
+          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
+
+evMethodOf : EvVal -> (Route, List Route, List Route)
+evMethodOf (EvMethod r impls meths) = (r, impls, meths)
+evMethodOf _ =
+  panic
+    "evidence table: a method occurrence answered by a dictionary application"
 
 -- ── the interface half of the word ────────────────────────────────────────
 -- `module::Iface` when the interface's origin is known, and the BARE name when

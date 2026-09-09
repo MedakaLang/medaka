@@ -1199,7 +1199,7 @@ exprPrec (EHeadAnnot _ _) = precTop
 exprPrec (EGuards _) = precTop
 -- typed-pipeline-only nodes (never from the parser); give them atom precedence.
 exprPrec (EVarAt _ _) = precAtom
-exprPrec (EMethodAt _ _ _ _) = precAtom
+exprPrec (EMethodAt _ _ _) = precAtom
 exprPrec (EDictAt _ _) = precAtom
 -- ELoc is transparent: the wrapper takes its child's precedence.
 exprPrec (ELoc _ e) = exprPrec e
@@ -1432,7 +1432,7 @@ printExprRaw _ (ESlice e lo hi incl _) =
           (Cat (printExpr precTop hi) (text "]")))))
 -- typed-pipeline-only nodes: print the name / inner transparently.
 printExprRaw _ (EVarAt n _) = text n
-printExprRaw _ (EMethodAt n _ _ _) = text n
+printExprRaw _ (EMethodAt n _ _) = text n
 printExprRaw _ (EDictAt n _) = text n
 -- ELoc is transparent: print the wrapped expr, remembering the span.
 printExprRaw _ (ELoc l e) = printExprRaw (Some l) e

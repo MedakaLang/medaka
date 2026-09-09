@@ -151,7 +151,7 @@ exprSexp (EVarId x _) = node "EVar" [escStr x]
 exprSexp (EVarAt _ _) =
   panic
     "unreachable: programToSexp serializes pre-annotate ASTs; EVarAt is introduced by annotateProgram"
-exprSexp (EMethodAt _ _ _ _) =
+exprSexp (EMethodAt _ _ _) =
   panic
     "unreachable: programToSexp serializes pre-annotate ASTs; EMethodAt is introduced by typecheck elaboration"
 exprSexp (EDictAt _ _) =
@@ -436,7 +436,7 @@ deferNodeName False = "EDo"
 (DFunDef false "exprSexp" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EVarAt is introduced by annotateProgram"))))
-(DFunDef false "exprSexp" ((PCon "EMethodAt" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EMethodAt is introduced by typecheck elaboration"))))
+(DFunDef false "exprSexp" ((PCon "EMethodAt" PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EMethodAt is introduced by typecheck elaboration"))))
 (DFunDef false "exprSexp" ((PCon "EDictAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"))))
 (DFunDef false "exprSexp" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EApp"))) (EListLit (EApp (EVar "exprSexp") (EVar "f")) (EApp (EVar "exprSexp") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "ELam"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
@@ -617,7 +617,7 @@ deferNodeName False = "EDo"
 (DFunDef false "exprSexp" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EVarAt is introduced by annotateProgram"))))
-(DFunDef false "exprSexp" ((PCon "EMethodAt" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EMethodAt is introduced by typecheck elaboration"))))
+(DFunDef false "exprSexp" ((PCon "EMethodAt" PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EMethodAt is introduced by typecheck elaboration"))))
 (DFunDef false "exprSexp" ((PCon "EDictAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"))))
 (DFunDef false "exprSexp" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EApp"))) (EListLit (EApp (EVar "exprSexp") (EVar "f")) (EApp (EVar "exprSexp") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "ELam"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))

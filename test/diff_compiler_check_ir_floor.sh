@@ -114,10 +114,28 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # every-impl-method row pairing now exits early when the interface has no index-only
 # effect variable, which is what brought the local figure back under the old ceiling).
 # The 20% convention is re-applied to the fresh measurement.
-CEIL_check="${CHECK_IR_CEIL:-880000000}"
-CEIL_build="${BUILD_IR_CEIL:-615000000}"
-CEIL_run="${RUN_IR_CEIL:-950000000}"
-CEIL_test="${TEST_IR_CEIL:-595000000}"
+# RE-DERIVED 2026-09-08 (#2705 M2 phase 2, branch `typecheck-rearch-2`), same method,
+# one run per verb on this box and on the CI runner (run 34293665669):
+#
+#   verb    base 2a0a1e0f3   this box        CI runner       CEIL (= CI x1.20, up to 5M)
+#   check   ~730,000,000     1,034,339,075   1,048,007,588   1,260,000,000
+#   build   ~513,000,000       667,610,759     675,259,197     815,000,000
+#   run     ~789,000,000     1,094,363,945   1,108,871,552   1,335,000,000
+#   test    ~495,000,000       650,104,879     658,142,405     790,000,000
+#
+# What regrew is ONE thing, understood and owned, not creep: every Module-arm driver
+# now marks and SOLVES (#2705 — `check` runs the same mark pre-pass, impl-body
+# inference and graph-end resolver drain that only `elaborateModules` ran before), and
+# on a hello-world that is the once-per-process cost of solving the PRELUDE: ~+300M Ir
+# on `check`/`run` (the check pass), ~+160M on `build`/`test`.  It is the cold cell of
+# ruling 7's measurement (SA-10a item 11: +62% cold, +20% warm on the memo path), and
+# #2719 (a per-binding solve memo) is the unit that brings it back down — when it
+# lands, re-derive these four DOWN with it rather than leaving the headroom.  The 20%
+# convention is applied to the CI figure, which this gate is graded on.
+CEIL_check="${CHECK_IR_CEIL:-1260000000}"
+CEIL_build="${BUILD_IR_CEIL:-815000000}"
+CEIL_run="${RUN_IR_CEIL:-1335000000}"
+CEIL_test="${TEST_IR_CEIL:-790000000}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mdk-checkirfloor.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM

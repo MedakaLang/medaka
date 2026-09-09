@@ -106,6 +106,7 @@ evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> Value a
 evalMain : List Decl -> String
 evalMatch : EvalEnv (Value a) -> Value a -> List Arm -> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> Route -> List Route -> List Route -> Value a
+evalMethodAtEv : EvalEnv (Value a) -> String -> (Route, List Route, List Route) -> Value a
 evalModules : List Decl -> List (String, List Decl) -> List (String, Value a)
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String

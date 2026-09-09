@@ -666,7 +666,7 @@ checkExpr _ _ _ (EDictApp _) = []
 -- these arms are unreachable.
 checkExpr _ _ _ (EVarAt _ _) =
   panic "unreachable: EVarAt is introduced by annotateProgram after resolve"
-checkExpr _ _ _ (EMethodAt _ _ _ _) =
+checkExpr _ _ _ (EMethodAt _ _ _) =
   panic
     "unreachable: EMethodAt is introduced by typecheck elaboration after resolve"
 checkExpr _ _ _ (EDictAt _ _) =
@@ -3747,7 +3747,7 @@ stampExpr _ (ELit l) = ELit l
 stampExpr _ (ENumLit n r d lx) = ENumLit n r d lx
 stampExpr _ (EMethodRef m) = EMethodRef m
 stampExpr _ (EDictApp d) = EDictApp d
-stampExpr _ (EMethodAt name r ir mr) = EMethodAt name r ir mr
+stampExpr _ (EMethodAt name seed ev) = EMethodAt name seed ev
 stampExpr _ (EDictAt name r) = EDictAt name r
 stampExpr _ (EVarAt n a) = EVarAt n a
 stampExpr _ (EVarId n i) = EVarId n i

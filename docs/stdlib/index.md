@@ -794,6 +794,9 @@ Assertions for unit tests.
 - [`expectSome`](test.md#expectsome)
 - [`expectNone`](test.md#expectnone)
 - [`expectWithin`](test.md#expectwithin)
+- [`expectTextContainsAll`](test.md#expecttextcontainsall)
+- [`expectLineContainsAll`](test.md#expectlinecontainsall)
+- [`expectTextStartsWithAndContains`](test.md#expecttextstartswithandcontains)
 - [`expectEqualText`](test.md#expectequaltext)
 - [`expectAll`](test.md#expectall)
 - [`expectationTag`](test.md#expectationtag)
@@ -802,6 +805,21 @@ Assertions for unit tests.
 - [`expectationActual`](test.md#expectationactual)
 - [`runTests`](test.md#runtests)
 - [`expectGolden`](test.md#expectgolden)
+
+## [`test_process`](test_process.md)
+
+Assertions for a test that runs a program.
+
+- [`medakaRoot`](test_process.md#medakaroot)
+- [`underRoot`](test_process.md#underroot)
+- [`medakaBin`](test_process.md#medakabin)
+- [`expectSpawnOk`](test_process.md#expectspawnok)
+- [`expectSpawnFails`](test_process.md#expectspawnfails)
+- [`expectSpawnOkLine`](test_process.md#expectspawnokline)
+- [`testFileStem`](test_process.md#testfilestem)
+- [`testAssertionCount`](test_process.md#testassertioncount)
+- [`unrosteredTestFiles`](test_process.md#unrosteredtestfiles)
+- [`missingTestFiles`](test_process.md#missingtestfiles)
 
 ## [`time`](time.md)
 
