@@ -40274,7 +40274,7 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 -- preamble additionally sets the promotion-eligible set and stamps core via
 -- elabModuleStamp.
 --
--- ⚠️ #1110: each caller acquires type-constructor identity FIRST
+-- #1110: each caller acquires type-constructor identity FIRST
 -- (`stampGraphTyOrigins`, the resolve→typecheck channel) and hands this preamble
 -- the ALREADY-STAMPED prelude and modules.  It is not done here, where one line
 -- would serve them all, for a specific reason: this function's inferred type is
@@ -40666,7 +40666,7 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
 -- `run`/`build` reported a type error).  For it the precondition is not "clear before the
 -- first module" but **"OVERWRITE with this run's graph before the first module"**:
 --     setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
--- which `checkModulesPreambleK` and `elaborateModules` both do.  ⚠️ The failure modes differ
+-- which `checkModulesPreambleK` and `elaborateModules` both do.  The failure modes differ
 -- in KIND, which is why this is worth spelling out rather than folding into the list above:
 -- skipping `resetCrossModuleState` leaks the previous run's universe; skipping THIS write
 -- leaves the previous run's INDEX in place, and a stale index can pick a wrong interface
