@@ -1,0 +1,7 @@
+-- Exercises the resolve-UNCLEAN branch: a deriving diagnostic (a surface
+-- diagnostic) alongside a resolve error, on a program where typecheck never
+-- runs. Pins that surfaceDiags precede resDiags, and that no typecheck/
+-- auto-print diagnostic follows.
+data Widget = Widget Int deriving (Bogus)
+
+main = println unknownName
