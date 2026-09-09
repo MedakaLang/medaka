@@ -1,6 +1,6 @@
 aliasDictNamesOfDecl	Decl	2/15
 aliasMethodRenamesOf	Decl	2/15
-allEVars	Expr	29/41
+allEVars	Expr	37/41
 alpha	Expr	12/41
 appArgLoc	Expr	2/41
 appNodeArg	Expr	2/41

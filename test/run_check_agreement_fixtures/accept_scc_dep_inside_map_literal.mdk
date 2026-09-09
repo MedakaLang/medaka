@@ -1,0 +1,24 @@
+-- allEVars SCC-EDGE GUARD: a top-level binding whose only reference to a
+-- LATER-defined function sits inside a `Map { … }` literal.
+--
+-- `desugar.lowerContainerLiterals` lowers `Map { … }` to an `EHeadAnnot`-wrapped
+-- `fromEntries` call.  `typecheck.allEVars` — the free-variable walk behind
+-- `processTopGroups` -> `depGraphMap` -> `depsOf` -> `clauseRefs`, which feeds
+-- Tarjan's SCC ordering of top-level bindings — used to end in a `_ => []`
+-- catch-all with no `EHeadAnnot` arm.  So `g` got NO dependency edge to `f`,
+-- was inferred before it, and check/run/build all rejected the program with
+-- `Unbound variable: f`.
+--
+-- .expected = ACCEPT.  Ground truth for .out was derived by hand from the
+-- program (`f 2` = 4, one entry keyed 1) and cross-checked against the
+-- forward-order spelling (`f` defined BEFORE `g`), which accepts and prints
+-- the same value both before and after the fix — definition ORDER must not
+-- change a well-typed program's meaning.
+import map.{Map, toList}
+
+g : Map Int Int
+g = Map { 1 => f 2 }
+
+f x = x + x
+
+main = println (toList g)

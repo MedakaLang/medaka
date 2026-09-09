@@ -1,5 +1,5 @@
 # META
-source_lines=43245
+source_lines=43278
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -34239,7 +34239,40 @@ allEVars (ERecordUpdate e fs _) = allEVars e ++ flatMap fieldAssignEVars fs
 allEVars (EVariantUpdate _ e fs) = allEVars e ++ flatMap fieldAssignEVars fs
 allEVars (ELoc _ e) = allEVars e
 allEVars (EDoOrigin _ e) = allEVars e
+allEVars (EHeadAnnot e _) = allEVars e
+allEVars (EAsPat _ e) = allEVars e
+allEVars (EMapLit _ kvs) = flatMap kvEVars kvs
+allEVars (ESetLit _ es) = flatMap allEVars es
+allEVars (EDo _ stmts) = flatMap doStmtEVars stmts
+allEVars (EStringInterp parts) = flatMap interpEVars parts
+allEVars (EGuards arms) = flatMap guardArmEVars arms
+allEVars (ESection s) = sectionEVars s
+-- The arms above mirror `rewriteArgScoped`'s traversal (children only; binders do
+-- not matter for the over-approximation `depsOf` consumes).  What is left for the
+-- catch-all, derived against `Expr`'s full constructor set, is exactly four
+-- constructors that carry no sub-`Expr` reachable here:
+--   ENumLit, EDictApp  — leaves;
+--   EMethodRef         — no production verb mints one (see `declRefNames` below);
+--   EVarAt             — minted by `annotateProgram`, which runs after typecheck.
+-- A new reference-bearing constructor therefore needs an arm above: falling to the
+-- catch-all silently drops a dependency edge rather than erroring.
 allEVars _ = []
+
+kvEVars : (Expr, Expr) -> List String
+kvEVars (k, v) = allEVars k ++ allEVars v
+
+interpEVars : InterpPart -> List String
+interpEVars (InterpStr _) = []
+interpEVars (InterpExpr e) = allEVars e
+
+guardArmEVars : GuardArm -> List String
+guardArmEVars (GuardArm guards body) =
+  flatMap guardEVars guards ++ allEVars body
+
+sectionEVars : Section -> List String
+sectionEVars (SecBare op) = [op]
+sectionEVars (SecRight op e) = op :: allEVars e
+sectionEVars (SecLeft e op) = op :: allEVars e
 
 letBindEVars : LetBind -> List String
 letBindEVars (LetBind _ clauses) = flatMap funClauseEVars clauses
@@ -48487,7 +48520,26 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allEVars" ((PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EApp (EVar "flatMap") (EVar "fieldAssignEVars")) (EVar "fs"))))
 (DFunDef false "allEVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EAsPat" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (EVar "kvEVars")) (EVar "kvs")))
+(DFunDef false "allEVars" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "allEVars")) (EVar "es")))
+(DFunDef false "allEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtEVars")) (EVar "stmts")))
+(DFunDef false "allEVars" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpEVars")) (EVar "parts")))
+(DFunDef false "allEVars" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmEVars")) (EVar "arms")))
+(DFunDef false "allEVars" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionEVars") (EVar "s")))
 (DFunDef false "allEVars" (PWild) (EListLit))
+(DTypeSig false "kvEVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "kvEVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "k")) (EApp (EVar "allEVars") (EVar "v"))))
+(DTypeSig false "interpEVars" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "interpEVars" ((PCon "InterpStr" PWild)) (EListLit))
+(DFunDef false "interpEVars" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DTypeSig false "guardArmEVars" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "guardArmEVars" ((PCon "GuardArm" (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "guardEVars")) (EVar "guards")) (EApp (EVar "allEVars") (EVar "body"))))
+(DTypeSig false "sectionEVars" (TyFun (TyCon "Section") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "sectionEVars" ((PCon "SecBare" (PVar "op"))) (EListLit (EVar "op")))
+(DFunDef false "sectionEVars" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EBinOp "::" (EVar "op") (EApp (EVar "allEVars") (EVar "e"))))
+(DFunDef false "sectionEVars" ((PCon "SecLeft" (PVar "e") (PVar "op"))) (EBinOp "::" (EVar "op") (EApp (EVar "allEVars") (EVar "e"))))
 (DTypeSig false "letBindEVars" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "letBindEVars" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMap") (EVar "funClauseEVars")) (EVar "clauses")))
 (DTypeSig false "funClauseEVars" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -54927,7 +54979,26 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allEVars" ((PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "fieldAssignEVars")) (EVar "fs"))))
 (DFunDef false "allEVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EAsPat" PWild (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DFunDef false "allEVars" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (EVar "kvEVars")) (EVar "kvs")))
+(DFunDef false "allEVars" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "allEVars")) (EVar "es")))
+(DFunDef false "allEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtEVars")) (EVar "stmts")))
+(DFunDef false "allEVars" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpEVars")) (EVar "parts")))
+(DFunDef false "allEVars" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmEVars")) (EVar "arms")))
+(DFunDef false "allEVars" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionEVars") (EVar "s")))
 (DFunDef false "allEVars" (PWild) (EListLit))
+(DTypeSig false "kvEVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "kvEVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "k")) (EApp (EVar "allEVars") (EVar "v"))))
+(DTypeSig false "interpEVars" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "interpEVars" ((PCon "InterpStr" PWild)) (EListLit))
+(DFunDef false "interpEVars" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "allEVars") (EVar "e")))
+(DTypeSig false "guardArmEVars" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "guardArmEVars" ((PCon "GuardArm" (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "guardEVars")) (EVar "guards")) (EApp (EVar "allEVars") (EVar "body"))))
+(DTypeSig false "sectionEVars" (TyFun (TyCon "Section") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "sectionEVars" ((PCon "SecBare" (PVar "op"))) (EListLit (EVar "op")))
+(DFunDef false "sectionEVars" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EBinOp "::" (EVar "op") (EApp (EVar "allEVars") (EVar "e"))))
+(DFunDef false "sectionEVars" ((PCon "SecLeft" (PVar "e") (PVar "op"))) (EBinOp "::" (EVar "op") (EApp (EVar "allEVars") (EVar "e"))))
 (DTypeSig false "letBindEVars" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "letBindEVars" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseEVars")) (EVar "clauses")))
 (DTypeSig false "funClauseEVars" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))

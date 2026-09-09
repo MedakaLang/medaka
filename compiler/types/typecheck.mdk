@@ -34235,7 +34235,40 @@ allEVars (ERecordUpdate e fs _) = allEVars e ++ flatMap fieldAssignEVars fs
 allEVars (EVariantUpdate _ e fs) = allEVars e ++ flatMap fieldAssignEVars fs
 allEVars (ELoc _ e) = allEVars e
 allEVars (EDoOrigin _ e) = allEVars e
+allEVars (EHeadAnnot e _) = allEVars e
+allEVars (EAsPat _ e) = allEVars e
+allEVars (EMapLit _ kvs) = flatMap kvEVars kvs
+allEVars (ESetLit _ es) = flatMap allEVars es
+allEVars (EDo _ stmts) = flatMap doStmtEVars stmts
+allEVars (EStringInterp parts) = flatMap interpEVars parts
+allEVars (EGuards arms) = flatMap guardArmEVars arms
+allEVars (ESection s) = sectionEVars s
+-- The arms above mirror `rewriteArgScoped`'s traversal (children only; binders do
+-- not matter for the over-approximation `depsOf` consumes).  What is left for the
+-- catch-all, derived against `Expr`'s full constructor set, is exactly four
+-- constructors that carry no sub-`Expr` reachable here:
+--   ENumLit, EDictApp  — leaves;
+--   EMethodRef         — no production verb mints one (see `declRefNames` below);
+--   EVarAt             — minted by `annotateProgram`, which runs after typecheck.
+-- A new reference-bearing constructor therefore needs an arm above: falling to the
+-- catch-all silently drops a dependency edge rather than erroring.
 allEVars _ = []
+
+kvEVars : (Expr, Expr) -> List String
+kvEVars (k, v) = allEVars k ++ allEVars v
+
+interpEVars : InterpPart -> List String
+interpEVars (InterpStr _) = []
+interpEVars (InterpExpr e) = allEVars e
+
+guardArmEVars : GuardArm -> List String
+guardArmEVars (GuardArm guards body) =
+  flatMap guardEVars guards ++ allEVars body
+
+sectionEVars : Section -> List String
+sectionEVars (SecBare op) = [op]
+sectionEVars (SecRight op e) = op :: allEVars e
+sectionEVars (SecLeft e op) = op :: allEVars e
 
 letBindEVars : LetBind -> List String
 letBindEVars (LetBind _ clauses) = flatMap funClauseEVars clauses
