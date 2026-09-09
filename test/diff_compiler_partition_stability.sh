@@ -219,7 +219,12 @@ for sym in leaf_fn midgraph_fn consumer_fn mdk_program_main shared_const; do
   defcount=0
   for p in "$inv1_out"/p*; do
     [ -f "$p" ] || continue
-    if grep -Eq "^define [^{]*@${sym}\\(|^@${sym} = (private|internal) " "$p"; then
+    # A global's DEFINITION carries its initializer; pcg_partition promotes
+    # private/internal linkage to `hidden` on the way out, so the definition
+    # form in a partition is `= [hidden ](constant|global) `. The declaration
+    # form (`= external hidden constant`) must not match, or every partition
+    # that merely references the symbol would count as defining it.
+    if grep -Eq "^define [^{]*@${sym}\\(|^@${sym} = (hidden )?(constant|global) " "$p"; then
       defcount=$((defcount + 1))
     fi
   done

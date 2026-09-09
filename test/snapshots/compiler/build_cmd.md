@@ -1,5 +1,5 @@
 # META
-source_lines=1527
+source_lines=1536
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -1214,8 +1214,15 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
 -- expected to gain further entry classes over time (larger, more numerous
 -- ones included). A count cap sized for "one object per machine" is the
 -- wrong shape the moment a second class with different size/cardinality
--- shares the directory; an age sweep over every regular file in the
--- directory is shape-agnostic and needs no change when that happens.
+-- shares the directory.
+--
+-- The sweep is nonetheless restricted to `rt-*.o`, this cache's own entry
+-- names, because MEDAKA_CACHE_DIR is a user-supplied path: a user may point
+-- it at a directory that holds things medaka did not create, and deleting
+-- those would be silent data loss no build has any business causing. A
+-- future entry class adds its own pattern here; that is a deliberately
+-- larger obligation than a shape-agnostic sweep, and the smaller one is not
+-- available to a cache that does not own its directory.
 -- `cachedRtObj` refreshes an entry's mtime on every HIT, so this can never
 -- sweep a file this box is still actually using.
 --
@@ -1227,8 +1234,10 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
 -- succeed.
 sweepStaleObjCacheEntries : String -> <IO> Unit
 sweepStaleObjCacheEntries dir =
-  let findArgs =
-    [dir, "-maxdepth", "1", "-type", "f", "-mtime", "+30", "-delete"]
+  let findArgs = [
+    dir, "-maxdepth", "1", "-type", "f", "-name", "rt-*.o", "-mtime", "+30",
+    "-delete"
+  ]
   match runCommand "find" findArgs
     Ok _ => ()
     Err _ => ()
@@ -1645,7 +1654,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "populateRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
 (DFunDef false "populateRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "dir") (PVar "objPath")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mkdir"))) (EListLit (ELit (LString "-p")) (EVar "dir"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mktemp"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "rtobj_XXXXXX"))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "tOut") PWild)) () (EBlock (DoLet false false (PVar "tmpObj") (EApp (EVar "stringTrim") (EVar "tOut"))) (DoExpr (EIf (EBinOp "==" (EVar "tmpObj") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "tmpObj")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mv"))) (EListLit (ELit (LString "-f")) (EVar "tmpObj") (EVar "objPath"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false PWild (EApp (EVar "sweepStaleObjCacheEntries") (EVar "dir"))) (DoExpr (EVar "objPath")))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString ""))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString "")))))))))))) (arm PWild () (ELit (LString ""))))) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "sweepStaleObjCacheEntries" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "sweepStaleObjCacheEntries" ((PVar "dir")) (EBlock (DoLet false false (PVar "findArgs") (EListLit (EVar "dir") (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "f")) (ELit (LString "-mtime")) (ELit (LString "+30")) (ELit (LString "-delete")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" PWild) () (ELit LUnit))))))
+(DFunDef false "sweepStaleObjCacheEntries" ((PVar "dir")) (EBlock (DoLet false false (PVar "findArgs") (EListLit (EVar "dir") (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "f")) (ELit (LString "-name")) (ELit (LString "rt-*.o")) (ELit (LString "-mtime")) (ELit (LString "+30")) (ELit (LString "-delete")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" PWild) () (ELit LUnit))))))
 (DTypeSig false "rtObjNote" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "rtObjNote" ((PVar "rtObjEnv") (PVar "rtCached")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "rtObjEnv") (ELit (LString ""))) (EBinOp "==" (EVar "rtCached") (EVar "rtObjEnv"))) (ELit (LString "MEDAKA_RT_OBJ (explicit)")) (EIf (EBinOp "==" (EVar "rtCached") (ELit (LString ""))) (ELit (LString "inline (no cache)")) (EBinOp "++" (EBinOp "++" (ELit (LString "cache ")) (EApp (EVar "display") (EVar "rtCached"))) (ELit (LString ""))))))
 (DTypeSig false "clangLinkGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))))
@@ -1780,7 +1789,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "populateRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
 (DFunDef false "populateRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "dir") (PVar "objPath")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mkdir"))) (EListLit (ELit (LString "-p")) (EVar "dir"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mktemp"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "rtobj_XXXXXX"))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "tOut") PWild)) () (EBlock (DoLet false false (PVar "tmpObj") (EApp (EVar "stringTrim") (EVar "tOut"))) (DoExpr (EIf (EBinOp "==" (EVar "tmpObj") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "tmpObj")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mv"))) (EListLit (ELit (LString "-f")) (EVar "tmpObj") (EVar "objPath"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false PWild (EApp (EVar "sweepStaleObjCacheEntries") (EVar "dir"))) (DoExpr (EVar "objPath")))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString ""))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString "")))))))))))) (arm PWild () (ELit (LString ""))))) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "sweepStaleObjCacheEntries" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "sweepStaleObjCacheEntries" ((PVar "dir")) (EBlock (DoLet false false (PVar "findArgs") (EListLit (EVar "dir") (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "f")) (ELit (LString "-mtime")) (ELit (LString "+30")) (ELit (LString "-delete")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" PWild) () (ELit LUnit))))))
+(DFunDef false "sweepStaleObjCacheEntries" ((PVar "dir")) (EBlock (DoLet false false (PVar "findArgs") (EListLit (EVar "dir") (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "f")) (ELit (LString "-name")) (ELit (LString "rt-*.o")) (ELit (LString "-mtime")) (ELit (LString "+30")) (ELit (LString "-delete")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" PWild) () (ELit LUnit))))))
 (DTypeSig false "rtObjNote" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "rtObjNote" ((PVar "rtObjEnv") (PVar "rtCached")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "rtObjEnv") (ELit (LString ""))) (EBinOp "==" (EVar "rtCached") (EVar "rtObjEnv"))) (ELit (LString "MEDAKA_RT_OBJ (explicit)")) (EIf (EBinOp "==" (EVar "rtCached") (ELit (LString ""))) (ELit (LString "inline (no cache)")) (EBinOp "++" (EBinOp "++" (ELit (LString "cache ")) (EApp (EMethodRef "display") (EVar "rtCached"))) (ELit (LString ""))))))
 (DTypeSig false "clangLinkGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))))

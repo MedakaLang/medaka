@@ -1210,8 +1210,15 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
 -- expected to gain further entry classes over time (larger, more numerous
 -- ones included). A count cap sized for "one object per machine" is the
 -- wrong shape the moment a second class with different size/cardinality
--- shares the directory; an age sweep over every regular file in the
--- directory is shape-agnostic and needs no change when that happens.
+-- shares the directory.
+--
+-- The sweep is nonetheless restricted to `rt-*.o`, this cache's own entry
+-- names, because MEDAKA_CACHE_DIR is a user-supplied path: a user may point
+-- it at a directory that holds things medaka did not create, and deleting
+-- those would be silent data loss no build has any business causing. A
+-- future entry class adds its own pattern here; that is a deliberately
+-- larger obligation than a shape-agnostic sweep, and the smaller one is not
+-- available to a cache that does not own its directory.
 -- `cachedRtObj` refreshes an entry's mtime on every HIT, so this can never
 -- sweep a file this box is still actually using.
 --
@@ -1223,8 +1230,10 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
 -- succeed.
 sweepStaleObjCacheEntries : String -> <IO> Unit
 sweepStaleObjCacheEntries dir =
-  let findArgs =
-    [dir, "-maxdepth", "1", "-type", "f", "-mtime", "+30", "-delete"]
+  let findArgs = [
+    dir, "-maxdepth", "1", "-type", "f", "-name", "rt-*.o", "-mtime", "+30",
+    "-delete"
+  ]
   match runCommand "find" findArgs
     Ok _ => ()
     Err _ => ()
