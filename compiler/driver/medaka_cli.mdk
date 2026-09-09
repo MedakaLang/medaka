@@ -3644,13 +3644,11 @@ checkPolicyHelpText = stringConcat [
   "sample request. Exit 0 on accept, 1 on reject.\n"
 ]
 
--- `--allow`/`--fn` take values; `check_policy.mdk`'s own `parsePolicyGo` reads
--- only the space form, so `--allow=IO` used to fall through as the FIRST
--- POSITIONAL and become the filename (AS-FILENAME, C1's §1 opening
--- transcript).  Both spellings now reach the same key, and the `PolicyArgs`
--- triple is built HERE from the parse rather than by re-scanning raw argv —
--- `parsePolicyArgs` itself belongs to `tools.check_policy` and is left alone
--- (S-3's file, not this slice's).
+-- `--allow`/`--fn` take values; only the space form used to be read, so
+-- `--allow=IO` used to fall through as the FIRST POSITIONAL and become the
+-- filename (AS-FILENAME, C1's §1 opening transcript).  Both spellings now
+-- reach the same key, and the `PolicyArgs` triple is built HERE from the
+-- parse rather than by re-scanning raw argv.
 -- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
 -- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 policyArgSpec : ArgSpec
@@ -3664,16 +3662,16 @@ policyArgSpec =
 runCheckPolicyCmd : List String -> <IO> Unit
 runCheckPolicyCmd argv0 =
   let a = requireArgs policyArgSpec argv0
-  -- LAST-WINS on both values and FIRST positional as the file, exactly as
-  -- `parsePolicyGo` resolved them; defaults are its defaults.
+  -- LAST-WINS on both values and FIRST positional as the file; defaults
+  -- match `check-policy`'s documented defaults (Cache,Log / transform).
   runCheckPolicyArgs
     (PolicyArgs
       (firstPositional a)
       (optDefault (lastValue "--allow" a) "Cache,Log")
       (optDefault (lastValue "--fn" a) "transform"))
 
--- The first positional, or `None` — the shape `parsePolicyGo`/`parseManifestGo`
--- produced by keeping the first bare token and ignoring every later one.
+-- The first positional, or `None` — keeps the first bare token and ignores
+-- every later one.
 firstPositional : Args -> Option String
 firstPositional a = match a.positionals
   [] => None

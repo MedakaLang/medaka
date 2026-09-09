@@ -1613,6 +1613,7 @@ oneOrMultiV many _ = VMulti many
 -- while a canonical key always does — so this can't cross-match.  This is what
 -- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
 -- narrow to the one the checker picked instead of first-impl-wins.
+export
 hasTag : String -> Value e -> Bool
 hasTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
 hasTag _ _ = False

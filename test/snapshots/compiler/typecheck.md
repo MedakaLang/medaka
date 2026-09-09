@@ -1,5 +1,5 @@
 # META
-source_lines=43794
+source_lines=43791
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -20577,7 +20577,7 @@ data ArgRw =
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
--- DTest / DBench / DAttrib; everything else — incl. DLetGroup — left unchanged),
+-- DTest / DAttrib; everything else — incl. DLetGroup — left unchanged),
 -- so with the emit path off this would degenerate to the same node set mapProg
 -- visits.
 prePassDeclScoped : ArgRw -> Decl -> Decl
@@ -20595,8 +20595,6 @@ prePassDeclScoped rw (DProp pub name params body) =
     (rewriteArgScoped rw (boundOfList (propParamNamesTc params)) body)
 prePassDeclScoped rw (DTest pub name body) =
   DTest pub name (rewriteArgScoped rw omEmpty body)
-prePassDeclScoped rw (DBench pub name body) =
-  DBench pub name (rewriteArgScoped rw omEmpty body)
 prePassDeclScoped rw (DAttrib attrs d) = DAttrib attrs (prePassDeclScoped rw d)
 -- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
 -- so a constrained-fn occurrence inside a group body would never be rewritten to
@@ -39561,7 +39559,7 @@ ambiguousAdmitted occ path amb = match importedBindings path
 
 -- every name this module's own decl bodies REFERENCE, as a set.  Mirrors `groupRefs`'
 -- `allEVars` collector one level up, at the decl layer: the top-level clause bodies plus
--- the impl/default/prop/test/bench bodies, which is every place a user program can spell
+-- the impl/default/prop/test bodies, which is every place a user program can spell
 -- an imported value.  Alias-qualified references arrive here already flattened into a
 -- single dotted `EVar "A.g"` by desugar's `rewriteAliasQual` (via `qualifiedLocal`), so
 -- the alias spelling is a plain string lookup and needs no separate walk.
@@ -39579,7 +39577,6 @@ declRefNames (DAttrib _ d) = declRefNames d
 declRefNames (DFunDef _ _ _ body) = allEVars body
 declRefNames (DProp _ _ _ body) = allEVars body
 declRefNames (DTest _ _ body) = allEVars body
-declRefNames (DBench _ _ body) = allEVars body
 declRefNames (DLetGroup _ binds) = flatMap letBindEVars binds
 declRefNames (DImpl { methods, ... }) = flatMap implMethodEVars methods
 declRefNames (DInterface { methods, ... }) = flatMap ifaceMethodEVars methods
@@ -42925,7 +42922,7 @@ argRwOf : MarkCtx -> OrdMap Unit -> (String -> EvId -> Unit) -> ArgRw
 argRwOf mc dn onDict = ArgRw mc.mcRp dn mc.mcAn mc.mcSm onDict
 
 -- Mark the declarations of one module that are not binding groups (impl, default,
--- prop, test and bench bodies) with the module's final dict-name set.  Binding
+-- prop and test bodies) with the module's final dict-name set.  Binding
 -- groups were marked on the schedule (`markGroupClauses`) and are left alone.
 markTailDecls : MarkCtx -> OrdMap Unit -> List Decl -> List Decl
 markTailDecls mc dn decls = map (markTailDecl (argRwOf mc dn noDictHook)) decls
@@ -43706,7 +43703,7 @@ placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
 
 -- The module's marked tree: its binding groups' marked clauses written back into the
 -- declarations in source order, then the remaining bodies (impl, default, prop,
--- test, bench) marked with the module's final dict-name set — they are inferred
+-- test) marked with the module's final dict-name set — they are inferred
 -- after every group, so every promotion the module made is in the set by then.
 finishModuleMarking : ModuleMarking ->
   OrdMap (List (List Pat, Expr)) ->
@@ -47119,7 +47116,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "prePassImplMethodScoped") (EVar "rw"))) (EVar "methods"))))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "prePassDeclScoped") (EVar "rw")) (EVar "d"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "prePassLetBindScoped") (EVar "rw"))) (EVar "binds"))))
 (DFunDef false "prePassDeclScoped" (PWild (PVar "d")) (EVar "d"))
@@ -49862,7 +49858,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declRefNames" ((PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
 (DFunDef false "declRefNames" ((PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
 (DFunDef false "declRefNames" ((PCon "DTest" PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
-(DFunDef false "declRefNames" ((PCon "DBench" PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
 (DFunDef false "declRefNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EVar "letBindEVars")) (EVar "binds")))
 (DFunDef false "declRefNames" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "implMethodEVars")) (EVar "methods")))
 (DFunDef false "declRefNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodEVars")) (EVar "methods")))
@@ -53632,7 +53627,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassImplMethodScoped") (EVar "rw"))) (EVar "methods"))))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "prePassDeclScoped") (EVar "rw")) (EVar "d"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassLetBindScoped") (EVar "rw"))) (EVar "binds"))))
 (DFunDef false "prePassDeclScoped" (PWild (PVar "d")) (EVar "d"))
@@ -56375,7 +56369,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declRefNames" ((PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
 (DFunDef false "declRefNames" ((PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
 (DFunDef false "declRefNames" ((PCon "DTest" PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
-(DFunDef false "declRefNames" ((PCon "DBench" PWild PWild (PVar "body"))) (EApp (EVar "allEVars") (EVar "body")))
 (DFunDef false "declRefNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EVar "letBindEVars")) (EVar "binds")))
 (DFunDef false "declRefNames" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "implMethodEVars")) (EVar "methods")))
 (DFunDef false "declRefNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodEVars")) (EVar "methods")))

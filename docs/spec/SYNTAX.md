@@ -896,9 +896,7 @@ bad pointer. See `docs/KNOWN-GAPS.md`.
 prop "commutative" (x : Int) = x + 0 == x
 ```
 
-`bench "name" = expr` parses, but the `bench` subcommand is not yet
-implemented in the native CLI (`medaka bench` → `subcommand 'bench' not yet
-in native CLI`, even though `--help` still lists it) — don't rely on it.
+`bench "name" = expr` no longer parses — see "Removed — do not use".
 
 ## Attributes
 
@@ -1004,6 +1002,7 @@ just choke, it names the removal and points at a replacement. Tree-wide gate:
 | named impls, `impl Name of Iface Ty where` | a plain `impl Iface Ty where` — overlap resolves to the most-specific instance automatically |
 | `default impl Iface Ty where` | a plain `impl Iface Ty where` |
 | `@Name` impl-hint at a call site (`combine @Additive`) | n/a — named instances are gone, so there is nothing left to hint at |
+| `bench "name" = expr` | `test/bench.sh` — no runner ever consumed the declaration, so it typechecked and then did nothing (#2291). The *word* `bench` stays reserved so the removal is diagnosed rather than mis-parsed |
 
 ---
 

@@ -1,0 +1,8 @@
+running doctests in test/compiler_test_fixtures/user_arbitrary.mdk
+  ok   test/compiler_test_fixtures/user_arbitrary.mdk:13: isRed Red
+  ok   test/compiler_test_fixtures/user_arbitrary.mdk:15: isRed Green
+
+test/compiler_test_fixtures/user_arbitrary.mdk: 2/2 passed
+test/compiler_test_fixtures/user_arbitrary.mdk:24: Testing "user generator is honored" ... OK (100 tests)
+
+1 passed, 0 failed
