@@ -41435,8 +41435,18 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       allMods
   let core2' = dictPass dictNames core2
+  -- ONE reverse-reachability index for the whole run: `dictPassModulesScoped` asks the
+  -- importer question once per module, and re-deriving it there re-walked the graph
+  -- (twice — ids and decls) with a decl-list scan at every visited node.
+  let importerReach = importerReachIndex modules2
   let modules2' =
-    dictPassModulesScoped dictNames promotedQ core2 modules2 modules2
+    dictPassModulesScoped
+      dictNames
+      promotedQ
+      importerReach
+      core2
+      modules2
+      modules2
   (core2', modules2')
 -- Post-ARGSTAMP-UNIFY (Phase 4): ALWAYS run on every path (single elaboration mode).
 -- Emit:
@@ -41453,20 +41463,23 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
 -- per-module: set funConstraintsRef to the module's importer-scoped arities, then
 -- dict-pass that module.  [allModules] is the full set (for the transitive-importer
 -- walk); [modules2] is the remaining suffix to process.  core2 is always in scope.
+-- [importerReach] is the run's one reachability index; it answers the importer
+-- question for every module, so nothing here re-walks the import graph.
 dictPassModulesScoped : List String ->
   List ((String, String), List PredicateSlot) ->
+  OrdMap (OrdMap Unit) ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Decl)
-dictPassModulesScoped _ _ _ _ [] = []
+dictPassModulesScoped _ _ _ _ _ [] = []
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog) :: rest) =
-  let importerDecls = transitiveImporterDecls mid allModules
+dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, prog) :: rest) =
+  let importers = transitiveImporters importerReach mid allModules
+  let importerDecls = flatMap snd importers
   let scope = core2 ++ prog ++ importerDecls
-  let scopeMods =
-    namesToSet (mid :: transitiveImporterIds mid allModules) omEmpty
+  let scopeMods = namesToSet (mid :: map fst importers) omEmpty
   -- IMPORT ALIASING: scopePredicateSlots keys arity by the DEFINITION's name, but an aliased
   -- call site in THIS module writes the LOCAL name.  Re-key this module's own aliases
   -- (from its DUse decls) onto the origin's arity, else the aliased call under-applies
@@ -41496,7 +41509,13 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog) :: rest)
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
   (mid, dictPass dictNames prog)
-    :: dictPassModulesScoped dictNames promotedQ core2 allModules rest
+    :: dictPassModulesScoped
+      dictNames
+      promotedQ
+      importerReach
+      core2
+      allModules
+      rest
 
 -- the arity table for a scope: every `=>`-constrained signature in [scope]
 -- (constrainedSigPredicateSlots) PLUS the joint-discovered promoted-fn slots whose fn is
@@ -41800,57 +41819,57 @@ attributeMethodModulePredicateSlots mid prog entries =
 declTopFnNames : List Decl -> List String
 declTopFnNames decls = map fst (funDefs decls)
 
--- the decls of every module that transitively imports [mid] (excluding [mid]),
--- so a public constrained/promoted fn defined in [mid] but referenced only by an
--- importer is in scope when [mid] is dict-passed.
-transitiveImporterDecls : String -> List (String, List Decl) -> List Decl
-transitiveImporterDecls mid modules =
-  flatMap
-    (p =>
-      if fst p /= mid && transitivelyImports (fst p) mid modules then
-        snd p
-      else
-        [])
-    modules
-
--- the module IDS that transitively import [mid] (excluding [mid]) — the id-level
--- analog of transitiveImporterDecls, for the scopePredicateSlots owning-module set.
-transitiveImporterIds : String -> List (String, List Decl) -> List String
-transitiveImporterIds mid modules =
-  flatMap
-    (p =>
-      if fst p /= mid && transitivelyImports (fst p) mid modules then
-        [fst p]
-      else
-        [])
-    modules
-
--- does module [a] transitively import module [target]?
-transitivelyImports : String -> String -> List (String, List Decl) -> Bool
-transitivelyImports a target modules = depReaches [] a target modules
-
-depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
-depReaches seen a target modules
-  | contains a seen = False
-  | otherwise =
-    let deps = directImports a modules
-    contains target deps || anyDepReaches (a :: seen) deps target modules
-
-anyDepReaches : List String ->
-  List String ->
+-- the modules that transitively import [mid] (excluding [mid]), in module-list order.
+-- Their decls are the importer half of [mid]'s dict-pass scope — a public
+-- constrained/promoted fn defined in [mid] but referenced only by an importer must be
+-- in scope when [mid] is dict-passed — and their ids are the owning-module set
+-- `scopePredicateSlots` filters on.  Both halves read the SAME row, so the two can no
+-- longer disagree about who the importers are.
+transitiveImporters : OrdMap (OrdMap Unit) ->
   String ->
   List (String, List Decl) ->
-  Bool
-anyDepReaches _ [] _ _ = False
-anyDepReaches seen (d :: rest) target modules =
-  depReaches seen d target modules || anyDepReaches seen rest target modules
+  List (String, List Decl)
+transitiveImporters reach mid modules =
+  filterList
+    (p =>
+      fst p /= mid && omHasKey mid (optionOr omEmpty (omLookup (fst p) reach)))
+    modules
 
--- the module ids module [mid] imports directly (from its DUse decls), mirroring the
--- oracle's path→module-id mapping (last component of a dotted UseName, else the path).
-directImports : String -> List (String, List Decl) -> List String
-directImports mid modules = match lookupAssoc mid modules
-  Some prog => flatMap useModuleId prog
-  None => []
+-- Module id → every module id it reaches through `DUse` edges, seeded EMPTY so a
+-- module is reachable from itself only through a genuine cycle (the property the
+-- per-target `fst p /= mid` guard above relied on the old path-pruned DFS for).
+--
+-- The direct-import edges are indexed FIRST, for the reason spelled out at
+-- `declEnvReachIndex`: this walk visits O(modules) rows per module, so a direct-import
+-- lookup that SCANS the module list — and re-runs `flatMap useModuleId` over the
+-- scanned module's whole decl list, as the DFS this replaces did — makes the index
+-- cubic in the module count.
+importerReachIndex : List (String, List Decl) -> OrdMap (OrdMap Unit)
+importerReachIndex mods =
+  importerReachGo (importerEdgeIndex mods omEmpty) mods omEmpty
+
+importerReachGo : OrdMap (List String) ->
+  List (String, List Decl) ->
+  OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit)
+importerReachGo _ [] acc = acc
+importerReachGo edges ((mid, _) :: rest) acc =
+  importerReachGo
+    edges
+    rest
+    (omInsert mid (declEnvReachFrom edges [mid] omEmpty) acc)
+
+-- Module id → the ids its `DUse` decls name, mirroring the oracle's path→module-id
+-- mapping (`useModuleId`).  FIRST row wins and an absent id yields `[]` — the two
+-- properties of the `lookupAssoc` scan this replaces.
+importerEdgeIndex : List (String, List Decl) ->
+  OrdMap (List String) ->
+  OrdMap (List String)
+importerEdgeIndex [] acc = acc
+importerEdgeIndex ((mid, prog) :: rest) acc
+  | omHasKey mid acc = importerEdgeIndex rest acc
+  | otherwise =
+    importerEdgeIndex rest (omInsert mid (flatMap useModuleId prog) acc)
 
 useModuleId : Decl -> List String
 useModuleId (DUse _ path _) = [usePathModuleId path]
