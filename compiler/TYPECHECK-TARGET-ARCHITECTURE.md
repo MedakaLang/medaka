@@ -663,6 +663,44 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    fallback every non-promoted recursive occurrence already takes; no fixture in the
    corpus exhibits it.
 
+13. **The double typecheck per `run`/`build` is gone, 2026-09-09** (#2705's last named unit,
+   PRs #2782 and the batch after it; the `build` child's own elaboration is the one
+   typecheck that remains by construction — see the ruling-3 question below).  Three moves:
+   (a) `elaborateModules` became the diagnostics-producing driver: its per-module worker is
+   `checkModuleFullDiags` (the constructor/match oracle seeded from the module's own decls —
+   the #2049 empty mint survives only ahead of the core pass — and `runFinalChecks`), and it
+   returns `(mid, (errs, warns))` per module in load order with the coherence verdict
+   attached, beside the residual and the evidence table; the two lists OVERLAP (every
+   per-module error is in the residual, which adds the drain's diagnostics; the list adds the
+   coherence verdict, which is pushed to neither channel), so a consumer renders one of them,
+   never both.  (b) The alias-qualified method spelling `A.mth` now survives inference
+   (#1386): the `UseAlias` occurrence rewrite in `renameAliasedMethods` is gone, the
+   spelling is supplied to the four spelling-keyed readers (the mark sets through
+   `withAliasMethodNames`; the dispatch index and the impl-row queries through
+   `originMethodName`), and `resolveAliasMethodSpellings` restores the origin name at the
+   end of the driver so eval and emit see the tree they always saw.  This was the
+   precondition: without it, dropping the check pass turned the correct reject of
+   `dict_fixtures/1386-alias-reproB` into an unrelated standalone's `42`, because the check
+   pass had been the only rejector.  It re-pins `dict_fixtures/1182-alias-dispatch-half-known-bad`
+   from its KNOWN-BAD `2 2` to the spec answer `1 2` — a value change, made on the
+   fixture's own instruction, that does not close #1182/#1265 (a bare occurrence with two
+   admitted declarations has no spelling to tell apart).  (c) `run`'s and `build`'s
+   multi-module arms render the per-module list through `typecheckPass`'s factored tail and
+   keep the `hadTypeErrors` residual gate (rendering the residual directly rather than
+   re-running `analyzeProject`).  Measured: `run` of a multi-module program −34.4% Ir; the
+   1,082-comparison `check`+`run` corpus moves at exactly the 1182 cell plus one located
+   error `run` now prints beside a definer-site reject (`b1-p4`, same verdict); self-compile
+   fixpoint C3a and C3b PASS after each move.  Also landed on the way: the LSP hover driver
+   now consults the prelude memo (`checkModulesK`; −68% Ir per hover), and #2719's premise
+   re-measured — the warm `import list` analyze is +5.6% over ruling 7's baseline after unit
+   1, the residue being the preamble's whole-graph derivations (51%) and the per-keystroke
+   resolve/desugar (23%), not the solver (0.4%).
+   **Open, for the owner:** ruling 3 (does the emitter run resolve) is now due — the `build`
+   child can become the single typecheck (it already receives the per-module diagnostics;
+   the mangled tree keeps its `Loc`s; the parent would run resolve only), at the cost of
+   flipping the #2089 gate hard and giving the child a warning channel; the question is
+   posted on #2705.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
