@@ -345,20 +345,25 @@ their final path, promoted via same-filesystem `mv`.
 🚨 **[B-NO-BORROW-ISOLATED] In a worktree, never `cp` an emitter from another tree — just
 `make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
 and that is FINE. Three cases, measured on this box (Debian 13, 12-core/32GB) on
-2026-09-08, after both links moved to ThinLTO (#2725; see "PARALLEL CODEGEN" in
-`test/build_native_medaka.sh`), each with `time sh test/build_native_medaka.sh`:
+2026-09-08, with both links on module-partitioned ThinLTO (#2725, #2752; see "PARALLEL
+CODEGEN" in `test/build_native_medaka.sh`), each with `time sh test/build_native_medaka.sh`:
   - **cache-served fresh worktree** (no `./medaka`/`./medaka_emitter` present, cache live) —
-    **~1s**, the usual case: the build cache serves a binary another tree already built from
+    **1s**, the usual case: the build cache serves a binary another tree already built from
     this exact source, and only the FIRST worktree at a given source state pays a real build.
-    Unaffected by the codegen path.
+    Unaffected by the codegen path. ⚠️ That cache holds **8 entries**, so a session doing many
+    forced rebuilds evicts its own emitter entry and the next "fresh worktree" pays a full
+    seed bootstrap instead (measured, same session: **68s**).
   - **warm forced full rebuild**, `FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the
-    emitter already present — **104s** ThinLTO (stage B link 27s); the plain-`clang -O2`
-    fallback measured **157s** (stage B link 65s) in the same hour. Box load moves these
-    30–40% run to run; compare arms interleaved, never across sessions.
+    emitter already present — **75s / 76s** on a cold `$MEDAKA_SCRATCH` ThinLTO cache, **38s**
+    once that cache holds this source (the round-robin split it replaced: 79s / 61s cold, and
+    it could never reach the warm figure — its cache keys carried the per-build `mktemp` path).
+    Box load moves these 30–40% run to run; compare arms interleaved, never across sessions.
   - **cold, cache forced off** (no `./medaka`/`./medaka_emitter` present, forcing the seed
-    bootstrap) — not re-measured since ThinLTO. `test/bootstrap_from_seed.sh` still links the
-    seed and `emitter2` with plain `clang -O2`, so expect roughly the warm figure plus two
-    ~35s serial links and one extra emit.
+    bootstrap) — **89s** with a warm ThinLTO cache. `test/bootstrap_from_seed.sh` still links
+    the seed and `emitter2` with plain `clang -O2`, which is where that time goes.
+  ⚠️ The ThinLTO cache only serves source it has ALREADY built. An edit to any compiler
+  module invalidates every partition's entry, so an edit-rebuild loop pays the cold figure
+  every time — measure with a fresh `$MEDAKA_SCRATCH` unless you mean the unchanged-source case.
 So the worst case is a few minutes, not the stale "~31s" figure, which is off by an order of
 magnitude. Cold exceeds warm-forced by the seed bootstrap, the only ordering physically
 possible; a cold figure BELOW the warm-forced one means the cache or an existing emitter was

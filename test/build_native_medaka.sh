@@ -86,23 +86,47 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # BOTH links this script performs: stage A's emitter and stage B's ./medaka CLI.
 #
 # Handing clang one ~17 MB (emitter) or ~35 MB (CLI) IR module gets one
-# single-threaded -O2 pipeline out of a 12-core box. When `llvm-split` and lld are
-# discoverable, pcg_link instead splits that module into $MEDAKA_CODEGEN_PARTS
-# partitions, compiles each to ThinLTO bitcode CONCURRENTLY (`clang -x ir -O2
-# -flto=thin -c`), and hands the results to a single ThinLTO link whose backend is
-# itself parallel (`-flto=thin -fuse-ld=lld -Wl,--thinlto-jobs=N`). ThinLTO's
-# per-module summaries carry inlining ACROSS partition boundaries, which is the
-# thing a partition-local `opt`/`llc` scheme gives up. Set
-# MEDAKA_PARALLEL_CODEGEN=0 to force the single `clang -O2` link on both stages;
-# that is also what runs, silently but positively logged, wherever the tools are
-# absent (CI runner layouts vary — see pcg_discover, and MEDAKA_LLVM_BINDIR there
-# for pointing this at a toolchain it would not find).
+# single-threaded -O2 pipeline out of a 12-core box. When lld is discoverable,
+# pcg_link instead cuts that module into $MEDAKA_CODEGEN_PARTS partitions BY SOURCE
+# MODULE (pcg_partition, from the emitter's own `; mdk-module` markers), compiles
+# each to ThinLTO bitcode CONCURRENTLY (`clang -x ir -O2 -flto=thin -c`), and hands
+# the results to a single ThinLTO link whose backend is itself parallel
+# (`-flto=thin -fuse-ld=lld -Wl,--thinlto-jobs=N`). ThinLTO's per-module summaries
+# carry inlining ACROSS partition boundaries, which is the thing a partition-local
+# `opt`/`llc` scheme gives up. Set MEDAKA_PARALLEL_CODEGEN=0 to force the single
+# `clang -O2` link on both stages; that is also what runs, silently but positively
+# logged, wherever lld is absent (CI runner layouts vary — see pcg_discover, and
+# MEDAKA_LLVM_BINDIR there for pointing this at a toolchain it would not find).
+#
+# Partitioning by MODULE rather than by round-robin function (issue #2727) makes a
+# partition's bytes depend only on the modules in it: a one-line edit to
+# compiler/tools/lint.mdk leaves seven of the eight partitions BYTE-IDENTICAL
+# (measured: the eighth differs by 2 lines). Round-robin gave every partition a
+# share of every edit.
+#
+# 🚨 That byte-identity does NOT buy a cheap relink after an edit, and nothing here
+# should be read as claiming it does. lld keys the ThinLTO cache on a module's
+# import closure as well as on the module, and eight partitions of ONE program
+# import from each other densely, so a change anywhere invalidates every entry.
+# Measured, partition objects held fixed and only the link timed: cold 24s; relink
+# of the SAME objects 0s (all 10 entries reused); relink after the two-line lint
+# edit 23s, writing 8 fresh entries and reusing none. The cache pays for repeated
+# builds of UNCHANGED source — a fresh worktree, a gate rerun, a `make` after a
+# docs-only change — not for the edit-rebuild loop. Making the loop cheap needs
+# partition-local codegen, which costs the cross-partition inlining measured in the
+# runtime row below; that trade is issue #2727 and is not settled here.
 #
 # Measured on this box (Debian 13, 12-core/32GB) on 2026-09-08, on the real emitted
-# CLI IR (34.6 MB), three codegen paths built from identical source:
-#   * LINK TIME: plain `clang -O2` 72s; ThinLTO 24s cold (8s of partition compiles
-#     + 16s of link), ~1s on a warm --thinlto-cache-dir relink; a naive split with
-#     partition-local codegen and a plain link, 7s.
+# CLI IR (34.6 MB):
+#   * FULL BUILD, identical source, fresh $MEDAKA_SCRATCH, two runs back to back:
+#     77s then 38s (stage A/B links 24s+29s, then 7s+8s), and the ThinLTO cache
+#     held at 19 entries across both. The round-robin split it replaces measured
+#     69s then 65s (links 14s+31s, then 14s+28s) and grew the cache by 16 on the
+#     second run, having reused nothing: its module identifiers carried the
+#     per-build mktemp path (issue #2752).
+#   * The 8s warm stage-B link is 3s of partitioning + 6s of partition compiles +
+#     1s of actual link. The partitioning and the compiles are redone every build;
+#     only the link is cached.
 #   * INTERPRETER RUNTIME — what every `medaka check`/`test`/`run`, i.e. every gate
 #     and oracle in the tree, pays on every invocation, far more often than the CLI
 #     is relinked: `check compiler/backend/llvm_emit.mdk`, 3 reps interleaved —
@@ -123,32 +147,43 @@ MEDAKA_PARALLEL_CODEGEN="${MEDAKA_PARALLEL_CODEGEN:-1}"
 # still runs the ThinLTO link, just with no parallelism at either level).
 MEDAKA_CODEGEN_PARTS="${MEDAKA_CODEGEN_PARTS:-8}"
 
-# lld is where the parallel ThinLTO backend and --thinlto-jobs come from, so every
-# non-Darwin candidate directory must hold it. macOS is the exception: ld64.lld
-# does not reliably link system frameworks, and Apple's own `ld` supports
-# `-flto=thin` directly, so there the discovered directory need only supply
-# llvm-split and the link goes through the system linker (see PCG_LTO_LDFLAGS).
-# Untested on macOS — no Darwin box was available when this was written.
+# lld is the ONLY external tool this path needs, and it is where the parallel
+# ThinLTO backend and --thinlto-jobs come from, so every non-Darwin candidate
+# directory must hold it. macOS is the exception: ld64.lld does not reliably link
+# system frameworks, and Apple's own `ld` supports `-flto=thin` directly, so there
+# the link goes through the system linker (see PCG_LTO_LDFLAGS) and NO tool
+# directory is required at all. Untested on macOS — no Darwin box was available
+# when this was written.
+#
+# The partitioning used to need `llvm-split` too. It does not any more: pcg_partition
+# below cuts the module by its own `; mdk-module` markers, in awk.
 PCG_NEED_LLD=1
 [ "$(uname -s)" = "Darwin" ] && PCG_NEED_LLD=0
 
-# Whether directory $1 holds every tool the ThinLTO path needs.
+# Whether directory $1 supplies what the ThinLTO path needs there: ld.lld off
+# Darwin, nothing but its own existence on it. The existence test is not
+# ceremony — it is what keeps MEDAKA_LLVM_BINDIR pointed at a toolless directory
+# a working way to exercise the plain-clang fallback on BOTH platforms.
 pcg_has_tools() {
-  [ -x "$1/llvm-split" ] || return 1
+  [ -d "$1" ] || return 1
   [ "$PCG_NEED_LLD" = "0" ] && return 0
   [ -x "$1/ld.lld" ]
 }
 
-# Where llvm-split and ld.lld live. $MEDAKA_LLVM_BINDIR, if set, is searched
-# INSTEAD of everything else — an operator knob for a toolchain in a nonstandard
-# place, and the seam that lets the fallback path be exercised rather than asserted
-# (point it at a directory without the tools). Otherwise: PATH first; then the
-# versioned Debian/Ubuntu directories, which put these tools OFF PATH (on this box
-# only /usr/bin/clang is on it); then the two Homebrew prefixes, for
-# [B-DUAL-PLATFORM]. Highest version wins among the /usr/lib/llvm-* candidates.
-# Prints the directory to use, or returns nonzero when no single directory holds
-# them all — a runner without these tools must degrade to the plain clang path,
-# never fail, so no layout is hardcoded as the only place to look.
+# Where ld.lld lives. $MEDAKA_LLVM_BINDIR, if set, is searched INSTEAD of
+# everything else — an operator knob for a toolchain in a nonstandard place, and
+# the seam that lets the fallback path be exercised rather than asserted (point it
+# at a directory without the tools). Otherwise: PATH first; then the versioned
+# Debian/Ubuntu directories, which put ld.lld OFF PATH (on this box only
+# /usr/bin/clang is on it); then the two Homebrew prefixes, for [B-DUAL-PLATFORM].
+# Highest version wins among the /usr/lib/llvm-* candidates. Prints the directory
+# to use, or returns nonzero when none supplies it — a runner without lld must
+# degrade to the plain clang path, never fail, so no layout is hardcoded as the
+# only place to look.
+#
+# The printed value is used as a directory PREFIX for `-fuse-ld`, so it must be the
+# directory that actually holds ld.lld. Off Darwin there is no such directory to
+# name: the value is a label for the log line, and PCG_LTO_LDFLAGS never reads it.
 pcg_discover() {
   if [ -n "${MEDAKA_LLVM_BINDIR:-}" ]; then
     if pcg_has_tools "$MEDAKA_LLVM_BINDIR"; then
@@ -157,18 +192,15 @@ pcg_discover() {
     fi
     return 1
   fi
+  if [ "$PCG_NEED_LLD" = "0" ]; then
+    printf 'system-ld'
+    return 0
+  fi
   for _d in "" $(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -r) \
             /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
     if [ -z "$_d" ]; then
-      # PATH is searched per-TOOL, but $PCG_BIN is used as a single directory
-      # PREFIX, so an independent `command -v` hit is not enough: a PATH with
-      # llvm-split in one directory and ld.lld in another would yield a $PCG_BIN
-      # where "$PCG_BIN/ld.lld" does not exist, and the ThinLTO link would fail
-      # hard instead of degrading to plain clang. Require the same directory, with
-      # the same -x check every other candidate below uses; a split PATH falls
-      # through to the next candidate.
-      if command -v llvm-split >/dev/null 2>&1; then
-        _pd="$(dirname "$(command -v llvm-split)")"
+      if command -v ld.lld >/dev/null 2>&1; then
+        _pd="$(dirname "$(command -v ld.lld)")"
         if pcg_has_tools "$_pd"; then
           printf '%s' "$_pd"
           return 0
@@ -593,8 +625,12 @@ esac
 
 # ---- ThinLTO link flags (see PARALLEL CODEGEN above) ---------------------------
 # The ThinLTO backend writes one object per imported-summary group and can reuse
-# them across links, which turns a re-link of unchanged partitions from ~16 s into
-# ~1 s. It lives under $MEDAKA_SCRATCH for the same reason the build cache does:
+# them across links. Its keys are computed over each module's IDENTIFIER, which is
+# the path clang was handed — so this cache only ever hits because pcg_link runs
+# the partition compiles from inside the partition directory under RELATIVE names
+# (issue #2752), and even then only for source it has already built — see the
+# ThinLTO-cache paragraph under "PARALLEL CODEGEN" for what an edit costs.
+# It lives under $MEDAKA_SCRATCH for the same reason the build cache does:
 # /tmp on the dev box is a RAM-backed tmpfs, and a cache that evaporates under
 # memory pressure is not a cache. `mkdir -p` failure is ignored — an unwritable
 # cache directory makes the link cold, never broken.
@@ -619,27 +655,180 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# ---- pcg_link: the ThinLTO half of PARALLEL CODEGEN (issues #2681, #2725) -------
+# ---- pcg_partition: cut the emitted IR by SOURCE MODULE ------------------------
+#
+#   pcg_partition <in.ll> <outdir> <n>     -> writes <outdir>/p0 .. p<n-1>
+#
+# The emitter precedes every top-level entity with a `; mdk-module <scope>` comment,
+# where <scope> is a module id (`frontend_lexer`), an impl-group key (`impl:List_eq`)
+# or `program` (dispatchers, interface defaults, @mdk_program_main, the $memo
+# forcers). Scopes are NOT contiguous in the text, so this bins by marker and never
+# by position. Markers also appear INSIDE @mdk_program_main's body, one per module's
+# global initializer, so only a marker seen at top level moves the current scope —
+# hence the `define`/`}` state machine.
+#
+# Scopes are coalesced IN ORDER into n-1 partitions of roughly equal line count, and
+# `program` gets the last partition to itself. That is the whole point of the slice:
+# a partition's bytes then depend only on the modules IN it, so editing one module
+# leaves the other partitions byte-identical and the ThinLTO cache serves them. It
+# also isolates @mdk_program_main, which carries an initializer for every module and
+# therefore changes on almost any edit.
+#
+# Two things a text split has to do that llvm-split did in the IR:
+#   * local-linkage globals (`private` string constants, `internal` closure records)
+#     are referenced across partition boundaries, so their definitions are promoted
+#     from private/internal to `hidden` — external linkage, still not exported from
+#     the binary, and exactly what llvm-split emitted for the same globals. lld's
+#     LTO re-internalizes what stays partition-local.
+#   * a partition needs a declaration for every symbol it references but does not
+#     define. They are derived from the definition text and appended (top-level IR
+#     is order-insensitive), and ONLY for symbols the partition actually mentions —
+#     declaring everything everywhere would put every module's string-constant types
+#     in every partition and hand the cache a miss on every edit.
+# The `; mdk-module` markers themselves are dropped: 3.7% of the IR text, and clang
+# does not need them.
+#
+# An input with no markers is a hard failure. It can only mean the emitter that
+# produced it predates them, and the alternative — one partition holding everything
+# and seven holding the preamble — would duplicate every definition n times.
+pcg_partition() {
+  awk -v PARTS="$3" -v DIR="$2" '
+  # The type of a global, as the balanced prefix of the text after `constant`/
+  # `global`: `{ i64, i64, i64, [2 x i8] }` before its initializer, `[2 x i64]`
+  # before its elements, or a bare `i64`.
+  function typeprefix(s,   c, o, cl, d, i, ch, n) {
+    c = substr(s, 1, 1)
+    if (c == "{") { o = "{"; cl = "}" }
+    else if (c == "[") { o = "["; cl = "]" }
+    else { i = index(s, " "); return (i > 0 ? substr(s, 1, i - 1) : s) }
+    d = 0; n = length(s)
+    for (i = 1; i <= n; i++) {
+      ch = substr(s, i, 1)
+      if (ch == o) d++
+      else if (ch == cl) { d--; if (d == 0) return substr(s, 1, i) }
+    }
+    return ""
+  }
+  function die(msg) { print "pcg: " msg > "/dev/stderr"; bad = 1; exit 1 }
+  function note(s) { if (!(s in sz)) { sz[s] = 0; ord[++nord] = s } }
+  function assign(   i, s, tot, mp, tgt, cum, p, cnt) {
+    tot = 0
+    for (i = 1; i <= nord; i++) if (ord[i] != "program") tot += sz[ord[i]]
+    mp = PARTS - 1; if (mp < 1) mp = 1
+    tgt = tot / mp
+    cum = 0; p = 0
+    for (i = 1; i <= nord; i++) {
+      s = ord[i]
+      if (s == "program") { part[s] = PARTS - 1; continue }
+      # Close a partition BEFORE the scope that would overshoot it, never after:
+      # types_typecheck alone is a fifth of the module, and appending it to a
+      # nearly-full partition is how one job ends up doing a third of the work.
+      if (p < mp - 1 && cnt[p] > 0 && cum + sz[s] > tgt * (p + 1)) p++
+      part[s] = p; cnt[p]++
+      cum += sz[s]
+    }
+    for (i = 0; i < PARTS; i++) OF[i] = DIR "/p" i
+  }
+  function emit(l,   i, s, sym) {
+    if (tp < 0) { for (i = 0; i < PARTS; i++) print l > OF[i]; return }
+    print l > OF[tp]
+    if (index(l, "@")) {
+      s = l
+      while (match(s, /@[-a-zA-Z$._0-9]+/)) {
+        sym = substr(s, RSTART, RLENGTH)
+        ref[tp, sym] = 1
+        s = substr(s, RSTART + RLENGTH)
+      }
+    }
+  }
+  BEGIN { ind = 0; cur = ""; tp = -1; markers = 0; bad = 0; note("") }
+
+  # ---- pass 1: scope sizes, symbol owners, and each symbol s external declaration
+  NR == FNR {
+    if (ind) { sz[cur]++; if ($0 ~ /^\}/) ind = 0; next }
+    if ($0 ~ /^; mdk-module /) { cur = substr($0, 14); markers++; note(cur); next }
+    sz[cur]++
+    if ($0 ~ /^define /) {
+      ind = 1
+      nm = $3; sub(/\(.*/, "", nm)
+      d = $0; sub(/^define /, "declare ", d); sub(/[ \t]*\{[ \t]*$/, "", d)
+      owner[nm] = cur; decl[nm] = d
+      next
+    }
+    if ($0 ~ /^@/) {
+      nm = $1
+      rest = $0; sub(/^[^ ]+ = /, "", rest)
+      nt = split(rest, T, " ")
+      kw = 0
+      for (i = 1; i <= nt; i++) if (T[i] == "constant" || T[i] == "global") { kw = i; break }
+      if (!kw) die("unrecognized global definition: " $0)
+      vis = ""; st = 1
+      if (T[1] == "private" || T[1] == "internal") { vis = "hidden "; st = 2 }
+      head = ""
+      for (i = st; i <= kw; i++) head = head (head == "" ? "" : " ") T[i]
+      after = rest
+      for (i = 1; i <= kw; i++) sub(/^[^ ]+ +/, "", after)
+      ty = typeprefix(after)
+      if (ty == "") die("cannot read the type of global " nm ": " $0)
+      owner[nm] = cur; decl[nm] = nm " = external " vis head " " ty
+      next
+    }
+    next
+  }
+
+  # ---- pass 2: write each line to its partition (preamble to all of them)
+  {
+    if (!assigned) { assign(); assigned = 1 }
+    if (ind) { emit($0); if ($0 ~ /^\}/) ind = 0; next }
+    if ($0 ~ /^; mdk-module /) { cur = substr($0, 14); tp = part[cur]; next }
+    l = $0
+    if (l ~ /^define /) ind = 1
+    else if (l ~ /^@/) { sub(/ = private /, " = hidden ", l); sub(/ = internal /, " = hidden ", l) }
+    emit(l)
+  }
+
+  END {
+    if (bad) exit 1
+    if (markers == 0) die("input IR carries no `; mdk-module` markers — it was emitted by an emitter that predates them")
+    for (k in ref) {
+      split(k, A, SUBSEP); q = A[1] + 0; sym = A[2]
+      if (!(sym in owner)) continue
+      if (part[owner[sym]] == q) continue
+      print decl[sym] > OF[q]
+    }
+  }
+  ' "$1" "$1"
+}
+
+# ---- pcg_link: the ThinLTO half of PARALLEL CODEGEN (issues #2681, #2725, #2752) -
 #
 #   pcg_link <in.ll> <out-binary> <-O level> <errfile> [extra clang args ...]
 #
-# Split the module, compile each partition to ThinLTO bitcode concurrently, then
-# let clang drive one ThinLTO link — which is also where runtime/medaka_rt.c is
-# compiled, so the trailing args reach that compile exactly as they do on the plain
-# path. Stage B passes its -DMEDAKA_SRC_* provenance defines that way; with
-# -flto=thin the C file becomes thin bitcode too, and the defines still apply
-# because they are consumed by the C front end before any of that.
+# Partition the module by source module, compile each partition to ThinLTO bitcode
+# concurrently, then let clang drive one ThinLTO link — which is also where
+# runtime/medaka_rt.c is compiled, so the trailing args reach that compile exactly
+# as they do on the plain path. Stage B passes its -DMEDAKA_SRC_* provenance defines
+# that way; with -flto=thin the C file becomes thin bitcode too, and the defines
+# still apply because they are consumed by the C front end before any of that.
 #
 # Returns nonzero on any failure with the reason appended to <errfile>; both call
 # sites treat that exactly as they treat a clang failure, so a partition that
 # cannot be split or compiled is a hard build failure, never a silent fallback to a
 # binary built some other way.
 #
-# 🚨 `llvm-split` writes EXTENSIONLESS partition files, and `clang -c` on one fails
-# instantly with "unknown file type" unless it is told `-x ir`. Inside the `&`
-# fan-out below that failure would be silent and the whole "build" would finish in
-# seconds with no objects at all — which is why every partition's status file is
-# checked for `ok` AND its .o is checked for existence before the link.
+# 🚨 THE PARTITION COMPILES AND THE LINK RUN WITH $_pdir AS THE WORKING DIRECTORY
+# and name the partitions relatively. clang stamps the input path into the module
+# identifier it writes into the bitcode, and lld keys the ThinLTO cache on that
+# identifier — so an absolute name under a per-build `mktemp -d` gives every module
+# a unique key and the cache the link is handed can never hit. Measured before this
+# was fixed: two identical forced builds wrote 34 fresh entries and reused none.
+# The caller's paths are absolutized here because that cd invalidates a relative one.
+#
+# 🚨 The partition files are EXTENSIONLESS, and `clang -c` on one fails instantly
+# with "unknown file type" unless it is told `-x ir`. Inside the `&` fan-out below
+# that failure would be silent and the whole "build" would finish in seconds with no
+# objects at all — which is why every partition's status file is checked for `ok`
+# AND its .o is checked for existence before the link.
 #
 # $GC_SECTION_CFLAGS is passed to the partition compiles as well as the link:
 # without per-function/-data sections in the emitted objects, $GC_SECTION_LDFLAGS
@@ -648,46 +837,53 @@ trap 'rm -rf "$WORK"' EXIT
 pcg_link() {
   _ll="$1"; _pout="$2"; _popt="$3"; _perr="$4"
   shift 4
+  case "$_ll"   in /*) ;; *) _ll="$PWD/$_ll" ;; esac
+  case "$_pout" in /*) ;; *) _pout="$PWD/$_pout" ;; esac
+  case "$_perr" in /*) ;; *) _perr="$PWD/$_perr" ;; esac
   _pdir="$WORK/pcg.$$"
   rm -rf "$_pdir"
   mkdir -p "$_pdir" || { echo "pcg: cannot create $_pdir" >>"$_perr"; return 1; }
 
-  if ! "$PCG_BIN/llvm-split" -j "$MEDAKA_CODEGEN_PARTS" -o "$_pdir/p" "$_ll" 2>>"$_perr"; then
-    echo "pcg: llvm-split failed" >>"$_perr"; return 1
+  if ! pcg_partition "$_ll" "$_pdir" "$MEDAKA_CODEGEN_PARTS" 2>>"$_perr"; then
+    echo "pcg: module partitioning failed" >>"$_perr"; return 1
   fi
 
-  # One background job per partition. Each gets its OWN status and error file:
-  # POSIX `wait` reports only the last job's exit status, so a mid-list failure is
-  # otherwise invisible, and concurrent appends to one shared error file interleave.
-  # A missing status file counts as a failure, not as success.
-  _i=0
-  while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
-    (
-      if "$CC" -x ir "$_popt" -flto=thin -c $GC_SECTION_CFLAGS \
-           "$_pdir/p$_i" -o "$_pdir/p$_i.o" 2>"$_pdir/p$_i.err"
-      then printf 'ok' > "$_pdir/p$_i.status"
-      else printf 'fail' > "$_pdir/p$_i.status"
+  (
+    cd "$_pdir" || exit 1
+
+    # One background job per partition. Each gets its OWN status and error file:
+    # POSIX `wait` reports only the last job's exit status, so a mid-list failure is
+    # otherwise invisible, and concurrent appends to one shared error file interleave.
+    # A missing status file counts as a failure, not as success.
+    _i=0
+    while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
+      (
+        if "$CC" -x ir "$_popt" -flto=thin -c $GC_SECTION_CFLAGS \
+             "p$_i" -o "p$_i.o" 2>"p$_i.err"
+        then printf 'ok' > "p$_i.status"
+        else printf 'fail' > "p$_i.status"
+        fi
+      ) &
+      _i=$(( _i + 1 ))
+    done
+    wait
+
+    _objs=""
+    _i=0
+    while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
+      if [ "$(cat "p$_i.status" 2>/dev/null)" != "ok" ] || [ ! -s "p$_i.o" ]; then
+        echo "pcg: partition $_i produced no ThinLTO object:" >>"$_perr"
+        cat "p$_i.err" >>"$_perr" 2>/dev/null
+        exit 1
       fi
-    ) &
-    _i=$(( _i + 1 ))
-  done
-  wait
+      _objs="$_objs p$_i.o"
+      _i=$(( _i + 1 ))
+    done
 
-  _objs=""
-  _i=0
-  while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
-    if [ "$(cat "$_pdir/p$_i.status" 2>/dev/null)" != "ok" ] || [ ! -s "$_pdir/p$_i.o" ]; then
-      echo "pcg: partition $_i produced no ThinLTO object:" >>"$_perr"
-      cat "$_pdir/p$_i.err" >>"$_perr" 2>/dev/null
-      return 1
-    fi
-    _objs="$_objs $_pdir/p$_i.o"
-    _i=$(( _i + 1 ))
-  done
-
-  # $_objs, $PCG_LTO_LDFLAGS and the GC flag vars are deliberately unquoted word lists.
-  "$CC" -pthread "$_popt" -flto=thin $PCG_LTO_LDFLAGS "$@" $GC_SECTION_CFLAGS $GC_CFLAGS \
-        $_objs "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$_pout" 2>>"$_perr"
+    # $_objs, $PCG_LTO_LDFLAGS and the GC flag vars are deliberately unquoted word lists.
+    "$CC" -pthread "$_popt" -flto=thin $PCG_LTO_LDFLAGS "$@" $GC_SECTION_CFLAGS $GC_CFLAGS \
+          $_objs "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$_pout" 2>>"$_perr"
+  )
 }
 
 trim_unit() {
@@ -860,8 +1056,9 @@ else
   # 4.78s → CLI_OPT=-O2 2.44s — about 2x faster, at current stdlib/interpreter
   # size. For build-heavy loops where the CLI's own extra link time dominates
   # instead, opt out with CLI_OPT=-O0. (The 94.6s figure is the PLAIN -O2 link;
-  # the ThinLTO path this stage now takes by default cuts that to ~24s cold and
-  # ~1s on a warm ThinLTO cache — see "PARALLEL CODEGEN" above.)
+  # the ThinLTO path this stage now takes by default cuts that to ~29s cold and
+  # ~8s when the source has not changed since the last build. It does NOT cut the
+  # link after a source edit — see "PARALLEL CODEGEN" above.)
   # (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
   CLI_OPT="${CLI_OPT:--O2}"
   # STALENESS STAMP (issue #89): bake the COMPILER-source fingerprint into ./medaka
