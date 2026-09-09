@@ -42057,6 +42057,12 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- ref is on `driverState`, which `resetCrossModuleState` does not touch.
   let declEnvs = buildDeclEnvs coreDecls modules
   driverState.value.declEnvsRef := declEnvs
+  -- The abstract-record set `resolveFieldRecord` consults for `T-ABSTRACT-FIELD`
+  -- is seeded at BOTH Module-mode driver entries, like the four refs above:
+  -- `checkModulesPreambleK` carries the identical line.  A driver that skips it
+  -- reads an empty set and never rejects a dot-access on an abstractly exported
+  -- record, so `run` would execute what `check` rejects.
+  let _ = seedAbstractRecordTypes coreDecls modules
   -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` — the same list
   -- value (see `declEnvDeclsOf`), derived from the envelope.
   let allDecls = declEnvs.deAllDecls

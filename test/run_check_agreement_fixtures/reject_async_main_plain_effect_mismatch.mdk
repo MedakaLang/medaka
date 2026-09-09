@@ -1,0 +1,10 @@
+-- run/check agreement: an Async main whose plain program has a located effect-index
+-- mismatch.  run/build render the PLAIN elaboration's diagnostics, not the wrapped
+-- synthetic program's, so this rejects with the same located diagnostic as check.
+import async.{Async, liftIO}
+
+inner : Async <Clock> Unit
+inner = liftIO (u => ())
+
+main : Async <Stdout> Unit
+main = inner
