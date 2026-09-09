@@ -210,10 +210,11 @@ buildClassEnv : List DeclEnvModule -> ClassEnv
 buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List DeclEnvModule -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
+buildDeclEnvsFrom : DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
-buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
+buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
 buildImplUniverse : List Decl -> ImplUniverse
 buildStandaloneShadowsGraph : List Decl -> List Decl -> List String
 buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
@@ -535,6 +536,7 @@ currentModuleMarks : Unit -> GraphMarks
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
+dataEnvFinish : DataEnv -> DataEnv
 dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
@@ -569,7 +571,8 @@ deRecordOrderFixtureB : Decl
 deSeedChainKinds : Map String (List (TabKey, List Kind))
 deSeedChainNames : Map String (Map String Unit)
 deSeedChainOwners : Map String (Map String (List String))
-deSeedChainProbe : (Map String (List (TabKey, List Kind)), Map String (Map String (List String)), Map String (Map String Unit))
+deSeedChainProbe : DeclEnvSeedAcc
+deSeedChainProbeZero : DeclEnvSeedAcc
 deSeedNameParity : String -> Bool
 deSeedRowN : DeclEnvModule
 declBodyVars : String -> List Decl -> List String
@@ -577,6 +580,7 @@ declBodyVarsOf : String -> Decl -> List String
 declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
+declEnvAccOf : List DeclEnvModule -> DeclEnvAcc -> DeclEnvAcc
 declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclOwnerModules : String -> List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
@@ -589,7 +593,7 @@ declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
 declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
-declEnvPolarityChain : List DeclEnvModule -> List (TabKey, List Polarity) -> Map String (List (TabKey, List Polarity)) -> Map String (List (TabKey, List Polarity))
+declEnvPolarityChain : List DeclEnvModule -> (List (TabKey, List Polarity), Map String (List (TabKey, List Polarity))) -> (List (TabKey, List Polarity), Map String (List (TabKey, List Polarity)))
 declEnvPolarityEntries : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
 declEnvPolarityEntriesFix : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
 declEnvPolarityFixGo : List (TabKey, List Polarity) -> List Decl -> Int -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
@@ -598,12 +602,12 @@ declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (M
 declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
 declEnvReachSeed : String -> Map String Unit
 declEnvRowAtomEntries : List Decl -> List (TabKey, List (List Atom))
-declEnvRowAtomsChain : List DeclEnvModule -> List (TabKey, List (List Atom)) -> Map String (List (TabKey, List (List Atom))) -> Map String (List (TabKey, List (List Atom)))
+declEnvRowAtomsChain : List DeclEnvModule -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom)))) -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom))))
 declEnvRowAtomsEntries : Int -> DeclEnvModule -> List (TabKey, List (List Atom))
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
-declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String Unit -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> Map String (Map String Unit) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)), Map String (Map String Unit))
+declEnvSeedChain : List DeclEnvModule -> DeclEnvSeedAcc -> DeclEnvSeedAcc
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
 declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) -> Map String (List String)
@@ -771,7 +775,10 @@ emitValueShadowGate : String -> Bool
 emptyBuiltinClasses : BuiltinClasses
 emptyClassEnv : ClassEnv
 emptyDataEnv : DataEnv
+emptyDeclEnvAcc : DeclEnvAcc
+emptyDeclEnvSeedAcc : DeclEnvSeedAcc
 emptyDeclEnvs : DeclEnvs
+emptyImplAcc : ImplAcc
 emptyImplEnv : ImplEnv
 emptyImplUniverse : ImplUniverse
 emptyShadowDicts : ShadowDicts
@@ -975,11 +982,14 @@ graphAliasEntry : String -> List ((String, String), a) -> (String, (String, Stri
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
+graphCtorExportsFrom : List (String, String, Ident) -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (String, List String))
+graphIfaceMethodsFrom : List (String, List String) -> List (String, List Decl) -> Map String (List (String, List String))
 graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
 graphMarksNow : Unit -> GraphMarks
 graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
+graphMethodExportsFrom : List (String, Ident) -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
 graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
@@ -1028,8 +1038,7 @@ idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
 ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
-ieBuildSnapsEmit : ImplRow -> List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
-ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
+ieBuildSnapsGo : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidatesForIface : ImplEnv -> HeadKey -> IfaceRef -> List Mono -> List KeyEntry
 ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> Option IfaceRef -> List Mono -> List KeyEntry
@@ -1078,9 +1087,12 @@ ieRowsAll : ImplEnv -> List ImplRow
 ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
 ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
 ieSameImplIn : String -> Decl
+ieSameOrdRun : Int -> List ImplRow -> List ImplRow -> (List ImplRow, List ImplRow)
 ieSelectRowByIface : ImplEnv -> IfaceRef -> List Mono -> Option ImplRow
 ieSelectRowByMethod : ImplEnv -> String -> List Mono -> Option ImplRow
 ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
+ieSnapStep : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
+ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
 ieTyBlob : String -> Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
@@ -1123,6 +1135,7 @@ ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
 ifaceSortKey : IfaceRef -> String
 ifaceSupersOf : List Decl -> String -> Option (List String, List Super)
 ifaceTabKey : TyConOrigin -> String -> TabKey
+implAccFinish : ImplAcc -> ImplEnv
 implBodyLoc : Expr -> Option Loc
 implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
 implCountForIfaceU : ImplUniverse -> IfaceRef -> Int
@@ -1448,6 +1461,7 @@ markGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, E
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
 markRecursiveOccurrences : ModuleMarking -> List (String, Mono) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+markSetsFrom : PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
 markSetsOf : List Decl -> List (String, List Decl) -> List Decl -> MarkSets
 markTailDecl : ArgRw -> Decl -> Decl
 markTailDecls : MarkCtx -> Map String Unit -> List Decl -> List Decl
@@ -1524,7 +1538,7 @@ modInScope : String -> Map String Unit -> Bool
 modeModuleId : CheckMode -> String
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleChainMemoRef : Ref (Option ChainMemo)
-moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
+moduleDictNames : List (String, List String) -> List String -> List (String, List Decl) -> List String
 moduleMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 moduleRefNameSet : List Decl -> Map String Unit
@@ -1714,7 +1728,9 @@ polarityEq : Polarity -> Polarity -> Bool
 polarityPublicKeys : List Decl -> List TabKey
 popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))
 populateEffectDomains : List Decl -> Unit
+populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
 populateGo : List Decl -> Unit
+populateUnitsGo : List (String, List Decl) -> Unit
 ppSchemeNamed : String -> Scheme -> String
 ppSchemeNamedFull : String -> Scheme -> String
 prePassDeclScoped : ArgRw -> Decl -> Decl
@@ -1747,7 +1763,13 @@ prefixConcrete : String -> String
 prefixPatternErrMsg : String -> String -> String
 prefixPatternOk : String -> Bool
 preludeArgPosDictNames : List Decl -> List Decl -> List String
+preludeConstrainedBodyVars : List Decl -> List (String, List String)
+preludeMarkFactsOf : List Decl -> PreludeMarkFacts
 preludeMethodEntry : String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+preludePreambleFor : Option (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
+preludePreambleMemoRef : Ref (Option ((Int, Int), PreludePreamble))
+preludePreambleOf : List Decl -> DeclEnvModule -> PreludePreamble
+preludePreambleStore : (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
 prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
 prependDictClause : String -> Int -> FunClause -> FunClause
