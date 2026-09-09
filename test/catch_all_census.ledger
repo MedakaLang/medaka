@@ -45,6 +45,7 @@ implHeadParametric	Decl	2/15
 implHeadTagForIface	Decl	2/15
 implTysIfMatch	Decl	1/15
 importOverlayDecls	Decl	2/15
+importShadowsOfDecl	Decl	2/15
 infer	Expr	29/41
 inferExpected	Expr	1/41
 inferOneIfaceDefaults	Decl	2/15
