@@ -262,10 +262,14 @@ maxRequestsPerWindow : Int
 maxRequestsPerWindow = 3000
 
 -- Placeholder pending real traffic data, like its three siblings above and
--- below — kept low enough that a real signed write's cost (MST update,
--- commit signing, disk persistence) still fits many multiples of the
--- ceiling inside one window, rather than a number chosen only to look
--- generous.
+-- below. Two independent constraints bound it. A signed write costs an MST
+-- update, a commit signature and a disk persist, so the ceiling belongs far
+-- enough below what one window can physically absorb that a caller hits the
+-- limit rather than the work. And a write ceiling a flood cannot reach
+-- inside one window is unobservable by construction — the count resets
+-- mid-flood, so nothing can ever witness the refusal; driving 301 writes
+-- takes ~72s against this 60s window, which is what rules out a ceiling in
+-- the hundreds until either the window or the per-write cost changes.
 export
 maxWritesPerWindow : Int
 maxWritesPerWindow = 60

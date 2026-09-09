@@ -579,8 +579,9 @@ class, which no reverse proxy in front of it can. `pds/shell/server.mdk`
 charges every request against a `RateLimitState` (`pds/lib/ratelimit.mdk`)
 kept in one fixed window (`rateLimitWindowSeconds`, `pds/lib/
 resource_limits.mdk`) per four independent classes: a `ConnectionsClass`
-charge once per accepted connection, a `RequestsClass` charge on every
-request, and two narrower classes layered on top of `RequestsClass` rather
+charge on a connection's first framed and parsed request, a `RequestsClass`
+charge on every framed and parsed request, and two narrower classes layered
+on top of `RequestsClass` rather
 than replacing it — `WritesClass` for the write NSIDs (`createRecord`,
 `putRecord`, `deleteRecord`, `applyWrites`, `uploadBlob`) and
 `CreateSessionClass` for `createSession` alone, since login attempts are a
@@ -589,17 +590,51 @@ with `error: "RateLimitExceeded"` and the IETF `RateLimit-*` response
 headers (`ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`) naming
 the exceeded class's own ceiling, not a blended figure.
 
+"Framed and parsed" is the load-bearing qualifier in that paragraph, and it
+is where this half of the limiter stops: a charge needs an identity, an
+identity comes from a header, and a header only exists once a request has
+been framed out of the connection's bytes and parsed. Two things therefore
+fall outside every class. A connection that never completes a request is
+accepted, occupies a slot against `maxConcurrentConnections`, and is charged
+nothing — enough of them deny service to every other caller (#2772), which
+is why a read deadline, not a counter, is what closes that shape. And a
+request that fails to frame or parse is answered 400 and, having produced no
+identity to charge, is attributed to the shared `"direct"` bucket rather
+than to its sender; that bounds the channel globally without pretending to
+know who used it, which is defensible for malformed traffic precisely
+because malformed traffic is not the shape a legitimate client has.
+
+One fixed window per identity also bounds the AVERAGE rate over a window,
+not the instantaneous one: because the window index is derived from the
+absolute epoch, an identity can spend a full allowance just before a
+boundary and a second full allowance just after it, so the worst-case burst
+is twice the nominal ceiling in an arbitrarily short interval (#2775).
+Capacity planning should read the ceilings here as "per window, and up to
+twice that across a boundary." A token bucket removes the boundary; the
+fixed window is kept for now because its per-identity state is a counter and
+a window index, which is what makes it cheap to reason about and to test.
+
 The identity a request is charged against comes from the last hop of
 `X-Forwarded-For` — but ONLY when the operator passes `--trusted-proxy`,
 asserting that this process's peer IS the configured reverse proxy (Caddy,
 in the deployment this document describes). There is no way for this
 process to verify that assertion itself (no `getpeername`-equivalent in
 this runtime); without the flag, every request is charged against one
-shared `"direct"` identity bucket regardless of its source address, which
-is deliberately the SAFER default — a forwarded-for header trusted by
-default would let any client claim any identity's budget for itself, or
-spend a stranger's. `pds/README.md` documents the operator-facing half of
-this: when to pass the flag and what happens without it.
+shared `"direct"` identity bucket regardless of its source address. That
+default is chosen because the alternative is worse, not because it is
+without cost: a forwarded-for header trusted by default would let any client
+claim any identity's budget for itself, or spend a stranger's. The cost it
+does carry should be stated plainly, because it inverts the property this
+half of the limiter exists for — with one bucket for every caller, all four
+ceilings are process-wide rather than per-client, so the first caller to
+reach one refuses every other caller until the window turns. A per-identity
+limiter that cannot distinguish identities is a global limiter. Nothing in
+this runtime can close that gap from here: identifying an unproxied caller
+needs its peer address, which this runtime cannot obtain (#2757). The
+consequence is that `--trusted-proxy` is not an optimization to defer — a
+deployment exposed past loopback without it has one shared allowance for the
+whole world. `pds/README.md` documents the operator-facing half of this:
+when to pass the flag and what happens without it.
 
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
 sibling of (never inside) the repository's `<data>/blocks`, sharded on the

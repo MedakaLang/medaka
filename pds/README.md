@@ -585,11 +585,18 @@ be checked**: this runtime has no way to confirm a TCP peer's identity
 that actually sanitizes the header lets any direct client forge
 `X-Forwarded-For` and either claim another identity's remaining budget or
 spend it down on that identity's behalf. Without the flag (the default),
-every caller — proxied or not — shares one `"direct"` identity bucket; that
-is the safe default for a loopback-bound process with nothing in front of
-it yet, and it is why exposing this server past loopback without deciding
-this flag first exposes the WHOLE deployment's allowance to a single
-requester's mistake or abuse, not just one visitor's.
+every caller — proxied or not — shares one `"direct"` identity bucket. That
+is the right default for a loopback-bound process with nothing in front of
+it yet, but it is not a *safe* one to leave in place, and the difference
+matters: with a single bucket, all four ceilings stop being per-client and
+become process-wide, so the first caller to reach one refuses **every other
+caller** until the window turns. Exposing this server past loopback without
+deciding this flag first hands the WHOLE deployment's allowance to a single
+requester's mistake or abuse, not just one visitor's — and there is no way
+to fix that from inside this process, since identifying an unproxied caller
+requires its peer address, which this runtime cannot obtain (#2757). Treat
+`--trusted-proxy` as part of exposing the server, not as a later tuning
+step.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 
