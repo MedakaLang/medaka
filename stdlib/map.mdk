@@ -603,6 +603,28 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
+{- | The `Foldable` methods visit values in ascending order of their keys, so
+   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
+   over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+
+   > toList (fromList [(2, 20), (1, 10)])
+   [10, 20]
+   > length (fromList [(1, 10), (2, 20)])
+   2
+   > isEmpty (fromList [(1, 10)] : Map Int Int)
+   False
+   > elem 20 (fromList [(1, 10), (2, 20)])
+   True
+   > sum (fromList [(1, 10), (2, 20)])
+   30 -}
+export impl Foldable (Map k) where
+  fold f z m = foldlWithKey (acc _ v => f acc v) z m
+  foldRight f z m = foldrWithKey (_ v acc => f v acc) z m
+  toList m = values m
+  isEmpty Tip = True
+  isEmpty _ = False
+  length m = size m
+
 {- | Two maps are equal when they hold the same keys with equal values,
    regardless of how they were built.
 

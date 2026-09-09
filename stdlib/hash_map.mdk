@@ -274,6 +274,28 @@ values m = map snd (entries m)
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
+{- | The `Foldable` methods visit values in unspecified order (`keys` and
+   `entries` above make the same guarantee), so `toList`, `length`, `elem`,
+   `sum`, and `any` all work on a table but their element order is not
+   something a caller can rely on.
+
+   > toList (fromList [(5, 50)])
+   [50]
+   > length (fromList [(1, 10), (2, 20)])
+   2
+   > isEmpty (fromList [(1, 10)] : HashMap Int Int)
+   False
+   > elem 20 (fromList [(1, 10), (2, 20)])
+   True
+   > sum (fromList [(1, 10), (2, 20)])
+   30 -}
+export impl Foldable (HashMap k) where
+  fold f z m = fold f z (values m)
+  foldRight f z m = foldRight f z (values m)
+  toList m = values m
+  isEmpty m = size m == 0
+  length m = size m
+
 allEntriesIn : (Eq k, Eq v, Hashable k) => List (k, v) -> HashMap k v -> Bool
 allEntriesIn [] _ = True
 allEntriesIn ((k, v) :: rest) m

@@ -1,5 +1,5 @@
 # META
-source_lines=841
+source_lines=863
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -607,6 +607,28 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
+{- | The `Foldable` methods visit values in ascending order of their keys, so
+   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
+   over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+
+   > toList (fromList [(2, 20), (1, 10)])
+   [10, 20]
+   > length (fromList [(1, 10), (2, 20)])
+   2
+   > isEmpty (fromList [(1, 10)] : Map Int Int)
+   False
+   > elem 20 (fromList [(1, 10), (2, 20)])
+   True
+   > sum (fromList [(1, 10), (2, 20)])
+   30 -}
+export impl Foldable (Map k) where
+  fold f z m = foldlWithKey (acc _ v => f acc v) z m
+  foldRight f z m = foldrWithKey (_ v acc => f v acc) z m
+  toList m = values m
+  isEmpty Tip = True
+  isEmpty _ = False
+  length m = size m
+
 {- | Two maps are equal when they hold the same keys with equal values,
    regardless of how they were built.
 
@@ -979,6 +1001,7 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DFunDef false "intersection" ((PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "intersectionWith") (ELam ((PVar "x") PWild) (EVar "x"))) (EVar "a")) (EVar "b")))
 (DImpl true "Mappable" ((TyApp (TyCon "Map") (TyVar "k"))) () ((im "map" ((PVar "f") (PCon "Tip")) (EVar "Tip")) (im "map" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EVar "f") (EVar "v"))) (EApp (EApp (EVar "map") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "map") (EVar "f")) (EVar "r"))))))
 (DImpl true "Filterable" ((TyApp (TyCon "Map") (TyVar "k"))) () ((im "filterMap" ((PVar "f") (PCon "Tip")) (EVar "Tip")) (im "filterMap" ((PVar "f") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EBlock (DoLet false false (PVar "l2") (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "l"))) (DoLet false false (PVar "r2") (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "r"))) (DoExpr (EMatch (EApp (EVar "f") (EVar "v")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "w")) (EVar "l2")) (EVar "r2"))) (arm (PCon "None") () (EApp (EApp (EVar "link2") (EVar "l2")) (EVar "r2")))))))))
+(DImpl true "Foldable" ((TyApp (TyCon "Map") (TyVar "k"))) () ((im "fold" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") PWild (PVar "v")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "v")))) (EVar "z")) (EVar "m"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam (PWild (PVar "v") (PVar "acc")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "acc")))) (EVar "z")) (EVar "m"))) (im "toList" ((PVar "m")) (EApp (EVar "values") (EVar "m"))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "m")) (EApp (EVar "size") (EVar "m")))))
 (DImpl true "Eq" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EVar "a"))) (EApp (EVar "entries") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k"))) (req "Ord" ((TyVar "v")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "entries") (EVar "a"))) (EApp (EVar "entries") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))
@@ -1172,6 +1195,7 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DFunDef false "intersection" ((PVar "a") (PVar "b")) (EApp (EApp (EApp (EDictApp "intersectionWith") (ELam ((PVar "x") PWild) (EVar "x"))) (EVar "a")) (EVar "b")))
 (DImpl true "Mappable" ((TyApp (TyCon "Map") (TyVar "k"))) () ((im "map" ((PVar "f") (PCon "Tip")) (EVar "Tip")) (im "map" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EVar "f") (EVar "v"))) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "l"))) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "r"))))))
 (DImpl true "Filterable" ((TyApp (TyCon "Map") (TyVar "k"))) () ((im "filterMap" ((PVar "f") (PCon "Tip")) (EVar "Tip")) (im "filterMap" ((PVar "f") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EBlock (DoLet false false (PVar "l2") (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "l"))) (DoLet false false (PVar "r2") (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "r"))) (DoExpr (EMatch (EApp (EVar "f") (EVar "v")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "w")) (EVar "l2")) (EVar "r2"))) (arm (PCon "None") () (EApp (EApp (EVar "link2") (EVar "l2")) (EVar "r2")))))))))
+(DImpl true "Foldable" ((TyApp (TyCon "Map") (TyVar "k"))) () ((im "fold" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") PWild (PVar "v")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "v")))) (EVar "z")) (EVar "m"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam (PWild (PVar "v") (PVar "acc")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "acc")))) (EVar "z")) (EVar "m"))) (im "toList" ((PVar "m")) (EApp (EVar "values") (EVar "m"))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "m")) (EApp (EVar "size") (EVar "m")))))
 (DImpl true "Eq" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EVar "a"))) (EApp (EVar "entries") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k"))) (req "Ord" ((TyVar "v")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "entries") (EVar "a"))) (EApp (EVar "entries") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))

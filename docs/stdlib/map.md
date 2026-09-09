@@ -28,7 +28,7 @@ subtree's size, a key, a value, and the left and right subtrees. The
 constructors are visible for pattern matching, but build maps with the
 functions in this module, which keep the tree balanced.
 
-Instances: [`Index`](#index-map-k-v-k-v), [`Mappable`](#mappable-map-k), [`Filterable`](#filterable-map-k), [`Eq`](#eq-map-k-v), [`Ord`](#ord-map-k-v), [`Debug`](#debug-map-k-v), [`Display`](#display-map-k-v), [`Semigroup`](#semigroup-map-k-v), [`FromEntries`](#fromentries-map-k-v-k-v), [`Monoid`](#monoid-map-k-v)
+Instances: [`Index`](#index-map-k-v-k-v), [`Mappable`](#mappable-map-k), [`Filterable`](#filterable-map-k), [`Foldable`](#foldable-map-k), [`Eq`](#eq-map-k-v), [`Ord`](#ord-map-k-v), [`Debug`](#debug-map-k-v), [`Display`](#display-map-k-v), [`Semigroup`](#semigroup-map-k-v), [`FromEntries`](#fromentries-map-k-v-k-v), [`Monoid`](#monoid-map-k-v)
 
 ## Construction
 
@@ -505,6 +505,29 @@ impl Filterable (Map k)
 `filter` and `filterMap` test each value, keeping the keys of the
 entries that survive. `filterWithKey` is the form that also sees the
 key.
+
+### `Foldable (Map k)`
+
+```
+impl Foldable (Map k)
+```
+
+The `Foldable` methods visit values in ascending order of their keys, so
+`toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
+over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+
+```medaka
+> toList (fromList [(2, 20), (1, 10)])
+[10, 20]
+> length (fromList [(1, 10), (2, 20)])
+2
+> isEmpty (fromList [(1, 10)] : Map Int Int)
+False
+> elem 20 (fromList [(1, 10), (2, 20)])
+True
+> sum (fromList [(1, 10), (2, 20)])
+30
+```
 
 ### `Eq (Map k v)`
 

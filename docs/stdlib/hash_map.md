@@ -22,7 +22,7 @@ data HashMap k v
 The hash table type. Its fields are the bucket array and the entry
 count, both mutable.
 
-Instances: [`Eq`](#eq-hashmap-k-v), [`Debug`](#debug-hashmap-k-v), [`Display`](#display-hashmap-k-v), [`Index`](#index-hashmap-k-v-k-v)
+Instances: [`Foldable`](#foldable-hashmap-k), [`Eq`](#eq-hashmap-k-v), [`Debug`](#debug-hashmap-k-v), [`Display`](#display-hashmap-k-v), [`Index`](#index-hashmap-k-v-k-v)
 
 ## Construction
 
@@ -191,6 +191,30 @@ The values, in unspecified order.
 ```
 
 ## Instances
+
+### `Foldable (HashMap k)`
+
+```
+impl Foldable (HashMap k)
+```
+
+The `Foldable` methods visit values in unspecified order (`keys` and
+`entries` above make the same guarantee), so `toList`, `length`, `elem`,
+`sum`, and `any` all work on a table but their element order is not
+something a caller can rely on.
+
+```medaka
+> toList (fromList [(5, 50)])
+[50]
+> length (fromList [(1, 10), (2, 20)])
+2
+> isEmpty (fromList [(1, 10)] : HashMap Int Int)
+False
+> elem 20 (fromList [(1, 10), (2, 20)])
+True
+> sum (fromList [(1, 10), (2, 20)])
+30
+```
 
 ### `Eq (HashMap k v)`
 

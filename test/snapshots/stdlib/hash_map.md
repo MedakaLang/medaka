@@ -1,5 +1,5 @@
 # META
-source_lines=365
+source_lines=387
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable hash table from keys to values.
@@ -278,6 +278,28 @@ values m = map snd (entries m)
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
+{- | The `Foldable` methods visit values in unspecified order (`keys` and
+   `entries` above make the same guarantee), so `toList`, `length`, `elem`,
+   `sum`, and `any` all work on a table but their element order is not
+   something a caller can rely on.
+
+   > toList (fromList [(5, 50)])
+   [50]
+   > length (fromList [(1, 10), (2, 20)])
+   2
+   > isEmpty (fromList [(1, 10)] : HashMap Int Int)
+   False
+   > elem 20 (fromList [(1, 10), (2, 20)])
+   True
+   > sum (fromList [(1, 10), (2, 20)])
+   30 -}
+export impl Foldable (HashMap k) where
+  fold f z m = fold f z (values m)
+  foldRight f z m = foldRight f z (values m)
+  toList m = values m
+  isEmpty m = size m == 0
+  length m = size m
+
 allEntriesIn : (Eq k, Eq v, Hashable k) => List (k, v) -> HashMap k v -> Bool
 allEntriesIn [] _ = True
 allEntriesIn ((k, v) :: rest) m
@@ -428,6 +450,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
 (DFunDef false "values" ((PVar "m")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
+(DImpl true "Foldable" ((TyApp (TyCon "HashMap") (TyVar "k"))) () ((im "fold" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EVar "z")) (EApp (EVar "values") (EVar "m")))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "z")) (EApp (EVar "values") (EVar "m")))) (im "toList" ((PVar "m")) (EApp (EVar "values") (EVar "m"))) (im "isEmpty" ((PVar "m")) (EBinOp "==" (EApp (EVar "size") (EVar "m")) (ELit (LInt 0)))) (im "length" ((PVar "m")) (EApp (EVar "size") (EVar "m")))))
 (DTypeSig false "allEntriesIn" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Eq" (TyVar "v")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "allEntriesIn" ((PList) PWild) (EVar "True"))
 (DFunDef false "allEntriesIn" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EIf (EBinOp "==" (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (EApp (EVar "Some") (EVar "v"))) (EApp (EApp (EVar "allEntriesIn") (EVar "rest")) (EVar "m")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -507,6 +530,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
 (DFunDef false "values" ((PVar "m")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
+(DImpl true "Foldable" ((TyApp (TyCon "HashMap") (TyVar "k"))) () ((im "fold" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EVar "z")) (EApp (EVar "values") (EVar "m")))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "m")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "z")) (EApp (EVar "values") (EVar "m")))) (im "toList" ((PVar "m")) (EApp (EVar "values") (EVar "m"))) (im "isEmpty" ((PVar "m")) (EBinOp "==" (EApp (EVar "size") (EVar "m")) (ELit (LInt 0)))) (im "length" ((PVar "m")) (EApp (EVar "size") (EVar "m")))))
 (DTypeSig false "allEntriesIn" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Eq" (TyVar "v")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "allEntriesIn" ((PList) PWild) (EVar "True"))
 (DFunDef false "allEntriesIn" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EIf (EBinOp "==" (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (EApp (EVar "Some") (EVar "v"))) (EApp (EApp (EDictApp "allEntriesIn") (EVar "rest")) (EVar "m")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
