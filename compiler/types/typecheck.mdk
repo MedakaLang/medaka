@@ -37723,31 +37723,218 @@ nameableIfaceShadows prog names
 -- import arm here and on the re-export arm in `graphIfaceMethods`.
 nameableIfaceMethodSet : List Decl -> OrdMap Unit
 nameableIfaceMethodSet prog =
-  addImportedIfaceMethods
-    prog
-    (addIfaceRowMethods
-      (optionOr
-        []
-        (omLookup "core" driverState.value.graphIfaceMethodsRef.value))
-      (namesToSet (allIfaceMethodNames prog) omEmpty))
+  namesToSet (flatMap snd (nameableIfaceRows prog)) omEmpty
 
-addImportedIfaceMethods : List Decl -> OrdMap Unit -> OrdMap Unit
-addImportedIfaceMethods [] acc = acc
-addImportedIfaceMethods ((DAttrib _ d) :: rest) acc =
-  addImportedIfaceMethods rest (addImportedIfaceMethods [d] acc)
-addImportedIfaceMethods ((DUse _ path _) :: rest) acc = addImportedIfaceMethods
-  rest
+-- The same operand ONE level less flattened: the (interface name, its method names)
+-- ROWS, not just the union of their method names.  `nameableIfaceMethodSet` above is
+-- defined as this list's flattening, so there is still exactly ONE derivation of S1's
+-- right operand — a diagnostic that needs to name WHICH interface owns a colliding
+-- method (#2738's `W-IMPORT-METHOD-SHADOW`) must not answer that from a second,
+-- independently-scoped walk, which is what S1-NS (b) rules non-conformant.
+--
+-- `ifaceMethodRows prog` is `allIfaceMethodNames prog` grouped by declaration: both walk
+-- `DAttrib`/`DInterface` in the same order and take `ifaceMethodNames methods`, so the
+-- flattening above is the previous expression term for term.
+export
+nameableIfaceRows : List Decl -> List (String, List String)
+nameableIfaceRows prog =
+  optionOr [] (omLookup "core" driverState.value.graphIfaceMethodsRef.value)
+    ++ ifaceMethodRows prog
+    ++ importedIfaceRows prog
+
+importedIfaceRows : List Decl -> List (String, List String)
+importedIfaceRows [] = []
+importedIfaceRows ((DAttrib _ d) :: rest) =
+  importedIfaceRows [d] ++ importedIfaceRows rest
+importedIfaceRows ((DUse _ path _) :: rest) =
   (match (omLookup
-    (usePathModuleId path)
-    driverState.value.graphIfaceMethodsRef.value)
-    None => acc
-    Some src => addIfaceRowMethods (selectIfaceRows path src) acc)
-addImportedIfaceMethods (_ :: rest) acc = addImportedIfaceMethods rest acc
+      (usePathModuleId path)
+      driverState.value.graphIfaceMethodsRef.value)
+      None => []
+      Some src => selectIfaceRows path src)
+    ++ importedIfaceRows rest
+importedIfaceRows (_ :: rest) = importedIfaceRows rest
 
-addIfaceRowMethods : List (String, List String) -> OrdMap Unit -> OrdMap Unit
-addIfaceRowMethods [] acc = acc
-addIfaceRowMethods ((_, ms) :: rest) acc =
-  addIfaceRowMethods rest (namesToSet ms acc)
+-- ── #2738: a selectively imported standalone displaced by a nameable method ──
+-- The peer of `frontend/marker.mdk`'s `preludeStandaloneShadows` for the IMPORTER
+-- direction, and it is sited here rather than beside it because the two operands it
+-- needs live here: S1's right operand (`nameableIfaceRows`, the only predicate in the
+-- compiler that answers `nameable in M`) and, through it, the interface a colliding
+-- method name belongs to.  `compiler/frontend/marker.mdk` cannot reach either —
+-- `types/typecheck.mdk` imports `frontend.marker`, so the edge does not run the other
+-- way — and re-deriving the operand there is what S1-NS (b) rules non-conformant.
+--
+-- Yields one entry per DIFFERING-scheme collision, in declaration order:
+--   (bound name, the interface declaring it, the standalone's declared signature,
+--    the method's declared signature, the import member's own span).
+-- The standalone signature is `None` when the defining module declares the function
+-- without a signature: a scheme that cannot be read cannot be shown harmless, so it
+-- counts as differing.  Identical (alpha-equivalent) signatures yield nothing, which is
+-- what keeps the everyday `import m.{f}` silent.
+--
+-- SELECTIVE imports only (`UseGroup`).  A wildcard or bare import makes no statement
+-- about the name, and a module alias binds a DOTTED local (`A.f`) that no bare method
+-- name can collide with; the ruling is scoped to the explicit member list, which is the
+-- strongest statement the language offers about which binding is meant.
+--
+-- Fails CLOSED on an absent index, the opposite of `nameableIfaceShadows` above and for
+-- the opposite reason: that predicate decides resolution, where dropping shadow-hood
+-- miscompiles, while this one only decides a warning, where a graph-global operand would
+-- fire on collisions the module cannot name.
+export
+importedStandaloneShadows : List (String, List Decl) ->
+  List Decl ->
+  List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadows graph prog
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = []
+  | otherwise =
+    let rows = nameableIfaceRows prog
+    let nameable = namesToSet (flatMap snd rows) omEmpty
+    let universe = flatMap snd graph ++ prog
+    flatMap (importShadowsOfDecl graph rows nameable universe) prog
+
+importShadowsOfDecl : List (String, List Decl) ->
+  List (String, List String) ->
+  OrdMap Unit ->
+  List Decl ->
+  Decl ->
+  List (String, String, Option Ty, Ty, Loc)
+importShadowsOfDecl graph rows nameable universe (DAttrib _ d) =
+  importShadowsOfDecl graph rows nameable universe d
+importShadowsOfDecl graph rows nameable universe (DUse _ path _) = match path
+  UseGroup _ ms => match lookupAssoc (usePathModuleId path) graph
+    None => []
+    Some depDecls =>
+      flatMap (importMemberShadow rows nameable universe depDecls) ms
+  _ => []
+importShadowsOfDecl _ _ _ _ _ = []
+
+importMemberShadow : List (String, List String) ->
+  OrdMap Unit ->
+  List Decl ->
+  List Decl ->
+  UseMember ->
+  List (String, String, Option Ty, Ty, Loc)
+importMemberShadow rows nameable universe depDecls (UseMember origin _ mloc alias) =
+  let local = match alias
+    Some a => a
+    None => origin
+  if not (omHasKey local nameable) then
+    []
+  else if not (declaresStandalone origin depDecls) then
+    []
+  else match ifaceMethodSigFor local rows universe
+    None => []
+    Some (iface, mty) =>
+      let sty = standaloneSigOf origin depDecls
+      if schemesAgree sty mty then [] else [(local, iface, sty, mty, mloc)]
+
+schemesAgree : Option Ty -> Ty -> Bool
+schemesAgree None _ = False
+schemesAgree (Some sty) mty = tyAlphaEq sty mty
+
+-- the first NAMEABLE interface declaring [name], with that method's declared signature.
+-- Rows whose declaration is not in [universe] are skipped rather than guessed at.
+ifaceMethodSigFor : String ->
+  List (String, List String) ->
+  List Decl ->
+  Option (String, Ty)
+ifaceMethodSigFor _ [] _ = None
+ifaceMethodSigFor name ((iface, ms) :: rest) universe
+  | not (contains name ms) = ifaceMethodSigFor name rest universe
+  | otherwise = match ifaceMethodTyIn iface name universe
+    Some ty => Some (iface, ty)
+    None => ifaceMethodSigFor name rest universe
+
+ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
+ifaceMethodTyIn _ _ [] = None
+ifaceMethodTyIn iface name ((DAttrib _ d) :: rest) =
+  let inner = ifaceMethodTyIn iface name [d]
+  match inner
+    Some ty => Some ty
+    None => ifaceMethodTyIn iface name rest
+ifaceMethodTyIn iface name ((DInterface { name = n, methods, ... }) :: rest)
+  | n == iface = match ifaceMethodTyOf name methods
+    Some ty => Some ty
+    None => ifaceMethodTyIn iface name rest
+  | otherwise = ifaceMethodTyIn iface name rest
+ifaceMethodTyIn iface name (_ :: rest) = ifaceMethodTyIn iface name rest
+
+ifaceMethodTyOf : String -> List IfaceMethod -> Option Ty
+ifaceMethodTyOf _ [] = None
+ifaceMethodTyOf name ((IfaceMethod n ty _ _) :: rest)
+  | n == name = Some ty
+  | otherwise = ifaceMethodTyOf name rest
+
+declaresStandalone : String -> List Decl -> Bool
+declaresStandalone _ [] = False
+declaresStandalone n ((DAttrib _ d) :: rest) =
+  declaresStandalone n [d] || declaresStandalone n rest
+declaresStandalone n ((DFunDef _ m _ _) :: rest) =
+  m == n || declaresStandalone n rest
+declaresStandalone n (_ :: rest) = declaresStandalone n rest
+
+standaloneSigOf : String -> List Decl -> Option Ty
+standaloneSigOf _ [] = None
+standaloneSigOf n ((DAttrib _ d) :: rest) = match standaloneSigOf n [d]
+  Some t => Some t
+  None => standaloneSigOf n rest
+standaloneSigOf n ((DTypeSig _ m ty) :: rest)
+  | m == n = Some ty
+  | otherwise = standaloneSigOf n rest
+standaloneSigOf n (_ :: rest) = standaloneSigOf n rest
+
+-- Alpha-equivalence of two SURFACE signatures: equal up to a consistent renaming of
+-- type variables, so `Box a -> a` and `Box b -> b` agree while `Box a -> (String, a)`
+-- and `t a -> a` do not.  The bijection is carried both ways, so `a -> b` and `a -> a`
+-- do not agree either.  Any shape not matched pairwise below is treated as DIFFERING,
+-- which is the direction that warns.
+export
+tyAlphaEq : Ty -> Ty -> Bool
+tyAlphaEq a b = match tyAlphaGo [] a b
+  Some _ => True
+  None => False
+
+tyAlphaGo : List (String, String) -> Ty -> Ty -> Option (List (String, String))
+tyAlphaGo m (TyVar x) (TyVar y) = bindTyName m x y
+tyAlphaGo m (TyCon { tyConName = x }) (TyCon { tyConName = y })
+  | x == y = Some m
+  | otherwise = None
+tyAlphaGo m (TyApp f x) (TyApp g y) = match tyAlphaGo m f g
+  None => None
+  Some m2 => tyAlphaGo m2 x y
+tyAlphaGo m (TyFun a b) (TyFun c d) = match tyAlphaGo m a c
+  None => None
+  Some m2 => tyAlphaGo m2 b d
+tyAlphaGo m (TyTuple xs) (TyTuple ys) = tyAlphaList m xs ys
+tyAlphaGo m (TyEffect e1 t1 a) (TyEffect e2 t2 b)
+  | e1 == e2 && t1 == t2 = tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyConstrained c1 a) (TyConstrained c2 b)
+  | listLen c1 == listLen c2 = tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyRow e1 t1 _) (TyRow e2 t2 _)
+  | e1 == e2 && t1 == t2 = Some m
+  | otherwise = None
+tyAlphaGo _ _ _ = None
+
+tyAlphaList : List (String, String) ->
+  List Ty ->
+  List Ty ->
+  Option (List (String, String))
+tyAlphaList m [] [] = Some m
+tyAlphaList m (x :: xs) (y :: ys) = match tyAlphaGo m x y
+  None => None
+  Some m2 => tyAlphaList m2 xs ys
+tyAlphaList _ _ _ = None
+
+bindTyName : List (String, String) ->
+  String ->
+  String ->
+  Option (List (String, String))
+bindTyName m x y = match lookupAssoc x m
+  Some y2 => if y2 == y then Some m else None
+  None => if anyList (e => snd e == y) m then None else Some ((x, y) :: m)
 
 -- C5: graph-wide standalone-shadow names — every top-level funDef name in [userDecls]
 -- (the user modules, NOT core) that is also an interface method name anywhere in

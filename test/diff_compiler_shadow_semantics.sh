@@ -219,6 +219,13 @@ pass=0; fail=0; asserts=0
 #                         "some integer, not the right one")
 #   `value` uses literal backslash-n for embedded newlines (expanded via
 #   `printf '%b'`); empty for mode NONE.
+#   An OPTIONAL 8th field asserts a DIAGNOSTIC, which the exit-code and value
+#   columns are structurally blind to:
+#     (absent)     -- no diagnostic assertion
+#     WARN:<text>  -- <text> must appear on check's, run's AND build's stderr
+#     NOWARN:<text>-- <text> must appear on NONE of the three
+#   <text> is a substring of the rendered message, not the diagnostic code:
+#   the CLI prints the code only under `--json`.
 TABLE='d1b_definer_noimpl_zeroimpls.mdk|D1b definer, iface has ZERO impls (S2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|4
 d1_definer_noimpl.mdk|D1 definer, no-impl receiver, impl exists elsewhere (S2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|4
 d2_definer_liveimpl.mdk|D2 definer, live-impl receiver is now a located REJECT (S2 INVERSION: `size (Box 3)` no longer dispatches -- the module`s own `size : Int -> Int` wins, so Box mistypes)|REJECT|REJECT|REJECT|NONE|
@@ -303,7 +310,9 @@ x13_autoprint_wrap_prelude_pin_noimpl.mdk|X13 (#2185, S0, packet §4b LICENSED F
 x14_autoprint_wrap_display_pin.mdk|X14 (#2185`s defect class RE-OPENED as fix-round F1, S0) the `display` twin of x12: slice 1 paid for x12/x13 by RESPELLING the wrap `println` -> `putStrLn (display <e>)`, which merely MOVED the capture onto `display` -- a name users declare constantly for Pretty-style interfaces. MEASURED ON SPRINT HEAD a17281e6: check/build ACCEPT and the built binary prints `HIJACKED`, dispatching the wrap`s synthesized `display` through this module`s own `impl Ifc Int` (S0: wrong ANSWER, exit 0, no diagnostic, on source that never writes `display` at a call site). FIXED: the wrap resolves NO name in user scope -- it calls the prelude`s own `println` declaration re-bound under an unspellable name (autoPrintPinCore), so its `display` is prelude-scoped -- built binary must print 7. `run` REJECTs BY DESIGN (#1681, a non-Unit VALUE main), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7
 x15_autoprint_wrap_display_pin_noimpl.mdk|X15 (fix-round F2, S1) x14`s NO-IMPL sibling and x13`s `display` twin: `Ifc` declares a method named `display`, no impl exists anywhere, nothing calls it. MEASURED ON SPRINT HEAD a17281e6: check/build REJECT `No impl of Ifc for Int` -- slice 1`s respelled wrap synthesized a `display` occurrence into this module, where the user declaration outranks the prelude`s Display, so the compiler demanded an impl of an interface the program never uses. A FALSE REJECT of a program that builds clean at b6d029cd. FIXED: `Ifc` is never consulted -- check/build ACCEPT, built binary prints 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7
 x16_autoprint_wrap_putstrln_pin.mdk|X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exits 1, `E-PANIC: no impl of method putStrLn for type Unit`, byte-identical to this row. Graded ACCEPT REJECT REJECT NONE to pin the CURRENT state incl. the check-ACCEPTs/build-panics split; SELF-DRAINING -- when the prelude body stops being capturable this row goes RED and must be re-graded to BUILD_EXACT against the value 7. S1 (loud panic at exit 1), not S0|ACCEPT|REJECT|REJECT|NONE|
-x17_autoprint_wrap_display_pin_xmod/main.mdk|X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface AND its impl moved into an IMPORTED module -- the entry declares nothing and sees the name only through `import ifcx.{Ifc, display}`. The axis a single-file row cannot see: own-declaration and imported are DIFFERENT rungs of the entry`s method table (ownMethodIdent vs methodCandImported), so a fix that only stops an OWN declaration capturing the wrap passes x14 and still ships the S0 here. MEASURED ON SPRINT HEAD a17281e6: build ACCEPTs, built binary prints `HIJACKED`. FIXED: built binary must print 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7'
+x17_autoprint_wrap_display_pin_xmod/main.mdk|X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface AND its impl moved into an IMPORTED module -- the entry declares nothing and sees the name only through `import ifcx.{Ifc, display}`. The axis a single-file row cannot see: own-declaration and imported are DIFFERENT rungs of the entry`s method table (ownMethodIdent vs methodCandImported), so a fix that only stops an OWN declaration capturing the wrap passes x14 and still ships the S0 here. MEASURED ON SPRINT HEAD a17281e6: build ACCEPTs, built binary prints `HIJACKED`. FIXED: built binary must print 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7
+i29_importer_selective_import_displaced/main.mdk|I29 (#2738) an interface method nameable by its TYPE name displaces a SELECTIVELY IMPORTED standalone of a DIFFERENT scheme. The i3 topology with the standalone`s domain widened to cover the receiver, so both candidates typecheck and the displacement is observable only as a value plus a diagnostic. RESOLUTION IS UNCHANGED AND CONFORMANT -- S1 makes `peek` an importer shadow (S1-NS (a)(i), the TYPE arm: `import peekable.{Peekable}` names the interface), S2`s importer arm finds `impl Peekable Box` at the receiver`s head, so it dispatches: `peek=7`, not `peek=("box", 7)`. What was S0 is the SILENCE: the user wrote the strongest statement the language offers about which `peek` is meant and got the other one at exit 0 on check, run and build alike. VALUES AND VERDICTS DERIVED FROM S1/S2 AND FROM THE RULING BEFORE THE BINARY WAS BUILT, per [W-QUIETER] in reverse -- this path returned nothing, so the new something is untested by construction|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|peek=7|WARN:is shadowed in module
+i30_importer_selective_import_same_scheme/main.mdk|I30 (#2738 CONTROL) THE SILENT HALF, and the row that makes I29 evidence about a PREDICATE rather than about a diagnostic existing. Identical topology to I29 -- selective import, interface nameable by type name, live impl at the receiver`s head -- differing in ONE respect: the standalone`s declared `a -> String` is ALPHA-EQUIVALENT to the method`s `t -> String`. Val`s ruling fires the warning only where the two schemes DIFFER, so this cell must be silent on all three verbs. A predicate that warned on every importer shadow in the tree would pass I29 and fail here. Resolution is the same as I29`s and is not the point: it dispatches, printing `iface`|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|iface|NOWARN:is shadowed in module'
 
 # --- Coverage self-audit: every top-level fixture unit (a .mdk file, or a
 # directory) in FIXDIR must appear in TABLE, or this gate silently re-creates
@@ -337,7 +346,7 @@ echo
 printf '%-70s %-6s %-6s %-6s %-11s %s\n' 'fixture' 'check' 'run' 'build' 'value' 'result'
 printf '%-70s %-6s %-6s %-6s %-11s %s\n' '----------------------------------------------------------------------' '------' '------' '------' '-----------' '------'
 
-printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp_build mode value; do
+printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp_build mode value warn; do
   [ -z "$entry" ] && continue
   entrypath="$FIXDIR/$entry"
   base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/' '_')"
@@ -464,6 +473,47 @@ printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp
       else
         value_v='n/a'
       fi
+      ;;
+  esac
+
+  # Optional 8th column: a DIAGNOSTIC assertion, on all three verbs at once.
+  # An exit-code-and-value gate is blind to a warning -- the whole point of a
+  # conformance-required warning (SHADOW-SEMANTICS.md S1-PRELUDE (b) and its
+  # #2738 sibling) is that the program still ACCEPTS and still prints the same
+  # value, so every other column of this row is identical with and without it.
+  # `NOWARN` is not decoration either: it is the control that says the rule
+  # fires on the differing-scheme case ONLY, and a warning gate with no silent
+  # cell grades "the diagnostic exists", never "it is the right predicate".
+  #
+  # The pattern is a fixed substring of the MESSAGE, not the diagnostic code:
+  # the CLI's human-readable rendering prints the located text and not the code
+  # (the code is a `--json` field), so a code-keyed grep would silently never
+  # match and both arms would grade green for the wrong reason.
+  case "$warn" in
+    '') ;;
+    WARN:*)
+      code="${warn#WARN:}"
+      if grep -q "$code" "$TMP/$base.chk.err" \
+        && grep -q "$code" "$TMP/$base.run.err" \
+        && grep -q "$code" "$TMP/$base.build.err"; then
+        :
+      else
+        row_ok=0
+        printf '     expected %s on check+run+build stderr; not on all three\n' "$code"
+      fi
+      ;;
+    NOWARN:*)
+      code="${warn#NOWARN:}"
+      if grep -q "$code" "$TMP/$base.chk.err" \
+        || grep -q "$code" "$TMP/$base.run.err" \
+        || grep -q "$code" "$TMP/$base.build.err"; then
+        row_ok=0
+        printf '     expected NO %s on any verb; it fired\n' "$code"
+      fi
+      ;;
+    *)
+      row_ok=0
+      printf '     unknown warn column %s\n' "$warn"
       ;;
   esac
 

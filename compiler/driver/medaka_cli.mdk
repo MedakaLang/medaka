@@ -1446,8 +1446,23 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 -- on a graph the #1185 phantom is still ~99% of the channel.  So the multi-module
 -- side stays here, BLOCKED ON #1185, and collapsing the two arms back together is a
 -- decision that waits on #1185's constructor oracle becoming scrutinee-typed.
+-- #2738 / D2.  The third member owes the same three measurements, and they answer the
+-- same way as the second's.  (1) It is not a demotion of anything loud: the path it
+-- covers returned NOTHING on any verb, so `run`/`build` going silent about it is what
+-- is being repaired, not preserved.  (2) No oracle, so no false positive is
+-- representable: it is a name-set intersection filtered by a comparison of two DECLARED
+-- signatures, and it fires at most once per import MEMBER, not per occurrence —
+-- measured THREE times over this file's whole module closure (`types/registry.mdk`'s
+-- `map.toList`, and `eval/eval.mdk`'s `add`/`sub`), against the #1185 phantom's 1249
+-- lines on the same command.  (3) The render cost is therefore bounded by the collision
+-- count, not by the module graph, exactly as for `W-PRELUDE-METHOD-SHADOW`.
+--
+-- Three is not zero: unlike `W-PRELUDE-METHOD-SHADOW`, this code DOES fire on the
+-- compiler's own source today.  Those three sites are live members of the class, not
+-- false positives, and they are the derived worklist the drain half of #2769 consumes.
 runBuildWarnCodes : List String
-runBuildWarnCodes = [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW"]
+runBuildWarnCodes =
+  [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW", "W-IMPORT-METHOD-SHADOW"]
 
 isCoherenceWarn : Diag -> Bool
 isCoherenceWarn (Diag SevWarning c _ _ _ _) = contains c runBuildWarnCodes

@@ -990,6 +990,57 @@ Given an occurrence of bare name `N` in module `M`:
     made S1 unreadable. Do not restore it: say **graph-global** here and
     **nameable in `M`** at S1 (§1.0).
 
+  > ### 🔒 S2-IMPORT-DIFFER — RULED 2026-09-08 ([#2738](https://github.com/MedakaLang/medaka/issues/2738)): a differing-scheme importer shadow over a SELECTIVE import may not be SILENT
+  >
+  > **The clause.** Where an **importer** shadow's standalone reaches `M` through a
+  > **selective import** (`import m.{f}`, or `import m.{f as g}` for the name it
+  > binds) and the two **declared** signatures are **not alpha-equivalent**, the
+  > implementation MUST emit a **warning** naming both bindings and both types,
+  > located on the import member, on `check`, `check --json`/MCP/LSP, `run` and
+  > `build`, at **exit 0**. Where they ARE alpha-equivalent it MUST stay silent.
+  > **Silence on the differing case is NON-CONFORMANT.**
+  >
+  > **What this clause does NOT change: the resolution.** S1 and S2 already decide
+  > the occurrence and they are not touched — §2 row 17 has pinned exactly this
+  > topology as conformant since 2026-07-14. The defect #2738 filed is the
+  > **silence**, not the answer: a module whose only statement about a name is an
+  > explicit, selective, named import — the strongest statement the language offers
+  > about which binding is meant — got a different function with a different return
+  > type, at exit 0, with nothing on stdout, stderr, or in `--json`, on all three
+  > verbs. **Changing what an importer shadow RESOLVES to is out of scope and was
+  > ruled out**: it is breaking, and it needs its own window.
+  >
+  > **Why a WARNING and not an ambiguity ERROR.** This is **S1-PRELUDE (b)**'s
+  > register applied one direction over, and for its reason verbatim: where the
+  > method legitimately wins, an error would **narrow acceptance on working
+  > programs**. The collision is currently resolvable by the author only by
+  > renaming or aliasing, so rejecting it breaks programs that are correct under
+  > every other rule in this document.
+  >
+  > **Why only when the schemes DIFFER.** Identical schemes make the shadow
+  > harmless in practice — the two denotations agree at every receiver either can
+  > accept — so a warning there is noise that trains authors to ignore the one that
+  > matters. The comparison is over **declared** signatures, alpha-equivalence, and
+  > a standalone whose defining module declares it **without a signature** counts as
+  > DIFFERING: a scheme that cannot be read cannot be shown harmless.
+  >
+  > **Why SELECTIVE only.** A wildcard or bare import makes no statement about the
+  > name (a bare import binds none — see `selectIfaceRows`' fourth arm), and a
+  > module alias binds a DOTTED local (`A.f`) that no bare method name can collide
+  > with. The ruling is scoped to the member list, which is where the author's claim
+  > about the name is written.
+  >
+  > **Corpus.** §2 rows **50** (differing → warns) and **51** (alpha-equivalent →
+  > silent). Row 51 is not decoration: without it the corpus grades *"the diagnostic
+  > exists"* and cannot tell that apart from a predicate that fires on every
+  > importer shadow in the tree.
+  >
+  > **⟲ Overturn condition.** A program, correct under every other clause here,
+  > whose two colliding declared signatures differ and whose author has no way to
+  > silence the warning without changing what the program means — or, on the other
+  > side, a pair of alpha-equivalent signatures whose two denotations demonstrably
+  > disagree at some receiver both accept.
+
   > ### 🔒 S2-DECL — RULED 2026-08-09 ([#1351](https://github.com/MedakaLang/medaka/issues/1351)): the importer arm is evaluated PER DECLARATION, over declarations S1 admits, and BOTH its halves come from the SAME one
   >
   > **The gap this fills — two definite articles with no referent.** The importer
@@ -1666,6 +1717,8 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 47 | row 46 with **ZERO impls** of the colliding interface | S1-PRELUDE (a) | same → **located REJECT** | `x2_prelude_standalone_zeroimpls.mdk` | reject | reject | reject | **OK** — the `d1b`/`d19` move applied to the prelude cell, and it closes a *different* escape hatch: an implementation that consulted the impl universe **before** deciding the name would answer row 46 correctly for the wrong reason. With no impl to consult, only the interface method having taken the name outright can produce this reject — which is (a)'s actual content (*"no S2 arm applies; the impl universe is never consulted to decide the name"*) |
 | 48 | row 46 at **ARITY-DIFFERING** width — prelude `count`'s two arguments against an interface `count`'s one | S1-PRELUDE (a) + S8 | same → **located REJECT** (over-application **and** no impl at the function argument's head) | `x3_prelude_standalone_arity_differ.mdk` | reject | reject | reject | **OK** — rows 46/47 both collide with an arity-**matching** standalone, so a reader could conclude the rule is gated on the signatures lining up. It is not. Under the rejected reading this ACCEPTS and prints `3` |
 | 49 | **PRELUDE standalone** collision where **BOTH denotations are well-typed at the SAME receiver** (an `impl` of the colliding interface at the receiver's head, so the interface method applies exactly where the prelude standalone also would) | S1-PRELUDE (a) + **S7** | (a) gives the **interface method**; `check`, `run` and the built binary must agree on it | `test/shadow_fixtures/x4_prelude_standalone_live_impl_receiver.mdk` (unconstrained), `x5_prelude_constrained_standalone_live_impl.mdk` (constrained) — added by the `prelude-shadow-agreement` sprint; [#1497](https://github.com/MedakaLang/medaka/issues/1497)'s must-fail pin is DRAINED (`test/must_fail_fixtures/1497-*` no longer exists) | **the PRELUDE standalone's answer** | **the INTERFACE METHOD's answer** | accept, **0 diagnostics** | ✅ **CONFORMANT, measured 2026-08-28 on this tree** (post `S-prelude-cell-agreement` `89268878` + `F1` `abf203ba`, sprint `prelude-shadow-agreement`). `check`/`run`/`build`+binary all agree on the **INTERFACE METHOD's** answer, matching (a) — both on the two gated fixtures (x4: `True`/`True`/`True`; x5: `7`/`7`/`7`, all `ACCEPT ACCEPT ACCEPT`, `diff_compiler_shadow_semantics.sh`) and on a further hand-run sample (`length`, `abs`, `compare`, `sum`, plus a cross-module importer variant of `abs`) — see the LOUD/SILENT/PRELUDE-INTERNAL bullets under S1-PRELUDE's Conformance for the individual re-measurements. **This sample is not a re-run of the review round's original 55-name census**, so this row does not claim conformance for every prelude name, only for what was re-measured. Issues [#1492](https://github.com/MedakaLang/medaka/issues/1492) and #1497 remain **OPEN** on the tracker (closing them is not this doc edit's call), but neither issue's own repro, nor this row's own fixtures, reproduce a run/build divergence on this tree any more; [#1493](https://github.com/MedakaLang/medaka/issues/1493) (the PRELUDE-INTERNAL sibling) is **CLOSED**. **No mechanism is asserted** for why the prior divergence closed (see the ⚠️ under S1-PRELUDE's Conformance: the partial-application account was already measured false, and no replacement account is offered here). 🚨 **STILL NOT CAPTURABLE as an engine-recorded golden** — even though the arms currently agree, per this document's own corpus rule (`WT-GOLDEN-ENSHRINES`) a captured golden records what an engine DID, and this cell's own history (a silent divergence existed once, unnoticed, until #1497 was filed) is the argument against ever letting one arm's output alone stand as this cell's ground truth. It is graded by `x4`/`x5`'s hand-derived `ALL_EXACT` run+build-agreement assertions instead, never a capture |
+| 50 | **importer** · the standalone is **SELECTIVELY IMPORTED** (`import box.{peek}`) · interface nameable by its **TYPE** name (`import peekable.{Peekable}`) · **live impl** at the receiver's head · the two **declared schemes DIFFER** (`Box a -> (String, a)` against `t a -> a`) | S1 + S2 (importer arm) + **S2-IMPORT-DIFFER** | **importer shadow** → the method → `peek=7`, **plus `W-IMPORT-METHOD-SHADOW` on all four verbs at exit 0** | `i29_importer_selective_import_displaced/` | `peek=7` | `peek=7` | accept, **1 warning** | **OK** — this is row 17's topology with the standalone's domain WIDENED to cover the receiver, so both candidates typecheck and the displacement is observable only as a value and a diagnostic. It was [#2738](https://github.com/MedakaLang/medaka/issues/2738) (S0): the file's only statement about the name is the selective import, and it got the other binding at exit 0 with nothing on stdout, stderr, or in `--json`. ⚠️ **The RESOLUTION was never the defect and does not move** — row 17 already pins it and S1/S2 already license it; what this row adds is that S2-IMPORT-DIFFER makes the silence non-conformant. Value hand-derived from S1/S2 and the ruling **before** the implementing binary was built, per [W-QUIETER] in reverse |
+| 51 | row 50 with the two declared schemes **ALPHA-EQUIVALENT** (`a -> String` against `t -> String`) — the SILENT control | S2-IMPORT-DIFFER | **importer shadow** → the method → `iface`, and **NO diagnostic on any verb** | `i30_importer_selective_import_same_scheme/` | `iface` | `iface` | accept, **0 diagnostics** | **OK** — the row that makes 50 evidence about a **predicate** rather than about a diagnostic existing. A predicate that warned on every importer shadow in the tree passes row 50 and fails this one. Identical topology in every other respect, which is what makes the scheme comparison the only variable |
 
 **Tally — DERIVE IT, do not read it.** The status distribution moves with every
 row added, and the figure this line used to carry

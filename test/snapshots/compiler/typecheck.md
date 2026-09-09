@@ -1,5 +1,5 @@
 # META
-source_lines=43054
+source_lines=43241
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -37727,31 +37727,218 @@ nameableIfaceShadows prog names
 -- import arm here and on the re-export arm in `graphIfaceMethods`.
 nameableIfaceMethodSet : List Decl -> OrdMap Unit
 nameableIfaceMethodSet prog =
-  addImportedIfaceMethods
-    prog
-    (addIfaceRowMethods
-      (optionOr
-        []
-        (omLookup "core" driverState.value.graphIfaceMethodsRef.value))
-      (namesToSet (allIfaceMethodNames prog) omEmpty))
+  namesToSet (flatMap snd (nameableIfaceRows prog)) omEmpty
 
-addImportedIfaceMethods : List Decl -> OrdMap Unit -> OrdMap Unit
-addImportedIfaceMethods [] acc = acc
-addImportedIfaceMethods ((DAttrib _ d) :: rest) acc =
-  addImportedIfaceMethods rest (addImportedIfaceMethods [d] acc)
-addImportedIfaceMethods ((DUse _ path _) :: rest) acc = addImportedIfaceMethods
-  rest
+-- The same operand ONE level less flattened: the (interface name, its method names)
+-- ROWS, not just the union of their method names.  `nameableIfaceMethodSet` above is
+-- defined as this list's flattening, so there is still exactly ONE derivation of S1's
+-- right operand — a diagnostic that needs to name WHICH interface owns a colliding
+-- method (#2738's `W-IMPORT-METHOD-SHADOW`) must not answer that from a second,
+-- independently-scoped walk, which is what S1-NS (b) rules non-conformant.
+--
+-- `ifaceMethodRows prog` is `allIfaceMethodNames prog` grouped by declaration: both walk
+-- `DAttrib`/`DInterface` in the same order and take `ifaceMethodNames methods`, so the
+-- flattening above is the previous expression term for term.
+export
+nameableIfaceRows : List Decl -> List (String, List String)
+nameableIfaceRows prog =
+  optionOr [] (omLookup "core" driverState.value.graphIfaceMethodsRef.value)
+    ++ ifaceMethodRows prog
+    ++ importedIfaceRows prog
+
+importedIfaceRows : List Decl -> List (String, List String)
+importedIfaceRows [] = []
+importedIfaceRows ((DAttrib _ d) :: rest) =
+  importedIfaceRows [d] ++ importedIfaceRows rest
+importedIfaceRows ((DUse _ path _) :: rest) =
   (match (omLookup
-    (usePathModuleId path)
-    driverState.value.graphIfaceMethodsRef.value)
-    None => acc
-    Some src => addIfaceRowMethods (selectIfaceRows path src) acc)
-addImportedIfaceMethods (_ :: rest) acc = addImportedIfaceMethods rest acc
+      (usePathModuleId path)
+      driverState.value.graphIfaceMethodsRef.value)
+      None => []
+      Some src => selectIfaceRows path src)
+    ++ importedIfaceRows rest
+importedIfaceRows (_ :: rest) = importedIfaceRows rest
 
-addIfaceRowMethods : List (String, List String) -> OrdMap Unit -> OrdMap Unit
-addIfaceRowMethods [] acc = acc
-addIfaceRowMethods ((_, ms) :: rest) acc =
-  addIfaceRowMethods rest (namesToSet ms acc)
+-- ── #2738: a selectively imported standalone displaced by a nameable method ──
+-- The peer of `frontend/marker.mdk`'s `preludeStandaloneShadows` for the IMPORTER
+-- direction, and it is sited here rather than beside it because the two operands it
+-- needs live here: S1's right operand (`nameableIfaceRows`, the only predicate in the
+-- compiler that answers `nameable in M`) and, through it, the interface a colliding
+-- method name belongs to.  `compiler/frontend/marker.mdk` cannot reach either —
+-- `types/typecheck.mdk` imports `frontend.marker`, so the edge does not run the other
+-- way — and re-deriving the operand there is what S1-NS (b) rules non-conformant.
+--
+-- Yields one entry per DIFFERING-scheme collision, in declaration order:
+--   (bound name, the interface declaring it, the standalone's declared signature,
+--    the method's declared signature, the import member's own span).
+-- The standalone signature is `None` when the defining module declares the function
+-- without a signature: a scheme that cannot be read cannot be shown harmless, so it
+-- counts as differing.  Identical (alpha-equivalent) signatures yield nothing, which is
+-- what keeps the everyday `import m.{f}` silent.
+--
+-- SELECTIVE imports only (`UseGroup`).  A wildcard or bare import makes no statement
+-- about the name, and a module alias binds a DOTTED local (`A.f`) that no bare method
+-- name can collide with; the ruling is scoped to the explicit member list, which is the
+-- strongest statement the language offers about which binding is meant.
+--
+-- Fails CLOSED on an absent index, the opposite of `nameableIfaceShadows` above and for
+-- the opposite reason: that predicate decides resolution, where dropping shadow-hood
+-- miscompiles, while this one only decides a warning, where a graph-global operand would
+-- fire on collisions the module cannot name.
+export
+importedStandaloneShadows : List (String, List Decl) ->
+  List Decl ->
+  List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadows graph prog
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = []
+  | otherwise =
+    let rows = nameableIfaceRows prog
+    let nameable = namesToSet (flatMap snd rows) omEmpty
+    let universe = flatMap snd graph ++ prog
+    flatMap (importShadowsOfDecl graph rows nameable universe) prog
+
+importShadowsOfDecl : List (String, List Decl) ->
+  List (String, List String) ->
+  OrdMap Unit ->
+  List Decl ->
+  Decl ->
+  List (String, String, Option Ty, Ty, Loc)
+importShadowsOfDecl graph rows nameable universe (DAttrib _ d) =
+  importShadowsOfDecl graph rows nameable universe d
+importShadowsOfDecl graph rows nameable universe (DUse _ path _) = match path
+  UseGroup _ ms => match lookupAssoc (usePathModuleId path) graph
+    None => []
+    Some depDecls =>
+      flatMap (importMemberShadow rows nameable universe depDecls) ms
+  _ => []
+importShadowsOfDecl _ _ _ _ _ = []
+
+importMemberShadow : List (String, List String) ->
+  OrdMap Unit ->
+  List Decl ->
+  List Decl ->
+  UseMember ->
+  List (String, String, Option Ty, Ty, Loc)
+importMemberShadow rows nameable universe depDecls (UseMember origin _ mloc alias) =
+  let local = match alias
+    Some a => a
+    None => origin
+  if not (omHasKey local nameable) then
+    []
+  else if not (declaresStandalone origin depDecls) then
+    []
+  else match ifaceMethodSigFor local rows universe
+    None => []
+    Some (iface, mty) =>
+      let sty = standaloneSigOf origin depDecls
+      if schemesAgree sty mty then [] else [(local, iface, sty, mty, mloc)]
+
+schemesAgree : Option Ty -> Ty -> Bool
+schemesAgree None _ = False
+schemesAgree (Some sty) mty = tyAlphaEq sty mty
+
+-- the first NAMEABLE interface declaring [name], with that method's declared signature.
+-- Rows whose declaration is not in [universe] are skipped rather than guessed at.
+ifaceMethodSigFor : String ->
+  List (String, List String) ->
+  List Decl ->
+  Option (String, Ty)
+ifaceMethodSigFor _ [] _ = None
+ifaceMethodSigFor name ((iface, ms) :: rest) universe
+  | not (contains name ms) = ifaceMethodSigFor name rest universe
+  | otherwise = match ifaceMethodTyIn iface name universe
+    Some ty => Some (iface, ty)
+    None => ifaceMethodSigFor name rest universe
+
+ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
+ifaceMethodTyIn _ _ [] = None
+ifaceMethodTyIn iface name ((DAttrib _ d) :: rest) =
+  let inner = ifaceMethodTyIn iface name [d]
+  match inner
+    Some ty => Some ty
+    None => ifaceMethodTyIn iface name rest
+ifaceMethodTyIn iface name ((DInterface { name = n, methods, ... }) :: rest)
+  | n == iface = match ifaceMethodTyOf name methods
+    Some ty => Some ty
+    None => ifaceMethodTyIn iface name rest
+  | otherwise = ifaceMethodTyIn iface name rest
+ifaceMethodTyIn iface name (_ :: rest) = ifaceMethodTyIn iface name rest
+
+ifaceMethodTyOf : String -> List IfaceMethod -> Option Ty
+ifaceMethodTyOf _ [] = None
+ifaceMethodTyOf name ((IfaceMethod n ty _ _) :: rest)
+  | n == name = Some ty
+  | otherwise = ifaceMethodTyOf name rest
+
+declaresStandalone : String -> List Decl -> Bool
+declaresStandalone _ [] = False
+declaresStandalone n ((DAttrib _ d) :: rest) =
+  declaresStandalone n [d] || declaresStandalone n rest
+declaresStandalone n ((DFunDef _ m _ _) :: rest) =
+  m == n || declaresStandalone n rest
+declaresStandalone n (_ :: rest) = declaresStandalone n rest
+
+standaloneSigOf : String -> List Decl -> Option Ty
+standaloneSigOf _ [] = None
+standaloneSigOf n ((DAttrib _ d) :: rest) = match standaloneSigOf n [d]
+  Some t => Some t
+  None => standaloneSigOf n rest
+standaloneSigOf n ((DTypeSig _ m ty) :: rest)
+  | m == n = Some ty
+  | otherwise = standaloneSigOf n rest
+standaloneSigOf n (_ :: rest) = standaloneSigOf n rest
+
+-- Alpha-equivalence of two SURFACE signatures: equal up to a consistent renaming of
+-- type variables, so `Box a -> a` and `Box b -> b` agree while `Box a -> (String, a)`
+-- and `t a -> a` do not.  The bijection is carried both ways, so `a -> b` and `a -> a`
+-- do not agree either.  Any shape not matched pairwise below is treated as DIFFERING,
+-- which is the direction that warns.
+export
+tyAlphaEq : Ty -> Ty -> Bool
+tyAlphaEq a b = match tyAlphaGo [] a b
+  Some _ => True
+  None => False
+
+tyAlphaGo : List (String, String) -> Ty -> Ty -> Option (List (String, String))
+tyAlphaGo m (TyVar x) (TyVar y) = bindTyName m x y
+tyAlphaGo m (TyCon { tyConName = x }) (TyCon { tyConName = y })
+  | x == y = Some m
+  | otherwise = None
+tyAlphaGo m (TyApp f x) (TyApp g y) = match tyAlphaGo m f g
+  None => None
+  Some m2 => tyAlphaGo m2 x y
+tyAlphaGo m (TyFun a b) (TyFun c d) = match tyAlphaGo m a c
+  None => None
+  Some m2 => tyAlphaGo m2 b d
+tyAlphaGo m (TyTuple xs) (TyTuple ys) = tyAlphaList m xs ys
+tyAlphaGo m (TyEffect e1 t1 a) (TyEffect e2 t2 b)
+  | e1 == e2 && t1 == t2 = tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyConstrained c1 a) (TyConstrained c2 b)
+  | listLen c1 == listLen c2 = tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyRow e1 t1 _) (TyRow e2 t2 _)
+  | e1 == e2 && t1 == t2 = Some m
+  | otherwise = None
+tyAlphaGo _ _ _ = None
+
+tyAlphaList : List (String, String) ->
+  List Ty ->
+  List Ty ->
+  Option (List (String, String))
+tyAlphaList m [] [] = Some m
+tyAlphaList m (x :: xs) (y :: ys) = match tyAlphaGo m x y
+  None => None
+  Some m2 => tyAlphaList m2 xs ys
+tyAlphaList _ _ _ = None
+
+bindTyName : List (String, String) ->
+  String ->
+  String ->
+  Option (List (String, String))
+bindTyName m x y = match lookupAssoc x m
+  Some y2 => if y2 == y then Some m else None
+  None => if anyList (e => snd e == y) m then None else Some ((x, y) :: m)
 
 -- C5: graph-wide standalone-shadow names — every top-level funDef name in [userDecls]
 -- (the user modules, NOT core) that is also an interface method name anywhere in
@@ -48805,15 +48992,64 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "nameableIfaceShadows" (PWild (PList)) (EListLit))
 (DFunDef false "nameableIfaceShadows" ((PVar "prog") (PVar "names")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "names") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (EVar "names")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "nameableIfaceMethodSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
-(DFunDef false "nameableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "prog")) (EApp (EApp (EVar "addIfaceRowMethods") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")))) (EApp (EApp (EVar "namesToSet") (EApp (EVar "allIfaceMethodNames") (EVar "prog"))) (EVar "omEmpty")))))
-(DTypeSig false "addImportedIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "addImportedIfaceMethods" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "addImportedIfaceMethods" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "rest")) (EApp (EApp (EVar "addImportedIfaceMethods") (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "addImportedIfaceMethods" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "rest")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "addIfaceRowMethods") (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src"))) (EVar "acc"))))))
-(DFunDef false "addImportedIfaceMethods" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "rest")) (EVar "acc")))
-(DTypeSig false "addIfaceRowMethods" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "addIfaceRowMethods" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "addIfaceRowMethods" ((PCons (PTuple PWild (PVar "ms")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addIfaceRowMethods") (EVar "rest")) (EApp (EApp (EVar "namesToSet") (EVar "ms")) (EVar "acc"))))
+(DFunDef false "nameableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EVar "nameableIfaceRows") (EVar "prog")))) (EVar "omEmpty")))
+(DTypeSig true "nameableIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "nameableIfaceRows" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value"))) (EApp (EVar "ifaceMethodRows") (EVar "prog"))) (EApp (EVar "importedIfaceRows") (EVar "prog"))))
+(DTypeSig false "importedIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "importedIfaceRows" ((PList)) (EListLit))
+(DFunDef false "importedIfaceRows" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "importedIfaceRows") (EListLit (EVar "d"))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBinOp "++" (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "importedIfaceRows") (EVar "rest")))
+(DTypeSig true "importedStandaloneShadows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc"))))))
+(DFunDef false "importedStandaloneShadows" ((PVar "graph") (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nameableIfaceRows") (EVar "prog"))) (DoLet false false (PVar "nameable") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "universe") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "graph")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe"))) (EVar "prog")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "importShadowsOfDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))))
+(DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "d")))
+(DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "ms")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "graph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "depDecls")) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "importMemberShadow") (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "depDecls"))) (EVar "ms"))))) (arm PWild () (EListLit))))
+(DFunDef false "importShadowsOfDecl" (PWild PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "importMemberShadow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))))
+(DFunDef false "importMemberShadow" ((PVar "rows") (PVar "nameable") (PVar "universe") (PVar "depDecls") (PCon "UseMember" (PVar "origin") PWild (PVar "mloc") (PVar "alias"))) (EBlock (DoLet false false (PVar "local") (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EVar "origin")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "local")) (EVar "nameable"))) (EListLit) (EIf (EApp (EVar "not") (EApp (EApp (EVar "declaresStandalone") (EVar "origin")) (EVar "depDecls"))) (EListLit) (EMatch (EApp (EApp (EApp (EVar "ifaceMethodSigFor") (EVar "local")) (EVar "rows")) (EVar "universe")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "mty"))) () (EBlock (DoLet false false (PVar "sty") (EApp (EApp (EVar "standaloneSigOf") (EVar "origin")) (EVar "depDecls"))) (DoExpr (EIf (EApp (EApp (EVar "schemesAgree") (EVar "sty")) (EVar "mty")) (EListLit) (EListLit (ETuple (EVar "local") (EVar "iface") (EVar "sty") (EVar "mty") (EVar "mloc")))))))))))))
+(DTypeSig false "schemesAgree" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
+(DFunDef false "schemesAgree" ((PCon "None") PWild) (EVar "False"))
+(DFunDef false "schemesAgree" ((PCon "Some" (PVar "sty")) (PVar "mty")) (EApp (EApp (EVar "tyAlphaEq") (EVar "sty")) (EVar "mty")))
+(DTypeSig false "ifaceMethodSigFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Ty")))))))
+(DFunDef false "ifaceMethodSigFor" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "ifaceMethodSigFor" ((PVar "name") (PCons (PTuple (PVar "iface") (PVar "ms")) (PVar "rest")) (PVar "universe")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms"))) (EApp (EApp (EApp (EVar "ifaceMethodSigFor") (EVar "name")) (EVar "rest")) (EVar "universe")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "universe")) (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "ty")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ifaceMethodSigFor") (EVar "name")) (EVar "rest")) (EVar "universe")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ifaceMethodTyIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Ty"))))))
+(DFunDef false "ifaceMethodTyIn" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "ifaceMethodTyIn" ((PVar "iface") (PVar "name") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EListLit (EVar "d")))) (DoExpr (EMatch (EVar "inner") (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "Some") (EVar "ty"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")))))))
+(DFunDef false "ifaceMethodTyIn" ((PVar "iface") (PVar "name") (PCons (PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" None)) true) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "iface")) (EMatch (EApp (EApp (EVar "ifaceMethodTyOf") (EVar "name")) (EVar "methods")) (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "Some") (EVar "ty"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ifaceMethodTyIn" ((PVar "iface") (PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")))
+(DTypeSig false "ifaceMethodTyOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "Option") (TyCon "Ty")))))
+(DFunDef false "ifaceMethodTyOf" (PWild (PList)) (EVar "None"))
+(DFunDef false "ifaceMethodTyOf" ((PVar "name") (PCons (PCon "IfaceMethod" (PVar "n") (PVar "ty") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "ty")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceMethodTyOf") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declaresStandalone" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
+(DFunDef false "declaresStandalone" (PWild (PList)) (EVar "False"))
+(DFunDef false "declaresStandalone" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EListLit (EVar "d"))) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest"))))
+(DFunDef false "declaresStandalone" ((PVar "n") (PCons (PCon "DFunDef" PWild (PVar "m") PWild PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest"))))
+(DFunDef false "declaresStandalone" ((PVar "n") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest")))
+(DTypeSig false "standaloneSigOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Ty")))))
+(DFunDef false "standaloneSigOf" (PWild (PList)) (EVar "None"))
+(DFunDef false "standaloneSigOf" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EVar "rest")))))
+(DFunDef false "standaloneSigOf" ((PVar "n") (PCons (PCon "DTypeSig" PWild (PVar "m") (PVar "ty")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "Some") (EVar "ty")) (EIf (EVar "otherwise") (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "standaloneSigOf" ((PVar "n") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EVar "rest")))
+(DTypeSig true "tyAlphaEq" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Bool"))))
+(DFunDef false "tyAlphaEq" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EListLit)) (EVar "a")) (EVar "b")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "tyAlphaGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyVar" (PVar "x")) (PCon "TyVar" (PVar "y"))) (EApp (EApp (EApp (EVar "bindTyName") (EVar "m")) (EVar "x")) (EVar "y")))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PRec "TyCon" ((rf "tyConName" (PVar "x"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "y"))) false)) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyApp" (PVar "f") (PVar "x")) (PCon "TyApp" (PVar "g") (PVar "y"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "f")) (EVar "g")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m2")) (EVar "x")) (EVar "y")))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyFun" (PVar "a") (PVar "b")) (PCon "TyFun" (PVar "c") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m2")) (EVar "b")) (EVar "d")))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyTuple" (PVar "xs")) (PCon "TyTuple" (PVar "ys"))) (EApp (EApp (EApp (EVar "tyAlphaList") (EVar "m")) (EVar "xs")) (EVar "ys")))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyEffect" (PVar "e1") (PVar "t1") (PVar "a")) (PCon "TyEffect" (PVar "e2") (PVar "t2") (PVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "e1") (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyConstrained" (PVar "c1") (PVar "a")) (PCon "TyConstrained" (PVar "c2") (PVar "b"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "c1")) (EApp (EVar "listLen") (EVar "c2"))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyRow" (PVar "e1") (PVar "t1") PWild) (PCon "TyRow" (PVar "e2") (PVar "t2") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "e1") (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "tyAlphaList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "tyAlphaList" ((PVar "m") (PList) (PList)) (EApp (EVar "Some") (EVar "m")))
+(DFunDef false "tyAlphaList" ((PVar "m") (PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "x")) (EVar "y")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaList") (EVar "m2")) (EVar "xs")) (EVar "ys")))))
+(DFunDef false "tyAlphaList" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "bindTyName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "bindTyName" ((PVar "m") (PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "m")) (arm (PCon "Some" (PVar "y2")) () (EIf (EBinOp "==" (EVar "y2") (EVar "y")) (EApp (EVar "Some") (EVar "m")) (EVar "None"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "snd") (EVar "e")) (EVar "y")))) (EVar "m")) (EVar "None") (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "x") (EVar "y")) (EVar "m")))))))
 (DTypeSig false "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "computeMangledShadowMap" ((PVar "allDecls") (PVar "units")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "unitMangledShadows") (EVar "methodNames"))) (EVar "units")))))
 (DTypeSig false "unitMangledShadows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -55204,15 +55440,64 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "nameableIfaceShadows" (PWild (PList)) (EListLit))
 (DFunDef false "nameableIfaceShadows" ((PVar "prog") (PVar "names")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "names") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (EVar "names")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "nameableIfaceMethodSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
-(DFunDef false "nameableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "prog")) (EApp (EApp (EVar "addIfaceRowMethods") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")))) (EApp (EApp (EVar "namesToSet") (EApp (EVar "allIfaceMethodNames") (EVar "prog"))) (EVar "omEmpty")))))
-(DTypeSig false "addImportedIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "addImportedIfaceMethods" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "addImportedIfaceMethods" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "rest")) (EApp (EApp (EVar "addImportedIfaceMethods") (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "addImportedIfaceMethods" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "rest")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "addIfaceRowMethods") (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src"))) (EVar "acc"))))))
-(DFunDef false "addImportedIfaceMethods" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addImportedIfaceMethods") (EVar "rest")) (EVar "acc")))
-(DTypeSig false "addIfaceRowMethods" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "addIfaceRowMethods" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "addIfaceRowMethods" ((PCons (PTuple PWild (PVar "ms")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "addIfaceRowMethods") (EVar "rest")) (EApp (EApp (EVar "namesToSet") (EVar "ms")) (EVar "acc"))))
+(DFunDef false "nameableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EVar "nameableIfaceRows") (EVar "prog")))) (EVar "omEmpty")))
+(DTypeSig true "nameableIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "nameableIfaceRows" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value"))) (EApp (EVar "ifaceMethodRows") (EVar "prog"))) (EApp (EVar "importedIfaceRows") (EVar "prog"))))
+(DTypeSig false "importedIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "importedIfaceRows" ((PList)) (EListLit))
+(DFunDef false "importedIfaceRows" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "importedIfaceRows") (EListLit (EVar "d"))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBinOp "++" (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "importedIfaceRows") (EVar "rest")))
+(DTypeSig true "importedStandaloneShadows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc"))))))
+(DFunDef false "importedStandaloneShadows" ((PVar "graph") (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nameableIfaceRows") (EVar "prog"))) (DoLet false false (PVar "nameable") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "universe") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "graph")) (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe"))) (EVar "prog")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "importShadowsOfDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))))
+(DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "d")))
+(DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "ms")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "graph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "depDecls")) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "importMemberShadow") (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "depDecls"))) (EVar "ms"))))) (arm PWild () (EListLit))))
+(DFunDef false "importShadowsOfDecl" (PWild PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "importMemberShadow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))))
+(DFunDef false "importMemberShadow" ((PVar "rows") (PVar "nameable") (PVar "universe") (PVar "depDecls") (PCon "UseMember" (PVar "origin") PWild (PVar "mloc") (PVar "alias"))) (EBlock (DoLet false false (PVar "local") (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EVar "origin")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "local")) (EVar "nameable"))) (EListLit) (EIf (EApp (EVar "not") (EApp (EApp (EVar "declaresStandalone") (EVar "origin")) (EVar "depDecls"))) (EListLit) (EMatch (EApp (EApp (EApp (EVar "ifaceMethodSigFor") (EVar "local")) (EVar "rows")) (EVar "universe")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "mty"))) () (EBlock (DoLet false false (PVar "sty") (EApp (EApp (EVar "standaloneSigOf") (EVar "origin")) (EVar "depDecls"))) (DoExpr (EIf (EApp (EApp (EVar "schemesAgree") (EVar "sty")) (EVar "mty")) (EListLit) (EListLit (ETuple (EVar "local") (EVar "iface") (EVar "sty") (EVar "mty") (EVar "mloc")))))))))))))
+(DTypeSig false "schemesAgree" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
+(DFunDef false "schemesAgree" ((PCon "None") PWild) (EVar "False"))
+(DFunDef false "schemesAgree" ((PCon "Some" (PVar "sty")) (PVar "mty")) (EApp (EApp (EVar "tyAlphaEq") (EVar "sty")) (EVar "mty")))
+(DTypeSig false "ifaceMethodSigFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Ty")))))))
+(DFunDef false "ifaceMethodSigFor" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "ifaceMethodSigFor" ((PVar "name") (PCons (PTuple (PVar "iface") (PVar "ms")) (PVar "rest")) (PVar "universe")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms"))) (EApp (EApp (EApp (EVar "ifaceMethodSigFor") (EVar "name")) (EVar "rest")) (EVar "universe")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "universe")) (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "ty")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ifaceMethodSigFor") (EVar "name")) (EVar "rest")) (EVar "universe")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ifaceMethodTyIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Ty"))))))
+(DFunDef false "ifaceMethodTyIn" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "ifaceMethodTyIn" ((PVar "iface") (PVar "name") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EListLit (EVar "d")))) (DoExpr (EMatch (EVar "inner") (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "Some") (EVar "ty"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")))))))
+(DFunDef false "ifaceMethodTyIn" ((PVar "iface") (PVar "name") (PCons (PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" None)) true) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "iface")) (EMatch (EApp (EApp (EVar "ifaceMethodTyOf") (EVar "name")) (EVar "methods")) (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "Some") (EVar "ty"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ifaceMethodTyIn" ((PVar "iface") (PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "ifaceMethodTyIn") (EVar "iface")) (EVar "name")) (EVar "rest")))
+(DTypeSig false "ifaceMethodTyOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "Option") (TyCon "Ty")))))
+(DFunDef false "ifaceMethodTyOf" (PWild (PList)) (EVar "None"))
+(DFunDef false "ifaceMethodTyOf" ((PVar "name") (PCons (PCon "IfaceMethod" (PVar "n") (PVar "ty") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "ty")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceMethodTyOf") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declaresStandalone" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
+(DFunDef false "declaresStandalone" (PWild (PList)) (EVar "False"))
+(DFunDef false "declaresStandalone" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EListLit (EVar "d"))) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest"))))
+(DFunDef false "declaresStandalone" ((PVar "n") (PCons (PCon "DFunDef" PWild (PVar "m") PWild PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest"))))
+(DFunDef false "declaresStandalone" ((PVar "n") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest")))
+(DTypeSig false "standaloneSigOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Ty")))))
+(DFunDef false "standaloneSigOf" (PWild (PList)) (EVar "None"))
+(DFunDef false "standaloneSigOf" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EVar "rest")))))
+(DFunDef false "standaloneSigOf" ((PVar "n") (PCons (PCon "DTypeSig" PWild (PVar "m") (PVar "ty")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "Some") (EVar "ty")) (EIf (EVar "otherwise") (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "standaloneSigOf" ((PVar "n") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "standaloneSigOf") (EVar "n")) (EVar "rest")))
+(DTypeSig true "tyAlphaEq" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Bool"))))
+(DFunDef false "tyAlphaEq" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EListLit)) (EVar "a")) (EVar "b")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "tyAlphaGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyVar" (PVar "x")) (PCon "TyVar" (PVar "y"))) (EApp (EApp (EApp (EVar "bindTyName") (EVar "m")) (EVar "x")) (EVar "y")))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PRec "TyCon" ((rf "tyConName" (PVar "x"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "y"))) false)) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyApp" (PVar "f") (PVar "x")) (PCon "TyApp" (PVar "g") (PVar "y"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "f")) (EVar "g")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m2")) (EVar "x")) (EVar "y")))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyFun" (PVar "a") (PVar "b")) (PCon "TyFun" (PVar "c") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m2")) (EVar "b")) (EVar "d")))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyTuple" (PVar "xs")) (PCon "TyTuple" (PVar "ys"))) (EApp (EApp (EApp (EVar "tyAlphaList") (EVar "m")) (EVar "xs")) (EVar "ys")))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyEffect" (PVar "e1") (PVar "t1") (PVar "a")) (PCon "TyEffect" (PVar "e2") (PVar "t2") (PVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "e1") (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyConstrained" (PVar "c1") (PVar "a")) (PCon "TyConstrained" (PVar "c2") (PVar "b"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "c1")) (EApp (EVar "listLen") (EVar "c2"))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyRow" (PVar "e1") (PVar "t1") PWild) (PCon "TyRow" (PVar "e2") (PVar "t2") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "e1") (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "tyAlphaList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "tyAlphaList" ((PVar "m") (PList) (PList)) (EApp (EVar "Some") (EVar "m")))
+(DFunDef false "tyAlphaList" ((PVar "m") (PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "x")) (EVar "y")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaList") (EVar "m2")) (EVar "xs")) (EVar "ys")))))
+(DFunDef false "tyAlphaList" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "bindTyName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "bindTyName" ((PVar "m") (PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "m")) (arm (PCon "Some" (PVar "y2")) () (EIf (EBinOp "==" (EVar "y2") (EVar "y")) (EApp (EVar "Some") (EVar "m")) (EVar "None"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "snd") (EVar "e")) (EVar "y")))) (EVar "m")) (EVar "None") (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "x") (EVar "y")) (EVar "m")))))))
 (DTypeSig false "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "computeMangledShadowMap" ((PVar "allDecls") (PVar "units")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "unitMangledShadows") (EVar "methodNames"))) (EVar "units")))))
 (DTypeSig false "unitMangledShadows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
