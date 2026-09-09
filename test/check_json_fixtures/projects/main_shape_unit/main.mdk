@@ -4,7 +4,7 @@
 --
 -- Until #2246 this golden was impossible: S-3 (#2234) deleted the extra
 -- `elaborateModules` that used to populate `mainSchemeRef` for `checkJsonFile`'s
--- multi-module arm, and nothing on the `analyzeProject` → `typecheckPass` →
+-- multi-module arm, and nothing on the `analyzeProject` → `typecheckPassFull` →
 -- `checkModulesDiags` chain replaced it.  In a fresh process the ref is `None`,
 -- `mainTypeIsUnit ()` answers False on `None`, and W-MAIN-SHAPE fired here — a
 -- false positive on every `check --json` / MCP `medaka_check` of a multi-module
