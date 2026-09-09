@@ -665,6 +665,16 @@ grep -E -q '^keygen: keygen' "$WORK/keygen2.err" \
   && fail 'case 28: the refusal carries a doubled keygen: prefix'
 [ "$(tr -d '\n' < "$KEYGEN_DIR/key.hex")" = "$KEYGEN_SECRET" ] \
   || fail 'case 28: the refused second keygen changed the key on disk'
+# A run that names one new destination and one that already exists must write
+# NEITHER. Refusing after the first write would leave a valid 0600 signing key
+# on disk under a failure exit code, and the operator has no way to tell that
+# half-finished state from a run that wrote nothing.
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/fresh.hex" \
+  --token-secret "$KEYGEN_DIR/token.hex" \
+  > "$WORK/keygen3.out" 2> "$WORK/keygen3.err" \
+  && fail 'case 28: keygen accepted an existing --token-secret destination'
+[ ! -e "$KEYGEN_DIR/fresh.hex" ] \
+  || fail 'case 28: keygen left a signing key behind after refusing the run'
 # 28b. and what keygen wrote is what serve accepts: a whole genesis server
 #    stands up on the generated key and the generated token secret, which is
 #    the only proof that keygen and serve agree on the file format and mode.
