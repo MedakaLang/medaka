@@ -39555,7 +39555,7 @@ ambiguousAdmitted occ path amb = match importedBindings path
 
 -- every name this module's own decl bodies REFERENCE, as a set.  Mirrors `groupRefs`'
 -- `allEVars` collector one level up, at the decl layer: the top-level clause bodies plus
--- the impl/default/prop/test/bench bodies, which is every place a user program can spell
+-- the impl/default/prop/test bodies, which is every place a user program can spell
 -- an imported value.  Alias-qualified references arrive here already flattened into a
 -- single dotted `EVar "A.g"` by desugar's `rewriteAliasQual` (via `qualifiedLocal`), so
 -- the alias spelling is a plain string lookup and needs no separate walk.
@@ -42899,7 +42899,7 @@ argRwOf : MarkCtx -> OrdMap Unit -> (String -> EvId -> Unit) -> ArgRw
 argRwOf mc dn onDict = ArgRw mc.mcRp dn mc.mcAn mc.mcSm onDict
 
 -- Mark the declarations of one module that are not binding groups (impl, default,
--- prop, test and bench bodies) with the module's final dict-name set.  Binding
+-- prop and test bodies) with the module's final dict-name set.  Binding
 -- groups were marked on the schedule (`markGroupClauses`) and are left alone.
 markTailDecls : MarkCtx -> OrdMap Unit -> List Decl -> List Decl
 markTailDecls mc dn decls = map (markTailDecl (argRwOf mc dn noDictHook)) decls
@@ -43749,7 +43749,7 @@ placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
 
 -- The module's marked tree: its binding groups' marked clauses written back into the
 -- declarations in source order, then the remaining bodies (impl, default, prop,
--- test, bench) marked with the module's final dict-name set — they are inferred
+-- test) marked with the module's final dict-name set — they are inferred
 -- after every group, so every promotion the module made is in the set by then.
 finishModuleMarking : ModuleMarking ->
   OrdMap (List (List Pat, Expr)) ->

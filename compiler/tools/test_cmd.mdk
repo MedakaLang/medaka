@@ -1125,6 +1125,7 @@ runProps pair target tsrc userDecls cases filterOpt
         (propLineTests tsrc)
         env
         (elaboratedRootProps modsM userDecls)
+        (coreM ++ flatMap snd modsM)
 
 -- The root module's elaborated decls — the prop and `test "…"` bodies both come
 -- from here.  The root module is the LAST in the list (the loader returns
@@ -1702,6 +1703,7 @@ propsReport pair target tsrc userDecls cases filterOpt
         (propLineTests tsrc)
         (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
         (elaboratedRootProps modsM userDecls)
+        (coreM ++ flatMap snd modsM)
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split

@@ -1,0 +1,6 @@
+-- Module `a`'s `Color` carries the only `Arbitrary` instance in this project.
+-- Module `b`'s `Color` carries none, and the prop is declared over `b`'s.
+public export data Color = Mk
+
+impl Arbitrary Color where
+  arbitrary () = Mk

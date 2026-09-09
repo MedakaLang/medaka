@@ -1220,7 +1220,10 @@ none.
 `medaka test` draws each `prop` parameter from its declared type. A
 user-defined type that takes no type arguments is drawn through its
 `Arbitrary` instance when one is in scope, and built from its constructors
-otherwise. Every other parameter type the runner builds itself: `Int`,
+otherwise. That applies to the parameter's own type only: a user type
+reached as a field of another type is always built from its constructors,
+whether or not it has an instance. Every other parameter type the runner
+builds itself: `Int`,
 `Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
 `Result`, tuples, and any type applied to arguments, so an instance at one
 of those is not consulted. Counterexamples are shrunk by the runner, so

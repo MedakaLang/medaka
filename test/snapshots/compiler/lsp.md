@@ -567,7 +567,7 @@ symbolParts _ _ = []
 -- shared name, the LAST row's kind (so a `sig`(Variable)+`def`(Function) pair
 -- reads as the Function, not the sig), the range spanning first-start..last-end,
 -- and the concatenated children.  The clause-like gate is what stops a
--- `test "double"`/`prop`/`bench` (free string label, never a duplicate) from being
+-- `test "double"`/`prop` (free string label, never a duplicate) from being
 -- fused into an adjacent same-named function; only sig/clause runs coalesce, and
 -- only adjacent ones, so decls that merely share a prefix are never merged either.
 -- The collapsed row keeps the FIRST clause's name `Loc` (`nl0`) — it pairs with

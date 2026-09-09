@@ -4216,7 +4216,7 @@ isTUpperTok (TUpper _) = True
 isTUpperTok _ = False
 
 -- The decl's NAME-token index, given `i` already past any leading modifiers:
--- for kinds with a head keyword (`data`/`extern`/`prop`/`test`/`bench`/
+-- for kinds with a head keyword (`data`/`extern`/`prop`/`test`/
 -- `interface`/`type`/`newtype`/`let rec`), skip it (skipping any further
 -- noise) and land on the name; for kinds with no head keyword (`DTypeSig`/
 -- `DFunDef`), `i` IS already the name. `DImpl` points at its head TYPE's
