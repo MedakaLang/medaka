@@ -346,9 +346,9 @@ printVersion _ = putStrLn (medakaVersionString ())
 -- `Unbound variable: e3`), and the version string ("0.1.0-preview") never moves,
 -- so it is useless as a staleness signal.  test/build_native_medaka.sh stamps the
 -- compiler-source fingerprint into the binary (surfaced by the `buildFingerprint`
--- extern); here we recompute the SAME fingerprint over the
--- LIVE <root>/compiler and <root>/stdlib and warn on a mismatch.  MEDAKA_STRICT=1 promotes the
--- warning to a hard error.  Runs on every invocation, so it is gated TIGHTLY:
+-- extern); here we recompute the SAME fingerprint over the LIVE <root>/compiler
+-- and <root>/stdlib and warn on a mismatch.  MEDAKA_STRICT=1 promotes the warning
+-- to a hard error.  Runs on every invocation, so it is gated TIGHTLY:
 -- only when a stamp was baked AND <root>/compiler is present (a shipped binary
 -- has neither).
 --

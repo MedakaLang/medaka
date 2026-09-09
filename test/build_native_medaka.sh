@@ -99,11 +99,22 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # pcg_discover, and MEDAKA_LLVM_BINDIR there for a toolchain it would not find).
 #
 # Partitioning by MODULE rather than by round-robin function (issue #2727) makes a
-# partition's bytes depend only on the modules in it, so a one-line edit to
-# compiler/tools/lint.mdk leaves every other partition BYTE-IDENTICAL and lld's
-# --thinlto-cache-dir serves them. Round-robin gave every partition a share of every
-# edit, and its module identifiers additionally carried the per-build `mktemp` path,
-# which put a fresh key on every entry (issue #2752, fixed by the `cd` in pcg_link).
+# partition's bytes depend only on the modules in it, so lld's --thinlto-cache-dir
+# serves every partition an edit did not touch. Measured on the stage-B IR, one
+# partition of 77 moved by each: a one-line edit to compiler/tools/lint.mdk, and a
+# one-line edit to compiler/frontend/desugar.mdk. Round-robin gave every partition a
+# share of every edit, and its module identifiers additionally carried the per-build
+# `mktemp` path, which put a fresh key on every entry (issue #2752, fixed by the `cd`).
+#
+# Two things still cost more than one partition, both by construction rather than by
+# accident. @mdk_program_main is the concatenation of every module's initializers and
+# lives in the `program` partition, so adding or removing a TOP-LEVEL binding moves
+# that partition as well as the module's own. And an edit inside the EMITTER's import
+# closure rebuilds the emitter in stage A, after which a different emitter emits
+# stage B — every module whose IR that changes is a real change, not a partitioning
+# artifact. Measured, both stages, warm cache: a lint.mdk edit wrote 7 of 117 cache
+# entries with stage A skipped; renaming a generated binder in desugar.mdk, which
+# touches every desugared `do` block in the tree, wrote 18.
 #
 # 🚨 GRANULARITY IS THE WHOLE MECHANISM, not a tuning parameter. lld keys the cache
 # on a module's import closure as well as on its own bytes, so a partition is
@@ -120,17 +131,16 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # why $MEDAKA_CODEGEN_JOBS is a separate knob: the two used to be one variable, and
 # tying the partition count to the core count is what made the cache useless.
 #
-# 🚨 NOTHING PER-BUILD MAY ENTER THE LTO UNIT, or the cache above is worthless. The
-# three build-provenance stamps used to: stage B baked them into runtime/medaka_rt.c
-# with -DMEDAKA_SRC_FP=$FP_COMPILER and friends, that fingerprint changes on ANY
-# compiler source edit, and every partition imports from the runtime, so the
-# runtime's summary hash was in every partition's key. Measured on the same
-# partitions with the same edit, varying only the define: unchanged — 4s, 5 entries
-# written, 68 reused; changed — 23s, 73 written, 0 reused. They now live in a
-# generated three-line provenance.c compiled WITHOUT -flto (see stage B), which
-# leaves medaka_rt.c byte-identical across builds. Compiling medaka_rt.c itself
-# outside the LTO unit would have fixed the cache too and cost ~7.7% of interpreter
-# runtime over 3 interleaved reps — the trade the naive-split arm below already lost.
+# 🚨 NOTHING PER-BUILD MAY ENTER THE LTO UNIT, or the cache above is worthless.
+# Every partition imports from runtime/medaka_rt.c, so anything that changes that
+# file's summary hash changes every partition's cache key. The three build-provenance
+# stamps are the standing instance: they change on every compiler edit, so they live
+# in a generated three-line provenance.c compiled WITHOUT -flto (see stage B) and
+# medaka_rt.c stays byte-identical across builds. Measured on identical partitions
+# and one edit, varying only the fingerprint: unchanged — 4s, 5 entries written, 68
+# reused; changed — 23s, 73 written, 0 reused. Moving medaka_rt.c itself out of the
+# LTO unit fixes the cache the same way and costs ~7.7% of interpreter runtime over
+# 3 interleaved reps — the trade the naive-split arm below already lost.
 #
 # ONE BUILD PER WORKTREE IS UN-PARTITIONED BY CONSTRUCTION, and that is not a bug to
 # fix. Stage A always runs the PREVIOUS generation's emitter, so in a worktree whose
@@ -178,6 +188,15 @@ MEDAKA_PARALLEL_CODEGEN="${MEDAKA_PARALLEL_CODEGEN:-1}"
 # at 6s. Full-miss link time and interpreter runtime were both unmoved by the
 # difference (measurements under "PARALLEL CODEGEN" above).
 MEDAKA_CODEGEN_PARTS="${MEDAKA_CODEGEN_PARTS:-}"
+# 0 is not a spelling of "auto": empty already means that, so a 0 is a typo or a
+# shell variable that did not expand, and it used to reach awk as a partition count
+# of zero and die there in awk's own words. Rejected here, before anything is built.
+case "${MEDAKA_CODEGEN_PARTS:-auto}" in
+  auto) ;;
+  0|*[!0-9]*)
+    echo "MEDAKA_CODEGEN_PARTS must be empty (one partition per module scope) or an integer >= 1; got '$MEDAKA_CODEGEN_PARTS'." >&2
+    exit 1 ;;
+esac
 
 # HOW MANY concurrent jobs, which is a property of the box and NOT of the source:
 # it bounds both the partition-compile fan-out and --thinlto-jobs, two concurrency
@@ -198,8 +217,8 @@ MEDAKA_CODEGEN_JOBS="${MEDAKA_CODEGEN_JOBS:-8}"
 # directory is required at all. Untested on macOS — no Darwin box was available
 # when this was written.
 #
-# The partitioning used to need `llvm-split` too. It does not any more: pcg_partition
-# below cuts the module by its own `; mdk-module` markers, in awk.
+# The partitioning needs no tool at all: pcg_partition below cuts the module by its
+# own `; mdk-module` markers, in awk.
 PCG_NEED_LLD=1
 [ "$(uname -s)" = "Darwin" ] && PCG_NEED_LLD=0
 
@@ -749,16 +768,17 @@ trap 'rm -rf "$WORK"' EXIT
 # where <scope> is a module id (`frontend_lexer`), an impl-group key (`impl:List_eq`)
 # or `program` (dispatchers, interface defaults, @mdk_program_main, the $memo
 # forcers). Scopes are NOT contiguous in the text, so this bins by marker and never
-# by position. Markers also appear INSIDE @mdk_program_main's body, one per module's
-# global initializer, so only a marker seen at top level moves the current scope —
-# hence the `define`/`}` state machine.
+# by position. Only a marker at TOP LEVEL moves the current scope, which is what the
+# `define`/`}` state machine is for: a marker inside a function body would be a
+# comment about an instruction, and acting on it would split a define from its own
+# scope. The emitter currently emits none there, and this does not rely on that.
 #
 # A partition's bytes then depend only on the modules IN it, so editing one module
 # leaves the other partitions byte-identical and the ThinLTO cache can serve them —
 # but only if the changed partition is not an importer of most of the rest, which is
 # why the default is one module per partition rather than a handful of big ones. It
-# also isolates @mdk_program_main, which carries an initializer for every module and
-# therefore changes on almost any edit.
+# also isolates @mdk_program_main, which concatenates every module's initializers and
+# therefore moves whenever any module gains or loses a top-level binding.
 #
 # Two things a text split has to do that llvm-split did in the IR:
 #   * local-linkage globals (`private` string constants, `internal` closure records)
@@ -774,9 +794,9 @@ trap 'rm -rf "$WORK"' EXIT
 # The `; mdk-module` markers themselves are dropped: 3.7% of the IR text, and clang
 # does not need them.
 #
-# An input with no markers is a hard failure. It can only mean the emitter that
-# produced it predates them, and the alternative — one partition holding everything
-# and seven holding the preamble — would duplicate every definition n times.
+# Both halves of that promise depend on every entity carrying a marker: an entity
+# that reached the preamble instead would be BROADCAST, i.e. defined n times over.
+# That is why an unreadable marker is refused rather than skipped.
 pcg_partition() {
   awk -v PARTS="$3" -v DIR="$2" '
   # The type of a global, as the balanced prefix of the text after `constant`/
@@ -801,8 +821,8 @@ pcg_partition() {
     if (markers == 0) { DEG = 1; NPARTS = 1; part[""] = 0; OF[0] = DIR "/p0"; return }
     if (PARTS == "") {
       # Derived: a partition per module scope. An `impl:` group joins the module
-      # before it — impl groups are numerous (337 of the CLI IR s 411 scopes) and
-      # tiny, and the module they follow is the one whose edit moves them.
+      # before it — impl groups are numerous: 337 of the 414 scopes in the CLI IR,
+      # and tiny, and the module they follow is the one whose edit moves them.
       p = -1
       for (i = 1; i <= nord; i++) {
         s = ord[i]
@@ -833,14 +853,30 @@ pcg_partition() {
     part[""] = 0
     for (i = 0; i < NPARTS; i++) OF[i] = DIR "/p" i
   }
-  function emit(l,   i, s, sym) {
-    if (tp < 0) { for (i = 0; i < NPARTS; i++) print l > OF[i]; return }
-    print l > OF[tp]
+  # ONE output file open at a time. A partition per module means ~77 of them, and
+  # one-true-awk (the /usr/bin/awk of older macOS) caps simultaneous output
+  # redirections near 17 — writing to the 18th is a runtime error, not a slow path.
+  # Lines arrive in scope order, so switching costs one close per marker.
+  function put(f, l) {
+    if (f != curf) { if (curf != "") close(curf); curf = f }
+    if (f in opened) print l >> f
+    else { print l > f; opened[f] = 1 }
+  }
+  function emit(l,   s, sym) {
+    # The preamble belongs to every partition. Buffered rather than broadcast, so
+    # it costs one append per partition at END instead of NPARTS open files here.
+    if (tp < 0) { pre[++npre] = l; return }
+    put(OF[tp], l)
     if (index(l, "@")) {
       s = l
       while (match(s, /@[-a-zA-Z$._0-9]+/)) {
         sym = substr(s, RSTART, RLENGTH)
-        ref[tp, sym] = 1
+        # Remember the ORDER of first reference, not just the fact of it. The
+        # declarations below are written in this order, so the partition bytes do not
+        # depend on which awk ran: `for (k in ref)` is hash order, and gawk, mawk and
+        # busybox awk each give a different one — which would give the same source
+        # three different sets of ThinLTO cache keys.
+        if (!((tp, sym) in ref)) { ref[tp, sym] = 1; rlist[tp, ++rn[tp]] = sym }
         s = substr(s, RSTART + RLENGTH)
       }
     }
@@ -890,7 +926,7 @@ pcg_partition() {
     if (!assigned) { assign(); assigned = 1 }
     # Degraded: one partition, byte-identical to the input. No linkage promotion and
     # no synthesized declarations, because nothing crosses a partition boundary.
-    if (DEG) { print > OF[0]; next }
+    if (DEG) { put(OF[0], $0); next }
     if (ind) { emit($0); if ($0 ~ /^\}/) ind = 0; next }
     if ($0 ~ /^; mdk-module($| )/) {
       cur = substr($0, 14)
@@ -905,12 +941,21 @@ pcg_partition() {
 
   END {
     if (bad) exit 1
+    if (curf != "") { close(curf); curf = "" }
     if (DEG) { print "1 nomark"; exit 0 }
-    for (k in ref) {
-      split(k, A, SUBSEP); q = A[1] + 0; sym = A[2]
-      if (!(sym in owner)) continue
-      if (part[owner[sym]] == q) continue
-      print decl[sym] > OF[q]
+    # One pass per partition, each opening its file once: the preamble it shares with
+    # every other partition, then a declaration for each symbol it references but does
+    # not define, in first-reference order.
+    for (q = 0; q < NPARTS; q++) {
+      if (!(OF[q] in opened)) { printf "" > OF[q]; opened[OF[q]] = 1 }
+      for (i = 1; i <= npre; i++) print pre[i] >> OF[q]
+      for (i = 1; i <= rn[q]; i++) {
+        sym = rlist[q, i]
+        if (!(sym in owner)) continue
+        if (part[owner[sym]] == q) continue
+        print decl[sym] >> OF[q]
+      }
+      close(OF[q])
     }
     print NPARTS " mod"
   }
@@ -1144,15 +1189,17 @@ else
   fi
   if [ "$PCG_MODE_USED" != "$PCG_MODE" ]; then
     echo "stage A: this emitter emits no \`; mdk-module\` markers (it predates them), so its IR"
-    echo "         was NOT partitioned — one ThinLTO module, no partition parallelism, and its own"
-    echo "         build-cache key. The emitter this stage just built does emit them, so stage B"
-    echo "         and every later build partition normally."
-    EMITTER_KEY="$(emitter_key_for "$PCG_MODE_USED")"
+    echo "         was NOT partitioned — one ThinLTO module and no partition parallelism, and this"
+    echo "         binary is not cached. The emitter this stage just built does emit them, so"
+    echo "         stage B and every later build partition normally."
+    # NOT cached: the key is chosen before any IR exists, so no cache_get ever asks
+    # for a nomark one. Storing it could only evict a servable entry from the eight.
+    EMITTER_KEY=""
   fi
   echo "stage A: link done ($PCG_MODE_USED${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_A_T0 ))s)."
   mv "$EMIT_NEW" "$EMITTER"
   echo "stage A: rebuilt $EMITTER from current source ($PCG_MODE_USED, $(( $(date +%s) - STAGE_A_T0 ))s for emit + link)."
-  cache_put "$EMITTER_KEY" "$EMITTER"
+  [ -n "$EMITTER_KEY" ] && cache_put "$EMITTER_KEY" "$EMITTER"
 fi
 
 # ---- STAGE B (WARM): the (fresh) emitter emits the medaka_cli graph -> ./medaka --
@@ -1206,11 +1253,11 @@ else
   # link after a source edit — see "PARALLEL CODEGEN" above.)
   # (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
   CLI_OPT="${CLI_OPT:--O2}"
-  # STALENESS STAMP (issue #89): bake the COMPILER-source fingerprint into ./medaka
+  # STALENESS STAMP (issue #89): stamp the COMPILER-source fingerprint into ./medaka
   # so the CLI can warn when it is run against a NEWER compiler/ than it was built
-  # from.  The -D hits ONLY this C compile of medaka_rt.c — never the emitter IR —
-  # so it is fixpoint/seed-safe (the text IR is produced before clang runs).  We bake
-  # FP_COMPILER (compiler/**.mdk + stdlib/**.mdk), NOT FP_FULL: the driver's
+  # from.  It reaches the binary through the provenance object below — never the
+  # emitter IR, which is produced before any clang runs — so it is fixpoint/seed-safe.
+  # We stamp FP_COMPILER (compiler/**.mdk + stdlib/**.mdk), NOT FP_FULL: the driver's
   # `liveSourceFingerprint` (compiler/driver/medaka_cli.mdk) recomputes the SAME
   # file set as a hash at runtime and hard-fails a mismatch under MEDAKA_STRICT,
   # so the baked value must stay byte-for-byte identical to that live computation.
@@ -1262,13 +1309,13 @@ else
     fi
   fi
   if [ "$PCG_MODE_USED" != "$PCG_MODE" ]; then
-    echo "stage B: emitter IR carries no \`; mdk-module\` markers — un-partitioned, own cache key."
-    CLI_KEY="$(cli_key_for "$PCG_MODE_USED")"
+    echo "stage B: emitter IR carries no \`; mdk-module\` markers — un-partitioned, not cached."
+    CLI_KEY=""
   fi
   echo "stage B: link done ($PCG_MODE_USED${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_B_T0 ))s)."
   mv "$OUT_NEW" "$OUT"
   echo "stage B: built $OUT ($PCG_MODE_USED, $(( $(date +%s) - STAGE_B_T0 ))s for emit + link)."
-  cache_put "$CLI_KEY" "$OUT"
+  [ -n "$CLI_KEY" ] && cache_put "$CLI_KEY" "$OUT"
 fi
 
 # Record WHICH SOURCE this emitter was built from — FP_FULL (compiler + runtime), so

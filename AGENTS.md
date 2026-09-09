@@ -366,11 +366,13 @@ CODEGEN" in `test/build_native_medaka.sh`), each with `time sh test/build_native
   - **cold, cache forced off** (no `./medaka`/`./medaka_emitter` present, forcing the seed
     bootstrap) — **89s** with a warm ThinLTO cache. `test/bootstrap_from_seed.sh` still links
     the seed and `emitter2` with plain `clang -O2`, which is where that time goes.
-  ⚠️ A one-module edit costs the floor (partitioning + the partition compiles, ~11s) plus the
-  edited partition and its importers — **15s of stage-B link, 5 of 73 ThinLTO cache entries
-  rewritten**, measured on a one-line `compiler/tools/lint.mdk` change. Anything per-build that
-  reaches the LTO unit destroys that: the build-provenance stamps did until they moved to their
-  own non-LTO translation unit, and cost all 73 entries and 33s while they did. Keep them out.
+  ⚠️ A one-module edit costs the floor (partitioning + the partition compiles) plus the edited
+  partition and its importers. Measured, warm cache, one-line edits: `compiler/tools/lint.mdk`
+  — **19s of stage-B link against a 14s no-edit floor, 7 of 117 ThinLTO cache entries
+  rewritten**; `compiler/frontend/desugar.mdk` — 18 entries, and stage A legitimately rebuilds
+  because it is in the emitter's closure. Anything per-build that reaches the LTO unit destroys
+  this: the build-provenance stamps did until they moved to their own non-LTO translation unit,
+  and cost every entry while they did. Keep them out.
 So the worst case is a few minutes, not the stale "~31s" figure, which is off by an order of
 magnitude. Cold exceeds warm-forced by the seed bootstrap, the only ordering physically
 possible; a cold figure BELOW the warm-forced one means the cache or an existing emitter was

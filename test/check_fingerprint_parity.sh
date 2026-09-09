@@ -6,8 +6,9 @@
 # WHY THIS GATE EXISTS. test/build_native_medaka.sh's src_fingerprint_compiler()
 # hashes `find compiler -name '*.mdk' -not -name '*_test.mdk' -print | LC_ALL=C sort`
 # (names AND contents, via a `while read f; do printf ...; cat "$f"; done` shell
-# loop) and bakes the
-# result into ./medaka as -DMEDAKA_SRC_FP. compiler/driver/medaka_cli.mdk's
+# loop) and stamps the
+# result into ./medaka through its generated provenance object.
+# compiler/driver/medaka_cli.mdk's
 # `liveSourceFingerprint` REIMPLEMENTS that exact same algorithm (same find/sort,
 # same hash_stream chain) in a one-shot perl one-liner for speed, and compares its
 # live result against the baked value on every `./medaka` invocation

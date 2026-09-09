@@ -591,8 +591,9 @@ checks is just a suggestion, so the gate regenerates it and fails if it differs.
 
 `test/build_native_medaka.sh`'s `src_fingerprint_compiler()` (shell/cat-based) and
 `compiler/driver/medaka_cli.mdk`'s `liveSourceFingerprint` (perl-based) are two hand-synced
-reimplementations of the same hashing algorithm — one bakes `-DMEDAKA_SRC_FP` into `./medaka` at
-build time, the other recomputes it live on every invocation and hard-fails a mismatch under
+reimplementations of the same hashing algorithm — one stamps the value into `./medaka` at build
+time (through the generated provenance object stage B links), the other recomputes it live on
+every invocation and hard-fails a mismatch under
 `MEDAKA_STRICT=1`. #182's first attempt broke exactly this mirror and only human review (PR #263)
 caught it — no gate proved the two still agreed. `test/check_fingerprint_parity.sh` re-exercises
 the just-built `./medaka`'s own staleness self-check, under `MEDAKA_STRICT=1`, on the exact tree

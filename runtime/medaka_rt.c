@@ -1819,17 +1819,18 @@ long long mdk_executable_path(long long unit_ignored) {
  * every path that links no such object gets: the cold seed bootstrap, the
  * emitter, oracle builds, `medaka build`, a shipped or relocated binary.
  *
- * WEAK GLOBALS AND A SEPARATE TRANSLATION UNIT, not the -D defines this used to
- * take, because the value changes on every compiler edit and this file is inside
- * the ThinLTO unit: a define baked here changed the runtime's summary hash, which
- * sits in the cache key of every partition that imports from the runtime, i.e.
- * all of them. Measured, same partitions and same one-module edit, varying only
- * the fingerprint: unchanged 4s and 5 of 73 cache entries written; changed 23s
- * and all 73. Compiling this file outside the LTO unit instead would also fix
- * the cache and cost ~7.7% of interpreter runtime. Weak-vs-strong is resolved by
- * the linker before LTO runs — the bitcode symbol is marked preempted, so LTO
- * cannot fold the "" away — and holds for lld and for Apple's ld alike, so
- * there is no platform arm here.
+ * WEAK GLOBALS AND A SEPARATE TRANSLATION UNIT, never a -D on this file, because
+ * the value changes on every compiler edit and this file is inside the ThinLTO
+ * unit: a value baked in here moves the runtime's summary hash, which sits in the
+ * cache key of every partition that imports from the runtime, i.e. all of them.
+ * Measured, same partitions and same one-module edit, varying only the
+ * fingerprint: unchanged 4s and 5 of 73 cache entries written; changed 23s and
+ * all 73. Compiling this file outside the LTO unit instead would also fix the
+ * cache and cost ~7.7% of interpreter runtime. Weak-vs-strong is resolved by the
+ * linker before LTO runs — the bitcode symbol is marked preempted, so LTO cannot
+ * fold the "" away. Measured with lld; taken on faith for Apple's ld, which
+ * documents the same precedence but was never run (no Darwin box), so a `medaka
+ * --version` with no commit on macOS is the symptom to look for.
  *
  * These are ARRAYS, not pointers, and the strong definitions may be longer: a
  * string object takes its defining TU's size, which is the ordinary C spelling
