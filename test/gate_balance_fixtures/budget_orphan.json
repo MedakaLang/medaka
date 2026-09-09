@@ -1,0 +1,11 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_budget.sh. Hand-written, not ingested. 'tidy' matches the registry and measures 10.0s, well inside the cheap-class ceiling; 'ghost' is a cost row for a gate no [[gate]] entry in the paired registry declares -- clause (d)'s orphan.",
+  "generated": "2026-09-08T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "tidy", "medianMs": 10000, "samples": 1, "ms": [10000]},
+    {"name": "ghost", "medianMs": 5000, "samples": 1, "ms": [5000]}
+  ]
+}
