@@ -33,26 +33,26 @@ semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
 
 | Collection | Record | Call sites (lookupAssoc/lookupTab/contains) | Suggested container |
 |---|---|---|---|
-| `perRun.dataParamKindsRef` | PerRun | 8 (lookupTab) | `OrdMap` (String-keyed via `TabKey`) |
-| `perRun.shadowStandaloneSchemesRef` | PerRun | 9 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `perRun.definerShadowNamesRef` | PerRun | 8 (contains) + 1 field decl | `HashSet` |
-| `perRun.definerShadowSigsRef` | PerRun | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `perRun.aliasTableRef` | PerRun | 5 (lookupTab) + 1 field decl | `OrdMap` |
-| `driverState.standaloneValuesRef` | DriverState | 4 (contains) + 1 field decl | `HashSet` |
-| `driverState.mangledShadowMapRef` | DriverState | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `perRun.currentImportDefinersRef` | PerRun | 2 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `perRun.dataParamPolarityRef` | PerRun | 2 (lookupTab) + 1 field decl | `OrdMap` |
-| `perRun.dataParamRowAtomsRef` | PerRun | 1 (lookupTab) + 1 field decl | `OrdMap` |
-| `perRun.rigidEffvarsRef` | PerRun | 1 (contains) + 1 field decl | `HashSet` |
-| `perRun.promotedRef` | PerRun | 1 (dedup) + 1 field decl | n/a — dedup, not lookup; `HashSet`-backed dedup if hot |
-| `perRun.funConstraintDeclaredRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `perRun.currentImportOriginsRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `driverState.userIfaceNamesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
-| `driverState.stdlibOwnedModsRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
-| `driverState.promotionHarvestRef` | DriverState | 1 (dedup) + 1 field decl | n/a — dedup |
-| `driverState.abstractRecordTypesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
+| `dataParamKindsRef` | PerRun | 8 (lookupTab) | `OrdMap` (String-keyed via `TabKey`) |
+| `shadowStandaloneSchemesRef` | PerRun | 9 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `definerShadowNamesRef` | PerRun | 8 (contains) + 1 field decl | `HashSet` |
+| `definerShadowSigsRef` | PerRun | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `aliasTableRef` | PerRun | 5 (lookupTab) + 1 field decl | `OrdMap` |
+| `standaloneValuesRef` | DriverState | 4 (contains) + 1 field decl | `HashSet` |
+| `mangledShadowMapRef` | DriverState | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `currentImportDefinersRef` | PerRun | 2 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `dataParamPolarityRef` | PerRun | 2 (lookupTab) + 1 field decl | `OrdMap` |
+| `dataParamRowAtomsRef` | PerRun | 1 (lookupTab) + 1 field decl | `OrdMap` |
+| `rigidEffvarsRef` | PerRun | 1 (contains) + 1 field decl | `HashSet` |
+| `promotedRef` | PerRun | 1 (dedup) + 1 field decl | n/a — dedup, not lookup; `HashSet`-backed dedup if hot |
+| `funConstraintDeclaredRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `currentImportOriginsRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `userIfaceNamesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
+| `stdlibOwnedModsRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
+| `promotionHarvestRef` | DriverState | 1 (dedup) + 1 field decl | n/a — dedup |
+| `abstractRecordTypesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
 | module list (`modules`/`allModules`/`modPaths`) | (loader/typecheck/resolve param) | 4 (lookupAssoc-family) | `OrdMap` keyed by module id |
-| **= #2724**: `graphRun.goals` via `moduleWindow`'s `listLen` | GraphRun | see below, not part of the lookupAssoc/contains/Ref(List sweeps — `listLen` shape | tracked by #2724 (counter instead of `listLen`) |
+| **= #2724**: `goals` via `moduleWindow`'s `listLen` | GraphRun | see below, not part of the lookupAssoc/contains/Ref(List sweeps — `listLen` shape | tracked by #2724 (counter instead of `listLen`) |
 | **= #2724**: `allModules` in `dictPassModulesScoped` → `transitiveImporterDecls` | (typecheck.mdk param) | see below | `OrdMap`/precomputed importer index |
 
 Remaining `DriverState`/`GraphRun`/`PerRun` fields that are `Ref (List …)`-typed but not
@@ -185,9 +185,9 @@ Every scan found across all four shapes above is **first-wins**: `lookupAssoc`,
 `lookupTab`, and the hand-rolled `List` scans all fold from the head, and every
 run-wide channel is prepended-to (`x.value := v :: x.value`, per the `PerRun` comment
 at `compiler/types/typecheck.mdk:9316` on why fields stay `Ref`s), so "first match in
-the list" means "most recently pushed." Converting one of these to `OrdMap.insert`
+the list" means "most recently pushed." Converting one of these to `omInsert`
 (last-wins on `insert`) would invert the answer — the replacement needs an
-insert-if-absent (`omInsertWith` keeping the existing value, or push in reverse) to
+insert-if-absent (an `omHasKey` guard keeping the existing value, or push in reverse) to
 preserve semantics.
 
 The one place BOTH keying directions coexist in `typecheck.mdk` is unrelated to any
@@ -533,19 +533,19 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:2884 | Ref (List | route-stamp carrier | per-decl (default) | Ref accumulator | n/a | per-obligation route carrier, heuristic |
 | compiler/types/typecheck.mdk:5773 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:6730 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:7257 | Ref (List | `DriverState.effectDomains` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7262 | Ref (List | `DriverState.abstractRecordTypesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7263 | Ref (List | `DriverState.argDispatchIdxByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7264 | Ref (List | `DriverState.dictEligibleRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7266 | Ref (List | `DriverState.mangledShadowMapRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7268 | Ref (List | `DriverState.userIfaceNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7269 | Ref (List | `DriverState.coherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7270 | Ref (List | `DriverState.stdlibOwnedModsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7273 | Ref (List | `DriverState.superDeclsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7274 | Ref (List | `DriverState.standaloneValuesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7275 | Ref (List | `DriverState.methodDispatchIdxByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7277 | Ref (List | `DriverState.matchWarnings` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7278 | Ref (List | `DriverState.promotionHarvestRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7257 | Ref (List | `effectDomains` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7262 | Ref (List | `abstractRecordTypesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7263 | Ref (List | `argDispatchIdxByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7264 | Ref (List | `dictEligibleRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7266 | Ref (List | `mangledShadowMapRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7268 | Ref (List | `userIfaceNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7269 | Ref (List | `coherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7270 | Ref (List | `stdlibOwnedModsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7273 | Ref (List | `superDeclsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7274 | Ref (List | `standaloneValuesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7275 | Ref (List | `methodDispatchIdxByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7277 | Ref (List | `matchWarnings` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7278 | Ref (List | `promotionHarvestRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7526 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:8050 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:8077 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
@@ -564,41 +564,41 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:8440 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:8513 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:8608 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:9136 | Ref (List | `GraphRun.goals` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9140 | Ref (List | `GraphRun.numlitRefs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9141 | Ref (List | `GraphRun.activeDictVars` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9150 | Ref (List | `GraphRun.moduleRanges` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9154 | Ref (List | `GraphRun.stampCtxs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9136 | Ref (List | `goals` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9140 | Ref (List | `numlitRefs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9141 | Ref (List | `activeDictVars` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9150 | Ref (List | `moduleRanges` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9154 | Ref (List | `stampCtxs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9304 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:9328 | Ref (List | `PerRun.rigidEffvarsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9331 | Ref (List | `PerRun.dataParamKindsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9333 | Ref (List | `PerRun.dataParamPolarityRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9334 | Ref (List | `PerRun.dataParamRowAtomsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9335 | Ref (List | `PerRun.aliasTableRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9336 | Ref (List | `PerRun.shadowStandaloneSchemesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9337 | Ref (List | `PerRun.ifaceMethodSchemesByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9340 | Ref (List | `PerRun.definerShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9341 | Ref (List | `PerRun.definerShadowSigsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9348 | Ref (List | `PerRun.poisonedVars` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9349 | Ref (List | `PerRun.deferrableVarIds` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9350 | Ref (List | `PerRun.tupleCallCandidates` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9351 | Ref (List | `PerRun.numlitVarLocs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9352 | Ref (List | `PerRun.numlitUntainted` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9353 | Ref (List | `PerRun.numlitOpLocs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9354 | Ref (List | `PerRun.numlitCtxTags` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9355 | Ref (List | `PerRun.localBindRefs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9356 | Ref (List | `PerRun.localSchemesOut` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9357 | Ref (List | `PerRun.seedSchemesOut` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9358 | Ref (List | `PerRun.funPredicateSlotsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9359 | Ref (List | `PerRun.funConstraintDeclaredRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9360 | Ref (List | `PerRun.currentImportDefinersRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9361 | Ref (List | `PerRun.currentImportOriginsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9368 | Ref (List | `PerRun.schemeObligationsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9373 | Ref (List | `PerRun.methodPredicateSlotsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9379 | Ref (List | `PerRun.promotedRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9383 | Ref (List | `PerRun.flatUserShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9384 | Ref (List | `PerRun.groupConstraintMonosRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9400 | Ref (List | `PerRun.pinnedLocals` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9328 | Ref (List | `rigidEffvarsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9331 | Ref (List | `dataParamKindsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9333 | Ref (List | `dataParamPolarityRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9334 | Ref (List | `dataParamRowAtomsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9335 | Ref (List | `aliasTableRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9336 | Ref (List | `shadowStandaloneSchemesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9337 | Ref (List | `ifaceMethodSchemesByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9340 | Ref (List | `definerShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9341 | Ref (List | `definerShadowSigsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9348 | Ref (List | `poisonedVars` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9349 | Ref (List | `deferrableVarIds` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9350 | Ref (List | `tupleCallCandidates` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9351 | Ref (List | `numlitVarLocs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9352 | Ref (List | `numlitUntainted` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9353 | Ref (List | `numlitOpLocs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9354 | Ref (List | `numlitCtxTags` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9355 | Ref (List | `localBindRefs` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9356 | Ref (List | `localSchemesOut` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9357 | Ref (List | `seedSchemesOut` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9358 | Ref (List | `funPredicateSlotsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9359 | Ref (List | `funConstraintDeclaredRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9360 | Ref (List | `currentImportDefinersRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9361 | Ref (List | `currentImportOriginsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9368 | Ref (List | `schemeObligationsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9373 | Ref (List | `methodPredicateSlotsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9379 | Ref (List | `promotedRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9383 | Ref (List | `flatUserShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9384 | Ref (List | `groupConstraintMonosRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9400 | Ref (List | `pinnedLocals` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:10427 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:10428 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:10429 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
@@ -1135,20 +1135,20 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | file:line | shape | collection | class | container | keying | note |
 |---|---|---|---|---|---|---|
 | compiler/frontend/exhaust.mdk:263 | lookupTab | `oracle.typeCtors` | per-module | persistent value | first-wins (linear scan) | one module's exhaustiveness oracle |
-| compiler/types/typecheck.mdk:1505 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:2057 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:2386 | lookupTab | `PerRun.aliasTableRef` | graph | Ref accumulator | first-wins | run-wide alias table |
-| compiler/types/typecheck.mdk:2390 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:9734 | lookupTab | `PerRun.dataParamPolarityRef` (via `tab` param) | graph | persistent value (passed as arg) | first-wins | "graph-wide seed builder … per-run reader" per adjoining comment |
-| compiler/types/typecheck.mdk:9740 | lookupTab | `PerRun.dataParamRowAtomsRef` | graph | Ref accumulator | first-wins | run-wide row-atom table |
-| compiler/types/typecheck.mdk:10627 | lookupTab | `PerRun.aliasTableRef` | graph | Ref accumulator | first-wins | run-wide alias table |
-| compiler/types/typecheck.mdk:10750 | lookupTab | `PerRun.aliasTableRef` | graph | Ref accumulator | first-wins | run-wide alias table |
-| compiler/types/typecheck.mdk:10760 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:10770 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:10989 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:11068 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:17534 | lookupTab | `PerRun.dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
-| compiler/types/typecheck.mdk:17945 | lookupTab | `PerRun.dataParamPolarityRef` | graph | Ref accumulator | first-wins | run-wide polarity table |
-| compiler/types/typecheck.mdk:32858 | lookupTab | `PerRun.aliasTableRef` (via `aliases` param) | graph | persistent value (passed as arg) | first-wins | comment at line ~32850 names the source as "the current module's `perRun.aliasTableRef`" |
-| compiler/types/typecheck.mdk:32864 | lookupTab | `PerRun.aliasTableRef` (via `aliases` param) | graph | persistent value (passed as arg) | first-wins | see 32858 |
+| compiler/types/typecheck.mdk:1505 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:2057 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:2386 | lookupTab | `aliasTableRef` | graph | Ref accumulator | first-wins | run-wide alias table |
+| compiler/types/typecheck.mdk:2390 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:9734 | lookupTab | `dataParamPolarityRef` (via `tab` param) | graph | persistent value (passed as arg) | first-wins | "graph-wide seed builder … per-run reader" per adjoining comment |
+| compiler/types/typecheck.mdk:9740 | lookupTab | `dataParamRowAtomsRef` | graph | Ref accumulator | first-wins | run-wide row-atom table |
+| compiler/types/typecheck.mdk:10627 | lookupTab | `aliasTableRef` | graph | Ref accumulator | first-wins | run-wide alias table |
+| compiler/types/typecheck.mdk:10750 | lookupTab | `aliasTableRef` | graph | Ref accumulator | first-wins | run-wide alias table |
+| compiler/types/typecheck.mdk:10760 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:10770 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:10989 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:11068 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:17534 | lookupTab | `dataParamKindsRef` | graph | Ref accumulator | first-wins | run-wide kind table |
+| compiler/types/typecheck.mdk:17945 | lookupTab | `dataParamPolarityRef` | graph | Ref accumulator | first-wins | run-wide polarity table |
+| compiler/types/typecheck.mdk:32858 | lookupTab | `aliasTableRef` (via `aliases` param) | graph | persistent value (passed as arg) | first-wins | comment at line ~32850 names the source as "the current module's `aliasTableRef`" |
+| compiler/types/typecheck.mdk:32864 | lookupTab | `aliasTableRef` (via `aliases` param) | graph | persistent value (passed as arg) | first-wins | see 32858 |
 | compiler/types/typecheck.mdk:34009 | lookupTab | `PerRun.*` table (via `tab` param, unresolved to a single field without more reading) | graph (tentative) | persistent value (passed as arg) | first-wins | not individually verified past the naming convention |
