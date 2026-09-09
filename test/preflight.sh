@@ -956,6 +956,25 @@ while IFS= read -r f; do
       # shape check for it lives here too.
       add 'diff_compiler_tier_drift'
       add 'diff_compiler_check*' ;;
+    # S-gate-registry (#2735): gate_registry.mdk holds the schema types,
+    # migration/kind/tiers vocab, the TOML reader, the matrix rows, glob/
+    # selector matching and the JSON/text renderers that gate_cmd.mdk's
+    # verify/explain/ci/balance/coverage/help/reject-floor machinery all read
+    # through, so it mirrors that arm's gate set rather than a hand-picked
+    # subset — the split moved code between two files, not between concerns.
+    # Same shadowing rule as gate_cmd.mdk above — it is also an ordinary
+    # compiler/tools/*.mdk file, so it must keep the catch-all's
+    # `diff_compiler_check*` line or this arm silently narrows it away.
+    compiler/tools/gate_registry.mdk)
+      add 'diff_compiler_gate_registry'
+      add 'diff_compiler_ci_gen_drift'
+      add 'diff_compiler_ci_shard_coverage'
+      add 'diff_compiler_prose_classifier'
+      add 'diff_compiler_gate_balance'
+      add 'diff_compiler_cli_help_conformance'
+      add 'diff_compiler_cli_reject_floor'
+      add 'diff_compiler_tier_drift'
+      add 'diff_compiler_check*' ;;
     # #2178 (S-3-S-balancer): the cost-baseline READER the balancer joins on.
     # Same shadowing rule as gate_cmd.mdk above — it is also an ordinary
     # compiler/tools/*.mdk file, so it must keep the catch-all's
