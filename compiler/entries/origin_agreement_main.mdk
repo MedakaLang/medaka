@@ -47,9 +47,9 @@
 --                                            reach a top-level binding's type.)
 --   single  elaborateModules … [(id, …)]      `medaka test <file>`
 --                                            (compiler/tools/test_cmd.mdk's
---                                            `runSingle`/`runPropsSingle`/
---                                            `runTestDeclsSingle`/
---                                            `propsReportSingle` — NOT the
+--                                            prelude-only arms: `runChosen`'s
+--                                            `DtSingle` clause and
+--                                            `prepareSingle` — NOT the
 --                                            snapshot driver, `tools/snapshot.mdk`,
 --                                            which has its own SEPARATE
 --                                            `"__user__"` call site, untouched by
@@ -361,8 +361,8 @@ flatSlot mid _ = mid
 --
 -- Fixed (#1526 blocker 2, PREFERRED remedy — call the driver, don't model it):
 -- this arm now calls `tools.test_cmd.singleRootId` DIRECTLY — the SAME exported
--- function `runSingle`/`runPropsSingle`/`runTestDeclsSingle`/`propsReportSingle`
--- call — over roots freshly derived from the module's OWN file path
+-- function every prelude-only arm (`runChosen`'s `DtSingle` clause,
+-- `prepareSingle`) calls — over roots freshly derived from the module's OWN file path
 -- (`entrySearchRoots (dirOf path) ++ [stdlibDir]`, mirroring `medaka_cli.mdk`'s
 -- `testFilesGo`, which computes each test target's roots from THAT target's own
 -- directory) — using `mid` ONLY as the table SLOT (the probe's bookkeeping key,

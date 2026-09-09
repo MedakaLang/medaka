@@ -182,8 +182,8 @@ choice; (a) in particular is what the registry dispatch does under the hood.
 - **Engine, not language.** `tools/native_doctest.mdk` compiles a module plus
   synthesized bindings into one probe binary that prints one value per example between
   sentinels, with the abort rule; it is the template. It is not shared code: the eval arm
-  evaluates elaborated `DTest` bodies directly (`runTestDeclsSingle`,
-  `test_cmd.mdk:1082-1100`), so wave 0a writes the synth generator for `test` decls, gives
+  evaluates elaborated `DTest` bodies directly (`runTestsOn`'s `EngInterp` clauses,
+  `test_cmd.mdk`), so wave 0a writes the synth generator for `test` decls, gives
   `runTestDecls` (`:1026-1053`) an `Engine` parameter as the doctest phase has, tags the
   `test` phase's `--json` by engine, and handles the multi-module (`hasUseDecls`) path.
   `--native`/`--engines` stop being inert for the `test` phase (B §2). Sizing: medium-plus.

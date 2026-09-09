@@ -79,7 +79,7 @@ Support files:
 | `compiler/tools/lsp.mdk` | LSP/stdio: diagnostics/fmt/symbols/hover/definition/highlight/completion/inlay |
 | `compiler/tools/mcp.mdk` | `medaka mcp` — MCP stdio, 8 tools (check/type_at/symbols/definition/references/fmt/lint/test). **Prefer over grep/Bash.** `docs/ops/MCP.md` |
 | `compiler/tools/lint.mdk` | `medaka lint` — AST linter, RAW pre-desugar AST; `Rule`/`CrossFileRule`; `--fix`/`--deny`/`--disable`/`--only` |
-| `compiler/tools/doctest.mdk` | Doctest extraction. **[P-DOCTEST-RESIDUAL]** #1223 OPEN: no-import FIXED, `runMulti` (import-bearing) not — pinned `diff_compiler_origin_agreement.sh`. Derive: `grep -n 'SAME multi-module path' compiler/tools/test_cmd.mdk` |
+| `compiler/tools/doctest.mdk` | Doctest extraction. **[P-DOCTEST-RESIDUAL]** #1223 OPEN: no-import FIXED (`singleRootId` → `canonicalPathId`, last-root), import-bearing NOT — `prepareMulti` loads through `loadProgramFilesLocatedE`, which stamps the entry first-root. Pinned `diff_compiler_origin_agreement.sh`. Derive: `grep -n 'FIRST containing root' compiler/driver/loader.mdk` |
 | `compiler/tools/check.mdk` / `check_policy.mdk` | `medaka check` entry + policy checker |
 | `compiler/tools/test_cmd.mdk` / `prop_runner.mdk` | `medaka test` — doctests + property tests |
 | `compiler/tools/doc.mdk` / `new_cmd.mdk` / `repl.mdk` | `medaka doc` / `new` / `repl` |

@@ -1194,18 +1194,37 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
     Err (LoadMsg e) =>
       appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])]
     Ok mods =>
-      let seeded = seedAll (map midPath mods) []
-      let afterRes =
-        resolvePass allowInternal trustedMods runtimeP coreP omEmpty mods seeded
-      let afterTc =
-        typecheckPass
+      appendStale
+        staleRef
+        (projectDiagsLoaded
+          allowInternal
+          trustedMods
           runtimeP
           coreP
           preludeKey
           (chainKeyOf entry roots)
-          mods
-          afterRes
-      appendStale staleRef afterTc
+          mods)
+
+-- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
+-- graph the caller has already loaded.  `medaka test` loads once and calls this,
+-- rather than handing `analyzeProject` an entry it would load a second time.
+export
+projectDiagsLoaded : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  Option (Int, Int) ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Diag)
+projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
+  typecheckPass
+    runtimeP
+    coreP
+    preludeKey
+    chainKey
+    mods
+    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1359,7 +1378,10 @@ typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
 -- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
 -- `run`/`build` reach it with the diagnostics `elaborateModules` returned, so the
--- graph is rendered from ONE typecheck rather than from a second, check-only one.
+-- graph is rendered from ONE typecheck rather than from a second, check-only one;
+-- `projectDiagsFromTc` below reaches it the same way for `medaka test`.  Both
+-- drivers' diagnostics must bucket, filter and order identically, which is why
+-- there is one fold.
 -- `modPairs` is passed in rather than re-derived: `typecheckPass` needs it for the
 -- chain memo's keys, and desugaring the graph twice was the cost this split would
 -- otherwise add.
@@ -1383,6 +1405,62 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   let shadowPool = preludeStandaloneSet (runtimeP ++ coreP)
   foldModuleTc shadowPool oracleDecls modPairs mods tcByMid buckets
 
+-- Resolve a graph the caller has already loaded, bucketing each module's errors
+-- by its file.  The shared prefix of `projectDiagsLoaded` and
+-- `projectDiagsFromTc`, which differ only in where the typecheck half comes
+-- from — the two must resolve identically or their verdicts diverge on a
+-- channel that has nothing to do with typing.
+resolvedBuckets : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Diag)
+resolvedBuckets allowInternal trustedMods runtimeP coreP mods =
+  resolvePass
+    allowInternal
+    trustedMods
+    runtimeP
+    coreP
+    omEmpty
+    mods
+    (seedAll (map midPath mods) [])
+
+-- `analyzeProject` minus the load and minus the typecheck: resolve the graph the
+-- caller already loaded, then bucket the per-module typecheck diagnostics the
+-- caller already has.  `medaka test`'s no-doctest arm elaborates the graph ONCE
+-- and routes element 3 of the `elaborateModules` tuple — the same
+-- `List (String, (List TcDiag, List TcDiag))` `checkModulesDiagsChain` returns —
+-- through here, so that gate and `check`'s are resolved, bucketed and rendered
+-- by one implementation.  They accept the same programs only while the two
+-- workers pass the same impl universe; see `elaborateFor` in tools/test_cmd.mdk.
+--
+-- No stale-read machinery: the caller loads with a disk-only read, so there is
+-- no unsaved-buffer source for `analyzeProject`'s `staleRef` to collect.
+export
+projectDiagsFromTc : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, List Diag)
+projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
+  typecheckDiagsFold
+    runtimeP
+    coreP
+    mods
+    (map midToDesugaredPair mods)
+    tcByMid
+    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+
+-- The desugared `(modId, decls)` pairs `projectDiagsFromTc` will bucket against,
+-- for a caller that must hand the SAME trees to a graph driver.  Shares
+-- `desugarModule`'s source-keyed memo with the check path.
+export
+desugaredModPairs : List (String, String, List Decl) -> List (String, List Decl)
+desugaredModPairs mods = map midToDesugaredPair mods
+
 rawDeclsOfMod : (String, String, List Decl) -> List Decl
 rawDeclsOfMod (_, _, prog) = prog
 
@@ -1393,6 +1471,7 @@ midToDesugaredPair (mid, path, prog) = (mid, desugarModule path prog)
 
 -- The chain-level memo key: the entry and its roots fix how the loader resolves
 -- and rewrites every module in the graph.
+export
 chainKeyOf : String -> List String -> String
 chainKeyOf entry roots = joinNl (entry :: roots)
 
