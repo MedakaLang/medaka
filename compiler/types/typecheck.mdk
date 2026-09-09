@@ -208,6 +208,10 @@ import types.registry.{
   regEmpty,
   regInsertK,
   regLookupK,
+  -- The `TabKey` renderer, injective on both arms: what keys the two
+  -- `OrdMap`-shaped per-run tables (`dataParamKindsRef`, `dataParamRowAtomsRef`)
+  -- and their `DeclEnvs` seeds.  One renderer, not a second spelling.
+  tabKeyRender,
 }
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
@@ -1502,7 +1506,9 @@ tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
 tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+    match (omLookup
+      (tabKeyRender (tyTabKey o n))
+      perRun.value.dataParamKindsRef.value)
       Some kinds if listLen kinds == listLen args =>
         tyVarTypeOccSlots p kinds args
       _ => anyList (tyVarTypeOcc p) args
@@ -2054,7 +2060,9 @@ krowSlotOccs : List (String, List Kind) ->
   List Ty ->
   List (String, List Atom)
 krowSlotOccs scope perf o n args =
-  match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+  match (omLookup
+    (tabKeyRender (tyTabKey o n))
+    perRun.value.dataParamKindsRef.value)
     Some kinds if listLen kinds == listLen args =>
       (if perf then
           krowArgVarAtoms
@@ -2387,7 +2395,7 @@ headRemainingKinds o n nApplied
   | otherwise =
     map
       (dropFirst nApplied)
-      (lookupTab key perRun.value.dataParamKindsRef.value)
+      (omLookup (tabKeyRender key) perRun.value.dataParamKindsRef.value)
   where
     key = tyTabKey o n
 
@@ -3541,10 +3549,10 @@ data DeclEnvs = DeclEnvs {
   deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
   deImpls : ImplEnv,
   deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
-  deKindsBefore : OrdMap (List (TabKey, List Kind)),
+  deKindsBefore : OrdMap (OrdMap (List Kind)),  -- #2747: inner rows are `tabKeyRender`-keyed, folded once inside `declEnvSeedChain` — see its header for why the conversion is not per module
   deNameIndexBefore : OrdMap (OrdMap Unit),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows' `tabKeyName`s as a membership set — see `declEnvSeedChain`
   dePolaritiesBefore : OrdMap (List (TabKey, List Polarity)),  -- #1119 D-2: `deKindsBefore`'s VARIANCE twin — see `declEnvPolarityChain`
-  deAtomsBefore : OrdMap (List (TabKey, List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin — see `declEnvRowAtomsChain`
+  deAtomsBefore : OrdMap (OrdMap (List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin, `tabKeyRender`-keyed alongside it since #2747 — see `declEnvRowAtomsChain`
   deOwnersBefore : OrdMap (OrdMap (List String)),
   deOwnerModules : OrdMap (List String),  -- #1597: field-owner KEY → the module ids that declare it — see `declEnvOwnerModules`
   deReach : OrdMap (OrdMap Unit),  -- #1597: module id → its transitive `DUse` closure (itself + the prelude included) — see `declEnvReachIndex`
@@ -3588,10 +3596,10 @@ buildDeclEnvs coreDecls modules =
   let (seedKinds, seedOwners, seedNames) =
     declEnvSeedChain
       mods
-      []
       omEmpty
       omEmpty
-      (omInsert "" [] omEmpty)
+      omEmpty
+      (omInsert "" omEmpty omEmpty)
       (omInsert "" omEmpty omEmpty)
       (omInsert "" omEmpty omEmpty)
   -- #1675: BOTH definer projections come out of ONE fold.  They are derived from the
@@ -3650,7 +3658,8 @@ buildDeclEnvs coreDecls modules =
     -- not sharing.  Same ordinal-ascending walk, same "[m]'s seed is
     -- everything strictly before [m]" stamping, same `""` seed for the core
     -- pass.
-    deAtomsBefore = declEnvRowAtomsChain mods [] (omInsert "" [] omEmpty),
+    deAtomsBefore =
+      declEnvRowAtomsChain mods omEmpty (omInsert "" omEmpty omEmpty),
     deOwnersBefore = seedOwners,
     -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
     -- whole-graph and reader-independent (the reader is applied at the READ, in
@@ -4050,20 +4059,37 @@ declEnvKindEntries (_ :: rest) = declEnvKindEntries rest
 -- with the kind half rather than re-deriving the projection, which is what keeps
 -- the two provably the same rows: the name set is `kacc`'s key set by
 -- construction, not by a parallel definition that could drift.
+-- ── #2747: `kacc` IS A MAP, AND THE CONVERSION SITS HERE FOR THE SAME MEASURED
+-- REASON THE NAME ACCUMULATOR DOES ────────────────────────────────────────
+-- Every reader of `dataParamKindsRef` is a single-key lookup, so the row wants to
+-- be an `OrdMap` keyed by `tabKeyRender`.  Converting a row at the READ (in
+-- `declEnvSeedDataUniverse`) folds a list whose length grows with the module
+-- ordinal — the O(M² log M) shape `stage_ir_scaling`'s `modules:typecheck` row
+-- caught at 2.219 → 2.500 against a 2.45 ceiling.  Folding it HERE pays
+-- O(entries log entries) once for the whole graph and leaves the read a single
+-- `omLookup`, exactly as the `nacc` accumulator below does.
+--
+-- The first-match ordering the list carried is preserved, not abandoned: `kacc`
+-- used to be `kents ++ kacc` read by `lookupTab`'s FIRST match, so the newest row
+-- won on a duplicate key.  `omFromPairs` is last-write-wins, so `kents` is
+-- REVERSED before it is folded on top of `kacc` — its own head still wins within
+-- the row, and the row still wins over every earlier row.
 declEnvSeedChain : List DeclEnvModule ->
-  List (TabKey, List Kind) ->
+  OrdMap (List Kind) ->
   OrdMap (List String) ->
   OrdMap Unit ->
-  OrdMap (List (TabKey, List Kind)) ->
+  OrdMap (OrdMap (List Kind)) ->
   OrdMap (OrdMap (List String)) ->
   OrdMap (OrdMap Unit) ->
-  (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+  (OrdMap (OrdMap (List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
 declEnvSeedChain [] _ _ _ km om nm = (km, om, nm)
 declEnvSeedChain (m :: rest) kacc oacc nacc km om nm =
   let kents = declEnvRowKindEntries (m.demOrd + 1) m
   declEnvSeedChain
     rest
-    (kents ++ kacc)
+    (omFromPairs
+      (reverseL (map (p => (tabKeyRender (fst p), snd p)) kents))
+      kacc)
     (declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) oacc)
     (omFromNames (map (p => tabKeyName (fst p)) kents) nacc)
     (omInsert m.demId kacc km)
@@ -4112,15 +4138,25 @@ declEnvPolarityChain (m :: rest) pacc pm =
 -- REJECTED through the module boundary.  The direction is over-rejection, so
 -- the gap was loud rather than a launder, but it made #2110 inapplicable to
 -- every abstractly-exported wrapper.
+--
+-- #2747: the accumulator is an `OrdMap` keyed by `tabKeyRender`, folded here
+-- rather than converted per module, for `declEnvSeedChain`'s measured reason;
+-- the row's entries are reversed before the fold so `omFromPairs`' last-wins
+-- reproduces the retired `lookupTab` first-match exactly.
 declEnvRowAtomsChain : List DeclEnvModule ->
-  List (TabKey, List (List Atom)) ->
-  OrdMap (List (TabKey, List (List Atom))) ->
-  OrdMap (List (TabKey, List (List Atom)))
+  OrdMap (List (List Atom)) ->
+  OrdMap (OrdMap (List (List Atom))) ->
+  OrdMap (OrdMap (List (List Atom)))
 declEnvRowAtomsChain [] _ am = am
 declEnvRowAtomsChain (m :: rest) aacc am =
   declEnvRowAtomsChain
     rest
-    (declEnvRowAtomsEntries (m.demOrd + 1) m ++ aacc)
+    (omFromPairs
+      (reverseL
+        (map
+          (p => (tabKeyRender (fst p), snd p))
+          (declEnvRowAtomsEntries (m.demOrd + 1) m)))
+      aacc)
     (omInsert m.demId aacc am)
 
 -- The atom entries of row [m] a reader at ordinal [cur] may see — the peer of
@@ -4551,7 +4587,7 @@ declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
   perRun.value.dataParamKindsRef :=
-    optionOr [] (omLookup mid envs.deKindsBefore)
+    optionOr omEmpty (omLookup mid envs.deKindsBefore)
   -- #2158: the BARE-NAME half of the same seed, read under the same key and from
   -- the same fold (`declEnvSeedChain`'s third accumulator), so it holds exactly
   -- the `tabKeyName`s of the line above's keys by construction.
@@ -4578,7 +4614,7 @@ declEnvSeedDataUniverse mid envs =
   -- pre-#2110 behaviour, so it can only over-reject.  That is why the table
   -- shipped without a seed at all and why the gap was recoverable.
   perRun.value.dataParamRowAtomsRef :=
-    optionOr [] (omLookup mid envs.deAtomsBefore)
+    optionOr omEmpty (omLookup mid envs.deAtomsBefore)
   perRun.value.fieldOwnersRef :=
     optionOr omEmpty (omLookup mid envs.deOwnersBefore)
   perRun.value.fieldOwnerModulesRef := envs.deOwnerModules
@@ -4684,18 +4720,23 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 -- fail-capability argument, and it is by construction, not by hope:
 --   * `deSeedChainProbe` is a TWO-row chain, so the final accumulator differs
 --     from every row's prefix.  Row "m" is FIRST, so its correct seed is EMPTY
---     while the final accumulator holds both rows: 0 → 6 kinds, `[]` → two
+--     while the final accumulator holds both rows: 0 → 3 kind keys, `[]` → two
 --     owners.  Row "n" is LAST, so its correct seed is row "m" alone while the
---     final accumulator adds "n"'s own identical `Pt`: 3 → 6 kinds, and
---     `["Pt"]` → `["Pt", "Pt"]` — the doubled key itself, named.
+--     final accumulator adds "n"'s own identical `Pt`, and the OWNER assertion is
+--     what catches that: `["Pt"]` → `["Pt", "Pt"]`, the doubled key itself,
+--     named.  The KIND assertion at row "n" does NOT discriminate the wrong
+--     edit and must not be read as if it did: since #2747 the kind seed is a
+--     `tabKeyRender`-keyed map, both rows carry the SAME three keys (they share
+--     `deKindFixtureDecls`, hence the same `dataOrigin`), so 3 → 3 there.  The
+--     owner row is a multimap and still doubles; row "m"'s 0 → 3 still fires.
 --   * A ONE-row chain could not discriminate any of that (prefix and final
 --     accumulator coincide at the only row), which is why the probe carries two
 --     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
--- > listLen (optionOr [] (omLookup "m" deSeedChainKinds))
+-- > omSize (optionOr omEmpty (omLookup "m" deSeedChainKinds))
 -- 0
 -- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "m" deSeedChainOwners)))
 -- []
--- > listLen (optionOr [] (omLookup "n" deSeedChainKinds))
+-- > omSize (optionOr omEmpty (omLookup "n" deSeedChainKinds))
 -- 3
 -- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "n" deSeedChainOwners)))
 -- ["Pt"]
@@ -4730,18 +4771,18 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 deSeedRowN : DeclEnvModule
 deSeedRowN = declEnvModule 1 "n" deKindFixtureDecls
 
-deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+deSeedChainProbe : (OrdMap (OrdMap (List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
 deSeedChainProbe =
   declEnvSeedChain
     [deKindRow0, deSeedRowN]
-    []
+    omEmpty
     omEmpty
     omEmpty
     omEmpty
     omEmpty
     omEmpty
 
-deSeedChainKinds : OrdMap (List (TabKey, List Kind))
+deSeedChainKinds : OrdMap (OrdMap (List Kind))
 deSeedChainKinds =
   let (km, _, _) = deSeedChainProbe
   km
@@ -4757,18 +4798,31 @@ deSeedChainNames =
   nm
 
 -- The accumulated name set for [mid] vs. the retired rebuild, computed here off
--- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
+-- the SAME row's kind entries.  `omKeys` is sorted ascending, so this compares KEY
 -- SETS and is blind to tree shape and to insertion order — which is exactly the
 -- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
+--
+-- #2747 MOVED THE `rebuilt` SIDE'S SOURCE, AND THE MOVE IS FORCED.  It used to
+-- read `deSeedChainKinds`, which is now keyed by `tabKeyRender` — a string from
+-- which `tabKeyName` is not recoverable, and inventing a decoder for it would be
+-- the second renderer `registry.mdk` exists to prevent.  So it reads the row's
+-- kind ENTRIES through `declEnvRowKindEntries`, the SAME projection the chain
+-- itself calls to produce `kents` and the same one `nacc` is folded from; the
+-- only thing spelled out again below is WHICH rows are strictly earlier, which
+-- for this two-row probe is pinned independently by the own-row-exclusion
+-- doctests above.
+deSeedKindEntriesBefore : String -> List (TabKey, List Kind)
+deSeedKindEntriesBefore "n" =
+  declEnvRowKindEntries (deKindRow0.demOrd + 1) deKindRow0
+deSeedKindEntriesBefore _ = []
+
 deSeedNameParity : String -> Bool
 deSeedNameParity mid =
   let accumulated = omKeys (optionOr omEmpty (omLookup mid deSeedChainNames))
   let rebuilt =
     omKeys
       (omFromNames
-        (map
-          (p => tabKeyName (fst p))
-          (optionOr [] (omLookup mid deSeedChainKinds)))
+        (map (p => tabKeyName (fst p)) (deSeedKindEntriesBefore mid))
         omEmpty)
   accumulated == rebuilt
 
@@ -4857,7 +4911,7 @@ deNameIdxChain =
   let (_, _, nm) =
     declEnvSeedChain
       [deNameIdxModA, deNameIdxModB, deNameIdxModC, deNameIdxModD]
-      []
+      omEmpty
       omEmpty
       omEmpty
       omEmpty
@@ -4872,7 +4926,7 @@ deNameIdxChainNoUnrelated =
   let (_, _, nm) =
     declEnvSeedChain
       [deNameIdxModA, deNameIdxModB]
-      []
+      omEmpty
       omEmpty
       omEmpty
       omEmpty
@@ -9471,10 +9525,10 @@ data PerRun = PerRun {
   rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
   recordByNameRef : Ref (OrdMap RecordInfo),
   fieldOwnersRef : Ref (OrdMap (List String)),
-  dataParamKindsRef : Ref (List (TabKey, List Kind)),
+  dataParamKindsRef : Ref (OrdMap (List Kind)),  -- #2747: keyed by `tabKeyRender`; every reader is one `omLookup`, and the seed arrives already folded from `deKindsBefore` (see `declEnvSeedChain`).  `omInsert`'s last-write-wins IS the retired `lookupTab` first-match over the consed list — `recordParamKinds` still registers the module's own decls ON TOP of the universe.
   dataParamNameIndexRef : Ref (OrdMap Unit),  -- #2158: `tabKeyName`-only index over dataParamKindsRef's keys, kept in lockstep at every write site (freshPerRun / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test is O(1)-ish instead of an O(n) `tabHasName` scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
   dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
-  dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
+  dataParamRowAtomsRef : Ref (OrdMap (List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above, `tabKeyRender`-keyed since #2747 like the kinds half — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
   aliasTableRef : Ref (List (TabKey, (List String, Ty))),
   shadowStandaloneSchemesRef : Ref (OrdMap Scheme),
   ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1/L2: the Module arm's interface-method schemes under an identity key; read by `pickSchemesByDecl` (checkBodyImpl step 21)
@@ -9569,10 +9623,10 @@ freshPerRun _ = PerRun {
   rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
-  dataParamKindsRef = Ref [],
+  dataParamKindsRef = Ref omEmpty,
   dataParamNameIndexRef = Ref omEmpty,
   dataParamPolarityRef = Ref [],
-  dataParamRowAtomsRef = Ref [],
+  dataParamRowAtomsRef = Ref omEmpty,
   aliasTableRef = Ref [],
   shadowStandaloneSchemesRef = Ref omEmpty,
   ifaceMethodSchemesByIdRef = Ref [],
@@ -9881,7 +9935,8 @@ paramPolaritiesIn tab key
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
 -- miss (`None`) already says exactly that.
 paramRowAtomsOf : TabKey -> Option (List (List Atom))
-paramRowAtomsOf key = lookupTab key perRun.value.dataParamRowAtomsRef.value
+paramRowAtomsOf key =
+  omLookup (tabKeyRender key) perRun.value.dataParamRowAtomsRef.value
 
 -- ERROR-QUALITY.md: a distinct surface from BOTH `effectLeakMsg` (nothing is
 -- being performed here) and `indexRowMismatchMsg` (that one is about a row
@@ -10901,7 +10956,7 @@ fromAstTypeApp etbl tvs o n args =
       let kinds =
         optionOr
           (map (_ => KType) params)
-          (lookupTab key perRun.value.dataParamKindsRef.value)
+          (omLookup (tabKeyRender key) perRun.value.dataParamKindsRef.value)
       let bound = aliasArgBindings etbl tvs params kinds args
       fromAstTypeE (fst bound ++ etbl) (snd bound ++ tvs) rhs
     -- Alias applied to the wrong arity: reject, keep the opaque fallback.
@@ -10911,7 +10966,7 @@ fromAstTypeApp etbl tvs o n args =
           "T-ALIAS-ARITY"
           (aliasArityMsg n (listLen params) (listLen args))
       appFallback etbl tvs o n args
-    _ => match lookupTab key perRun.value.dataParamKindsRef.value
+    _ => match omLookup (tabKeyRender key) perRun.value.dataParamKindsRef.value
       Some kinds if listLen kinds == listLen args =>
         foldAppKinds etbl tvs (tconFrom o n) kinds args
       _ => appFallback etbl tvs o n args
@@ -11130,7 +11185,9 @@ rowArgNamesApp : List (String, List Kind) ->
   List String ->
   List String
 rowArgNamesApp scope o n args fallback =
-  match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+  match (omLookup
+    (tabKeyRender (tyTabKey o n))
+    perRun.value.dataParamKindsRef.value)
     Some kinds if listLen kinds == listLen args =>
       krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args
     _ => fallback
@@ -11209,7 +11266,9 @@ rowArgAtomsApp : List (String, List Kind) ->
   List (String, List Atom) ->
   List (String, List Atom)
 rowArgAtomsApp scope o n args fallback =
-  match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+  match (omLookup
+    (tabKeyRender (tyTabKey o n))
+    perRun.value.dataParamKindsRef.value)
     Some kinds if listLen kinds == listLen args =>
       krowArgVarAtoms kinds (optionOr [] (paramRowAtomsOf (tyTabKey o n))) args
         ++ flatMap (rowArgAtomsIn scope) args
@@ -17810,7 +17869,9 @@ headAnnotTy ty = match tyAppSpine ty
   -- OCCURRENCE MINT (#1110): same source as `fromAstTypeE`'s — the identity of
   -- the annotation head being rebuilt at its declared arity.
   (TyCon { tyConName = n, tyConOrigin = o }, _) =>
-    match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+    match (omLookup
+      (tabKeyRender (tyTabKey o n))
+      perRun.value.dataParamKindsRef.value)
       Some kinds => applyParams (tconFrom o n) (freshVars (listLen kinds))
       None => fst (astTypeFreshTbl ty)
   _ => fst (astTypeFreshTbl ty)
@@ -18245,20 +18306,23 @@ registerVariants o env name params anns variants =
   addVariants env tvs etbl paramTyIds rowEffvarIds result variants
 
 -- The sole place that ADDS AN ENTRY to `dataParamKindsRef`.  (It is not the ref's only
--- writer: `declEnvSeedDataUniverse` replaces the whole list with stage K's projection at
+-- writer: `declEnvSeedDataUniverse` replaces the whole table with stage K's projection at
 -- the reading module's ordinal — it was `loadDataUniverse` copying a `crossRun`
--- accumulator until A-3.2b — and `freshPerRun`/`resetState` re-init it to `[]`.  Those set
--- the TABLE; this is the only thing that registers a TYPE.)  Prepends, so a later
--- registration shadows an earlier one
--- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
--- overlay over the data universe and therefore win, which is the ordering every reader
--- assumes (see the `dataEnv` binding in checkBodyImpl).
+-- accumulator until A-3.2b — and `freshPerRun`/`resetState` re-init it to `omEmpty`.
+-- Those set the TABLE; this is the only thing that registers a TYPE.)  Inserts, so a
+-- later registration shadows an earlier one under `omInsert`'s last-write-wins — the
+-- module's own decls are registered as an overlay over the data universe and therefore
+-- win, which is the ordering every reader assumes (see the `dataEnv` binding in
+-- checkBodyImpl).  That is the same answer #2747's map gives that the consed list read
+-- FIRST-match gave: newest registration wins either way.
 -- (`o` is the DECLARATION's identity — #1111 A-2.3; see `tyTabKey`.)
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamKinds o name kinds =
-  let entry = (tyTabKey o name, kinds)
   perRun.value.dataParamKindsRef :=
-    entry :: perRun.value.dataParamKindsRef.value
+    omInsert
+      (tabKeyRender (tyTabKey o name))
+      kinds
+      perRun.value.dataParamKindsRef.value
   -- #2158: keep the name-only index in lockstep — an insert here because this
   -- call only ADDS one key, where `declEnvSeedDataUniverse` REPLACES the whole
   -- table (it reads its module's whole prefix out of `deNameIndexBefore` in one
@@ -18354,9 +18418,11 @@ recordParamPolarities o name pols =
 -- launder.
 recordParamRowAtoms : TyConOrigin -> String -> List (List Atom) -> Unit
 recordParamRowAtoms o name atomss =
-  let entry = (tyTabKey o name, atomss)
   perRun.value.dataParamRowAtomsRef :=
-    entry :: perRun.value.dataParamRowAtomsRef.value
+    omInsert
+      (tabKeyRender (tyTabKey o name))
+      atomss
+      perRun.value.dataParamRowAtomsRef.value
 
 -- Per parameter, the atoms GUARANTEED at every one of its occurrences in the
 -- declaration's fields.  Mirrors `inferParamKinds`/`inferParamPolarities`'
