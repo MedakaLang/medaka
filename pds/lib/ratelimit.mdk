@@ -1,0 +1,201 @@
+{- | Client-identity derivation and the pure rate-limit decision (#2612, PURE
+   half only — nothing here is enforced; the shell wires this in next).
+
+   The step function is `(state, identity, class, now) -> (state, verdict)`.
+   `now` is a plain `Int` argument, never a `Clock` effect: `pds/lib/` may
+   import no effect (`pds/test/lib_boundary.sh`), and threading time through
+   the call is what keeps the decision itself testable at exact instants
+   instead of by waiting on a real clock.
+
+   FIXED WINDOW, not a token bucket: the allowance for an identity resets the
+   moment `now / rateLimitWindowSeconds` (the window index) changes. That
+   needs no floating-point leak rate or per-tick refill state — the whole
+   state per identity per class is one counter plus the window index it was
+   last touched in — and it is what makes retirement exact rather than
+   approximate: an identity's row is safe to drop the instant its window
+   index no longer matches the caller's, because recreating it fresh later
+   is indistinguishable from never having dropped it.
+
+   IDENTITY: the last hop of `X-Forwarded-For`, parsed only when the caller
+   states the connection's peer is a configured trusted proxy — never from
+   the socket peer itself, which is always the front proxy under P5 and
+   which the runtime has no extern to read anyway. An untrusted peer, a
+   missing or duplicated header, or a last hop that is not IPv4/IPv6-shaped
+   all fall back to one shared `direct` identity: a spoofable identity is
+   worse than one shared bucket, because it hands an attacker every other
+   client's bucket to evict. -}
+
+import list.{head, reverse}
+import map.{Map(..), get, set, filterWithKey}
+import string.{
+  contains,
+  fromChar,
+  fromUtf8,
+  isDigit,
+  split,
+  toChars,
+  toInt,
+  toLower,
+  trim,
+  utf8ByteLength,
+}
+import lib.http.{Header, headerName, headerValue}
+import lib.resource_limits.{
+  maxConnectionsPerWindow,
+  maxCreateSessionPerWindow,
+  maxRequestsPerWindow,
+  maxWritesPerWindow,
+  rateLimitWindowSeconds,
+}
+
+-- | Opaque: the only way to produce one is `identifyClient`/`directIdentity`,
+-- so a caller cannot manufacture an identity that bypassed trust checking.
+export data ClientIdentity = ClientIdentity String
+
+-- | The shared bucket for every request whose peer is untrusted, or whose
+-- `X-Forwarded-For` is absent, duplicated, or unparseable.
+export
+directIdentity : ClientIdentity
+directIdentity = ClientIdentity "direct"
+
+-- | The bucket key this identity counts against — for logging/headers only;
+-- the value is opaque data everywhere else in this module's own API.
+export
+identityLabel : ClientIdentity -> String
+identityLabel (ClientIdentity label) = label
+
+public export data RateLimitClass =
+  | ConnectionsClass
+  | RequestsClass
+  | WritesClass
+  | CreateSessionClass
+
+public export data RateLimitVerdict = Admitted | Refused
+
+-- | Opaque, resource-bounded: `step` prunes every row from a prior window
+-- before touching the current one, so the map holds at most one row per
+-- identity active in the current window — never one per identity ever seen.
+export data RateLimitState = RateLimitState (Map String ClientCounters)
+
+data ClientCounters = ClientCounters Int Int Int Int Int
+-- window index, connections used, requests used, writes used, createSession used
+
+export
+initRateLimitState : RateLimitState
+initRateLimitState = RateLimitState Tip
+
+export
+classAllowance : RateLimitClass -> Int
+classAllowance ConnectionsClass = maxConnectionsPerWindow
+classAllowance RequestsClass = maxRequestsPerWindow
+classAllowance WritesClass = maxWritesPerWindow
+classAllowance CreateSessionClass = maxCreateSessionPerWindow
+
+-- | The pure decision. Same identity, same class: refused while `used >=
+-- classAllowance class`, admitted again once `now` crosses into a fresh
+-- window index for that identity.
+export
+step : RateLimitState ->
+  ClientIdentity ->
+  RateLimitClass ->
+  Int ->
+  (RateLimitState, RateLimitVerdict)
+step (RateLimitState table) (ClientIdentity key) limitClass now =
+  let windowIdx = now / rateLimitWindowSeconds
+  let pruned = pruneStale windowIdx table
+  let current = match get key pruned
+    Some counters => counters
+    None => freshCounters windowIdx
+  if classUsed limitClass current >= classAllowance limitClass then
+    (RateLimitState (set key current pruned), Refused)
+  else
+    (RateLimitState (set key (bumpClass limitClass current) pruned), Admitted)
+
+pruneStale : Int -> Map String ClientCounters -> Map String ClientCounters
+pruneStale currentWindowIdx table =
+  filterWithKey
+    (_key counters => counterWindow counters == currentWindowIdx)
+    table
+
+freshCounters : Int -> ClientCounters
+freshCounters windowIdx = ClientCounters windowIdx 0 0 0 0
+
+counterWindow : ClientCounters -> Int
+counterWindow (ClientCounters w _ _ _ _) = w
+
+classUsed : RateLimitClass -> ClientCounters -> Int
+classUsed ConnectionsClass (ClientCounters _ c _ _ _) = c
+classUsed RequestsClass (ClientCounters _ _ r _ _) = r
+classUsed WritesClass (ClientCounters _ _ _ w _) = w
+classUsed CreateSessionClass (ClientCounters _ _ _ _ s) = s
+
+bumpClass : RateLimitClass -> ClientCounters -> ClientCounters
+bumpClass ConnectionsClass (ClientCounters w c r wr s) =
+  ClientCounters w (c + 1) r wr s
+bumpClass RequestsClass (ClientCounters w c r wr s) =
+  ClientCounters w c (r + 1) wr s
+bumpClass WritesClass (ClientCounters w c r wr s) =
+  ClientCounters w c r (wr + 1) s
+bumpClass CreateSessionClass (ClientCounters w c r wr s) =
+  ClientCounters w c r wr (s + 1)
+
+-- | Derive the caller's identity for this request. `isTrustedPeer` is
+-- supplied by the caller (slice 4's `--trusted-proxy` configuration test
+-- against the connection); this module never inspects a socket.
+export
+identifyClient : Bool -> List Header -> ClientIdentity
+identifyClient isTrustedPeer headers =
+  if not isTrustedPeer then
+    directIdentity
+  else match xffLastHop headers
+    Some address => ClientIdentity address
+    None => directIdentity
+
+isXffHeader : Header -> Bool
+isXffHeader h = headerName h == "x-forwarded-for"
+
+-- | A duplicated `X-Forwarded-For` field is treated exactly like a missing
+-- one: with two fields present there is no rule for which one a trusted
+-- proxy actually wrote, and guessing hands an attacker able to inject an
+-- extra header the same seat-eviction power an unparseable one would.
+xffLastHop : List Header -> Option String
+xffLastHop headers = match filter isXffHeader headers
+  only :: [] => lastHopToken (fromUtf8 (headerValue only))
+  _ => None
+
+lastHopToken : String -> Option String
+lastHopToken raw =
+  let tokens = map trim (split "," raw)
+  match head (reverse tokens)
+    Some candidate => if isAddressToken candidate then Some candidate else None
+    None => None
+
+isAddressToken : String -> Bool
+isAddressToken token = isIPv4Address token || isIPv6Address token
+
+isIPv4Address : String -> Bool
+isIPv4Address token =
+  let parts = split "." token
+  length parts == 4 && all isDecOctet parts
+
+isDecOctet : String -> Bool
+isDecOctet part =
+  let len = utf8ByteLength part
+  len >= 1
+    && len <= 3
+    && all isDigit (toChars part)
+    && (match toInt part
+      Some value => value >= 0 && value <= 255
+      None => False)
+
+-- | Loose on purpose: this only has to reject non-address garbage
+-- ("not-an-address", empty, punctuation), not validate a fully compliant
+-- IPv6 literal — the value is a rate-limit bucket key, not a routed address.
+isIPv6Address : String -> Bool
+isIPv6Address token =
+  utf8ByteLength token > 0
+    && contains ":" token
+    && all isHexOrColonChar (toChars token)
+
+isHexOrColonChar : Char -> Bool
+isHexOrColonChar c = contains (toLower (fromChar c)) "0123456789abcdef:"

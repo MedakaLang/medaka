@@ -245,3 +245,26 @@ checkMstTraversalDepth depth =
     Err "mst: traversal depth exceeds 128 resource limit"
   else
     Ok ()
+
+-- Rate limiting policy (#2612). One shared window across the four limit
+-- classes `pds/lib/ratelimit.mdk` defines; each class keeps its own
+-- allowance within that window.
+export
+rateLimitWindowSeconds : Int
+rateLimitWindowSeconds = 60
+
+export
+maxConnectionsPerWindow : Int
+maxConnectionsPerWindow = 120
+
+export
+maxRequestsPerWindow : Int
+maxRequestsPerWindow = 3000
+
+export
+maxWritesPerWindow : Int
+maxWritesPerWindow = 300
+
+export
+maxCreateSessionPerWindow : Int
+maxCreateSessionPerWindow = 30

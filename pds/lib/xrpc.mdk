@@ -230,6 +230,16 @@ invalidRequest = failure 400 "Bad Request" "InvalidRequest"
 notFound : String -> RouteResult
 notFound = failure 404 "Not Found" "NotFound"
 
+-- | The 429 refusal for a rate-limited request. Exported (unlike the private
+-- `invalidRequest`/`notFound` above) because rate-limit decisions are made
+-- before a route is looked up at all, by `pds/shell/server.mdk` calling
+-- `lib.ratelimit.step` directly, so the caller needs the `XrpcFailure` value
+-- itself rather than a `RouteResult` this module's own router never sees.
+export
+rateLimitFailure : String -> XrpcFailure
+rateLimitFailure message =
+  failureValue 429 "Too Many Requests" "RateLimitExceeded" message
+
 methodNotAllowed : String -> RouteResult
 methodNotAllowed = failure 405 "Method Not Allowed" "MethodNotAllowed"
 

@@ -1,0 +1,111 @@
+{- | Focused structural tests for the pure client-identity and rate-limit
+   decision (#2612). Enforcement lives in slice 4 — this only exercises the
+   `(state, identity, class, now) -> (state, verdict)` step and the identity
+   derivation from `X-Forwarded-For`. -}
+
+import string.{toUtf8}
+import test.{expectAll, expectEqual, expectTrue}
+import lib.http.{Header, makeHeader}
+import lib.resource_limits.{maxCreateSessionPerWindow, rateLimitWindowSeconds}
+import lib.ratelimit.{
+  RateLimitClass(..),
+  RateLimitState,
+  RateLimitVerdict(..),
+  classAllowance,
+  directIdentity,
+  identifyClient,
+  identityLabel,
+  initRateLimitState,
+  step,
+}
+import lib.xrpc.{rateLimitFailure, xrpcFailureError, xrpcFailureStatus}
+
+mustHeader : String -> String -> Header
+mustHeader name value = match makeHeader name (toUtf8 value)
+  Ok header => header
+  Err message => panic message
+
+xffHeader : String -> Header
+xffHeader = mustHeader "x-forwarded-for"
+
+isRefused : RateLimitVerdict -> Bool
+isRefused Refused = True
+isRefused Admitted = False
+
+isAdmitted : RateLimitVerdict -> Bool
+isAdmitted Admitted = True
+isAdmitted Refused = False
+
+-- | Run `step` `n` times for the same identity/class/instant and keep the
+-- resulting state; used to reach the exact edge of a class's allowance.
+exhaust : RateLimitState -> RateLimitClass -> Int -> Int -> RateLimitState
+exhaust state _ _ 0 = state
+exhaust state limitClass now n =
+  let (next, _) = step state directIdentity limitClass now
+  exhaust next limitClass now (n - 1)
+
+-- (a) the allowance refills over time: same identity refused once its
+-- window's allowance is spent, admitted again once `now` crosses into the
+-- next window.
+test "createSession allowance refuses at the limit and refills next window" =
+  let saturated =
+    exhaust initRateLimitState CreateSessionClass 0 maxCreateSessionPerWindow
+  let (_, atLimit) = step saturated directIdentity CreateSessionClass 0
+  let (_, nextWindow) =
+    step saturated directIdentity CreateSessionClass rateLimitWindowSeconds
+  expectAll [expectTrue (isRefused atLimit), expectTrue (isAdmitted nextWindow)]
+
+test "an identity under its allowance is admitted" =
+  let (_, verdict) = step initRateLimitState directIdentity RequestsClass 0
+  expectTrue (isAdmitted verdict)
+
+test "classAllowance is per-class, not one shared counter" = expectAll [
+  expectTrue (classAllowance ConnectionsClass /= classAllowance RequestsClass),
+  expectTrue (classAllowance WritesClass /= classAllowance CreateSessionClass),
+]
+
+-- (b) a refusal names RateLimitExceeded with status 429.
+test "the rate-limit refusal is a 429 RateLimitExceeded" =
+  let failure = rateLimitFailure "rate limit exceeded"
+  expectAll [
+    expectEqual (xrpcFailureStatus failure) 429,
+    expectEqual (xrpcFailureError failure) "RateLimitExceeded",
+  ]
+
+-- (c) an untrusted peer's X-Forwarded-For is ignored: the request falls into
+-- the single "direct" bucket rather than becoming its own identity.
+test "an untrusted peer's X-Forwarded-For is ignored" =
+  let headers = [xffHeader "203.0.113.7"]
+  expectEqual (identityLabel (identifyClient False headers)) "direct"
+
+test "a trusted peer's well-formed X-Forwarded-For is honored" =
+  let headers = [xffHeader "203.0.113.7"]
+  expectEqual (identityLabel (identifyClient True headers)) "203.0.113.7"
+
+test "a trusted peer's forwarded chain picks the LAST hop" =
+  let headers = [xffHeader "203.0.113.7, 198.51.100.9, 192.0.2.44"]
+  expectEqual (identityLabel (identifyClient True headers)) "192.0.2.44"
+
+-- (d) a malformed header never admits a second identity.
+test "malformed X-Forwarded-For (garbage) falls back to direct" =
+  let headers = [xffHeader "garbage"]
+  expectEqual (identityLabel (identifyClient True headers)) "direct"
+
+test "malformed X-Forwarded-For (empty) falls back to direct" =
+  let headers = [xffHeader ""]
+  expectEqual (identityLabel (identifyClient True headers)) "direct"
+
+test "malformed X-Forwarded-For (bare comma) falls back to direct" =
+  let headers = [xffHeader ","]
+  expectEqual (identityLabel (identifyClient True headers)) "direct"
+
+test "malformed X-Forwarded-For (last hop not an address) falls back to direct" =
+  let headers = [xffHeader "203.0.113.7, not-an-address"]
+  expectEqual (identityLabel (identifyClient True headers)) "direct"
+
+test "duplicated X-Forwarded-For fields fall back to direct" =
+  let headers = [xffHeader "203.0.113.7", xffHeader "198.51.100.9"]
+  expectEqual (identityLabel (identifyClient True headers)) "direct"
+
+test "no X-Forwarded-For at all falls back to direct" =
+  expectEqual (identityLabel (identifyClient True [])) "direct"
