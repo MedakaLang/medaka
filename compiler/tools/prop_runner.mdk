@@ -24,7 +24,9 @@ import frontend.ast.{
   Field(..),
   ConPayload(..),
 }
-import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
+import eval.eval.{
+  Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasTag, ppValue
+}
 import support.util.{
   listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains
 }
@@ -222,9 +224,7 @@ genUserOrFail tydefs subst depth ty = match tySpine ty
     Some tydef => genUser tydefs subst depth name tydef args
     None =>
       panic
-        ("prop_runner: no generator for type '"
-          ++ name
-          ++ "'. Define an explicit generator (there is no 'Arbitrary' deriver).")
+        "prop_runner: no generator for type '\{name}'. Give it a data declaration the runner can see, an argument-free 'Arbitrary' instance, or an explicit generator (there is no 'Arbitrary' deriver)."
   None => panic "prop_runner: cannot generate values for type"
 
 genUser : List (String, TyDef) ->
@@ -618,7 +618,7 @@ findFailure : List (String, TyDef) ->
 findFailure tydefs evalEnv params body maxTests run
   | run > maxTests = PropPassed
   | otherwise =
-    let inputs = genInputs tydefs params
+    let inputs = genInputs tydefs evalEnv params
     findFailureStep
       tydefs
       evalEnv
@@ -644,10 +644,64 @@ findFailureStep _ evalEnv params body _ run inputs False =
   let (shrunk, fuelExhausted) = shrinkLoop evalEnv params body inputs
   PropFailed run shrunk fuelExhausted
 
-genInputs : List (String, TyDef) -> List PropParam -> <e> List (String, Value e)
-genInputs _ [] = []
-genInputs tydefs ((PropParam x _ ty) :: rest) =
-  (x, genForType tydefs [] 0 ty) :: genInputs tydefs rest
+genInputs : List (String, TyDef) ->
+  List (String, Value e) ->
+  List PropParam ->
+  <e> List (String, Value e)
+genInputs _ _ [] = []
+genInputs tydefs evalEnv ((PropParam x _ ty) :: rest) =
+  (x, genParam tydefs evalEnv ty) :: genInputs tydefs evalEnv rest
+
+genParam : List (String, TyDef) -> List (String, Value e) -> Ty -> <e> Value e
+genParam tydefs evalEnv ty = match userArbitrary evalEnv ty
+  Some v => v
+  None => genForType tydefs [] 0 ty
+
+-- The head tycons `genForType` draws itself.  Redirecting one of these onto its
+-- `Arbitrary` instance would move the draw off `propRngStateRef` and onto the
+-- `randomInt`/`randomBool` externs, which draw from the SAME ref the program
+-- under test does: that both perturbs the program's own stream and makes
+-- `--seed` describe nothing, since `seedPropRng` reseeds the private ref alone.
+builtinGenHeads : List String
+builtinGenHeads = [
+  "Int",
+  "Bool",
+  "Float",
+  "Char",
+  "String",
+  "Unit",
+  "List",
+  "Array",
+  "Option",
+  "Result",
+]
+
+-- A prop parameter whose type `genForType` would hand to `genUserOrFail` is
+-- drawn through an in-scope `Arbitrary` instance at its head instead, when
+-- exactly one candidate carries that head tag.  Only an ARGUMENT-FREE head is
+-- eligible: a constrained instance (`impl Arbitrary (List a) requires
+-- Arbitrary a`) is dict-passed, so `apply c VUnit` would feed VUnit where the
+-- leading dictionary belongs, and building that dictionary needs constraint
+-- entailment the runner has no access to.  Only `arbitrary` is honored;
+-- shrinking stays the runner's own.
+userArbitrary : List (String, Value e) -> Ty -> <e> Option (Value e)
+userArbitrary evalEnv ty = match tySpine ty
+  Some (name, []) =>
+    if contains name builtinGenHeads then
+      None
+    else match lookupAssoc "arbitrary" evalEnv
+      Some m => userArbitraryAt name (force m)
+      None => None
+  _ => None
+
+userArbitraryAt : String -> Value e -> <e> Option (Value e)
+userArbitraryAt name (VMulti vs) = drawArbitrary (filterList (hasTag name) vs)
+userArbitraryAt name v = drawArbitrary (filterList (hasTag name) [v])
+
+-- Ambiguity falls back to the structural draw rather than picking a candidate.
+drawArbitrary : List (Value e) -> <e> Option (Value e)
+drawArbitrary [c] = Some (force (apply c VUnit))
+drawArbitrary _ = None
 
 printCounterexample : List (String, Value e) -> <IO> Unit
 printCounterexample [] = ()

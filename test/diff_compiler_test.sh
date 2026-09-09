@@ -46,6 +46,10 @@
 #     prop used to hang forever shrinking (shrinkInt 0 had no base case).
 #     Pins the deterministic shrunk counterexample, proving shrinking
 #     terminates and converges.
+#   test/compiler_test_fixtures/user_arbitrary.mdk  GH #2292: a prop parameter
+#     at an argument-free user-defined type is drawn through that type's
+#     `Arbitrary` instance, not structurally. Passes only when the instance is
+#     honored; a structural draw fails it within a few tests.
 #
 # DEFERRED (pre-existing compiler/native gaps, NOT gate-rerooting regressions):
 #   error-path doctests — compiler eval has no per-binding panic recovery.
@@ -120,6 +124,7 @@ else
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \
          $ROOT/test/compiler_test_fixtures/record_prop.mdk \
          $ROOT/test/compiler_test_fixtures/int_shrink.mdk \
+         $ROOT/test/compiler_test_fixtures/user_arbitrary.mdk \
          $ROOT/test/compiler_test_fixtures/mappable_not_foldable.mdk \
          $ROOT/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
          $ROOT/test/compiler_test_fixtures/blockquote_and_valid.mdk \
