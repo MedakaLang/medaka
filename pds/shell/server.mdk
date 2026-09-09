@@ -2,9 +2,9 @@
    HTTP/1.1 lifecycle around the pure protocol core.
 
    Nothing here knows what a request means. Bytes arrive from a socket, are
-   framed by `lib.http`'s `scanRequestBoundary` and by nothing else, are handed
-   whole to `lib.server_core`'s `handleBytes`, and the response bytes it returns
-   go back out. The successor `Store` is persisted through `shell.persist`
+   framed by `lib.http`'s `scanRequestBoundaryFrom` and by nothing else, are
+   handed whole to `lib.server_core`'s `handleBytes`, and the response bytes it
+   returns go back out. The successor `Store` is persisted through `shell.persist`
    and `shell.blobfile` and then published into the one `Ref Store` every
    connection task shares.
 
@@ -15,18 +15,20 @@
    Every per-connection bound lives here rather than in `lib.resource_limits`
    because each is a `Duration` or a socket-scheduling count, neither of which
    the pure core can express. The one bound this module does NOT own is the
-   per-request byte ceiling: `scanRequestBoundary` already refuses a buffer past
-   `maxHttpRequestBytes`, so re-checking it here would be a second, divergent
-   answer to a question `lib.http` has already settled. -}
+   per-request byte ceiling: `scanRequestBoundaryFrom` already refuses a buffer
+   past `maxHttpRequestBytes`, so re-checking it here would be a second,
+   divergent answer to a question `lib.http` has already settled. -}
 
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
 import lib.http.{
   HttpFrame(..),
+  HttpScan,
+  httpScanStart,
   parseRequestAt,
   requestKeepAlive,
-  scanRequestBoundary,
+  scanRequestBoundaryFrom,
   serializeResponse,
 }
 import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
@@ -269,27 +271,32 @@ connectionLoop : Server ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 connectionLoop server dir storeRef conn pending = defer
   deadline <- deadlineAfter requestTimeout
-  frameLoop server dir storeRef conn deadline pending
+  frameLoop server dir storeRef conn deadline pending httpScanStart
 
--- `scanRequestBoundary` is the ONLY notion of a complete request in this
--- module: nothing here inspects a byte of the buffer on its own.
+-- `scanRequestBoundaryFrom` is the ONLY notion of a complete request in this
+-- module: nothing here inspects a byte of the buffer on its own. The `HttpScan`
+-- it hands back is carried to the next read so that a trickling client costs
+-- what it sent rather than what it has sent so far; it is opaque here, and a
+-- new request starts from `httpScanStart` in `connectionLoop` because
+-- `respond` hands the next request a buffer rebased on its own first byte.
 frameLoop : Server ->
   String ->
   Ref Store ->
   Connection ->
   Wait ->
   Array Int ->
+  HttpScan ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-frameLoop server dir storeRef conn deadline buf =
-  match scanRequestBoundary buf 0
-    HttpFramedAt boundary => respond server dir storeRef conn buf boundary
-    HttpFrameFailed _ => rejectBuffer server dir storeRef conn buf
-    HttpNeedMore => defer
+frameLoop server dir storeRef conn deadline buf scan =
+  match scanRequestBoundaryFrom buf 0 scan
+    (HttpFramedAt boundary, _) => respond server dir storeRef conn buf boundary
+    (HttpFrameFailed _, _) => rejectBuffer server dir storeRef conn buf
+    (HttpNeedMore, resumed) => defer
       late <- expired deadline
       if late then
         deferPure (Err "request deadline exceeded")
       else
-        readMore server dir storeRef conn deadline buf
+        readMore server dir storeRef conn deadline buf resumed
 
 readMore : Server ->
   String ->
@@ -297,8 +304,9 @@ readMore : Server ->
   Connection ->
   Wait ->
   Array Int ->
+  HttpScan ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-readMore server dir storeRef conn deadline buf = defer
+readMore server dir storeRef conn deadline buf scan = defer
   received <- A.recvWithin idleTimeout conn readChunkBytes
   match received
     Err message => deferPure (Err message)
@@ -306,7 +314,7 @@ readMore server dir storeRef conn deadline buf = defer
       if arrayLength bytes == 0 then
         deferPure (endOfStream buf)
       else
-        frameLoop server dir storeRef conn deadline (buf ++ bytes)
+        frameLoop server dir storeRef conn deadline (buf ++ bytes) scan
 
 -- A peer that closes between requests has finished; one that closes part way
 -- through a request has not.

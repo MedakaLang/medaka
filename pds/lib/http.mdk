@@ -258,9 +258,11 @@ findCrlf label input start pos limit =
   else
     findCrlf label input start (pos + 1) limit
 
-parseRequestLine : Array Int -> Int -> Result FrameError RequestLine
-parseRequestLine input start = do
-  end <- findCrlf "request line" input start start maxHttpRequestLineBytes
+-- | `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
+-- and a later, already-searched offset when a suspended scan continues.
+parseRequestLine : Array Int -> Int -> Int -> Result FrameError RequestLine
+parseRequestLine input start cursor = do
+  end <- findCrlf "request line" input start cursor maxHttpRequestLineBytes
   () <- resourceExcess (checkHttpRequestLineBytes (end - start))
   firstSpace <- match findByte input start end 32
     None =>
@@ -338,6 +340,42 @@ checkFieldCount trailer count =
   else
     resourceExcess (checkHttpHeaderFields count)
 
+-- | One field line of a header or trailer section. `FieldDone` reports the
+-- index past the section's blank line and the section's accumulated byte count.
+data FieldStep = FieldDone Int Int | FieldMore Header Int
+
+-- | Frame exactly one field line. This is the single place a field line's
+-- extent and legality are decided, so the one-shot fold below and the
+-- resumable scan further down cannot disagree about where a section ends.
+-- `cursor` resumes an interrupted CRLF search; it is `pos` for a fresh line.
+fieldStep : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Result FrameError FieldStep
+fieldStep input pos cursor sectionStart priorBytes count trailer = do
+  end <- findCrlf
+    (if trailer then "trailer field" else "header field")
+    input
+    pos
+    cursor
+    maxHttpHeaderBytes
+  let next = end + 2
+  let totalBytes = priorBytes + next - sectionStart
+  () <- resourceExcess (checkHttpHeaderBytes totalBytes)
+  if end == pos then
+    Ok (FieldDone next totalBytes)
+  else do
+    () <- checkFieldCount trailer (count + 1)
+    field <- parseHeaderLine input pos end
+    if trailer && forbiddenTrailer field then
+      malformed "http: forbidden framing or routing field in trailer"
+    else
+      Ok (FieldMore field next)
+
 parseFields : Array Int ->
   Int ->
   Int ->
@@ -347,23 +385,10 @@ parseFields : Array Int ->
   List Header ->
   Result FrameError HeaderBlock
 parseFields input pos sectionStart priorBytes count trailer acc = do
-  end <- findCrlf
-    (if trailer then "trailer field" else "header field")
-    input
-    pos
-    pos
-    maxHttpHeaderBytes
-  let next = end + 2
-  let totalBytes = priorBytes + next - sectionStart
-  () <- resourceExcess (checkHttpHeaderBytes totalBytes)
-  if end == pos then
-    Ok (HeaderBlock (reverse acc) next totalBytes)
-  else do
-    () <- checkFieldCount trailer (count + 1)
-    field <- parseHeaderLine input pos end
-    if trailer && forbiddenTrailer field then
-      malformed "http: forbidden framing or routing field in trailer"
-    else
+  step <- fieldStep input pos pos sectionStart priorBytes count trailer
+  match step
+    FieldDone next totalBytes => Ok (HeaderBlock (reverse acc) next totalBytes)
+    FieldMore field next =>
       parseFields
         input
         next
@@ -761,19 +786,43 @@ parseChunked : Array Int ->
   Int ->
   Result FrameError ParsedBody
 parseChunked input pos headerBytes out total count = do
-  lineEnd <- findCrlf "chunk-size line" input pos pos maxHttpHeaderBytes
+  head <- chunkHeadStep input pos pos total count
+  match head
+    ChunkEnd dataPos => do
+      (HeaderBlock trailers finalPos _) <- parseFields
+        input
+        dataPos
+        dataPos
+        headerBytes
+        0
+        True
+        []
+      Ok (ParsedBody (buildArray out) trailers finalPos)
+    ChunkBody dataPos size => do
+      (chunk, _) <- readSliceAt input dataPos size
+      next <- chunkDataEnd input dataPos size
+      let () = emitArray chunk 0 out
+      parseChunked input next headerBytes out (total + size) (count + 1)
+
+-- | The head of one chunk: either the terminating zero-size chunk, whose data
+-- position starts the trailer section, or a data chunk of that size.
+data ChunkHead = ChunkEnd Int | ChunkBody Int Int
+
+-- | Frame one chunk's size line and apply the chunk-count and decoded-size
+-- ceilings. Shared by the decoding fold above and the resumable scan, so a
+-- chunk's extent has one definition. `cursor` resumes an interrupted search.
+chunkHeadStep : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result FrameError ChunkHead
+chunkHeadStep input pos cursor total count = do
+  lineEnd <- findCrlf "chunk-size line" input pos cursor maxHttpHeaderBytes
   size <- parseChunkSize input pos lineEnd
   let dataPos = lineEnd + 2
-  if size == 0 then do
-    (HeaderBlock trailers finalPos _) <- parseFields
-      input
-      dataPos
-      dataPos
-      headerBytes
-      0
-      True
-      []
-    Ok (ParsedBody (buildArray out) trailers finalPos)
+  if size == 0 then
+    Ok (ChunkEnd dataPos)
   else do
     () <- resourceExcess (checkHttpChunks (count + 1))
     if size > maxHttpBodyBytes - total then
@@ -781,21 +830,23 @@ parseChunked input pos headerBytes out total count = do
         (Fatal
           (HttpResourceExcess
             "http: decoded chunked body exceeds resource limit"))
-    else do
-      (chunk, afterChunk) <- readSliceAt input dataPos size
-      if afterChunk + 2 > arrayLength input then
-        incomplete "http: truncated CRLF after chunk data"
-      else if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then
-        malformed "http: missing CRLF after chunk data"
-      else
-        let () = emitArray chunk 0 out
-        parseChunked
-          input
-          (afterChunk + 2)
-          headerBytes
-          out
-          (total + size)
-          (count + 1)
+    else
+      Ok (ChunkBody dataPos size)
+
+-- | Where the chunk whose data starts at `dataPos` ends, CRLF included. The
+-- truncation diagnostic matches `readSliceAt`'s so that framing the chunk and
+-- decoding it report the same shortfall.
+chunkDataEnd : Array Int -> Int -> Int -> Result FrameError Int
+chunkDataEnd input dataPos size =
+  let afterChunk = dataPos + size
+  if afterChunk > arrayLength input then
+    incomplete "http: truncated body at byte \{intToString (arrayLength input)}"
+  else if afterChunk + 2 > arrayLength input then
+    incomplete "http: truncated CRLF after chunk data"
+  else if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then
+    malformed "http: missing CRLF after chunk data"
+  else
+    Ok (afterChunk + 2)
 
 -- | Frame the body and report the index one past its last byte. Bytes beyond
 -- that index belong to whatever follows the request, so rejecting them is the
@@ -816,30 +867,182 @@ trailingMessage ChunkedBody = "http: bytes after framed chunked request"
 
 data FramedRequest = FramedRequest Request BodyMode Int
 
-frameRequestAt : Array Int -> Int -> Result FrameError FramedRequest
-frameRequestAt input start = do
-  (RequestLine method target headerPos) <- parseRequestLine input start
-  (HeaderBlock headers bodyPos headerBytes) <- parseFields
-    input
-    headerPos
-    headerPos
-    0
-    0
-    False
-    []
+-- | Everything the header section settled: the request line, its fields, the
+-- body framing they select, where the body starts and how many bytes the
+-- section spent. None of it can change once the blank line has arrived.
+data FrameHead = FrameHead RequestLine (List Header) BodyMode Bool Int Int
+
+-- | A fully framed request span: its head plus the index one past its last
+-- byte. The body bytes are not part of it, so framing a span costs nothing
+-- proportional to the body.
+data FrameSpan = FrameSpan FrameHead Int
+
+headHeaderBytes : FrameHead -> Int
+headHeaderBytes (FrameHead _ _ _ _ _ headerBytes) = headerBytes
+
+requestLineHeaderPos : RequestLine -> Int
+requestLineHeaderPos (RequestLine _ _ headerPos) = headerPos
+
+-- | Where the body of a request whose head is framed can still be growing.
+data BodyPhase =
+  | BodyUntil Int
+  | BodyChunkSize Int Int Int Int
+  | BodyChunkData Int Int Int Int
+  | BodyTrailers Int Int Int Int
+
+-- | Where a scan of a still-growing buffer suspended. Each phase is a point at
+-- which only later bytes can change the verdict, so resuming there and
+-- scanning the whole buffer afresh reach the same answer.
+data ScanPhase =
+  | PhaseLine Int
+  | PhaseFields RequestLine (List Header) Int Int Int
+  | PhaseBody FrameHead BodyPhase
+
+-- | The three ways a scan ends. `ScanSuspend` carries the diagnostic the
+-- one-shot parser reports for the same buffer, so nothing about a message
+-- depends on whether the scan was resumed.
+data ScanOutcome =
+  | ScanSuspend String ScanPhase
+  | ScanFatal HttpParseFailure
+  | ScanFramed FrameSpan
+
+-- | Where an interrupted CRLF search resumes. A search only ever runs out of
+-- input at the buffer's end, and it stops one byte early on a trailing CR, so
+-- the last byte read is the earliest offset a later read must reconsider.
+crlfResume : Array Int -> Int -> Int
+crlfResume input lineStart = max lineStart (arrayLength input - 1)
+
+buildHead : RequestLine ->
+  List Header ->
+  Int ->
+  Int ->
+  Result FrameError FrameHead
+buildHead line headers bodyPos headerBytes = do
   () <- validateHost headers
   mode <- selectBodyMode headers
   keepAlive <- keepAliveFromHeaders headers
-  (ParsedBody body trailers finalPos) <- parseBody
-    mode
-    input
-    bodyPos
-    headerBytes
-  Ok
-    (FramedRequest
-      (Request method target headers trailers body keepAlive)
-      mode
-      finalPos)
+  Ok (FrameHead line headers mode keepAlive bodyPos headerBytes)
+
+headBodyPhase : FrameHead -> BodyPhase
+headBodyPhase (FrameHead _ _ NoBody _ bodyPos _) = BodyUntil bodyPos
+headBodyPhase (FrameHead _ _ (FixedBody size) _ bodyPos _) =
+  BodyUntil (bodyPos + size)
+headBodyPhase (FrameHead _ _ ChunkedBody _ bodyPos _) =
+  BodyChunkSize bodyPos 0 0 bodyPos
+
+scanBody : Array Int -> FrameHead -> BodyPhase -> ScanOutcome
+scanBody input head (BodyUntil finalPos) =
+  if finalPos <= arrayLength input then
+    ScanFramed (FrameSpan head finalPos)
+  else
+    ScanSuspend
+      "http: truncated body at byte \{intToString (arrayLength input)}"
+      (PhaseBody head (BodyUntil finalPos))
+scanBody input head (BodyChunkSize chunkPos total count cursor) =
+  match chunkHeadStep input chunkPos (max chunkPos cursor) total count
+    Err (Incomplete message) =>
+      ScanSuspend
+        message
+        (PhaseBody
+          head
+          (BodyChunkSize chunkPos total count (crlfResume input chunkPos)))
+    Err (Fatal failure) => ScanFatal failure
+    Ok (ChunkEnd dataPos) =>
+      scanBody input head (BodyTrailers dataPos dataPos 0 dataPos)
+    Ok (ChunkBody dataPos size) =>
+      scanBody input head (BodyChunkData dataPos size total count)
+scanBody input head (BodyChunkData dataPos size total count) =
+  match chunkDataEnd input dataPos size
+    Err (Incomplete message) =>
+      ScanSuspend
+        message
+        (PhaseBody head (BodyChunkData dataPos size total count))
+    Err (Fatal failure) => ScanFatal failure
+    Ok next =>
+      scanBody input head (BodyChunkSize next (total + size) (count + 1) next)
+scanBody input head (BodyTrailers sectionStart pos count cursor) =
+  let step =
+    fieldStep
+      input
+      pos
+      (max pos cursor)
+      sectionStart
+      (headHeaderBytes head)
+      count
+      True
+  match step
+    Err (Incomplete message) =>
+      ScanSuspend
+        message
+        (PhaseBody
+          head
+          (BodyTrailers sectionStart pos count (crlfResume input pos)))
+    Err (Fatal failure) => ScanFatal failure
+    Ok (FieldMore _ next) =>
+      scanBody input head (BodyTrailers sectionStart next (count + 1) next)
+    Ok (FieldDone finalPos _) => ScanFramed (FrameSpan head finalPos)
+
+-- | Advance a scan of the request starting at `start` from `phase`. Every
+-- framing decision in this module is taken here or in a step this calls, so
+-- the resumable scanner and the one-shot parser are the same framer.
+scanFrom : Array Int -> Int -> ScanPhase -> ScanOutcome
+scanFrom input start (PhaseLine cursor) =
+  match parseRequestLine input start (max start cursor)
+    Err (Incomplete message) =>
+      ScanSuspend message (PhaseLine (crlfResume input start))
+    Err (Fatal failure) => ScanFatal failure
+    Ok line =>
+      let headerPos = requestLineHeaderPos line
+      scanFrom input start (PhaseFields line [] headerPos 0 headerPos)
+scanFrom input start (PhaseFields line acc pos count cursor) =
+  let step =
+    fieldStep
+      input
+      pos
+      (max pos cursor)
+      (requestLineHeaderPos line)
+      0
+      count
+      False
+  match step
+    Err (Incomplete message) =>
+      ScanSuspend
+        message
+        (PhaseFields line acc pos count (crlfResume input pos))
+    Err (Fatal failure) => ScanFatal failure
+    Ok (FieldMore field next) =>
+      scanFrom
+        input
+        start
+        (PhaseFields line (field :: acc) next (count + 1) next)
+    Ok (FieldDone bodyPos headerBytes) =>
+      match settle (buildHead line (reverse acc) bodyPos headerBytes)
+        Err failure => ScanFatal failure
+        Ok head => scanBody input head (headBodyPhase head)
+scanFrom input _ (PhaseBody head phase) = scanBody input head phase
+
+frameSpanAt : Array Int -> Int -> Result FrameError FrameSpan
+frameSpanAt input start = match scanFrom input start (PhaseLine start)
+  ScanSuspend message _ => Err (Incomplete message)
+  ScanFatal failure => Err (Fatal failure)
+  ScanFramed span => Ok span
+
+-- | Collect the body of an already-framed span. The span fixed where the
+-- request ends, so this only has to produce the bytes and trailers inside it.
+frameFromSpan : Array Int -> FrameHead -> Int -> Result FrameError FramedRequest
+frameFromSpan input (FrameHead (RequestLine method target _) headers mode keepAlive bodyPos headerBytes) finalPos =
+  do
+    (ParsedBody body trailers _) <- parseBody mode input bodyPos headerBytes
+    Ok
+      (FramedRequest
+        (Request method target headers trailers body keepAlive)
+        mode
+        finalPos)
+
+frameRequestAt : Array Int -> Int -> Result FrameError FramedRequest
+frameRequestAt input start = do
+  (FrameSpan head finalPos) <- frameSpanAt input start
+  frameFromSpan input head finalPos
 
 parseWholeBuffer : Array Int -> Result FrameError Request
 parseWholeBuffer input = do
@@ -871,23 +1074,75 @@ requestBytesVerdict size framed = match checkHttpRequestBytes size
   Ok () => framed
   Err message => HttpFrameFailed (HttpResourceExcess message)
 
--- | Find the end of the first complete request at or after `start`. A buffer
--- whose pending bytes already exceed the per-request ceiling is rejected
--- rather than left pending, so a caller can bound what it buffers.
+{- | How far a scan of a growing buffer has already got. The type is opaque:
+   a caller obtains one from `httpScanStart`, hands it back to
+   `scanRequestBoundaryFrom` with the same request `start` and a buffer that has
+   only grown at its end, and gets a fresh one to carry to the next read.
+
+   A state is only meaningful for the buffer prefix it was produced from. Any
+   other buffer, or a different `start`, needs `httpScanStart` again — which is
+   what a caller does at a request boundary, since the next request is a new
+   scan. Nothing is lost by starting over: a fresh state reaches exactly the
+   verdict a resumed one does. -}
+export data HttpScan = HttpScan Int ScanPhase
+
+-- | A scan that has read nothing.
+export
+httpScanStart : HttpScan
+httpScanStart = HttpScan 0 (PhaseLine 0)
+
+scanVerdict : Array Int ->
+  Int ->
+  HttpScan ->
+  ScanOutcome ->
+  (HttpFrame, HttpScan)
+scanVerdict _ start scanned (ScanFramed (FrameSpan _ finalPos)) =
+  (requestBytesVerdict (finalPos - start) (HttpFramedAt finalPos), scanned)
+scanVerdict _ _ scanned (ScanFatal failure) = (HttpFrameFailed failure, scanned)
+scanVerdict input start _ (ScanSuspend _ phase) = (
+  requestBytesVerdict (arrayLength input - start) HttpNeedMore,
+  HttpScan (arrayLength input) phase,
+)
+
+{- | Find the end of the first complete request at or after `start`, resuming
+   the scan `state` left off at. A buffer whose pending bytes already exceed the
+   per-request ceiling is rejected rather than left pending, so a caller can
+   bound what it buffers.
+
+   The cost of a resumed scan is proportional to the bytes that arrived since
+   the state was produced, not to the bytes already buffered, because every
+   suspension point is one only later bytes can move past. -}
+export
+scanRequestBoundaryFrom : Array Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
+scanRequestBoundaryFrom input start (HttpScan validatedTo phase) =
+  -- A refused buffer leaves `validatedTo` where it was: the bytes it rejected
+  -- were never accepted, so a later read must not skip over them.
+  let unchanged = HttpScan validatedTo phase
+  if start < 0 || start > arrayLength input then
+    (
+      HttpFrameFailed (HttpMalformed "http: scan offset outside buffer"),
+      unchanged,
+    )
+  else if not (validBytes input (max start validatedTo)) then
+    (
+      HttpFrameFailed
+        (HttpMalformed "http: input element outside byte range 0..255"),
+      unchanged,
+    )
+  else
+    scanVerdict
+      input
+      start
+      (HttpScan (arrayLength input) phase)
+      (scanFrom input start phase)
+
+-- | Find the end of the first complete request at or after `start` without a
+-- prior scan. This is `scanRequestBoundaryFrom` from `httpScanStart`, so a
+-- whole-buffer scan and a resumed one cannot be two different framers.
 export
 scanRequestBoundary : Array Int -> Int -> HttpFrame
 scanRequestBoundary input start =
-  if start < 0 || start > arrayLength input then
-    HttpFrameFailed (HttpMalformed "http: scan offset outside buffer")
-  else if not (validBytes input start) then
-    HttpFrameFailed
-      (HttpMalformed "http: input element outside byte range 0..255")
-  else match frameRequestAt input start
-    Ok (FramedRequest _ _ finalPos) =>
-      requestBytesVerdict (finalPos - start) (HttpFramedAt finalPos)
-    Err (Incomplete _) =>
-      requestBytesVerdict (arrayLength input - start) HttpNeedMore
-    Err (Fatal failure) => HttpFrameFailed failure
+  fst (scanRequestBoundaryFrom input start httpScanStart)
 
 -- | Parse the frame `[start, end)` exactly as `parseRequestClassified` parses
 -- that region on its own, so a scanned boundary and a parse cannot disagree.
