@@ -157,9 +157,9 @@ through `processSCCs`/`processSCC`. But the *orchestration* — registration ord
 coherence, and the final passes — is duplicated in two near-identical blocks:
 
 - single-file: `checkProgramDiags` (`:11565`), plus `checkProgramSchemes` (`:9259`)
-- multi-module: `checkModuleFullDiags` (`:12417`), driven by `checkModulesDiagsK`
-  (`:12480`) / `checkModules` (`:12395`); `elaborateModules` (`:12610`) for the
-  elaborated tree
+- multi-module: `checkModuleFullDiags`, driven by the one graph driver `driveGraphK`
+  (`GOutDiags` for diagnostics and schemes, `GOutTrees` for the elaborated tree that
+  `elaborateModules` projects) / `checkModules` for the schemes-only fast path
 
 Both run `checkCoherence` / `checkInterfaceCycles` / `checkPhantomMethods` /
 `checkSuperImpls`. **A new whole-program pass added to one and not the other is

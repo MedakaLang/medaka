@@ -168,7 +168,6 @@ atomsDiff : List Atom -> List Atom -> List Atom
 atomsEscape : List Atom -> List Atom -> List Atom
 atomsOfWritten : List (String, Option String) -> List Atom
 attachCoherenceConflict : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
-attachCoherenceConflictPair : List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryPayload : (a -> a) -> List (String, a) -> List (String, a)
 attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)
 attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((String, String), a)
@@ -207,8 +206,7 @@ buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, Li
 buildClassEnv : List DeclEnvModule -> ClassEnv
 buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List DeclEnvModule -> DataEnv
-buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
-buildDeclEnvsFrom : DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
+buildDeclEnvs : DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
@@ -341,7 +339,6 @@ checkModuleFullImpl : String -> List (String, Scheme) -> List Decl -> List Decl 
 checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, Scheme))
 checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesDiagsChain : Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
-checkModulesDiagsK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 checkModulesEntryFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFullK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
@@ -413,9 +410,6 @@ clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr
 closedRowEqCheck : List Atom -> List Atom -> Unit
 closedRowMismatchMsg : List Atom -> List Atom -> String
 cmCheckWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List (String, Scheme))
-cmDiagsCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
-cmEntryCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag)
-cmModuleWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
 cohCrossModuleMsg : String -> String -> String -> String
@@ -437,7 +431,6 @@ cohIsCrossModule : String -> String -> Bool
 cohKeepFirst : Option a -> Option a -> Option a
 cohMutuallySubsumes : List Mono -> List Mono -> Bool
 cohOntoFull : Option String -> Option String -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag)
-cohOntoPair : Option String -> Option String -> (List TcDiag, List TcDiag) -> (List TcDiag, List TcDiag)
 cohOverlap : List Mono -> List Mono -> Bool
 cohOverlapGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
 cohOverlapMsg : String -> List Mono -> List Mono -> String
@@ -724,6 +717,7 @@ doStmtSites : DoStmt -> List (Ref Route)
 domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
 drainStampQueue : Unit -> Unit
+driveGraphK : GraphOut -> DrainDiags -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driverState : Ref DriverState
 dropCtorIdentCand : Ident -> List (Ident, String, Scheme) -> List (Ident, String, Scheme)
 dropFirst : Int -> List a -> List a
@@ -764,11 +758,7 @@ effectParamMsg : String -> String -> String
 effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
-elabCollect : Bool -> String -> (List Decl, List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List TcDiag, List TcDiag)))
-elabHarvestWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List Decl, List TcDiag, List TcDiag))
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List Decl)
-elabModuleStampDiags : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List Decl, List TcDiag, List TcDiag)
-elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List Decl, List TcDiag, List TcDiag))
 elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry)
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
@@ -984,16 +974,17 @@ goalsSince : Int -> List Obligation
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
-graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
-graphCtorExportsFrom : List (String, String, Ident) -> List (String, List Decl) -> Map String (List (String, String, Ident))
+graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
+graphCtorExports : List (String, String, Ident) -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
-graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (String, List String))
-graphIfaceMethodsFrom : List (String, List String) -> List (String, List Decl) -> Map String (List (String, List String))
+graphDrainFinish : DrainDiags -> Unit
+graphIfaceMethods : List (String, List String) -> List (String, List Decl) -> Map String (List (String, List String))
 graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
 graphMarksNow : Unit -> GraphMarks
-graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
-graphMethodExportsFrom : List (String, Ident) -> List (String, List Decl) -> Map String (List (String, Ident))
+graphMethodExports : List (String, Ident) -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
+graphModuleWorker : GraphOut -> String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List Decl, List (String, Scheme), List TcDiag, List TcDiag))
+graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List Decl, MarkSets)
 graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
 groundAdmittedGo : String -> List IfaceRef -> List Mono -> Option Loc -> Unit
@@ -1464,8 +1455,7 @@ markGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, E
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
 markRecursiveOccurrences : ModuleMarking -> List (String, Mono) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
-markSetsFrom : PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
-markSetsOf : List Decl -> List (String, List Decl) -> List Decl -> MarkSets
+markSetsOf : PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
 markTailDecl : ArgRw -> Decl -> Decl
 markTailDecls : MarkCtx -> Map String Unit -> List Decl -> List Decl
 matchCol0Type : Mono -> Option TabKey
