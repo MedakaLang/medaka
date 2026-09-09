@@ -113,9 +113,15 @@ test: medaka
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on
 	## compiler/tools/*, so without this line the fail-open coverage would be
-	## fixtures that never execute. It also picks up the isProsePath/underDir/
-	## modePartOf doctests already in the file, which were equally unrun.
+	## fixtures that never execute. It also picks up the isProsePath/underDir
+	## doctests already in the file, which were equally unrun.
 	./medaka test compiler/tools/gate_cmd.mdk
+	## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
+	## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk
+	## either, so without this line its tierPartOf/modePartOf/globMatch/
+	## parseSelector doctests and its `prop` block (selector parsing, glob
+	## matching) would be fixtures that never execute.
+	./medaka test compiler/tools/gate_registry.mdk
 	## FIX-lint-mechanism-correctness (Fix C): compiler/tools/lint_baseline.mdk
 	## is outside every entry's import closure ([W-MODULE-BLIND]), so its
 	## fail-closed parse/validation paths (missing file, malformed TOML, a

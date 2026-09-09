@@ -287,7 +287,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_ci_shard_coverage.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_shard_coverage.sh", "test/gates.toml", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "test/diff_compiler_ci_shard_coverage.sh", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 
@@ -2377,7 +2377,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_fmt_write_safety.sh"
 oracles = []
-sources = ["compiler/driver/*", "test/diff_compiler_fmt_write_safety.sh"]
+sources = ["compiler/driver/*", "compiler/support/cli_targets.mdk", "test/diff_compiler_fmt_write_safety.sh"]
 corpus = []
 toolchain = []
 
@@ -2527,7 +2527,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_lint_cache.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
 corpus = ["test/lint_fixtures"]
 toolchain = []
 
@@ -2542,7 +2542,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_lint_crossfile.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_crossfile.sh"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_crossfile.sh"]
 corpus = ["test/lint_crossfile_fixtures"]
 toolchain = []
 
@@ -2572,7 +2572,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_lint_multi_dir.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_multi_dir.sh"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_multi_dir.sh"]
 corpus = ["test/lint_multi_dir_fixtures"]
 toolchain = []
 
@@ -2587,7 +2587,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_lint_multi.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_multi.sh"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_multi.sh"]
 corpus = ["test/lint_multi_fixtures"]
 toolchain = []
 
@@ -2617,7 +2617,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/diff_compiler_lint_baseline.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/lint_baseline.toml", "test/diff_compiler_lint_baseline.sh", ".githooks/pre-commit"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/lint_baseline.toml", "test/diff_compiler_lint_baseline.sh", ".githooks/pre-commit"]
 corpus = []
 toolchain = []
 
@@ -3945,7 +3945,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_gate_registry.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_gate_registry.sh", "test/gates.toml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "test/diff_compiler_gate_registry.sh", "test/gates.toml"]
 corpus = ["test/gate_registry_fixtures"]
 toolchain = []
 
@@ -3980,7 +3980,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_tier_drift.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_tier_drift.sh", "test/gates.toml", ".github/workflows/ci.yml", ".github/workflows/nightly.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "test/diff_compiler_tier_drift.sh", "test/gates.toml", ".github/workflows/ci.yml", ".github/workflows/nightly.yml"]
 corpus = []
 toolchain = []
 
@@ -3995,7 +3995,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_ci_gen_drift.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 
@@ -4059,7 +4059,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_gate_balance.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
 corpus = ["test/gate_balance_fixtures"]
 toolchain = []
 
@@ -4091,7 +4091,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_gate_budget.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 
@@ -4171,7 +4171,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_cli_help_conformance.sh"
 oracles = []
-sources = ["test/diff_compiler_cli_help_conformance.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "stdlib/args.mdk"]
+sources = ["test/diff_compiler_cli_help_conformance.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "compiler/tools/test_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
 
@@ -4209,7 +4209,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_cli_reject_floor.sh"
 oracles = []
-sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "stdlib/args.mdk"]
+sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "compiler/tools/test_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
 
