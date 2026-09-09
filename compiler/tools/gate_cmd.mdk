@@ -4806,6 +4806,47 @@ balNthStr i (x :: xs)
   | i <= 0 = x
   | otherwise = balNthStr (i - 1) xs
 
+-- ── Coverage: the governed/exempt split (#2596 item 4) ──────────────────────
+--
+-- `balReport` names the count it PACKS, and the registry is larger than that.
+-- The difference is not a rounding note.  A gate whose `shard` is the
+-- `other-job` sentinel is scheduled by one of ci.yml's hand-written job blocks,
+-- which invokes it by literal path; only test/run_gates.sh exports
+-- GATE_TIMING_JSON, so no cost sample can reach test/gate_cost_baseline.json
+-- for such a gate.  And `balCands`/`balUncosted` skip the sentinel regardless
+-- of whether a cost exists, so even a measured one would never move the pole.
+-- The exemption is structural, not an oversight: the pole/floor above governs
+-- the `gates` matrix alone, and these gates' wall clock lives outside it.
+-- Printing the split — with the names — is what keeps that exemption auditable
+-- rather than silent.
+balExemptNames : List Gate -> List String
+balExemptNames [] = []
+balExemptNames (g :: gs)
+  | g.shard == balOtherJob = g.name :: balExemptNames gs
+  | otherwise = balExemptNames gs
+
+balCoverage : List Gate -> String
+balCoverage gates =
+  let ex = balExemptNames gates
+  let n = listLen gates
+  let e = listLen ex
+  let headLine =
+    "  coverage: \{intToString n} registry gates = \{intToString (n - e)} governed by the packing above + \{intToString e} exempt (shard = \"\{balOtherJob}\")\n"
+  if e == 0 then
+    headLine
+  else
+    stringConcat [
+      headLine,
+      "  an exempt gate is scheduled by a hand-written ci.yml job block by literal\n",
+      "  path, not through test/run_gates.sh — the only caller that exports\n",
+      "  GATE_TIMING_JSON — so no cost sample reaches test/gate_cost_baseline.json\n",
+      "  for it, and the packer skips the sentinel whether or not a cost exists.\n",
+      "  Its wall clock is OUTSIDE the pole/floor above, which is the `gates`\n",
+      "  matrix alone.  Ungoverned by this budget, by name:\n",
+      joinNl (balIndent ex),
+      "\n",
+    ]
+
 -- The projection block both `--check` and the mutating form print, verbatim.
 -- One renderer, so the two can never describe different packings.
 balReport : String ->
@@ -5120,6 +5161,7 @@ balCompute regPath gates shs base runs regSrc =
         [
           "medaka gate balance: \{regPath}\n",
           balReport label cs rows ps runs,
+          balCoverage gates,
           balThinLine base,
           balOosBlock base cs runs,
           balStabLine cs (balRows runs shs) ps rows,
