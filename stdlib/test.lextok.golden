@@ -14,7 +14,11 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
+IDENT "contains"
+COMMA
 IDENT "lines"
+COMMA
+IDENT "startsWith"
 COMMA
 IDENT "stripSuffix"
 RBRACE
@@ -594,6 +598,248 @@ IDENT "e"
 INTERP_END ""
 IDENT "e"
 IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "missingTextNeedles"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "missingTextNeedles"
+IDENT "needles"
+IDENT "actual"
+EQUAL
+INDENT
+IDENT "filter"
+LPAREN
+IDENT "needle"
+FAT_ARROW
+IDENT "not"
+LPAREN
+IDENT "contains"
+IDENT "needle"
+IDENT "actual"
+RPAREN
+RPAREN
+IDENT "needles"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectTextContainsAll"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectTextContainsAll"
+IDENT "needles"
+IDENT "actual"
+EQUAL
+INDENT
+LET
+IDENT "expected"
+EQUAL
+IDENT "debug"
+IDENT "needles"
+NEWLINE
+MATCH
+IDENT "missingTextNeedles"
+IDENT "needles"
+IDENT "actual"
+INDENT
+LBRACKET
+RBRACKET
+FAT_ARROW
+UPPER "Pass"
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+IDENT "missing"
+CONS
+UNDERSCORE
+FAT_ARROW
+INDENT
+UPPER "Fail"
+INTERP_OPEN "expected text containing "
+IDENT "debug"
+IDENT "missing"
+INTERP_END ""
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "lineContainsAll"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "lineContainsAll"
+IDENT "needles"
+IDENT "line"
+EQUAL
+MATCH
+IDENT "missingTextNeedles"
+IDENT "needles"
+IDENT "line"
+INDENT
+LBRACKET
+RBRACKET
+FAT_ARROW
+UPPER "True"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectLineContainsAll"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectLineContainsAll"
+IDENT "needles"
+IDENT "actual"
+EQUAL
+INDENT
+LET
+IDENT "expected"
+EQUAL
+IDENT "debug"
+IDENT "needles"
+NEWLINE
+IF
+IDENT "any"
+LPAREN
+IDENT "lineContainsAll"
+IDENT "needles"
+RPAREN
+LPAREN
+IDENT "lines"
+IDENT "actual"
+RPAREN
+THEN
+INDENT
+UPPER "Pass"
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+STRING "expected one line containing every required string"
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectTextStartsWithAndContains"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectTextStartsWithAndContains"
+IDENT "prefix"
+IDENT "needles"
+IDENT "actual"
+EQUAL
+INDENT
+LET
+IDENT "expected"
+EQUAL
+INTERP_OPEN "prefix "
+IDENT "debug"
+IDENT "prefix"
+INTERP_MID ", substrings "
+IDENT "debug"
+IDENT "needles"
+INTERP_END ""
+NEWLINE
+IF
+IDENT "not"
+LPAREN
+IDENT "startsWith"
+IDENT "prefix"
+IDENT "actual"
+RPAREN
+THEN
+INDENT
+UPPER "Fail"
+INTERP_OPEN "expected text starting with "
+IDENT "debug"
+IDENT "prefix"
+INTERP_END ""
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
+ELSE
+MATCH
+IDENT "missingTextNeedles"
+IDENT "needles"
+IDENT "actual"
+INDENT
+LBRACKET
+RBRACKET
+FAT_ARROW
+UPPER "Pass"
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+IDENT "missing"
+CONS
+UNDERSCORE
+FAT_ARROW
+INDENT
+UPPER "Fail"
+INTERP_OPEN "expected text containing "
+IDENT "debug"
+IDENT "missing"
+INTERP_END ""
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
