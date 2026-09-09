@@ -715,11 +715,98 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve29b.err" 'case 29 resumed server'
 
-# ── fourth, independent --data dir: rate limiting (#2612) ──────────────────
-# `--trusted-proxy` is on here and nowhere else in this gate — every other
-# case above runs the untrusted, single-bucket identity path, and this is
-# the one place that needs two DISTINCT identities to prove a limit refuses
-# one without refusing the other.
+# ── fourth, independent --data dirs: the bind refusal (#2606, #2757) ───────
+# `--bind` other than the loopback default is refused unless
+# `--trusted-proxy` is also given: this process cannot verify a peer's
+# identity on its own (no getpeername-equivalent extern), so the flag is an
+# operator assertion the refusal makes mandatory rather than optional.
+
+# 30. non-loopback with NO auth: --trusted-proxy IS set, so the bind check
+#    passes, and what actually refuses the run is the ALREADY-unconditional
+#    credential requirement (A1: no --password-file and no existing
+#    credential in a fresh --data dir) — this asserts THAT diagnostic, not
+#    an invented bind-specific one, and that the bind-specific message did
+#    NOT fire instead.
+DATA30="$WORK/data30"
+mkdir -p "$DATA30"
+run_until_exit "$WORK/serve30.out" "$WORK/serve30.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATA30" --port 0 --bind 0.0.0.0 --trusted-proxy --init
+[ "$RC" -ne 0 ] \
+  || fail 'case 30: a non-loopback bind with no account credential was accepted'
+grep -F 'no account credential' "$WORK/serve30.err" >/dev/null \
+  || fail 'case 30: the refusal was not the existing missing-credential diagnostic'
+if grep -F 'trusted-proxy' "$WORK/serve30.err" >/dev/null 2>&1; then
+  fail 'case 30: the bind-specific refusal fired instead of the credential one'
+fi
+if grep -F 'serve: listening on' "$WORK/serve30.out" >/dev/null 2>&1; then
+  fail 'case 30: the listener bound before the credential was graded'
+fi
+
+# 31. non-loopback WITH auth (a --password-file is given, bootstrapping a
+#    credential) but no --trusted-proxy: refused by the NEW bind-specific
+#    diagnostic, before the credential or session secret reach disk.
+DATA31="$WORK/data31"
+mkdir -p "$DATA31"
+run_until_exit "$WORK/serve31.out" "$WORK/serve31.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA31" --port 0 \
+  --bind 0.0.0.0 --init
+[ "$RC" -ne 0 ] \
+  || fail 'case 31: a non-loopback bind with no --trusted-proxy was accepted'
+grep -F 'refusing to bind 0.0.0.0: a non-loopback bind requires --trusted-proxy' \
+  "$WORK/serve31.err" >/dev/null \
+  || fail 'case 31: the refusal did not name the bind address and the remedy'
+if grep -F 'serve: listening on' "$WORK/serve31.out" >/dev/null 2>&1; then
+  fail 'case 31: the listener bound before the bind was graded'
+fi
+[ ! -e "$DATA31/session-secret" ] \
+  || fail 'case 31: a refused non-loopback bind left a generated session secret behind'
+[ ! -e "$DATA31/credential" ] \
+  || fail 'case 31: a refused non-loopback bind left a generated credential behind'
+
+# 32. the accepted combination: non-loopback bind + --trusted-proxy + a real
+#    credential actually binds and serves. The client still connects over
+#    127.0.0.1 (its only address), which 0.0.0.0 accepts along with every
+#    other interface, so this proves the bind took rather than merely that
+#    the refusal didn't fire.
+DATA32="$WORK/data32"
+mkdir -p "$DATA32"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA32" --port 0 \
+  --bind 0.0.0.0 --trusted-proxy --init \
+  >"$WORK/serve32.out" 2>"$WORK/serve32.err" &
+SERVER_PID=$!
+i=0
+while [ "$i" -lt 100 ]; do
+  if grep -F 'serve: listening on 0.0.0.0:' "$WORK/serve32.out" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    cat "$WORK/serve32.err" >&2
+    fail 'case 32: the accepted combination did not report readiness'
+  fi
+  i=$((i + 1))
+  sleep 0.1
+done
+require_empty "$WORK/serve32.err" 'case 32 startup'
+PORT32=$(sed -n 's/.*listening on 0\.0\.0\.0:\([0-9]*\).*/\1/p' "$WORK/serve32.out" | head -1)
+[ -n "$PORT32" ] || fail 'case 32: could not read the bound port'
+client login "$PORT32" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 32: login against the non-loopback bind failed'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve32.err" 'case 32 (post-run)'
+
+# ── fifth, independent --data dir: rate limiting (#2612) ───────────────────
+# `--trusted-proxy` is also on here — every case in that block above the
+# rate-limit one runs the untrusted, single-bucket identity path, and this
+# is the one place that needs two DISTINCT identities to prove a limit
+# refuses one without refusing the other.
 
 DATARL="$WORK/data-ratelimit"
 mkdir -p "$DATARL"
@@ -836,4 +923,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, and a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'

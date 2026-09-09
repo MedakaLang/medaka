@@ -1,0 +1,16 @@
+# pds/Caddyfile — a template for the reverse proxy in front of `pds serve`.
+#
+# Caddy is the ONLY thing in this deployment that touches TLS (P5,
+# docs/design/ATPROTO-PDS-DESIGN.md): it obtains and renews the Let's
+# Encrypt certificate for the hostname below and reverse-proxies plaintext
+# HTTP to the Medaka process, which binds loopback only. `pds serve` never
+# sees the certificate and never terminates TLS itself — there is no TLS
+# implementation in Medaka to do so.
+#
+# Replace `pds.example.com` with the real hostname (the same one `pds serve
+# --hostname` is given) before use, and see docs/ops/PDS-DEPLOY.md for the
+# rest of the procedure — the port here must match `pds serve --port`.
+
+pds.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

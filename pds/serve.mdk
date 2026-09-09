@@ -1,5 +1,5 @@
 {- | `pds/serve.mdk` — the PDS entry point: admit a configuration, rehydrate the
-   account repository from disk, bind the loopback listener, and serve.
+   account repository from disk, bind the listener, and serve.
 
    Every configuration value arrives as a command-line flag and is admitted
    before anything is bound: a bad DID, handle, or hostname is rejected by
@@ -10,8 +10,16 @@
    default for any of them, so a misconfigured server never starts serving
    something other than what was asked for.
 
-   The bind address is not configurable at all: `shell.server`'s `bindLoopback`
-   takes only a port.
+   The bind address is `--bind`, defaulting to `127.0.0.1` (loopback). A
+   non-loopback address is refused before anything is read or written unless
+   `--trusted-proxy` is also given (`requireTrustedBind`): this process has no
+   way to observe whether the peer on the other end of an accepted connection
+   is actually the reverse proxy `--trusted-proxy` says it is — there is no
+   `getpeername` in the runtime — so the flag is an operator assertion about
+   the deployment, not a verified fact, and the refusal is what makes an
+   unproxied direct bind require deliberately opting out of it rather than
+   silently exposing the server (`#2757`,
+   `docs/design/ATPROTO-PDS-DESIGN.md`).
 
    The signing key is read here and handed to `lib.repo`, which is the only
    thing that needs it, and to nothing else. It is never printed, and neither is
@@ -105,7 +113,7 @@ import shell.persist.{
   persistLoad,
   persistSave,
 }
-import shell.server.{bindLoopback, runServer}
+import shell.server.{bindAddress, runServer}
 import string.{lines, stripSuffix, toInt, trim}
 import time.{now}
 
@@ -124,7 +132,11 @@ serveSpec = spec "serve" [
     "PATH"
     "file holding the account password, for first-run credential bootstrap",
   value ["--data"] "DIR" "existing directory holding the persisted repository",
-  intValue ["--port"] "N" "loopback TCP port to bind; 0 picks a free one",
+  intValue ["--port"] "N" "TCP port to bind; 0 picks a free one",
+  value
+    ["--bind"]
+    "ADDR"
+    "address to bind, default 127.0.0.1 (loopback); a non-loopback address is refused unless --trusted-proxy is also given",
   switch ["--init"] "create the genesis repository in an empty data directory",
   switch
     ["--trusted-proxy"]
@@ -166,6 +178,37 @@ requiredPort parsed = do
         Err "--port must be in 0..65535"
       else
         Ok port
+
+loopbackAddress : String
+loopbackAddress = "127.0.0.1"
+
+-- `--bind`, defaulting to loopback when absent. There is no admission check
+-- here — a malformed address is caught the same way it always was, by
+-- `shell.server`'s `bindAddress` failing to bind it.
+bindAddressOf : Args -> String
+bindAddressOf parsed = match flagValue "--bind" parsed
+  Some given => given
+  None => loopbackAddress
+
+isLoopbackAddress : String -> Bool
+isLoopbackAddress addr = addr == loopbackAddress
+
+{- | Refuse a non-loopback bind unless `--trusted-proxy` is also set (`#2757`).
+
+   This process cannot observe whether the peer on the other end of an
+   accepted connection really is the reverse proxy `--trusted-proxy` claims —
+   there is no `getpeername` in the runtime — so the flag is an operator
+   assertion about the deployment, and this refusal is what makes skipping it
+   a deliberate act rather than a silent direct exposure. It fires before any
+   secret is read or generated and before the listener binds (`#2659` item
+   4's ordering; a refusal here must leave nothing behind either). -}
+requireTrustedBind : String -> TrustedProxy -> Result String Unit
+requireTrustedBind bind (TrustedProxy trusted) =
+  if isLoopbackAddress bind || trusted then
+    Ok ()
+  else
+    Err
+      "refusing to bind \{bind}: a non-loopback bind requires --trusted-proxy (see docs/ops/PDS-DEPLOY.md)"
 
 -- The mode as `chmod` and `stat -c %a` spell it, so an operator can compare a
 -- rejection to the `0600` its remedy names without converting anything.
@@ -478,9 +521,10 @@ openRepo True dir did keyBytes secret =
     initRepo dir did keyBytes
 
 {- | Everything the server needs, or the first reason it may not run: the
-   configured server, its initial store, the data directory, and the port. -}
+   configured server, its initial store, the data directory, the port, and
+   the address to bind. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, TrustedProxy)
+  <Clock, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, TrustedProxy)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -488,6 +532,12 @@ configure parsed = do
   keyPath <- required "--key" parsed
   dir <- required "--data" parsed
   port <- requiredPort parsed
+  let bind = bindAddressOf parsed
+  let trustedProxy = TrustedProxy (flag "--trusted-proxy" parsed)
+  -- Before anything else is read or generated: a bind refusal must leave no
+  -- secret behind, same as every other refusal `configure` can raise
+  -- (#2659 item 4).
+  () <- requireTrustedBind bind trustedProxy
   account <- makeAccount did handle hostname
   server <- pdsServer account
   keyBytes <- readHexBytes "signing key" keyPath
@@ -509,55 +559,58 @@ configure parsed = do
     storeWithCredential credential withSecret,
     dir,
     port,
-    TrustedProxy (flag "--trusted-proxy" parsed),
+    bind,
+    trustedProxy,
   )
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting
 -- would otherwise wait for a process that never exits.
-ready : Int -> <Stdout> Unit
-ready port =
-  let () = putStrLn "serve: listening on 127.0.0.1:\{intToString port}"
+ready : String -> Int -> <Stdout> Unit
+ready bind port =
+  let () = putStrLn "serve: listening on \{bind}:\{intToString port}"
   flushStdout ()
 
 reportOutcome : Result String Unit -> <Stderr> Unit
 reportOutcome (Ok ()) = ()
 reportOutcome (Err message) = abort "serve: accept loop ended: \{message}"
 
-announce : Int ->
+announce : String ->
+  Int ->
   Listener ->
   Store ->
   String ->
   Server ->
   TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-announce port lis store dir server trustedProxy = defer
-  _ <- liftIO (u => ready port)
+announce bind port lis store dir server trustedProxy = defer
+  _ <- liftIO (u => ready bind port)
   storeRef <- liftIO (u => Ref store)
   outcome <- runServer server dir storeRef lis trustedProxy
   liftIO (u => reportOutcome outcome)
 
-bound : Server ->
+bound : String ->
+  Server ->
   Store ->
   String ->
   TrustedProxy ->
   Result String Listener ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-bound _ _ _ _ (Err message) =
+bound _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
-bound server store dir trustedProxy (Ok lis) = defer
+bound bind server store dir trustedProxy (Ok lis) = defer
   port <- liftIO (u => listenPort lis)
   match port
     Err message =>
       liftIO (u => abort "serve: listener port unavailable: \{message}")
-    Ok given => announce given lis store dir server trustedProxy
+    Ok given => announce bind given lis store dir server trustedProxy
 
-start : Result String (Server, Store, String, Int, TrustedProxy) ->
+start : Result String (Server, Store, String, Int, String, TrustedProxy) ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port, trustedProxy)) = defer
-  listener <- liftIO (u => bindLoopback port)
-  bound server store dir trustedProxy listener
+start (Ok (server, store, dir, port, bind, trustedProxy)) = defer
+  listener <- liftIO (u => bindAddress bind port)
+  bound bind server store dir trustedProxy listener
 
 -- A `keygen` run touches no socket and no repository, so it finishes inside
 -- one synchronous step rather than entering the scheduler.

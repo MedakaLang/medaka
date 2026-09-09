@@ -1,13 +1,23 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** ACTIVE (2026-09-04) — Phases 0–3 are complete in the current tree.
+**Status:** ACTIVE (2026-09-09) — Phases 0–3 are complete in the current tree.
 Phase 4 (#1697) has landed record CRUD, `applyWrites` as one signed commit,
 session authentication, and the blob half (`uploadBlob`/`getBlob`/`listBlobs`
 with on-disk persistence across restarts) — the Async v2 runtime arc (#500)
 and the graded-interface work (#823/#824) that Phase 3 depended on are both
-landed, so nothing in Phase 4 remains gated on them either. What is left of
-Phase 4 is deployment behind Caddy under systemd; multi-repository support
-stays out of scope through 0.1.0 by design (§0, P14).
+landed, so nothing in Phase 4 remains gated on them either. The bind is now
+configuration (`--bind`, default `127.0.0.1`) rather than a literal, a
+non-loopback bind is refused unless `--trusted-proxy` is also set (`#2757`,
+accepted-risk plus this refusal — a peer-address extern was proposed and
+declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
+carry the deploy procedure — but no live deploy has happened: pointing a real
+domain at a real key is a manual, deliberate act still to be taken. Still
+open, tracked separately rather than blocking that act: `#2613` (backup/
+restore, Phase 6), `#2572` (a block operation can occupy the scheduler
+past its budget), `#2773`/`#2774` (perf), `#2608` (firehose, Phase 5), and
+`#1962` (the signing-parity oracle is nightly-only — confirm it green
+immediately before a deploy). Multi-repository support stays out of scope
+through 0.1.0 by design (§0, P14).
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
 dev box behind Caddy. This is simultaneously the most demanding Medaka program
@@ -592,19 +602,23 @@ pure core stays reachable from every engine Phase 3 does not run on. The signatu
 half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
-**Loopback-only is deliberate, not an oversight.** `bindLoopback` takes a port and
-nothing else — no configuration path can move this server off `127.0.0.1`. §4.2-4.4
-below describe the auth seam this server now has: the three record writes and
-`getSession` require a valid access token, `refreshSession`/`deleteSession` require a
-valid refresh token, `createSession` is the public login that issues both, and the
-six reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only is the
-separate gate that remains: authentication makes the endpoints safe to answer, but
-nothing here hardens the socket for exposure past loopback (TLS, a non-loopback
-bind), which is not a Phase 3 or Phase 4 gap to work around but out of scope until a
-later phase takes it up.
+**Loopback by default, and a non-loopback bind is a deliberate act.** `--bind`
+(`pds/serve.mdk`) defaults to `127.0.0.1`; a bind to anything else is refused
+before any secret is read or generated and before the listener binds, unless
+`--trusted-proxy` is also given (`requireTrustedBind`, `#2757`) — see the
+paragraph below for why that flag is the enforcement rather than a peer-address
+check this process could make instead. §4.2-4.4 below describe the auth seam
+this server now has: the three record writes and `getSession` require a valid
+access token, `refreshSession`/`deleteSession` require a valid refresh token,
+`createSession` is the public login that issues both, and the six reads,
+`resolveHandle`, and the two well-knowns stay public. TLS is never
+implemented here (P5) — Caddy terminates it and reverse-proxies to the
+loopback port, which is the deployment `docs/ops/PDS-DEPLOY.md` describes.
 
-**Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), except
-deployment.*
+**Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), including
+the configurable bind, the refusal, and the deployment artifacts
+(`pds/Caddyfile`, `pds/pds.service`, `docs/ops/PDS-DEPLOY.md`) — except the
+live deploy itself, which is a manual act still to be taken.*
 
 Shipped, all in `pds/lib/handlers.mdk` as pure functions over the Phase-2 seam,
 composed under the Phase-3 shell's auth seam (§ above): record CRUD
@@ -722,10 +736,17 @@ ceilings are process-wide rather than per-client, so the first caller to
 reach one refuses every other caller until the window turns. A per-identity
 limiter that cannot distinguish identities is a global limiter. Nothing in
 this runtime can close that gap from here: identifying an unproxied caller
-needs its peer address, which this runtime cannot obtain (#2757). The
-consequence is that `--trusted-proxy` is not an optimization to defer — a
-deployment exposed past loopback without it has one shared allowance for the
-whole world. `pds/README.md` documents the operator-facing half of this:
+needs its peer address, which this runtime cannot obtain — there is no
+`getpeername`-equivalent extern, and adding one is not the fix, since under
+Caddy on the same box a socket peer address reads `127.0.0.1` regardless of
+who is really asking, so the last `X-Forwarded-For` hop is already the
+better identity available. `#2757` closes as accepted-risk on that basis,
+plus the refusal `requireTrustedBind` (`pds/serve.mdk`) now enforces: **a
+direct, unproxied non-loopback bind is unsupported** — `configure` refuses to
+start one at all, so the "whole world sharing one bucket" state described
+above can only be reached by a deployment that has itself already asserted
+`--trusted-proxy` while lacking a real proxy, which the flag's own name
+argues against. `pds/README.md` documents the operator-facing half of this:
 when to pass the flag and what happens without it.
 
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a

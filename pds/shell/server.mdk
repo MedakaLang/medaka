@@ -8,9 +8,10 @@
    and `shell.blobfile` and then published into the one `Ref Store` every
    connection task shares.
 
-   The listener binds the loopback address and only the loopback address: the
-   address is a literal in `bindLoopback` and no parameter, argument, or
-   configuration field reaches it. A caller chooses the port and nothing else.
+   The listener binds whatever address `bindAddress` is given — `pds/serve.mdk`
+   defaults it to loopback and refuses any other address unless
+   `--trusted-proxy` is also set, but that refusal lives in `configure`, not
+   here: this module binds the socket it is told to bind.
 
    Every per-connection bound lives here rather than in `lib.resource_limits`
    because each is a `Duration` or a socket-scheduling count, neither of which
@@ -162,14 +163,16 @@ maxUnframedConnections = 64
 headerTimeout : Duration
 headerTimeout = seconds 5
 
-{- | Bind the listening socket.
+{- | Bind the listening socket to the given address and port.
 
-   The address is the literal below and is reachable no other way:
-   `bindLoopback` takes a port and nothing else, so no configuration path can
-   move this server off the loopback interface. -}
+   `pds/serve.mdk`'s `configure` is the only caller, and it refuses to reach
+   here at all for a non-loopback address unless `--trusted-proxy` is also
+   set (`requireTrustedBind`) — this function itself performs no such check,
+   because it cannot: a bind address is a deployment fact, not something this
+   process can verify about its own socket. -}
 export
-bindLoopback : Int -> <Net "_"> Result String Listener
-bindLoopback port = listen "127.0.0.1" port
+bindAddress : String -> Int -> <Net "_"> Result String Listener
+bindAddress addr port = listen addr port
 
 persistFailureBytes : Array Int
 persistFailureBytes =
