@@ -55,7 +55,7 @@ engineLabel NativeSpeed = "native (speed)"
    recomputation: adding tests only raises the real count (`>= floor` still
    passes), while removing them, or a discovery regression, drops below the
    floor and fails. Raise one floor when you add tests to that file; never
-   regenerate all 21 from a fresh run, which would turn the guard into a
+   regenerate every floor from a fresh run, which would turn the guard into a
    tautology.
 
    The engine column is the measured assignment, not either retired
@@ -76,7 +76,7 @@ engineLabel NativeSpeed = "native (speed)"
 suites : List (String, (Int, Engine))
 suites = [
   ("skeleton_test", (2, Eval)),
-  ("http_test", (74, Eval)),
+  ("http_test", (83, Eval)),
   ("xrpc_test", (29, Eval)),
   ("server_core_test", (11, Eval)),
   ("encodings_test", (29, Eval)),
@@ -96,6 +96,7 @@ suites = [
   ("session_routes_test", (29, NativeCapability)),
   ("auth_seam_test", (31, NativeCapability)),
   ("blob_routes_test", (15, NativeCapability)),
+  ("ratelimit_test", (13, Eval)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -191,7 +192,7 @@ floorExpectation name = match lookup name excluded
 test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
   floorExpectation "skeleton_test"
 
-test "pds/test/http_test.mdk executed >= 74 assertions" =
+test "pds/test/http_test.mdk executed >= 83 assertions" =
   floorExpectation "http_test"
 
 test "pds/test/xrpc_test.mdk executed >= 29 assertions" =
@@ -250,6 +251,9 @@ test "pds/test/auth_seam_test.mdk executed >= 31 assertions" =
 
 test "pds/test/blob_routes_test.mdk executed >= 15 assertions" =
   floorExpectation "blob_routes_test"
+
+test "pds/test/ratelimit_test.mdk executed >= 13 assertions" =
+  floorExpectation "ratelimit_test"
 
 -- # Non-vacuity
 
