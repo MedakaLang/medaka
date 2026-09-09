@@ -282,6 +282,8 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
   -- exact case Stage 0 added that parameter for.  `compiler`/`stdlib` are
   -- appended by `runBuildNativeRoots` itself.
   let extraRoots = entrySearchRoots (dirOf target)
+  -- strictEmit = True: same reason as the `test` probe's, same seam (#2679) —
+  -- see runBuildNativeRoots.
   match (runBuildNativeRoots
     root
     medaka
@@ -290,7 +292,8 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
     outPath
     tmpDir
     False
-    extraRoots)
+    extraRoots
+    True)
     Err rep =>
       Err
         "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"

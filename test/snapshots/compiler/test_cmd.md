@@ -1,5 +1,5 @@
 # META
-source_lines=2254
+source_lines=2283
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -150,7 +150,7 @@ import support.util.{
   startsWith,
   stringTrim,
 }
-import support.path.{dirOf, baseOf}
+import support.path.{dirOf, baseOf, joinPath}
 import args.{
   ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
 }
@@ -366,10 +366,23 @@ typecheckExempt target userDecls tsrc
 -- the filesystem instead of consulting a roster, so a project added later is in
 -- scope with no edit here ([W-PROJECT-BY-MANIFEST]) — the same live derivation
 -- `test/preflight.sh` and `test/diff_compiler_project_enrolment.sh` use.
+--
+-- The third half (`underMedakaRepoTestDir`) is this repository's OWN `test/`
+-- directory, which the project half cannot reach: the medaka repo root carries
+-- no `medaka.toml` of its own (`compiler/` and each sibling project has one,
+-- the root does not), so `findProjectRoot` walks past it to the filesystem root
+-- and answers `None`.  The repo's `test/*_test.mdk` gate-tests are ordinary
+-- type-checkable code by the same argument as any project's, and were the last
+-- `*_test.mdk` files still inheriting the exemption (#2679).  It too asks the
+-- filesystem — the `test/` directory whose SIBLING is the compiler project —
+-- rather than naming a root.
 isNewVehiclePath : String -> <IO> Bool
 isNewVehiclePath target =
   if endsWith "_test.mdk" target then
-    hasVehicleSegment (canonicalizePath target) || underProjectTestDir target
+    let canon = canonicalizePath target
+    hasVehicleSegment canon
+      || underProjectTestDir target
+      || underMedakaRepoTestDir canon
   else
     False
 
@@ -394,6 +407,22 @@ underProjectTestDir target =
     None => False
   else
     False
+
+-- Does `target` sit directly in the medaka repository's own `test/` directory?
+-- That directory has no manifest at or above it, so `underProjectTestDir`
+-- cannot see it; what identifies it instead is its SIBLING — a `test/` whose
+-- parent also holds the compiler project's `medaka.toml` is this tree's `test/`
+-- and no other.  Derived, not a roster, and worktree-local: it answers about
+-- the checkout the target lives in, not about the one the running binary was
+-- built from.
+--
+-- The direct-child rule matters: `test/ported/*.mdk` sits a directory deeper
+-- (its `dirOf` is `…/test/ported`), so the eval-vs-check divergence corpus is
+-- untouched and keeps its exemption.
+underMedakaRepoTestDir : String -> <IO> Bool
+underMedakaRepoTestDir target =
+  let d = dirOf target
+  baseOf d == "test" && fileExists (joinPath (dirOf d) "compiler/medaka.toml")
 
 -- The exemption ANNOUNCEMENT, on the printing arm only (#1680).  The silent
 -- twin (`runTestReport`, for MCP/`--json`) has no stderr channel of its own and
@@ -2275,7 +2304,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
-(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
@@ -2287,11 +2316,13 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EVar "False")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBlock (DoLet false false (PVar "canon") (EApp (EVar "canonicalizePath") (EVar "target"))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EVar "canon")) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EApp (EVar "underMedakaRepoTestDir") (EVar "canon"))))) (EVar "False")))
 (DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
 (DTypeSig false "underProjectTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "underProjectTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EMatch (EApp (EVar "findProjectRoot") (EVar "d")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))) (EVar "False")))))
+(DTypeSig false "underMedakaRepoTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "underMedakaRepoTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "d"))) (ELit (LString "compiler/medaka.toml"))))))))
 (DTypeSig false "exemptNotice" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "exemptNotice" ((PCon "False") PWild PWild) (ELit LUnit))
 (DFunDef false "exemptNotice" ((PCon "True") (PVar "target") (PVar "userDecls")) (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls"))))
@@ -2609,7 +2640,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
-(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
@@ -2621,11 +2652,13 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EVar "False")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBlock (DoLet false false (PVar "canon") (EApp (EVar "canonicalizePath") (EVar "target"))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EVar "canon")) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EApp (EVar "underMedakaRepoTestDir") (EVar "canon"))))) (EVar "False")))
 (DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
 (DTypeSig false "underProjectTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "underProjectTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EMatch (EApp (EVar "findProjectRoot") (EVar "d")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))) (EVar "False")))))
+(DTypeSig false "underMedakaRepoTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "underMedakaRepoTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "d"))) (ELit (LString "compiler/medaka.toml"))))))))
 (DTypeSig false "exemptNotice" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "exemptNotice" ((PCon "False") PWild PWild) (ELit LUnit))
 (DFunDef false "exemptNotice" ((PCon "True") (PVar "target") (PVar "userDecls")) (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls"))))

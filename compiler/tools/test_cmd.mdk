@@ -146,7 +146,7 @@ import support.util.{
   startsWith,
   stringTrim,
 }
-import support.path.{dirOf, baseOf}
+import support.path.{dirOf, baseOf, joinPath}
 import args.{
   ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
 }
@@ -362,10 +362,23 @@ typecheckExempt target userDecls tsrc
 -- the filesystem instead of consulting a roster, so a project added later is in
 -- scope with no edit here ([W-PROJECT-BY-MANIFEST]) — the same live derivation
 -- `test/preflight.sh` and `test/diff_compiler_project_enrolment.sh` use.
+--
+-- The third half (`underMedakaRepoTestDir`) is this repository's OWN `test/`
+-- directory, which the project half cannot reach: the medaka repo root carries
+-- no `medaka.toml` of its own (`compiler/` and each sibling project has one,
+-- the root does not), so `findProjectRoot` walks past it to the filesystem root
+-- and answers `None`.  The repo's `test/*_test.mdk` gate-tests are ordinary
+-- type-checkable code by the same argument as any project's, and were the last
+-- `*_test.mdk` files still inheriting the exemption (#2679).  It too asks the
+-- filesystem — the `test/` directory whose SIBLING is the compiler project —
+-- rather than naming a root.
 isNewVehiclePath : String -> <IO> Bool
 isNewVehiclePath target =
   if endsWith "_test.mdk" target then
-    hasVehicleSegment (canonicalizePath target) || underProjectTestDir target
+    let canon = canonicalizePath target
+    hasVehicleSegment canon
+      || underProjectTestDir target
+      || underMedakaRepoTestDir canon
   else
     False
 
@@ -390,6 +403,22 @@ underProjectTestDir target =
     None => False
   else
     False
+
+-- Does `target` sit directly in the medaka repository's own `test/` directory?
+-- That directory has no manifest at or above it, so `underProjectTestDir`
+-- cannot see it; what identifies it instead is its SIBLING — a `test/` whose
+-- parent also holds the compiler project's `medaka.toml` is this tree's `test/`
+-- and no other.  Derived, not a roster, and worktree-local: it answers about
+-- the checkout the target lives in, not about the one the running binary was
+-- built from.
+--
+-- The direct-child rule matters: `test/ported/*.mdk` sits a directory deeper
+-- (its `dirOf` is `…/test/ported`), so the eval-vs-check divergence corpus is
+-- untouched and keeps its exemption.
+underMedakaRepoTestDir : String -> <IO> Bool
+underMedakaRepoTestDir target =
+  let d = dirOf target
+  baseOf d == "test" && fileExists (joinPath (dirOf d) "compiler/medaka.toml")
 
 -- The exemption ANNOUNCEMENT, on the printing arm only (#1680).  The silent
 -- twin (`runTestReport`, for MCP/`--json`) has no stderr channel of its own and
