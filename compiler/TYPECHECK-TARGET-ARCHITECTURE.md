@@ -911,6 +911,16 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    re-unification duplicate.  The population the ruling has to adjudicate is now two files
    of one kind, not three kinds.
 
+18. **`run --json` envelopes a static error, 2026-09-09** (#2798). The five `runRunCmd`
+   error arms stage their diagnostics into the same `pendingRunDiags` envelope `check --json`
+   and the runtime-error path already use (stderr, `run`'s machine channel), so the `[perf]` and
+   staleness notices ride inside the document instead of corrupting it; the residual-only arm
+   emits a `T-RESIDUAL` diagnostic for the entry rather than an empty envelope; multi-module
+   paths are relativized as `check --json`'s are; warnings ride beside errors so the arrays
+   match `check --json` element-wise. Two pre-existing `.json.out` goldens had pinned the prose.
+   Found alongside, pre-existing and filed: a user file named `core.mdk` bypasses `run`'s static
+   gate (#2811).
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
