@@ -6,6 +6,7 @@
 
 import io.{getEnvOr, runVerb}
 import string.{contains, lines, startsWith, toLower}
+import test_process.{boundedVerb, boundedVerbSeconds, medakaBin}
 import test.{
   Expectation,
   expectLineContainsAll,
@@ -18,9 +19,6 @@ import test.{
 root : <IO> String
 root = getEnvOr "MEDAKA_ROOT" "."
 
-medakaBin : <IO> String
-medakaBin = getEnvOr "MEDAKA" "\{root}/medaka"
-
 export
 fixtureIn : String -> String -> <IO> String
 fixtureIn corpus name = "\{root}/\{corpus}/\{name}"
@@ -29,6 +27,38 @@ export
 runMedaka : List String -> <Exec "_", IO> Result String (Int, String)
 runMedaka args =
   map ((code, out, err) => (code, out ++ err)) (runVerb medakaBin args)
+
+-- # Spawning inside the tree under test
+
+{- | The raw native emitter to spawn, from `MEDAKA_EMITTER`, defaulting to the
+   one in `root`.
+
+   The peer of `test_process.medakaBin`, for a gate whose subject is the
+   emitter binary itself rather than a `medaka` verb. -}
+export
+emitterBin : <IO> String
+emitterBin = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
+
+{- | Runs `cmd` with `MEDAKA_ROOT` and `MEDAKA_EMITTER` named explicitly in its
+   environment, killed after `secs` seconds.
+
+   Both variables are passed rather than left to a default lookup: a gate
+   shard does not export them, and a spawn that relies on the binary finding
+   its own emitter is one refactor away from grading a verb that silently did
+   nothing. `env` carries them because Medaka has no `setEnv`, which is the
+   same device `medaka gate run` uses to hand a gate its environment. A value
+   already set in this process wins, since `root` and `emitterBin` read it
+   first. -}
+export
+boundedInTree : Int ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+boundedInTree secs cmd args =
+  boundedVerbSeconds
+    secs
+    "env"
+    (["MEDAKA_ROOT=\{root}", "MEDAKA_EMITTER=\{emitterBin}", cmd] ++ args)
 
 rejectionLine : String -> Bool
 rejectionLine line =
@@ -97,3 +127,68 @@ expectVerbExitStartsWithAndContains verb args expectedCode prefix needles =
           "medaka \{verb}: expected exit \{intToString expectedCode}, got \{intToString code}: \{debug out}"
       else
         expectTextStartsWithAndContains prefix needles out
+
+-- # Three-verb agreement
+
+{- | What `check`, `run` and `build` each did with one entry file, and what
+   the binary `build` produced then printed.
+
+   The three verbs share a front end and differ only in engine, so a gate
+   that grades them apart is grading one program three ways. The exit codes
+   alone cannot do that: a program rejected by a diagnostic and a program
+   executed and killed by a runtime panic both exit 1, and a build that
+   exits 0 while its binary prints the wrong number is invisible to any
+   grader that stops at the code. Every stream is therefore kept separate
+   and whole. -}
+public export data Agreement = Agreement {
+  checkCode : Int,
+  runCode : Int,
+  runOut : String,
+  runErr : String,
+  buildCode : Int,
+  buildLog : String,
+  binCode : Int,
+  binOut : String,
+  binErr : String,
+}
+
+-- | `"ACCEPT"` when a verb exited 0, `"REJECT"` otherwise — the verdict
+-- column a fixture pins.
+export
+verdictOf : Int -> String
+verdictOf 0 = "ACCEPT"
+verdictOf _ = "REJECT"
+
+{- | Runs `medaka check`, `medaka run` and `medaka build` over `entry`,
+   writing the build's output to `binPath`, and executes that binary when
+   the build succeeded.
+
+   Every spawn is bounded (`boundedVerb`), so one hanging fixture fails its
+   own row rather than the job. When the build did not succeed there is no
+   binary to run, and the three `bin` fields report an empty zero-exit run
+   that every caller reads only after checking `buildCode`. -}
+export
+checkRunBuild : String -> String -> <Exec "_", IO> Result String Agreement
+checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
+  Err e => Err "\{entry}: could not run `medaka check`: \{e}"
+  Ok (checkCode, _, _) => match boundedVerb medakaBin ["run", entry]
+    Err e => Err "\{entry}: could not run `medaka run`: \{e}"
+    Ok (runCode, runOut, runErr) =>
+      match boundedVerb medakaBin ["build", entry, "-o", binPath]
+        Err e => Err "\{entry}: could not run `medaka build`: \{e}"
+        Ok (buildCode, buildOut, buildErr) =>
+          let built =
+            if buildCode == 0 then boundedVerb binPath [] else Ok (0, "", "")
+          match built
+            Err e => Err "\{entry}: could not run the built binary: \{e}"
+            Ok (binCode, binOut, binErr) => Ok Agreement {
+              checkCode = checkCode,
+              runCode = runCode,
+              runOut = runOut,
+              runErr = runErr,
+              buildCode = buildCode,
+              buildLog = buildOut ++ buildErr,
+              binCode = binCode,
+              binOut = binOut,
+              binErr = binErr,
+            }

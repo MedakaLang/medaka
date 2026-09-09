@@ -265,10 +265,55 @@ for tag in $tags; do
   esac
 done
 
+# ── the probe build is STRICT (#2679) ──────────────────────────────────
+# A target that keeps the `test "…"` exemption (this one does: manifest-less scratch
+# dir, no `_test.mdk` suffix) still gets its synthesized probe COMPILED. The emitter's
+# own elaboration is warn-first by ruling (#2089), so before the fix it printed the
+# type errors to a stderr nobody reads, emitted IR anyway, and the probe linked, ran,
+# and reported `pass` at exit 0 — a green for a module that does not typecheck.
+# `medaka test --native` now arms MEDAKA_STRICT=1 for that emit subprocess alone.
+# The exemption itself is untouched: `medaka check` is still what reports the error,
+# and the eval engine still runs the same file (that is what `test/ported/*.mdk`
+# needs). What may not happen is a PASS.
+st="$WORK/strict_probe"
+mkdir -p "$st"
+cat > "$st/exempt_illtyped.mdk" <<'STRICTEOF'
+import test.{expectEqual}
+
+test "t" = expectEqual 1 1
+STRICTEOF
+st_out="$WORK/strict_probe.out"
+bound "$MEDAKA" test --native "$st/exempt_illtyped.mdk" >"$st_out" 2>&1
+st_rc=$?
+checked=$((checked + 1))
+if [ "$st_rc" -eq 0 ]; then
+  bad "exempt_illtyped.mdk: 'medaka test --native' exited 0 — the emitter records 'Ambiguous instance' type errors for this probe, so it must never report a pass (#2679). See $st_out"
+elif ! grep -qF 'Ambiguous instance' "$st_out"; then
+  bad "exempt_illtyped.mdk: 'medaka test --native' failed without naming the type error the emitter recorded — the failure must carry the diagnostic, not just a nonzero code. See $st_out"
+else
+  note "ok   exempt_illtyped.mdk: the native probe build is strict — emitter-recorded type errors fail the run and are named"
+fi
+# The same file under the EVAL engine keeps the exemption: no probe is built, so
+# nothing here narrows what `medaka test` (no --native) accepts.
+st_ev_out="$WORK/strict_probe_eval.out"
+bound "$MEDAKA" test "$st/exempt_illtyped.mdk" >"$st_ev_out" 2>&1
+st_ev_rc=$?
+checked=$((checked + 1))
+if [ "$st_ev_rc" -ne 0 ]; then
+  bad "exempt_illtyped.mdk: 'medaka test' (eval engine) exited $st_ev_rc — the #2679 fix must be scoped to the native probe build and must not narrow the eval-engine exemption. See $st_ev_out"
+else
+  note "ok   exempt_illtyped.mdk: the eval engine still exempts it (the fix is scoped to the probe build)"
+fi
+
 # ── abort rule (#2657/#2588: native_test_abort.mdk) ──────────────────────────
 # The probe dies inside test 2 of 4: tests 2, 3 and 4 have no complete output
 # and must be reported as errors — never dropped, never counted as passing.
 # Test 1 already printed its result before the abort and is judged normally.
+# The fixture's `expectEqual` arguments carry `(n : Int)` ascriptions because the
+# probe build is strict (#2679): bare integer literals leave `Eq`/`Debug` ambiguous,
+# the emitter records that, and the probe would fail to BUILD — which is a different
+# failure from the abort this cell is about. Keep the ascriptions, and keep the test
+# decls on lines 13/15/17/19: the assertions below grep those line numbers.
 ab="$ROOT/test/compiler_test_fixtures/native_test_abort.mdk"
 ab_out="$WORK/abort.out"
 bound "$MEDAKA" test --native "$ab" >"$ab_out" 2>&1

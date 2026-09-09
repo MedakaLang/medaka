@@ -10,10 +10,10 @@
 
 import test.{expectEqual, Expectation}
 
-test "runs before the abort" = expectEqual 1 1
+test "runs before the abort" = expectEqual (1 : Int) 1
 
-test "aborts the probe" = expectEqual 1 (panic "boom")
+test "aborts the probe" = expectEqual (1 : Int) (panic "boom")
 
-test "never reached (a)" = expectEqual 2 2
+test "never reached (a)" = expectEqual (2 : Int) 2
 
-test "never reached (b)" = expectEqual 3 3
+test "never reached (b)" = expectEqual (3 : Int) 3

@@ -128,6 +128,16 @@ test: medaka
 	## duplicate row, a negative count, a missing count field, findings with
 	## no row) are otherwise never run. Its sibling carries the six cases.
 	./medaka test compiler/tools/lint_baseline_test.mdk
+	## The `test/diff_compiler_*_test.mdk` gate modules' own library
+	## ([W-MODULE-BLIND]): nothing else walks stdlib/fs.mdk or
+	## stdlib/test_process.mdk, so their doctests — the anti-vacuity floors and
+	## the roster/count audits the migrated gates rest on — were fixtures that
+	## never executed. `--native` is not decoration: every file operation here
+	## is a host primitive the interpreter does not bind (`listDir` panics with
+	## `unbound identifier` under it), so the interpreter arm can only report a
+	## crash, never a pass.
+	./medaka test --native stdlib/fs.mdk
+	./medaka test --native stdlib/test_process.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
