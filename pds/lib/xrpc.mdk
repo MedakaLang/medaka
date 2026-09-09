@@ -242,21 +242,22 @@ invalidRequest = failure 400 "Bad Request" "InvalidRequest"
 notFound : String -> RouteResult
 notFound = failure 404 "Not Found" "NotFound"
 
--- | The 429 refusal for a rate-limited request. Exported (unlike the private
--- `invalidRequest`/`notFound` above) because rate-limit decisions are made
--- before a route is looked up at all, by `pds/shell/server.mdk` calling
--- `lib.ratelimit.step` directly, so the caller needs the `XrpcFailure` value
--- itself rather than a `RouteResult` this module's own router never sees.
-export
-rateLimitFailure : String -> XrpcFailure
-rateLimitFailure message =
-  failureValue 429 "Too Many Requests" "RateLimitExceeded" message
+{- | The 429 refusal for a rate-limited request, carrying the `RateLimit-*`
+   response fields the caller computed for the class it refused
+   (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` —
+   `pds/shell/server.mdk` builds these from `lib.ratelimit`, which owns the
+   allowance and window state this module never sees).
 
--- | Same refusal as `rateLimitFailure`, carrying the `RateLimit-*` response
--- fields the caller computed for the class it refused (`RateLimit-Limit`,
--- `RateLimit-Remaining`, `RateLimit-Reset` — `pds/shell/server.mdk` builds
--- these from `lib.ratelimit`, which owns the allowance and window state this
--- module never sees).
+   Exported (unlike the private `invalidRequest`/`notFound` above) because
+   rate-limit decisions are made before a route is looked up at all, by
+   `pds/shell/server.mdk` calling `lib.ratelimit.step` directly, so the caller
+   needs the `XrpcFailure` value itself rather than a `RouteResult` this
+   module's own router never sees.
+
+   There is deliberately no header-free variant: a refusal with no
+   `RateLimit-*` fields tells the client nothing about when to retry, and a
+   second entry point would be a second thing to keep in step with the
+   headers the server actually sends. -}
 export
 rateLimitFailureWithHeaders : String -> List Header -> XrpcFailure
 rateLimitFailureWithHeaders message extraHeaders =
