@@ -1450,7 +1450,7 @@ projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
     runtimeP
     coreP
     mods
-    (map midToDesugaredPair mods)
+    (desugaredModPairs mods)
     tcByMid
     (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
 

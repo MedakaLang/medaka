@@ -40888,10 +40888,13 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- which marks each module's groups on the schedule, so a module is marked at the
   -- point it is checked — after any memo restore of `graphRun`, never before, which
   -- is what keeps a minted cell indexing the table it was minted into).  A check
-  -- driver never sets the promotion-eligible set, so its dict-name set stays bare;
-  -- the harvest is cleared here so a previous elaboration in this process cannot
-  -- leak promoted names into it.
+  -- driver never promotes, so its dict-name set stays bare: the promotion-eligible
+  -- set and the harvest are both CLEARED here, because an elaboration earlier in
+  -- this process (`run`'s auto-print re-check runs after its elaboration; the
+  -- playground analyzes after an emit) leaves both populated on `driverState`,
+  -- which no reset touches, and `maybeInferConstraint` reads the set.
   let _ = markSetsFrom prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls
+  let _ = setDictEligible []
   driverState.value.promotionHarvestRef := []
   -- the core pass, memoized under the caller's prelude key — see `checkCoreMemoized`.
   let coreSchemes = checkCoreMemoized preludeKey coreDecls runtimeSeed

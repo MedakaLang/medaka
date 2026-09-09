@@ -53,7 +53,7 @@
 # Usage:  sh test/diff_compiler_run_check_agreement.sh
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MEDAKA="$ROOT/medaka"
+MEDAKA="${MEDAKA:-$ROOT/medaka}"
 FIXDIR="$ROOT/test/run_check_agreement_fixtures"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 [ -d "$FIXDIR" ] || { echo "missing fixture dir: $FIXDIR"; exit 2; }

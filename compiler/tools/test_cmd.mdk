@@ -543,8 +543,10 @@ data DoctestTrees =
 -- elaboration.
 --
 -- Forcing is the ONLY thing the filter may influence.  Which constructor this is
--- depends on doctest presence alone; if `--filter` could reach that choice it
--- would choose the gate's driver, and the two drivers do not have to agree.
+-- depends on doctest PRESENCE — measured on the module's unfiltered examples,
+-- never on the filtered synth decls — because the constructor selects the
+-- gate's driver, and a `--filter` that matched none would otherwise move a
+-- doctest-bearing module to the other driver's gate.
 data Prepared =
   | PreparedPair TestPair
   | PreparedInject (List (String, String, List Decl)) (List Decl)
@@ -571,24 +573,28 @@ data Prepared =
 --                 keyed into the prelude and module-chain memos `check` mints).
 --
 -- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
--- takes decides whether it type-checks — and adding a doctest, or a `--filter`
--- that matches none, would move it between them.  `elabWorker` and
--- `cmDiagsWorker` both pass `accAll ++ prog` (types/typecheck.mdk); if that ever
--- diverges again, this split is unsound and both arms must move to one driver.
+-- takes decides whether it type-checks — and adding a doctest would move it
+-- between them.  `elabWorker` and `cmModuleWorker` both pass `accAll ++ prog`
+-- (types/typecheck.mdk); if that ever diverges again, this split is unsound and
+-- both arms must move to one driver.  `hasDoctests` is the module's UNFILTERED
+-- doctest presence: the arm is chosen by what the module contains, so `--filter`
+-- cannot move it.
 prepareMulti : String ->
   String ->
   String ->
   List String ->
   Bool ->
+  Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-prepareMulti rsrc csrc target roots exempt synthDecls =
+prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
   match loadProgramFilesLocatedE (_ => None) target roots
     Err le => (
       loadGate exempt target le,
       PreparedPair (TestPairErr (loadErrorMessage le)),
     )
-    Ok mods => elaborateFor rsrc csrc target roots mods exempt synthDecls
+    Ok mods =>
+      elaborateFor rsrc csrc target roots mods exempt hasDoctests synthDecls
 
 elaborateFor : String ->
   String ->
@@ -596,9 +602,10 @@ elaborateFor : String ->
   List String ->
   List (String, String, List Decl) ->
   Bool ->
+  Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-elaborateFor rsrc csrc _target _roots mods exempt [] =
+elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   match elaborateModules runtimeDecls coreDecls (desugaredModPairs mods)
@@ -606,7 +613,7 @@ elaborateFor rsrc csrc _target _roots mods exempt [] =
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
       PreparedPair (uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))),
     )
-elaborateFor rsrc csrc target roots mods exempt synthDecls = (
+elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
   gateOfCheck exempt rsrc csrc target roots mods,
   PreparedInject mods synthDecls,
 )
@@ -727,11 +734,20 @@ driveMulti : List Engine ->
   Bool ->
   <IO> Bool
 driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt =
-  let examples =
-    filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
+  let allExamples = extractExamples (collectComments tsrc)
+  let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults examples
   let synthDecls = buildSynthDecls synthResults
-  match prepareMulti rsrc csrc target roots exempt synthDecls
+  let gated =
+    prepareMulti
+      rsrc
+      csrc
+      target
+      roots
+      exempt
+      (isNonEmptyL allExamples)
+      synthDecls
+  match gated
     (Some errText, _) =>
       let _ = ePutStrLn (typecheckGateFail target errText)
       False
@@ -1523,11 +1539,18 @@ reportMulti : List Engine ->
   Bool ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt includeTestDecls userDecls exempt =
-  let examples =
-    filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
+  let allExamples = extractExamples (collectComments tsrc)
+  let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults examples
   let prepared =
-    prepareMulti rsrc csrc target roots exempt (buildSynthDecls synthResults)
+    prepareMulti
+      rsrc
+      csrc
+      target
+      roots
+      exempt
+      (isNonEmptyL allExamples)
+      (buildSynthDecls synthResults)
   match prepared
     (Some errText, _) => (Some errText, [], [], [], False)
     (None, prepared) =>

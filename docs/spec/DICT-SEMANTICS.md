@@ -1842,8 +1842,8 @@ per-module path for a graph. It is not.
   them are stated against.
 
 **The place someone will push back, and what U2 actually says about it.** The doctest
-runner splits on whether the file under test has imports (`runChosen`,
-`compiler/tools/test_cmd.mdk:213-216`, on `hasUseDecls`), and the split is deliberate
+runner splits on whether the file under test has imports (`driveAll`,
+`compiler/tools/test_cmd.mdk`, on `hasUseDecls`), and the split is deliberate
 and documented. It is **not** a second elaboration mode — the no-import file goes
 through the degenerate 1-module list `[(rootId, decls)]`, and every arm reaches
 `elaborateModules` (the doctest arm via the wrapper `elaborateOne`). So U2 is

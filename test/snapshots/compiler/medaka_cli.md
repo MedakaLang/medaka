@@ -1,5 +1,5 @@
 # META
-source_lines=4235
+source_lines=4238
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -3048,9 +3048,12 @@ elaborateRun rtD coreD modsD =
 -- The wrapped elaboration's trees, residual and evidence, carrying the PLAIN
 -- program's per-module diagnostics.  The wrapped graph is synthetic — the
 -- `async` scheduler driver applied to the user's `main` — so a diagnostic
--- attributed to it names code the user did not write.  Anything only the wrap
--- makes ill-typed still aborts the run: the residual is the wrapped pass's, and
--- both passes feed the same sticky accumulator `hadTypeErrors` reads.
+-- attributed to it names code the user did not write.  The residual and the
+-- sticky accumulator `hadTypeErrors` reads are the wrapped pass's, so a
+-- diagnostic only the wrapped pass produces would still abort the run; none has
+-- been constructed (the wrap strips `main`'s signature and applies a row-open
+-- driver), so what the residual gate carries in practice is the graph-end
+-- drain's diagnostics and the core pass's, which no per-module list holds.
 plainPerModuleOf : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable) ->
   (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable) ->
   (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)

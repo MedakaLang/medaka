@@ -28,7 +28,7 @@
 #   f  directory with a zero-doctest ill-typed member      exit 1
 #   g  IMPORT-BEARING, zero doctests, ill-typed            exit 1 + located diagnostic
 #   h  `prop "…"` decls, ill-typed   exit 0 + the prop actually RUNS    <- the exemption
-#   n  IMPORT-BEARING, zero doctests, module-own impl   `test` AGREES with `check`
+#   t  IMPORT-BEARING, zero doctests, module-own impl   `test` AGREES with `check`
 #
 # ...and five more (issue #1680) pinning that the exemption is no longer SILENT:
 #
@@ -55,11 +55,12 @@
 # routed through it. Its fixture uses a genuine `Type mismatch` (not an unbound name) so
 # the assertion reaches the type checker, not just the resolver.
 #
-# CELL n IS AN AGREEMENT CELL, NOT A VERDICT CELL. `medaka test`'s import-bearing gate
+# CELL t IS AN AGREEMENT CELL, NOT A VERDICT CELL. `medaka test`'s import-bearing gate
 # picks its driver by doctest presence: with no doctests the gate is the phases' own
 # `elaborateModules` result, with doctests it is the check driver over the same loaded
-# graph. Those two drivers must accept the same programs, or adding a doctest — or a
-# `--filter` that matches none — changes whether an unrelated binding type-checks. The
+# graph. Those two drivers must accept the same programs, or adding a doctest
+# changes whether an unrelated binding type-checks (the arm is keyed on the UNFILTERED
+# doctest presence, so `--filter` cannot move it). The
 # discriminating shape is a module that owns the impl grounding a return-only type
 # parameter in a 2+-module graph: the two workers differed on whether a module's OWN
 # impls join the universe (`accAll` vs `accAll ++ prog`, types/typecheck.mdk). So this
@@ -489,7 +490,7 @@ run_case 'f directory with ill-typed member' "$TMP/dir" 1 \
 run_case 'g import-bearing, zero doctests, ill-typed' "$TMP/proj/main.mdk" 1 \
   'requires it to `medaka check` first' 'Type mismatch: Int vs String'
 
-agree_case 'n import-bearing, module-own impl: test agrees with check' "$TMP/agree/main.mdk"
+agree_case 't import-bearing, module-own impl: test agrees with check' "$TMP/agree/main.mdk"
 
 # Cell a's counterpart: `medaka check` must reject the same file, or the gate is
 # comparing `test` against nothing. This is the positive control for the whole matrix
