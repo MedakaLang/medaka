@@ -53,7 +53,7 @@ semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
 | `abstractRecordTypesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
 | module list (`modules`/`allModules`/`modPaths`) | (loader/typecheck/resolve param) | 4 (lookupAssoc-family) | `OrdMap` keyed by module id |
 | **= #2724**: `goals` via `moduleWindow`'s `listLen` | GraphRun | see below, not part of the lookupAssoc/contains/Ref(List sweeps — `listLen` shape | tracked by #2724 (counter instead of `listLen`) |
-| **= #2724**: `allModules` in `dictPassModulesScoped` → `transitiveImporterDecls` | (typecheck.mdk param) | see below | `OrdMap`/precomputed importer index |
+| **= #2724**: `allModules` in `dictPassModulesScoped` → the transitive-importer walk | (typecheck.mdk param) | see below | precomputed importer index, one per run (`importerReachIndex`, PR #2743) |
 
 Remaining `DriverState`/`GraphRun`/`PerRun` fields that are `Ref (List …)`-typed but not
 found scanned by `lookupAssoc`/`lookupTab`/`contains` in this sweep (47 total field
@@ -61,16 +61,16 @@ declarations in the three records — see the `Ref (List` table below, rows tagg
 `graph`) are lower priority: a field with no scan call site found here costs allocation
 on push but not a linear rescan.
 
-### The fourteenth quadratic (#2724, fix in flight), located
+### The fourteenth quadratic (#2724), located
 
 - `moduleWindow : Ref (List a) -> Int -> List a` (`compiler/types/typecheck.mdk:9304`)
   — `let now = cell.value in takeFirst (listLen now - mark) now`. Called on
   `graphRun.value.goals` (line 2984) and `graphRun.value.numlitRefs` (lines 19834, 30440,
   42378) — the run-wide goals/numlit channels.
-- `transitiveImporterDecls : String -> List (String, List Decl) -> List Decl`
-  (`compiler/types/typecheck.mdk:41791`), called from `dictPassModulesScoped`
-  (`compiler/types/typecheck.mdk:41441`) as `transitiveImporterDecls mid allModules` per
-  module in the program — the per-module walk that is quadratic in module count.
+- the transitive-importer walk (`compiler/types/typecheck.mdk` ~41791 at the census base),
+  called from `dictPassModulesScoped` (~41441) once per module in the program, each call a
+  DFS that scanned the module list and every visited module's decls — quadratic in module
+  count. Replaced by a per-run index (`importerReachIndex` / `transitiveImporters`, PR #2743).
 
 ## Per-file × class summary
 
