@@ -1224,7 +1224,7 @@ projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey 
     preludeKey
     chainKey
     mods
-    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+    (resolvedBuckets allowInternal trustedMods preludeKey runtimeP coreP mods)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1316,18 +1316,20 @@ foldStale ((path, d) :: rest) buckets =
 -- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
 resolvePass : Bool ->
   List String ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   OrdMap ModuleExports ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   List (String, List Diag)
-resolvePass _ _ _ _ _ [] buckets = buckets
-resolvePass allowInternal trustedMods rt core known ((mid, path, prog) :: rest) buckets =
+resolvePass _ _ _ _ _ _ [] buckets = buckets
+resolvePass allowInternal trustedMods preludeKey rt core known ((mid, path, prog) :: rest) buckets =
   let desugared = desugar prog
   let (exp, errs) =
     resolveModuleG
       (internalGuardFor (allowInternal || contains mid trustedMods))
+      preludeKey
       rt
       core
       known
@@ -1337,6 +1339,7 @@ resolvePass allowInternal trustedMods rt core known ((mid, path, prog) :: rest) 
   resolvePass
     allowInternal
     trustedMods
+    preludeKey
     rt
     core
     (omInsert exp.modId exp known)
@@ -1412,14 +1415,16 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
 -- channel that has nothing to do with typing.
 resolvedBuckets : Bool ->
   List String ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
   List (String, List Diag)
-resolvedBuckets allowInternal trustedMods runtimeP coreP mods =
+resolvedBuckets allowInternal trustedMods preludeKey runtimeP coreP mods =
   resolvePass
     allowInternal
     trustedMods
+    preludeKey
     runtimeP
     coreP
     omEmpty
@@ -1452,7 +1457,7 @@ projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
     mods
     (desugaredModPairs mods)
     tcByMid
-    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+    (resolvedBuckets allowInternal trustedMods None runtimeP coreP mods)
 
 -- The desugared `(modId, decls)` pairs `projectDiagsFromTc` will bucket against,
 -- for a caller that must hand the SAME trees to a graph driver.  Shares
