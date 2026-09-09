@@ -189,6 +189,41 @@ else
   sed -e 's/^/        /' "$out"
 fi
 
+# ── 1b. the coverage block reconciles ─────────────────────────────────────────
+#
+# `coverage: N registry gates = M governed by the packing above + K exempt` is
+# how a reader learns that the pole/floor above does NOT speak for the whole
+# registry. Its danger is arithmetic drift: a gate silently dropped from the
+# packing leaves N unchanged while M falls, and the sentence still READS
+# correct. Assert the identity N = M + K, not merely the presence of the line.
+#
+# Run on a fixture rather than the real tree so the numbers are the balancer's
+# own arithmetic on a known set, not whatever today's registry happens to hold.
+# ⚠️ No fixture under test/gate_balance_fixtures/ declares an `other-job` gate,
+# so K is exercised at 0 only; the identity still catches an M/N divergence.
+out_cov="$TMP/coverage.txt"
+MEDAKA_ROOT="$ROOT" "$MEDAKA" gate balance --check \
+  --registry "$FIX/lpt_packing_gap.toml" \
+  --baseline "$FIX/lpt_packing_gap.json" >"$out_cov" 2>&1
+cov_line="$(grep -m1 '^  coverage: ' "$out_cov" || true)"
+if [ -z "$cov_line" ]; then
+  bad "--check printed no coverage block"
+  sed -e 's/^/        /' "$out_cov"
+else
+  cov_n="$(printf '%s\n' "$cov_line" | sed -n 's/^  coverage: \([0-9][0-9]*\) registry gates = .*/\1/p')"
+  cov_m="$(printf '%s\n' "$cov_line" | sed -n 's/.* = \([0-9][0-9]*\) governed .*/\1/p')"
+  cov_k="$(printf '%s\n' "$cov_line" | sed -n 's/.*+ \([0-9][0-9]*\) exempt .*/\1/p')"
+  if [ -z "$cov_n" ] || [ -z "$cov_m" ] || [ -z "$cov_k" ]; then
+    bad "the coverage block printed, but its three numbers could not be read from it"
+    printf '        %s\n' "$cov_line"
+  elif [ "$cov_n" -eq $((cov_m + cov_k)) ]; then
+    ok "the coverage block reconciles: $cov_n = $cov_m governed + $cov_k exempt"
+  else
+    bad "the coverage block does not reconcile: $cov_n != $cov_m + $cov_k"
+    printf '        %s\n' "$cov_line"
+  fi
+fi
+
 # ── 2. idempotence, proved by diff and not by the tool's own verdict ──────────
 cp "$ROOT/test/gates.toml" "$TMP/real1.toml"
 _bal_real() {

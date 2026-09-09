@@ -1152,10 +1152,40 @@ Same shape and same reason as §13's `gate-balance` job: this gate grades a numb
 (the projected pole/floor) that a packing bug could move if the gate itself were
 packed, so it cannot be a member of the set it certifies.
 
-### Not yet required
+### Required as of sprint cost-governor-on S4
 
-`ci-gen-drift` is the one context of this family actually in the required-checks
-ruleset today; `gate-cost`, `gate-balance`, and this gate's `gate-budget` job are not.
-Adding a required context is a separate, non-atomic `gh api` ruleset edit
-(AGENTS.md [W-REQUIRED-CHECKS]) — out of scope for this slice; see its report for the
-exact command.
+`ci-gen-drift` and this gate's `gate-budget` job are both in the required-checks
+ruleset (AGENTS.md [W-REQUIRED-CHECKS]); `gate-cost` and `gate-balance` are still
+not. Adding a required context is a `gh api` ruleset edit, which no commit can
+carry, so it can never be atomic with the change that adds the check — derive the
+live set with [W-REQUIRED-CHECKS]'s recipe rather than trusting this paragraph.
+
+### Clause (c) reds every open PR at once — the one blast radius no other required check has
+
+Clauses (a), (b) and (d) are per-gate: they name a gate the author's own diff
+touched, and only a PR that touches it can red on it. Clause (c) is not. It
+grades the projected `pole/floor` of the WHOLE packing, so if a future cost
+ingest yields a set the packer cannot fit under the tolerance, the next run of
+`gate-budget` reds — on every open PR in the repo simultaneously, none of which
+changed anything relevant. The ingest is automated (`scripts/cost_baseline_land.sh`
+from the box cron), so no human is in the loop at the moment it can happen.
+
+The discharge is the `Gate-Budget-Override: pole-floor` trailer, which every
+blocked author would have to carry until the underlying pole is fixed — so treat
+a clause-(c) red as an incident to fix at the source, not a trailer to paste
+across a queue.
+
+Standing headroom, derived from `./medaka gate balance --check` on this tree
+(re-derive it rather than trusting these numbers, which age with every ingest):
+
+- tolerance constant: `budget pole/floor 1.125 — MET`
+- current pole `668.6s (gates_5)`, floor `668.6s`, so `pole/floor 1.000`
+- the floor is set by `diff_compiler_stage_ir_scaling` ALONE (668.6 s,
+  indivisible), which is also the pole — the pole row holds exactly that one gate
+
+So the margin is the full 0.125: the pole may rise to `1.125 × 668.6 ≈ 752 s`
+(about 84 s of slack) before clause (c) fires. Because pole and floor are the
+same indivisible gate today, the two move together — the realistic way to spend
+that headroom is not a slow gate landing somewhere, it is a SECOND row growing
+past `gates_5`, or `diff_compiler_stage_ir_scaling` itself getting slower while
+some other row does not.

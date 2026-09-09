@@ -336,11 +336,14 @@ GUARDWILD_N="${STAGE_IR_GUARDWILD_N:-25}"
 # 250/500/1000 where both cross 3.0 (dce r2=3.632, trmc r2=3.526). See
 # S-5-scoperefs-attribution's report for the full derivation table.
 #
-# PLACEMENT DECISION (per [W-SHARD-DERIVED]/contract §7.3): this shape rides the gate's
-# existing per-PR cadence — test/gates.toml's `diff_compiler_stage_ir_scaling` entry is
-# `tier = "merge"` (every PR/merge-queue run, same as its five sibling shapes in this
-# file), not `nightly` or `ondemand`. No special-case override was needed or added; the
-# ~1 min/shape callgrind cost at this band was accepted as part of that existing tier.
+# PLACEMENT (per [W-SHARD-DERIVED]): this shape is graded by the `full` tier only —
+# nightly, not per-PR. It rode the merge cadence until #2596, which found this gate to
+# be the indivisible floor of the merge queue's `gates` matrix at 668.6s and split it
+# into tiers (see STAGE_IR_TIER below). The ~1 min/shape callgrind cost that the merge
+# cadence had accepted is what the split moved. #2172's MODULE-level ceiling
+# (KNOWN_CEIL_scoperefs in test/diff_compiler_ir_scaling.sh, a separate merge-tier
+# gate) is unaffected and still runs on every PR; what moved to nightly is the
+# per-stage attribution half graded here.
 SCOPEREFS_N="${STAGE_IR_SCOPEREFS_N:-35}"
 
 # ── the multi-module band ────────────────────────────────────────────────────
@@ -845,10 +848,98 @@ if [ -n "$STAGE_IR_ONLY" ]; then
   echo "############################################################################"
 fi
 
-# want <shape> — the ONLY reader of STAGE_IR_ONLY.
+# ── STAGE_IR_TIER: which units this gate GRADES (#2596, merge-tier proxy) ────
+#
+# A TIER is a grading CONFIGURATION, not a narrowing, and the distinction is the
+# whole point of this block. Every tier asserts its own scope (an unknown tier
+# name and a tier that graded nothing both FAIL), keeps the zero-graded coverage
+# guard at the foot of this file live, and prints a PASS-class verdict. That is
+# what STAGE_IR_ONLY above deliberately does not do.
+#
+#   merge  the default, and what the `gates` matrix runs: `match` + `modules`.
+#   full   every unit; run nightly (.github/workflows/nightly.yml, job
+#          `stage-ir-scaling-full`, which sets STAGE_IR_TIER=full).
+#
+# Grading all eight units costs ~11 min of Callgrind, which made this gate the
+# indivisible floor of the merge queue's `gates` matrix (`medaka gate balance
+# --check`). `match` is the cheapest single-module shape and `modules` is the
+# only multi-module driver, so the merge pair still exercises BOTH profilers and
+# both grading paths (grade_shape and grade_modules). The six shape-specific
+# ledgered ceilings — #2125's in the `guardwild` band, #2172's attribution in
+# `gen_scoperefs` — are asserted by the nightly `full` tier, not on the merge
+# path. Derive the unit set, do not trust this comment:
+#
+#   grep -n '^grade_shape \|^grade_modules$' test/diff_compiler_stage_ir_scaling.sh
+STAGE_IR_ALL_UNITS="match xref vchain constrained wideiface guardwild scoperefs modules"
+STAGE_IR_TIER="${STAGE_IR_TIER:-merge}"
+case "$STAGE_IR_TIER" in
+  merge) STAGE_IR_TIER_UNITS="match modules" ;;
+  full)  STAGE_IR_TIER_UNITS="$STAGE_IR_ALL_UNITS" ;;
+  *)
+    echo "FAIL: STAGE_IR_TIER=[$STAGE_IR_TIER] is not a tier — expected 'merge' or 'full'."
+    exit 1
+    ;;
+esac
+echo "tier: $STAGE_IR_TIER — grading [$STAGE_IR_TIER_UNITS]"
+
+# ── tier vocabulary self-test (review S4) ────────────────────────────────────
+#
+# The tier is now a graded SCOPE that a nightly job and this gate disagree about
+# in cost but must agree about in vocabulary, and until here nothing asserted
+# either half. Both checks below are string-only — no profile runs — so they are
+# affordable on the merge path; actually GRADING `full` is ~11 min of Callgrind
+# and is the nightly job's whole reason to exist, so it is not re-run here.
+#
+# (i) the `full` tier's scope is EIGHT shapes and it CONTAINS the merge pair —
+#     it is not the six-shape complement. A grading configuration asserts its
+#     own scope; narrowing it to the delta would make the nightly verdict
+#     unreadable without a merge run beside it. This is the count and the
+#     containment .github/workflows/nightly.yml's job name states, so a shape
+#     added to (or dropped from) the corpus without updating that job reds here.
+_all_n="$(printf '%s\n' $STAGE_IR_ALL_UNITS | wc -l | tr -d ' ')"
+if [ "$_all_n" -ne 8 ]; then
+  echo "FAIL: the full tier grades $_all_n shape(s) [$STAGE_IR_ALL_UNITS], not 8 — .github/workflows/nightly.yml's stage-ir-scaling-full job says eight."
+  exit 1
+fi
+for _m in $STAGE_IR_TIER_UNITS; do
+  case " $STAGE_IR_ALL_UNITS " in
+    *" $_m "*) ;;
+    *)
+      echo "FAIL: tier '$STAGE_IR_TIER' grades '$_m', which the full tier [$STAGE_IR_ALL_UNITS] does not contain."
+      exit 1
+      ;;
+  esac
+done
+# (ii) an unrecognised tier must be REJECTED, not silently defaulted — a typo
+#     that fell through to `merge` would report PASS having graded two shapes
+#     while the reader believed eight ([W-QUIETER]). Re-invoked as a child,
+#     which exits at the `case` above before any profiling.
+if [ -z "${STAGE_IR_TIER_SELFTEST:-}" ]; then
+  _tier_out="$(STAGE_IR_TIER_SELFTEST=1 STAGE_IR_TIER=not-a-tier sh "$0" 2>&1)" && _tier_rc=0 || _tier_rc=$?
+  if [ "$_tier_rc" -eq 0 ]; then
+    echo "FAIL: STAGE_IR_TIER=not-a-tier was ACCEPTED — an unknown tier must not fall through to a default."
+    exit 1
+  fi
+  case "$_tier_out" in
+    *"is not a tier — expected 'merge' or 'full'"*) ;;
+    *)
+      echo "FAIL: STAGE_IR_TIER=not-a-tier was rejected, but not with the tier-vocabulary message:"
+      printf '%s\n' "$_tier_out" | sed -e 's/^/        /'
+      exit 1
+      ;;
+  esac
+  echo "tier self-test: the full tier is 8 shapes and contains [$STAGE_IR_TIER_UNITS]; an unknown tier is rejected."
+fi
+
+# want <unit> — the ONLY reader of STAGE_IR_ONLY and STAGE_IR_TIER.
+# STAGE_IR_ONLY wins when set: a debug narrowing names its units directly, so it
+# must not be filtered by whichever tier it happens to run under.
 want() {
-  [ -z "$STAGE_IR_ONLY" ] && return 0
-  for _w in $STAGE_IR_ONLY; do [ "$_w" = "$1" ] && return 0; done
+  if [ -n "$STAGE_IR_ONLY" ]; then
+    for _w in $STAGE_IR_ONLY; do [ "$_w" = "$1" ] && return 0; done
+    return 1
+  fi
+  for _t in $STAGE_IR_TIER_UNITS; do [ "$_t" = "$1" ] && return 0; done
   return 1
 }
 
@@ -1508,11 +1599,11 @@ grade_modules
 #   exit=1
 if [ "$graded" -eq 0 ] && [ -n "$STAGE_IR_ONLY" ]; then
   echo "FAIL: STAGE_IR_ONLY=[$STAGE_IR_ONLY] matched no unit — this run graded nothing."
-  echo "      Valid units: match xref vchain constrained wideiface modules"
+  echo "      Valid units: $STAGE_IR_ALL_UNITS"
   echo "      (derive:  grep -n '^grade_shape \\|^grade_modules$' $0 )"
   exit 1
 elif [ "$graded" -eq 0 ]; then
-  echo "FAIL: no stage was graded — this gate proved nothing."
+  echo "FAIL: no stage was graded under tier [$STAGE_IR_TIER] (units [$STAGE_IR_TIER_UNITS]) — this gate proved nothing."
   exit 1
 fi
 
@@ -1524,6 +1615,22 @@ fi
 if [ -n "$STAGE_IR_ONLY" ]; then
   echo "NARROWED OK (NOT a gate result): $graded stage-ratio(s) graded ($known ledgered) under STAGE_IR_ONLY=[$STAGE_IR_ONLY]."
 else
-  echo "PASS: $graded stage-ratio(s) graded ($known ledgered), all sub-quadratic in stage Ir (threshold $THRESH)."
+  # The verdict must SAY which scope it speaks for: "PASS" alone reads the same
+  # whether two shapes or eight were graded, and the nightly and merge runs
+  # differ in exactly that. Compose it, assert it carries the tier and every
+  # unit the tier resolved to, then print it — a run whose verdict has lost the
+  # scope is a wrong-looking green, not a formatting nit.
+  verdict="PASS (tier $STAGE_IR_TIER, units [$STAGE_IR_TIER_UNITS]): $graded stage-ratio(s) graded ($known ledgered), all sub-quadratic in stage Ir (threshold $THRESH)."
+  case "$verdict" in
+    "PASS (tier $STAGE_IR_TIER, units ["*) ;;
+    *) echo "FAIL: the verdict line no longer names its tier."; exit 1 ;;
+  esac
+  for _u in $STAGE_IR_TIER_UNITS; do
+    case "$verdict" in
+      *"$_u"*) ;;
+      *) echo "FAIL: the verdict line does not name graded unit '$_u'."; exit 1 ;;
+    esac
+  done
+  echo "$verdict"
 fi
 exit 0

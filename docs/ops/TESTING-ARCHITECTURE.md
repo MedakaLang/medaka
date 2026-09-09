@@ -54,7 +54,7 @@ Seven reports, scratch-only; the load-bearing numbers, each with its source repo
 | `gates_5` contents | one gate, `diff_compiler_stage_ir_scaling` (median 648 s over 9 CI samples, range 460–782) | D, H |
 | pds share of modeled cost | 1,589 s (29.5%); all subprojects 34.8% | C, D |
 | CPU saved by removing every genuine duplicate | ~5 s; ~7 s if the `bootstrap_*` ladder is retired (a decision §5.2 leaves to the owner); ~28 near-clone scripts, 108 redundant goldens | C |
-| Gate-budget enforcement | built (3 clauses + override trailer), **not a required check** — left non-required as sequencing ("a separate, non-atomic ruleset edit"), not as a decision against | D |
+| Gate-budget enforcement | built (4 clauses + override trailer), **a required check** (sprint cost-governor-on S4, #2596 item 2) | D |
 | Native vehicle real deficiencies | no IO/subprocess under eval (`testCapableExterns` = 5 names); a panic kills the run and every later file on a dir target; no derived `*_test.mdk` discovery | B |
 | Native vehicle folklore that is false | takes one file (dirs and multi-target work); sibling can't see subject (it loads the graph); doesn't typecheck (it does, except under paths without a `compiler`/`stdlib` segment — all 24 pds/sqlite `_test.mdk` files) | B |
 | `medaka test` on `pds/test/scalar_test.mdk` | 311–324 s wall for 38 decls, **dev box**. Separately: the whole 15-file `pds_test_inlang_test_oracle` gate is a 419 s **CI** median. Different machines, so no share is quoted; the direction (one file dominates) is the finding | B, F |
@@ -341,9 +341,8 @@ that already exists.
   KPI is Goodhart's law in a tree that needs shell for every trust anchor.
 
 **Cost.**
-- `gate-budget` becomes a required context (D §4: built, three clauses, override
-  trailer; non-required only as sequencing). Ruleset edit is add → swap → delete with
-  read-back ([W-GH-WRITE-VERIFY]). **Consequence to state in the failure message:** clause
+- `gate-budget` is a required context (sprint cost-governor-on S4, #2596 item 2; D §4:
+  built, four clauses, override trailer). **Consequence stated in the failure message:** clause
   (a) reds any schedulable gate with no baseline row (`balUncosted`,
   `gate_pack.mdk`), and a brand-new gate has none until the nightly ingest, so
   every gate-adding PR carries a `Gate-Budget-Override: uncosted:<name>` trailer until
@@ -355,12 +354,16 @@ that already exists.
   wall-clock arm goes nightly. All arms are non-soundness-class under the §3.6 charter
   (H), but two are ledgered regression pins whose move off pre-merge is an explicit
   decision for whoever approves: `guardwild`'s #2125 ceiling and `scoperefs`' #2172
-  attribution (H item 3, the G14 call). **Savings, stated honestly:** the ~168 s proxy
-  estimate is a linear extrapolation from the script's per-run costs and has never been
-  run; 648 − 168 ≈ 480 s is gate CPU, not queue wall. Queue wall saved before any
-  rebalance is `gates_5` 891 s − `gates_6` 663 s ≈ 4 min; after a rebalance the floor is
-  bounded by total/rows ≈ 5,387/8 ≈ 673 s plus setup. The win is that `gates_5` stops
-  being a single-gate pole.
+  attribution (H item 3, the G14 call). **Savings, as measured (S3, sprint
+  cost-governor-on, interleaved A/B/A on one box, one session):** the merge tier
+  (`match` + `modules`) cost 191 s and 200 s across the two A runs; the full
+  eight-shape tier cost 1003 s — a ~4.9-5.3× reduction of **the gate's own wall
+  clock**. That is not a queue saving and not a pole move: `gate balance --check`
+  after the change still reports `pole 668.6s (gates_5) … floor 668.6s …
+  pole/floor 1.000`, unchanged, because the cheaper cost row does not exist until
+  the nightly ingest prices the merge-tier run. The realized queue-wall and pole
+  effect is not verifiable until that ingest lands; no figure beyond the measured
+  gate wall clock above is claimed here.
 - pds: after the native arm, re-measure `pds_test_inlang_test_oracle` on CI (one of its
   15 files takes five minutes on the dev box); then apply N1 to whatever heavy vectors
   remain, following the `signing_parity` precedent. Not before — demoting a
@@ -380,7 +383,7 @@ evidence argues against, with what replaces them and what prior reasoning is ans
 |---|---|---|---|
 | Native/wasm engines for `test`/`prop` deferred past 0.1.0 | #2299 | 191 gates blocked; pds five min/file and 26 hand-rolled native drivers (#2299's own "promote by demand" clause); §4.2's compensator false | pull the native `test` arm forward as wave 0; its "agreement is the engines gate's job" reason is right for wasm, which stays deferred |
 | Migration rides #2182 opportunistically, no mass-migration sprint | #2298 | zero `kind = "native"` gates in five weeks; 174 new scripts; its own review's tiebreak unanswered (answered in §3) | explicit waves, each PR deleting a script |
-| `gate-budget` not required | CI-ARCHITECTURE §3.5 | left non-required as "a separate, non-atomic ruleset edit, out of scope for this slice" — sequencing, not a decision against; green on main today | required, with the uncosted-trailer consequence stated |
+| `gate-budget` not required | CI-ARCHITECTURE §3.5 | was left non-required as "a separate, non-atomic ruleset edit, out of scope for this slice" — sequencing, not a decision against; green on main at the time | **done** (sprint cost-governor-on S4): required, with the uncosted-trailer consequence stated |
 | `stage_ir_scaling` merge-tier at full band | registry | 648 s alone on the pole; every arm deterministic; #2036's nightly-triage worry answered by keeping two shapes at merge | proxy + nightly full, with the two ledgered pins' move made explicit |
 | TESTING-DESIGN §4.2's "same assertions run on all three engines" | `docs/ops/TESTING-DESIGN.md:482-485` | false for `test`/`prop` today | amended now; true for two engines after wave 0, with `make test` as the consumer |
 
