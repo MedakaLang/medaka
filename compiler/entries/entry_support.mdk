@@ -10,7 +10,7 @@
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
 import frontend.ast.{Decl}
-import types.typecheck.{TcDiag(..)}
+import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 export import support.util.{rootsOrDefault}
@@ -22,9 +22,19 @@ import types.typecheck.{
   hadTypeErrors,
   setLocalPinDisabled,
 }
-import driver.diagnostics.{renderTcDiags}
+import driver.diagnostics.{
+  emitDiagExitCode,
+  emitGateDiags,
+  residualOrGeneric,
+}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
-import driver.loader.{loadProgram, unknownModuleIdOf}
+import driver.loader.{
+  dropPathTriple,
+  loadErrorMessage,
+  loadProgramFilesLocatedE,
+  modIdToPath,
+  unknownModuleIdOf,
+}
 import backend.private_mangle.{mangleUnits}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
@@ -140,7 +150,16 @@ usageModules = "usage: <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
 export
 driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveModules runEmit = match args ()
+driveModules runEmit = driveModulesLocated (_ => runEmit)
+
+-- `driveModules` for a terminal that needs the loader's `(modId, path, decls)`
+-- triples as well — the emit drivers do, because since the parent `medaka build`
+-- process stopped typechecking they own the located diagnostics for the build
+-- and need each module's own file to render against.
+export
+driveModulesLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  <IO> Unit
+driveModulesLocated runEmit = match args ()
   runtimeP :: coreP :: entry :: roots =>
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
@@ -154,7 +173,12 @@ export
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
 
-driveModulesGo : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+-- The loader is the LOCATED one (`parseLocatedResult`, real spans + each
+-- module's path), not `loadProgram`: this driver renders the build's type
+-- diagnostics itself, and placeholder 1:0 spans with no path render them as
+-- `(module <mid>)` with no caret.  `ELoc` is transparent to every backend, so
+-- the emitted IR is unchanged by the swap.
+driveModulesGo : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   String ->
   String ->
   String ->
@@ -164,13 +188,14 @@ driveModulesGo runEmit runtimeP coreP entry roots = match readFile runtimeP
   Err e => failWith e
   Ok rsrc => match readFile coreP
     Err e => failWith e
-    Ok csrc => match loadProgram entry roots
-      Err e => failWith (moduleLoadHint e)
+    Ok csrc => match loadProgramFilesLocatedE (_ => None) entry roots
+      Err e => failWith (moduleLoadHint (loadErrorMessage e))
       Ok mods =>
         runEmit
+          mods
           (desugar (parse rsrc))
           (desugar (parse csrc))
-          (map desugarPair mods)
+          (map desugarPair (map dropPathTriple mods))
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root
@@ -220,35 +245,72 @@ argtagUnpinArmed () = match getEnv "MEDAKA_ARGTAG_UNPIN"
 -- #2089: the emit driver's own elaboration is the only `elaborateModules` caller
 -- that never read `hadTypeErrors` afterwards — a type error surfaced only on this
 -- path (the mangled tree, or the compiler's own graph on the bootstrap, which never
--- passes through `medaka build`'s CLI gate) reached codegen at exit 0.  Warn-first,
--- by ruling: print the messages the sticky channel kept and continue; only
--- `MEDAKA_STRICT=1` makes it fatal.  The flip to hard-by-default waits on a
--- self-compile fixpoint measured with this gate on (C3a and C3b separately).
-emitElaborationGate : List (String, TcDiag) -> <IO> Unit
-emitElaborationGate residual =
+-- passes through `medaka build`'s CLI gate) reached codegen at exit 0.  The gate is
+-- HARD: ruling 3 made this process `build`'s only typecheck, so nothing downstream
+-- would reject the program, and `MEDAKA_STRICT=1` no longer selects between two
+-- behaviours.
+--
+-- Residual-only arm: the graph-end drain's own diagnostics, which the per-module
+-- lists cannot carry (they close before the drain runs).  Reached from the wrapped
+-- re-elaboration, whose per-module diagnostics `emitFullGate` already rendered for
+-- the unwrapped program.
+emitResidualGate : List (String, String) ->
+  String ->
+  List (String, TcDiag) ->
+  <IO> Unit
+emitResidualGate pathMap target residual =
   if hadTypeErrors () then
-    let _ =
-      ePutStrLn
-        "warning: emit-path elaboration recorded type errors that no earlier pass reported (#2089); continuing — set MEDAKA_STRICT=1 to make this fatal"
-    let _ = map ePutStrLn (renderTcDiags [] residual)
-    match getEnv "MEDAKA_STRICT"
-      Some "" => ()
-      Some _ => exit 1
-      None => ()
+    let _ = ePutStrLn (residualOrGeneric pathMap target residual)
+    exit emitDiagExitCode
+
+-- The whole diagnostic verdict for a build, rendered as `medaka check` renders
+-- it: this process is the only one that typechecks the graph, so the warnings go
+-- out even when the build goes on to succeed and an error stops it before the
+-- backend.  `emitDiagExitCode` tells the parent that what reached its stderr is a
+-- located diagnostic and needs no "emitter failed" preamble wrapped around it.
+emitFullGate : List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, TcDiag) ->
+  <IO> Unit
+emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
+  let (errLines, warnLines) =
+    emitGateDiags runtimeDecls coreDecls modsWithPath modules perMod
+  let _ = map ePutStrLn warnLines
+  let pathMap = map modIdToPath modsWithPath
+  match errLines
+    [] => emitResidualGate pathMap (entryPathOf modsWithPath) residual
+    _ =>
+      let _ = map ePutStrLn errLines
+      exit emitDiagExitCode
+
+-- The entry module's path, for the residual's fallback text.  The loader is
+-- dependency-first, so the entry is last.
+entryPathOf : List (String, String, List Decl) -> String
+entryPathOf [] = ""
+entryPathOf [(_, path, _)] = path
+entryPathOf (_ :: rest) = entryPathOf rest
 
 export
 runEmitWith : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  List (String, String, List Decl) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
+runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, residual, _) =
+  let (coreD, modules2, perMod, residual, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
-  let _ = emitElaborationGate residual
+  -- The surface half of the fold reads the UNMANGLED trees the loader parsed, so
+  -- its diagnostics name the user's own constructors; only the typecheck half
+  -- comes from the mangled elaboration above, and mangling preserves module ids.
+  let _ =
+    emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
@@ -256,7 +318,7 @@ runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags runtimeDecls coreW modulesW
       d :: _ => failWith (tcMsg d)
-      [] => emitModulesWith emitTail runtimeDecls coreW modulesW
+      [] => emitModulesWith emitTail modsWithPath runtimeDecls coreW modulesW
   else match asyncMainShapeError modules
     Some msg => failWith msg
     None =>
@@ -268,23 +330,34 @@ runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
         let modulesW = asyncWrapModules asyncDriver modules
         match underivedMainDiags runtimeDecls coreDecls modulesW
           d :: _ => failWith (tcMsg d)
-          [] => emitModulesWith emitTail runtimeDecls coreDecls modulesW
+          [] =>
+            emitModulesWith
+              emitTail
+              modsWithPath
+              runtimeDecls
+              coreDecls
+              modulesW
       else
         emitTail runtimeDecls coreD modules2
 
 -- Mangle + elaborate + emit a (possibly wrapped) module list from scratch.
 export
 emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  List (String, String, List Decl) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitModulesWith emitTail runtimeDecls coreDecls modules =
+emitModulesWith emitTail modsWithPath runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
   let (coreD, modules2, _, residual, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
-  let _ = emitElaborationGate residual
+  let _ =
+    emitResidualGate
+      (map modIdToPath modsWithPath)
+      (entryPathOf modsWithPath)
+      residual
   emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────

@@ -24,10 +24,10 @@ import frontend.ast.{Decl}
 import ir.core_ir_lower.{lowerProgramEmit, EmitTarget(..)}
 import ir.core_ir_sexp.{cprogramToSexpWith, faithfulSexpMode}
 import ir.dce.{dceFilter}
-import entries.entry_support.{driveModules, runEmitWith}
+import entries.entry_support.{driveModulesLocated, runEmitWith}
 
 main : <IO> Unit
-main = driveModules (runEmitWith "runAsyncIOMain" emitTail)
+main = driveModulesLocated (runEmitWith "runAsyncIOMain" emitTail)
 
 -- The llvm_emit_modules_main emitTail with `putStr (emitProgram …)` swapped for
 -- the S-expression serializer; no side-table installs (they feed the emitter,

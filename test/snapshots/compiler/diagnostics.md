@@ -1,5 +1,5 @@
 # META
-source_lines=2484
+source_lines=2685
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -2048,6 +2048,207 @@ readDiagSrc (path, diags) = match readFile path
   Ok src => (path, src, diags)
   Err _ => (path, "", diags)
 
+export
+cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
+cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
+
+export
+joinedOrNone : List String -> Option String
+joinedOrNone [] = None
+joinedOrNone ls = Some (joinNl ls)
+
+-- #2044: split the source ONCE, not once per diagnostic — and, per the strictness
+-- trap the strictness note on `locatedProjectDiags` (medaka_cli.mdk) spells out, not at all
+-- when there is nothing to render.  `map f xs` with `f = ppDiagCliLines
+-- (srcLinesArr src) path` builds that partial application from ALREADY-EVALUATED
+-- arguments, so a strict language splits the whole file before `map` ever looks at
+-- whether `xs` is empty — which made a clean multi-module project pay a full
+-- per-file `Array String` split on EVERY file for output that does not exist.
+-- The `[]` arm is what keeps the split off the zero-diagnostic path; keep it.
+--
+-- #2400 F2b: `path` here is the LOADER-NORMALISED form (`./main.mdk` for an
+-- entry named with no directory part), where the single-file arm passes the
+-- CLI's `target` verbatim — the same tool printed `./main.mdk` for a
+-- multi-module TYPE error and `main.mdk` for a single-file one.  `displayPath`
+-- reconciles the two INSIDE `ppDiagCliLines`, for DISPLAY only, so the triples
+-- reaching here keep the loader's spelling and `locatedProjectDiags` can go on
+-- identifying the entry triple positionally (it works BECAUSE these paths do
+-- not compare equal to `target`).
+export
+renderTripleErrors : (String, String, List Diag) -> List String
+renderTripleErrors (path, src, diags) =
+  let errs = filter diagIsError diags
+  match errs
+    [] => []
+    _ => map (ppDiagCliLines (srcLinesArr src) path) errs
+
+export
+renderTripleWarnings : (String, String, List Diag) -> List String
+renderTripleWarnings (path, src, diags) =
+  let ws = filter diagIsWarn diags
+  match ws
+    [] => []
+    _ => map (ppDiagCliLines (srcLinesArr src) path) ws
+
+-- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
+-- looser `hadTypeErrors`: once that gate has already fired, render the residual —
+-- the graph-end drain's own diagnostics, which the per-module lists do not carry
+-- (they close before the drain runs) — falling back to the generic deflection only
+-- if the residual carries nothing (never leaves the user with exit 1 and no text).
+--
+-- #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
+-- when the per-module diagnostics this elaboration produced were empty while the
+-- same elaboration armed `hadTypeErrors` — i.e. precisely the #1812 divergence,
+-- where `medaka check` on this program exits 0 and reports success.  The old text
+-- read "Run `medaka check` for details" and so named the one command guaranteed to
+-- confirm the wrong thing.  #2544 (M4): the residual IS reachable — `elaborateModules`
+-- returns every diagnostic the elaboration left standing, each with its own `Loc` —
+-- so this renders it located, through the same face `check` uses.
+--
+-- The `analyzeProject` re-run this used to prefer over the residual is gone with the
+-- second typecheck it belonged to: the per-module errors the caller already rendered
+-- ARE that pass's output, and they were empty on every path that reaches here.
+export
+residualOrGeneric : List (String, String) ->
+  String ->
+  List (String, TcDiag) ->
+  <IO> String
+residualOrGeneric pathMap target residual = match renderTcDiags pathMap residual
+  [] =>
+    "error: type error in "
+      ++ target
+      ++ ", detected during elaboration (the run/build type pass); no located"
+      ++ " diagnostic is available for it, and `medaka check` may not report this"
+      ++ " program at all — see issue #1812"
+  rendered => joinNl rendered
+
+export
+diagIsWarn : Diag -> Bool
+diagIsWarn d = not (diagIsError d)
+
+-- ── the ONE typecheck warning `run`/`build` surface (F-3d, #614/#311) ───────
+-- READ THIS BEFORE WIDENING IT TO `diagIsWarn`.  That was tried, on the reasoning
+-- that `run`/`build` "should show the same warnings `check` does", and it is wrong on
+-- three counts, each measured:
+--
+--  (1) IT IS NOT THE ACCEPTANCE CRITERION.  F-3d's criterion is "nothing that was
+--      LOUD goes silent".  The only diagnostic that was loud on `run`/`build` before
+--      F-3d is the coherence reject F-3d demoted.  Every other warning on the
+--      `matchWarnings` channel was ALREADY invisible on those verbs and stays exactly
+--      as it was — not a regression, and not this change's to fix.
+--  (2) SPEW, ~96% FALSE.  The channel is populated over the WHOLE MODULE GRAPH, and
+--      `checkGuardExhaustivenessWith` draws its constructor oracle from the graph
+--      rather than from the scrutinee's own type — so a fully exhaustive
+--      `List`-matching function is reported "Missing case: `Text _`", `Text` being a
+--      constructor of an unrelated type in another module (issue 1185, PRE-EXISTING).
+--      Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 → 4896 stderr
+--      lines, 1249 of them demanding that phantom `Text _`; a 25-line three-module
+--      toy went 0 → 20, all false.  That makes `build` ~200× noisier than `check`.
+--  (3) PERF.  Surfacing the channel means RENDERING it, and rendering a located
+--      diagnostic materialises the containing file's lines (`ppDiagCliSrc` →
+--      `srcLinesArr`) — a cost paid per file whose channel is non-empty.
+--      Interleaved A/B on a quiet box: multi-module `check` 16.0–17.1 s → 38.9–40.6 s
+--      with byte-identical stdout.  Narrowing to one code removes the render, which
+--      fixes that at its cause rather than optimising around it.
+--
+-- So: exactly the demoted code, nothing else.  Widening this predicate is a decision
+-- about which verb is the diagnostic one, not a cleanup.
+export
+coherenceWarnCode : String
+coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
+
+-- #1499 / D1.  The predicate above is now a MEMBERSHIP TEST over a short
+-- allowlist, not a single-literal test — and the three measured objections
+-- recorded above do NOT reach the second member.  `W-PRELUDE-METHOD-SHADOW` has
+-- no oracle at all (a pure name-set intersection, so it cannot be false), fires
+-- at most ONCE PER COLLIDING INTERFACE-METHOD DECLARATION, and measures zero
+-- occurrences across compiler/, stdlib/ and sqlite/ — so both the (2) spew and
+-- (3) render costs are bounded by the collision count rather than by the module
+-- graph.  This list is the decision, taken deliberately; it is not a place to
+-- park codes, and every addition owes the same three measurements.
+--
+-- #2400 / F4 (2026-09-01): THIS LIST IS NOW THE MULTI-MODULE ALLOWLIST ONLY.
+-- The SINGLE-FILE / single-module arms of `run` and `build` bypass it entirely via
+-- `allWarnTriples` (`filter diagIsWarn`), matching what `checkRoute`'s single-file
+-- arm already does with the identical `diags` value.  The split is deliberate, not
+-- an oversight: objections (2) and (3) above are properties of the module graph and
+-- do not reach a single-file program (measured — see `allWarnTriples`'s note), while
+-- on a graph the #1185 phantom is still ~99% of the channel.  So the multi-module
+-- side stays here, BLOCKED ON #1185, and collapsing the two arms back together is a
+-- decision that waits on #1185's constructor oracle becoming scrutinee-typed.
+export
+runBuildWarnCodes : List String
+runBuildWarnCodes = [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW"]
+
+export
+isCoherenceWarn : Diag -> Bool
+isCoherenceWarn (Diag SevWarning c _ _ _ _) = contains c runBuildWarnCodes
+isCoherenceWarn _ = False
+
+-- The emit driver's whole diagnostic face (ARCH §E), over the per-module
+-- `(errs, warns)` ONE elaboration already produced: the located per-file error
+-- lines and the warning lines `build` prints, rendered exactly as `check`
+-- renders them.  `medaka build`'s parent process runs no typecheck of its own,
+-- so this is where every post-resolve diagnostic of a build comes from.
+--
+-- The single/multi split is `runBuildWarnCodes`' (see its note): one module ⇒
+-- the FULL warning set, a graph ⇒ the coherence allowlist, because the #1185
+-- phantom is a property of the graph oracle and cannot reach one module.
+-- The main-shape warning rides last, the order the CLI's two arms both used.
+-- The exit code the emit driver uses when what it wrote to stderr is a LOCATED
+-- DIAGNOSTIC rather than a backend failure.  `medaka build`'s parent forwards
+-- that stderr verbatim instead of wrapping it in "emitter failed compiling …",
+-- so a type error reads exactly as `medaka check` prints it; every other
+-- non-zero code keeps the preamble, which is what names the emitter for a real
+-- backend crash.  Never reaches a user: the parent reports 1 either way, per
+-- docs/ops/CLI-CONFORMANCE.md's two-code rule.
+export
+emitDiagExitCode : Int
+emitDiagExitCode = 3
+
+export
+emitGateDiags : List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  <IO> (List String, List String)
+emitGateDiags rtD coreD modsWithPath modsD perMod =
+  let triples =
+    map
+      readDiagSrc
+      (typecheckDiagsFold
+        rtD
+        coreD
+        modsWithPath
+        modsD
+        perMod
+        (seedAll (map midPath modsWithPath) []))
+  let warnSrc = match modsWithPath
+    [_] => triples
+    _ => map cohWarnsOfTriple triples
+  (
+    flatMap renderTripleErrors triples,
+    flatMap renderTripleWarnings (warnSrc ++ mainShapeTriple modsWithPath),
+  )
+
+-- `main`'s shape warning as a renderable triple against the ENTRY module's own
+-- file.  `mainShapeWarnings` reads `mainSchemeRef`, so the caller's elaboration
+-- must already have run over this graph.
+mainShapeTriple : List (String, String, List Decl) ->
+  <IO> List (String, String, List Diag)
+mainShapeTriple mods = match lastModTriple mods
+  None => []
+  Some (_, path, decls) => match mainShapeWarnings [] [] [] decls
+    [] => []
+    ws => [readDiagSrc (path, ws)]
+
+lastModTriple : List (String, String, List Decl) ->
+  Option (String, String, List Decl)
+lastModTriple [] = None
+lastModTriple [m] = Some m
+lastModTriple (_ :: rest) = lastModTriple rest
+
 -- Normalize an emitted diagnostic `file` path to project-root-relative (#298).
 -- Target + project imports resolve relative to cwd and stay relative, but a
 -- stdlib dependency resolves through the absolute stdlibDir root and would
@@ -2764,6 +2965,36 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))
+(DTypeSig true "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
+(DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
+(DTypeSig true "joinedOrNone" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "joinedOrNone" ((PList)) (EVar "None"))
+(DFunDef false "joinedOrNone" ((PVar "ls")) (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "ls"))))
+(DTypeSig true "renderTripleErrors" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "errs")))))))
+(DTypeSig true "renderTripleWarnings" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "ws") (EApp (EApp (EVar "filter") (EVar "diagIsWarn")) (EVar "diags"))) (DoExpr (EMatch (EVar "ws") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "ws")))))))
+(DTypeSig true "residualOrGeneric" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyCon "String"))))))
+(DFunDef false "residualOrGeneric" ((PVar "pathMap") (PVar "target") (PVar "residual")) (EMatch (EApp (EApp (EVar "renderTcDiags") (EVar "pathMap")) (EVar "residual")) (arm (PList) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812")))) (arm (PVar "rendered") () (EApp (EVar "joinNl") (EVar "rendered")))))
+(DTypeSig true "diagIsWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
+(DFunDef false "diagIsWarn" ((PVar "d")) (EApp (EVar "not") (EApp (EVar "diagIsError") (EVar "d"))))
+(DTypeSig true "coherenceWarnCode" (TyCon "String"))
+(DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
+(DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW"))))
+(DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
+(DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
+(DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
+(DTypeSig true "emitDiagExitCode" (TyCon "Int"))
+(DFunDef false "emitDiagExitCode" () (ELit (LInt 3)))
+(DTypeSig true "emitGateDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "emitGateDiags" ((PVar "rtD") (PVar "coreD") (PVar "modsWithPath") (PVar "modsD") (PVar "perMod")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit))))) (DoLet false false (PVar "warnSrc") (EMatch (EVar "modsWithPath") (arm (PList PWild) () (EVar "triples")) (arm PWild () (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples"))))) (DoExpr (ETuple (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples")) (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EBinOp "++" (EVar "warnSrc") (EApp (EVar "mainShapeTriple") (EVar "modsWithPath"))))))))
+(DTypeSig false "mainShapeTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "mainShapeTriple" ((PVar "mods")) (EMatch (EApp (EVar "lastModTriple") (EVar "mods")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild (PVar "path") (PVar "decls"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")) (arm (PList) () (EListLit)) (arm (PVar "ws") () (EListLit (EApp (EVar "readDiagSrc") (ETuple (EVar "path") (EVar "ws")))))))))
+(DTypeSig false "lastModTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "lastModTriple" ((PList)) (EVar "None"))
+(DFunDef false "lastModTriple" ((PList (PVar "m"))) (EApp (EVar "Some") (EVar "m")))
+(DFunDef false "lastModTriple" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastModTriple") (EVar "rest")))
 (DTypeSig true "relDiagPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "relDiagPath" ((PVar "root") (PVar "path")) (EBlock (DoLet false false (PVar "pre") (EBinOp "++" (EVar "root") (ELit (LString "/")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "path")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "pre"))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")) (EVar "path")))))
 (DTypeSig false "relDiagTriple" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
@@ -3095,6 +3326,36 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))
+(DTypeSig true "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
+(DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
+(DTypeSig true "joinedOrNone" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "joinedOrNone" ((PList)) (EVar "None"))
+(DFunDef false "joinedOrNone" ((PVar "ls")) (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "ls"))))
+(DTypeSig true "renderTripleErrors" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "errs")))))))
+(DTypeSig true "renderTripleWarnings" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "ws") (EApp (EApp (EMethodRef "filter") (EVar "diagIsWarn")) (EVar "diags"))) (DoExpr (EMatch (EVar "ws") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "ws")))))))
+(DTypeSig true "residualOrGeneric" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyCon "String"))))))
+(DFunDef false "residualOrGeneric" ((PVar "pathMap") (PVar "target") (PVar "residual")) (EMatch (EApp (EApp (EVar "renderTcDiags") (EVar "pathMap")) (EVar "residual")) (arm (PList) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812")))) (arm (PVar "rendered") () (EApp (EVar "joinNl") (EVar "rendered")))))
+(DTypeSig true "diagIsWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
+(DFunDef false "diagIsWarn" ((PVar "d")) (EApp (EVar "not") (EApp (EVar "diagIsError") (EVar "d"))))
+(DTypeSig true "coherenceWarnCode" (TyCon "String"))
+(DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
+(DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW"))))
+(DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
+(DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
+(DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
+(DTypeSig true "emitDiagExitCode" (TyCon "Int"))
+(DFunDef false "emitDiagExitCode" () (ELit (LInt 3)))
+(DTypeSig true "emitGateDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "emitGateDiags" ((PVar "rtD") (PVar "coreD") (PVar "modsWithPath") (PVar "modsD") (PVar "perMod")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit))))) (DoLet false false (PVar "warnSrc") (EMatch (EVar "modsWithPath") (arm (PList PWild) () (EVar "triples")) (arm PWild () (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples"))))) (DoExpr (ETuple (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples")) (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EBinOp "++" (EVar "warnSrc") (EApp (EVar "mainShapeTriple") (EVar "modsWithPath"))))))))
+(DTypeSig false "mainShapeTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "mainShapeTriple" ((PVar "mods")) (EMatch (EApp (EVar "lastModTriple") (EVar "mods")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild (PVar "path") (PVar "decls"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")) (arm (PList) () (EListLit)) (arm (PVar "ws") () (EListLit (EApp (EVar "readDiagSrc") (ETuple (EVar "path") (EVar "ws")))))))))
+(DTypeSig false "lastModTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "lastModTriple" ((PList)) (EVar "None"))
+(DFunDef false "lastModTriple" ((PList (PVar "m"))) (EApp (EVar "Some") (EVar "m")))
+(DFunDef false "lastModTriple" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastModTriple") (EVar "rest")))
 (DTypeSig true "relDiagPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "relDiagPath" ((PVar "root") (PVar "path")) (EBlock (DoLet false false (PVar "pre") (EBinOp "++" (EVar "root") (ELit (LString "/")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "path")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "pre"))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")) (EVar "path")))))
 (DTypeSig false "relDiagTriple" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))

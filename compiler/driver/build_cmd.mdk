@@ -35,6 +35,7 @@ import frontend.parse_cache.{notePreludeParse}
 import driver.diagnostics.{
   Diag,
   SevWarning,
+  emitDiagExitCode,
   mkDiag,
   parseErrDiag,
   ppDiag,
@@ -656,9 +657,15 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   match emitRes
     Err e => buildErr "error: could not run emitter (\{emitProg}): \{e}"
     Ok (code, irRaw, emitErr) =>
-      if code /= 0 then
+      if code == emitDiagExitCode then
+        buildErr (dropTrailingNewline emitErr)
+      else if code /= 0 then
         buildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
       else
+        -- The child is the build's only typecheck, so its warnings go out here,
+        -- on stderr, before clang runs and before the `built <in> -> <out>` line
+        -- — the order `check` uses and a build log reads in.
+        let _ = forwardEmitterStderr emitErr
         let ir = stripTrailingUnit irRaw
         if stringLength ir == 0 then
           buildErr
@@ -705,7 +712,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 keepIrOutcome (outPath ++ ".ll") ir
               else
                 (None, [])
-            withBuildNotes keptIr emitErr keepNotes res
+            withBuildNotes keptIr "" keepNotes res
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
 -- Structurally identical to runBuildNative: run the emitter (here the WasmGC
@@ -791,10 +798,13 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
       Err e =>
         buildErr "error: could not run wasm emitter (\{wasmEmitter}): \{e}"
       Ok (code, watRaw, emitErr) =>
-        if code /= 0 then
+        if code == emitDiagExitCode then
+          buildErr (dropTrailingNewline emitErr)
+        else if code /= 0 then
           buildErr
             "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
         else
+          let _ = forwardEmitterStderr emitErr
           let wat = stripTrailingUnit watRaw
           if stringLength wat == 0 then
             buildErr
@@ -811,7 +821,26 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
                   keepIrOutcome (outPath ++ ".wat") wat
                 else
                   (None, [])
-              withBuildNotes keptIr emitErr keepNotes res
+              withBuildNotes keptIr "" keepNotes res
+
+-- The emitter child writes the build's diagnostics to its own stderr.  On a
+-- clean emit that stream carries the WARNINGS `medaka build` prints, so it must
+-- reach the user's stderr rather than ride into `ppBuildReport`'s stdout line —
+-- routed, never suppressed (docs/ops/CLI-CONFORMANCE.md).  A failing emit keeps
+-- carrying its text in the report's `status` instead, where the CLI's own error
+-- path prints it.
+-- The CLI's error path adds its own newline, and the child's stream already
+-- ends in one; without this every build diagnostic gained a trailing blank line.
+dropTrailingNewline : String -> String
+dropTrailingNewline s =
+  let n = stringLength s
+  if n > 0 && stringSlice (n - 1) n s == "\n" then
+    stringSlice 0 (n - 1) s
+  else
+    s
+
+forwardEmitterStderr : String -> <IO> Unit
+forwardEmitterStderr err = if stringLength err == 0 then () else ePutStr err
 
 -- Probe `wasm-tools` up front (the wasm analogue of the implicit clang
 -- requirement).  `wasm-tools --version` exits 0 iff the tool is reachable.

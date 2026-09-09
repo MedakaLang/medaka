@@ -1165,8 +1165,17 @@ loadProgramE entry roots =
     (mods => map dropPathTriple mods)
     (loadProgramFilesE (_ => None) entry roots)
 
+-- Drop the file-path component of a located-loader triple back to the
+-- (modId, decls) pair shape `loadProgram` returns.
+export
 dropPathTriple : (String, String, List Decl) -> (String, List Decl)
 dropPathTriple (mid, _, decls) = (mid, decls)
+
+-- The modId -> path map every located driver threads into its diagnostic
+-- renderers, so an imported module's diagnostics report ITS own path (#41).
+export
+modIdToPath : (String, String, List Decl) -> (String, String)
+modIdToPath (mid, path, _) = (mid, path)
 
 -- ── path-carrying read-callback topo-sort (B.10.5) ──
 --
