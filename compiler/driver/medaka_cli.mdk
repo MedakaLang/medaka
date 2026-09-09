@@ -137,6 +137,7 @@ import driver.diagnostics.{
   ppResolveErrorsByFile,
   diagOfResError,
   diagOfTypeError,
+  relDiagPath,
   srcLinesArr,
   Diag(..),
   Severity(..),
@@ -906,12 +907,16 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
 cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
 
--- `run --json`'s structured counterpart to `renderTripleErrors` — same
--- `filter isDiagError`, kept as `Diag`s instead of rendered lines, for
--- `elaboratedProjectDiags`'s multi-module `Some errText` arm to serialize via
--- `runAbortJson` instead of a second JSON printer.
-errorTripleOf : (String, String, List Diag) -> (String, String, List Diag)
-errorTripleOf (path, src, diags) = (path, src, filter isDiagError diags)
+-- `run --json`'s multi-module arms' own copy of `diagnostics.relDiagTriple`
+-- (not exported there — only `relDiagPath`, its one-line body, is): strip the
+-- project-root prefix from a triple's `file` so an imported module resolved
+-- through the absolute `stdlibDir` root doesn't leak the worktree layout into
+-- the envelope, matching `check --json`'s own multi-module normalization
+-- (diagnostics.mdk's `checkJsonFileParts`, ~:2478-2482; #2798 review S2).
+relDiagTriple : String ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
+relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 
 -- the warn diagnostics on one (non-entry) module's triple that neither
 -- channel above already surfaces (see the doc comment on `locatedProjectDiags`).
@@ -1006,7 +1011,9 @@ runAbortJson triples =
 -- `run --json`'s structured counterpart to `ppResolveErrorsByFile` — one triple
 -- per file with at least one resolve error, each converted via the SAME
 -- `diagOfResError` the human renderer already uses, left for `cjAllToJson` (via
--- `runAbortJson`) to serialize instead of a second JSON printer.
+-- `runAbortJson`) to serialize instead of a second JSON printer.  `ResError`
+-- carries no warning variant (frontend.resolve.ResError, all-error), so unlike
+-- the typecheck triples below there is no filter to widen here.
 resolveErrorJsonTriples : List (String, List ResError) ->
   <IO> List (String, String, List Diag)
 resolveErrorJsonTriples [] = []
@@ -1015,6 +1022,24 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
   (file, readFileSafe file, map diagOfResError errs)
     :: resolveErrorJsonTriples rest
 
+-- The generic #1812 deflection (`residualOrGeneric`'s own `[] =>` arm), as a
+-- `Diag` instead of prose, for the JSON residual arm's empty-residual case
+-- below.  Same code family as the rest of this file's minted diagnostics
+-- (`R-BUILD-FAILED` etc. in `cjBuildFailedJson`) — `T-RESIDUAL` names the one
+-- circumstance this fires: the graph-end drain saw a type error the per-module
+-- pass did not, so there is no located diagnostic to report instead.
+genericResidualDiag : String -> Diag
+genericResidualDiag target =
+  mkDiag
+    SevError
+    "T-RESIDUAL"
+    ("type error in "
+      ++ target
+      ++ ", detected during elaboration (the run/build type pass); no located"
+      ++ " diagnostic is available for it, and `medaka check` may not report"
+      ++ " this program at all — see issue #1812")
+    None
+
 -- `run --json`'s structured counterpart to `residualOrGeneric`/`renderTcDiags` —
 -- one `Diag` triple per graph-end residual entry, attributed to its own module
 -- id via `pathMap` exactly as the human renderer looks the file up, via the
@@ -1022,17 +1047,28 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- the same file — `pendingRunDiags` already carries repeated file entries on
 -- this same envelope (`eval.runtimePanic`'s own append), so a second grouping
 -- pass here would buy nothing.
-residualJsonTriples : List (String, String) ->
+--
+-- Two guarantees `residualOrGeneric` states explicitly and this must match
+-- (#2798 review S1): an EMPTY residual still yields the generic #1812 triple,
+-- attributed to the ENTRY file — `runAbortJson` must never exit 1 with an
+-- empty envelope, the JSON twin of "never leaves the user with exit 1 and no
+-- text" — and a `pathMap` MISS (a module id the loader's map does not know)
+-- attributes to the entry file too, rather than the non-path
+-- `"(module <mid>)"` placeholder string a `file` field is not allowed to be.
+residualJsonTriples : String ->
+  List (String, String) ->
   List (String, TcDiag) ->
   <IO> List (String, String, List Diag)
-residualJsonTriples _ [] = []
-residualJsonTriples pathMap ((mid, d) :: rest) = match lookupAssoc mid pathMap
-  Some file =>
-    (file, readFileSafe file, [diagOfTypeError d])
-      :: residualJsonTriples pathMap rest
-  None =>
-    ("(module \{mid})", "", [diagOfTypeError d])
-      :: residualJsonTriples pathMap rest
+residualJsonTriples entryFile _ [] =
+  [(entryFile, readFileSafe entryFile, [genericResidualDiag entryFile])]
+residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
+  match lookupAssoc mid pathMap
+    Some file =>
+      (file, readFileSafe file, [diagOfTypeError d])
+        :: residualJsonTriples entryFile pathMap rest
+    None =>
+      (entryFile, readFileSafe entryFile, [diagOfTypeError d])
+        :: residualJsonTriples entryFile pathMap rest
 
 -- The rendering half of `locatedProjectDiags`, over per-module diagnostics an
 -- elaboration already produced: the same `foldModuleTc` tail `analyzeProject` runs
@@ -1072,13 +1108,20 @@ elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
 -- `typecheckDiagsFold`'s own note) — kept as `Diag`s instead of rendered
 -- lines. A sibling of `elaboratedProjectDiags` rather than a widened return
 -- tuple on it, so `typecheckGateRoute`'s existing 3-tuple match is untouched.
-elaboratedProjectErrorTriples : List Decl ->
+--
+-- Unlike `renderTripleErrors` (the prose path, errors-only by design — the
+-- human `run` has always dropped warnings once any error is present),
+-- `nonEmptyTriples` here is the ONLY filter: `check --json`'s per-file
+-- `diagnostics` array carries every diag, errors and warnings alike, and this
+-- is the JSON channel, so it matches that array element-wise rather than a
+-- narrower prose-derived one (#2798 review S2).
+elaboratedProjectJsonTriples : List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
   <IO> List (String, String, List Diag)
-elaboratedProjectErrorTriples rtD coreD modsWithPath modsD perMod =
+elaboratedProjectJsonTriples rtD coreD modsWithPath modsD perMod =
   let results =
     typecheckDiagsFold
       rtD
@@ -1087,7 +1130,7 @@ elaboratedProjectErrorTriples rtD coreD modsWithPath modsD perMod =
       modsD
       perMod
       (seedAll (map midPath modsWithPath) [])
-  nonEmptyTriples (map errorTripleOf (map readDiagSrc results))
+  nonEmptyTriples (map readDiagSrc results)
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -3008,15 +3051,19 @@ runRunCmd argv =
             -- surface diagnostics are the whole report (as they were when the
             -- entry driver gated its own typecheck on the same predicate).
             False =>
-              let resolveErrs = filter isDiagError (analyzeFinish surface [])
+              -- #2798 review S2: JSON carries the WHOLE surface list (errors
+              -- and warnings, matching `check --json`'s per-file diagnostics
+              -- array element-wise); the prose face stays errors-only, as it
+              -- always has been.
+              let surfaceDiags = analyzeFinish surface []
               match jsonMode
-                True => runAbortJson [(target, tsrc, resolveErrs)]
+                True => runAbortJson [(target, tsrc, surfaceDiags)]
                 False =>
                   runAbort
                     (joinNl
                       (map
                         (ppDiagCliLines (srcLinesArr tsrc) target)
-                        resolveErrs))
+                        (filter isDiagError surfaceDiags)))
             True =>
               let _ = resetTypeErrorsSticky ()
               let (coreE, modsE, perMod, residual, _) =
@@ -3031,7 +3078,8 @@ runRunCmd argv =
                   -- Belt-and-braces, as on the multi-module arm: anything only
                   -- the graph-end drain can see still aborts before eval.
                   True => match jsonMode
-                    True => runAbortJson (residualJsonTriples pathMap residual)
+                    True =>
+                      runAbortJson (residualJsonTriples target pathMap residual)
                     False =>
                       runAbort (residualOrGeneric pathMap target residual)
                   False =>
@@ -3054,7 +3102,10 @@ runRunCmd argv =
                       (allWarnTriples tsrc target diags)
                       (runEvalPerf perfOn target perfT0 perfTCheck)
                 errs => match jsonMode
-                  True => runAbortJson [(target, tsrc, errs)]
+                  -- #2798 review S2: `diags` (the WHOLE list `analyzeFinish`
+                  -- returned, errors and warnings) for JSON — `errs` is the
+                  -- errors-only prose projection of it.
+                  True => runAbortJson [(target, tsrc, diags)]
                   False =>
                     runAbort
                       (joinNl
@@ -3094,21 +3145,32 @@ runRunCmd argv =
               match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
                 (Some errText, _, _) => match jsonMode
                   True =>
+                    -- #2798 review S2: normalize each file the SAME way
+                    -- `check --json`'s own multi-module arm does
+                    -- (`relDiagTriple root`, diagnostics.mdk ~:2478-2482) — an
+                    -- imported stdlib module resolves through the absolute
+                    -- `stdlibDir` root and must not leak that worktree path
+                    -- into the envelope's `file` field.
                     let jsonTriples =
-                      elaboratedProjectErrorTriples
-                        rtD
-                        coreD
-                        modsWithPath
-                        modsD
-                        perMod
+                      map
+                        (relDiagTriple root)
+                        (elaboratedProjectJsonTriples
+                          rtD
+                          coreD
+                          modsWithPath
+                          modsD
+                          perMod)
                     runAbortJson jsonTriples
                   False => runAbort errText
                 (None, projWarns, _) => match hadTypeErrors ()
+                  -- Belt-and-braces: anything only the graph-end drain can
+                  -- see still aborts before eval.
                   True => match jsonMode
-                    -- Belt-and-braces: anything only the graph-end drain can
-                    -- see still aborts before eval.
-
-                    True => runAbortJson (residualJsonTriples pathMap residual)
+                    True =>
+                      runAbortJson
+                        (map
+                          (relDiagTriple root)
+                          (residualJsonTriples target pathMap residual))
                     False =>
                       runAbort (residualOrGeneric pathMap target residual)
                   False =>
@@ -3124,7 +3186,12 @@ runRunCmd argv =
                       (runEvalPerf perfOn target perfT0 perfTCheck)
             _ => match jsonMode
               True =>
-                let jsonTriples = resolveErrorJsonTriples resolvePairs
+                -- #2798 review S2: same `relDiagTriple root` normalization as
+                -- the typecheck-error arm above.
+                let jsonTriples =
+                  map
+                    (relDiagTriple root)
+                    (resolveErrorJsonTriples resolvePairs)
                 runAbortJson jsonTriples
               False => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
