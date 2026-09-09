@@ -156,7 +156,9 @@ Per-node `infer`/`check` arms are shared, and both paths funnel group inference
 through `processSCCs`/`processSCC`. But the *orchestration* — registration order,
 coherence, and the final passes — is duplicated in two near-identical blocks:
 
-- single-file: `checkProgramDiags` (`:11565`), plus `checkProgramSchemes` (`:9259`)
+- single-file: `checkProgramDiags`, plus `checkProgramSchemes` — locate both with
+  `grep -n '^checkProgramDiags \|^checkProgramSchemes ' compiler/types/typecheck.mdk`
+  (line numbers in this file rot; derive them)
 - multi-module: `checkModuleFullDiags`, driven by the one graph driver `driveGraphK`
   (`GOutDiags` for diagnostics and schemes, `GOutTrees` for the elaborated tree that
   `elaborateModules` projects) / `checkModules` for the schemes-only fast path

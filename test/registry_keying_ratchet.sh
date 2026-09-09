@@ -831,9 +831,17 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 # REASON ROW for the shape change: the two-entry parity rows are retired because
 # the second entry is GONE, not because a row stopped applying. The rows themselves
 # are all kept, re-pointed at `graphPreamble`, and two NEW rows are added: the
-# projection row (`elaborateModules` must carry no writer of its own) and the
+# SOLE-SITE row (every mention of a writer's NAME in this file, outside the writer's
+# own column-0 definition lines, must fall inside `graphPreamble`'s body) and the
 # single-entry row (`graphPreamble` must have exactly the two call sites the
 # consolidation leaves -- `driveGraphK` and `checkModulesPreambleK`'s projection).
+#
+# The sole-site row is file-wide on purpose. A row keyed on one consumer's body can
+# only fire for a writer copied into THAT body, and it can only fire at all if the
+# pattern it greps for is a spelling that compiles there -- neither is a property
+# worth resting #2791 on. Scanning the file for the callee's NAME costs the same and
+# fires wherever a second copy grows: a consumer, the driver itself, the keyed chain
+# fold, or a brand-new top-level body that never calls `graphPreamble` at all.
 #
 # THE SET, derived from the body (not from prose), one row per call, with
 # a one-line reason -- the same discipline `driver_allowed` above uses:
@@ -852,33 +860,66 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 #                                    schedule), and after the consolidation ONE spelling
 #   promotionHarvestRef := []    -- the harvest is cleared at the entry (#194)
 #
-# 🚨 REMEDY WHEN ANY ROW FIRES: add the missing writer/seed call to `graphPreamble`
+# REMEDY WHEN ANY ROW FIRES: add the missing writer/seed call to `graphPreamble`
 # (compiler/types/typecheck.mdk) -- or, if a row genuinely no longer applies, add a
 # one-line justified EXEMPTION row here rather than deleting the check. Never widen
-# a pattern to make a row stop firing, and never satisfy the projection row by
+# a pattern to make a row stop firing, and never satisfy the sole-site row by
 # moving a writer OUT of graphPreamble into a consumer: that re-creates #2791.
+#
+# MUTATIONS THIS CHECK HAS BEEN SEEN TO FAIL ON (run in a scratch copy of
+# `compiler/` + `test/`; the control tree passes):
+#   1  delete `seedAbstractRecordTypes` from `graphPreamble`
+#   2  add `seedAbstractRecordTypes coreDecls0 modulesIn` to `elaborateModules`
+#   2b add `seedAbstractRecordTypes coreDecls modules` to `elaborateModules`
+#      (graphPreamble's own spelling, which would not compile there)
+#   2c add `populateEffectDomainsGraph coreDecls0 modulesIn` to `elaborateModules`
+#   2d add a duplicate `seedAbstractRecordTypes coreDecls modules` inside
+#      `driveGraphK`, where those two names ARE locals
+#   3  add a third `graphPreamble` call site
+#   M4 add a new top-level body that inlines `resetCrossModuleState ()`,
+#      `populateEffectDomainsGraph`, the three `graph*ExportsRef :=` writes and
+#      `declEnvsRef :=`, and never calls `graphPreamble`
+# 2, 2c, 2d and M4 all passed the earlier one-consumer form of the sole-site row.
 echo "checking #2796 Module-mode driver entry: one preamble carries the whole-graph set ..."
 
 preamble_body=$(body_of "$TC" '^graphPreamble sel preludeKey runtimeDecls coreDecls modules =')
-elaborate_body=$(body_of "$TC" '^elaborateModules runtimeDecls coreDecls0 modulesIn =')
 
 preamble_n=$(printf '%s\n' "$preamble_body" | grep -c . || true)
-elaborate_n=$(printf '%s\n' "$elaborate_body" | grep -c . || true)
-if [ "$preamble_n" -eq 0 ] || [ "$elaborate_n" -eq 0 ]; then
-  echo "FAIL: check 6 extracted ZERO lines for graphPreamble ($preamble_n) or"
-  echo "  elaborateModules ($elaborate_n). Either entry's equation line changed shape"
-  echo "  (the two start markers this check greps for) or this check just validated"
-  echo "  nothing. Update the start markers -- do NOT treat a zero extraction as a pass."
+if [ "$preamble_n" -eq 0 ]; then
+  echo "FAIL: check 6 extracted ZERO lines for graphPreamble ($preamble_n). Its"
+  echo "  equation line changed shape (the start marker this check greps for) or"
+  echo "  this check just validated nothing. Update the start marker -- do NOT"
+  echo "  treat a zero extraction as a pass."
   exit 1
 fi
 
-# check_parity_row LABEL PATTERN: fail-closed, naming the ROW. Two halves:
-#   (a) `graphPreamble` CARRIES the call;
-#   (b) `elaborateModules` does NOT -- it is a projection of `driveGraphK`, and a
-#       writer appearing there again is the start of a second Module-mode entry.
+# graphPreamble's LINE RANGE in $TC: its equation line through the last line before
+# the next column-0 binding. The sole-site half below asks whether each mention of a
+# writer falls inside it, so the range must be derived, not assumed.
+preamble_range=$(awk '
+  /^graphPreamble sel preludeKey runtimeDecls coreDecls modules =/ { found=1; lo=NR; next }
+  found && /^[A-Za-z_]/ { print lo, NR-1; found=0; exit }
+  END { if (found) print lo, NR }
+' "$TC")
+preamble_lo=${preamble_range% *}
+preamble_hi=${preamble_range#* }
+if [ -z "$preamble_lo" ] || [ -z "$preamble_hi" ] || [ "$preamble_hi" -le "$preamble_lo" ]; then
+  echo "FAIL: check 6 could not derive graphPreamble's line range (got"
+  echo "  '$preamble_range'). Do NOT treat an underived range as a pass."
+  exit 1
+fi
+
+# check_parity_row LABEL PATTERN NAME: fail-closed, naming the ROW. Two halves:
+#   (a) `graphPreamble` CARRIES the call, spelled exactly as PATTERN;
+#   (b) SOLE SITE -- every non-comment line of this file that mentions NAME (the
+#       callee/ref alone, so the check does not depend on any one caller's parameter
+#       names) is inside graphPreamble's body, apart from NAME's own column-0
+#       definition lines. A mention anywhere else is a second copy of the whole-graph
+#       writer set, which is exactly what #2791 exploited.
 check_parity_row() {
   label="$1"
   pattern="$2"
+  name="$3"
   cc=$(printf '%s\n' "$preamble_body" | grep -Fc "$pattern")
   if [ "$cc" -lt 1 ]; then
     echo "FAIL: graphPreamble is missing the '$label' writer/seed call"
@@ -890,36 +931,51 @@ check_parity_row() {
     echo "  instead of deleting the check."
     exit 1
   fi
-  ec=$(printf '%s\n' "$elaborate_body" | grep -Fc "$pattern")
-  if [ "$ec" -gt 0 ]; then
-    echo "FAIL: elaborateModules carries its OWN '$label' writer/seed call"
-    echo "  (looked for: $pattern)."
-    echo "  elaborateModules must be a PROJECTION of driveGraphK, not a second"
-    echo "  Module-mode driver entry: a second copy of the whole-graph writer set is"
-    echo "  exactly what #2791 exploited (a fix landing in one entry and not the"
-    echo "  other, silently, with run and check disagreeing)."
+  stray=$(awk -v name="$name" -v lo="$preamble_lo" -v hi="$preamble_hi" '
+    {
+      if (index($0, name) == 0) next
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ /^--/) next
+      if (index($0, name) == 1) next
+      if (NR >= lo && NR <= hi) next
+      printf "    %d: %s\n", NR, line
+    }
+  ' "$TC")
+  if [ -n "$stray" ]; then
+    echo "FAIL: the '$label' writer/seed appears OUTSIDE graphPreamble"
+    echo "  (looked for: $name), at:"
+    printf '%s\n' "$stray"
+    echo "  graphPreamble is the one Module-mode driver entry; every other whole-graph"
+    echo "  body -- elaborateModules, driveGraphK, chainGo, a new top-level driver --"
+    echo "  must PROJECT it, never carry its own copy.  A second copy is what #2791"
+    echo "  exploited: a fix landing in one entry and not the other, silently, with"
+    echo "  run and check disagreeing."
     echo "  REMEDY: put the call in graphPreamble, behind the output selection if it"
-    echo "  only applies to one, and let elaborateModules keep projecting."
+    echo "  only applies to one, and let the other bodies keep projecting."
     exit 1
   fi
 }
 
-check_parity_row "resetCrossModuleState" "resetCrossModuleState ()"
-check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules"
-check_parity_row "graphMethodExportsRef :=" "graphMethodExportsRef :="
-check_parity_row "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :="
-check_parity_row "graphCtorExportsRef :=" "graphCtorExportsRef :="
-check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
-check_parity_row "declEnvsRef :=" "declEnvsRef :="
-check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules"
-check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []"
+check_parity_row "resetCrossModuleState" "resetCrossModuleState ()" "resetCrossModuleState"
+check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules" "populateEffectDomainsGraph"
+check_parity_row "graphMethodExportsRef :=" "graphMethodExportsRef :=" "graphMethodExportsRef :="
+check_parity_row "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :="
+check_parity_row "graphCtorExportsRef :=" "graphCtorExportsRef :=" "graphCtorExportsRef :="
+check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
+check_parity_row "declEnvsRef :=" "declEnvsRef :=" "declEnvsRef :="
+check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules" "seedAbstractRecordTypes"
+# The harvest CLEAR is the entry-only fact; `graphModuleWorker`'s per-module
+# accumulation writes the same ref and is not a second copy of it, so this row's
+# sole-site half keys on the cleared spelling rather than on the bare ref name.
+check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []" "promotionHarvestRef := []"
 
-check_parity_row "mark sets" "markSetsOf prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls"
-echo "  ok: graphPreamble carries the whole-graph writer/seed set; elaborateModules"
-echo "      carries none of it"
+check_parity_row "mark sets" "markSetsOf prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls" "markSetsOf"
+echo "  ok: graphPreamble carries the whole-graph writer/seed set, and no other body"
+echo "      in the file carries a copy of any row"
 
-# THE SINGLE-ENTRY ROW. The rows above prove the set lives in graphPreamble and not
-# in elaborateModules. This one proves no THIRD body has grown a copy: graphPreamble
+# THE SINGLE-ENTRY ROW. The rows above prove each writer has exactly one site and
+# that the site is graphPreamble. This one proves the CALL COUNT: graphPreamble
 # is called from exactly the two sites the consolidation leaves -- `driveGraphK`
 # (the one graph driver) and `checkModulesPreambleK` (its two-component projection,
 # for the schemes-only `checkModulesK`). A third call site is a new Module-mode

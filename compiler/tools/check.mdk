@@ -29,7 +29,6 @@ import frontend.desugar.{desugar}
 import support.util.{joinNl}
 import frontend.resolve.{
   resolveToLines,
-  resolveModulesToLines,
   singleFileImportErrors,
   ppResError,
 }
@@ -40,7 +39,6 @@ import types.typecheck.{
   checkOneErrorsWithRuntime,
   entryReportFromDiags,
   ModDiags,
-  TcDiag,
 }
 
 -- exported so the batch typecheck harness's synthetic entry can pull this

@@ -1,5 +1,5 @@
 # META
-source_lines=43758
+source_lines=43794
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -22,14 +22,18 @@ stages=DESUGAR,MARK
 -- residual and the evidence table) is what `run`, `build`'s child, `medaka test`'s
 -- phases and the emit entries consume.  They share one preamble, one per-module
 -- worker and one graph-end drain, so a module is checked against the same universe,
--- the same seed and the same mark sets on both.  Every whole-graph entry point in
--- this file is a projection of that function; the chain memo
--- (`checkModulesDiagsChain`) wraps the `GOutDiags` selection only.
+-- the same seed and the same mark sets on both.  Every UNKEYED whole-graph entry point
+-- in this file is a projection of that function.  The chain memo's KEYED arm is not:
+-- `checkModulesDiagsChain (Some …)` runs `chainGo`, which shares `graphPreamble` (via
+-- `checkModulesPreambleK`) and `graphModuleWorker` but MIRRORS `driveGraphK GOutDiags`'
+-- `foldModules` by hand — a lockstep obligation, stated at `chainGo` itself, that no
+-- gate checks.  Its unkeyed arm (`None`) is a projection like the rest.
 --
 -- Two things the selections still differ on BY CONSTRUCTION, and both are observable:
 -- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set) and it
 -- runs `renameAliasedMethods`.  So ACCEPTING UNDER ONE SELECTION IS STILL NOT PROOF
--- ABOUT THE OTHER for an alias-import program: that divergence is pinned as a fixture
+-- ABOUT THE OTHER for a program that promotes an inferred-constraint fn across modules,
+-- or that imports an aliased method: the alias-import divergence is pinned as a fixture
 -- (`test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject/`) and its
 -- consequence for the gate over this compiler's own source is #1811.
 --
@@ -3532,9 +3536,10 @@ toggles = Ref (freshToggles ())
 -- and never open-code `<=` at a read site.
 --
 -- ⚠️ WHAT IS LIVE TODAY, AND WHAT IS NOT — this unit's bar is BYTE-IDENTICAL, so
--- it may not move a judgment.  LIVE: `buildDeclEnvs` runs at both Module-mode
--- driver entries, and `deAllDecls` supplies the whole-graph decl list each of them
--- previously concatenated inline, so a mis-built envelope is LOUD
+-- it may not move a judgment.  LIVE: `buildDeclEnvs` runs at the ONE Module-mode
+-- driver entry, `graphPreamble` (under `driveGraphK`, with `checkModulesPreambleK`
+-- its two-component projection), and `deAllDecls` supplies the whole-graph decl list
+-- that entry previously concatenated inline, so a mis-built envelope is LOUD
 -- (`populateEffectDomains` would miss a module's `effect` decls) rather than
 -- silent.  NOT LIVE IN THIS UNIT: the filter.  ⚠️ THE ROW ACCESSOR THIS PARAGRAPH
 -- USED TO TRACK IS GONE — `declEnvsVisible`/`declEnvsUpTo`/`declEnvsUpToGo` were
@@ -5990,7 +5995,8 @@ buildImplEnvGo (m :: rest) ia =
 -- ── ARCH B-2.1-a2 (Stage B sprint): the FLAT arm's `ImplEnv` ─────────────────
 --
 -- `buildImplEnv` above needs an ENVELOPE (`List DeclEnvModule`), which only the
--- graph drivers build (`buildDeclEnvs` ← `checkModulesPreambleK` / `elaborateModules`).
+-- graph driver builds (`buildDeclEnvs` ← `graphPreamble`, reached from `driveGraphK`
+-- and from `checkModulesPreambleK`'s projection of it).
 -- The FLAT path — `checkProgramSeededSplit` → `checkBodyImpl (Flat coreProg)`, reached
 -- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, `lint`'s policy pass,
 -- `snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries via
@@ -14500,9 +14506,10 @@ seedBuiltinClasses (Flat coreProg) prog =
   crossRun.value.builtinClassesRef := classes
 -- ⚠️ BOTH SPELLINGS of the prelude's module id are tested, for the same reason
 -- `declEnvsOrdOf` indexes it twice: the `graph*Exports` peers key the prelude under
--- `"core"`, but the `mid` both Module-mode drivers actually PASS for the core pass is
--- `""` (`checkModuleFull` → `checkModuleFullImpl ""`; `elabModuleStamp ""`).  Testing
--- only `"core"` would silently never fire on either driver — and the miss is silent
+-- `"core"`, but the `mid` `graphPreamble` actually PASSES for the core pass is `""` on
+-- both output selections (`GOutDiags`: `checkModuleFull` → `checkModuleFullImpl ""`;
+-- `GOutTrees`: `elabModuleStamp ""`).  Testing
+-- only `"core"` would silently never fire on either selection — and the miss is silent
 -- because an unseeded table yields `OriginUnresolved`, i.e. a `TkBare` goal key against
 -- `TkIdent` impls: a false REJECT of the prelude, which is the #1112 prototype's
 -- 634-diagnostic signature.
@@ -24626,9 +24633,10 @@ ordinalSentinelMsg =
   "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete"
 
 -- #1557 A-3.5c: the FLAT arm's single-module `CE`.  `buildDeclEnvs` runs only at the
--- two Module-mode driver entries, so `driverState.declEnvsRef` is `emptyDeclEnvs` on
--- every flat path — reading it here would make `ceLookupAt` miss on every interface
--- and turn two live rejections into silent accepts on `medaka check <one file>`.
+-- one Module-mode driver entry, `graphPreamble`, so `driverState.declEnvsRef` is
+-- `emptyDeclEnvs` on every flat path — reading it here would make `ceLookupAt` miss on
+-- every interface and turn two live rejections into silent accepts on
+-- `medaka check <one file>`.
 -- Ordinal 0 with `cur = 0` makes "visible at" and "owned by" coincide, which is
 -- correct: a flat program is exactly one module.
 flatClassEnvOf : List Decl -> ClassEnv
@@ -37652,10 +37660,11 @@ buildDefinerShadows implDecls prog =
 -- impl EXISTENCE and impl SELECTION both read the graph-global `bodyImplEnvRef` now, and a
 -- prefix-keyed second population is the shape B-2.1-c/-f/-g each measured an S0 out of.
 -- BOTH SPELLINGS of the prelude's module id under `Module` mode, in one place.  The
--- `graph*Exports` peers key the prelude under `"core"`, but the `mid` both Module-mode
--- drivers actually PASS for the core pass is `""` (`checkModuleFull` →
--- `checkModuleFullImpl ""`; `elabModuleStamp ""`).  A test of one spelling alone
--- silently never fires on either driver.  Two callers — `seedBuiltinClasses` and
+-- `graph*Exports` peers key the prelude under `"core"`, but the `mid` `graphPreamble`
+-- actually PASSES for the core pass is `""` on both output selections (`GOutDiags`:
+-- `checkCoreMemoized` → `checkModuleFull` → `checkModuleFullImpl ""`; `GOutTrees`:
+-- `elabModuleStamp ""`).  A test of one spelling alone silently never fires on either
+-- selection.  Two callers — `seedBuiltinClasses` and
 -- `appendUniverseAccums` (below) — and they must not drift apart, since both ask the
 -- same question: "is the unit being folded the implicit prelude?"
 isPreludeMid : String -> Bool
@@ -37972,9 +37981,10 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
 -- `resolveRLocalSites` to stamp and the route stays the method's RKey) — the S4/#410
 -- class, up to `no impl of method … for type …` on a valid program and a SIGSEGV variant.
 -- Adding shadow-hood is the pre-existing behaviour.  So an ABSENT index answers True for
--- every name rather than False: `graphIfaceMethodsRef` is written unconditionally at both
--- Module-mode driver entries (`checkModulesPreambleK`, `elaborateModules` — the conjunction
--- stated in full on `graphMethodExports`, which this ref is written beside), and a driver
+-- every name rather than False: `graphIfaceMethodsRef` is written unconditionally at the one
+-- Module-mode driver entry, `graphPreamble` (`checkModulesPreambleK` is its projection — the
+-- conjunction stated in full on `graphMethodExports`, which this ref is written beside),
+-- and a driver
 -- that ever omits that write must degrade to today's graph-global answer, not to "nothing
 -- is a shadow anywhere".
 --
@@ -39104,10 +39114,11 @@ selectIfaceRows path src = match importedBindings path
 -- arm keeps `fst`"*.  It cannot move the run/build answer, and that is DERIVABLE from this
 -- file without building anything — grep the two call sites and read the order:
 --
---     grep -n 'renameAliasedMethods \|graphIfaceMethods coreDecls' compiler/types/typecheck.mdk
+--     grep -n 'renameAliasedMethods \|graphIfaceMethodsRef :=' compiler/types/typecheck.mdk
 --
--- `renameAliasedMethods` has exactly ONE call site, in `elaborateModules`, and it runs
--- BEFORE that driver writes `graphIfaceMethodsRef` and before the mark pass.  It applies
+-- `renameAliasedMethods` has exactly ONE call site: `driveGraphK`'s `GOutTrees` arm, which
+-- selects it before calling `graphPreamble`, so it runs BEFORE the `graphIfaceMethodsRef`
+-- write and before the mark pass, and only on the tree selection.  It applies
 -- `deAliasMethodImports`, whose whole job (b) is rewriting `import ifc.{size as sz}` into
 -- `import ifc.{size}` — the alias is dropped because a method is global-by-name.  So by the
 -- time `selectIfaceRows` runs on that path, `snd b == fst b` for every member and the two
@@ -40224,8 +40235,8 @@ graphAmbigValues mid =
 -- the thing it was derived FROM is replaced, so a second graph in one process reads the
 -- first graph's answers.  This table is instead a FIELD of the value it is a function of.
 -- `deDefiners` is derived from `mods` and from nothing else, in the same constructor, so
--- it cannot outlive its input: every write of `declEnvsRef` (both Module-mode driver
--- entries write it unconditionally — see `checkModulesPreambleK` and `elaborateModules`)
+-- it cannot outlive its input: every write of `declEnvsRef` (the one Module-mode driver
+-- entry, `graphPreamble`, writes it unconditionally, on both output selections)
 -- replaces the whole envelope, table included, and a driver that never calls
 -- `buildDeclEnvs` reads `emptyDeclEnvs`' empty one.  There is no state to forget to clear.
 --
@@ -40811,20 +40822,30 @@ data GraphOut = GOutDiags | GOutTrees
 -- drain, so a caller that gates on `hadTypeErrors` right after the drive does not
 -- see them; `DrainKeep` leaves them standing and they reach the caller as the
 -- drive's residual.  The two are not a taste: the drain rejects things an
--- accepted program contains — an undefaulted `Num` literal in a test/prop body,
--- `panic "…"` (#2315), a route re-unification the obligation channel already
--- decided — so reporting them universally would reject working programs.
+-- accepted program contains — an undefaulted `Num` literal in a test/prop body —
+-- so reporting them universally would reject working programs.  (The HYPOTHESIS
+-- the census below tested named two further members, `panic "…"` (#2315) and a
+-- route re-unification the obligation channel already decided; neither is in the
+-- measured population, and they are recorded here as what was looked for, not as
+-- what is there.)
+--
+-- The population is a property of the INSTRUMENT, not of what ships.  It is what a
+-- `GOutDiags` arm with the rollback REMOVED raises; the shipped `DrainKeep` callers
+-- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
+-- `hadTypeErrors` and the residual does not arm it.
 --
 -- DELETION CONDITION: this parameter goes away, and every caller takes one
--- behavior, when ruling 1's T4 census over the drain's diagnostics population
--- (#2705) decides once whether they are reported.  The population is MEASURED,
--- never assumed, and it is small: re-derived on this tree as a two-arm corpus
--- (one arm with the rollback removed and the residual rendered) over every `.mdk`
--- under `test/` and `stdlib/` this compiler accepts, it is 2 of 2,548 accepted
--- files — `test/engine_fixtures/where_dict_forward.mdk` and
+-- behavior, when the population is EMPTY or every member of it is reported.
+-- Re-derive the population before deciding — do not read the number below as
+-- current.  How: build a second arm with `DrainRollback` mapped to
+-- `drainStampQueue` and the drive's residual rendered as entry warnings, run both
+-- arms over every `.mdk` under `test/` and `stdlib/` this compiler accepts, and
+-- diff.  Measured that way on this tree, it is 2 of 2,548 accepted files —
+-- `test/engine_fixtures/where_dict_forward.mdk` and
 -- `test/parse_fixtures/blocks.mdk`, both an `Ambiguous instance` on a literal the
 -- graph never defaulted (#2646's owed D1 quiescence step).  Recorded in
--- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 16.
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 17 (ONE graph driver),
+-- #2705.
 data DrainDiags = DrainRollback | DrainKeep
 
 -- The drain, under the caller's choice of the bit above.
@@ -41123,7 +41144,8 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
 -- per-module resetState.  They are grown by `appendUniverseAccums prog0` per module but
 -- must be CLEARED once per run by `resetCrossModuleState` (and seeded by the core pass)
 -- BEFORE the first module.  Every existing caller goes through a driver that does exactly
--- that (foldModulesDiags / checkModulesDiags via resetCrossModuleState); a future
+-- that (`driveGraphK` and the keyed chain's `chainGo`, both via `graphPreamble`'s
+-- `resetCrossModuleState`); a future
 -- standalone caller that skips it would leak the previous run's universe into this one.
 --
 -- 🚨 THE SENTENCE ABOVE DOES NOT COVER EVERYTHING THE Module PATH READS, AND THE ONE
@@ -41134,8 +41156,9 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
 -- mid-run is precisely the defect that put it on `driverState` (F1 — `check` clean while
 -- `run`/`build` reported a type error).  For it the precondition is not "clear before the
 -- first module" but **"OVERWRITE with this run's graph before the first module"**:
---     setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
--- which `checkModulesPreambleK` and `elaborateModules` both do.  The failure modes differ
+--     driverState.value.graphMethodExportsRef :=
+--       graphMethodExports prelude.ppMethodIdents modules
+-- which `graphPreamble` — the one Module-mode driver entry — does.  The failure modes differ
 -- in KIND, which is why this is worth spelling out rather than folding into the list above:
 -- skipping `resetCrossModuleState` leaks the previous run's universe; skipping THIS write
 -- leaves the previous run's INDEX in place, and a stale index can pick a wrong interface
@@ -41290,7 +41313,8 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- promotions before the next module's `resetState` wipes `promotedRef` —
 -- `foldModules` calls the worker HEAD-first, which is what makes that read safe.
 --
--- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module.  `foldModules` never folds a module into its own
+-- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module.
+-- `foldModules` never folds a module into its own
 -- `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this module's own
 -- decls too must fold [prog] in itself"), and `checkBodyImpl`'s `groundUniverse` binding
 -- reads `implDecls` RAW on the Module arm — so bare `accAll` makes
@@ -41311,9 +41335,11 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- only way the terminal module's own bindings reach `graphCollect` — which owes
 -- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload, and the entry-report
 -- projection needs the same triple to keep the terminal module's OWN schemes/warns.
--- Costs nothing: `checkModuleFullDiags` already computed them, and so is the marked
--- tree — it is the same list value the module was marked in, not a copy, so the diags
--- arm carrying it to a `collect` that drops it retains nothing extra.
+-- Costs nothing: `checkModuleFullDiags` already computed them, and the marked tree is
+-- the same list value the module was marked in, not a copy.  The diags arm carries
+-- that tree as far as `graphCollect` and `graphCollect` drops it there, rather than
+-- consing it: that selection returns `gdModules = []`, so accumulating the tree would
+-- hold every module's marked forms live for the whole drive.
 -- One module's row in a graph drive's per-module diagnostics: its own value
 -- schemes, its isolated errors and its isolated warnings, under its module id.
 -- The schemes half is what lets the ENTRY REPORT be a projection of the same list
@@ -41358,8 +41384,9 @@ graphModuleWorker sel mid seed accData accAll prog =
 -- terminal module's own schemes and warnings, plus every module's errors — from this
 -- one pass instead of from a second, entry-only driver over the same graph
 -- (`checkModulesEntryFromDiags` below is that projection, and it is the old
--- entry-only `collect` written as a fold over this list).  `checkModulesDiagsChain`'s exported signature
--- (a selfproc LEG A row) keeps the narrower `(errs, warns)` shape: it projects.
+-- entry-only `collect` written as a fold over this list).  `checkModulesDiagsChain`'s
+-- exported signature (a selfproc LEG A row) keeps the narrower `(errs, warns)` shape:
+-- it projects.
 --
 -- #2246: this is the multi-module `analyzeProject` path's ONLY producer of
 -- `mainSchemeRef`.  S-3 (#2234) made `mainShapeWarnings` pure — it now READS the ref
@@ -41388,7 +41415,13 @@ graphCollect sel isLast mid (marked, schemes, errs, warns) (markedRest, diagsRes
   let _ = match sel
     GOutDiags => setMainSchemeIfEntry isLast schemes
     GOutTrees => ()
-  ((mid, marked) :: markedRest, (mid, (schemes, errs, warns)) :: diagsRest)
+  -- The DIAGS selection drops the marked tree HERE, at the module boundary, because
+  -- its `driveGraphK` arm returns `gdModules = []`: accumulating it would hold every
+  -- module's marked forms live for the whole drive on the GC-bound `check` stage.
+  let markedOut = match sel
+    GOutDiags => markedRest
+    GOutTrees => (mid, marked) :: markedRest
+  (markedOut, (mid, (schemes, errs, warns)) :: diagsRest)
 
 -- the `(errs, warns)` projection of one full per-module entry, for the exported
 -- drivers whose contract is the narrower pair.
@@ -41623,8 +41656,10 @@ data GraphDrive = GraphDrive {
 -- shared preamble, check every module dependency-first through one worker, drain
 -- at graph end, and attach the whole-graph coherence verdict.  `sel` chooses what
 -- comes back (see `GraphOut`); `drain` chooses whether the drain's own diagnostics
--- survive (see `DrainDiags`).  Every whole-graph entry point below is a projection
--- of this function.
+-- survive (see `DrainDiags`).  Every UNKEYED whole-graph entry point below is a
+-- projection of this function; the keyed memo arm (`chainGo`) shares `graphPreamble`
+-- and `graphModuleWorker` and MIRRORS the fold below rather than reusing it, which is
+-- the lockstep obligation `chainGo`'s own comment states.
 --
 -- The memo layer is OUTSIDE, not a parameter: memoization is a property of the
 -- caller's process lifetime, not of the driver.  A one-shot CLI process drives the
@@ -43394,7 +43429,8 @@ runStampCtxs (ctx :: rest) =
   toggles := ctx.scToggles
   -- `givensHere` selects this module's bucket off `gGiven` by exactly this key
   -- (#2547 unit 3), and `superDeclsRef` is the impl universe the stampers'
-  -- super-expansion reads — both are what `elabModuleStamp` set for this module.
+  -- super-expansion reads — both are what `graphModuleWorker` set for this module
+  -- (`elabModuleStamp` for the core pass, which is the only module still on it).
   driverState.value.currentModuleRef := ctx.scModule
   driverState.value.superDeclsRef := ctx.scImplDecls
   let _ = runStampSteps ctx moduleStampOrder
@@ -49997,7 +50033,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "graphModuleWorker" (TyFun (TyCon "GraphOut") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))))
 (DFunDef false "graphModuleWorker" ((PVar "sel") (PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "implDecls") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "implDecls"))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EVar "schemes")) (arm (PCon "Some" (PVar "sc")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EVar "Some") (EVar "sc")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value"))))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "marked") (EVar "schemes") (EVar "errs") (EVar "warns"))))))
 (DTypeSig false "graphCollect" (TyFun (TyCon "GraphOut") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "ModDiags"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "ModDiags")))))))))
-(DFunDef false "graphCollect" ((PVar "sel") (PVar "isLast") (PVar "mid") (PTuple (PVar "marked") (PVar "schemes") (PVar "errs") (PVar "warns")) (PTuple (PVar "markedRest") (PVar "diagsRest"))) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "isLast")) (EVar "schemes"))) (arm (PCon "GOutTrees") () (ELit LUnit)))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "mid") (EVar "marked")) (EVar "markedRest")) (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))) (EVar "diagsRest"))))))
+(DFunDef false "graphCollect" ((PVar "sel") (PVar "isLast") (PVar "mid") (PTuple (PVar "marked") (PVar "schemes") (PVar "errs") (PVar "warns")) (PTuple (PVar "markedRest") (PVar "diagsRest"))) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "isLast")) (EVar "schemes"))) (arm (PCon "GOutTrees") () (ELit LUnit)))) (DoLet false false (PVar "markedOut") (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EVar "markedRest")) (arm (PCon "GOutTrees") () (EBinOp "::" (ETuple (EVar "mid") (EVar "marked")) (EVar "markedRest"))))) (DoExpr (ETuple (EVar "markedOut") (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))) (EVar "diagsRest"))))))
 (DTypeSig true "dropModSchemes" (TyFun (TyCon "ModDiags") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "dropModSchemes" ((PTuple (PVar "mid") (PTuple PWild (PVar "errs") (PVar "warns")))) (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))))
 (DTypeSig true "checkModulesEntryFromDiags" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
@@ -56510,7 +56546,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "graphModuleWorker" (TyFun (TyCon "GraphOut") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))))
 (DFunDef false "graphModuleWorker" ((PVar "sel") (PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "implDecls") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "implDecls"))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EVar "schemes")) (arm (PCon "Some" (PVar "sc")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EVar "Some") (EVar "sc")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value"))))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "marked") (EVar "schemes") (EVar "errs") (EVar "warns"))))))
 (DTypeSig false "graphCollect" (TyFun (TyCon "GraphOut") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "ModDiags"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "ModDiags")))))))))
-(DFunDef false "graphCollect" ((PVar "sel") (PVar "isLast") (PVar "mid") (PTuple (PVar "marked") (PVar "schemes") (PVar "errs") (PVar "warns")) (PTuple (PVar "markedRest") (PVar "diagsRest"))) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "isLast")) (EVar "schemes"))) (arm (PCon "GOutTrees") () (ELit LUnit)))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "mid") (EVar "marked")) (EVar "markedRest")) (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))) (EVar "diagsRest"))))))
+(DFunDef false "graphCollect" ((PVar "sel") (PVar "isLast") (PVar "mid") (PTuple (PVar "marked") (PVar "schemes") (PVar "errs") (PVar "warns")) (PTuple (PVar "markedRest") (PVar "diagsRest"))) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "isLast")) (EVar "schemes"))) (arm (PCon "GOutTrees") () (ELit LUnit)))) (DoLet false false (PVar "markedOut") (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EVar "markedRest")) (arm (PCon "GOutTrees") () (EBinOp "::" (ETuple (EVar "mid") (EVar "marked")) (EVar "markedRest"))))) (DoExpr (ETuple (EVar "markedOut") (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))) (EVar "diagsRest"))))))
 (DTypeSig true "dropModSchemes" (TyFun (TyCon "ModDiags") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "dropModSchemes" ((PTuple (PVar "mid") (PTuple PWild (PVar "errs") (PVar "warns")))) (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))))
 (DTypeSig true "checkModulesEntryFromDiags" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))

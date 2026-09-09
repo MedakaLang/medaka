@@ -1,5 +1,5 @@
 # META
-source_lines=4438
+source_lines=4449
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -1032,6 +1032,14 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- (`R-BUILD-FAILED` etc. in `cjBuildFailedJson`) — `T-RESIDUAL` names the one
 -- circumstance this fires: the graph-end drain saw a type error the per-module
 -- pass did not, so there is no located diagnostic to report instead.
+--
+-- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
+-- two reviewers failed to construct one, and the two files the drain's T4 census
+-- names as its whole population (see `DrainDiags` in `compiler/types/typecheck.mdk`)
+-- both take `run`'s ACCEPT path.  It exists so the empty-residual case cannot exit
+-- 1 with an empty envelope, which is a shape the code must handle whether or not an
+-- input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
+-- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.
 genericResidualDiag : String -> Diag
 genericResidualDiag target =
   mkDiag
@@ -2881,13 +2889,16 @@ runHelpText = stringConcat [
   "medaka run — Type-check and run a program (interpreter)\n", "\n", "Usage:\n",
   "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
   "\n",
-  "  --json            emit the Diag JSON envelope instead of human text, for\n",
-  "                    a runtime panic, a warning, a clean run, or a static\n",
-  "                    (resolve/type) error in the program. KNOWN GAP: a usage\n",
-  "                    error (bad flag, missing file) or a load/parse failure\n",
-  "                    (bad import, malformed source) still prints human text\n",
-  "                    on stderr and exits 1 with no envelope, so a consumer\n",
-  "                    must handle both.\n",
+  "  --json            emit the Diag JSON envelope on stderr instead of human\n",
+  "                    text, for a runtime panic, a static (resolve/type) error\n",
+  "                    in the program, or a warning in a SINGLE-FILE program. A\n",
+  "                    clean run emits no envelope at all; a multi-module\n",
+  "                    program's warnings are not reported by `run` (issue\n",
+  "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n",
+  "                    a usage error (bad flag, missing file) or a load/parse\n",
+  "                    failure (bad import, malformed source) still prints human\n",
+  "                    text on stderr and exits 1 with no envelope, so a\n",
+  "                    consumer must handle both.\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
   "  --release         accepted, ignored — the interpreter has no release mode.\n",
   "                    There is no `build --release`; a native build is always\n",
@@ -4752,7 +4763,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "flushPendingRunDiags" ((PCon "False")) (ELit LUnit))
 (DFunDef false "flushPendingRunDiags" ((PCon "True")) (EApp (EVar "flushRunEnvelope") (EUnOp "!" (EVar "pendingRunDiags"))))
 (DTypeSig false "runHelpText" (TyCon "String"))
-(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope instead of human text, for\n")) (ELit (LString "                    a runtime panic, a warning, a clean run, or a static\n")) (ELit (LString "                    (resolve/type) error in the program. KNOWN GAP: a usage\n")) (ELit (LString "                    error (bad flag, missing file) or a load/parse failure\n")) (ELit (LString "                    (bad import, malformed source) still prints human text\n")) (ELit (LString "                    on stderr and exits 1 with no envelope, so a consumer\n")) (ELit (LString "                    must handle both.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
+(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope on stderr instead of human\n")) (ELit (LString "                    text, for a runtime panic, a static (resolve/type) error\n")) (ELit (LString "                    in the program, or a warning in a SINGLE-FILE program. A\n")) (ELit (LString "                    clean run emits no envelope at all; a multi-module\n")) (ELit (LString "                    program's warnings are not reported by `run` (issue\n")) (ELit (LString "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n")) (ELit (LString "                    a usage error (bad flag, missing file) or a load/parse\n")) (ELit (LString "                    failure (bad import, malformed source) still prints human\n")) (ELit (LString "                    text on stderr and exits 1 with no envelope, so a\n")) (ELit (LString "                    consumer must handle both.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
 (DTypeSig false "runArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "runArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope on stderr"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--allow-internal")))) (ELit (LString "permit internal-only externs outside stdlib/"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--release")))) (ELit (LString "accepted and ignored (eval is never optimized)"))))))
 (DTypeSig false "runEvalPerf" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))))))
@@ -5216,7 +5227,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "flushPendingRunDiags" ((PCon "False")) (ELit LUnit))
 (DFunDef false "flushPendingRunDiags" ((PCon "True")) (EApp (EVar "flushRunEnvelope") (EUnOp "!" (EVar "pendingRunDiags"))))
 (DTypeSig false "runHelpText" (TyCon "String"))
-(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope instead of human text, for\n")) (ELit (LString "                    a runtime panic, a warning, a clean run, or a static\n")) (ELit (LString "                    (resolve/type) error in the program. KNOWN GAP: a usage\n")) (ELit (LString "                    error (bad flag, missing file) or a load/parse failure\n")) (ELit (LString "                    (bad import, malformed source) still prints human text\n")) (ELit (LString "                    on stderr and exits 1 with no envelope, so a consumer\n")) (ELit (LString "                    must handle both.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
+(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope on stderr instead of human\n")) (ELit (LString "                    text, for a runtime panic, a static (resolve/type) error\n")) (ELit (LString "                    in the program, or a warning in a SINGLE-FILE program. A\n")) (ELit (LString "                    clean run emits no envelope at all; a multi-module\n")) (ELit (LString "                    program's warnings are not reported by `run` (issue\n")) (ELit (LString "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n")) (ELit (LString "                    a usage error (bad flag, missing file) or a load/parse\n")) (ELit (LString "                    failure (bad import, malformed source) still prints human\n")) (ELit (LString "                    text on stderr and exits 1 with no envelope, so a\n")) (ELit (LString "                    consumer must handle both.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
 (DTypeSig false "runArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "runArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope on stderr"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--allow-internal")))) (ELit (LString "permit internal-only externs outside stdlib/"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--release")))) (ELit (LString "accepted and ignored (eval is never optimized)"))))))
 (DTypeSig false "runEvalPerf" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))))))

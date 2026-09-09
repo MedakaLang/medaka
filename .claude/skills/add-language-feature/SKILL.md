@@ -52,8 +52,9 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    `harden-typechecker` — it's keyed to the `ws:typecheck` label, not to a skill, precisely
    because a fix routed here (cross-cutting) would otherwise miss a skill-scoped gate. Infer/check
    types (HM + interfaces + effects). If the construct introduces match arms, update
-   exhaustiveness — `checkMatchExhaustive` / `checkMatchRedundant`
-   (`compiler/types/typecheck.mdk:5841` / `:5862`) call *into*
+   exhaustiveness — `checkMatchExhaustive` / `checkMatchRedundant`, whose call sites
+   (`grep -n 'checkMatchExhaustive\|checkMatchRedundant' compiler/types/typecheck.mdk`
+   — derive them, line numbers here rot) call *into*
    `compiler/frontend/exhaust.mdk` (`buildOracle` / `useful` / `usefulWitness`);
    exhaust is not a standalone stage. Per-node `infer`/`check` arms are shared, but
    **whole-program orchestration lives in two entry points** — `checkProgramDiags`

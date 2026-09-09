@@ -472,8 +472,10 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
 * **Prose semantics.** `run --help`'s `--json` paragraph describes WHEN an envelope appears.
   §2798 drained the resolve/type half of what used to be a blanket "any compile-time failure"
   KNOWN GAP; the help text now names only the residual (a usage error or a load/parse failure)
-  as still prose-only. Whether that residual claim itself holds is a flag-existence question
-  A/B/C are still blind to.
+  as still prose-only, plus the two silences MEASURED on both arms and pre-existing — a clean
+  run emits no envelope at all (`flushRunEnvelope`'s `([], []) => ()`), and a multi-module
+  program's warnings are not reported by `run` (#2818). Whether any of those claims holds is a
+  flag-existence question A/B/C are still blind to.
 * **A and B ask "is this flag rejected as unknown", not "is it honoured."** An
   accepted-but-ignored flag reads as parsed — which is why `gate run --jobs`, conforming dead
   surface under E6, is correctly not flagged.

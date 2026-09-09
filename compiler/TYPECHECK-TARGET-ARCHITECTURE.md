@@ -865,10 +865,20 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    under two parameters:
    * `GraphOut` — `GOutDiags` (per-module diagnostics and schemes) or `GOutTrees` (those
      plus the dict-passed trees, the residual and the evidence table).  The selection gates
-     six writes and nothing else: `mainSchemeRef`'s clear, the empty ctor oracle,
-     `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the core pass
-     is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked decls, and
-     a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef` writes.
+     more than writes; DERIVE the sites rather than trusting a count here
+     (`grep -n 'match sel' compiler/types/typecheck.mdk`, minus the one unrelated
+     `selectReqImpl` hit).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
+     oracle, `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the
+     core pass is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked
+     decls, and a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef`
+     writes.  Three are not writes and are real behavioural differences: `renameAliasedMethods`
+     runs on the tree arm only (`modulesAliased`); `graphCollect` accumulates the marked tree
+     on the tree arm only (the diags arm returns `gdModules = []`, so keeping it would hold
+     every module's marked forms live for the whole drive); and the tree arm's finish runs
+     `dictPassModulesIfEnabled`, `resolveAliasMethodSpellings` and publishes the residual.
+     The file header names the first of those three as one of the two remaining
+     by-construction divergences between the selections, so "and nothing else" would
+     contradict it.
    * `DrainDiags` — `DrainRollback` or `DrainKeep`, with its deletion condition in the code.
    `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK`
    are projections.  The memo layer stays OUTSIDE and wraps `GOutDiags` only: `ChainStep`
@@ -888,13 +898,31 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    bindings — `driveGraphK`, `graphPreamble`, `graphModuleWorker`, `graphCollect`,
    `graphDrainFinish` — and 5 renames, each a lost pair and a gained row);
    `tools.check` loses 2.  `ModDiags` names the per-module payload the widening had spelled
-   out at 16 sites.
+   out.  DERIVE the size of that widening rather than reading a number here, and say WHICH
+   count you mean: `git grep -c` for the exact spelling
+   `List (String, (List (String, Scheme), List TcDiag, List TcDiag))` over `compiler/*.mdk`
+   gives 16 lines at `026c44160` and `ModDiags` gives 20 at head, while the DIFF touches
+   more than either, because the widening also rewrote the narrower `(errs, warns)`
+   spellings around it.  "16 sites" named the first of those and read as if it named all of
+   them.  `ModDiags` is also a NEW export of
+   `types/typecheck.mdk` (`export type ModDiags`), which an `^export$` count cannot see;
+   `compiler/tools/check.mdk` loses two exports over the same commit.
    **The one behavior change** is the entry report's HARD coherence conflict: it now sits at
-   the front of the ENTRY module's errors rather than the accumulated list, differing only on
-   a graph with both a conflict and an imported-module type error.
-   **`registry_keying_ratchet` check 6 was strengthened, not weakened**: with one entry it
-   proves the set lives in `graphPreamble`, that `elaborateModules` carries none of it, and
-   that `graphPreamble` has exactly two call sites.
+   the front of the ENTRY module's errors rather than the accumulated list.  That differs only
+   on a graph with both a conflict and an imported-module type error, and **the differing
+   branch is currently unreachable**: every caller of `checkModulesEntryFullSplitK` /
+   `…FullK` / `…Full` / `…Report` / `…HasErrors` passes a SINGLETON module list, and the
+   multi-module `check` route reaches the entry report through `entryReportFromDiags` instead.
+   Witnessed rather than argued: the shape it names (`t9` — a cross-module hard `impl`
+   conflict plus a type error in the imported module) is byte-identical on both arms under
+   `check`, `check --json`, `run`, `run --json`, `build` and `medaka test`.  So a future
+   multi-module caller of the entry-report driver lights up code no fixture covers.
+   **`registry_keying_ratchet` check 6 was strengthened, not weakened**: with one entry, the
+   per-row half proves each writer of the whole-graph set has exactly ONE site in
+   `types/typecheck.mdk` and that the site is inside `graphPreamble` (file-wide, so a copy in
+   `elaborateModules`, in `driveGraphK`, in `chainGo` or in a new top-level body all fire it),
+   and the single-entry row proves `graphPreamble` has exactly two call sites.  The mutations
+   it has been seen to fail on are listed in the check's own header.
    **Measured.**  Two-arm four-verb differential (`check`, `check --json`, `run`,
    `medaka test`) over every multi-module fixture corpus plus `stdlib` — 317 entries, 1,268
    cells, **0 divergences**.  Two-arm cachegrind against `20869bcc7`: ruling 7's two warm LSP
@@ -911,13 +939,27 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    re-unification duplicate.  The population the ruling has to adjudicate is now two files
    of one kind, not three kinds.
 
-18. **`run --json` envelopes a static error, 2026-09-09** (#2798). The five `runRunCmd`
-   error arms stage their diagnostics into the same `pendingRunDiags` envelope `check --json`
+18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms
+   — SIX of them; derive rather than trust this number, `grep -n 'runAbortJson'
+   compiler/driver/medaka_cli.mdk` minus the definition's two lines and the three comment
+   mentions — stage their diagnostics into the same `pendingRunDiags` envelope `check --json`
    and the runtime-error path already use (stderr, `run`'s machine channel), so the `[perf]` and
    staleness notices ride inside the document instead of corrupting it; the residual-only arm
    emits a `T-RESIDUAL` diagnostic for the entry rather than an empty envelope; multi-module
-   paths are relativized as `check --json`'s are; warnings ride beside errors so the arrays
-   match `check --json` element-wise. Two pre-existing `.json.out` goldens had pinned the prose.
+   paths are relativized as `check --json`'s are; warnings ride beside errors so the
+   per-file `diagnostics` arrays match `check --json` element-wise. Two pre-existing
+   `.json.out` goldens had pinned the prose.
+   **Three qualifications on "the arrays match", all measured.** (a) It holds PER FILE THAT
+   HAS DIAGNOSTICS. (b) The `files` array itself differs: `check --json` emits
+   `{"file":…,"diagnostics":[]}` rows for clean modules and `run --json` drops them
+   (`nonEmptyTriples`), so a consumer keying on `files[0].file` sees a different document.
+   (c) On the ACCEPT path there is nothing to match — a clean `run --json` emits no envelope
+   at all (`flushRunEnvelope`'s `([], []) => ()`), and a multi-module program's warnings are
+   not reported by `run` at all (#2818). Both are pre-existing and reproduce on the base arm;
+   `run --help` describes them as they are.
+   **`T-RESIDUAL` is a new diagnostic code** and is now a row in
+   `compiler/DIAGNOSTIC-CODES-DESIGN.md`. Nothing known reaches it: `test/diag_census.sh`
+   only sees codes that FIRE, so its "0 undocumented" was structurally blind to this one.
    Found alongside, pre-existing and filed: a user file named `core.mdk` bypasses `run`'s static
    gate (#2811).
 
