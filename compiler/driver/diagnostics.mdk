@@ -50,8 +50,8 @@ import frontend.marker.{
 import types.repr.{Scheme(..)}
 import types.typecheck.{
   checkOneDiagsK, checkModulesDiagsChain, checkModulesK, entryOwnSchemes,
-  setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit,
-  mainTypeIsAsync
+  dropModSchemes, setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg,
+  mainTypeIsUnit, mainTypeIsAsync
 }
 import driver.loader.{
   LoadMsg,
@@ -1178,6 +1178,35 @@ analyzeProject : Bool ->
   String ->
   <IO> List (String, List Diag)
 analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+  let (_, results) =
+    analyzeProjectFull
+      allowInternal
+      trustedMods
+      cacheRef
+      parseCacheRef
+      read
+      entry
+      roots
+      runtimeSrc
+      coreSrc
+  results
+
+-- `analyzeProject` also handing back the per-module `(schemes, errs, warns)` the
+-- graph driver produced — see `typecheckPassFull`.  A load failure never reaches a
+-- typecheck, so its per-module list is empty and only the diagnostics it attributes
+-- to the entry file carry any verdict.
+export
+analyzeProjectFull : Bool ->
+  List String ->
+  Ref (List (String, String)) ->
+  Ref (List (String, List Decl)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO> (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
+analyzeProjectFull allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
   let runtimeP = preludeDesugared runtimeSrc
@@ -1190,20 +1219,22 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
     -- (a half-typed buffer), and it used to reach here as a panic that took the
     -- whole didChange response with it.
     Err (LoadParseFailed mpath _ pe) =>
-      appendStale staleRef [(mpath, [parseErrDiag mpath pe])]
-    Err (LoadMsg e) =>
-      appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])]
+      ([], appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
+    Err (LoadMsg e) => (
+      [],
+      appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+    )
     Ok mods =>
-      appendStale
-        staleRef
-        (projectDiagsLoaded
+      let (full, results) =
+        projectDiagsLoadedFull
           allowInternal
           trustedMods
           runtimeP
           coreP
           preludeKey
           (chainKeyOf entry roots)
-          mods)
+          mods
+      (full, appendStale staleRef results)
 
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
@@ -1219,6 +1250,25 @@ projectDiagsLoaded : Bool ->
   List (String, List Diag)
 projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
   typecheckPass
+    runtimeP
+    coreP
+    preludeKey
+    chainKey
+    mods
+    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+
+-- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` —
+-- see `typecheckPassFull`.
+projectDiagsLoadedFull : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  Option (Int, Int) ->
+  String ->
+  List (String, String, List Decl) ->
+  (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
+projectDiagsLoadedFull allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
+  typecheckPassFull
     runtimeP
     coreP
     preludeKey
@@ -1361,10 +1411,28 @@ typecheckPass : List Decl ->
   List (String, List Diag) ->
   List (String, List Diag)
 typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
+  let (_, results) =
+    typecheckPassFull runtimeP coreP preludeKey chainKey mods buckets
+  results
+
+-- `typecheckPass` also handing back the per-module `(schemes, errs, warns)` the
+-- driver produced, so a caller that needs the graph's ENTRY REPORT as well as its
+-- bucketed diagnostics (human `check`'s multi-module arm) reads them both out of
+-- ONE typecheck.  `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the
+-- schemes are a projection beside the fold, never an input to it.
+export
+typecheckPassFull : List Decl ->
+  List Decl ->
+  Option (Int, Int) ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Diag) ->
+  (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
+typecheckPassFull runtimeP coreP preludeKey chainKey mods buckets =
   let modPairs = map midToDesugaredPair mods
   -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
   -- resumed from its snapshot, so only the modules after it are re-checked.
-  let tcByMid =
+  let full =
     checkModulesDiagsChain
       preludeKey
       chainKey
@@ -1372,7 +1440,16 @@ typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
       runtimeP
       coreP
       modPairs
-  typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets
+  (
+    full,
+    typecheckDiagsFold
+      runtimeP
+      coreP
+      mods
+      modPairs
+      (map dropModSchemes full)
+      buckets,
+  )
 
 -- The non-typecheck half of `typecheckPass`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
@@ -1430,7 +1507,8 @@ resolvedBuckets allowInternal trustedMods runtimeP coreP mods =
 -- caller already loaded, then bucket the per-module typecheck diagnostics the
 -- caller already has.  `medaka test`'s no-doctest arm elaborates the graph ONCE
 -- and routes element 3 of the `elaborateModules` tuple — the same
--- `List (String, (List TcDiag, List TcDiag))` `checkModulesDiagsChain` returns —
+-- `List (String, (List TcDiag, List TcDiag))` `typecheckDiagsFold` consumes on the
+-- check path, via `dropModSchemes` —
 -- through here, so that gate and `check`'s are resolved, bucketed and rendered
 -- by one implementation.  They accept the same programs only while the two
 -- workers pass the same impl universe; see `elaborateFor` in tools/test_cmd.mdk.
@@ -1967,7 +2045,8 @@ mainNonUnitWarning decls = match findMainFunDef decls
 -- populated the ref: `mainTypeIsUnit ()` answers False on `None` and the warning
 -- FIRES, but a WRONG scheme makes it VANISH):
 --   * `checkRoute` single-module (medaka_cli) — `analyzeLocatedG`, then `runCheck`.
---   * `checkRoute` multi-module (medaka_cli) — `runCheckModules`.
+--   * `checkRoute` multi-module (medaka_cli) — `locatedProjectDiags`, whose fold
+--     writes the ref on the terminal module (`cmDiagsCollect`).
 --   * `typecheckGateRoute` single-module (medaka_cli, the build/run gate) —
 --     `analyzeLocatedG` alone.  This is the caller the deletion nearly broke: see
 --     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
