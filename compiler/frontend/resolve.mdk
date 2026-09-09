@@ -3914,8 +3914,29 @@ stampImplMethod top (ImplMethod nm pats body) =
 export
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampBindingIds decls =
+  let (top, ids) = stampTopScope decls
+  (map (stampDecl top) decls, ids)
+
+-- The two halves of `stampBindingIds`, for a driver that stamps one binding group
+-- at a time: the top-level scope (name → minted id) plus the `defIds` pair list,
+-- and the per-declaration / per-clause walks over that scope.  A clause is stamped
+-- under its own params shadow-inserted over `top`, exactly as `stampDecl`'s
+-- `DFunDef` arm does; the id table is a pure function of the declaration heads, so
+-- stamping the groups in any order yields the same ids `stampBindingIds` mints.
+export
+stampTopScope : List Decl -> (OrdMap Int, List (String, Int))
+stampTopScope decls =
   let top = numberFrom 1 (dedup (topBinderNames decls))
-  (map (stampDecl (omFromPairs top omEmpty)) decls, top)
+  (omFromPairs top omEmpty, top)
+
+export
+stampDeclWith : OrdMap Int -> Decl -> Decl
+stampDeclWith top d = stampDecl top d
+
+export
+stampClauseWith : OrdMap Int -> (List Pat, Expr) -> (List Pat, Expr)
+stampClauseWith top (pats, body) =
+  (pats, stampExpr (insertParams pats top) body)
 
 -- ── #1110: type-constructor ORIGIN acquisition ──────────────────────────────
 -- `ast.mdk`'s `TyCon.tyConOrigin` (the A-1 carrier, PR #1211) says WHERE a

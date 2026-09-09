@@ -1,6 +1,6 @@
 aliasDictNamesOfDecl	Decl	2/15
 aliasMethodRenamesOf	Decl	2/15
-allEVars	Expr	29/41
+allEVars	Expr	37/41
 alpha	Expr	12/41
 appArgLoc	Expr	2/41
 appNodeArg	Expr	2/41
@@ -55,6 +55,7 @@ isDoLoweredAndThenCalleeExpr	Expr	2/41
 isNonexpansive	Expr	14/41
 isSyntacticLambda	Expr	1/41
 lamUnderLoc	Expr	2/41
+markTailDecl	Decl	1/15
 methodConstraintNamesOfDecl	Decl	2/15
 numLitFromIntParamsDecl	Decl	2/15
 overlayScanOne	Decl	1/15
@@ -75,6 +76,7 @@ rewriteRPDictArg	Expr	1/41
 shadowStandaloneHead	Expr	4/41
 spineFirstArg	Expr	3/41
 spineHeadIsApp	Expr	3/41
+stampTailDecl	Decl	1/15
 stmtCalleeName	Expr	10/41
 superImplMsgsOf	Decl	1/15
 tupleArgElems	Expr	2/41

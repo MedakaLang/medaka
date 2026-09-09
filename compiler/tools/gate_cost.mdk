@@ -30,7 +30,7 @@
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
 import json.{JNull, Json, asArray, asBool, asInt, asString, get, parse}
-import support.util.{joinWith, listLen, splitOnChar, startsWith}
+import support.util.{contains, joinWith, listLen, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
    the LOWER median of the retained raw samples, in milliseconds.  `samples`
@@ -587,6 +587,30 @@ costRowOfKey _ [] = None
 costRowOfKey k (c :: cs)
   | c.name == k = Some c
   | otherwise = costRowOfKey k cs
+
+{- | Baseline rows whose key names no gate in `liveKeys` — a cost history kept
+   for a gate the registry no longer declares.  The reverse direction of
+   `costOf`'s "a miss is a miss": that join asks "does this registry gate have
+   a price", and nothing anywhere asks the other question, "does this priced
+   row still name a gate".  `liveKeys` is the caller's `baselineKey g.run` for
+   every registry entry — this module takes the already-derived keys rather
+   than the registry's `Gate` type, so it stays free of a dependency on
+   `gate_cmd.mdk`'s types.
+
+   > orphanBaselineNames ["a", "b"] []
+   []
+
+   > orphanBaselineNames ["a"] (GateCost { name = "a", medianMs = 1, samples = 1, ms = [1], sampleRuns = [""] } :: [])
+   []
+
+   > orphanBaselineNames ["a"] (GateCost { name = "gone", medianMs = 1, samples = 1, ms = [1], sampleRuns = [""] } :: [])
+   ["gone"] -}
+export
+orphanBaselineNames : List String -> List GateCost -> List String
+orphanBaselineNames _ [] = []
+orphanBaselineNames liveKeys (c :: cs)
+  | contains c.name liveKeys = orphanBaselineNames liveKeys cs
+  | otherwise = c.name :: orphanBaselineNames liveKeys cs
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 

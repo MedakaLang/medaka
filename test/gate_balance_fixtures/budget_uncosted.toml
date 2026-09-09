@@ -7,6 +7,13 @@
 # packing entirely (S-5's own regression check), so this fixture reds on
 # clause (a) alone — there is no clause (b)/(c) violation riding along to
 # confuse which clause the assertion is actually pinning.
+#
+# "unrelated", in the paired baseline, has an entry HERE too (sprint
+# cost-governor-on S1, clause (d)): `parseCostBaseline` refuses an empty
+# `gates` array, so the baseline needs a second row to exist alongside
+# "lonely"'s absence, and since clause (d) added, that row must now name a
+# real registry gate or it reads as an orphan and confuses the isolation
+# this fixture exists for.
 
 [[gate]]
 name = "lonely"
@@ -18,6 +25,21 @@ cost = "cheap"
 kind = "exec"
 migration = "native-wrap"
 run = "test/lonely.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "unrelated"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-wrap"
+run = "test/unrelated.sh"
 oracles = []
 sources = []
 corpus = []

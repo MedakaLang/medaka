@@ -1,0 +1,7 @@
+-- Byte-identical in shape to main.mdk/lib.mdk except r1 and r2 carry explicit `Int ->
+-- Int` signatures (control_lib.mdk), so the group is monomorphic from the start instead
+-- of being generalized over `Num a` and instantiated at the call site. MEASURED:
+-- check/run/build all exit 0 and the executed binary exits 0 printing 6.
+import control_lib.{r1}
+
+main = println (r1 (3 : Int))

@@ -5,7 +5,7 @@
    baseline `test/gate_cost_baseline.json`: the candidate/row model
    (`Cand`/`Row`/`Place`), the makespan objective and its floor, the packing
    itself, the stability and out-of-sample-error statistics, the rendered
-   report, and the budget governor's three clauses.  Nothing here reads or
+   report, and the budget governor's four clauses.  Nothing here reads or
    writes a byte — `gate_cmd.mdk` keeps the argv parsers, the file IO, and the
    `--check` comparison, and calls in at `balNewText` and `budgetOutput`.
 
@@ -28,6 +28,7 @@ import tools.gate_cost.{
   costRowOf,
   gateSetDigest,
   latestRunForShard,
+  orphanBaselineNames,
   packStat,
   parseCostBaseline,
   parseCostRuns,
@@ -1650,6 +1651,47 @@ balNthStr i (x :: xs)
   | i <= 0 = x
   | otherwise = balNthStr (i - 1) xs
 
+-- ── Coverage: the governed/exempt split (#2596 item 4) ──────────────────────
+--
+-- `balReport` names the count it PACKS, and the registry is larger than that.
+-- The difference is not a rounding note.  A gate whose `shard` is the
+-- `other-job` sentinel is scheduled by one of ci.yml's hand-written job blocks,
+-- which invokes it by literal path; only test/run_gates.sh exports
+-- GATE_TIMING_JSON, so no cost sample can reach test/gate_cost_baseline.json
+-- for such a gate.  And `balCands`/`balUncosted` skip the sentinel regardless
+-- of whether a cost exists, so even a measured one would never move the pole.
+-- The exemption is structural, not an oversight: the pole/floor above governs
+-- the `gates` matrix alone, and these gates' wall clock lives outside it.
+-- Printing the split — with the names — is what keeps that exemption auditable
+-- rather than silent.
+balExemptNames : List Gate -> List String
+balExemptNames [] = []
+balExemptNames (g :: gs)
+  | g.shard == balOtherJob = g.name :: balExemptNames gs
+  | otherwise = balExemptNames gs
+
+balCoverage : List Gate -> String
+balCoverage gates =
+  let ex = balExemptNames gates
+  let n = listLen gates
+  let e = listLen ex
+  let headLine =
+    "  coverage: \{intToString n} registry gates = \{intToString (n - e)} governed by the packing above + \{intToString e} exempt (shard = \"\{balOtherJob}\")\n"
+  if e == 0 then
+    headLine
+  else
+    stringConcat [
+      headLine,
+      "  an exempt gate is scheduled by a hand-written ci.yml job block by literal\n",
+      "  path, not through test/run_gates.sh — the only caller that exports\n",
+      "  GATE_TIMING_JSON — so no cost sample reaches test/gate_cost_baseline.json\n",
+      "  for it, and the packer skips the sentinel whether or not a cost exists.\n",
+      "  Its wall clock is OUTSIDE the pole/floor above, which is the `gates`\n",
+      "  matrix alone.  Ungoverned by this budget, by name:\n",
+      joinNl (balIndent ex),
+      "\n",
+    ]
+
 -- The projection block both `--check` and the mutating form print, verbatim.
 -- One renderer, so the two can never describe different packings.
 balReport : String ->
@@ -1936,6 +1978,7 @@ balCompute regPath gates shs base runs regSrc =
         [
           "medaka gate balance: \{regPath}\n",
           balReport label cs rows ps runs,
+          balCoverage gates,
           balThinLine base,
           balOosBlock base cs runs,
           balStabLine cs (balRows runs shs) ps rows,
@@ -1963,7 +2006,7 @@ balCompute regPath gates shs base runs regSrc =
 -- ── `gate budget` — #2180's governor (S-5) ──────────────────────────────────
 --
 -- A required, cheap, TEXT-ONLY gate — no build, `gate verify`'s shape — that
--- reds on any of three clauses:
+-- reds on any of four clauses:
 --
 --   (a) a schedulable gate has no cost baseline entry (`balUncosted`'s
 --       condition). The sprint contract's literal clause (a) — "a registry
@@ -1981,6 +2024,13 @@ balCompute regPath gates shs base runs regSrc =
 --       computed from `balCands`/`balRows`/`balTarget`, which already skip
 --       `other-job` gates, so an `other-job` gate's (nonexistent) cost never
 --       contributes here either.
+--   (d) a baseline row names no gate the registry currently declares — the
+--       REVERSE of (a). Neither `gate verify` (registry-only, never opens the
+--       baseline) nor `gate balance`/(a) (only ever ask "does this registry
+--       gate have a price") looks the other way, so a gate deleted from
+--       `test/gates.toml` leaves its cost history behind forever with nothing
+--       noticing (`pds_test_unit_suite`, removed in #2723, sat in the
+--       baseline through 11 clean `gate verify` runs).
 --
 -- Any clause may be accepted on purpose with a structured, greppable
 -- acknowledgment: a trailer line on an AUTHORED commit message in the change
@@ -2040,30 +2090,47 @@ budgetCountUnacked commitMessage (t :: ts)
 
 -- ── Clause (a) ───────────────────────────────────────────────────────────────
 
-budgetUncostedNames : List GateCost -> List Gate -> List String
-budgetUncostedNames _ [] = []
-budgetUncostedNames base (g :: gs)
-  | g.shard == balOtherJob = budgetUncostedNames base gs
+-- The pair is (gate name, baseline key). Both are needed and they are not
+-- interchangeable: the override token is minted from the NAME, because that
+-- is what a reader has in front of them in `test/gates.toml`, while the
+-- lookup that failed was keyed on `baselineKey g.run`. Rendering only the
+-- name hides which string the baseline was actually searched for, which is
+-- the whole diagnosis when a `run` path was renamed.
+budgetUncosted : List GateCost -> List Gate -> List (String, String)
+budgetUncosted _ [] = []
+budgetUncosted base (g :: gs)
+  | g.shard == balOtherJob = budgetUncosted base gs
   | otherwise = match costOf g.run base
-    Some _ => budgetUncostedNames base gs
-    None => g.name :: budgetUncostedNames base gs
+    Some _ => budgetUncosted base gs
+    None => (g.name, baselineKey g.run) :: budgetUncosted base gs
 
-budgetUncostedTokens : List String -> List String
+budgetUncostedTokens : List (String, String) -> List String
 budgetUncostedTokens [] = []
-budgetUncostedTokens (n :: ns) = "uncosted:\{n}" :: budgetUncostedTokens ns
+budgetUncostedTokens ((n, _) :: ns) = "uncosted:\{n}" :: budgetUncostedTokens ns
 
-budgetUncostedLines : String -> List String -> List String
+budgetUncostedLines : String -> List (String, String) -> List String
 budgetUncostedLines _ [] = []
-budgetUncostedLines commitMessage (n :: ns) =
+budgetUncostedLines commitMessage ((n, key) :: ns) =
   let tok = "uncosted:\{n}"
   let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
   stringConcat [
-      n, ack,
+      n, " (baseline key '", key, "')", ack,
       " — remedy: re-ingest the baseline (test/gate_cost_ingest.sh) so this",
       " gate gets a sample; the `cost` field is present, the packer just has",
       " no price yet, so there is nothing to declare or split here.",
+      " Two causes reach this line. A BRAND-NEW gate, which has no baseline",
+      " row until the nightly ingest runs. Or a gate whose `run` path was",
+      " renamed, which changes the key and abandons the old row: if clause",
+      " (d) also fired in this run, that orphan and this line are the SAME",
+      " gate seen from both sides, and they discharge together.",
       " To accept unpriced on purpose, paste:\n    Gate-Budget-Override: ", tok,
-      "\n"
+      "\n", " A brand-new gate also reds a second, separate",
+      " required check: `ci-gen-drift` runs `medaka gate balance --check`,",
+      " and the balancer hard-refuses to run in the same commit that adds a",
+      " gate with no cost sample — a hand-chosen `shard` does not fix this,",
+      " only `medaka gate balance` may derive one. Discharge both in the same",
+      " commit: get a real cost sample, then `medaka gate balance && make",
+      " gen-ci` and commit both alongside this override.\n"
     ]
     :: budgetUncostedLines commitMessage ns
 
@@ -2164,6 +2231,38 @@ budgetPoleFloorLines commitMessage (Some factor) =
     ]
     :: []
 
+-- ── Clause (d) ───────────────────────────────────────────────────────────────
+
+budgetLiveKeys : List Gate -> List String
+budgetLiveKeys [] = []
+budgetLiveKeys (g :: gs) = baselineKey g.run :: budgetLiveKeys gs
+
+budgetOrphanNames : List GateCost -> List Gate -> List String
+budgetOrphanNames base gates = orphanBaselineNames (budgetLiveKeys gates) base
+
+budgetOrphanTokens : List String -> List String
+budgetOrphanTokens [] = []
+budgetOrphanTokens (n :: ns) = "orphan:\{n}" :: budgetOrphanTokens ns
+
+budgetOrphanLines : String -> List String -> List String
+budgetOrphanLines _ [] = []
+budgetOrphanLines commitMessage (n :: ns) =
+  let tok = "orphan:\{n}"
+  let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
+  stringConcat [
+      n, ack,
+      " — a cost baseline row for a gate the registry no longer declares",
+      " — remedy: delete the row from test/gate_cost_baseline.json BY HAND.",
+      " That file is GENERATED and this is the one edit its banner does not",
+      " cover: test/gate_cost_ingest.sh only ADDS samples — it never reads",
+      " the registry and has no prune mode, so re-running it carries the",
+      " orphan forward rather than dropping it (#2770 tracks giving it one;",
+      " until that lands, the hand edit is the only discharge that works).",
+      " To accept the stale row on",
+      " purpose, paste:\n    Gate-Budget-Override: ", tok, "\n"
+    ]
+    :: budgetOrphanLines commitMessage ns
+
 -- ── Assembling the report ────────────────────────────────────────────────────
 
 budgetIndent : List String -> List String
@@ -2177,14 +2276,16 @@ budgetSection title lines =
 
 budgetReport : List GateCost ->
   String ->
-  List String ->
+  List (String, String) ->
   List Gate ->
   Option Int ->
+  List String ->
   Result String String
-budgetReport base commitMessage uncosted overClass poleFactorOpt =
+budgetReport base commitMessage uncosted overClass poleFactorOpt orphans =
   let aLines = budgetUncostedLines commitMessage uncosted
   let bLines = budgetOverClassLines base commitMessage overClass
   let cLines = budgetPoleFloorLines commitMessage poleFactorOpt
+  let dLines = budgetOrphanLines commitMessage orphans
   let aUnacked =
     budgetCountUnacked commitMessage (budgetUncostedTokens uncosted)
   let bUnacked =
@@ -2199,12 +2300,14 @@ budgetReport base commitMessage uncosted overClass poleFactorOpt =
       0
     else
       1
-  let total = listLen uncosted + listLen overClass + cCount
-  let unacked = aUnacked + bUnacked + cUnacked
+  let dUnacked = budgetCountUnacked commitMessage (budgetOrphanTokens orphans)
+  let total = listLen uncosted + listLen overClass + cCount + listLen orphans
+  let unacked = aUnacked + bUnacked + cUnacked + dUnacked
   let body = stringConcat [
     budgetSection "no cost baseline entry (clause a)" aLines,
     budgetSection "over declared class, tolerance-adjusted (clause b)" bLines,
     budgetSection "projected pole/floor over budget (clause c)" cLines,
+    budgetSection "baseline row names no registry gate (clause d)" dLines,
   ]
   if total == 0 then
     Ok "medaka gate budget: OK — 0 violations.\n"
@@ -2230,9 +2333,16 @@ budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
             Err
               "medaka gate budget: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (u :: us)}\n"
           [] =>
-            let uncosted = budgetUncostedNames base gates
+            let uncosted = budgetUncosted base gates
             let overClass = budgetOverClassGates base gates
+            let orphans = budgetOrphanNames base gates
             match budgetPoleFactor gates shs base runs
               Err m => Err "medaka gate budget: \{m}\n"
               Ok poleFactorOpt =>
-                budgetReport base commitMessage uncosted overClass poleFactorOpt
+                budgetReport
+                  base
+                  commitMessage
+                  uncosted
+                  overClass
+                  poleFactorOpt
+                  orphans

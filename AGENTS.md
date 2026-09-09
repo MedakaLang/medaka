@@ -55,7 +55,7 @@ patterns.
 | AST | `compiler/frontend/ast.mdk` | Node types + source locations |
 | Desugar | `compiler/frontend/desugar.mdk` | `deriving`, record puns, `EGuards`/`ESection`/`EStringInterp`/`EDo`, default-method specialization |
 | Resolve | `compiler/frontend/resolve.mdk` | Name binding, single/multi-module |
-| Mark | `compiler/frontend/marker.mdk` | ⚠️ **[P-NO-MARK-PASS]** NOT on `check`/`run`/`build`. `markWithPrelude` — the `EVar`→`EMethodRef` pass — is reached only from `tools/snapshot.mdk` and two `entries/` probes, so **no production verb ever sees an `EMethodRef`**. `run`/`build` mark dicts inside typecheck's own `prePassDict`/`prePassDictArg`, which mint `EMethodAt`/`EDictAt`; `check` runs no mark pass at all. The FILE is still live, for `preludeStandaloneShadows` (`driver/diagnostics.mdk`), `declRefs` (`ir/dce.mdk`) and `localBoundNames` (typecheck) |
+| Mark | `compiler/frontend/marker.mdk` | ⚠️ **[P-NO-MARK-PASS]** NOT on `check`/`run`/`build`. `markWithPrelude` — the `EVar`→`EMethodRef` pass — is reached only from `tools/snapshot.mdk` and two `entries/` probes, so **no production verb ever sees an `EMethodRef`**. Every Module-arm driver (`check`, `run`, `build`, the LSP) marks inside typecheck itself, per binding group on the inference schedule (`checkBodyImpl` → `processSCC` → `markGroupClauses`, minting `EMethodAt`/`EDictAt`; ARCH §E), so there is no whole-tree mark pass and no promotion fixpoint; only the Flat arm (`elaborateDict`, `snapshot`) still pre-marks with `prePassDictArg`. The FILE is still live, for `preludeStandaloneShadows` (`driver/diagnostics.mdk`), `declRefs` (`ir/dce.mdk`) and `localBoundNames` (typecheck) |
 | Typecheck | `compiler/types/typecheck.mdk` | Hindley-Milner + interfaces + effects; invokes Exhaust per `EMatch` |
 | Exhaust | `compiler/frontend/exhaust.mdk` | Maranget pattern-matrix; called *from* typecheck |
 | Eval | `compiler/eval/eval.mdk` | Tree-walking interpreter; dict-passing dispatch |
@@ -178,8 +178,12 @@ is a REQUIRED context and its script runs `medaka gate balance --check`
 (`test/diff_compiler_ci_gen_drift.sh:80`), so the refusal reds a required check and the PR
 cannot merge** — "enrol now, discharge in a follow-up" is not available, and three sprints
 lost a cycle discovering that. Derive the required set rather than trusting this list
-([W-REQUIRED-CHECKS]); `gate-balance` and `gate-budget` are separate, currently ADVISORY
-jobs, so their reds are not what blocks you. The discharge, before merge: enrol with a
+([W-REQUIRED-CHECKS]) — `gate-balance` and `gate-budget` included; this file states no
+membership for either, because its own rule forbids the list. What is durable is the
+CONSEQUENCE: a brand-new gate reds `medaka gate budget` clause (a) as well, alongside this
+same `ci-gen-drift` red, and the clause-(a) message names both. The acknowledgment is a
+`Gate-Budget-Override: uncosted:<name>` trailer, carried until the nightly ingest prices it.
+The discharge, before merge: enrol with a
 guessed `shard`, get a real cost sample, then `medaka gate balance && make gen-ci` and
 commit both. Two traps in getting that sample, each paid for twice: a guessed `shard` can
 name a CLOSED packing row the balancer can never assign into (read the refusal text and
