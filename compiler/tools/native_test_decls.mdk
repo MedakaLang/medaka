@@ -134,20 +134,14 @@ isMainDef _ = False
 -- `--filter` the interpreter arm applies, so index `i` here is the same test
 -- the driver names at index `i`.  The result is one `ExResult` per test,
 -- positionally aligned.
---
--- `strictEmit` is the caller's `typecheckExempt` answer, negated: a module the
--- driver exempted from the type-check VERDICT keeps the emitter's warn-first
--- #2089 path, so the eval-vs-check divergence corpus (`test/ported/*.mdk`)
--- still builds and runs here.  Every non-exempt target arms the gate.
 export
 runNativeTests : String ->
   String ->
   List Decl ->
   List (String, Int, Expr) ->
-  Bool ->
   <IO> List ExResult
-runNativeTests target tsrc userDecls tests strictEmit =
-  match nativeRendered target tsrc userDecls tests strictEmit
+runNativeTests target tsrc userDecls tests =
+  match nativeRendered target tsrc userDecls tests
     Err reason => map (_ => Errored reason) tests
     Ok results => results
 
@@ -155,9 +149,8 @@ nativeRendered : String ->
   String ->
   List Decl ->
   List (String, Int, Expr) ->
-  Bool ->
   <IO> Result String (List ExResult)
-nativeRendered target tsrc userDecls tests strictEmit =
+nativeRendered target tsrc userDecls tests =
   match nativeTestSkipReason target userDecls
     Some reason => Err reason
     None => match makeTempDir ()
@@ -170,7 +163,7 @@ nativeRendered target tsrc userDecls tests strictEmit =
         let nonce = mintNonce ()
         -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.
-        let results = runInTmp target tsrc tests tmpDir nonce strictEmit
+        let results = runInTmp target tsrc tests tmpDir nonce
         let _ = cleanupTempDir tmpDir
         results
 
@@ -191,15 +184,14 @@ runInTmp : String ->
   List (String, Int, Expr) ->
   String ->
   String ->
-  Bool ->
   <IO> Result String (List ExResult)
-runInTmp target tsrc tests tmpDir nonce strictEmit =
+runInTmp target tsrc tests tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "ts_probe"
   let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
   match writeFile entryPath (probeSource nonce tsrc tests)
     Err e => Err "native test runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce strictEmit
+    Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
 
 buildAndRun : String ->
   String ->
@@ -207,20 +199,18 @@ buildAndRun : String ->
   String ->
   List (String, Int, Expr) ->
   String ->
-  Bool ->
   <IO> Result String (List ExResult)
-buildAndRun target entryPath outPath tmpDir tests nonce strictEmit =
+buildAndRun target entryPath outPath tmpDir tests nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
   let cc = envOr "CC" "clang"
   -- The scratch entry sits in a `mktemp -d`, so its own search roots resolve
   -- nothing; the target's real roots are passed as extraRoots.
   let extraRoots = entrySearchRoots (dirOf target)
-  -- strictEmit (#2679): the probe is written, built and RUN in one breath, so
-  -- the emitter's warn-first #2089 note reaches no reader — without the gate
-  -- armed, a target the emitter records type errors for still links and reports
-  -- `pass`.  It is the caller's `typecheckExempt` answer negated, so a target
-  -- the driver already exempts from the type-check verdict keeps warn-first.
+  -- strictEmit = True (#2679): the probe is written, built and RUN in one
+  -- breath, so the emitter's warn-first #2089 note reaches no reader — without
+  -- the gate armed, a target the emitter records type errors for still links and
+  -- reports `pass`.
   match (runBuildNativeRoots
     root
     medaka
@@ -230,7 +220,7 @@ buildAndRun target entryPath outPath tmpDir tests nonce strictEmit =
     tmpDir
     False
     extraRoots
-    strictEmit)
+    True)
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"

@@ -377,7 +377,7 @@ isNewVehiclePath target =
   if endsWith "_test.mdk" target then
     let canon = canonicalizePath target
     hasVehicleSegment canon
-      || underProjectTestDir target
+      || underProjectTestDir canon
       || underMedakaRepoTestDir canon
   else
     False
@@ -395,6 +395,12 @@ hasVehicleSegment path =
 -- manifest is what makes it a project ([W-PROJECT-BY-MANIFEST]); WHICH project
 -- is irrelevant, so nothing here enumerates them.  A scratch tree with no
 -- manifest anywhere above it answers `None` and keeps the exemption.
+--
+-- Takes the CANONICAL path, like its two siblings above.  `baseOf (dirOf p)`
+-- is a spelling test, so on a raw argument `test/./x_test.mdk` answers `.`
+-- rather than `test` and the exemption survives a path a user can type by
+-- accident -- the same file, addressed two ways, typechecked one way and not
+-- the other.
 underProjectTestDir : String -> <IO> Bool
 underProjectTestDir target =
   let d = dirOf target
@@ -931,8 +937,7 @@ runChosenOn : Engine ->
 runChosenOn EngInterp trees _target _tsrc _userDecls examples synthResults =
   runChosen trees examples synthResults
 runChosenOn EngNative _trees target tsrc userDecls examples synthResults =
-  let exempt = typecheckExempt target userDecls tsrc
-  runNativeDoctests target tsrc userDecls examples synthResults (not exempt)
+  runNativeDoctests target tsrc userDecls examples synthResults
 
 -- The interpreter arm.  `DtPair` is the one elaboration the whole invocation
 -- shares; `DtSingle` elaborates HERE — this is the first point that knows the
@@ -1281,11 +1286,7 @@ runTestDeclsNative : String -> String -> List Decl -> Option String -> <IO> Bool
 runTestDeclsNative target tsrc userDecls filterOpt =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
   let _ = putStrLn ("running tests in " ++ target)
-  let exempt = typecheckExempt target userDecls tsrc
-  reportNativeTests
-    target
-    tests
-    (runNativeTests target tsrc userDecls tests (not exempt))
+  reportNativeTests target tests (runNativeTests target tsrc userDecls tests)
 
 nativeRawTests : String -> List (String, Int, Expr)
 nativeRawTests tsrc = collectTests (parseLocated tsrc)
@@ -1817,8 +1818,7 @@ testDeclsReportOn EngInterp (TestPair coreM modsM) runtimeDecls target tsrc user
     (rootTestsOf filterOpt tsrc modsM userDecls)
 testDeclsReportOn EngNative _pair _runtimeDecls target tsrc userDecls filterOpt =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
-  let exempt = typecheckExempt target userDecls tsrc
-  zipTestResults tests (runNativeTests target tsrc userDecls tests (not exempt))
+  zipTestResults tests (runNativeTests target tsrc userDecls tests)
 
 zipTestResults : List (String, Int, Expr) ->
   List ExResult ->
