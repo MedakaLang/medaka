@@ -1107,7 +1107,15 @@ cachedRtObj cc rtC optFlag gcCflags tmpDir =
     else
       let objPath = joinPath dir "rt-\{key}.o"
       let hit = if fileExists objPath then rtObjUsable objPath else False
-      if hit then objPath else populateRtObj cc rtC optFlag gcCflags dir objPath
+      if hit then
+        -- Refresh the entry's mtime on every hit (best-effort; a failed touch
+        -- costs nothing) so `sweepStaleObjCacheEntries` below ages out only
+        -- entries that are genuinely unused, never one this box still hits on
+        -- every build.
+        let _ = runCommand "touch" [objPath]
+        objPath
+      else
+        populateRtObj cc rtC optFlag gcCflags dir objPath
 
 -- Sanity-check a cache HIT before trusting it (#2233 item 2).  The population
 -- path is already write-then-rename, so a truncated object needs a crash or
@@ -1175,7 +1183,13 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
             -- fail-open-by-design: compile failure -> "".
             Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
               -- fail-open-by-design: mv failure -> "".
-              Ok (0, _, _) => objPath
+              Ok (0, _, _) =>
+                -- Opportunistic eviction on write (#2233 item 1) — same shape
+                -- as the shell build cache's cache_put -> cache_evict, and
+                -- best-effort like sweepStaleTempDirs: a population that just
+                -- succeeded must never be failed by a sweep of OTHER entries.
+                let _ = sweepStaleObjCacheEntries dir
+                objPath
               _ =>
                 let _ = removeFile tmpObj
                 ""
@@ -1184,6 +1198,36 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
               ""
       _ => ""
     _ => ""
+
+-- ---- object-cache eviction (#2233 item 1) ----
+-- The cache never removed anything: every past revision of medaka_rt.c (or
+-- of any compiler/-driven build config) leaves its keyed `rt-*.o` behind
+-- forever, one dead file per historical revision on a long-lived box.
+--
+-- Age, not a count cap, is the eviction signal, because objCacheDir is not
+-- guaranteed to hold only one entry class of one fixed size: today it holds
+-- `rt-*.o` (~127 KB each), and a directory-scoped cache like this one is
+-- expected to gain further entry classes over time (larger, more numerous
+-- ones included). A count cap sized for "one object per machine" is the
+-- wrong shape the moment a second class with different size/cardinality
+-- shares the directory; an age sweep over every regular file in the
+-- directory is shape-agnostic and needs no change when that happens.
+-- `cachedRtObj` refreshes an entry's mtime on every HIT, so this can never
+-- sweep a file this box is still actually using.
+--
+-- Same concurrency reasoning as sweepStaleTempDirs (age is the guard: a
+-- write in progress has a fresh mtime and is never swept), and the same
+-- BEST-EFFORT contract as everything else in this file — `find` absent, an
+-- unwritable directory, a file another process just removed: every failure
+-- is swallowed, because a sweep must never fail a build that would otherwise
+-- succeed.
+sweepStaleObjCacheEntries : String -> <IO> Unit
+sweepStaleObjCacheEntries dir =
+  let findArgs =
+    [dir, "-maxdepth", "1", "-type", "f", "-mtime", "+30", "-delete"]
+  match runCommand "find" findArgs
+    Ok _ => ()
+    Err _ => ()
 
 -- The `[perf] rt-obj` row's ops field: which of the three runtime-object paths
 -- this build actually took, so the row is self-explaining in a log.
