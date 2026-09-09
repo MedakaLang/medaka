@@ -1,5 +1,5 @@
 # META
-source_lines=320
+source_lines=321
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -275,6 +275,7 @@ annotateDecl (DFunDef p n pats body) =
 annotateDecl (DProp p n params body) =
   DProp p n params (annotateExpr [map propParamName params] body)
 annotateDecl (DTest p n body) = DTest p n (annotateExpr [] body)
+annotateDecl (DBench p n body) = DBench p n (annotateExpr [] body)
 annotateDecl (DLetGroup p binds) =
   DLetGroup p (map (annotateLetBind (map letBindName binds :: [])) binds)
 -- #1110: record UPDATE, not re-construction.  A total literal here would have
@@ -437,6 +438,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateDecl" ((PCon "DFunDef" (PVar "p") (PVar "n") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "p")) (EVar "n")) (EVar "pats")) (EApp (EApp (EVar "annotateExpr") (EApp (EVar "paramFrames") (EVar "pats"))) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DProp" (PVar "p") (PVar "n") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "p")) (EVar "n")) (EVar "params")) (EApp (EApp (EVar "annotateExpr") (EListLit (EApp (EApp (EVar "map") (EVar "propParamName")) (EVar "params")))) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DTest" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
+(DFunDef false "annotateDecl" ((PCon "DBench" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DLetGroup" (PVar "p") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "p")) (EApp (EApp (EVar "map") (EApp (EVar "annotateLetBind") (EBinOp "::" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")) (EListLit)))) (EVar "binds"))))
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EVar "annotateImplMethod")) (EVar "methods"))))))
@@ -564,6 +566,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateDecl" ((PCon "DFunDef" (PVar "p") (PVar "n") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "p")) (EVar "n")) (EVar "pats")) (EApp (EApp (EVar "annotateExpr") (EApp (EVar "paramFrames") (EVar "pats"))) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DProp" (PVar "p") (PVar "n") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "p")) (EVar "n")) (EVar "params")) (EApp (EApp (EVar "annotateExpr") (EListLit (EApp (EApp (EMethodRef "map") (EVar "propParamName")) (EVar "params")))) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DTest" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
+(DFunDef false "annotateDecl" ((PCon "DBench" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DLetGroup" (PVar "p") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "p")) (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateLetBind") (EBinOp "::" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")) (EListLit)))) (EVar "binds"))))
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateImplMethod")) (EVar "methods"))))))

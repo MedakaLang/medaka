@@ -34,7 +34,6 @@ assignTailRaw : Expr -> ParserE <> Expr
 attrArg : String -> Token -> ParserE <> Attr
 backtickInfixMsg : String
 bareMinusSection : ParserE <> Expr
-benchRemovedMsg : String
 binOp : Token -> String -> ParserE <> (Expr -> Expr -> Expr)
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
 bindPR : ParserE a b -> (b -> ParserE a c) -> Array Token -> Int -> PR c

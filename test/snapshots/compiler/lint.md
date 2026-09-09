@@ -5335,7 +5335,7 @@ assignFollows cs n i
 -- Reference sites that keep a binding LIVE (miss one → false "dead" → we'd delete
 -- live code, so we OVER-approximate references — safe direction):
 --   * other top-level bindings' bodies (via the reachability graph),
---   * `impl`/`interface`(default)/`prop`/`test`/top-level-`let` bodies
+--   * `impl`/`interface`(default)/`prop`/`test`/`bench`/top-level-`let` bodies
 --     (seeded as roots — they always run),
 --   * identifiers in doctest `>` input lines inside comments.  Doctests live in
 --     comments (stripped from the AST), so a helper exercised ONLY by a doctest
@@ -5466,11 +5466,11 @@ exportedNameL (DAttrib _ d) = exportedNameL d
 exportedNameL _ = []
 
 -- identifier roots from body-bearing NON-DFunDef decls (impl/interface-default/
--- prop/test/top-level-let).  Deliberately EXCLUDES DTypeSig/DExtern (they
+-- prop/test/bench/top-level-let).  Deliberately EXCLUDES DTypeSig/DExtern (they
 -- NAME a binding, they don't reference it — including a sig would make every
 -- signed private helper look reachable) and pure type/import decls.
 -- Kinds that NAME a binding or a type/import rather than referencing a value are
--- matched positionally and skipped; everything else (DProp/DTest/
+-- matched positionally and skipped; everything else (DProp/DTest/DBench/
 -- DInterface/DImpl/DLetGroup) is a body-bearing root.
 nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd

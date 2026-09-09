@@ -19,13 +19,13 @@ stages=DESUGAR,MARK
 --
 --   * RETAIN every non-`DFunDef` decl untouched — all DImpl, DInterface, DData,
 --     DTypeSig, DExtern, DUse, DEffect, DTypeAlias, DNewtype, DLetGroup,
---     DProp/DTest, DAttrib.  Impls and interface defaults are kept WHOLE.
+--     DProp/DTest/DBench, DAttrib.  Impls and interface defaults are kept WHOLE.
 --   * Eliminate ONLY plain top-level `DFunDef` bindings unreachable from the roots.
 --
 -- ROOTS = `main` + the references of every EMITTING decl that is not a plain
 -- function: impl-method bodies and interface-default bodies (the only other decls
 -- `core_ir_lower` lowers to code — `funClausesOf` pulls just DFunDef, `lowerImpls`
--- just DImpl/DInterface).  DProp/DTest bodies do NOT emit, so they are NOT
+-- just DImpl/DInterface).  DProp/DTest/DBench bodies do NOT emit, so they are NOT
 -- roots — that is exactly what lets `clamp` (referenced only by a core prop) drop.
 -- Reachability is the transitive closure of those roots over DFunDef bodies.
 --
@@ -142,7 +142,7 @@ funGraphInto defined (_ :: rest) g = funGraphInto defined rest g
 
 -- roots from emitting non-DFunDef decls: impl-method + interface-default bodies.
 -- (declRefs walks an impl's method bodies / an interface's default bodies; it is
--- empty for every other non-FunDef decl EXCEPT DProp/DTest — which DO NOT
+-- empty for every other non-FunDef decl EXCEPT DProp/DTest/DBench — which DO NOT
 -- emit code — so those are excluded here to keep prop-only refs like `clamp` from
 -- becoming roots.)
 emittingRoots : List Decl -> List String

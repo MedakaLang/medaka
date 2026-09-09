@@ -4638,6 +4638,10 @@ pFileExists : Value e -> <FileRead "_" | e> Value e
 pFileExists (VString path) = VBool (fileExists path)
 pFileExists _ = panic "fileExists: not a String"
 
+pFileMode : Value e -> <FileRead "_" | e> Value e
+pFileMode (VString path) = resultToValue (mapResultOk VInt (fileMode path))
+pFileMode _ = panic "fileMode: not a String"
+
 pCanonicalizePath : Value e -> <FileRead "_" | e> Value e
 pCanonicalizePath (VString path) = VString (canonicalizePath path)
 pCanonicalizePath _ = panic "canonicalizePath: not a String"
@@ -4663,6 +4667,11 @@ pWriteFileBytes : Value e -> Value e -> <FileWrite "_" | e> Value e
 pWriteFileBytes (VString path) bs =
   unitResultToValue (writeFileBytes path (unIntArray bs))
 pWriteFileBytes _ _ = panic "writeFileBytes: expected String (Array Int)"
+
+pWriteFileMode : Value e -> Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFileMode (VString path) (VInt mode) (VString s) =
+  unitResultToValue (writeFileMode path mode s)
+pWriteFileMode _ _ _ = panic "writeFileMode: expected String Int String"
 
 pAppendFile : Value e -> Value e -> <FileWrite "_" | e> Value e
 pAppendFile (VString path) (VString s) = unitResultToValue (appendFile path s)
@@ -4749,11 +4758,13 @@ ioExternBindings _ = [
   ("readFile", prim1 pReadFile),
   ("readFileBytes", prim1 pReadFileBytes),
   ("fileExists", prim1 pFileExists),
+  ("fileMode", prim1 pFileMode),
   ("canonicalizePath", prim1 pCanonicalizePath),
   ("listDir", prim1 pListDir),
   ("statFile", prim1 pStatFile),
   ("writeFile", prim2M pWriteFile),
   ("writeFileBytes", prim2M pWriteFileBytes),
+  ("writeFileMode", prim3M pWriteFileMode),
   ("appendFile", prim2M pAppendFile),
   ("makeDir", prim1 pMakeDir),
   ("removeFile", prim1 pRemoveFile),

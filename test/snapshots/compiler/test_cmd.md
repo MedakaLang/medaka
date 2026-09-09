@@ -1,5 +1,5 @@
 # META
-source_lines=2256
+source_lines=2289
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -150,7 +150,7 @@ import support.util.{
   startsWith,
   stringTrim,
 }
-import support.path.{dirOf, baseOf}
+import support.path.{dirOf, baseOf, joinPath}
 import args.{
   ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
 }
@@ -366,10 +366,23 @@ typecheckExempt target userDecls tsrc
 -- the filesystem instead of consulting a roster, so a project added later is in
 -- scope with no edit here ([W-PROJECT-BY-MANIFEST]) — the same live derivation
 -- `test/preflight.sh` and `test/diff_compiler_project_enrolment.sh` use.
+--
+-- The third half (`underMedakaRepoTestDir`) is this repository's OWN `test/`
+-- directory, which the project half cannot reach: the medaka repo root carries
+-- no `medaka.toml` of its own (`compiler/` and each sibling project has one,
+-- the root does not), so `findProjectRoot` walks past it to the filesystem root
+-- and answers `None`.  The repo's `test/*_test.mdk` gate-tests are ordinary
+-- type-checkable code by the same argument as any project's, and were the last
+-- `*_test.mdk` files still inheriting the exemption (#2679).  It too asks the
+-- filesystem — the `test/` directory whose SIBLING is the compiler project —
+-- rather than naming a root.
 isNewVehiclePath : String -> <IO> Bool
 isNewVehiclePath target =
   if endsWith "_test.mdk" target then
-    hasVehicleSegment (canonicalizePath target) || underProjectTestDir target
+    let canon = canonicalizePath target
+    hasVehicleSegment canon
+      || underProjectTestDir canon
+      || underMedakaRepoTestDir canon
   else
     False
 
@@ -386,6 +399,12 @@ hasVehicleSegment path =
 -- manifest is what makes it a project ([W-PROJECT-BY-MANIFEST]); WHICH project
 -- is irrelevant, so nothing here enumerates them.  A scratch tree with no
 -- manifest anywhere above it answers `None` and keeps the exemption.
+--
+-- Takes the CANONICAL path, like its two siblings above.  `baseOf (dirOf p)`
+-- is a spelling test, so on a raw argument `test/./x_test.mdk` answers `.`
+-- rather than `test` and the exemption survives a path a user can type by
+-- accident -- the same file, addressed two ways, typechecked one way and not
+-- the other.
 underProjectTestDir : String -> <IO> Bool
 underProjectTestDir target =
   let d = dirOf target
@@ -394,6 +413,22 @@ underProjectTestDir target =
     None => False
   else
     False
+
+-- Does `target` sit directly in the medaka repository's own `test/` directory?
+-- That directory has no manifest at or above it, so `underProjectTestDir`
+-- cannot see it; what identifies it instead is its SIBLING — a `test/` whose
+-- parent also holds the compiler project's `medaka.toml` is this tree's `test/`
+-- and no other.  Derived, not a roster, and worktree-local: it answers about
+-- the checkout the target lives in, not about the one the running binary was
+-- built from.
+--
+-- The direct-child rule matters: `test/ported/*.mdk` sits a directory deeper
+-- (its `dirOf` is `…/test/ported`), so the eval-vs-check divergence corpus is
+-- untouched and keeps its exemption.
+underMedakaRepoTestDir : String -> <IO> Bool
+underMedakaRepoTestDir target =
+  let d = dirOf target
+  baseOf d == "test" && fileExists (joinPath (dirOf d) "compiler/medaka.toml")
 
 -- The exemption ANNOUNCEMENT, on the printing arm only (#1680).  The silent
 -- twin (`runTestReport`, for MCP/`--json`) has no stderr channel of its own and
@@ -578,9 +613,9 @@ data Prepared =
 --
 -- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
 -- takes decides whether it type-checks — and adding a doctest would move it
--- between them.  `elabWorker` and `cmModuleWorker` both pass `accAll ++ prog`
--- (types/typecheck.mdk); if that ever diverges again, this split is unsound and
--- both arms must move to one driver.  `hasDoctests` is the module's UNFILTERED
+-- between them.  `graphModuleWorker` passes `accAll ++ prog`
+-- on both output selections (types/typecheck.mdk), so the two arms cannot diverge
+-- on it.  `hasDoctests` is the module's UNFILTERED
 -- doctest presence: the arm is chosen by what the module contains, so `--filter`
 -- cannot move it.
 prepareMulti : String ->
@@ -1129,7 +1164,6 @@ runProps pair target tsrc userDecls cases filterOpt
         (propLineTests tsrc)
         env
         (elaboratedRootProps modsM userDecls)
-        (coreM ++ flatMap snd modsM)
 
 -- The root module's elaborated decls — the prop and `test "…"` bodies both come
 -- from here.  The root module is the LAST in the list (the loader returns
@@ -1707,7 +1741,6 @@ propsReport pair target tsrc userDecls cases filterOpt
         (propLineTests tsrc)
         (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
         (elaboratedRootProps modsM userDecls)
-        (coreM ++ flatMap snd modsM)
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split
@@ -2277,7 +2310,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
-(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
@@ -2289,11 +2322,13 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EVar "False")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBlock (DoLet false false (PVar "canon") (EApp (EVar "canonicalizePath") (EVar "target"))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EVar "canon")) (EApp (EVar "underProjectTestDir") (EVar "canon"))) (EApp (EVar "underMedakaRepoTestDir") (EVar "canon"))))) (EVar "False")))
 (DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
 (DTypeSig false "underProjectTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "underProjectTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EMatch (EApp (EVar "findProjectRoot") (EVar "d")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))) (EVar "False")))))
+(DTypeSig false "underMedakaRepoTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "underMedakaRepoTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "d"))) (ELit (LString "compiler/medaka.toml"))))))))
 (DTypeSig false "exemptNotice" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "exemptNotice" ((PCon "False") PWild PWild) (ELit LUnit))
 (DFunDef false "exemptNotice" ((PCon "True") (PVar "target") (PVar "userDecls")) (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls"))))
@@ -2405,7 +2440,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "elaborateModulesMangled" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE"))))))
 (DTypeSig false "runProps" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))
-(DFunDef false "runProps" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllProps") (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EVar "env")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (EBinOp "++" (EVar "coreM") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modsM")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "runProps" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllProps") (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EVar "env")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "elaboratedRootProps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "elaboratedRootProps" ((PVar "modules") (PVar "userDecls")) (EMatch (EApp (EVar "lastModule") (EVar "modules")) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EVar "userDecls"))))
 (DTypeSig false "lastModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -2494,7 +2529,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "doctestReportGo" ((PList) PWild PWild PWild PWild PWild PWild) (EListLit))
 (DFunDef false "doctestReportGo" ((PCons (PVar "e") (PVar "rest")) (PVar "trees") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "examples") (PVar "synthResults")) (EBinOp "::" (ETuple (EVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runChosenOn") (EVar "e")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestReportGo") (EVar "rest")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))))
 (DTypeSig false "propsReport" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))
-(DFunDef false "propsReport" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" PWild) () (EListLit)) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllPropsResults") (EVar "cases")) (EVar "filterOpt")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (EBinOp "++" (EVar "coreM") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modsM")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "propsReport" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" PWild) () (EListLit)) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EApp (EApp (EApp (EApp (EApp (EVar "runAllPropsResults") (EVar "cases")) (EVar "filterOpt")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "testDeclsReport" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))))))))
 (DFunDef false "testDeclsReport" ((PVar "engines") (PVar "pair") (PVar "runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasTests") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testDeclsReportEngines") (EVar "engines")) (EVar "pair")) (EVar "runtimeDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "filterOpt")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "testDeclsReportEngines" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))))))))
@@ -2611,7 +2646,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
-(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
@@ -2623,11 +2658,13 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
-(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EApp (EVar "canonicalizePath") (EVar "target"))) (EApp (EVar "underProjectTestDir") (EVar "target"))) (EVar "False")))
+(DFunDef false "isNewVehiclePath" ((PVar "target")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "target")) (EBlock (DoLet false false (PVar "canon") (EApp (EVar "canonicalizePath") (EVar "target"))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EVar "hasVehicleSegment") (EVar "canon")) (EApp (EVar "underProjectTestDir") (EVar "canon"))) (EApp (EVar "underMedakaRepoTestDir") (EVar "canon"))))) (EVar "False")))
 (DTypeSig false "hasVehicleSegment" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasVehicleSegment" ((PVar "path")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filterList") (ELam ((PVar "seg")) (EBinOp "||" (EBinOp "==" (EVar "seg") (ELit (LString "compiler"))) (EBinOp "==" (EVar "seg") (ELit (LString "stdlib")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path")))))
 (DTypeSig false "underProjectTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "underProjectTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EMatch (EApp (EVar "findProjectRoot") (EVar "d")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))) (EVar "False")))))
+(DTypeSig false "underMedakaRepoTestDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "underMedakaRepoTestDir" ((PVar "target")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "dirOf") (EVar "target"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "baseOf") (EVar "d")) (ELit (LString "test"))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "d"))) (ELit (LString "compiler/medaka.toml"))))))))
 (DTypeSig false "exemptNotice" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "exemptNotice" ((PCon "False") PWild PWild) (ELit LUnit))
 (DFunDef false "exemptNotice" ((PCon "True") (PVar "target") (PVar "userDecls")) (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls"))))
@@ -2739,7 +2776,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "elaborateModulesMangled" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE"))))))
 (DTypeSig false "runProps" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))
-(DFunDef false "runProps" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllProps") (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EVar "env")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (EBinOp "++" (EVar "coreM") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modsM")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "runProps" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllProps") (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EVar "env")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "elaboratedRootProps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "elaboratedRootProps" ((PVar "modules") (PVar "userDecls")) (EMatch (EApp (EVar "lastModule") (EVar "modules")) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EVar "userDecls"))))
 (DTypeSig false "lastModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -2828,7 +2865,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "doctestReportGo" ((PList) PWild PWild PWild PWild PWild PWild) (EListLit))
 (DFunDef false "doctestReportGo" ((PCons (PVar "e") (PVar "rest")) (PVar "trees") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "examples") (PVar "synthResults")) (EBinOp "::" (ETuple (EVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runChosenOn") (EVar "e")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestReportGo") (EVar "rest")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))))
 (DTypeSig false "propsReport" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))
-(DFunDef false "propsReport" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" PWild) () (EListLit)) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllPropsResults") (EVar "cases")) (EVar "filterOpt")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (EBinOp "++" (EVar "coreM") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modsM")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "propsReport" ((PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" PWild) () (EListLit)) (arm (PCon "TestPair" (PVar "coreM") (PVar "modsM")) () (EApp (EApp (EApp (EApp (EApp (EVar "runAllPropsResults") (EVar "cases")) (EVar "filterOpt")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "testDeclsReport" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))))))))
 (DFunDef false "testDeclsReport" ((PVar "engines") (PVar "pair") (PVar "runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EIf (EApp (EVar "not") (EApp (EVar "hasTests") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testDeclsReportEngines") (EVar "engines")) (EVar "pair")) (EVar "runtimeDecls")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "filterOpt")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "testDeclsReportEngines" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))))))))

@@ -230,6 +230,30 @@ f x = x + 1
 test "t" = f "x" == 3
 EOF
 
+# u/v: issue #2679 (this repository's OWN `test/` directory). The medaka repo root
+# carries no `medaka.toml` of its own, so `underProjectTestDir`'s manifest walk goes
+# past it and the four `test/*_test.mdk` gate-tests were the last `*_test.mdk` files
+# still inheriting the exemption. What identifies that directory instead is its
+# SIBLING: a `test/` whose parent also holds `compiler/medaka.toml`.
+#   u  the repo shape  -> narrowed, must fail like cell n (a real type error)
+#   v  the discriminator: the same `test/` directory with no `compiler/` sibling is
+#      an ordinary manifest-less scratch tree and STAYS exempt (cell p's shape).
+#      Without v, a predicate keyed on the directory NAME alone would pass u.
+mkdir -p "$TMP/repo/compiler" "$TMP/repo/test" "$TMP/norepo/test"
+: > "$TMP/repo/compiler/medaka.toml"
+cat > "$TMP/repo/test/u_repo_test_dir_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+cat > "$TMP/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+
 # j: a module carrying BOTH a doctest and a `test "…"` decl. Doctest presence WINS
 # (the first guard), so this module IS type-checked — and therefore must NOT announce
 # a skip. It is the negative control for the announcement: a version that printed the
@@ -471,6 +495,12 @@ CASE_DIR="$TMP/compiler/types"
 run_case 'q narrowing survives a relative invocation form' 'n_narrow_compiler_vehicle_test.mdk' 1 \
   'requires it to `medaka check` first' 'Type mismatch: Int vs String'
 CASE_DIR="."
+
+run_case 'u narrowing: this repo own test dir no longer exempt' "$TMP/repo/test/u_repo_test_dir_test.mdk" 1 \
+  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+
+run_case 'v test dir without a compiler sibling: stays exempt' "$TMP/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk" 1 \
+  'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
 
 run_case 'r substring is not a component (mycompiler): stays exempt' "$TMP/mycompiler/sqlite/test/r_substring_not_component_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"

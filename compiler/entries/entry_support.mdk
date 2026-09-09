@@ -224,17 +224,30 @@ argtagUnpinArmed () = match getEnv "MEDAKA_ARGTAG_UNPIN"
 -- by ruling: print the messages the sticky channel kept and continue; only
 -- `MEDAKA_STRICT=1` makes it fatal.  The flip to hard-by-default waits on a
 -- self-compile fixpoint measured with this gate on (C3a and C3b separately).
+-- The headline names the disposition it is ABOUT to take.  It used to offer
+-- `MEDAKA_STRICT=1` unconditionally, including on the run where that flag was
+-- already set and the very next statement exits 1 — so the routine failure
+-- transcript of `medaka test --native` told the reader to set a flag they had
+-- set.  Same three-way read as `argtagUnpinArmed`: only a non-empty value arms.
 emitElaborationGate : List (String, TcDiag) -> <IO> Unit
 emitElaborationGate residual =
   if hadTypeErrors () then
+    let strict = strictEmitArmed ()
+    let disposition =
+      if strict then
+        "aborting (MEDAKA_STRICT=1)"
+      else
+        "continuing — set MEDAKA_STRICT=1 to make this fatal"
     let _ =
       ePutStrLn
-        "warning: emit-path elaboration recorded type errors that no earlier pass reported (#2089); continuing — set MEDAKA_STRICT=1 to make this fatal"
+        "warning: emit-path elaboration recorded type errors that no earlier pass reported (#2089); \{disposition}"
     let _ = map ePutStrLn (renderTcDiags [] residual)
-    match getEnv "MEDAKA_STRICT"
-      Some "" => ()
-      Some _ => exit 1
-      None => ()
+    if strict then exit 1
+
+strictEmitArmed : Unit -> <IO> Bool
+strictEmitArmed () = match getEnv "MEDAKA_STRICT"
+  Some v => v /= ""
+  None => False
 
 export
 runEmitWith : String ->

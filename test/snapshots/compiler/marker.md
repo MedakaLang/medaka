@@ -1,5 +1,5 @@
 # META
-source_lines=584
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -110,7 +110,7 @@ markInfix methods constrained op l r
 markProgram : OrdMap Unit -> OrdMap Unit -> List Decl -> List Decl
 markProgram methods constrained prog = map (markDecl methods constrained) prog
 
--- desugar.mapDecl's catch-all SKIPS DLetGroup bodies, so a
+-- desugar.mapDecl's catch-all SKIPS DLetGroup (and DBench) bodies, so a
 -- constrained-fn reference or interface-method occurrence inside a top-level
 -- `let rec … with …` body would never be marked → its call site never gets a
 -- dict route → the dict-passed callee is under-applied.  This dedicated
@@ -296,6 +296,7 @@ declBodies (DImpl { methods, ... }) = map implMethodBody methods
 declBodies (DInterface { methods, ... }) = flatMap ifaceMethodBodies methods
 declBodies (DProp _ _ _ body) = [body]
 declBodies (DTest _ _ body) = [body]
+declBodies (DBench _ _ body) = [body]
 -- OBS5: a `@attr…`-wrapped decl carries its body in the INNER decl; without this
 -- arm declRefs of e.g. `@inline f = … helper …` is [] → a helper referenced ONLY
 -- through an attributed function would be DCE'd (unbound-variable miscompile).
@@ -689,6 +690,7 @@ markerFor preludeProg =
 (DFunDef false "declBodies" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodBodies")) (EVar "methods")))
 (DFunDef false "declBodies" ((PCon "DProp" PWild PWild PWild (PVar "body"))) (EListLit (EVar "body")))
 (DFunDef false "declBodies" ((PCon "DTest" PWild PWild (PVar "body"))) (EListLit (EVar "body")))
+(DFunDef false "declBodies" ((PCon "DBench" PWild PWild (PVar "body"))) (EListLit (EVar "body")))
 (DFunDef false "declBodies" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBodies") (EVar "d")))
 (DFunDef false "declBodies" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EVar "letBindBodies")) (EVar "binds")))
 (DFunDef false "declBodies" (PWild) (EListLit))
@@ -956,6 +958,7 @@ markerFor preludeProg =
 (DFunDef false "declBodies" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodBodies")) (EVar "methods")))
 (DFunDef false "declBodies" ((PCon "DProp" PWild PWild PWild (PVar "body"))) (EListLit (EVar "body")))
 (DFunDef false "declBodies" ((PCon "DTest" PWild PWild (PVar "body"))) (EListLit (EVar "body")))
+(DFunDef false "declBodies" ((PCon "DBench" PWild PWild (PVar "body"))) (EListLit (EVar "body")))
 (DFunDef false "declBodies" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBodies") (EVar "d")))
 (DFunDef false "declBodies" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EVar "letBindBodies")) (EVar "binds")))
 (DFunDef false "declBodies" (PWild) (EListLit))

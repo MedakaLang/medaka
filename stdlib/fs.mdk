@@ -121,8 +121,11 @@ filesOnly (p :: rest) = match isFile p
    > fixtureFiles "stdlib/no-such-fixture-doctest-dir"
    Err "No such file or directory"
 
-   > map length (fixtureFiles "test/effect_set_fixtures")
-   Ok 5 -}
+   Every result is a path under `root`. The shape is asserted rather than
+   the count, for the same reason as `fixtureDirs`' doctest below.
+
+   > map (all (contains "/effect_set_fixtures/")) (fixtureFiles "test/effect_set_fixtures")
+   Ok True -}
 export
 fixtureFiles : String -> <FileRead "_"> Result String (List String)
 fixtureFiles root = match walkDir root
@@ -131,6 +134,57 @@ fixtureFiles root = match walkDir root
     Err e => Err e
     Ok [] => Err "\{root}: no fixture files found"
     Ok fs => Ok fs
+
+dirsOnly : List String -> <FileRead "_"> Result String (List String)
+dirsOnly [] = Ok []
+dirsOnly (p :: rest) = match isDir p
+  Err e => Err e
+  Ok True => map (p :: _) (dirsOnly rest)
+  Ok False => dirsOnly rest
+
+{- | Every top-level subdirectory of `root`, non-recursive, with the same
+   anti-vacuity floor as `fixtureFiles`. For a corpus where each fixture unit
+   is a whole directory (several files under one name) rather than a single
+   file — `fixtureFiles` filters directories out, so a directory-shaped
+   corpus needs this instead.
+
+   > fixtureDirs "stdlib/no-such-fixture-doctest-dir"
+   Err "No such file or directory"
+
+   Every result is a path under `root`. The shape is asserted rather than
+   the count: a count of somebody else's corpus written down here breaks
+   this module every time that corpus grows.
+
+   > map (all (contains "/import_order_fixtures/")) (fixtureDirs "test/import_order_fixtures")
+   Ok True -}
+export
+fixtureDirs : String -> <FileRead "_"> Result String (List String)
+fixtureDirs root = match listDir root
+  Err e => Err e
+  Ok names => match dirsOnly (map (joinPath root) names)
+    Err e => Err e
+    Ok [] => Err "\{root}: no fixture directories found"
+    Ok ds => Ok ds
+
+{- | `Err` unless `units` has exactly `want` elements — the weaker floor for
+   a corpus with no wired roster to check against: it catches a corpus that
+   grew or shrank, but not which unit changed. Prefer `unrosteredUnits` /
+   `missingUnits` (`test_process.mdk`) whenever a roster exists to check
+   against instead.
+
+   > expectUnitCount 2 ["a", "b"]
+   Ok ()
+
+   > expectUnitCount 3 ["a", "b"]
+   Err "expected 3 units, found 2" -}
+export
+expectUnitCount : Int -> List a -> Result String Unit
+expectUnitCount want units =
+  let got = length units
+  if got == want then
+    Ok ()
+  else
+    Err "expected \{intToString want} units, found \{intToString got}"
 
 -- ── Instance laws ────────────────────────────────────────────────────────────
 -- `FileStat` is a plain record of four immutable fields, so derived `Eq` is

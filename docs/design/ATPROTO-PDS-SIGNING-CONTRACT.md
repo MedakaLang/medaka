@@ -23,9 +23,46 @@ The deployment claim is narrow and testable:
 - eval and Wasm must produce identical values, but are not constant-time
   evidence. Ordinary Wasm `Int` remains value-dependently boxed. This contract
   adds no Wasm entropy import or uniform crypto carrier;
-- key generation and private-key persistence are out of scope. A later
-  key-generation contract must use `osEntropyBytes` on native/eval and keep the
-  explicit Wasm gap. This document does not settle design §7 Q6.
+- key generation and private-key persistence were out of scope for this
+  contract's own constant-time claim, and remain so; the key-generation
+  contract it anticipated is now settled below, and design §7 Q6 is ruled in
+  [`ATPROTO-PDS-DESIGN.md`](ATPROTO-PDS-DESIGN.md) §4.2.1.
+
+### 1.1 Key generation (`pds keygen`)
+
+Key generation is a VERB of `pds/serve.mdk`, not a separate program: it shares
+that entry point's flag vocabulary, so a key is written under the same flag
+name it is later read under. Its implementation is `pds/shell/keygen.mdk` —
+shell, because it reads entropy and writes files, neither of which `pds/lib`
+does.
+
+The contract:
+
+- the scalar comes from `osEntropyBytes` on native and eval, never from
+  `randomInt` (a deterministically seeded SplitMix64, which would make every
+  key ever generated derivable from a public constant). The Wasm gap this
+  contract keeps elsewhere is kept here: there is no Wasm entropy import, so
+  `keygen` is a native verb;
+- a candidate is admitted by `secretKeyFromBytes` and by nothing else, so the
+  admitted set is exactly §1's `1 <= d < n` and `keygen` can produce no value
+  `serve` would later refuse. A rejected candidate is redrawn, bounded (the
+  bound is a bound on a broken entropy source: a uniform 32-byte value falls
+  outside `[1, n)` with probability below 2^-127);
+- the file is written at mode `0600` through the one private-write primitive
+  (`io.writeFilePrivate`), which is the mode `serve` requires to read it back;
+- an existing path is REFUSED, never overwritten: overwriting a signing key
+  destroys the only value that can sign the account's next commit;
+- the scalar reaches its file and nothing else. What `keygen` prints is the
+  compressed public key and the `did:key`, both public by §1, and no failure
+  path renders a candidate.
+
+Grading: `pds/test/secp256k1_public_key_main.mdk` puts the derivation through
+the two externally sourced corpora together — `point_public_key_corpus.txt`
+(secret to compressed public key) and `pds_did_key_corpus.txt` (public key to
+`did:key`, from the official `Secp256k1Keypair.did()`) — so the whole
+derivation is graded against official values rather than against this tree's
+own output (G5). The file mode, the overwrite refusal, and the fact that
+`serve` runs on what `keygen` wrote are graded by `pds/test/serve_e2e.sh`.
 
 One result is deliberately declassified: after both RFC 6979 candidates and
 both complete signing computations have run, their aggregate `validBit` may be

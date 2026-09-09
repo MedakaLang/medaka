@@ -1629,6 +1629,45 @@ long long mdk_write_file_bytes(long long path, long long arr) {
   return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
 }
 
+/* writeFileMode : String -> Int -> String -> Result String Unit.
+ * Truncating write that leaves the file at exactly `mode`'s permission bits.
+ * open(2)'s mode argument applies only when the file is CREATED, and umask
+ * narrows it even then; an existing file keeps whatever mode it already had.
+ * fchmod on the open descriptor settles both cases, and it runs BEFORE the
+ * first byte is written, so the contents never exist at a wider mode. */
+long long mdk_write_file_mode(long long path, long long mode_tagged, long long content) {
+  const char *p = (const char *)path + 24;
+  const char *c = (const char *)content + 24;
+  long long cl = ((const long long *)content)[1];
+  mode_t mode = (mode_t)((mode_tagged >> 1) & 07777);
+  int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, mode);
+  if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  if (fchmod(fd, mode) != 0) {
+    int saved = errno; close(fd);
+    return mdk_err(mdk_str_cstr(strerror(saved)));
+  }
+  { long long off = 0;
+    while (off < cl) {
+      ssize_t w = write(fd, c + off, (size_t)(cl - off));
+      if (w < 0) {
+        int saved = errno; close(fd);
+        return mdk_err(mdk_str_cstr(strerror(saved)));
+      }
+      off += (long long)w;
+    } }
+  if (close(fd) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
+}
+
+/* fileMode : String -> Result String Int — st_mode's permission bits (& 07777),
+ * as a tagged Int inside Ok.  stat(2), so a symlink reports its target. */
+long long mdk_file_mode(long long path) {
+  const char *p = (const char *)path + 24;
+  struct stat st;
+  if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(((((long long)st.st_mode) & 07777) << 1) | 1);
+}
+
 /* fileExists : String -> Bool — raw 0/1, emitter tags via tagInt. */
 long long mdk_file_exists(long long path) {
   return access((const char *)path + 24, F_OK) == 0 ? 1 : 0;
