@@ -1,0 +1,2 @@
+export g : Int
+export g = 10
