@@ -941,7 +941,7 @@ renderTripleWarnings (path, src, diags) =
 -- (they close before the drain runs) — falling back to the generic deflection only
 -- if the residual carries nothing (never leaves the user with exit 1 and no text).
 --
--- 🚨 #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
+-- #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
 -- when the per-module diagnostics this elaboration produced were empty while the
 -- same elaboration armed `hadTypeErrors` — i.e. precisely the #1812 divergence,
 -- where `medaka check` on this program exits 0 and reports success.  The old text
@@ -2529,7 +2529,7 @@ typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target mo
       match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
         -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
         -- what `medaka check` prints and to what `--json` reports.
-        -- ⚠️ "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
+        -- "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
         -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
         -- module's warnings; this gate's `Ok` payload carries EVERY module's
         -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
