@@ -96,7 +96,6 @@ anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
-anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
@@ -669,7 +668,6 @@ definersIn : Map String (List (String, (String, String))) -> String -> List (Str
 depExportsCtorIdent : String -> String -> Ident -> Bool
 depExportsMethodIdent : String -> String -> Ident -> Bool
 depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
-depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derefOp : Mono -> Mono
 derivableIface : String -> Bool
@@ -687,9 +685,8 @@ dictPass : List String -> List Decl -> List Decl
 dictPassDecl : Map String Unit -> List String -> Decl -> Decl
 dictPassLetBind : Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
-dictPassModulesScoped : List String -> List ((String, String), List PredicateSlot) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+dictPassModulesScoped : List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
-directImports : String -> List (String, List Decl) -> List String
 directInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 directInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 directSupers : String -> List String
@@ -1167,6 +1164,9 @@ importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) ->
 importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 importerAdmittedVerdict : ImplEnv -> String -> List Mono -> AdmittedVerdict
 importerDispatchIdxOuter : String -> Option Int
+importerEdgeIndex : List (String, List Decl) -> Map String (List String) -> Map String (List String)
+importerReachGo : Map String (List String) -> List (String, List Decl) -> Map String (Map String Unit) -> Map String (Map String Unit)
+importerReachIndex : List (String, List Decl) -> Map String (Map String Unit)
 importerShadowDomain : String -> Option Mono
 importerShadowDomainAt : String -> Int -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
@@ -2148,9 +2148,7 @@ tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 toggles : Ref Toggles
 topRouteV : List Decl -> String -> IfaceRef -> Mono -> List Mono -> Route
-transitiveImporterDecls : String -> List (String, List Decl) -> List Decl
-transitiveImporterIds : String -> List (String, List Decl) -> List String
-transitivelyImports : String -> String -> List (String, List Decl) -> Bool
+transitiveImporters : Map String (Map String Unit) -> String -> List (String, List Decl) -> List (String, List Decl)
 tupleArgElems : Expr -> Option (List Expr)
 tupleCallHintFor : Mono -> Option (String, Option (Loc, String))
 tupleCallShapeHint : Expr -> Expr -> Mono -> Option (String, Option (Loc, String))
