@@ -354,9 +354,13 @@ CODEGEN" in `test/build_native_medaka.sh`), each with `time sh test/build_native
   - **cache-served fresh worktree** (no `./medaka`/`./medaka_emitter` present, cache live) —
     **1s**, the usual case: the build cache serves a binary another tree already built from
     this exact source, and only the FIRST worktree at a given source state pays a real build.
-    Unaffected by the codegen path. ⚠️ That cache holds **8 entries**, so a session doing many
-    forced rebuilds evicts its own emitter entry and the next "fresh worktree" pays a full
-    seed bootstrap instead (measured, same session: **68s**).
+    Unaffected by the codegen path. ⚠️ That cache holds **32 entries** (`MEDAKA_BUILD_CACHE_MAX`,
+    a deliberate policy sized for concurrent multi-session use, not the accidental 8 an earlier
+    revision of this file described, #2781) — a session doing enough forced rebuilds can still
+    evict its own emitter entry and pay a full seed bootstrap on the next "fresh worktree"
+    (measured against the old cap, same session: **68s**), but a miss caused by eviction now
+    reports distinguishably from a first-ever miss, so that cost is legible instead of a
+    mystery 1s→90s jump.
   - **warm forced full rebuild**, `FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the
     emitter already present — **96s / 89s** on a cold `$MEDAKA_SCRATCH` ThinLTO cache, **43s**
     once that cache holds this exact source. Interleaved against the 8-partition default it

@@ -549,9 +549,21 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 MEDAKA_SCRATCH="${MEDAKA_SCRATCH:-/var/tmp/medaka-scratch}"
 CACHE_DIR="${MEDAKA_BUILD_CACHE_DIR-$MEDAKA_SCRATCH/medaka-build-cache}"
 # Entry count, not total bytes: every entry is one compiler binary of roughly the same
-# size, so a count is a size proxy that needs no per-file `stat` (whose flags differ
-# between Linux and macOS — [B-DUAL-PLATFORM]).
-CACHE_MAX="${MEDAKA_BUILD_CACHE_MAX:-8}"
+# size (measured on this box: emitter entries ~3 MB, CLI entries ~6.6 MB), so a count
+# is a size proxy that needs no per-file `stat` (whose flags differ between Linux and
+# macOS — [B-DUAL-PLATFORM]).
+#
+# 8 was the accidental default entry_map size, not a chosen capacity, and it costs
+# real work: a single cold build at one commit populated an emitter entry and a CLI
+# entry and, because $CACHE_DIR is shared across every worktree and every session on
+# this box, that alone pushed the combined count over 8 and evicted two entries
+# another session still needed (#2781) — the eviction is real even though nothing in
+# THIS session's own history looks unusual. Entries are cheap (single digits of MB
+# each; dozens of them are a rounding error against 32 GB), so the deliberate policy
+# is to size for concurrent multi-session use rather than a single serial build: 32
+# holds several sessions' worth of emitter + CLI entries (each session can add more
+# than one of each across -O levels / codegen modes) with room to spare.
+CACHE_MAX="${MEDAKA_BUILD_CACHE_MAX:-32}"
 
 # Filename-safe rendering of a key component (hex digests and -O flags already are;
 # $BUILD_COMMIT/$BUILD_DATE come from git/date and could in principle not be).
@@ -582,7 +594,19 @@ cache_get() {
   _k="$1"; _dest="$2"
   [ -n "$CACHE_DIR" ] || return 1
   _ent="$CACHE_DIR/$_k.bin"; _sha="$CACHE_DIR/$_k.sha"
-  [ -f "$_ent" ] && [ -f "$_sha" ] || return 1
+  if ! { [ -f "$_ent" ] && [ -f "$_sha" ]; }; then
+    # Distinguish "never built at this key" from "was built and cached here, then
+    # evicted for space" (#2781) — the two report identically otherwise, and a
+    # session has no way to tell why its 1 s hit became a 90 s rebuild.
+    # cache_evict() leaves a tombstone behind for exactly this read.
+    if [ -f "$CACHE_DIR/$_k.evicted" ]; then
+      echo "  build cache: entry $_k was evicted earlier (cache is capped at $CACHE_MAX entries) — building for real."
+    else
+      echo "  build cache: no entry for $_k yet — building for real."
+    fi
+    return 1
+  fi
+  rm -f "$CACHE_DIR/$_k.evicted" 2>/dev/null || true
   _want="$(cat "$_sha" 2>/dev/null)"
   [ -n "$_want" ] || return 1
   _got="$(hash_stream < "$_ent" 2>/dev/null | cut -d' ' -f1)"
@@ -630,6 +654,7 @@ cache_put() {
   # binary beside it", i.e. a clean miss or a valid hit, never a mismatched pair.
   rm -f "$_sha"
   mv "$_entn" "$_ent" 2>/dev/null && mv "$_shan" "$_sha" 2>/dev/null || { rm -f "$_entn" "$_shan"; return 0; }
+  rm -f "$CACHE_DIR/$_k.evicted" 2>/dev/null || true   # this key is live again
   echo "  build cache: stored $_k."
   cache_evict
 }
@@ -643,13 +668,22 @@ cache_evict() {
   # Same hygiene as the $ROOT sweep near the top: a build killed between staging an
   # entry and promoting it leaves a per-PID orphan that nothing else will ever claim.
   find "$CACHE_DIR" -maxdepth 1 -name '*.new.*' -mtime +1 -delete 2>/dev/null || true
+  # Tombstones from earlier evictions are what makes a later miss distinguishable
+  # (see cache_get); sweep ones old enough that no session still mid-build could
+  # plausibly consult them, so they don't accumulate forever.
+  find "$CACHE_DIR" -maxdepth 1 -name '*.evicted' -mtime +7 -delete 2>/dev/null || true
   ls -t "$CACHE_DIR"/*.bin 2>/dev/null | {
     _n=0
     while IFS= read -r _e; do
       _n=$((_n + 1))
       [ "$_n" -le "$CACHE_MAX" ] && continue
+      _key="$(basename "${_e%.bin}")"
       rm -f "$_e" "${_e%.bin}.sha"
-      echo "  build cache: evicted $(basename "${_e%.bin}") (cache is capped at $CACHE_MAX entries)."
+      # Leave a tombstone so a future cache_get miss on this exact key can report
+      # "evicted" rather than "never built" — the two look identical otherwise, and
+      # only this call site knows which one just happened (#2781).
+      touch "$CACHE_DIR/$_key.evicted" 2>/dev/null || true
+      echo "  build cache: evicted $_key (cache is capped at $CACHE_MAX entries)."
     done
   }
   return 0
