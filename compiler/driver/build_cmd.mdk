@@ -646,9 +646,22 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- what it costs, what it saves, and every way it falls open to the whole-module
   -- path.  The `medaka run <entry>` emitter fallback is excluded: its IR is a
   -- function of the compiler SOURCES this key does not hash.
+  --
+  -- --keep-ir is excluded too, and NOT as a convenience: that flag's whole
+  -- promise is "here is the IR for your program", and on the split path the
+  -- copy it writes would be the program half alone — the prelude gone, and the
+  -- dict-constant gensym numbering shifted into `programHalfIdBase`'s range.
+  -- Silently handing a debugging surface half its subject is a misleading
+  -- answer, not a faster one, so asking to keep the IR pins the whole-module
+  -- build.  (test/diff_compiler_dict_semantics.sh's 79 emitted-IR assertions
+  -- read exactly that copy, and are what caught this.)
+  let keepIrOn = effectiveKeepIr keepIrCli
   let tBc0 = now ()
   let preludeLto =
-    if useNative then preludeBcPlan cc root emitProg0 tmpDir else None
+    if useNative && not keepIrOn then
+      preludeBcPlan cc root emitProg0 tmpDir
+    else
+      None
   let tBc1 = now ()
   let _ = emitPhase perfOn "prelude-bc" (tBc1 - tBc0) (preludeBcNote preludeLto)
   -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the prelude half.  When a
@@ -713,7 +726,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 (readForeignLibs ffiRoot)
                 preludeLto
             let (keptIr, keepNotes) =
-              if effectiveKeepIr keepIrCli then
+              if keepIrOn then
                 keepIrOutcome (outPath ++ ".ll") ir
               else
                 (None, [])
