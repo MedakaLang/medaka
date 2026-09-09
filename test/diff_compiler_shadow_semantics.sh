@@ -492,23 +492,23 @@ printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp
   case "$warn" in
     '') ;;
     WARN:*)
-      code="${warn#WARN:}"
-      if grep -q "$code" "$TMP/$base.chk.err" \
-        && grep -q "$code" "$TMP/$base.run.err" \
-        && grep -q "$code" "$TMP/$base.build.err"; then
+      msg="${warn#WARN:}"
+      if grep -q "$msg" "$TMP/$base.chk.err" \
+        && grep -q "$msg" "$TMP/$base.run.err" \
+        && grep -q "$msg" "$TMP/$base.build.err"; then
         :
       else
         row_ok=0
-        printf '     expected %s on check+run+build stderr; not on all three\n' "$code"
+        printf '     expected %s on check+run+build stderr; not on all three\n' "$msg"
       fi
       ;;
     NOWARN:*)
-      code="${warn#NOWARN:}"
-      if grep -q "$code" "$TMP/$base.chk.err" \
-        || grep -q "$code" "$TMP/$base.run.err" \
-        || grep -q "$code" "$TMP/$base.build.err"; then
+      msg="${warn#NOWARN:}"
+      if grep -q "$msg" "$TMP/$base.chk.err" \
+        || grep -q "$msg" "$TMP/$base.run.err" \
+        || grep -q "$msg" "$TMP/$base.build.err"; then
         row_ok=0
-        printf '     expected NO %s on any verb; it fired\n' "$code"
+        printf '     expected NO %s on any verb; it fired\n' "$msg"
       fi
       ;;
     *)
