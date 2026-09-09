@@ -1,0 +1,53 @@
+issue: 2768
+what: `r1`/`r2` (lib.mdk) are an UNSIGNATURED mutually recursive pair that inherits its
+what: `Num a =>` constraint through a call to `l0`, a promoted NON-MEMBER of the group
+what: (`l0 x = x + x`, called from both `r1`'s base case and `r2`'s body, never itself in
+what: the recursive group). `medaka check` accepts the program (`main : Unit`, exit 0),
+what: `medaka run` prints the CORRECT `6` (`r1 3 = r2 2 = r1 2 + l0 2 = ... = 6`, exit 0),
+what: and `medaka build` itself exits 0 and produces a binary -- but the EXECUTED binary
+what: dies with `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation
+what: fault)`, exit 139. No diagnostic on any verb; the interpreter is right and the
+what: native codegen is not -- an eval/native divergence in the null-dict-word /
+what: under-application family, found by the adversarial review of PR #2767 (probe p8).
+cmd: build-run main.mdk
+exit: 139
+control: build-run control.mdk
+why-fixture: `main.mdk`/`lib.mdk` are the issue's own two-module repro, unchanged.
+why-fixture: MEASURED by hand on a binary built in this worktree by
+why-fixture: `test/build_native_medaka.sh` (no borrowed emitter), every command
+why-fixture: redirected to a file with `$?` read directly, never piped:
+why-fixture:   check main.mdk    -> exit 0, stdout `main : Unit`
+why-fixture:   run   main.mdk    -> exit 0, stdout `6`
+why-fixture:   build main.mdk    -> exit 0, produces a binary
+why-fixture:   the produced binary -> exit 139, stdout EMPTY, stderr
+why-fixture:     `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`
+why-fixture: `build-run` is the only verb that reaches this: `check` and `build` both
+why-fixture: exit 0 on this program today, so a check- or build-based pin would be green
+why-fixture: forever without ever touching the cell where #2768 lives. No `stdout` is
+why-fixture: pinned: the fault kills the binary before `println` runs, so stdout is
+why-fixture: empty either way, and the runtime-error text lands on stderr, which
+why-fixture: build-run's stdout-only grading does not see (measured by hand, separating
+why-fixture: the streams above) -- exit 139 is itself the whole observable signature this
+why-fixture: row can grade.
+why-control: control.mdk/control_lib.mdk are main.mdk/lib.mdk with ONE feature flipped:
+why-control: `r1`/`r2` carry explicit `Int -> Int` signatures, so the pair is monomorphic
+why-control: from the start instead of being generalized over `Num a` and instantiated at
+why-control: the `(3 : Int)` call site -- the group no longer INHERITS a promoted
+why-control: constraint through `l0`, it is just `Int -> Int` throughout. Everything else
+why-control: (the recursion shape, the call to `l0`, the base case, `main`) is
+why-control: byte-for-byte the same. MEASURED: check/run/build all exit 0 and the
+why-control: executed binary exits 0 printing `6` -- the correct answer, matching
+why-control: `run`'s answer on main.mdk. This isolates the trigger to "unsignatured
+why-control: mutual recursion inheriting a promoted constraint through a call to a
+why-control: promoted non-member", not to mutual recursion in general, not to calling
+why-control: `l0`, and not to native codegen being broken in general: a lone (non-mutual)
+why-control: self-recursive function built with the same `l0`-calling shape also builds
+why-control: and runs clean (checked by hand, not shipped as a file here since the
+why-control: signature-based control already isolates the load-bearing feature more
+why-control: precisely).
+why-note: The issue's own battery found the single-member and both-members-constrained
+why-note: mutual-recursion shapes fine; only the shape where the constraint is INHERITED
+why-note: from outside the group via a promoted callee triggers this. A fix that makes
+why-note: the group's own inferred/generalized scheme agree with what native codegen
+why-note: emits for it -- so the produced binary executes to exit 0 printing `6` -- drains
+why-note: this row. Close #2768 and delete this fixture when that happens.
