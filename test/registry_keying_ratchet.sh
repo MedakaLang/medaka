@@ -29,13 +29,19 @@
 #      allowlist as it re-keys (or consolidates a bare/qualified field pair
 #      into one) a table this pins.
 #
-# THREE CHECKS:
+# SIX CHECKS:
 #   1. CrossRun + DriverState FIELD allowlist (compiler/types/typecheck.mdk)
 #   2. the cross-module WRITER ratchet: every `crossRun.value.*` /
 #      `driverState.value.*` WRITE site -- `setRef r v` or `r := v`, both live --
 #      pinned by TARGET FIELD (load-bearing)
 #   3. the THREE parallel engine module drivers' frame-seeding parity
 #      (evalModulesWith / evalModulesRootEnvWith / cevalModules)
+#   4. #1112 A-3.4 the IE namespace ratchet
+#   5. #1519 A-3.3 the CE construction ratchet
+#   6. #2796 Module-mode ENTRY PARITY: `checkModulesPreambleK` and
+#      `elaborateModules` must carry the SAME whole-graph writer/seed set
+#      (TYPECHECK-TARGET-ARCHITECTURE.md SA-10a item 14), plus the one ordering
+#      constraint item 14 states (populateEffectDomainsGraph before declEnvsRef :=)
 #
 # 🚨 REMEDY WHEN ANY CHECK FIRES: add the offending FIELD/LINE to the relevant
 # allowlist below and justify it in the PR -- never widen a pattern to make a
@@ -86,7 +92,7 @@
 # before any extraction, so control F cannot false-positive.
 #
 # Usage: sh test/registry_keying_ratchet.sh [ROOT]
-# Exit:  0 all three checks pass; 1 a ratchet fired (offending item printed).
+# Exit:  0 all six checks pass; 1 a ratchet fired (offending item printed).
 set -u
 
 if [ "${1:-}" != "" ]; then
@@ -806,4 +812,139 @@ if [ -n "$ce_excluded_hits" ]; then
 fi
 echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no excluded-table reach"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction)."
+# ═══════════════════════════════════════════════════════════════════════════
+# CHECK 6 — #2796: Module-mode ENTRY PARITY (the #2791 class)
+# ═══════════════════════════════════════════════════════════════════════════
+# THE PROPOSITION. Two Module-mode driver entries build the whole-graph state the
+# typechecker reads -- `checkModulesPreambleK` (check, LSP, analyzeProject,
+# `medaka test`'s gate) and `elaborateModules` (run, build, the other phases of
+# `medaka test`). Each must carry the SAME whole-graph writer/seed set
+# (TYPECHECK-TARGET-ARCHITECTURE.md SA-10a item 14). Until this check, that
+# contract was PROSE ONLY -- item 14's own closing sentence and each entry's own
+# comments ("`elaborateModules` carries the identical line") -- so a driver that
+# dropped one call silently diverged. That is exactly how #2791 happened:
+# `elaborateModules` never called `seedAbstractRecordTypes`, no gate noticed, and
+# `run` executed a dot-access on an abstractly exported record that `check`
+# rejects.
+#
+# THE SET, derived from the two bodies (not from prose), one row per call, with
+# a one-line reason -- the same discipline `driver_allowed` above uses:
+#   resetCrossModuleState        -- opens both entries; DriverState has no reset
+#                                    point, so this is the only place the run's
+#                                    prior CrossRun state is cleared
+#   populateEffectDomainsGraph   -- effect-label -> domain-param registry, over
+#                                    the WHOLE import graph, before anything reads it
+#   graphMethodExportsRef :=     -- module id -> method-export index (#1111 A-2.5b)
+#   graphIfaceMethodsRef :=      -- the TYPE-namespace peer of the line above (#1354 unit A)
+#   graphCtorExportsRef :=       -- the CONSTRUCTOR peer of the two lines above (#1111 A-2.11)
+#   mangledFunDefsPresentRef :=  -- graph-level "carries a mangled funDef" fact (L3, #1351 spine)
+#   declEnvsRef :=               -- the whole-graph declaration ENVELOPE, stage K (#1112 A-3.1)
+#   seedAbstractRecordTypes      -- abstract-record TYPE names; #2791's own missing row
+#   mark sets                    -- markSetsFrom (check entry) / markSetsOf (elaborate
+#                                    entry) -- ONE fact (ARCH §E marking-on-the-schedule),
+#                                    two entry-specific spellings, so this check accepts
+#                                    either at its own entry rather than one shared string
+#   promotionHarvestRef :=       -- cleared/opened at both entries (#194 harvest)
+#
+# 🚨 REMEDY WHEN ANY ROW FIRES: add the missing writer/seed call to the naming entry
+# in lockstep with the other entry's own line -- or, if a row genuinely no longer
+# applies to one entry, add a one-line justified EXEMPTION row here rather than
+# deleting the check. Never widen a pattern to make a row stop firing.
+echo "checking #2796 Module-mode driver entry parity (checkModulesPreambleK / elaborateModules) ..."
+
+preamble_body=$(body_of "$TC" '^checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =')
+elaborate_body=$(body_of "$TC" '^elaborateModules runtimeDecls coreDecls0 modulesIn =')
+
+preamble_n=$(printf '%s\n' "$preamble_body" | grep -c . || true)
+elaborate_n=$(printf '%s\n' "$elaborate_body" | grep -c . || true)
+if [ "$preamble_n" -eq 0 ] || [ "$elaborate_n" -eq 0 ]; then
+  echo "FAIL: check 6 extracted ZERO lines for checkModulesPreambleK ($preamble_n) or"
+  echo "  elaborateModules ($elaborate_n). Either entry's equation line changed shape"
+  echo "  (the two start markers this check greps for) or this check just validated"
+  echo "  nothing. Update the start markers -- do NOT treat a zero extraction as a pass."
+  exit 1
+fi
+
+# check_parity_row LABEL PATTERN: fail-closed, naming the ENTRY and the ROW.
+check_parity_row() {
+  label="$1"
+  pattern="$2"
+  cc=$(printf '%s\n' "$preamble_body" | grep -Fc "$pattern")
+  if [ "$cc" -lt 1 ]; then
+    echo "FAIL: checkModulesPreambleK is missing the '$label' writer/seed call"
+    echo "  (looked for: $pattern)."
+    echo "  REMEDY: add it to checkModulesPreambleK (compiler/types/typecheck.mdk), in"
+    echo "  lockstep with elaborateModules's own line -- or, if this row no longer"
+    echo "  applies to check, add a one-line justified exemption row to this script"
+    echo "  instead of deleting the check."
+    exit 1
+  fi
+  ec=$(printf '%s\n' "$elaborate_body" | grep -Fc "$pattern")
+  if [ "$ec" -lt 1 ]; then
+    echo "FAIL: elaborateModules is missing the '$label' writer/seed call"
+    echo "  (looked for: $pattern)."
+    echo "  REMEDY: add it to elaborateModules (compiler/types/typecheck.mdk), in"
+    echo "  lockstep with checkModulesPreambleK's own line -- this is the #2791 shape,"
+    echo "  where a fix landed in one Module-mode entry and not the other -- or, if"
+    echo "  this row no longer applies to elaborate, add a one-line justified"
+    echo "  exemption row to this script instead of deleting the check."
+    exit 1
+  fi
+}
+
+check_parity_row "resetCrossModuleState" "resetCrossModuleState ()"
+check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules"
+check_parity_row "graphMethodExportsRef :=" "graphMethodExportsRef :="
+check_parity_row "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :="
+check_parity_row "graphCtorExportsRef :=" "graphCtorExportsRef :="
+check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
+check_parity_row "declEnvsRef :=" "declEnvsRef :="
+check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules"
+check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []"
+
+# the mark sets: one fact, two entry-specific spellings -- checked separately
+# because the shared-pattern form check_parity_row uses does not apply.
+mark_c=$(printf '%s\n' "$preamble_body" | grep -Fc 'markSetsFrom prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls')
+if [ "$mark_c" -lt 1 ]; then
+  echo "FAIL: checkModulesPreambleK is missing its mark-sets call (markSetsFrom)."
+  echo "  REMEDY: add it in lockstep with elaborateModules's markSetsOf call -- ONE"
+  echo "  fact (ARCH §E marking-on-the-schedule), two entry-specific spellings."
+  exit 1
+fi
+mark_e=$(printf '%s\n' "$elaborate_body" | grep -Fc 'markSetsOf coreDecls modules allDecls')
+if [ "$mark_e" -lt 1 ]; then
+  echo "FAIL: elaborateModules is missing its mark-sets call (markSetsOf)."
+  echo "  REMEDY: add it in lockstep with checkModulesPreambleK's markSetsFrom call --"
+  echo "  ONE fact (ARCH §E marking-on-the-schedule), two entry-specific spellings."
+  exit 1
+fi
+echo "  ok: both Module-mode driver entries carry the whole-graph writer/seed set"
+
+# ORDER: populateEffectDomainsGraph must precede the declEnvsRef := write, at BOTH
+# entries -- the #2789 class. An envelope built before effect domains are
+# populated degrades every parameterized label to top (the atom-guarantee seed,
+# `declEnvRowAtomsEntries` -> `dtopFor`, reads the effect-domain table).
+check_order() {
+  label="$1"
+  body="$2"
+  before_line=$(printf '%s\n' "$body" | grep -n 'populateEffectDomainsGraph coreDecls modules' | head -1 | cut -d: -f1)
+  after_line=$(printf '%s\n' "$body" | grep -n 'declEnvsRef :=' | head -1 | cut -d: -f1)
+  if [ -z "$before_line" ] || [ -z "$after_line" ]; then
+    echo "FAIL: $label -- could not locate both populateEffectDomainsGraph and"
+    echo "  declEnvsRef := to check their order (the parity check above should have"
+    echo "  failed first if either call is genuinely absent)."
+    exit 1
+  fi
+  if [ "$before_line" -ge "$after_line" ]; then
+    echo "FAIL: $label -- populateEffectDomainsGraph does not precede the declEnvsRef :="
+    echo "  write (the #2789 class: an envelope built before effect domains are"
+    echo "  populated degrades every parameterized label to top)."
+    echo "  REMEDY: move populateEffectDomainsGraph above the declEnvsRef := write."
+    exit 1
+  fi
+}
+check_order "checkModulesPreambleK" "$preamble_body"
+check_order "elaborateModules" "$elaborate_body"
+echo "  ok: populateEffectDomainsGraph precedes declEnvsRef := at both entries"
+
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 Module-mode entry parity)."
