@@ -66,6 +66,7 @@ reexportedCtorIdentsOf	Decl	2/15
 reexportedIfaceMethodsOf	Decl	2/15
 reexportedMethodIdentsOf	Decl	2/15
 reexportedMethodsOf	Decl	2/15
+reexportedOriginsOf	Decl	2/15
 registerData	Decl	1/15
 registerMethodIfaceParamsDecl	Decl	2/15
 renderCallArg	Expr	9/41

@@ -88,10 +88,12 @@ defines **no** standalone colliding with a prelude method — its `length`/`isEm
 
 ### 0.4 Corroboration (this is not just my reasoning)
 
-The compiler's own source already asserts this conclusion, in two places:
+The compiler's own source already asserted this conclusion — and #2769 has since moved
+the ground under half of it, so read this section as the record of a decision taken in
+August 2026, not as a description of the tree:
 
-* `compiler/types/typecheck.mdk:7273` — *"The existing definer shadows (map/hash_map `toList`/`isEmpty`, parser `orElse`) are each applied only to their own type, which has NO impl of the shadowed interface, so they still resolve RLocal."*
-* `compiler/backend/llvm_emit.mdk:3555` — *"our OWN 5 definer shadows (map/hash_map `toList`/`isEmpty`, parser `orElse`)…"*
+* `compiler/backend/llvm_emit.mdk:5528` — *"The compiler's OWN definer shadows now reach THIS arm with their mangled symbol…"*. The comment used to read *"our OWN 5 definer shadows (map/hash_map `toList`/`isEmpty`, parser `orElse`)"*; #2769 deleted both `toList` standalones in favour of a real `impl Foldable`, so the enumeration — and the count this section reasons from — no longer describes the tree.
+* The bullet that stood here citing `compiler/types/typecheck.mdk:7273` is REMOVED rather than re-numbered: the sentence it quoted (*"The existing definer shadows … are each applied only to their own type, which has NO impl of the shadowed interface"*) exists nowhere in that file, at any line, and the claim it made is now false in any case — `Map` has an `impl Foldable` since #2769, so `stdlib/map.mdk`'s `isEmpty` IS applied to a type that has an impl of the shadowed interface. `groundShadowReceiver` (same file) carries the surviving half of the point, for `compiler/frontend/parser.mdk`'s `orElse` against `Alternative.orElse`, which the compiler declares no impl for.
 
 The stdlib used to **depend** on the standalone winning here, and now names the pair
 projection outright instead. `stdlib/map.mdk:647`:
@@ -106,12 +108,17 @@ the gated doctest `debug (fromList [(1, 10)])` prints the pairs. Were this still
 written `toList`, `Foldable.toList` would win at a `Map` receiver and the element type
 would be `v`, not `(k, v)`.
 
-`stdlib/hash_map.mdk:210-213` is the smoking gun in the other direction — the author
+`stdlib/hash_map.mdk` USED TO carry the smoking gun in the other direction — the author
 **working around** today's S2:
 
 > *"Named `entries`, not `toList`: `toList` is a `Foldable` method (returning `List v`), so an internal use of `toList` would be shadowed by the method and mistyped (`List v` vs the pairs `List (k, v)`). `toList` below is a thin exported alias, never used [internally]."*
 
-Under standalone-wins that workaround becomes unnecessary. (Leave it; it is harmless.)
+That paragraph is HISTORY: #2769 deleted the `toList` alias and gave `hash_map` a real
+`Foldable` impl, so there is no longer a workaround to point at. The evidence is
+therefore weaker than it was when this section was written — the workaround did exist,
+and it was removed by a change made for its own reasons, not by standalone-wins. The
+argument that standalone-wins would have made it unnecessary is unaffected; the
+present-tense claim that an author is working around the S2 today is not true.
 
 ### 0.5 GATE VERDICT
 

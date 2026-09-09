@@ -1,0 +1,4 @@
+-- SHADOW-SEMANTICS cell I31: the hop.  This module declares nothing; it only
+-- re-exports `box`'s standalone, which is the ONE respect in which the cell differs
+-- from I29.
+export import box.{Box(..), peek}

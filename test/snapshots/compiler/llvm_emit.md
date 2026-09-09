@@ -1,5 +1,5 @@
 # META
-source_lines=14249
+source_lines=14254
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -5490,8 +5490,8 @@ emitMethod e env name RNone implRoutes methRoutes argOps =
 -- under-applied).  Without this the direct emitKnownFnSat call below supplies one
 -- word too few, emitKnownFnSat correctly reads that as under-application, and the
 -- program silently prints a PAP heap pointer instead of the answer (the S-1 bug).
--- `dicts == []` (every unconstrained standalone, incl. all 5 of the compiler's own
--- definer shadows) keeps the byte-identical pre-S1 direct call ⇒ the self-compile
+-- `dicts == []` (every unconstrained standalone, the compiler's own definer shadows
+-- included) keeps the byte-identical pre-S1 direct call ⇒ the self-compile
 -- fixpoint cannot move.
 emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
   let target = if sym == "" then name else sym
@@ -5504,7 +5504,7 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
   -- `lookupVarG` is the SAME accessor `emitVar` uses for any other reference to that
   -- binding, so the two spellings of "read this global" cannot drift.  Gated on
   -- `isKnownFn` so every arg-position shadow (whose target IS a function) keeps the
-  -- byte-identical direct call — the compiler's own five definer shadows included.
+  -- byte-identical direct call — the compiler's own definer shadows included.
   if isEmpty argOps && not (isKnownFn e target) then
     lookupVarG e env target
   else if isEmpty dicts then
@@ -5529,9 +5529,14 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
 -- dicts.  P0-18: `target` is the carried MANGLED symbol `<mid>__name` when non-empty
 -- (the EMИТ path, where the def was renamed by mangleUnits and the EMethodAt carries
 -- the BARE dispatch name), else the bare `name` (un-mangled run path).  The compiler's
--- OWN 5 definer shadows (map/hash_map `toList`/`isEmpty`, parser `orElse`) now reach
+-- OWN definer shadows now reach
 -- THIS arm with their mangled symbol; the emitted `emitKnownFnSat` call is byte-
 -- identical to the pre-P0-18 direct `@mdk_<mid>__name` bare-EVar call (fixpoint gate).
+-- The membership is derived, not memorised — a module's own top-level function whose
+-- name is also a nameable interface method — and it moves with the tree: `map`'s and
+-- `hash_map`'s `toList` were members until #2769 deleted both in favour of a real
+-- `impl Foldable`; `stdlib/map.mdk`'s and `stdlib/hash_map.mdk`'s `isEmpty` (against
+-- `Foldable.isEmpty`) and `compiler/frontend/parser.mdk`'s `orElse` still are.
 
 -- Gap #50 (value position) — a bare method occurrence `CMethod name route ..` used
 -- as a FIRST-CLASS VALUE (passed to a HOF, e.g. `applyOp max 3 7`): there are no

@@ -1,0 +1,7 @@
+-- SHADOW-SEMANTICS cell I32 provider 2: the standalone `main.mdk` selectively
+-- imports.  `Eq a => b -> a -> String` is NOT alpha-equivalent to the method's
+-- `Debug a => t -> a -> String`: the two constraint lists are the same LENGTH and
+-- the two bodies do correspond, so a comparison that measures only the length
+-- reports these as the same scheme.
+export tagOf : Eq a => b -> a -> String
+tagOf _ _ = "prov"

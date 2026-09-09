@@ -1162,7 +1162,7 @@ importDefinersOf : List Decl -> List (String, (String, String))
 importFormBindsBare : UsePath -> String -> Bool
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importMemberShadow : List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
+importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importShadowsOfDecl : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> Decl -> List (String, String, Option Ty, Ty, Loc)
@@ -1800,6 +1800,8 @@ qualDeclOf : String -> String -> List PredicateSlot -> CDeclared
 qualSchemeOblsFor : String -> Option (List VecObl)
 quotedNames : List String -> String
 rangeFromCount : Int -> Int -> List Int
+reachableStandaloneSig : List (String, List Decl) -> Int -> List Decl -> String -> Option (Option Ty)
+reachableStandaloneSigGo : List (String, List Decl) -> Int -> List (String, String) -> Option (Option Ty)
 realizeRecDictApps : List RecDictApp -> Unit
 rebuildFunClauses : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> List FunClause -> (List FunClause, Map String (List (List Pat, Expr)))
 rebuildGroupDecls : Map String (List (List Pat, Expr)) -> List Decl -> List Decl
@@ -1873,6 +1875,8 @@ reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List 
 reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
+reexportedOrigins : List Decl -> String -> List (String, String)
+reexportedOriginsOf : Decl -> String -> List (String, String)
 regIfaceMonosFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
 regIfaceMonosOf : (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
 registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
@@ -2185,6 +2189,7 @@ tagNumlitCtxIf : Mono -> Mono -> String -> Unit
 tailCell : List (String, Ref Effvar) -> List String -> Option (Ref Effvar)
 tailCellsOf : List (String, Ref Effvar) -> List String -> List (Ref Effvar)
 taintAndDrop : Int -> List (Mono, Loc) -> List (Mono, Loc)
+takeAlphaConstraint : List (String, String) -> Constraint -> List Constraint -> List Constraint -> Option (List (String, String), List Constraint)
 takeFirst : Int -> List a -> List a
 takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
@@ -2206,6 +2211,8 @@ tupleMono : List Mono -> Mono
 tupleSpineOf : Mono -> List Mono -> Mono
 tupleUnifyClash : Mono -> Mono -> Bool
 tvarMonoOfIn : Mono -> Int -> Mono
+tyAlphaConstraint : List (String, String) -> Constraint -> Constraint -> Option (List (String, String))
+tyAlphaConstraints : List (String, String) -> List Constraint -> List Constraint -> Option (List (String, String))
 tyAlphaEq : Ty -> Ty -> Bool
 tyAlphaGo : List (String, String) -> Ty -> Ty -> Option (List (String, String))
 tyAlphaList : List (String, String) -> List Ty -> List Ty -> Option (List (String, String))

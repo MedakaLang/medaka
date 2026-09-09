@@ -1452,14 +1452,20 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 -- is being repaired, not preserved.  (2) No oracle, so no false positive is
 -- representable: it is a name-set intersection filtered by a comparison of two DECLARED
 -- signatures, and it fires at most once per import MEMBER, not per occurrence —
--- measured THREE times over this file's whole module closure (`types/registry.mdk`'s
--- `map.toList`, and `eval/eval.mdk`'s `add`/`sub`), against the #1185 phantom's 1249
--- lines on the same command.  (3) The render cost is therefore bounded by the collision
--- count, not by the module graph, exactly as for `W-PRELUDE-METHOD-SHADOW`.
+-- measured TWICE over this file's whole module closure (`eval/eval.mdk`'s `add` and
+-- `sub`, each importing a `U64` standalone that `Num`'s method of the same name
+-- displaces), against the #1185 phantom's 1249 lines on the same command.  (3) The
+-- render cost is therefore bounded by the collision count, not by the module graph,
+-- exactly as for `W-PRELUDE-METHOD-SHADOW`.
 --
--- Three is not zero: unlike `W-PRELUDE-METHOD-SHADOW`, this code DOES fire on the
--- compiler's own source today.  Those three sites are live members of the class, not
--- false positives, and they are the derived worklist the drain half of #2769 consumes.
+-- The count is not zero: unlike `W-PRELUDE-METHOD-SHADOW`, this code DOES fire on the
+-- compiler's own source today.  Those sites are live members of the class, not false
+-- positives, and they are the derived worklist the drain half of #2769 consumes.  Do
+-- not re-copy the number out of this comment — re-derive it, since the set moves with
+-- the tree (it was three until `map.toList` was deleted and `types/registry.mdk`
+-- switched to `map.{entries}`):
+--
+--     ./medaka check compiler/driver/medaka_cli.mdk 2>&1 | grep -c 'is shadowed in module'
 runBuildWarnCodes : List String
 runBuildWarnCodes =
   [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW", "W-IMPORT-METHOD-SHADOW"]
@@ -2454,8 +2460,9 @@ typecheckGate allowInternal root input =
 -- multi-module obligation check flags the compiler's own source with a spurious
 -- `No impl of Alternative for Parser`") named a predicate that no longer exists, and
 -- the false positive it described was fixed by checkModuleFullDiags's `accAll` seed
--- (typecheck.mdk "Bug C": without the imported-standalone-shadow universe, `toList m`
--- routed to method dispatch → spurious `No impl of Foldable for Map`).  The proof that
+-- (typecheck.mdk "Bug C": without the imported-standalone-shadow universe an imported
+-- standalone that shadows a `Foldable` method routed to method dispatch instead of to
+-- the standalone the importer named).  The proof that
 -- analyzeProject is clean on compiler source is a REQUIRED CI check:
 -- test/typecheck_compiler_source.sh runs exactly this driver over
 -- compiler/driver/medaka_cli.mdk's whole import closure and fails on ANY
