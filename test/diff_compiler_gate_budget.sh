@@ -15,6 +15,11 @@
 #   (c) the projected pole/floor (the SAME number `medaka gate balance
 #       --check` derives, S-4's metric) exceeds the enforced budget
 #       (`balTargetMilli`, 1.125).
+#   (d) a baseline row names no gate the registry currently declares — the
+#       reverse of (a): a gate deleted from test/gates.toml left its cost
+#       history behind, and nothing else looks the other way (sprint
+#       cost-governor-on S1, F6: `pds_test_unit_suite`, deleted in #2723,
+#       sat in the committed baseline through 11 clean `gate verify` runs).
 #
 # Any violation may be accepted on purpose with a structured, greppable
 # acknowledgment: a `Gate-Budget-Override: <token>` trailer on an AUTHORED
@@ -65,6 +70,9 @@
 #   - `lpt_packing_gap.{toml,json}` (test/gate_balance_fixtures, already
 #     documenting a real pole/floor 1.222 > 1.125 gap, S-5's own clause (c)
 #     demonstration reused verbatim) pins clause (c).
+#   - `budget_orphan.{toml,json}` pins clause (d) ALONE: one costed gate
+#     matching the registry exactly, plus a second baseline row naming a
+#     gate the registry does not declare (sprint cost-governor-on S1).
 #   - `budget_clean.{toml,json}` is a well-formed registry with zero
 #     violations.
 #
@@ -210,6 +218,40 @@ if _budget lpt_packing_gap "$out_c_green" --commit-message "$msg_c"; then
 else
   bad "clause (c) with its own override token still reds"
   sed -e 's/^/        /' "$out_c_green"
+fi
+
+# ── clause (d): a baseline row names no registry gate ───────────────────────
+out_d_red="$TMP/d_red.txt"; out_d_green="$TMP/d_green.txt"
+if _budget budget_orphan "$out_d_red"; then
+  bad "clause (d) fixture was accepted with no override (should red)"
+  sed -e 's/^/        /' "$out_d_red"
+else
+  if grep -q 'baseline row names no registry gate (clause d): 1' "$out_d_red" \
+     && grep -q '^  ghost — a cost baseline row for a gate the registry no longer declares' "$out_d_red"; then
+    ok "clause (d) alone reds: an orphaned baseline row, named"
+  else
+    bad "clause (d) fixture refused, but not for the orphan reason"
+    sed -e 's/^/        /' "$out_d_red"
+  fi
+fi
+tok_d="$(grep -o 'Gate-Budget-Override: [^[:space:]]*' "$out_d_red" | head -1 | sed 's/^Gate-Budget-Override: //')"
+if [ "$tok_d" = "orphan:ghost" ]; then
+  ok "clause (d) prints the expected override token"
+else
+  bad "clause (d) override token captured as '$tok_d', expected 'orphan:ghost'"
+fi
+msg_d="$(printf 'fix: clause (d) fixture\n\nGate-Budget-Override: %s\n' "$tok_d")"
+if _budget budget_orphan "$out_d_green" --commit-message "$msg_d"; then
+  if grep -q '\[ACKNOWLEDGED\]' "$out_d_green" \
+     && grep -q '1 violation(s), all acknowledged by commit-message trailer — OK' "$out_d_green"; then
+    ok "clause (d) goes green with the tool's own printed override token"
+  else
+    bad "clause (d) exited 0 but did not report the acknowledgment shape"
+    sed -e 's/^/        /' "$out_d_green"
+  fi
+else
+  bad "clause (d) with its own override token still reds"
+  sed -e 's/^/        /' "$out_d_green"
 fi
 
 # ── the override match is EXACT, not substring/prefix ───────────────────────

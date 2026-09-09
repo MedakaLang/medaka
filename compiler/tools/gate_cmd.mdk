@@ -78,6 +78,7 @@ import tools.gate_cost.{
   costRowOf,
   gateSetDigest,
   latestRunForShard,
+  orphanBaselineNames,
   packStat,
   parseCostBaseline,
   parseCostRuns,
@@ -733,8 +734,9 @@ gateHelpText = stringConcat [
   "`gate budget` is #2180's governor: text-only, no build. Reds when (a) a\n",
   "schedulable gate has no cost baseline entry, (b) a gate's measured cost\n",
   "has eaten into the tolerance-adjusted timeout its declared `cost` class\n",
-  "implies, or (c) the projected pole/floor (the same number `gate balance\n",
-  "--check` derives) exceeds S-4's budget. Any violation may be accepted on\n",
+  "implies, (c) the projected pole/floor (the same number `gate balance\n",
+  "--check` derives) exceeds S-4's budget, or (d) a baseline row names no\n",
+  "gate the registry currently declares. Any violation may be accepted on\n",
   "purpose with a `Gate-Budget-Override: <token>` trailer on the commit\n",
   "message (there is no PR body in a merge_group run) — the failing gate\n",
   "prints the exact trailer to paste.\n", "\n",
@@ -5208,7 +5210,7 @@ balCmdBody argv = match parseBalArgs argv BalArgs {
 -- ── `gate budget` — #2180's governor (S-5) ──────────────────────────────────
 --
 -- A required, cheap, TEXT-ONLY gate — no build, `gate verify`'s shape — that
--- reds on any of three clauses:
+-- reds on any of four clauses:
 --
 --   (a) a schedulable gate has no cost baseline entry (`balUncosted`'s
 --       condition). The sprint contract's literal clause (a) — "a registry
@@ -5226,6 +5228,14 @@ balCmdBody argv = match parseBalArgs argv BalArgs {
 --       computed from `balCands`/`balRows`/`balTarget`, which already skip
 --       `other-job` gates, so an `other-job` gate's (nonexistent) cost never
 --       contributes here either.
+--   (d) a baseline row names no gate the registry currently declares — the
+--       REVERSE of (a). Neither `gate verify` (registry-only, never opens the
+--       baseline) nor `gate balance`/(a) (only ever ask "does this registry
+--       gate have a price") looks the other way, so a gate deleted from
+--       `test/gates.toml` leaves its cost history behind forever with nothing
+--       noticing (F6, sprint cost-governor-on S1: `pds_test_unit_suite`,
+--       removed in #2723, sat in the baseline through 11 clean `gate verify`
+--       runs).
 --
 -- Any clause may be accepted on purpose with a structured, greppable
 -- acknowledgment: a trailer line on an AUTHORED commit message in the change
@@ -5409,6 +5419,34 @@ budgetPoleFloorLines commitMessage (Some factor) =
     ]
     :: []
 
+-- ── Clause (d) ───────────────────────────────────────────────────────────────
+
+budgetLiveKeys : List Gate -> List String
+budgetLiveKeys [] = []
+budgetLiveKeys (g :: gs) = baselineKey g.run :: budgetLiveKeys gs
+
+budgetOrphanNames : List GateCost -> List Gate -> List String
+budgetOrphanNames base gates = orphanBaselineNames (budgetLiveKeys gates) base
+
+budgetOrphanTokens : List String -> List String
+budgetOrphanTokens [] = []
+budgetOrphanTokens (n :: ns) = "orphan:\{n}" :: budgetOrphanTokens ns
+
+budgetOrphanLines : String -> List String -> List String
+budgetOrphanLines _ [] = []
+budgetOrphanLines commitMessage (n :: ns) =
+  let tok = "orphan:\{n}"
+  let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
+  stringConcat [
+      n, ack,
+      " — a cost baseline row for a gate the registry no longer declares",
+      " — remedy: drop the row from test/gate_cost_baseline.json (it is",
+      " GENERATED, so drop it via the same ingest/prune pass that would",
+      " otherwise carry it forward, not by hand). To accept the stale row on",
+      " purpose, paste:\n    Gate-Budget-Override: ", tok, "\n"
+    ]
+    :: budgetOrphanLines commitMessage ns
+
 -- ── Assembling the report ────────────────────────────────────────────────────
 
 budgetIndent : List String -> List String
@@ -5425,11 +5463,13 @@ budgetReport : List GateCost ->
   List String ->
   List Gate ->
   Option Int ->
+  List String ->
   Result String String
-budgetReport base commitMessage uncosted overClass poleFactorOpt =
+budgetReport base commitMessage uncosted overClass poleFactorOpt orphans =
   let aLines = budgetUncostedLines commitMessage uncosted
   let bLines = budgetOverClassLines base commitMessage overClass
   let cLines = budgetPoleFloorLines commitMessage poleFactorOpt
+  let dLines = budgetOrphanLines commitMessage orphans
   let aUnacked =
     budgetCountUnacked commitMessage (budgetUncostedTokens uncosted)
   let bUnacked =
@@ -5444,12 +5484,14 @@ budgetReport base commitMessage uncosted overClass poleFactorOpt =
       0
     else
       1
-  let total = listLen uncosted + listLen overClass + cCount
-  let unacked = aUnacked + bUnacked + cUnacked
+  let dUnacked = budgetCountUnacked commitMessage (budgetOrphanTokens orphans)
+  let total = listLen uncosted + listLen overClass + cCount + listLen orphans
+  let unacked = aUnacked + bUnacked + cUnacked + dUnacked
   let body = stringConcat [
     budgetSection "no cost baseline entry (clause a)" aLines,
     budgetSection "over declared class, tolerance-adjusted (clause b)" bLines,
     budgetSection "projected pole/floor over budget (clause c)" cLines,
+    budgetSection "baseline row names no registry gate (clause d)" dLines,
   ]
   if total == 0 then
     Ok "medaka gate budget: OK — 0 violations.\n"
@@ -5476,10 +5518,17 @@ budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
           [] =>
             let uncosted = budgetUncostedNames base gates
             let overClass = budgetOverClassGates base gates
+            let orphans = budgetOrphanNames base gates
             match budgetPoleFactor gates shs base runs
               Err m => Err "medaka gate budget: \{m}\n"
               Ok poleFactorOpt =>
-                budgetReport base commitMessage uncosted overClass poleFactorOpt
+                budgetReport
+                  base
+                  commitMessage
+                  uncosted
+                  overClass
+                  poleFactorOpt
+                  orphans
 
 data BudgetArgs = BudgetArgs {
   registry : Option String,
