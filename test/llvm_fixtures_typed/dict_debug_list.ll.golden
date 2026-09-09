@@ -172,7 +172,6 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -194,7 +193,7 @@ entry:
   %t10 = getelementptr i8, ptr %t8, i64 16
   store i64 %t7, ptr %t10
   %t11 = ptrtoint ptr %t8 to i64
-  %t12 = call i64 @mdk_impl_MyList_debug(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 %t11)
+  %t12 = call i64 @mdk_impl_MyList_debug(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11)
   %t13 = ashr i64 %t12, 1
   call void @mdk_print_int(i64 %t13)
   ret i32 0
@@ -281,7 +280,7 @@ entry:
 }
 
 ; mdk-module program
-@mdk_dc_program_0 = internal constant [1 x i64] [i64 193460240]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]
 ; mdk-module program
 define i64 @mdk_disp_debug_0_1(i64 %dict, i64 %arg0) {
 entry:

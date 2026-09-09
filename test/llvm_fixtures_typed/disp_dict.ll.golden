@@ -172,8 +172,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
-  %t0 = call i64 @mdk_firstZero(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 1)
+  %t0 = call i64 @mdk_firstZero(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 1)
   %t1 = alloca i64
   %t4 = and i64 %t0, 1
   %t5 = icmp eq i64 %t4, 1
@@ -190,7 +189,7 @@ disccont3:
   %t10 = icmp eq i64 %t9, 1
   br i1 %t10, label %conyes11, label %connext11
 conyes11:
-  %t12 = call i64 @mdk_firstZero(i64 ptrtoint (ptr @mdk_dc_program_1 to i64), i64 11)
+  %t12 = call i64 @mdk_firstZero(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 11)
   store i64 %t12, ptr %t1
   br label %decend2
 connext11:
@@ -272,9 +271,9 @@ entry:
 ; mdk-module program
 @mdk_gs_$memo_Flag_zero = global i8 0
 ; mdk-module program
-@mdk_dc_program_0 = internal constant [1 x i64] [i64 6384077407]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 6384077407]
 ; mdk-module program
-@mdk_dc_program_1 = internal constant [1 x i64] [i64 193460240]
+@mdk_dc.program.1 = internal constant [1 x i64] [i64 193460240]
 ; mdk-module program
 @.gname.$memo_Int_zero = private unnamed_addr constant [15 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\7A\65\72\6F\00"
 ; mdk-module program

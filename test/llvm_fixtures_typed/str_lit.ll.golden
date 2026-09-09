@@ -172,7 +172,6 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   call void @mdk_print_str(i64 ptrtoint (ptr @.strc.program.0 to i64))
   ret i32 0
 }

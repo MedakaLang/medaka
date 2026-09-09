@@ -172,29 +172,27 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store double 0xFFF8000000000000, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
   store i64 %t2, ptr @mdk_g_nan
-; mdk-module program
   %t3 = load i64, ptr @mdk_g_nan
   %t4 = load i64, ptr @mdk_g_nan
-  %t5 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_1 to i64), i64 %t3, i64 %t4)
+  %t5 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.1 to i64), i64 %t3, i64 %t4)
   %t6 = call i64 @mdk_bit(i64 %t5)
   %t7 = load i64, ptr @mdk_g_nan
   %t8 = load i64, ptr @mdk_g_nan
-  %t9 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_3 to i64), i64 %t7, i64 %t8)
+  %t9 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.3 to i64), i64 %t7, i64 %t8)
   %t10 = call i64 @mdk_bit(i64 %t9)
   %t11 = load i64, ptr @mdk_g_nan
   %t12 = load i64, ptr @mdk_g_nan
-  %t13 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_5 to i64), i64 %t11, i64 %t12)
+  %t13 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.5 to i64), i64 %t11, i64 %t12)
   %t14 = call i64 @mdk_bit(i64 %t13)
   %t15 = load i64, ptr @mdk_g_nan
   %t16 = load i64, ptr @mdk_g_nan
-  %t17 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_7 to i64), i64 %t15, i64 %t16)
+  %t17 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.7 to i64), i64 %t15, i64 %t16)
   %t18 = call i64 @mdk_bit(i64 %t17)
   %t19 = load i64, ptr @mdk_g_nan
   %t20 = call ptr @mdk_alloc_atomic(i64 16)
@@ -202,7 +200,7 @@ entry:
   %t21 = getelementptr i8, ptr %t20, i64 8
   store double 1.0, ptr %t21
   %t22 = ptrtoint ptr %t20 to i64
-  %t23 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_9 to i64), i64 %t19, i64 %t22)
+  %t23 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.9 to i64), i64 %t19, i64 %t22)
   %t24 = call i64 @mdk_bit(i64 %t23)
   %t25 = load i64, ptr @mdk_g_nan
   %t26 = call ptr @mdk_alloc_atomic(i64 16)
@@ -210,7 +208,7 @@ entry:
   %t27 = getelementptr i8, ptr %t26, i64 8
   store double 1.0, ptr %t27
   %t28 = ptrtoint ptr %t26 to i64
-  %t29 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_11 to i64), i64 %t25, i64 %t28)
+  %t29 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.11 to i64), i64 %t25, i64 %t28)
   %t30 = call i64 @mdk_bit(i64 %t29)
   %t31 = load i64, ptr @mdk_g_nan
   %t32 = call ptr @mdk_alloc_atomic(i64 16)
@@ -218,7 +216,7 @@ entry:
   %t33 = getelementptr i8, ptr %t32, i64 8
   store double 1.0, ptr %t33
   %t34 = ptrtoint ptr %t32 to i64
-  %t35 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_13 to i64), i64 %t31, i64 %t34)
+  %t35 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.13 to i64), i64 %t31, i64 %t34)
   %t36 = call i64 @mdk_bit(i64 %t35)
   %t37 = load i64, ptr @mdk_g_nan
   %t38 = call ptr @mdk_alloc_atomic(i64 16)
@@ -226,7 +224,7 @@ entry:
   %t39 = getelementptr i8, ptr %t38, i64 8
   store double 1.0, ptr %t39
   %t40 = ptrtoint ptr %t38 to i64
-  %t41 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_15 to i64), i64 %t37, i64 %t40)
+  %t41 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.15 to i64), i64 %t37, i64 %t40)
   %t42 = call i64 @mdk_bit(i64 %t41)
   %t43 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t43
@@ -234,7 +232,7 @@ entry:
   store double 1.0, ptr %t44
   %t45 = ptrtoint ptr %t43 to i64
   %t46 = load i64, ptr @mdk_g_nan
-  %t47 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_17 to i64), i64 %t45, i64 %t46)
+  %t47 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.17 to i64), i64 %t45, i64 %t46)
   %t48 = call i64 @mdk_bit(i64 %t47)
   %t49 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t49
@@ -242,7 +240,7 @@ entry:
   store double 1.0, ptr %t50
   %t51 = ptrtoint ptr %t49 to i64
   %t52 = load i64, ptr @mdk_g_nan
-  %t53 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_19 to i64), i64 %t51, i64 %t52)
+  %t53 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.19 to i64), i64 %t51, i64 %t52)
   %t54 = call i64 @mdk_bit(i64 %t53)
   %t55 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t55
@@ -250,7 +248,7 @@ entry:
   store double 1.0, ptr %t56
   %t57 = ptrtoint ptr %t55 to i64
   %t58 = load i64, ptr @mdk_g_nan
-  %t59 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_21 to i64), i64 %t57, i64 %t58)
+  %t59 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.21 to i64), i64 %t57, i64 %t58)
   %t60 = call i64 @mdk_bit(i64 %t59)
   %t61 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t61
@@ -258,7 +256,7 @@ entry:
   store double 1.0, ptr %t62
   %t63 = ptrtoint ptr %t61 to i64
   %t64 = load i64, ptr @mdk_g_nan
-  %t65 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_23 to i64), i64 %t63, i64 %t64)
+  %t65 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.23 to i64), i64 %t63, i64 %t64)
   %t66 = call i64 @mdk_bit(i64 %t65)
   %t67 = ashr i64 5, 1
   %t68 = ashr i64 %t10, 1
@@ -371,7 +369,6 @@ entry:
   %t175 = shl i64 %t174, 1
   %t176 = or i64 %t175, 1
   store i64 %t176, ptr @mdk_g_nanBits
-; mdk-module program
   %t177 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t177
   %t178 = getelementptr i8, ptr %t177, i64 8
@@ -382,7 +379,7 @@ entry:
   %t181 = getelementptr i8, ptr %t180, i64 8
   store double 2.0, ptr %t181
   %t182 = ptrtoint ptr %t180 to i64
-  %t183 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_25 to i64), i64 %t179, i64 %t182)
+  %t183 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.25 to i64), i64 %t179, i64 %t182)
   %t184 = call i64 @mdk_bit(i64 %t183)
   %t185 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t185
@@ -394,7 +391,7 @@ entry:
   %t189 = getelementptr i8, ptr %t188, i64 8
   store double 2.0, ptr %t189
   %t190 = ptrtoint ptr %t188 to i64
-  %t191 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_27 to i64), i64 %t187, i64 %t190)
+  %t191 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.27 to i64), i64 %t187, i64 %t190)
   %t192 = call i64 @mdk_bit(i64 %t191)
   %t193 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t193
@@ -406,7 +403,7 @@ entry:
   %t197 = getelementptr i8, ptr %t196, i64 8
   store double 1.0, ptr %t197
   %t198 = ptrtoint ptr %t196 to i64
-  %t199 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_29 to i64), i64 %t195, i64 %t198)
+  %t199 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.29 to i64), i64 %t195, i64 %t198)
   %t200 = call i64 @mdk_bit(i64 %t199)
   %t201 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t201
@@ -418,7 +415,7 @@ entry:
   %t205 = getelementptr i8, ptr %t204, i64 8
   store double 1.0, ptr %t205
   %t206 = ptrtoint ptr %t204 to i64
-  %t207 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_31 to i64), i64 %t203, i64 %t206)
+  %t207 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.31 to i64), i64 %t203, i64 %t206)
   %t208 = call i64 @mdk_bit(i64 %t207)
   %t209 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t209
@@ -430,7 +427,7 @@ entry:
   %t213 = getelementptr i8, ptr %t212, i64 8
   store double 1.0, ptr %t213
   %t214 = ptrtoint ptr %t212 to i64
-  %t215 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_33 to i64), i64 %t211, i64 %t214)
+  %t215 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.33 to i64), i64 %t211, i64 %t214)
   %t216 = call i64 @mdk_bit(i64 %t215)
   %t217 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t217
@@ -442,13 +439,13 @@ entry:
   %t221 = getelementptr i8, ptr %t220, i64 8
   store double 1.0, ptr %t221
   %t222 = ptrtoint ptr %t220 to i64
-  %t223 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_35 to i64), i64 %t219, i64 %t222)
+  %t223 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.35 to i64), i64 %t219, i64 %t222)
   %t224 = call i64 @mdk_bit(i64 %t223)
-  %t225 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_37 to i64), i64 3, i64 5)
+  %t225 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.37 to i64), i64 3, i64 5)
   %t226 = call i64 @mdk_bit(i64 %t225)
-  %t227 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_39 to i64), i64 5, i64 3)
+  %t227 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.39 to i64), i64 5, i64 3)
   %t228 = call i64 @mdk_bit(i64 %t227)
-  %t229 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc_program_41 to i64), i64 5, i64 5)
+  %t229 = call i64 @mdk_applyCmp(i64 ptrtoint (ptr @mdk_cc.program.41 to i64), i64 5, i64 5)
   %t230 = call i64 @mdk_bit(i64 %t229)
   %t231 = ashr i64 5, 1
   %t232 = ashr i64 %t192, 1
@@ -531,7 +528,6 @@ entry:
   %t309 = shl i64 %t308, 1
   %t310 = or i64 %t309, 1
   store i64 %t310, ptr @mdk_g_ctlBits
-; mdk-module program
   %t311 = load i64, ptr @mdk_g_nanBits
   %t312 = ashr i64 %t311, 1
   %t313 = ashr i64 2001, 1
@@ -625,191 +621,191 @@ else2:
 ; mdk-module program
 @mdk_g_ctlBits = global i64 0
 ; mdk-module program
-define i64 @mdk_eta_cmpLt_program_0(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLt.program.0(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_1 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt_program_0 to i64)]
+@mdk_cc.program.1 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt.program.0 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_2(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.2(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_3 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_2 to i64)]
+@mdk_cc.program.3 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.2 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGt_program_4(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGt.program.4(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_5 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt_program_4 to i64)]
+@mdk_cc.program.5 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt.program.4 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGe_program_6(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGe.program.6(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_7 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe_program_6 to i64)]
+@mdk_cc.program.7 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe.program.6 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLt_program_8(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLt.program.8(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_9 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt_program_8 to i64)]
+@mdk_cc.program.9 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt.program.8 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_10(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.10(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_11 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_10 to i64)]
+@mdk_cc.program.11 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.10 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGt_program_12(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGt.program.12(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_13 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt_program_12 to i64)]
+@mdk_cc.program.13 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt.program.12 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGe_program_14(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGe.program.14(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_15 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe_program_14 to i64)]
+@mdk_cc.program.15 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe.program.14 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLt_program_16(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLt.program.16(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_17 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt_program_16 to i64)]
+@mdk_cc.program.17 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt.program.16 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_18(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.18(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_19 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_18 to i64)]
+@mdk_cc.program.19 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.18 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGt_program_20(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGt.program.20(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_21 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt_program_20 to i64)]
+@mdk_cc.program.21 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt.program.20 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGe_program_22(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGe.program.22(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_23 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe_program_22 to i64)]
+@mdk_cc.program.23 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe.program.22 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLt_program_24(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLt.program.24(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_25 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt_program_24 to i64)]
+@mdk_cc.program.25 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt.program.24 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_26(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.26(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_27 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_26 to i64)]
+@mdk_cc.program.27 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.26 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_28(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.28(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_29 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_28 to i64)]
+@mdk_cc.program.29 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.28 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGt_program_30(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGt.program.30(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_31 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt_program_30 to i64)]
+@mdk_cc.program.31 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGt.program.30 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGe_program_32(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGe.program.32(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_33 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe_program_32 to i64)]
+@mdk_cc.program.33 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe.program.32 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_34(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.34(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_35 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_34 to i64)]
+@mdk_cc.program.35 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.34 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLt_program_36(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLt.program.36(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLt(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_37 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt_program_36 to i64)]
+@mdk_cc.program.37 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLt.program.36 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpLe_program_38(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpLe.program.38(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpLe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_39 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe_program_38 to i64)]
+@mdk_cc.program.39 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpLe.program.38 to i64)]
 ; mdk-module program
-define i64 @mdk_eta_cmpGe_program_40(i64 %clos, i64 %arg0, i64 %arg1) {
+define i64 @mdk_eta_cmpGe.program.40(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_cmpGe(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-@mdk_cc_program_41 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe_program_40 to i64)]
+@mdk_cc.program.41 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_eta_cmpGe.program.40 to i64)]

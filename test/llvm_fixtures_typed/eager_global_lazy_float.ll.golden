@@ -172,14 +172,12 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store double 2.5, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
   store i64 %t2, ptr @mdk_g_base
-; mdk-module program
   %t3 = call i64 @mdk_force_cell()
   %t4 = inttoptr i64 %t3 to ptr
   %t5 = getelementptr i8, ptr %t4, i64 8

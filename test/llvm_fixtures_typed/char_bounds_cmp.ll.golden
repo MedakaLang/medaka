@@ -172,15 +172,12 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call i64 @mdk_char_from_code(i64 1)
   %t1 = call i64 @mdk_unwrap(i64 %t0)
   store i64 %t1, ptr @mdk_g_lo
-; mdk-module program
   %t2 = call i64 @mdk_char_from_code(i64 2228223)
   %t3 = call i64 @mdk_unwrap(i64 %t2)
   store i64 %t3, ptr @mdk_g_hi
-; mdk-module program
   %t4 = load i64, ptr @mdk_g_lo
   %t5 = call i64 @mdk_value_le(i64 1, i64 %t4)
   %t6 = call i64 @mdk_bit(i64 3, i64 %t5)

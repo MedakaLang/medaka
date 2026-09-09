@@ -172,7 +172,6 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call i64 @mdk_force_theVal()
   %t1 = call i64 @mdk_unbox(i64 %t0)
   %t2 = call i64 @mdk_unbox(i64 %t1)
@@ -229,7 +228,7 @@ lz_forcing:
   unreachable
 lz_unforced:
   store i8 1, ptr @mdk_gs_theVal
-  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc_program_0 to i64))
+  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
   store i64 %t2, ptr @mdk_g_theVal
   store i8 2, ptr @mdk_gs_theVal
   ret i64 %t2
@@ -317,7 +316,7 @@ entry:
 ; mdk-module program
 @.gname.theVal = private unnamed_addr constant [7 x i8] c"\74\68\65\56\61\6C\00"
 ; mdk-module program
-@mdk_dc_program_0 = internal constant [1 x i64] [i64 -308483285326192921]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 -308483285326192921]
 ; mdk-module program
 define i64 @mdk_disp_def_0_0(i64 %dict) {
 entry:

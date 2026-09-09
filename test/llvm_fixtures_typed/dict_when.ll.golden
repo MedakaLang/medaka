@@ -172,13 +172,12 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call ptr @mdk_alloc(i64 16)
   store i64 281479271677952, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 1, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_when(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 3, i64 %t2)
+  %t3 = call i64 @mdk_when(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 3, i64 %t2)
   %t4 = alloca i64
   %t7 = and i64 %t3, 1
   %t8 = icmp eq i64 %t7, 1
@@ -320,4 +319,4 @@ decend1:
 }
 
 ; mdk-module program
-@mdk_dc_program_0 = internal constant [1 x i64] [i64 6952617947198]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 6952617947198]

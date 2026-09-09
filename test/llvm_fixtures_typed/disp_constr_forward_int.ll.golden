@@ -172,8 +172,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
-  %t0 = call i64 @mdk_allNe(i64 ptrtoint (ptr @mdk_dc_program_0 to i64), i64 3, i64 5, i64 7)
+  %t0 = call i64 @mdk_allNe(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 3, i64 5, i64 7)
   %t1 = ashr i64 %t0, 1
   %t2 = icmp ne i64 %t1, 0
   %t4 = alloca i64
@@ -225,4 +224,4 @@ entry:
 }
 
 ; mdk-module program
-@mdk_dc_program_0 = internal constant [1 x i64] [i64 193460240]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]

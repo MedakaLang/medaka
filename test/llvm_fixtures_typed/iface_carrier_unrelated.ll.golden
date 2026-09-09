@@ -172,8 +172,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
-  %t0 = call i64 @mdk_blend(i64 ptrtoint (ptr @mdk_dc_program_0 to i64))
+  %t0 = call i64 @mdk_blend(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
   %t1 = call ptr @mdk_alloc(i64 16)
   store i64 12884901888, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
@@ -348,7 +347,7 @@ decend1:
 }
 
 ; mdk-module program
-@mdk_dc_program_0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
+@mdk_dc.program.0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
 ; mdk-module program
 define i64 @mdk_disp_sides_0_1(i64 %dict, i64 %arg0) {
 entry:

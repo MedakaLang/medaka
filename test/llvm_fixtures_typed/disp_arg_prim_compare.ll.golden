@@ -172,7 +172,6 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call i64 @mdk_impl_Int_compare(i64 7, i64 11)
   %t1 = alloca i64
   %t4 = and i64 %t0, 1

@@ -172,7 +172,6 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-; mdk-module program
   %t0 = call i64 @mdk_impl_String_append(i64 ptrtoint (ptr @.strc.program.0 to i64), i64 ptrtoint (ptr @.strc.program.1 to i64))
   %t1 = inttoptr i64 %t0 to ptr
   %t2 = getelementptr i8, ptr %t1, i64 16
