@@ -37903,6 +37903,9 @@ importedStandaloneShadows graph prog
     let universe = flatMap snd graph ++ prog
     flatMap (importShadowsOfDecl graph rows nameable universe) prog
 
+-- The catch-all arms here are exhaustive by construction, not by omission: a shadow can
+-- only arise from an explicit member list, so every non-`DUse` declaration and every
+-- non-`UseGroup` use path contributes nothing by the scoping rule stated above.
 importShadowsOfDecl : List (String, List Decl) ->
   List (String, List String) ->
   OrdMap Unit ->

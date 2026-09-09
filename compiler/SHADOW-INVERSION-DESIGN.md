@@ -93,15 +93,18 @@ The compiler's own source already asserts this conclusion, in two places:
 * `compiler/types/typecheck.mdk:7273` — *"The existing definer shadows (map/hash_map `toList`/`isEmpty`, parser `orElse`) are each applied only to their own type, which has NO impl of the shadowed interface, so they still resolve RLocal."*
 * `compiler/backend/llvm_emit.mdk:3555` — *"our OWN 5 definer shadows (map/hash_map `toList`/`isEmpty`, parser `orElse`)…"*
 
-And the stdlib **depends** on the standalone winning today. `stdlib/map.mdk:454`:
+The stdlib used to **depend** on the standalone winning here, and now names the pair
+projection outright instead. `stdlib/map.mdk:647`:
 
-```medaka-nocheck: verbatim excerpt of stdlib/map.mdk:454; it names Map and toList from the module it was quoted out of
+```medaka-nocheck: verbatim excerpt of stdlib/map.mdk:647; it names Map and entries from the module it was quoted out of
 export impl Debug (Map k v) requires Debug k, Debug v where
-  debug m = "fromList \{debug (toList m)}"
+  debug m = "fromList \{debug (entries m)}"
 ```
 
-If `Foldable.toList` won here the element type would be `v`, not `(k, v)`, and the
-gated doctest `debug (fromList [(1, 10)])` would print the wrong thing. It doesn't.
+`entries` is a standalone that no interface declares, so nothing can shadow it, and
+the gated doctest `debug (fromList [(1, 10)])` prints the pairs. Were this still
+written `toList`, `Foldable.toList` would win at a `Map` receiver and the element type
+would be `v`, not `(k, v)`.
 
 `stdlib/hash_map.mdk:210-213` is the smoking gun in the other direction — the author
 **working around** today's S2:
