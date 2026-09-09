@@ -1,14 +1,19 @@
 {- | Assertions for a test that runs a program.
 
-   A test whose subject is a whole toolchain — a compiler verb, a script,
-   any binary — cannot compute its answer; it has to spawn the thing and
-   grade what came back. `expectSpawnOk` and `expectSpawnFails` grade a
-   spawn, and `medakaRoot`, `underRoot` and `medakaBin` say which files and
-   which binary a test addresses.
+   A test whose subject is a whole toolchain (a compiler verb, a script, any
+   binary) cannot compute its answer; it has to spawn the thing and grade
+   what came back. `expectSpawnOk`, `expectSpawnFails` and
+   `expectSpawnOkLine` grade a spawn, and `medakaRoot`, `underRoot` and
+   `medakaBin` say which files and which binary a test addresses.
 
    The two jobs are deliberately separate: a grader that also resolved the
    binary would have to name a verb, and callers need `check`, `run` and
    `test`.
+
+   A test that grades a whole directory of `medaka test` suites reads their
+   executed-assertion counts with `testAssertionCount`, and keeps its roster
+   closed over the directory with `testFileStem`, `unrosteredTestFiles` and
+   `missingTestFiles`.
 
    These assertions reach a subprocess extern, which `medaka test` does not
    bind under the interpreter, so a file using them runs under `medaka test
@@ -17,7 +22,9 @@
    Import what you need: `import test_process.{expectSpawnOk, medakaBin}`. -}
 
 import io.{getEnvOr, runVerb}
-import string.{contains, unwords}
+import json.{asInt, get, parse}
+import list.{somes}
+import string.{contains, endsWith, lines, stripSuffix, unwords}
 import test.{Expectation(..)}
 
 -- # Locating the tree
@@ -42,7 +49,7 @@ underRoot rel = "\{medakaRoot}/\{rel}"
    `medakaRoot`.
 
    The default is a path, never the bare name `medaka`, so an unset
-   `MEDAKA` cannot resolve to some other build on `PATH` — or to nothing at
+   `MEDAKA` cannot resolve to some other build on `PATH`, or to nothing at
    all, which still spawns and exits 127 with no output, an outcome any
    assertion phrased over the output would accept. -}
 export
@@ -109,3 +116,112 @@ expectSpawnFails cmd args needle =
           "`\{line}` exited \{intToString code} but its output does not contain \{debug needle}: \{debug text}"
           want
           got
+
+{- | Passes when running `cmd` with `args` exits 0 and one whole line of its
+   output equals `wantLine`.
+
+   The control-case peer of `expectSpawnFails`: exit 0 alone accepts a
+   program that ran and printed the wrong answer, and a substring accepts a
+   line that merely contains the expected one, so a longer or differently
+   prefixed line still passes. `wantLine` is matched against a whole line of
+   stdout and stderr concatenated, with a trailing carriage return removed.
+
+   > expectSpawnOkLine "echo" ["hi"] "hi"
+   Pass "exit 0, output with a line \"hi\"" "exit 0, output \"hi\\n\""
+   > expectSpawnOkLine "echo" ["said hi"] "hi"
+   Fail "`echo said hi` exited 0 but no output line equals \"hi\": \"said hi\\n\"" "exit 0, output with a line \"hi\"" "exit 0, output \"said hi\\n\"" -}
+export
+expectSpawnOkLine : String -> List String -> String -> <Exec "_"> Expectation
+expectSpawnOkLine cmd args wantLine =
+  let line = unwords (cmd :: args)
+  let want = "exit 0, output with a line \{debug wantLine}"
+  match runVerb cmd args
+    Err e => Fail "could not run `\{line}`: \{e}" want "no spawn"
+    Ok (code, out, err) =>
+      let text = out ++ err
+      let got = "exit \{intToString code}, output \{debug text}"
+      if code /= 0 then
+        Fail
+          "`\{line}` exited \{intToString code}, expected 0: \{debug text}"
+          want
+          got
+      else if elem wantLine (lines text) then
+        Pass want got
+      else
+        Fail
+          "`\{line}` exited 0 but no output line equals \{debug wantLine}: \{debug text}"
+          want
+          got
+
+-- # Grading a directory of suites
+
+{- | The stem of a `*_test.mdk` file name, or `None` when `name` is not one.
+
+   > testFileStem "expr_test.mdk"
+   Some "expr_test"
+   > testFileStem "expr.mdk"
+   None -}
+export
+testFileStem : String -> Option String
+testFileStem name =
+  if endsWith "_test.mdk" name then stripSuffix ".mdk" name else None
+
+{- | The executed-assertion count of `path`, from the `summary.passed` field
+   of `medaka test --json`, or `Err` naming what went wrong.
+
+   `extraArgs` are passed to `medaka test` before the path, so a suite that
+   needs the compiled engine is spawned with `["--native"]`. The count comes
+   from `--json` rather than the human transcript, so a change to the
+   transcript's shape cannot silently zero it. A suite that exits nonzero is
+   an `Err`, never a count, because a failed assertion is not a smaller
+   number of passing ones. -}
+export
+testAssertionCount : String -> List String -> <Exec "_", IO> Result String Int
+testAssertionCount path extraArgs =
+  let args = ["test"] ++ extraArgs ++ [path, "--json"]
+  let line = unwords (medakaBin :: args)
+  match runVerb medakaBin args
+    Err e => Err "could not run `\{line}`: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "`\{line}` exited \{intToString code} — an assertion failed, or the file did not run: \{debug (out ++ err)}"
+      else match parse out
+        Err e => Err "\{path}: --json output did not parse: \{e}"
+        Ok j => match get "summary" j
+          None => Err "\{path}: no \"summary\" in --json output"
+          Some summary => match get "passed" summary
+            None => Err "\{path}: no \"summary.passed\" in --json output"
+            Some p => match asInt p
+              None => Err "\{path}: \"summary.passed\" is not an integer"
+              Some n => Ok n
+
+{- | The `*_test.mdk` stems in `dir` that are absent from `known`.
+
+   `known` is the caller's roster plus whatever it deliberately exempts, so
+   an empty result means the roster is closed over the directory and a new
+   test file cannot be added without either joining the roster or taking an
+   exemption. -}
+export
+unrosteredTestFiles : String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+unrosteredTestFiles dir known = match listDir dir
+  Err e => Err "could not list \{dir}: \{e}"
+  Ok names =>
+    Ok (filter (n => not (elem n known)) (somes (map testFileStem names)))
+
+{- | The stems in `wanted` that name no `*_test.mdk` file in `dir`.
+
+   The other half of a closed roster: a roster or exemption row naming a file
+   that was renamed or deleted still reads as coverage, and only this
+   reports it. -}
+export
+missingTestFiles : String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+missingTestFiles dir wanted = match listDir dir
+  Err e => Err "could not list \{dir}: \{e}"
+  Ok names =>
+    let present = somes (map testFileStem names)
+    Ok (filter (n => not (elem n present)) wanted)

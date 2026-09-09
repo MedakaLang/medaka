@@ -12,7 +12,6 @@
    explicitly for the same reason. Add assertions here if the project ever
    grows behavior worth asserting on. -}
 
-import test.{Expectation}
 import test_process.{expectSpawnOk, medakaBin, underRoot}
 
 test "parsec/main.mdk passes `medaka check`" =
