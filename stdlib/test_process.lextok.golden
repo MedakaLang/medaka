@@ -1,0 +1,321 @@
+NEWLINE
+IMPORT
+IDENT "io"
+DOT_LBRACE
+IDENT "getEnvOr"
+COMMA
+IDENT "runVerb"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "string"
+DOT_LBRACE
+IDENT "contains"
+COMMA
+IDENT "unwords"
+RBRACE
+NEWLINE
+IMPORT
+TEST
+DOT_LBRACE
+UPPER "Expectation"
+LPAREN
+DOTDOT
+RPAREN
+RBRACE
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "medakaRoot"
+COLON
+LT
+UPPER "IO"
+GT
+UPPER "String"
+NEWLINE
+IDENT "medakaRoot"
+EQUAL
+IDENT "getEnvOr"
+STRING "MEDAKA_ROOT"
+STRING "."
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "underRoot"
+COLON
+UPPER "String"
+ARROW
+LT
+UPPER "IO"
+GT
+UPPER "String"
+NEWLINE
+IDENT "underRoot"
+IDENT "rel"
+EQUAL
+INTERP_OPEN ""
+IDENT "medakaRoot"
+INTERP_MID "/"
+IDENT "rel"
+INTERP_END ""
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "medakaBin"
+COLON
+LT
+UPPER "IO"
+GT
+UPPER "String"
+NEWLINE
+IDENT "medakaBin"
+EQUAL
+IDENT "getEnvOr"
+STRING "MEDAKA"
+INTERP_OPEN ""
+IDENT "medakaRoot"
+INTERP_END "/medaka"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectSpawnOk"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Expectation"
+NEWLINE
+IDENT "expectSpawnOk"
+IDENT "cmd"
+IDENT "args"
+EQUAL
+INDENT
+LET
+IDENT "line"
+EQUAL
+IDENT "unwords"
+LPAREN
+IDENT "cmd"
+CONS
+IDENT "args"
+RPAREN
+NEWLINE
+MATCH
+IDENT "runVerb"
+IDENT "cmd"
+IDENT "args"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "could not run `"
+IDENT "line"
+INTERP_MID "`: "
+IDENT "e"
+INTERP_END ""
+STRING "exit 0"
+STRING "no spawn"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+IDENT "out"
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+LET
+IDENT "a"
+EQUAL
+INTERP_OPEN "exit "
+IDENT "intToString"
+IDENT "code"
+INTERP_END ""
+NEWLINE
+IF
+IDENT "code"
+EQ_EQ
+INT 0
+THEN
+INDENT
+UPPER "Pass"
+STRING "exit 0"
+IDENT "a"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_MID "` exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ": "
+IDENT "debug"
+LPAREN
+IDENT "out"
+PLUSPLUS
+IDENT "err"
+RPAREN
+INTERP_END ""
+STRING "exit 0"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectSpawnFails"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Expectation"
+NEWLINE
+IDENT "expectSpawnFails"
+IDENT "cmd"
+IDENT "args"
+IDENT "needle"
+EQUAL
+INDENT
+LET
+IDENT "line"
+EQUAL
+IDENT "unwords"
+LPAREN
+IDENT "cmd"
+CONS
+IDENT "args"
+RPAREN
+NEWLINE
+LET
+IDENT "want"
+EQUAL
+INTERP_OPEN "nonzero exit, output containing "
+IDENT "debug"
+IDENT "needle"
+INTERP_END ""
+NEWLINE
+MATCH
+IDENT "runVerb"
+IDENT "cmd"
+IDENT "args"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "could not run `"
+IDENT "line"
+INTERP_MID "`: "
+IDENT "e"
+INTERP_END ""
+IDENT "want"
+STRING "no spawn"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+IDENT "out"
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+LET
+IDENT "text"
+EQUAL
+IDENT "out"
+PLUSPLUS
+IDENT "err"
+NEWLINE
+LET
+IDENT "got"
+EQUAL
+INTERP_OPEN "exit "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ", output "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+NEWLINE
+IF
+IDENT "code"
+EQ_EQ
+INT 0
+THEN
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_END "` exited 0, expected it to fail"
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "contains"
+IDENT "needle"
+IDENT "text"
+THEN
+INDENT
+UPPER "Pass"
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_MID "` exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID " but its output does not contain "
+IDENT "debug"
+IDENT "needle"
+INTERP_MID ": "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+NEWLINE
+EOF

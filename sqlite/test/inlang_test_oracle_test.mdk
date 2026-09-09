@@ -1,0 +1,177 @@
+{- | Floor gate for the in-language (`medaka test`) sqlite/ suite, migrated
+   from `sqlite/test/inlang_test_oracle.sh` under #2592.
+
+   Unlike the sibling `*_oracle.sh` gates (which diff the library against the
+   real sqlite3 CLI), this asserts that the pure-Medaka `test "…"` /
+   `prop "…"` suites under `sqlite/test/*_test.mdk` are DISCOVERED and PASS —
+   no sqlite3 and no emitter needed, since each suite runs under the
+   interpreter.
+
+   THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
+   indistinguishable from "this passed"): a `medaka test` file with zero
+   assertions exits 0 — vacuously green. So exit 0 alone is not enough. Every
+   suite's executed-assertion count (`summary.passed` from `medaka test
+   --json`) must meet a per-file floor committed below, the corpus's total
+   must be nonzero, and every `sqlite/test/*_test.mdk` file must either have
+   a roster row or a reasoned `exempt` row — a file with neither fails this
+   gate rather than going uncounted (the sqlite script never had this last
+   check; see the roster test below). -}
+
+import list.{lookup}
+import test.{Expectation(..)}
+import test_process.{
+  missingTestFiles,
+  testAssertionCount,
+  underRoot,
+  unrosteredTestFiles,
+}
+
+-- file:floor pairs — floor = the assertion count committed today. Adding
+-- tests only raises the real count (>= floor still passes); removing them,
+-- or a discovery regression, drops below the floor and fails. Raise a floor
+-- when you add tests; never regenerate all nine from a fresh run.
+suites : List (String, Int)
+suites = [
+  ("expr_test", 19),
+  ("query_test", 13),
+  ("roundtrip_test", 7),
+  ("arith_rowid_test", 9),
+  ("alias_test", 9),
+  ("index_decode_test", 2),
+  ("rowid_seek_test", 5),
+  ("index_seek_test", 15),
+  ("plan_test", 27),
+]
+
+rosterNames : List String
+rosterNames = map fst suites
+
+{- | The files under `sqlite/test/` that match `*_test.mdk` but are not
+   suites this gate grades, each paired with the reason it is not one.
+
+   A row is licensed only for a gate-test in its own right: a file with its
+   own `run =` entry in `test/gates.toml`, which CI therefore executes
+   directly rather than through this roster. Anything else under
+   `sqlite/test/` is a suite and belongs in `suites` — that is what keeps a
+   new test file from being added silently, since a file in neither list
+   fails the closure check below. Only this gate is exempt today; the list is
+   a list rather than a single name because a second gate-test landing beside
+   it must be a deliberate row, not a mechanism change. -}
+exempt : List (String, String)
+exempt = [
+  (
+    "inlang_test_oracle_test",
+    "this gate itself; `test/gates.toml` runs it as `sqlite/test/inlang_test_oracle`",
+  ),
+]
+
+exemptNames : List String
+exemptNames = map fst exempt
+
+-- Runs one suite under the default (eval) engine and returns its
+-- executed-assertion count, or an error naming the file and what went wrong.
+runSuite : String -> <Exec "_", IO> Result String Int
+runSuite name =
+  match testAssertionCount (underRoot "sqlite/test/\{name}.mdk") []
+    Err e => Err "sqlite/test/\{name}.mdk: \{e}"
+    Ok n => Ok n
+
+-- Every suite run exactly once, shared by every assertion below —
+-- top-level nullary bindings are memoized (a spawn placed in a shared
+-- top-level binding and read from two `test` decls was confirmed, by
+-- probe, to execute once, not twice).
+results : <Exec "_", IO> List (String, (Int, Result String Int))
+results = map ((name, floor) => (name, (floor, runSuite name))) suites
+
+-- Grades one suite's floor: the message names both the file and both
+-- numbers on a miss, per the migration's own acceptance check.
+floorExpectation : String -> <Exec "_", IO> Expectation
+floorExpectation name = match lookup name results
+  None => Fail "sqlite/test/\{name}.mdk has no `results` entry" "" ""
+  Some (floor, Err e) =>
+    Fail e "\{intToString floor} assertions" "spawn/parse error"
+  Some (floor, Ok ran) =>
+    if ran >= floor then
+      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
+    else
+      Fail
+        "sqlite/test/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+        "\{intToString floor} assertions"
+        "\{intToString ran} assertions"
+
+test "sqlite/test/expr_test.mdk executed >= 19 assertions" =
+  floorExpectation "expr_test"
+
+test "sqlite/test/query_test.mdk executed >= 13 assertions" =
+  floorExpectation "query_test"
+
+test "sqlite/test/roundtrip_test.mdk executed >= 7 assertions" =
+  floorExpectation "roundtrip_test"
+
+test "sqlite/test/arith_rowid_test.mdk executed >= 9 assertions" =
+  floorExpectation "arith_rowid_test"
+
+test "sqlite/test/alias_test.mdk executed >= 9 assertions" =
+  floorExpectation "alias_test"
+
+test "sqlite/test/index_decode_test.mdk executed >= 2 assertions" =
+  floorExpectation "index_decode_test"
+
+test "sqlite/test/rowid_seek_test.mdk executed >= 5 assertions" =
+  floorExpectation "rowid_seek_test"
+
+test "sqlite/test/index_seek_test.mdk executed >= 15 assertions" =
+  floorExpectation "index_seek_test"
+
+test "sqlite/test/plan_test.mdk executed >= 27 assertions" =
+  floorExpectation "plan_test"
+
+-- # Non-vacuity
+
+ranCountOf : (String, (Int, Result String Int)) -> Int
+ranCountOf (_, (_, Ok n)) = n
+ranCountOf (_, (_, Err _)) = 0
+
+totalRan : <Exec "_", IO> Int
+totalRan = sum (map ranCountOf results)
+
+test "sqlite in-language suite ran at least one assertion" =
+  if totalRan > 0 then
+    Pass "> 0 assertions" "\{intToString totalRan} assertions"
+  else
+    Fail
+      "no assertions ran at all across the sqlite in-language suite"
+      "> 0 assertions"
+      "0 assertions"
+
+-- # Roster closure — THE NEW PROPERTY (#2592): the retired script iterated
+-- its own SUITES roster only, so a new `sqlite/test/*_test.mdk` with no row
+-- went uncounted rather than failing the gate. This closes that gap: every
+-- `_test.mdk` file under `sqlite/test/` is accounted for by a row in
+-- `suites` above or a reasoned row in `exempt`.
+
+unrosteredFiles : <FileRead "_", IO> Result String (List String)
+unrosteredFiles =
+  unrosteredTestFiles (underRoot "sqlite/test") (rosterNames ++ exemptNames)
+
+test "every sqlite/test/*_test.mdk file has a `suites` or `exempt` row" =
+  match unrosteredFiles
+    Err e => Fail e "no unrostered files" "listDir failed"
+    Ok [] => Pass "no unrostered files" "no unrostered files"
+    Ok extras =>
+      Fail
+        "unaccounted sqlite/test/*_test.mdk file(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today, or an `exempt` row saying why it is not a suite"
+        "no unrostered files"
+        "\{debug extras}"
+
+phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions = missingTestFiles (underRoot "sqlite/test") exemptNames
+
+test "every `exempt` row names a file that exists" = match phantomExemptions
+  Err e => Fail e "no phantom exemptions" "listDir failed"
+  Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+  Ok extras =>
+    Fail
+      "`exempt` names sqlite/test file(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a file of that name"
+      "no phantom exemptions"
+      "\{debug extras}"

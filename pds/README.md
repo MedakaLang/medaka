@@ -92,7 +92,7 @@ manifest, and is not called `pds/main.mdk` for that reason.
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA="$MEDAKA_ROOT/medaka" \
-  sh pds/test/inlang_test_oracle.sh
+  ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
 Requires a built native `medaka` binary. No oracle build needed — `medaka
@@ -235,7 +235,7 @@ structurally — no in-family source publishes it.
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/encodings_vectors.sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
 ## secp256k1 field arithmetic (S-field, #1699)
@@ -280,7 +280,7 @@ cmp /tmp/x pds/test/vectors/field_reference_corpus.txt   # must be byte-identica
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/field_vectors.sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
 ## Oracle (S-oracle-standup, #1707)
@@ -626,7 +626,7 @@ or signing call graph.
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/scalar_vectors.sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
 ## secp256k1 points (S-point-core, #1700)
@@ -638,7 +638,7 @@ checks the infinity, equal, opposite, and ordinary-generator paths while also
 asserting that every infinity result uses the canonical coordinates.
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
 ## secp256k1 public keys (S-public-key, #1700 step 2)

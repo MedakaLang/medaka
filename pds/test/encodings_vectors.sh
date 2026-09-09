@@ -10,7 +10,7 @@
 #      print "TOTAL: PASS" having checked nothing).
 #
 # POSIX sh (dual-platform floor — this box's /bin/sh is dash: no
-# 'printf \xNN', no 'timeout'). Model: pds/test/inlang_test_oracle.sh.
+# 'printf \xNN', no 'timeout'). Model: pds/test/field_vectors.sh.
 #
 # Enrolled as a CI gate automatically by the landed 'sqlite' shard glob
 # 'pds/test/*' — this file lives DIRECTLY under pds/test/, so no ci.yml edit
