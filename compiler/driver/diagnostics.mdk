@@ -40,6 +40,7 @@ import frontend.resolve.{
   resolveModuleG,
   ModuleExports,
 }
+import list.{drop}
 import support.ordmap.{OrdMap, omEmpty, omInsert}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import frontend.marker.{
@@ -77,6 +78,8 @@ import driver.main_autoprint.{
 }
 import support.util.{
   joinNl,
+  listLen,
+  matchingStepPrefix,
   lookupAssoc,
   dropAssoc,
   startsWith,
@@ -1249,16 +1252,29 @@ projectDiagsLoaded : Bool ->
   List (String, String, List Decl) ->
   List (String, List Diag)
 projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
+  -- ONE `desugarModule` per module for the whole analyze: the resolve half and
+  -- the typecheck half read the same trees.
+  let modPairs = desugaredModPairs mods
   typecheckPass
     runtimeP
     coreP
     preludeKey
     chainKey
     mods
-    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+    modPairs
+    (resolvedBuckets
+      allowInternal
+      trustedMods
+      preludeKey
+      chainKey
+      runtimeP
+      coreP
+      mods
+      modPairs)
 
--- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` —
--- see `typecheckPassFull`.
+-- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
+-- see `typecheckPassFull`.  One `desugarModule` per module here too: the resolve
+-- half and the typecheck half read the same trees.
 projectDiagsLoadedFull : Bool ->
   List String ->
   List Decl ->
@@ -1268,13 +1284,23 @@ projectDiagsLoadedFull : Bool ->
   List (String, String, List Decl) ->
   (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
 projectDiagsLoadedFull allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
+  let modPairs = desugaredModPairs mods
   typecheckPassFull
     runtimeP
     coreP
     preludeKey
     chainKey
     mods
-    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+    modPairs
+    (resolvedBuckets
+      allowInternal
+      trustedMods
+      preludeKey
+      chainKey
+      runtimeP
+      coreP
+      mods
+      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1364,34 +1390,112 @@ foldStale ((path, d) :: rest) buckets =
 -- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
 -- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
 -- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
+-- ── resolve-prefix memo ─────────────────────────────────────────────────────
+-- `resolvePass` is a strict left fold with no backward dependency: module k's
+-- verdict is a function of the preludes, the modules BEFORE k, k's own trust and
+-- k's decls, so nothing after k can change it.  On an LSP keystroke only the
+-- entry's source changed, so the unchanged prefix's verdicts are replayed instead
+-- of recomputed, and only the modules from the first changed one onward resolve.
+--
+-- WHAT A STEP CARRIES: `ModuleExports` is ten fields of strings and string lists
+-- and `Diag` is a severity, two strings and three `Option`s -- no `Decl`, no
+-- `Ref`, no `Scheme`, no union-find cell.  So this memo is OUTSIDE the
+-- mint-after-restore law the module-chain memo lives under: it restores no
+-- `GraphRun` because resolve mints nothing to restore.
+--
+-- Uncapped and one step per module of the current graph, replaced wholesale when
+-- `rmKey` changes -- NOT a fixed-size MRU, whose hit rate collapses exactly when
+-- the graph outgrows the cap.
+data ResStep = ResStep {
+  rsKey : String,
+  rsExports : ModuleExports,
+  rsDiags : List Diag,
+}
+
+data ResMemo = ResMemo { rmKey : String, rmSteps : List ResStep }
+
+resolveChainMemoRef : Ref (Option ResMemo)
+resolveChainMemoRef = Ref None
+
+-- A module's step key is its `moduleStepKey` PLUS its resolved trust, because
+-- `resolvePass`'s verdict depends on `allowInternal`/`trustedMods` (#1362) and
+-- the chain key carries neither -- the typecheck chain does not depend on them.
+-- Without this a hit under one trust setting would launder an internal-extern
+-- rejection into the other's analyze.
+resStepKey : Bool -> List String -> (String, String, List Decl) -> Option String
+resStepKey allowInternal trustedMods (mid, path, prog) =
+  let trust = if allowInternal || contains mid trustedMods then "T" else "U"
+  map (k => joinNl [k, trust]) (moduleStepKey (mid, path, prog))
+
+rsKeyOf : ResStep -> String
+rsKeyOf st = st.rsKey
+
+-- Replay the hit prefix: rebuild `known` by folding its exports (cheaper than
+-- snapshotting the accumulator per step, and one fewer invariant), and push each
+-- step's diagnostics into its file's bucket in the order the fold would have.
+resumeResSteps : List ResStep ->
+  List (String, String, List Decl) ->
+  OrdMap ModuleExports ->
+  List (String, List Diag) ->
+  (OrdMap ModuleExports, List (String, List Diag))
+resumeResSteps [] _ known buckets = (known, buckets)
+resumeResSteps _ [] known buckets = (known, buckets)
+resumeResSteps (st :: sts) ((_, path, _) :: ms) known buckets =
+  resumeResSteps
+    sts
+    ms
+    (omInsert st.rsExports.modId st.rsExports known)
+    (pushDiags path st.rsDiags buckets)
+
+-- The fold itself.  `mods`' decls are already DESUGARED (the caller shares one
+-- `desugarModule` per module with the typecheck half).  Records a step after each
+-- module while keys are available; the LAST module of the graph is never
+-- recorded, and a `None` key ends recording for that module and every one after
+-- it, so the returned steps stay positionally aligned.
 resolvePass : Bool ->
   List String ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   OrdMap ModuleExports ->
+  List (Option String) ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
-  List (String, List Diag)
-resolvePass _ _ _ _ _ [] buckets = buckets
-resolvePass allowInternal trustedMods rt core known ((mid, path, prog) :: rest) buckets =
-  let desugared = desugar prog
+  (List (String, List Diag), List ResStep)
+resolvePass _ _ _ _ _ _ _ [] buckets = (buckets, [])
+resolvePass allowInternal trustedMods preludeKey rt core known keys ((mid, path, desugared) :: rest) buckets =
   let (exp, errs) =
     resolveModuleG
       (internalGuardFor (allowInternal || contains mid trustedMods))
+      preludeKey
       rt
       core
       known
       mid
       desugared
   let diags = map diagOfResError errs
-  resolvePass
-    allowInternal
-    trustedMods
-    rt
-    core
-    (omInsert exp.modId exp known)
-    rest
-    (pushDiags path diags buckets)
+  let (key, keys2) = match keys
+    k :: ks => (k, ks)
+    [] => (None, [])
+  let (buckets2, steps) =
+    resolvePass
+      allowInternal
+      trustedMods
+      preludeKey
+      rt
+      core
+      (omInsert exp.modId exp known)
+      keys2
+      rest
+      (pushDiags path diags buckets)
+  match rest
+    [] => (buckets2, [])
+    _ => match key
+      None => (buckets2, [])
+      Some k => (
+        buckets2,
+        ResStep { rsKey = k, rsExports = exp, rsDiags = diags } :: steps,
+      )
 
 -- ── typecheck pass (per module, ISOLATED) ───────────────────────────────────
 -- Run the shared multi-module typecheck (`checkModulesDiags`): core + runtime are
@@ -1408,28 +1512,29 @@ typecheckPass : List Decl ->
   Option (Int, Int) ->
   String ->
   List (String, String, List Decl) ->
+  List (String, List Decl) ->
   List (String, List Diag) ->
   List (String, List Diag)
-typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
-  let (_, results) =
-    typecheckPassFull runtimeP coreP preludeKey chainKey mods buckets
-  results
+typecheckPass runtimeP coreP preludeKey chainKey mods modPairs buckets =
+  snd
+    (typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets)
 
 -- `typecheckPass` also handing back the per-module `(schemes, errs, warns)` the
 -- driver produced, so a caller that needs the graph's ENTRY REPORT as well as its
 -- bucketed diagnostics (human `check`'s multi-module arm) reads them both out of
 -- ONE typecheck.  `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the
--- schemes are a projection beside the fold, never an input to it.
+-- schemes are a projection beside the fold, never an input to it.  `modPairs` is
+-- the caller's, so the graph is desugared once per analyze.
 export
 typecheckPassFull : List Decl ->
   List Decl ->
   Option (Int, Int) ->
   String ->
   List (String, String, List Decl) ->
+  List (String, List Decl) ->
   List (String, List Diag) ->
   (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
-typecheckPassFull runtimeP coreP preludeKey chainKey mods buckets =
-  let modPairs = map midToDesugaredPair mods
+typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets =
   -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
   -- resumed from its snapshot, so only the modules after it are re-checked.
   let full =
@@ -1489,19 +1594,66 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
 -- channel that has nothing to do with typing.
 resolvedBuckets : Bool ->
   List String ->
+  Option (Int, Int) ->
+  String ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
+  List (String, List Decl) ->
   List (String, List Diag)
-resolvedBuckets allowInternal trustedMods runtimeP coreP mods =
-  resolvePass
-    allowInternal
-    trustedMods
-    runtimeP
-    coreP
-    omEmpty
-    mods
-    (seedAll (map midPath mods) [])
+resolvedBuckets allowInternal trustedMods preludeKey chainKey runtimeP coreP mods modPairs =
+  let seeded = seedAll (map midPath mods) []
+  let dmods = desugaredTriples mods modPairs
+  match preludeKey
+    -- Unkeyed: neither hits nor stores, and hashes no key -- a one-shot verb
+    -- pays exactly what it paid before.
+    None =>
+      fst
+        (resolvePass
+          allowInternal
+          trustedMods
+          None
+          runtimeP
+          coreP
+          omEmpty
+          []
+          dmods
+          seeded)
+    Some (rk, ck) =>
+      let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+      let steps = match !resolveChainMemoRef
+        Some m => if m.rmKey == fullKey then m.rmSteps else []
+        None => []
+      let stepKeys = map (resStepKey allowInternal trustedMods) mods
+      let (kept, _) = matchingStepPrefix rsKeyOf steps stepKeys (listLen mods)
+      let n = listLen kept
+      let (known, buckets) = resumeResSteps kept mods omEmpty seeded
+      let (finalBuckets, newSteps) =
+        resolvePass
+          allowInternal
+          trustedMods
+          preludeKey
+          runtimeP
+          coreP
+          known
+          (drop n stepKeys)
+          (drop n dmods)
+          buckets
+      resolveChainMemoRef :=
+        Some ResMemo { rmKey = fullKey, rmSteps = kept ++ newSteps }
+      finalBuckets
+
+-- (modId, path, DESUGARED decls), pairing each module with the tree
+-- `desugarModule` already memoized for the typecheck half.  `resolvePass` used to
+-- run its own raw `desugar prog` over the whole graph and throw the trees away,
+-- so every analyze desugared it twice; resolve reads no route cell, so sharing
+-- the one tree is byte-identical.
+desugaredTriples : List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, String, List Decl)
+desugaredTriples ((mid, path, _) :: ms) ((_, decls) :: ps) =
+  (mid, path, decls) :: desugaredTriples ms ps
+desugaredTriples _ _ = []
 
 -- `analyzeProject` minus the load and minus the typecheck: resolve the graph the
 -- caller already loaded, then bucket the per-module typecheck diagnostics the
@@ -1524,13 +1676,22 @@ projectDiagsFromTc : Bool ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag)
 projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
+  let modPairs = desugaredModPairs mods
   typecheckDiagsFold
     runtimeP
     coreP
     mods
-    (desugaredModPairs mods)
+    modPairs
     tcByMid
-    (resolvedBuckets allowInternal trustedMods runtimeP coreP mods)
+    (resolvedBuckets
+      allowInternal
+      trustedMods
+      None
+      ""
+      runtimeP
+      coreP
+      mods
+      modPairs)
 
 -- The desugared `(modId, decls)` pairs `projectDiagsFromTc` will bucket against,
 -- for a caller that must hand the SAME trees to a graph driver.  Shares

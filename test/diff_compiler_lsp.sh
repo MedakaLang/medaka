@@ -288,5 +288,172 @@ sys.exit(0 if ok else 1)
 PY
 check "project didOpen → per-file publishDiagnostics (== check --json; bad import doesn't blank clean files)" "$?"
 
+
+# ── 6. multi-module project through repeated didChange (the WARM chain path) ──
+# Every other case above opens a buffer once, so nothing here reached the
+# per-analyze prefix memos (the resolve chain in driver/diagnostics.mdk and the
+# module chain in types/typecheck.mdk) on a HIT: a memo that replayed a stale
+# verdict would pass all five and only show up in an editor.
+#
+# One `medaka lsp` process is driven through a sequence of states of a 3-module
+# project — leaf keystrokes, a type error introduced into the leaf and cleared,
+# and an IMPORTED module rewritten ON DISK to introduce a resolve error only its
+# dependents can see and then to clear it — and after EACH state the published
+# per-file diagnostics must equal `medaka check --json` on the same state from a
+# COLD process.  Warm-equals-cold is the property; a hit that quietly replays the
+# previous state's verdict fails it in the direction that matters ([W-QUIETER]:
+# the stale verdict is usually the CLEAN one).
+#
+# Driven from python rather than through `drive_lsp` because the disk edits have
+# to land BETWEEN messages, which a single pre-framed stdin stream cannot do.
+P6="$TMP/p6"
+mkdir -p "$P6"
+printf '[package]\nname = "p6"\nversion = "0.1.0"\n' > "$P6/medaka.toml"
+python3 - "$MEDAKA" "$ROOT" "$P6" <<'PY'
+import json, os, subprocess, sys
+
+MEDAKA, ROOT, P6 = sys.argv[1], sys.argv[2], sys.argv[3]
+ENTRY = os.path.join(P6, "main6.mdk")
+
+BASE_OK = ("public export data Shape = Circle Int | Square Int\n\n"
+           "export\nareaish : Shape -> Int\n"
+           "areaish (Circle r) = r * r * 3\nareaish (Square s) = s * s\n\n"
+           "export\nbump : Int -> Int\nbump n = n + 1\n")
+# `bump` no longer exported: a resolve error only `mid` (its importer) can see.
+BASE_BAD = BASE_OK.replace("export\nbump", "bump")
+MID = ("import base.{Shape(..), areaish, bump}\n\n"
+       "export\ntotal : List Shape -> Int\n"
+       "total ss = fold (acc => s => acc + areaish s) 0 ss\n\n"
+       "export\ntagOf : Shape -> Int\ntagOf s = bump (areaish s)\n")
+ENTRY_OK = ("import mid.{total, tagOf}\nimport base.{Shape(..)}\n\n"
+            "shapes : List Shape\nshapes = [Circle 1, Square 2]\n\n"
+            "main = println (intToString (total shapes))\n")
+ENTRY_BAD = ENTRY_OK.replace("(total shapes)", '(total "not a list")')
+
+# (label, entry text, base text) — the leaf changes on every step, as an editor
+# would drive it; base changes only at steps 4 and 5.
+STATES = [
+    ("open",             ENTRY_OK,                 BASE_OK),
+    ("leaf-keystroke",   ENTRY_OK + "-- k1\n",     BASE_OK),
+    ("leaf-type-error",  ENTRY_BAD + "-- k2\n",    BASE_OK),
+    ("leaf-cleared",     ENTRY_OK + "-- k3\n",     BASE_OK),
+    ("import-broken",    ENTRY_OK + "-- k4\n",     BASE_BAD),
+    ("import-still-bad", ENTRY_OK + "-- k5\n",     BASE_BAD),
+    ("import-cleared",   ENTRY_OK + "-- k6\n",     BASE_OK),
+]
+
+open(os.path.join(P6, "mid.mdk"), "w").write(MID)
+
+
+def frame(o):
+    b = json.dumps(o, separators=(",", ":")).encode()
+    return b"Content-Length: %d\r\n\r\n" % len(b) + b
+
+
+class Sess:
+    def __init__(self):
+        env = dict(os.environ, MEDAKA_ROOT=ROOT)
+        self.p = subprocess.Popen([MEDAKA, "lsp"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  env=env)
+        self.buf = b""
+        self.send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                   "params": {"processId": None, "rootUri": "file://" + P6,
+                              "capabilities": {}}})
+        self.pump(1)
+        self.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+
+    def send(self, o):
+        self.p.stdin.write(frame(o))
+        self.p.stdin.flush()
+
+    def one(self):
+        while b"\r\n\r\n" not in self.buf:
+            c = self.p.stdout.read(1)
+            if not c:
+                return None
+            self.buf += c
+        head, rest = self.buf.split(b"\r\n\r\n", 1)
+        n = int([h for h in head.split(b"\r\n")
+                 if h.lower().startswith(b"content-length")][0].split(b":")[1])
+        while len(rest) < n:
+            c = self.p.stdout.read(n - len(rest))
+            if not c:
+                return None
+            rest += c
+        self.buf = rest[n:]
+        return json.loads(rest[:n].decode())
+
+    def pump(self, wait_id):
+        """Read until the reply to `wait_id`; collect publishes seen on the way."""
+        pubs = []
+        while True:
+            o = self.one()
+            if o is None:
+                return pubs
+            if o.get("method") == "textDocument/publishDiagnostics":
+                pubs.append(o["params"])
+            if o.get("id") == wait_id:
+                return pubs
+
+
+def norm(uri_diag_pairs):
+    out = {}
+    for uri, diags in uri_diag_pairs:
+        out[os.path.basename(uri)] = sorted(
+            (d.get("severity"), d["range"]["start"]["line"],
+             d["range"]["start"]["character"], d.get("message", ""))
+            for d in diags)
+    return out
+
+
+def cold(entry_text, base_text):
+    open(ENTRY, "w").write(entry_text)
+    open(os.path.join(P6, "base.mdk"), "w").write(base_text)
+    r = subprocess.run([MEDAKA, "check", "--json", ENTRY],
+                       capture_output=True, text=True,
+                       env=dict(os.environ, MEDAKA_ROOT=ROOT))
+    j = json.loads(r.stdout)
+    return norm((f["file"], f["diagnostics"]) for f in j.get("files", []))
+
+
+bad = []
+s = Sess()
+for i, (label, entry_text, base_text) in enumerate(STATES):
+    open(ENTRY, "w").write(entry_text)
+    open(os.path.join(P6, "base.mdk"), "w").write(base_text)
+    if i == 0:
+        s.send({"jsonrpc": "2.0", "method": "textDocument/didOpen",
+                "params": {"textDocument": {"uri": "file://" + ENTRY,
+                                            "languageId": "medaka", "version": 1,
+                                            "text": entry_text}}})
+    else:
+        s.send({"jsonrpc": "2.0", "method": "textDocument/didChange",
+                "params": {"textDocument": {"uri": "file://" + ENTRY,
+                                            "version": i + 1},
+                           "contentChanges": [{"text": entry_text}]}})
+    # A round-trip request after the notification: its reply cannot be written
+    # before the analyze the notification triggered has published.
+    s.send({"jsonrpc": "2.0", "id": 900 + i, "method": "textDocument/documentSymbol",
+            "params": {"textDocument": {"uri": "file://" + ENTRY}}})
+    warm = norm((p["uri"], p["diagnostics"]) for p in s.pump(900 + i))
+    want = cold(entry_text, base_text)
+    if warm != want:
+        bad.append("  %s: warm=%s cold=%s" % (label, warm, want))
+s.send({"jsonrpc": "2.0", "id": 999, "method": "shutdown", "params": {}})
+s.send({"jsonrpc": "2.0", "method": "exit", "params": {}})
+s.p.stdin.close()
+s.p.wait()
+
+# The states must not all be clean, or "warm == cold" is satisfied by publishing
+# nothing: assert the two error states actually produced diagnostics COLD.
+if not any(any(v for v in cold(e, b).values()) for (_l, e, b) in STATES[2:3] + STATES[4:5]):
+    bad.append("  the error states produced no diagnostics at all — fixture is inert")
+for line in bad:
+    sys.stderr.write(line + "\n")
+sys.exit(1 if bad else 0)
+PY
+check "multi-module project, 7 didChange states → warm publishes == cold check --json each time" "$?"
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

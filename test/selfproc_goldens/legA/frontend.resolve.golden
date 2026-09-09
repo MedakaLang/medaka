@@ -16,7 +16,7 @@ bindOneOrigin : Map String String -> String -> String -> List (String, String)
 bindTypeOrigin : Map String String -> (String, String) -> List (String, String)
 bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
-buildEnvMM : List Decl -> List Decl -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
+buildEnvMM : Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
 buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
@@ -230,6 +230,10 @@ patBindings : Pat -> List String
 patGroupDupErrors : Option Loc -> String -> List Pat -> List ResError
 patsBindings : List Pat -> List String
 ppResError : ResError -> String
+preludeScopeFor : Option (Int, Int) -> List Decl -> List Decl -> PreludeScope
+preludeScopeMemoRef : Ref (Option ((Int, Int), PreludeScope))
+preludeScopeOf : List Decl -> List Decl -> PreludeScope
+preludeScopeStore : (Int, Int) -> List Decl -> List Decl -> PreludeScope
 preludeValueNames : List Decl -> List String
 primitiveConstructors : List String
 primitiveTypes : List String
@@ -274,11 +278,11 @@ resErrorDidYouMean : ResError -> Option (String, String)
 resErrorLoc : ResError -> Option Loc
 resErrorSexp : ResError -> String
 resolveModule : List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
-resolveModuleG : List String -> List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
+resolveModuleG : List String -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModulesErrors : List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
-resolveModulesErrorsG : Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsPairsG : Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsG : Bool -> List String -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
+resolveModulesErrorsPairsG : Bool -> List String -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLinesG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError

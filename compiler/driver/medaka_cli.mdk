@@ -102,7 +102,7 @@ import frontend.parser.{
   parseErrorMessage,
   Positions,
 }
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor}
 import driver.loader.{
@@ -1112,7 +1112,14 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
   -- the entry file.
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
+      (resolveModulesErrorsByFile
+        pathMap
+        allowInternal
+        trusted
+        (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+        rtD
+        coreD
+        modsD)
   match resDiags
     "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
       -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
@@ -2532,7 +2539,14 @@ typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target mo
   -- stamped EVERY imported module's error with the entry file's path.
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
+      (resolveModulesErrorsByFile
+        pathMap
+        allowInternal
+        trusted
+        (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+        rtD
+        coreD
+        modsD)
   match resDiags
     "" =>
       -- ONE typecheck of the graph (ARCH §E): the elaboration `build` needs anyway
@@ -2973,6 +2987,7 @@ runRunCmd argv =
                 pathMap
                 allowInternal
                 trusted
+                (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
                 rtD
                 coreD
                 modsD)
