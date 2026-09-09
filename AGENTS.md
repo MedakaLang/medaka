@@ -354,16 +354,20 @@ CODEGEN" in `test/build_native_medaka.sh`), each with `time sh test/build_native
     forced rebuilds evicts its own emitter entry and the next "fresh worktree" pays a full
     seed bootstrap instead (measured, same session: **68s**).
   - **warm forced full rebuild**, `FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the
-    emitter already present — **75s / 76s** on a cold `$MEDAKA_SCRATCH` ThinLTO cache, **38s**
-    once that cache holds this source (the round-robin split it replaced: 79s / 61s cold, and
-    it could never reach the warm figure — its cache keys carried the per-build `mktemp` path).
-    Box load moves these 30–40% run to run; compare arms interleaved, never across sessions.
+    emitter already present — **96s / 89s** on a cold `$MEDAKA_SCRATCH` ThinLTO cache, **43s**
+    once that cache holds this exact source. Interleaved against the 8-partition default it
+    replaced, same hour: 99s / 90s, which could not reach a warm figure at all before its
+    cache keys stopped carrying the per-build `mktemp` path. Box load moves all of these
+    30–40% run to run; compare arms interleaved, never across sessions.
   - **cold, cache forced off** (no `./medaka`/`./medaka_emitter` present, forcing the seed
     bootstrap) — **89s** with a warm ThinLTO cache. `test/bootstrap_from_seed.sh` still links
     the seed and `emitter2` with plain `clang -O2`, which is where that time goes.
-  ⚠️ The ThinLTO cache only serves source it has ALREADY built. An edit to any compiler
-  module invalidates every partition's entry, so an edit-rebuild loop pays the cold figure
-  every time — measure with a fresh `$MEDAKA_SCRATCH` unless you mean the unchanged-source case.
+  ⚠️ The ThinLTO cache only serves source it has ALREADY built, so an edit-rebuild loop pays
+  close to the cold figure every time — measure with a fresh `$MEDAKA_SCRATCH` unless you mean
+  the unchanged-source case. That is not the partitioning: stage B compiles `medaka_rt.c`
+  inside the LTO unit with `-DMEDAKA_SRC_FP`, which changes on any compiler edit and is in
+  every partition's cache key (measured both ways; see "PARALLEL CODEGEN" in
+  `test/build_native_medaka.sh`).
 So the worst case is a few minutes, not the stale "~31s" figure, which is off by an order of
 magnitude. Cold exceeds warm-forced by the seed bootstrap, the only ordering physically
 possible; a cold figure BELOW the warm-forced one means the cache or an existing emitter was

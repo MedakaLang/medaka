@@ -87,65 +87,99 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 #
 # Handing clang one ~17 MB (emitter) or ~35 MB (CLI) IR module gets one
 # single-threaded -O2 pipeline out of a 12-core box. When lld is discoverable,
-# pcg_link instead cuts that module into $MEDAKA_CODEGEN_PARTS partitions BY SOURCE
-# MODULE (pcg_partition, from the emitter's own `; mdk-module` markers), compiles
-# each to ThinLTO bitcode CONCURRENTLY (`clang -x ir -O2 -flto=thin -c`), and hands
-# the results to a single ThinLTO link whose backend is itself parallel
-# (`-flto=thin -fuse-ld=lld -Wl,--thinlto-jobs=N`). ThinLTO's per-module summaries
-# carry inlining ACROSS partition boundaries, which is the thing a partition-local
-# `opt`/`llc` scheme gives up. Set MEDAKA_PARALLEL_CODEGEN=0 to force the single
-# `clang -O2` link on both stages; that is also what runs, silently but positively
-# logged, wherever lld is absent (CI runner layouts vary — see pcg_discover, and
-# MEDAKA_LLVM_BINDIR there for pointing this at a toolchain it would not find).
+# pcg_link instead cuts that module into ONE PARTITION PER SOURCE MODULE
+# (pcg_partition, from the emitter's own `; mdk-module` markers), compiles each to
+# ThinLTO bitcode CONCURRENTLY (`clang -x ir -O2 -flto=thin -c`, $MEDAKA_CODEGEN_JOBS
+# at a time), and hands the results to a single ThinLTO link whose backend is itself
+# parallel (`-flto=thin -fuse-ld=lld -Wl,--thinlto-jobs=N`). ThinLTO's per-module
+# summaries carry inlining ACROSS partition boundaries, which is the thing a
+# partition-local `opt`/`llc` scheme gives up. Set MEDAKA_PARALLEL_CODEGEN=0 to force
+# the single `clang -O2` link on both stages; that is also what runs, silently but
+# positively logged, wherever lld is absent (CI runner layouts vary — see
+# pcg_discover, and MEDAKA_LLVM_BINDIR there for a toolchain it would not find).
 #
 # Partitioning by MODULE rather than by round-robin function (issue #2727) makes a
-# partition's bytes depend only on the modules in it: a one-line edit to
-# compiler/tools/lint.mdk leaves seven of the eight partitions BYTE-IDENTICAL
-# (measured: the eighth differs by 2 lines). Round-robin gave every partition a
-# share of every edit.
+# partition's bytes depend only on the modules in it, so a one-line edit to
+# compiler/tools/lint.mdk leaves every other partition BYTE-IDENTICAL and lld's
+# --thinlto-cache-dir serves them. Round-robin gave every partition a share of every
+# edit, and its module identifiers additionally carried the per-build `mktemp` path,
+# which put a fresh key on every entry (issue #2752, fixed by the `cd` in pcg_link).
 #
-# 🚨 That byte-identity does NOT buy a cheap relink after an edit, and nothing here
-# should be read as claiming it does. lld keys the ThinLTO cache on a module's
-# import closure as well as on the module, and eight partitions of ONE program
-# import from each other densely, so a change anywhere invalidates every entry.
-# Measured, partition objects held fixed and only the link timed: cold 24s; relink
-# of the SAME objects 0s (all 10 entries reused); relink after the two-line lint
-# edit 23s, writing 8 fresh entries and reusing none. The cache pays for repeated
-# builds of UNCHANGED source — a fresh worktree, a gate rerun, a `make` after a
-# docs-only change — not for the edit-rebuild loop. Making the loop cheap needs
-# partition-local codegen, which costs the cross-partition inlining measured in the
-# runtime row below; that trade is issue #2727 and is not settled here.
+# 🚨 GRANULARITY IS THE WHOLE MECHANISM, not a tuning parameter. lld keys the cache
+# on a module's import closure as well as on its own bytes, so a partition is
+# skippable only if it does not import the one that changed. Coalescing the CLI's
+# 411 scopes into 8 fat partitions makes every partition an importer of every other,
+# and the cache then serves NOTHING after an edit. Measured on the real CLI IR with
+# the partition objects held fixed and only the link timed:
+#            cold   relink, same objects   relink after a 2-line lint.mdk edit
+#   8 parts   24s   0s  (10/10 reused)     23s   (8 entries written, 1 reused)
+#   73 parts  32s   1s  (74/74 reused)     6s    (5 entries written, 68 reused)
+# The 5 written at module granularity are the edited partition plus its four real
+# importers — the cost the mechanism is supposed to have. That is why the partition
+# count is DERIVED from the module set and not set to a machine-sized number, and
+# why $MEDAKA_CODEGEN_JOBS is a separate knob: the two used to be one variable, and
+# tying the partition count to the core count is what made the cache useless.
+#
+# 🚨 A REAL EDIT-REBUILD STILL PAYS THE COLD PRICE, for a reason that has nothing to
+# do with partitioning: stage B compiles runtime/medaka_rt.c INSIDE the LTO unit with
+# -DMEDAKA_SRC_FP=$FP_COMPILER, and that fingerprint changes on ANY compiler source
+# edit. Every partition imports from the runtime, so the runtime's summary hash is in
+# every partition's cache key. Measured on the same partitions with the same edit,
+# varying only the define: same define — 4s, 5 entries written, 68 reused; different
+# define — 23s, 73 written, 0 reused. Taking the runtime OUT of the LTO unit fixes the
+# cache (3s, 5 written) and costs ~7.7% of interpreter runtime in 3 interleaved reps,
+# which is the trade the naive-split arm below already lost, so it is not taken here.
+# The fix is to give the provenance defines a translation unit of their own, outside
+# the LTO unit; that needs runtime source, not this script.
 #
 # Measured on this box (Debian 13, 12-core/32GB) on 2026-09-08, on the real emitted
 # CLI IR (34.6 MB):
-#   * FULL BUILD, identical source, fresh $MEDAKA_SCRATCH, two runs back to back:
-#     77s then 38s (stage A/B links 24s+29s, then 7s+8s), and the ThinLTO cache
-#     held at 19 entries across both. The round-robin split it replaces measured
-#     69s then 65s (links 14s+31s, then 14s+28s) and grew the cache by 16 on the
-#     second run, having reused nothing: its module identifiers carried the
-#     per-build mktemp path (issue #2752).
-#   * The 8s warm stage-B link is 3s of partitioning + 6s of partition compiles +
-#     1s of actual link. The partitioning and the compiles are redone every build;
-#     only the link is cached.
+#   * FULL-MISS BUILD is unmoved by granularity: stage-B link 43.5s at 8 partitions
+#     vs 42.5s at 73, 2 reps each interleaved on a fresh $MEDAKA_SCRATCH.
+#   * A warm stage-B link is mostly NOT the link: partitioning and the partition
+#     compiles are redone every build and only the ThinLTO backend is cached, so
+#     the floor for an unchanged rebuild is the partition + compile cost, not 0.
 #   * INTERPRETER RUNTIME — what every `medaka check`/`test`/`run`, i.e. every gate
 #     and oracle in the tree, pays on every invocation, far more often than the CLI
 #     is relinked: `check compiler/backend/llvm_emit.mdk`, 3 reps interleaved —
 #     plain 15.3s mean, ThinLTO 13.9s, naive split 16.3s. ThinLTO was not slower
-#     than plain in any single rep.
+#     than plain in any single rep. Granularity does not cost it either: 73
+#     partitions measured 14.82s against 15.68s at 8, faster in all three reps,
+#     because ThinLTO importing follows the combined summary index and not
+#     partition membership.
 # The CLI link previously stayed on the plain path because a naive-split CLI
 # measured ~5.5% slower at interpreter runtime. That regression is a property of
 # NAIVE SPLITTING, not of parallel codegen: it reproduces above as the 16.3s arm,
 # and ThinLTO — which keeps cross-partition inlining — does not pay it. So both
 # stages take this path now, and $PCG_MODE below describes both.
 MEDAKA_PARALLEL_CODEGEN="${MEDAKA_PARALLEL_CODEGEN:-1}"
-# 8, on a 12-core box. It is BOTH the partition count and --thinlto-jobs, so it
-# bounds two concurrency levels that never overlap in time (the partition compiles
-# finish before the link starts, and both links are serial points in this script).
-# Leaving ~4 cores idle keeps a concurrent build, or the emitter's own GC threads,
-# from contending. Raising it past the core count buys nothing; lowering it to 1
-# is NOT the same as MEDAKA_PARALLEL_CODEGEN=0 (it still splits the module, and
-# still runs the ThinLTO link, just with no parallelism at either level).
-MEDAKA_CODEGEN_PARTS="${MEDAKA_CODEGEN_PARTS:-8}"
+# HOW MANY partitions. Empty (the default) means DERIVED: one partition per module
+# scope in the IR, with each `impl:` group folded onto the module scope before it
+# and `program` alone at the end — 73 on the CLI IR, 42 on the emitter's. It is
+# derived rather than fixed because the useful number is a property of the source,
+# not of the box: what a partition is FOR is to be the unit the ThinLTO cache can
+# skip, and a partition holding several modules is skippable only when none of them
+# changed. Set it to an integer to coalesce to exactly that many instead, which is
+# what the override is for and what a bisect wants.
+#
+# 🚨 A SMALL value is not a cheaper version of this — it is a different mechanism.
+# Coalescing the CLI's 411 scopes into 8 partitions makes every partition an
+# importer of every other, so a two-line edit to one module wrote 8 fresh ThinLTO
+# cache entries and reused ONE, at 23s of link. The derived count reused 68 of 73,
+# at 6s. Full-miss link time and interpreter runtime were both unmoved by the
+# difference (measurements under "PARALLEL CODEGEN" above).
+MEDAKA_CODEGEN_PARTS="${MEDAKA_CODEGEN_PARTS:-}"
+
+# HOW MANY concurrent jobs, which is a property of the box and NOT of the source:
+# it bounds both the partition-compile fan-out and --thinlto-jobs, two concurrency
+# levels that never overlap in time (the compiles finish before the link starts,
+# and both links are serial points in this script). 8 on this 12-core box is the
+# value the ThinLTO path was measured at; leaving ~4 cores idle keeps a concurrent
+# build, or the emitter's own GC threads, from contending. It is NOT derived from
+# nproc: that would silently re-tune every measurement in this file to whatever
+# machine reran it. Setting it to 1 is not the same as MEDAKA_PARALLEL_CODEGEN=0 —
+# the module is still partitioned and still linked through ThinLTO, just serially.
+MEDAKA_CODEGEN_JOBS="${MEDAKA_CODEGEN_JOBS:-8}"
 
 # lld is the ONLY external tool this path needs, and it is where the parallel
 # ThinLTO backend and --thinlto-jobs come from, so every non-Darwin candidate
@@ -229,8 +263,14 @@ fi
 # binary one scheme cached would be served under the other's key and launder
 # exactly the before/after measurement this field exists to protect. A future
 # scheme gets its own word here, in the same commit that introduces it.
+#
+# The partition COUNT is derived per input, so it is not known here and the label
+# says `auto` rather than a number; the per-stage log lines carry the real count.
+# The job count is deliberately absent: it changes how long the link takes, never
+# what it produces, so folding it in would split the cache for no gain.
+PCG_PARTS_USED=""
 if [ -n "$PCG_BIN" ]; then
-  PCG_MODE="thinlto-mod-$MEDAKA_CODEGEN_PARTS"
+  PCG_MODE="thinlto-mod-${MEDAKA_CODEGEN_PARTS:-auto}"
 else
   PCG_MODE="plain"
 fi
@@ -634,8 +674,8 @@ esac
 # them across links. Its keys are computed over each module's IDENTIFIER, which is
 # the path clang was handed — so this cache only ever hits because pcg_link runs
 # the partition compiles from inside the partition directory under RELATIVE names
-# (issue #2752), and even then only for source it has already built — see the
-# ThinLTO-cache paragraph under "PARALLEL CODEGEN" for what an edit costs.
+# (issue #2752). What an EDIT then costs depends on how many partitions import the
+# changed one — see the granularity paragraph under "PARALLEL CODEGEN".
 # It lives under $MEDAKA_SCRATCH for the same reason the build cache does:
 # /tmp on the dev box is a RAM-backed tmpfs, and a cache that evaporates under
 # memory pressure is not a cache. `mkdir -p` failure is ignored — an unwritable
@@ -654,7 +694,7 @@ if [ -n "$PCG_BIN" ]; then
   mkdir -p "$PCG_CACHE_DIR" 2>/dev/null || true
   case "$(uname -s)" in
     Darwin) PCG_LTO_LDFLAGS="-Wl,-cache_path_lto,$PCG_CACHE_DIR" ;;
-    *) PCG_LTO_LDFLAGS="-fuse-ld=$PCG_BIN/ld.lld -Wl,--thinlto-jobs=$MEDAKA_CODEGEN_PARTS -Wl,--thinlto-cache-dir=$PCG_CACHE_DIR" ;;
+    *) PCG_LTO_LDFLAGS="-fuse-ld=$PCG_BIN/ld.lld -Wl,--thinlto-jobs=$MEDAKA_CODEGEN_JOBS -Wl,--thinlto-cache-dir=$PCG_CACHE_DIR" ;;
   esac
 fi
 
@@ -663,7 +703,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 # ---- pcg_partition: cut the emitted IR by SOURCE MODULE ------------------------
 #
-#   pcg_partition <in.ll> <outdir> <n>     -> writes <outdir>/p0 .. p<n-1>
+#   pcg_partition <in.ll> <outdir> <n>     -> writes <outdir>/p0 .. p<k-1>,
+#                                             prints k
+#
+# <n> empty means DERIVE k: one partition per module scope, each `impl:` group
+# folded onto the module scope that precedes it, `program` alone at the end. <n>
+# nonzero coalesces to exactly n instead (see MEDAKA_CODEGEN_PARTS).
 #
 # The emitter precedes every top-level entity with a `; mdk-module <scope>` comment,
 # where <scope> is a module id (`frontend_lexer`), an impl-group key (`impl:List_eq`)
@@ -673,10 +718,10 @@ trap 'rm -rf "$WORK"' EXIT
 # global initializer, so only a marker seen at top level moves the current scope —
 # hence the `define`/`}` state machine.
 #
-# Scopes are coalesced IN ORDER into n-1 partitions of roughly equal line count, and
-# `program` gets the last partition to itself. That is the whole point of the slice:
-# a partition's bytes then depend only on the modules IN it, so editing one module
-# leaves the other partitions byte-identical and the ThinLTO cache serves them. It
+# A partition's bytes then depend only on the modules IN it, so editing one module
+# leaves the other partitions byte-identical and the ThinLTO cache can serve them —
+# but only if the changed partition is not an importer of most of the rest, which is
+# why the default is one module per partition rather than a handful of big ones. It
 # also isolates @mdk_program_main, which carries an initializer for every module and
 # therefore changes on almost any edit.
 #
@@ -718,25 +763,42 @@ pcg_partition() {
   function die(msg) { print "pcg: " msg > "/dev/stderr"; bad = 1; exit 1 }
   function note(s) { if (!(s in sz)) { sz[s] = 0; ord[++nord] = s } }
   function assign(   i, s, tot, mp, tgt, cum, p, cnt) {
-    tot = 0
-    for (i = 1; i <= nord; i++) if (ord[i] != "program") tot += sz[ord[i]]
-    mp = PARTS - 1; if (mp < 1) mp = 1
-    tgt = tot / mp
-    cum = 0; p = 0
-    for (i = 1; i <= nord; i++) {
-      s = ord[i]
-      if (s == "program") { part[s] = PARTS - 1; continue }
-      # Close a partition BEFORE the scope that would overshoot it, never after:
-      # types_typecheck alone is a fifth of the module, and appending it to a
-      # nearly-full partition is how one job ends up doing a third of the work.
-      if (p < mp - 1 && cnt[p] > 0 && cum + sz[s] > tgt * (p + 1)) p++
-      part[s] = p; cnt[p]++
-      cum += sz[s]
+    if (PARTS == "") {
+      # Derived: a partition per module scope. An `impl:` group joins the module
+      # before it — impl groups are numerous (337 of the CLI IR s 411 scopes) and
+      # tiny, and the module they follow is the one whose edit moves them.
+      p = -1
+      for (i = 1; i <= nord; i++) {
+        s = ord[i]
+        if (s == "program" || s == "") continue
+        if (substr(s, 1, 5) == "impl:") { if (p < 0) p = 0; part[s] = p; continue }
+        part[s] = ++p
+      }
+      NPARTS = p + 2
+      part["program"] = p + 1
+    } else {
+      tot = 0
+      for (i = 1; i <= nord; i++) if (ord[i] != "program") tot += sz[ord[i]]
+      mp = PARTS - 1; if (mp < 1) mp = 1
+      tgt = tot / mp
+      cum = 0; p = 0
+      for (i = 1; i <= nord; i++) {
+        s = ord[i]
+        if (s == "program") { part[s] = PARTS - 1; continue }
+        # Close a partition BEFORE the scope that would overshoot it, never after:
+        # types_typecheck alone is a fifth of the module, and appending it to a
+        # nearly-full partition is how one job ends up doing a third of the work.
+        if (p < mp - 1 && cnt[p] > 0 && cum + sz[s] > tgt * (p + 1)) p++
+        part[s] = p; cnt[p]++
+        cum += sz[s]
+      }
+      NPARTS = PARTS
     }
-    for (i = 0; i < PARTS; i++) OF[i] = DIR "/p" i
+    part[""] = 0
+    for (i = 0; i < NPARTS; i++) OF[i] = DIR "/p" i
   }
   function emit(l,   i, s, sym) {
-    if (tp < 0) { for (i = 0; i < PARTS; i++) print l > OF[i]; return }
+    if (tp < 0) { for (i = 0; i < NPARTS; i++) print l > OF[i]; return }
     print l > OF[tp]
     if (index(l, "@")) {
       s = l
@@ -802,6 +864,7 @@ pcg_partition() {
       if (part[owner[sym]] == q) continue
       print decl[sym] > OF[q]
     }
+    print NPARTS
   }
   ' "$1" "$1"
 }
@@ -850,33 +913,46 @@ pcg_link() {
   rm -rf "$_pdir"
   mkdir -p "$_pdir" || { echo "pcg: cannot create $_pdir" >>"$_perr"; return 1; }
 
-  if ! pcg_partition "$_ll" "$_pdir" "$MEDAKA_CODEGEN_PARTS" 2>>"$_perr"; then
-    echo "pcg: module partitioning failed" >>"$_perr"; return 1
-  fi
+  # PCG_PARTS_USED is how many partitions this input actually yielded — a per-input
+  # number under the derived default, so the caller's log line reads it from here
+  # rather than from $MEDAKA_CODEGEN_PARTS, which is usually empty.
+  PCG_PARTS_USED="$(pcg_partition "$_ll" "$_pdir" "$MEDAKA_CODEGEN_PARTS" 2>>"$_perr")"
+  case "$PCG_PARTS_USED" in
+    ''|*[!0-9]*) echo "pcg: module partitioning failed" >>"$_perr"; return 1 ;;
+  esac
 
   (
     cd "$_pdir" || exit 1
 
-    # One background job per partition. Each gets its OWN status and error file:
-    # POSIX `wait` reports only the last job's exit status, so a mid-list failure is
-    # otherwise invisible, and concurrent appends to one shared error file interleave.
-    # A missing status file counts as a failure, not as success.
-    _i=0
-    while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
+    # $MEDAKA_CODEGEN_JOBS workers, each taking every JOBSth partition. A worker
+    # POOL and not one job per partition: there are as many partitions as modules
+    # now, and 73 concurrent -O2 clangs on a 12-core box is not a build, it is a
+    # thrash. Striding rather than waves of $JOBS means the one 200k-line partition
+    # never barriers the rest behind it.
+    # Each compile gets its OWN status and error file: POSIX `wait` reports only the
+    # last job's exit status, so a mid-list failure is otherwise invisible, and
+    # concurrent appends to one shared error file interleave. A missing status file
+    # counts as a failure, not as success.
+    _j=0
+    while [ "$_j" -lt "$MEDAKA_CODEGEN_JOBS" ]; do
       (
-        if "$CC" -x ir "$_popt" -flto=thin -c $GC_SECTION_CFLAGS \
-             "p$_i" -o "p$_i.o" 2>"p$_i.err"
-        then printf 'ok' > "p$_i.status"
-        else printf 'fail' > "p$_i.status"
-        fi
+        _k=$_j
+        while [ "$_k" -lt "$PCG_PARTS_USED" ]; do
+          if "$CC" -x ir "$_popt" -flto=thin -c $GC_SECTION_CFLAGS \
+               "p$_k" -o "p$_k.o" 2>"p$_k.err"
+          then printf 'ok' > "p$_k.status"
+          else printf 'fail' > "p$_k.status"
+          fi
+          _k=$(( _k + MEDAKA_CODEGEN_JOBS ))
+        done
       ) &
-      _i=$(( _i + 1 ))
+      _j=$(( _j + 1 ))
     done
     wait
 
     _objs=""
     _i=0
-    while [ "$_i" -lt "$MEDAKA_CODEGEN_PARTS" ]; do
+    while [ "$_i" -lt "$PCG_PARTS_USED" ]; do
       if [ "$(cat "p$_i.status" 2>/dev/null)" != "ok" ] || [ ! -s "p$_i.o" ]; then
         echo "pcg: partition $_i produced no ThinLTO object:" >>"$_perr"
         cat "p$_i.err" >>"$_perr" 2>/dev/null
@@ -994,7 +1070,7 @@ else
   # is answerable from any build log without re-running anything.
   LINK_A_T0="$(date +%s)"
   if [ -n "$PCG_BIN" ]; then
-    echo "stage A: $PCG_MODE codegen ($MEDAKA_CODEGEN_PARTS partitions, $PCG_BIN) -> $EMITTER ..."
+    echo "stage A: $PCG_MODE codegen ($MEDAKA_CODEGEN_JOBS jobs, $PCG_BIN) -> $EMITTER ..."
     if ! pcg_link "$EMIT_LL" "$EMIT_NEW" "${EMITTER_OPT:--O2}" "$WORK/emitA-cc.err"; then
       rm -f "$EMIT_NEW"
       echo "FAIL ($PCG_MODE codegen, fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
@@ -1010,7 +1086,7 @@ else
       echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
     fi
   fi
-  echo "stage A: link done ($PCG_MODE, $(( $(date +%s) - LINK_A_T0 ))s)."
+  echo "stage A: link done ($PCG_MODE${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_A_T0 ))s)."
   mv "$EMIT_NEW" "$EMITTER"
   echo "stage A: rebuilt $EMITTER from current source ($PCG_MODE, $(( $(date +%s) - STAGE_A_T0 ))s for emit + link)."
   cache_put "$EMITTER_KEY" "$EMITTER"
@@ -1092,7 +1168,7 @@ else
   # identically on both paths.
   LINK_B_T0="$(date +%s)"
   if [ -n "$PCG_BIN" ]; then
-    echo "stage B: $PCG_MODE codegen ($MEDAKA_CODEGEN_PARTS partitions, $PCG_BIN) -> $OUT ..."
+    echo "stage B: $PCG_MODE codegen ($MEDAKA_CODEGEN_JOBS jobs, $PCG_BIN) -> $OUT ..."
     if ! pcg_link "$CLI_LL" "$OUT_NEW" "$CLI_OPT" "$WORK/cc.err" \
          "-DMEDAKA_SRC_FP=$FP_COMPILER" "-DMEDAKA_SRC_COMMIT=\"$BUILD_COMMIT\"" \
          "-DMEDAKA_SRC_BUILD_DATE=\"$BUILD_DATE\""; then
@@ -1106,7 +1182,7 @@ else
       echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
     fi
   fi
-  echo "stage B: link done ($PCG_MODE, $(( $(date +%s) - LINK_B_T0 ))s)."
+  echo "stage B: link done ($PCG_MODE${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_B_T0 ))s)."
   mv "$OUT_NEW" "$OUT"
   echo "stage B: built $OUT ($PCG_MODE, $(( $(date +%s) - STAGE_B_T0 ))s for emit + link)."
   cache_put "$CLI_KEY" "$OUT"
