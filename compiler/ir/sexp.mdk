@@ -147,7 +147,7 @@ exprSexp (EVarId x _) = node "EVar" [escStr x]
 exprSexp (EVarAt _ _) =
   panic
     "unreachable: programToSexp serializes pre-annotate ASTs; EVarAt is introduced by annotateProgram"
-exprSexp (EMethodAt _ _ _ _) =
+exprSexp (EMethodAt _ _ _) =
   panic
     "unreachable: programToSexp serializes pre-annotate ASTs; EMethodAt is introduced by typecheck elaboration"
 exprSexp (EDictAt _ _) =

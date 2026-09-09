@@ -222,7 +222,7 @@ runs:
           # the build script degrades gracefully because a failed walk must not stop a
           # build, but a failed walk HERE means this assertion cannot be made, and
           # AGENTS.md's rule for a check that cannot run is to fail, not to skip.
-          closure="$(awk -v entry="$fp_entry" -v roots="$fp_roots" -f test/emitter_source_set.awk)" || {
+          closure="$(awk -v entry="$fp_entry" -v roots="$fp_roots" -f test/emitter_source_set.awk /dev/null)" || {
             echo "::error::test/emitter_source_set.awk could not walk $fp_entry."
             exit 1
           }

@@ -7,7 +7,7 @@ appNodeArg	Expr	2/41
 appSpineArgCount	Expr	4/41
 appSpineExpr	Expr	2/41
 appSpineHead	Expr	2/41
-appSpineName	Expr	7/41
+appSpineName	Expr	9/41
 appSpineNodes	Expr	2/41
 argDispatchOfDecl	Decl	2/15
 argDispatchOfDeclById	Decl	2/15
@@ -33,7 +33,7 @@ definerShadowArgHead	Expr	2/41
 definerShadowVarHead	Expr	3/41
 dictPassDecl	Decl	3/15
 doChainIsDeferred	Expr	3/41
-eagerRefs	Expr	34/41
+eagerRefs	Expr	36/41
 exprLoc	Expr	2/41
 ifaceMethodRowOf	Decl	2/15
 implBodyLoc	Expr	4/41
@@ -66,7 +66,7 @@ reexportedMethodIdentsOf	Decl	2/15
 reexportedMethodsOf	Decl	2/15
 registerData	Decl	1/15
 registerMethodIfaceParamsDecl	Decl	2/15
-renderCallArg	Expr	7/41
+renderCallArg	Expr	9/41
 returnPosOfDecl	Decl	1/15
 rewriteArgScoped	Expr	33/41
 rewriteBinopExpr	Expr	3/41

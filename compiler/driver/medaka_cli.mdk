@@ -2357,12 +2357,14 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 --
 -- Load the entry + transitive imports and run the SAME front-end `medaka check`
 -- runs, reporting whether any error fired AND rendering it exactly as `check`
--- does.  This must be the CHECK path, not the EMIT path (elaborateModules):
--- elaborateModules sets implInferEnabled and deliberately SKIPS checkImplObligations
--- (a check-only diagnostic the emit driver doesn't want), so an ill-typed program
--- like `"x" + 1` slips past hadTypeErrors and reaches the emitter, which fails
--- with a confusing downstream `emitter failed …`.  We instead mirror checkRoute:
--- surface the exact diagnostic `check` prints and abort BEFORE the emitter/clang.
+-- does.  This is the CHECK path, not the EMIT path (elaborateModules): the check
+-- drivers are what render every diagnostic LOCATED, exactly as `check` prints it,
+-- so an ill-typed program like `"x" + 1` is rejected here rather than by the
+-- emitter's own elaboration with a downstream `emitter failed …`.  (Since #2705
+-- both drivers solve and check the same obligations; the remaining difference is
+-- the rendering, and folding the two passes into one is the target's step E.)
+-- We mirror checkRoute: surface the exact diagnostic `check` prints and abort
+-- BEFORE the emitter/clang.
 -- Read/load failures become Err (surfaced as-is) so the caller mirrors
 -- runBuild/loadProgram's own diagnostics.
 typecheckGate : Bool -> String -> String -> <IO> Result String (List String)
@@ -2422,17 +2424,15 @@ typecheckGate allowInternal root input =
 -- `checkRoute`'s multi-module arm uses (analyzeProject), so `build`/`run` reject
 -- exactly the graphs `check` rejects, by construction (bug #40).
 --
--- WHY THE OLD PREDICATE WAS UNSOUND (and could not be patched in place).  It was
--- `resolve diagnostics + elaborateModules + hadTypeErrors`.  But `elaborateModules`
--- sets `implInferEnabled := True`, and typecheck.mdk gates `checkImplObligations`
--- (the pass that raises `No impl of Display for Foo`) behind `if not
--- implInferEnabled.value`.  So the emit/eval elaboration STRUCTURALLY CANNOT record
--- a constraint / missing-impl error: `hadTypeErrors` stayed False and multi-module
--- `run` EXECUTED the ill-typed program, dying later on an unrelated runtime panic
--- (`intToString: not an Int`).  A plain unification `Type mismatch` DID set the
--- sticky flag, which is exactly why the hole hid for so long — probing with a type
--- mismatch shows correct behaviour.  Single-file `run`/`build` were never affected:
--- their arm already gates on `analyzeLocatedG`, which runs with implInferEnabled OFF.
+-- WHY THE PREDICATE IS THE CHECK PATH'S.  A predicate of the shape `resolve
+-- diagnostics + elaborateModules + hadTypeErrors` is only as sound as the
+-- obligations the elaborate driver checks; until #2705 that driver skipped the
+-- impl-obligation channel entirely (the pass that raises `No impl of Display for
+-- Foo`), so `hadTypeErrors` stayed False and multi-module `run` EXECUTED the
+-- ill-typed program, dying later on an unrelated runtime panic.  A plain
+-- unification `Type mismatch` DID set the sticky flag — probing with a type
+-- mismatch shows correct behaviour.  Both drivers check both channels now; the
+-- check path is kept as the gate because it is the one that renders located.
 --
 -- WHY THIS DOES NOT OVER-REJECT.  The historical fear (recorded here as "the
 -- multi-module obligation check flags the compiler's own source with a spurious
@@ -2915,15 +2915,12 @@ runRunCmd argv =
           -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
           -- so `run` rejects exactly the graphs `check` rejects (bug #40).
           --
-          -- The old gate here was resolve + elaborateModules +
-          -- hadTypeErrors, which is BLIND to constraint / missing-impl
-          -- errors: elaborateModules sets implInferEnabled, and typecheck
-          -- skips checkImplObligations under it.  So multi-module `run`
-          -- EXECUTED an ill-typed program (`println "\{Foo 1}"` with no
-          -- Display impl) and died on an unrelated `intToString: not an Int`
-          -- panic, while `check` on the same program printed the real
-          -- located `No impl of Display for Foo`.  See typecheckGateRoute
-          -- for why this is not an over-rejection.
+          -- A gate of resolve + elaborateModules + hadTypeErrors is only
+          -- as sound as the obligations the elaborate driver checks (both
+          -- channels since #2705) and renders nothing located; `check`'s
+          -- predicate prints the real located `No impl of Display for Foo`
+          -- for `println "\{Foo 1}"` with no Display impl.  See
+          -- typecheckGateRoute for why this is not an over-rejection.
           -- #186/#1360: per-module attribution via the loader's
           -- `pathMap`, the same seam `checkRoute` uses (#41).
           let resDiags =

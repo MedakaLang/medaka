@@ -1203,7 +1203,7 @@ exprPrec (EHeadAnnot _ _) = precTop
 exprPrec (EGuards _) = precTop
 -- typed-pipeline-only nodes (never from the parser); give them atom precedence.
 exprPrec (EVarAt _ _) = precAtom
-exprPrec (EMethodAt _ _ _ _) = precAtom
+exprPrec (EMethodAt _ _ _) = precAtom
 exprPrec (EDictAt _ _) = precAtom
 -- ELoc is transparent: the wrapper takes its child's precedence.
 exprPrec (ELoc _ e) = exprPrec e
@@ -1436,7 +1436,7 @@ printExprRaw _ (ESlice e lo hi incl _) =
           (Cat (printExpr precTop hi) (text "]")))))
 -- typed-pipeline-only nodes: print the name / inner transparently.
 printExprRaw _ (EVarAt n _) = text n
-printExprRaw _ (EMethodAt n _ _ _) = text n
+printExprRaw _ (EMethodAt n _ _) = text n
 printExprRaw _ (EDictAt n _) = text n
 -- ELoc is transparent: print the wrapped expr, remembering the span.
 printExprRaw _ (ELoc l e) = printExprRaw (Some l) e
@@ -2980,7 +2980,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "exprPrec" ((PCon "EHeadAnnot" PWild PWild)) (EVar "precTop"))
 (DFunDef false "exprPrec" ((PCon "EGuards" PWild)) (EVar "precTop"))
 (DFunDef false "exprPrec" ((PCon "EVarAt" PWild PWild)) (EVar "precAtom"))
-(DFunDef false "exprPrec" ((PCon "EMethodAt" PWild PWild PWild PWild)) (EVar "precAtom"))
+(DFunDef false "exprPrec" ((PCon "EMethodAt" PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EDictAt" PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "exprPrec") (EVar "e")))
 (DTypeSig false "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
@@ -3057,7 +3057,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" (PWild (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[|")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "|]"))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]")))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
-(DFunDef false "printExprRaw" (PWild (PCon "EMethodAt" (PVar "n") PWild PWild PWild)) (EApp (EVar "text") (EVar "n")))
+(DFunDef false "printExprRaw" (PWild (PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "printExprRaw") (EApp (EVar "Some") (EVar "l"))) (EVar "e")))
 (DTypeSig false "fieldAssignPiece" (TyFun (TyCon "FieldAssign") (TyCon "Piece")))
@@ -3877,7 +3877,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "exprPrec" ((PCon "EHeadAnnot" PWild PWild)) (EVar "precTop"))
 (DFunDef false "exprPrec" ((PCon "EGuards" PWild)) (EVar "precTop"))
 (DFunDef false "exprPrec" ((PCon "EVarAt" PWild PWild)) (EVar "precAtom"))
-(DFunDef false "exprPrec" ((PCon "EMethodAt" PWild PWild PWild PWild)) (EVar "precAtom"))
+(DFunDef false "exprPrec" ((PCon "EMethodAt" PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EDictAt" PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "exprPrec") (EVar "e")))
 (DTypeSig false "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
@@ -3954,7 +3954,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" (PWild (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[|")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "|]"))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]")))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
-(DFunDef false "printExprRaw" (PWild (PCon "EMethodAt" (PVar "n") PWild PWild PWild)) (EApp (EVar "text") (EVar "n")))
+(DFunDef false "printExprRaw" (PWild (PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "printExprRaw") (EApp (EVar "Some") (EVar "l"))) (EVar "e")))
 (DTypeSig false "fieldAssignPiece" (TyFun (TyCon "FieldAssign") (TyCon "Piece")))

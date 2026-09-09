@@ -1,5 +1,5 @@
 # META
-source_lines=582
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -368,12 +368,16 @@ collectVars (ESection (SecLeft e0 _)) = collectVars e0
 -- fns EDictAt, and resolved vars EVarAt).  Missing one here would silently drop a
 -- still-reachable binding.
 collectVars (EVarAt x _) = [x]
--- P0-18: a definer-shadow EMethodAt carries the BARE dispatch name `x` AND, in its
--- resolved route, the MANGLED standalone symbol `<mid>__x` (RLocal fallback).  Emit
--- BOTH as references so DCE keeps the standalone define alive — else the `RLocal`
--- emit calls an eliminated `@mdk_<mid>__x` (undefined-symbol link error).  Reading
--- the route ref is pure (same as `lower`).  "" (un-mangled path) contributes nothing.
-collectVars (EMethodAt x routeRef _ _) = x :: routeExtraRefs !routeRef
+-- P0-18: a definer-shadow EMethodAt carries the BARE dispatch name `x` AND, as its
+-- pre-pass seed, the MANGLED standalone symbol `<mid>__x` (the `RLocal` fallback the
+-- solver may stamp).  Emit BOTH as references so DCE keeps the standalone define
+-- alive — else the `RLocal` emit calls an eliminated `@mdk_<mid>__x`
+-- (undefined-symbol link error).  The seed is read, not the solved route: this walk
+-- is pure and runs whether or not a solve has published, and the mark pass is the
+-- sole origin of that symbol (every RLocal stamp propagates it unchanged), so the
+-- seed names exactly the symbol a solved `RLocal` would.  "" (un-mangled path, or a
+-- site that is no shadow) contributes nothing.
+collectVars (EMethodAt x seed _) = x :: seedExtraRefs seed
 collectVars (EDictAt x _) = [x]
 -- Remaining reference-bearing forms (for soundness as a DCE reference walk; some
 -- are desugared away before the prelude reaches DCE, but the user program may
@@ -386,16 +390,15 @@ collectVars (ELoc _ e) = collectVars e
 collectVars (EDoOrigin _ e) = collectVars e
 collectVars _ = []
 
--- P0-18: the extra symbol a resolved EMethodAt route references beyond its bare
--- name — the mangled standalone symbol carried by an `RLocal <sym>` fallback.
+-- P0-18: the extra symbol an EMethodAt references beyond its bare name — the
+-- mangled standalone symbol its pre-pass seed carries.
 -- S-1: the RLocal dict routes need NO extra DCE root — they name dict PARAMS
 -- (locals) and impl HEADS, and DCE already keeps every DImpl/DInterface whole
 -- (pruning an impl would be a silent miscompile under runtime dict-passing), which
 -- is exactly why RKey's nested requires-routes need no root here either.
-routeExtraRefs : Route -> List String
-routeExtraRefs (RLocal "" _) = []
-routeExtraRefs (RLocal s _) = [s]
-routeExtraRefs _ = []
+seedExtraRefs : String -> List String
+seedExtraRefs "" = []
+seedExtraRefs s = [s]
 
 letBindVars : LetBind -> List String
 letBindVars (LetBind _ clauses) = flatMap funClauseVars clauses
@@ -732,7 +735,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e0")))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EVarAt" (PVar "x") PWild)) (EListLit (EVar "x")))
-(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "routeRef") PWild PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "routeExtraRefs") (EUnOp "!" (EVar "routeRef")))))
+(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "seedExtraRefs") (EVar "seed"))))
 (DFunDef false "collectVars" ((PCon "EDictAt" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "collectVars") (EVar "e0")))
@@ -741,10 +744,9 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "collectVars" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "collectVars" (PWild) (EListLit))
-(DTypeSig false "routeExtraRefs" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "routeExtraRefs" ((PCon "RLocal" (PLit (LString "")) PWild)) (EListLit))
-(DFunDef false "routeExtraRefs" ((PCon "RLocal" (PVar "s") PWild)) (EListLit (EVar "s")))
-(DFunDef false "routeExtraRefs" (PWild) (EListLit))
+(DTypeSig false "seedExtraRefs" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "seedExtraRefs" ((PLit (LString ""))) (EListLit))
+(DFunDef false "seedExtraRefs" ((PVar "s")) (EListLit (EVar "s")))
 (DTypeSig false "letBindVars" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "letBindVars" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMap") (EVar "funClauseVars")) (EVar "clauses")))
 (DTypeSig false "funClauseVars" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1001,7 +1003,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e0")))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EVarAt" (PVar "x") PWild)) (EListLit (EVar "x")))
-(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "routeRef") PWild PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "routeExtraRefs") (EUnOp "!" (EVar "routeRef")))))
+(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "seedExtraRefs") (EVar "seed"))))
 (DFunDef false "collectVars" ((PCon "EDictAt" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "collectVars") (EVar "e0")))
@@ -1010,10 +1012,9 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "collectVars" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "collectVars" (PWild) (EListLit))
-(DTypeSig false "routeExtraRefs" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "routeExtraRefs" ((PCon "RLocal" (PLit (LString "")) PWild)) (EListLit))
-(DFunDef false "routeExtraRefs" ((PCon "RLocal" (PVar "s") PWild)) (EListLit (EVar "s")))
-(DFunDef false "routeExtraRefs" (PWild) (EListLit))
+(DTypeSig false "seedExtraRefs" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "seedExtraRefs" ((PLit (LString ""))) (EListLit))
+(DFunDef false "seedExtraRefs" ((PVar "s")) (EListLit (EVar "s")))
 (DTypeSig false "letBindVars" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "letBindVars" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseVars")) (EVar "clauses")))
 (DTypeSig false "funClauseVars" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))

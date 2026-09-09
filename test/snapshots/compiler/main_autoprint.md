@@ -28,7 +28,7 @@ stages=DESUGAR,MARK
 -- UNDERIVED detection: a bare ADT main with no `Display` instance (`data H = H;
 -- main = H`) must surface the clean `No impl of Display for H; add 'deriving
 -- Display'` error, NOT a miscompile.  `underivedMainDiags` re-runs the CHECK gate
--- (`checkOneDiags`, implInferEnabled OFF → checkImplObligations ON) on the
+-- (`checkOneDiags`, the located-diagnostics driver) on the
 -- WRAPPED, UN-MANGLED program — exactly what source-level `medaka build` of an
 -- explicit `main = println H` already does.  (The design's critical caveat: NEVER
 -- call checkImplObligations on the MANGLED emit-elaborated program — it can't match
