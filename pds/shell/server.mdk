@@ -28,6 +28,7 @@ import lib.http.{
   HttpParseFailure,
   HttpScan,
   Request,
+  httpScanInHeaders,
   httpScanStart,
   makeHeader,
   parseRequestAt,
@@ -109,6 +110,44 @@ requestNonceBytes = 16
    the very socket work the ceiling exists to bound. -}
 maxConcurrentConnections : Int
 maxConcurrentConnections = 256
+
+{- | How many UN-FRAMED connections may be in flight at once (#2772) — a
+   connection whose current request's header section has not been terminated
+   yet, which is the state a caller can hold open while doing nothing and
+   costing nothing.
+
+   `maxConcurrentConnections` alone does not bound it: a caller that opens
+   every slot and never terminates a header holds all 256 for as long as the
+   read and request budgets allow, and every other caller is closed at accept
+   for the whole of that. So this ceiling is deliberately a small fraction of
+   that one. The un-framed state is not where a healthy connection spends any
+   measurable time — a client that has sent a request has sent its headers
+   with it — so a fraction bounds an attacker without bounding legitimate
+   concurrency.
+
+   The charge is global rather than per-caller because no peer identity
+   exists before headers: `accept` yields a `Connection` and the runtime has
+   no `getpeername`, and `X-Forwarded-For` needs a parsed request. -}
+maxUnframedConnections : Int
+maxUnframedConnections = 64
+
+{- | How long one request's header section may take to arrive in full (#2772).
+
+   Distinct from `requestTimeout` and far shorter: a header section is capped
+   at `maxHttpHeaderBytes` and is what a client sends first, so seconds are
+   generous for it, whereas a whole request may legitimately carry megabytes
+   of body and needs the longer budget. Bounding both with one number gave the
+   cheapest state a caller can hold — headers half sent — the budget of the
+   most expensive one.
+
+   It bounds the header phase twice over, because either alone leaves a hole:
+   as the deadline `frameLoop` tests, so that a caller trickling one byte at a
+   time is closed on total elapsed time; and as the per-read timeout
+   `readMore` uses while the headers are unterminated, so that a caller
+   sending nothing at all is closed on it rather than sitting out the whole of
+   `idleTimeout` before any deadline is looked at. -}
+headerTimeout : Duration
+headerTimeout = seconds 5
 
 {- | Bind the listening socket.
 
@@ -358,6 +397,44 @@ applyRateLimit limiterRef identity classes nowSeconds =
             (classMessage cls)
             (rateLimitHeaderList next identity cls nowSeconds)))
 
+{- | The two budgets one request is under at once: the header section's, and
+   the whole request's. They travel as a pair rather than as two `Wait`
+   arguments so that a call site cannot silently swap them — they have the
+   same type and opposite meanings. -}
+data Deadlines = Deadlines Wait Wait
+
+{- | One connection's place in the un-framed census: the process-wide count,
+   and whether THIS connection is still one of the connections it counts.
+
+   The flag is what makes retirement idempotent. The count is retired at the
+   first point the connection stops being un-framed and again on the exit
+   path every connection leaves by, and a census one connection could
+   decrement twice would drift below zero and stop bounding anything — an
+   outage this process inflicts on itself, which nothing observes as an
+   error. -}
+data UnframedSlot = UnframedSlot (Ref Int) (Ref Bool)
+
+-- | Retire this connection's un-framed charge, if it still holds one.
+releaseUnframed : UnframedSlot -> Unit
+releaseUnframed (UnframedSlot unframed held) =
+  if !held then
+    let () = held := False
+    unframed := !unframed - 1
+
+-- | Retire it as soon as the scan leaves the header section, whether or not a
+-- whole request has framed yet: the body that may follow is bounded by
+-- `requestTimeout` and by `maxHttpRequestBytes`, not by this census.
+releaseWhenHeadersDone : UnframedSlot -> HttpScan -> Unit
+releaseWhenHeadersDone slot scan =
+  if httpScanInHeaders scan then () else releaseUnframed slot
+
+-- | Retire everything one connection holds, on the one path every connection
+-- leaves by.
+retireConnection : Ref Int -> UnframedSlot -> Unit
+retireConnection active slot =
+  let () = releaseUnframed slot
+  active := !active - 1
+
 {- | Accept connections until the listener fails or is closed, running each on
    its own task, never more than `maxConcurrentConnections` at a time.
    `trustedProxy` is `--trusted-proxy`'s value, unchanged for the life of the
@@ -373,37 +450,56 @@ runServer : Server ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 runServer server dir storeRef lis trustedProxy = defer
   active <- liftIO (u => Ref 0)
+  unframed <- liftIO (u => Ref 0)
   limiterRef <- liftIO (u => Ref initRateLimitState)
-  acceptLoop server dir storeRef lis active limiterRef trustedProxy
+  acceptLoop server dir storeRef lis active unframed limiterRef trustedProxy
 
 acceptLoop : Server ->
   String ->
   Ref Store ->
   Listener ->
   Ref Int ->
+  Ref Int ->
   Ref RateLimitState ->
   TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-acceptLoop server dir storeRef lis active limiterRef trustedProxy = defer
-  accepted <- A.accept lis
-  acceptStep server dir storeRef lis active limiterRef trustedProxy accepted
+acceptLoop server dir storeRef lis active unframed limiterRef trustedProxy =
+  defer
+    accepted <- A.accept lis
+    acceptStep
+      server
+      dir
+      storeRef
+      lis
+      active
+      unframed
+      limiterRef
+      trustedProxy
+      accepted
 
 acceptStep : Server ->
   String ->
   Ref Store ->
   Listener ->
   Ref Int ->
+  Ref Int ->
   Ref RateLimitState ->
   TrustedProxy ->
   Result String Connection ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-acceptStep _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
-acceptStep server dir storeRef lis active limiterRef trustedProxy (Ok conn) =
-  if !active >= maxConcurrentConnections then defer
+acceptStep _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
+acceptStep server dir storeRef lis active unframed limiterRef trustedProxy (Ok conn) =
+  -- Both ceilings close the connection the same way, without a read:
+  -- answering it would need the very socket work either ceiling exists to
+  -- bound. A connection is charged to the un-framed census here, before it
+  -- has been read from, because that is the state it is accepted INTO.
+  if !active >= maxConcurrentConnections
+    || !unframed >= maxUnframedConnections then defer
     _ <- A.close conn
-    acceptLoop server dir storeRef lis active limiterRef trustedProxy
+    acceptLoop server dir storeRef lis active unframed limiterRef trustedProxy
   else
     let () = active := !active + 1
+    let () = unframed := !unframed + 1
     defer
       _ <- spawn
         (serveConnection
@@ -413,11 +509,15 @@ acceptStep server dir storeRef lis active limiterRef trustedProxy (Ok conn) =
           limiterRef
           trustedProxy
           conn
-          active)
-      acceptLoop server dir storeRef lis active limiterRef trustedProxy
+          active
+          unframed)
+      acceptLoop server dir storeRef lis active unframed limiterRef trustedProxy
 
--- The counter is decremented on every exit path because the close and the
--- decrement are the continuation of the loop, not something inside it.
+-- Both counters are decremented on every exit path because the close and the
+-- decrement are the continuation of the loop, not something inside it. The
+-- un-framed one is USUALLY retired earlier, the moment the header section
+-- ends; `releaseUnframed` is idempotent so that this path can retire it
+-- unconditionally without having to know whether that already happened.
 serveConnection : Server ->
   String ->
   Ref Store ->
@@ -425,30 +525,48 @@ serveConnection : Server ->
   TrustedProxy ->
   Connection ->
   Ref Int ->
+  Ref Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> Unit
-serveConnection server dir storeRef limiterRef trustedProxy conn active = defer
-  _ <- connectionLoop server dir storeRef limiterRef trustedProxy conn [||] True
-  _ <- A.close conn
-  liftIO (u => active := !active - 1)
+serveConnection server dir storeRef limiterRef trustedProxy conn active unframed =
+  defer
+    held <- liftIO (u => Ref True)
+    _ <- connectionLoop
+      server
+      dir
+      storeRef
+      limiterRef
+      trustedProxy
+      conn
+      (UnframedSlot unframed held)
+      [||]
+      True
+    _ <- A.close conn
+    liftIO (u => retireConnection active (UnframedSlot unframed held))
 
 {- | Serve requests over one connection until it closes, fails, or times out.
    `pending` is what a previous request left behind: a pipelined client sends
    the next request in the same packet as the last, so the loop scans what it
    already holds before it reads anything more. `firstRequest` is True only
    for the connection's own first framed request — it is what makes
-   `ConnectionsClass` a per-connection charge rather than a per-request one. -}
+   `ConnectionsClass` a per-connection charge rather than a per-request one.
+
+   Both budgets are armed here, once per request rather than once per
+   connection: a kept-alive connection's second request gets its own header
+   and request budgets, exactly as a fresh connection's first one does. -}
 connectionLoop : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
   TrustedProxy ->
   Connection ->
+  UnframedSlot ->
   Array Int ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-connectionLoop server dir storeRef limiterRef trustedProxy conn pending firstRequest =
+connectionLoop server dir storeRef limiterRef trustedProxy conn slot pending firstRequest =
   defer
     deadline <- deadlineAfter requestTimeout
+    headerDeadline <- deadlineAfter headerTimeout
     frameLoop
       server
       dir
@@ -456,7 +574,8 @@ connectionLoop server dir storeRef limiterRef trustedProxy conn pending firstReq
       limiterRef
       trustedProxy
       conn
-      deadline
+      slot
+      (Deadlines headerDeadline deadline)
       pending
       httpScanStart
       firstRequest
@@ -473,14 +592,16 @@ frameLoop : Server ->
   Ref RateLimitState ->
   TrustedProxy ->
   Connection ->
-  Wait ->
+  UnframedSlot ->
+  Deadlines ->
   Array Int ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-frameLoop server dir storeRef limiterRef trustedProxy conn deadline buf scan firstRequest =
+frameLoop server dir storeRef limiterRef trustedProxy conn slot deadlines buf scan firstRequest =
   match scanRequestBoundaryFrom buf 0 scan
     (HttpFramedAt boundary, _) =>
+      let () = releaseUnframed slot
       respond
         server
         dir
@@ -488,15 +609,54 @@ frameLoop server dir storeRef limiterRef trustedProxy conn deadline buf scan fir
         limiterRef
         trustedProxy
         conn
+        slot
         buf
         boundary
         firstRequest
     (HttpFrameFailed _, _) =>
+      let () = releaseUnframed slot
       rejectBuffer server dir storeRef limiterRef conn buf firstRequest
-    (HttpNeedMore, resumed) => defer
+    (HttpNeedMore, resumed) =>
+      -- A scan that has passed the header section is no longer un-framed in
+      -- the sense the census bounds, even though no request has framed yet:
+      -- what is still arriving is a body, under its own budgets.
+      let () = releaseWhenHeadersDone slot resumed
+      framePending
+        server
+        dir
+        storeRef
+        limiterRef
+        trustedProxy
+        conn
+        slot
+        deadlines
+        buf
+        resumed
+        firstRequest
+
+-- The header budget is tested only while the header section is unterminated,
+-- so a legitimate body that outlives it is not closed on it.
+framePending : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  TrustedProxy ->
+  Connection ->
+  UnframedSlot ->
+  Deadlines ->
+  Array Int ->
+  HttpScan ->
+  Bool ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+framePending server dir storeRef limiterRef trustedProxy conn slot deadlines buf scan firstRequest =
+  match deadlines
+    Deadlines headerDeadline deadline => defer
       late <- expired deadline
+      lateHeader <- expired headerDeadline
       if late then
         deferPure (Err "request deadline exceeded")
+      else if lateHeader && httpScanInHeaders scan then
+        deferPure (Err "header deadline exceeded")
       else
         readMore
           server
@@ -505,9 +665,10 @@ frameLoop server dir storeRef limiterRef trustedProxy conn deadline buf scan fir
           limiterRef
           trustedProxy
           conn
-          deadline
+          slot
+          deadlines
           buf
-          resumed
+          scan
           firstRequest
 
 readMore : Server ->
@@ -516,14 +677,15 @@ readMore : Server ->
   Ref RateLimitState ->
   TrustedProxy ->
   Connection ->
-  Wait ->
+  UnframedSlot ->
+  Deadlines ->
   Array Int ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-readMore server dir storeRef limiterRef trustedProxy conn deadline buf scan firstRequest =
+readMore server dir storeRef limiterRef trustedProxy conn slot deadlines buf scan firstRequest =
   defer
-    received <- A.recvWithin idleTimeout conn readChunkBytes
+    received <- A.recvWithin (silenceBudget scan) conn readChunkBytes
     match received
       Err message => deferPure (Err message)
       Ok bytes =>
@@ -537,10 +699,20 @@ readMore server dir storeRef limiterRef trustedProxy conn deadline buf scan firs
             limiterRef
             trustedProxy
             conn
-            deadline
+            slot
+            deadlines
             (buf ++ bytes)
             scan
             firstRequest
+
+-- | How long this read may find nothing. A peer that has not terminated its
+-- headers gets the header budget rather than the idle one: the deadline in
+-- `framePending` is only consulted between reads, so a peer that sends
+-- nothing at all would otherwise sit out the whole of `idleTimeout` before
+-- anything looked at its header budget.
+silenceBudget : HttpScan -> Duration
+silenceBudget scan =
+  if httpScanInHeaders scan then headerTimeout else idleTimeout
 
 -- A peer that closes between requests has finished; one that closes part way
 -- through a request has not.
@@ -559,11 +731,12 @@ respond : Server ->
   Ref RateLimitState ->
   TrustedProxy ->
   Connection ->
+  UnframedSlot ->
   Array Int ->
   Int ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-respond server dir storeRef limiterRef trustedProxy conn buf boundary firstRequest =
+respond server dir storeRef limiterRef trustedProxy conn slot buf boundary firstRequest =
   defer
     nowSeconds <- liftIO (u => floatToInt (now ()))
     respondAt
@@ -573,6 +746,7 @@ respond server dir storeRef limiterRef trustedProxy conn buf boundary firstReque
       limiterRef
       trustedProxy
       conn
+      slot
       buf
       boundary
       firstRequest
@@ -584,12 +758,13 @@ respondAt : Server ->
   Ref RateLimitState ->
   TrustedProxy ->
   Connection ->
+  UnframedSlot ->
   Array Int ->
   Int ->
   Bool ->
   Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-respondAt server dir storeRef limiterRef trustedProxy conn buf boundary firstRequest nowSeconds =
+respondAt server dir storeRef limiterRef trustedProxy conn slot buf boundary firstRequest nowSeconds =
   let parsed = parseRequestAt buf 0 boundary
   let keepAlive = match parsed
     Ok request => requestKeepAlive request
@@ -610,6 +785,7 @@ respondAt server dir storeRef limiterRef trustedProxy conn buf boundary firstReq
         limiterRef
         trustedProxy
         conn
+        slot
         rest
         keepAlive
         (serializeResponse refusal)
@@ -623,6 +799,7 @@ respondAt server dir storeRef limiterRef trustedProxy conn buf boundary firstReq
         limiterRef
         trustedProxy
         conn
+        slot
         rest
         keepAlive
         response
@@ -633,11 +810,12 @@ sendAndContinue : Server ->
   Ref RateLimitState ->
   TrustedProxy ->
   Connection ->
+  UnframedSlot ->
   Array Int ->
   Bool ->
   Array Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-sendAndContinue server dir storeRef limiterRef trustedProxy conn rest keepAlive responseBytes =
+sendAndContinue server dir storeRef limiterRef trustedProxy conn slot rest keepAlive responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
     match sent
@@ -651,6 +829,7 @@ sendAndContinue server dir storeRef limiterRef trustedProxy conn rest keepAlive 
             limiterRef
             trustedProxy
             conn
+            slot
             rest
             False
         else

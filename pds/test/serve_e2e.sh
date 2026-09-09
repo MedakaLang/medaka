@@ -260,8 +260,22 @@ client malformed "$PORT1" || fail 'case 6: malformed request'
 # 7. over-cap body -> rejected (413), not truncated or hung
 client overcap "$PORT1" || fail 'case 7: over-cap body'
 
-# 8. idle connection closed after ~30s (idleTimeout) — costs real wall time.
+# 8. a connection that says nothing at all is closed by the server rather
+#    than held. It is closed on the HEADER budget, not on idleTimeout: a peer
+#    that has sent no bytes has not terminated a header section, and that is
+#    the shorter of the two budgets it is under. Costs real wall time.
 client idle "$PORT1" || fail 'case 8: idle timeout'
+
+# 8b. #2772: 300 connections, one identity, headers never terminated and
+#    never a byte more — and an unrelated caller is still ANSWERED. The
+#    budget below is what makes this a test rather than a tautology: it sits
+#    above the header budget an un-framed connection now gets and well below
+#    the read and request budgets it used to get, so a server that charges
+#    the un-framed state to nobody cannot pass it. The un-framed sockets are
+#    held open for the whole of the attempt, and released only when the
+#    client exits.
+client unframed-flood "$PORT1" 300 15 \
+  || fail 'case 8b: an unrelated caller went unanswered under an un-framed flood'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
@@ -612,4 +626,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free'
