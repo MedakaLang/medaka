@@ -1,5 +1,5 @@
 # META
-source_lines=586
+source_lines=592
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -44,8 +44,14 @@ contains x (y :: ys) =
 -- explicitly). Kept hand-rolled, unchanged.
 export
 listLen : List a -> Int
-listLen [] = 0
-listLen (_ :: xs) = 1 + listLen xs
+listLen xs = listLenFrom 0 xs
+
+-- Accumulating half of `listLen`: the count is carried down rather than rebuilt on the
+-- way back up, so the walk runs in constant stack for the run-wide channels the
+-- typechecker measures.
+listLenFrom : Int -> List a -> Int
+listLenFrom n [] = n
+listLenFrom n (_ :: xs) = listLenFrom (n + 1) xs
 
 export
 reverseL : List a -> List a
@@ -598,8 +604,10 @@ rootsOrDefault _ roots = roots
 (DFunDef false "contains" (PWild (PList)) (EVar "False"))
 (DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
 (DTypeSig true "listLen" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))
-(DFunDef false "listLen" ((PList)) (ELit (LInt 0)))
-(DFunDef false "listLen" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLen") (EVar "xs"))))
+(DFunDef false "listLen" ((PVar "xs")) (EApp (EApp (EVar "listLenFrom") (ELit (LInt 0))) (EVar "xs")))
+(DTypeSig false "listLenFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
+(DFunDef false "listLenFrom" ((PVar "n") (PList)) (EVar "n"))
+(DFunDef false "listLenFrom" ((PVar "n") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "listLenFrom") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "reverseL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "reverseL" ((PVar "xs")) (EApp (EVar "reverse") (EVar "xs")))
 (DTypeSig true "anyList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
@@ -764,8 +772,10 @@ rootsOrDefault _ roots = roots
 (DFunDef false "contains" (PWild (PList)) (EVar "False"))
 (DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
 (DTypeSig true "listLen" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))
-(DFunDef false "listLen" ((PList)) (ELit (LInt 0)))
-(DFunDef false "listLen" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLen") (EVar "xs"))))
+(DFunDef false "listLen" ((PVar "xs")) (EApp (EApp (EVar "listLenFrom") (ELit (LInt 0))) (EVar "xs")))
+(DTypeSig false "listLenFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
+(DFunDef false "listLenFrom" ((PVar "n") (PList)) (EVar "n"))
+(DFunDef false "listLenFrom" ((PVar "n") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "listLenFrom") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "reverseL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "reverseL" ((PVar "xs")) (EApp (EVar "reverse") (EVar "xs")))
 (DTypeSig true "anyList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))

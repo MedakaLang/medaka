@@ -40,8 +40,14 @@ contains x (y :: ys) =
 -- explicitly). Kept hand-rolled, unchanged.
 export
 listLen : List a -> Int
-listLen [] = 0
-listLen (_ :: xs) = 1 + listLen xs
+listLen xs = listLenFrom 0 xs
+
+-- Accumulating half of `listLen`: the count is carried down rather than rebuilt on the
+-- way back up, so the walk runs in constant stack for the run-wide channels the
+-- typechecker measures.
+listLenFrom : Int -> List a -> Int
+listLenFrom n [] = n
+listLenFrom n (_ :: xs) = listLenFrom (n + 1) xs
 
 export
 reverseL : List a -> List a

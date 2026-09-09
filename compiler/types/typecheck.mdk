@@ -2981,7 +2981,8 @@ pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _ ev)) = pushGoal
 -- the goals recorded since `mark` (a length of the channel: a module's start mark
 -- from `GraphMarks`, or a `let`/SCC bracket's own), newest first
 goalsSince : Int -> List Obligation
-goalsSince mark = moduleWindow graphRun.value.goals mark
+goalsSince mark =
+  moduleWindow graphRun.value.goalsN.value mark graphRun.value.goals.value
 
 goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
 goalsOfKindIn k gs = filterList (o => goalKindTag o.oKind == goalKindTag k) gs
@@ -9138,6 +9139,9 @@ data GraphRun = GraphRun {
   -- Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is
   -- deliberately NOT ported onto `UObligation` like `implObls` was.
   numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
+  -- the numlit channel's length, maintained by `pushNumlit` beside every write, so a
+  -- mark is O(1) — the goals channel's `goalsN`, for the one other windowed channel
+  numlitN : Ref Int,
   activeDictVars : Ref (List (Int, String)),
   -- #2547 unit 3: the given environment, keyed by MODULE.  Graph lifetime, but NOT
   -- graph-global visibility: every read goes through `givensHere`, which selects the
@@ -9172,6 +9176,7 @@ freshGraphRun _ = GraphRun {
   effvarCounter = Ref 0,
   goals = Ref [],
   numlitRefs = Ref [],
+  numlitN = Ref 0,
   activeDictVars = Ref [],
   gGiven = Ref omEmpty,
   moduleRanges = Ref [],
@@ -9225,6 +9230,7 @@ copyGraphRun g = GraphRun {
   effvarCounter = Ref g.effvarCounter.value,
   goals = Ref g.goals.value,
   numlitRefs = Ref g.numlitRefs.value,
+  numlitN = Ref g.numlitN.value,
   activeDictVars = Ref g.activeDictVars.value,
   gGiven = Ref g.gGiven.value,
   moduleRanges = Ref g.moduleRanges.value,
@@ -9284,7 +9290,7 @@ givenInScope GSImplRequires g = match g.geMatch
 graphMarksNow : Unit -> GraphMarks
 graphMarksNow _ = GraphMarks {
   mGoals = graphRun.value.goalsN.value,
-  mNumlit = listLen graphRun.value.numlitRefs.value,
+  mNumlit = graphRun.value.numlitN.value,
 }
 
 recordModuleStart : String -> Unit
@@ -9300,11 +9306,23 @@ currentModuleMarks _ = match graphRun.value.moduleRanges.value
   [] => GraphMarks { mGoals = 0, mNumlit = 0 }
 
 -- The entries a channel gained since `mark` — this module's own, in the order the
--- per-module list used to hold them.
-moduleWindow : Ref (List a) -> Int -> List a
-moduleWindow cell mark =
-  let now = cell.value
-  takeFirst (listLen now - mark) now
+-- per-module list used to hold them.  [now] is the channel's length, read off its own
+-- counter: measuring the RUN-WIDE list here instead made every windowed read cost the
+-- whole graph, which is the module-count superlinearity #2724 measures.
+moduleWindow : Int -> Int -> List a -> List a
+moduleWindow now mark xs = takeFirst (now - mark) xs
+
+-- the numeric-literal channel's window, the counterpart of `goalsSince`
+numlitSince : Int -> List (Mono, Ref (Option Float), Int, Ref Route)
+numlitSince mark =
+  moduleWindow graphRun.value.numlitN.value mark graphRun.value.numlitRefs.value
+
+-- The ONE numlit write, so the channel and its counter cannot drift apart.
+pushNumlit : (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+pushNumlit e =
+  let g = graphRun.value
+  g.numlitRefs := e :: g.numlitRefs.value
+  g.numlitN := g.numlitN.value + 1
 
 -- #158 PR3: the ~58 per-RUN accumulators/counters that `resetState` clears are bundled
 -- into ONE typed record so their reset lifecycle is a TYPE FACT, not a hand-maintained
@@ -14217,8 +14235,7 @@ inferNumLit env n fref dref
       let fromIntTy = inferNumLitMethod env s dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
-      graphRun.value.numlitRefs :=
-        (a, fref, n, dref) :: graphRun.value.numlitRefs.value
+      let _ = pushNumlit (a, fref, n, dref)
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
@@ -14278,8 +14295,7 @@ inferNumLitBare n fref =
       a
       PNumLit
       !currentLoc
-  graphRun.value.numlitRefs :=
-    (a, fref, n, Ref RNone) :: graphRun.value.numlitRefs.value
+  let _ = pushNumlit (a, fref, n, Ref RNone)
   let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
   a
 
@@ -19831,7 +19847,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
         driverState.value.currentModuleRef.value
         prog2
         flatGoals
-        (moduleWindow graphRun.value.numlitRefs mk.mNumlit))
+        (numlitSince mk.mNumlit))
       flatStampOrder
   -- #2549 M2: the Flat arm's own copy of what `runStampCtxs` does per module and
   -- `dictPassModulesIfEnabled` then installs.  One Flat module is the whole graph,
@@ -30436,8 +30452,7 @@ checkUndeterminedObligation univ iface occ loc
 -- Reads numlitRefs (populated by inferNumLit during THIS run/module's inference).
 setNumlitFloats : Unit -> Unit
 setNumlitFloats _ =
-  setNumlitFloatsGo
-    (moduleWindow graphRun.value.numlitRefs (currentModuleMarks ()).mNumlit)
+  setNumlitFloatsGo (numlitSince (currentModuleMarks ()).mNumlit)
 
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setNumlitFloatsGo [] = ()
@@ -42371,11 +42386,7 @@ enqueueStampCtx : String -> List Decl -> Unit
 enqueueStampCtx mid implDecls =
   let mk = currentModuleMarks ()
   let ctx =
-    stampCtxOf
-      mid
-      implDecls
-      (goalsSince mk.mGoals)
-      (moduleWindow graphRun.value.numlitRefs mk.mNumlit)
+    stampCtxOf mid implDecls (goalsSince mk.mGoals) (numlitSince mk.mNumlit)
   graphRun.value.stampCtxs := ctx :: graphRun.value.stampCtxs.value
 
 runStampSteps : StampCtx -> List StampStep -> Unit
