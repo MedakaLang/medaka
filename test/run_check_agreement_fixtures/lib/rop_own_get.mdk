@@ -1,0 +1,7 @@
+-- Support module for accept_own_module_impl_return_only_dispatch: it publishes the
+-- interface and the receiver type but NO impl, so the only `Get` impl in the graph is
+-- the one the ENTRY module defines.
+public export data Box a = Box a
+
+export interface Get c v where
+  get1 : c -> v

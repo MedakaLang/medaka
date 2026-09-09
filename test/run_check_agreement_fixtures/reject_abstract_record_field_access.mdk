@@ -1,0 +1,8 @@
+-- run/check agreement: a dot-access on an abstractly exported record inside its own
+-- module is T-ABSTRACT-FIELD.  Both Module-mode driver entries must seed the abstract
+-- set (`seedAbstractRecordTypes`); a driver that skips it executes what check rejects.
+export data T =
+  | A { x : Int }
+  | B { x : Int }
+
+main = println ((A { x = 41 }).x)

@@ -125,6 +125,10 @@ import driver.diagnostics.{
   analyzeLocated,
   analyzeLocatedG,
   analyzeFrom,
+  analyzeSurface,
+  analyzeFinish,
+  tcHalfOfPerModule,
+  SurfaceAnalysis(..),
   ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
@@ -2872,43 +2876,72 @@ runRunCmd argv =
           -- render byte-identical caret diagnostics via ppDiagCliSrc,
           -- instead of the opaque "type error in <file>" message (P1-8).
           let tsrc = readFileSafe target
-          -- S-3/#164 (F-converge): `analyzeFrom` with the loader's decls,
-          -- skipping `analyzeLocatedG`'s redundant `parseLocated tsrc`.
+          -- ONE typecheck of the program (ARCH §E), the single-file twin of the
+          -- multi-module arm below: `analyzeSurface` runs the AST-level half of
+          -- `analyzeFrom` (derives, guard exhaustiveness, prelude-standalone
+          -- shadows, resolve) over the loader's own raw, real-span decls, and
+          -- the typecheck half comes from the elaboration `run` performs for
+          -- eval rather than from a second, check-only pass over the same
+          -- program.  `analyzeFinish` re-assembles them in `analyzeFrom`'s
+          -- result order, so `check` and `run` still render the same set.
           -- ⚠️ Predicate preserved EXACTLY: unlike `typecheckGateRoute`'s
           -- single-module arm, `run`'s never consulted the `trusted` set —
           -- only the bare `--allow-internal` flag.  That asymmetry is
           -- pre-existing; this parity slice does not change it.
-          let diags =
-            analyzeFrom
+          let surface =
+            analyzeSurface
               runMid
               rsrc
               csrc
               runDecls
               (internalGuardFor allowInternal)
-          let errs = filter isDiagError diags
-          match errs
-            [] =>
-              let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, _, _, _) = elaborateRun rtD coreD modsD
-              let perfTCheck = now ()
-              let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-              -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
-              -- the FULL warning set here (it filters `isDiagWarn`, not
-              -- `runBuildWarnCodes`; see its note).
-              -- `finishRunEval` carries this triple down BOTH channels
-              -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
-              -- so widening here widens both in lockstep.  The multi-module
-              -- arm below keeps `projWarns` on the coherence allowlist.
-              finishRunEval
-                target
-                jsonMode
-                (coreE, modsE)
-                mods
-                (allWarnTriples tsrc target diags)
-                (runEvalPerf perfOn target perfT0 perfTCheck)
-            _ =>
+          match surface.resolveClean
+            -- Resolve rejected: no typecheck may run on this program, so the
+            -- surface diagnostics are the whole report (as they were when the
+            -- entry driver gated its own typecheck on the same predicate).
+            False =>
               runAbort
-                (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+                (joinNl
+                  (map
+                    (ppDiagCliLines (srcLinesArr tsrc) target)
+                    (filter isDiagError (analyzeFinish surface []))))
+            True =>
+              let _ = resetTypeErrorsSticky ()
+              let (coreE, modsE, perMod, residual, _) =
+                elaborateRun rtD coreD modsD
+              -- Read the sticky flag before `analyzeFinish`: the auto-print
+              -- obligation re-check it runs typechecks a synthetic wrapped
+              -- program, whose errors would otherwise land in this read.
+              let residualHit = hadTypeErrors ()
+              let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
+              match filter isDiagError diags
+                [] => match residualHit
+                  -- Belt-and-braces, as on the multi-module arm: anything only
+                  -- the graph-end drain can see still aborts before eval.
+                  True => runAbort (residualOrGeneric pathMap target residual)
+                  False =>
+                    let perfTCheck = now ()
+                    let _ =
+                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                    -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
+                    -- the FULL warning set here (it filters `isDiagWarn`, not
+                    -- `runBuildWarnCodes`; see its note).
+                    -- `finishRunEval` carries this triple down BOTH channels
+                    -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
+                    -- so widening here widens both in lockstep.  The
+                    -- multi-module arm below keeps `projWarns` on the
+                    -- coherence allowlist.
+                    finishRunEval
+                      target
+                      jsonMode
+                      (coreE, modsE)
+                      mods
+                      (allWarnTriples tsrc target diags)
+                      (runEvalPerf perfOn target perfT0 perfTCheck)
+                errs =>
+                  runAbort
+                    (joinNl
+                      (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
         _ =>
           -- Multi-module: gate on `locatedProjectErrors` — the SAME
           -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
@@ -3002,9 +3035,26 @@ elaborateRun rtD coreD modsD =
       plain
     None =>
       if shouldAsyncWrapMain "runAsyncIOMain" modsD then
-        elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
+        plainPerModuleOf
+          plain
+          (elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD))
       else
         plain
+
+-- The wrapped elaboration's trees, residual and evidence, carrying the PLAIN
+-- program's per-module diagnostics.  The wrapped graph is synthetic — the
+-- `async` scheduler driver applied to the user's `main` — so a diagnostic
+-- attributed to it names code the user did not write.  The residual and the
+-- sticky accumulator `hadTypeErrors` reads are the wrapped pass's, so a
+-- diagnostic only the wrapped pass produces would still abort the run; none has
+-- been constructed (the wrap strips `main`'s signature and applies a row-open
+-- driver), so what the residual gate carries in practice is the graph-end
+-- drain's diagnostics and the core pass's, which no per-module list holds.
+plainPerModuleOf : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable) ->
+  (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable) ->
+  (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)
+plainPerModuleOf (_, _, perMod, _, _) (coreW, modsW, _, residualW, evW) =
+  (coreW, modsW, perMod, residualW, evW)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main

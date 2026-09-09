@@ -147,8 +147,8 @@ import support.util.{joinWith, escStr}
 -- lower module) imports nothing and holds no state.
 --
 -- Exactly one table is installed per elaboration, and every read of it completes
--- before the next elaboration installs: `test_cmd`'s `runMulti` / `runSingle` / prop /
--- `test` phases, `elaborateRun`'s async and plain arms, `runEmitWith`,
+-- before the next elaboration installs: `test_cmd`'s `prepareMulti` / `prepareSingle` /
+-- `runChosen` phases, `elaborateRun`'s async and plain arms, `runEmitWith`,
 -- `emitModulesWith`, `eval_autoprint_main.runElab` and `playground_main.runEmit` each
 -- elaborate, install, and finish reading before the next elaboration begins.  THAT
 -- INSTALL ORDERING IS THE PROTECTION, because only one of the three ways a lookup can

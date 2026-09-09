@@ -443,6 +443,26 @@ populateEffectDomains decls =
   let _ = seedEffectDomains ()
   populateGo decls
 
+-- The same thing over a module GRAPH, in `deAllDecls` order (prelude first, then
+-- the loader's dependency-first modules) but without flattening it: the Module-mode
+-- drivers must populate the table BEFORE they build the declaration envelope (the
+-- envelope's atom seed reads it -- see `declEnvRowAtomsEntries`), and at that point
+-- `deAllDecls` does not exist yet.  Registering unit by unit is the same sequence of
+-- `registerEffectDomain` calls the flattened list produces, so the resulting table is
+-- the same value; spelling it this way is what keeps the concatenation from being
+-- built twice per analyze.
+populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
+populateEffectDomainsGraph coreDecls modules =
+  let _ = seedEffectDomains ()
+  let _ = populateGo coreDecls
+  populateUnitsGo modules
+
+populateUnitsGo : List (String, List Decl) -> Unit
+populateUnitsGo [] = ()
+populateUnitsGo ((_, prog) :: rest) =
+  let _ = populateGo prog
+  populateUnitsGo rest
+
 populateGo : List Decl -> Unit
 populateGo [] = ()
 populateGo ((DEffect _ name domain) :: rest) =
@@ -3582,83 +3602,154 @@ emptyDeclEnvs = DeclEnvs {
 -- (`checkModulesPreambleK`, `elaborateModules`) sit after their driver's stamp.
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
-  let mods = declEnvModulesFrom 0 (("core", coreDecls) :: modules)
-  let allDecls = declEnvDeclsOf mods
-  -- A-3.2b (#1512) slices 2+3: the DATA-UNIVERSE SEED CHAIN, built once here for the
-  -- whole graph so the per-module read is one `omLookup` and allocates nothing.  The
-  -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
-  -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
-  let (seedKinds, seedOwners, seedNames) =
-    declEnvSeedChain
-      mods
-      []
-      omEmpty
-      omEmpty
-      (omInsert "" [] omEmpty)
-      (omInsert "" omEmpty omEmpty)
-      (omInsert "" omEmpty omEmpty)
-  -- #1675: BOTH definer projections come out of ONE fold.  They are derived from the
-  -- same uncollapsed row list — `deDefiners` keeps the first row per name, `deAmbigValues`
-  -- records the names where keeping the first was a CHOICE between two definitions — so
-  -- computing them apart would walk `modulePubDefiners` twice and let the two disagree.
-  let definers = declEnvDefinerIndex omEmpty omEmpty mods
+  let coreRow = declEnvModule 0 "core" coreDecls
+  buildDeclEnvsFrom
+    (declEnvAccOf [coreRow] emptyDeclEnvAcc)
+    coreRow
+    (declEnvModulesFrom 1 modules)
+
+-- ── the envelope fold's state ────────────────────────────────────────────────
+-- One accumulator per table.  The point of the record is that the fold can be
+-- RESUMED: the prelude row is the same rows on every analyze of the same prelude,
+-- so a driver that has a prelude key folds it once per process
+-- (`preludePreambleFor`) and resumes here with the user modules.
+--
+-- WHAT MAY BE A FIELD HERE: a table whose prelude contribution is a pure function
+-- of `coreDecls` -- of the DECLS, and of nothing else a process carries.  Two
+-- disqualifications, and the second is the one that is easy to miss:
+--   * it may not hold a `Decl`.  `Decl` carries mutable `Ref`s, and the tree is
+--     re-stamped (`stampGraphTyOrigins`) into FRESH decls on every analyze, so a
+--     shared decl would be a live cell from an older tree.  `DeclEnvs`' two
+--     decl-carrying fields (`deModules`, `deAllDecls`) are rebuilt from the
+--     caller's decls every call and are NOT in this record.
+--   * it may not READ process-global state.  A read is as disqualifying as a
+--     `Ref` field: the value is then a function of WHEN it was first derived, and
+--     a resumed prefix pins that first reading for the life of the process.  This
+--     is why the ATOM-GUARANTEE seed is not here -- `declEnvRowAtomEntries`
+--     bottoms out in `dtopFor`, which reads `driverState.effectDomains`, a table
+--     the graph's own `effect` decls fill.  `buildDeclEnvsFrom` derives it over
+--     every row on every call, the way `deReach` is derived.
+data DeclEnvAcc = DeclEnvAcc {
+  daOrdIndex : OrdMap Int,
+  daDefiners : OrdMap (List (String, (String, String))),
+  daAmbig : OrdMap (List (String, List String)),
+  daData : DataEnv,
+  daImpls : ImplAcc,
+  daIfaces : ClassEnv,
+  daSeeds : DeclEnvSeedAcc,
+  daPolarity : (List (TabKey, List Polarity), OrdMap (List (TabKey, List Polarity))),
+  daOwnerModules : OrdMap (List String),
+}
+
+emptyDeclEnvAcc : DeclEnvAcc
+emptyDeclEnvAcc = DeclEnvAcc {
+  daOrdIndex = omInsert "" 0 omEmpty,
+  daDefiners = omEmpty,
+  daAmbig = omEmpty,
+  daData = emptyDataEnv,
+  daImpls = emptyImplAcc,
+  daIfaces = emptyClassEnv,
+  daSeeds = emptyDeclEnvSeedAcc,
+  daPolarity = ([], omInsert "" [] omEmpty),
+  daOwnerModules = omEmpty,
+}
+
+-- Fold rows into the accumulator, one row at a time, through each table's OWN
+-- fold (each called with a singleton list).  Going through the existing folds
+-- rather than open-coding a per-row step is what keeps a resumed prefix and a
+-- whole-graph build the same function: there is exactly one implementation of
+-- every table, so the two cannot drift.
+declEnvAccOf : List DeclEnvModule -> DeclEnvAcc -> DeclEnvAcc
+declEnvAccOf [] a = a
+declEnvAccOf (m :: rest) a =
+  -- #1675: BOTH definer projections come out of ONE fold.  They are derived from
+  -- the same uncollapsed row list -- `deDefiners` keeps the first row per name,
+  -- `deAmbigValues` records the names where keeping the first was a CHOICE between
+  -- two definitions -- so computing them apart would walk `modulePubDefiners` twice
+  -- and let the two disagree.
+  let definers = declEnvDefinerIndex a.daDefiners a.daAmbig [m]
+  declEnvAccOf rest DeclEnvAcc {
+    daOrdIndex = declEnvOrdIndex a.daOrdIndex [m],
+    daDefiners = fst definers,
+    daAmbig = snd definers,
+    daData = dataEnvFromRowsGo [m] a.daData,
+    daImpls = buildImplEnvGo [m] a.daImpls,
+    daIfaces = buildClassEnvGo [m] a.daIfaces,
+    daSeeds = declEnvSeedChain [m] a.daSeeds,
+    daPolarity = declEnvPolarityChain [m] a.daPolarity,
+    daOwnerModules = declEnvOwnerModules [m] a.daOwnerModules,
+  }
+
+-- Build the envelope from an accumulator that already holds the prelude row, the
+-- prelude row itself, and the loader's dependency-first module list.
+-- Must run AFTER the driver's `stampGraphTyOrigins`, for the same reason
+-- `graphMethodExports` must: identity lives on the decls, so an envelope built
+-- from the unstamped tree would carry a different one.  Both current call sites
+-- (`checkModulesPreambleK`, `elaborateModules`) sit after their driver's stamp.
+--
+-- `coreRow` is the CALLER'S row even when `acc` is a resumed prefix: it is what
+-- `deModules`/`deAllDecls` publish, and those must name the decls this analyze
+-- stamped.  See `DeclEnvAcc`.
+--
+-- The rows arrive built rather than being derived here, because the Module-mode
+-- drivers need the same rows earlier -- `populateEffectDomainsGraph` has to run
+-- before this function does (`deAtomsBefore` below reads the table it fills).
+buildDeclEnvsFrom : DeclEnvAcc ->
+  DeclEnvModule ->
+  List DeclEnvModule ->
+  DeclEnvs
+buildDeclEnvsFrom acc coreRow modRows =
+  let mods = coreRow :: modRows
+  let a = declEnvAccOf modRows acc
   DeclEnvs {
     deModules = mods,
-    deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
-    deDefiners = fst definers,
-    deAmbigValues = snd definers,
-    deAllDecls = allDecls,
-    deData = buildDataEnv mods,
-    -- #1112 A-3.4: `IE`, built here so it inherits this function's ordering and its
-    -- must-run-after-`stampGraphTyOrigins` precondition.  See the IE block header.
-    --
-    -- ⚠️ A-3.2a's `deData` and this field landed independently and now share this
-    -- one constructor; they COMPOSE rather than interact, and that is a property
-    -- worth stating because nothing here would fail loudly if it stopped holding.
-    -- Both read the per-module `mods` rows (A-3.2b's residual moved `buildDataEnv`
-    -- off the flattened `allDecls`, because `deAliases` now carries the declaring
-    -- module's ORDINAL and the flattened list has none — the very reason `IE` took
-    -- rows from the start).  Both are pure folds over the same `declEnvModulesFrom`
-    -- result, neither mutates a ref, and neither reads the other's output — so the
-    -- order of these two initialisers is not observable.
-    -- If a later unit gives either builder a side effect, that stops being true
-    -- and this comment is the thing it invalidates.
-    deImpls = buildImplEnv mods,
-    -- #1519 A-3.3: `CE`, same shape as `deImpls` immediately above — a pure fold
-    -- over the SAME `mods` (per-module rows, ordinal-tagged), composing rather
-    -- than interacting with the other two initialisers for the identical reason.
-    deIfaces = buildClassEnv mods,
-    deKindsBefore = seedKinds,
-    -- #2158: the BARE-NAME seed, out of the SAME fold and the same `kacc` rows —
-    -- see `declEnvSeedChain`'s third-accumulator note for why it is folded in
-    -- there rather than walked separately like the two chains below.
-    deNameIndexBefore = seedNames,
-    -- #1119 D-2: the VARIANCE seed.  It is a SEPARATE walk rather than a third
-    -- accumulator threaded through `declEnvSeedChain` because it is the only one
-    -- of the three that has to READ ITS OWN ACCUMULATOR while building it —
+    deOrdIndex = a.daOrdIndex,
+    deDefiners = a.daDefiners,
+    deAmbigValues = a.daAmbig,
+    -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` (see
+    -- `declEnvDeclsOf`).
+    deAllDecls = declEnvDeclsOf mods,
+    -- #1112 A-3.4 / #1519 A-3.3: `IE` and `CE` inherit this fold's ordering and
+    -- its must-run-after-`stampGraphTyOrigins` precondition, exactly as `deData`
+    -- does.  All three are pure folds over the same rows, none mutates a ref, and
+    -- none reads another's output -- so the order they are listed in is not
+    -- observable.  If a later unit gives any of them a side effect, that stops
+    -- being true and this comment is the thing it invalidates.
+    deData = dataEnvFinish a.daData,
+    deImpls = implAccFinish a.daImpls,
+    deIfaces = classEnvFinish a.daIfaces,
+    deKindsBefore = a.daSeeds.dsKinds,
+    -- #2158: `deKindsBefore`'s BARE-NAME twin, out of the SAME fold and the same
+    -- `kacc` rows -- see `declEnvSeedChain`.
+    deNameIndexBefore = a.daSeeds.dsNames,
+    -- #1119 D-2: the VARIANCE seed.  A SEPARATE chain rather than a fourth
+    -- accumulator inside `declEnvSeedChain` because it is the only one of the
+    -- three that has to READ ITS OWN ACCUMULATOR while building it --
     -- `data Cell a = MkCell (Ref a)` composes with `Ref`'s row, and a
     -- cross-module `data W a = MkW (Cell a)` composes with a row an EARLIER
-    -- module contributed.  Folding it into the pair chain would have made that
-    -- read a fourth argument of a function whose two existing accumulators are
-    -- write-only, which is drift, not sharing.  Same ordinal-ascending walk,
-    -- same "[m]'s seed is everything strictly before [m]" stamping.
-    dePolaritiesBefore = declEnvPolarityChain mods [] (omInsert "" [] omEmpty),
-    -- #2110 S2-1: the ATOM-GUARANTEE seed, a third separate walk for a
-    -- DIFFERENT reason than the variance one above: `inferParamRowAtoms`
-    -- composes with NOTHING (see its 🚨 note — an occurrence reached through
-    -- another type's spine drives the intersection empty), so this chain needs
-    -- neither its own accumulator nor a fixpoint.  It stays out of
-    -- `declEnvSeedChain` only because folding a third accumulator into a
-    -- two-accumulator function whose result type is already a pair is drift,
-    -- not sharing.  Same ordinal-ascending walk, same "[m]'s seed is
-    -- everything strictly before [m]" stamping, same `""` seed for the core
-    -- pass.
-    deAtomsBefore = declEnvRowAtomsChain mods [] (omInsert "" [] omEmpty),
-    deOwnersBefore = seedOwners,
+    -- module contributed.  Same ordinal-ascending walk, same "[m]'s seed is
+    -- everything strictly before [m]" stamping.
+    dePolaritiesBefore = snd a.daPolarity,
+    -- #2110 S2-1: the ATOM-GUARANTEE seed, a third chain for a DIFFERENT reason
+    -- than the variance one above: `inferParamRowAtoms` composes with NOTHING
+    -- (see its note -- an occurrence reached through another type's spine drives
+    -- the intersection empty), so this chain needs neither its own read edge nor
+    -- a fixpoint.
+    --
+    -- It is derived over EVERY row here rather than resumed from `acc`, and that
+    -- placement is load-bearing: an entry's ⊤ parameter comes from `dtopFor`,
+    -- which reads `driverState.effectDomains`.  That table is filled from the
+    -- WHOLE graph's `effect` decls, so a prelude entry cached under a
+    -- prelude-only key would pin whichever reading the first analyze in the
+    -- process happened to take.  See `DeclEnvAcc`.
+    deAtomsBefore =
+      snd (declEnvRowAtomsChain mods ([], omInsert "" [] omEmpty)),
+    deOwnersBefore = a.daSeeds.dsOwners,
     -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
     -- whole-graph and reader-independent (the reader is applied at the READ, in
-    -- `fieldOwnerNames`), so they are built here once alongside the seeds.
-    deOwnerModules = declEnvOwnerModules mods omEmpty,
+    -- `fieldOwnerNames`).  `deReach` is not in `DeclEnvAcc` because its per-row
+    -- answer depends on the WHOLE graph's import index, not on a prefix.
+    deOwnerModules = a.daOwnerModules,
     deReach = declEnvReachIndex mods,
   }
 
@@ -4053,25 +4144,44 @@ declEnvKindEntries (_ :: rest) = declEnvKindEntries rest
 -- with the kind half rather than re-deriving the projection, which is what keeps
 -- the two provably the same rows: the name set is `kacc`'s key set by
 -- construction, not by a parallel definition that could drift.
-declEnvSeedChain : List DeclEnvModule ->
-  List (TabKey, List Kind) ->
-  OrdMap (List String) ->
-  OrdMap Unit ->
-  OrdMap (List (TabKey, List Kind)) ->
-  OrdMap (OrdMap (List String)) ->
-  OrdMap (OrdMap Unit) ->
-  (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
-declEnvSeedChain [] _ _ _ km om nm = (km, om, nm)
-declEnvSeedChain (m :: rest) kacc oacc nacc km om nm =
+-- The chain's state: the three write-only accumulators (`ds*Acc` -- "everything
+-- strictly before the next row") and the three per-module seed tables stamped from
+-- them.  A record rather than six positional arguments so the fold is resumable
+-- from a prefix -- see `DeclEnvAcc`.
+data DeclEnvSeedAcc = DeclEnvSeedAcc {
+  dsKAcc : List (TabKey, List Kind),
+  dsOAcc : OrdMap (List String),
+  dsNAcc : OrdMap Unit,
+  dsKinds : OrdMap (List (TabKey, List Kind)),
+  dsOwners : OrdMap (OrdMap (List String)),
+  dsNames : OrdMap (OrdMap Unit),
+}
+
+-- The `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that
+-- spelling and its seed is empty because nothing precedes ordinal 0.
+emptyDeclEnvSeedAcc : DeclEnvSeedAcc
+emptyDeclEnvSeedAcc = DeclEnvSeedAcc {
+  dsKAcc = [],
+  dsOAcc = omEmpty,
+  dsNAcc = omEmpty,
+  dsKinds = omInsert "" [] omEmpty,
+  dsOwners = omInsert "" omEmpty omEmpty,
+  dsNames = omInsert "" omEmpty omEmpty,
+}
+
+declEnvSeedChain : List DeclEnvModule -> DeclEnvSeedAcc -> DeclEnvSeedAcc
+declEnvSeedChain [] s = s
+declEnvSeedChain (m :: rest) s =
   let kents = declEnvRowKindEntries (m.demOrd + 1) m
-  declEnvSeedChain
-    rest
-    (kents ++ kacc)
-    (declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) oacc)
-    (omFromNames (map (p => tabKeyName (fst p)) kents) nacc)
-    (omInsert m.demId kacc km)
-    (omInsert m.demId oacc om)
-    (omInsert m.demId nacc nm)
+  declEnvSeedChain rest DeclEnvSeedAcc {
+    dsKAcc = kents ++ s.dsKAcc,
+    dsOAcc =
+      declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) s.dsOAcc,
+    dsNAcc = omFromNames (map (p => tabKeyName (fst p)) kents) s.dsNAcc,
+    dsKinds = omInsert m.demId s.dsKAcc s.dsKinds,
+    dsOwners = omInsert m.demId s.dsOAcc s.dsOwners,
+    dsNames = omInsert m.demId s.dsNAcc s.dsNames,
+  }
 
 -- ── #1119 D-2: the VARIANCE seed chain (#1098, #1121) ────────────────────
 -- `declEnvSeedChain`'s kind half, one table over: the same ordinal-ascending
@@ -4089,16 +4199,17 @@ declEnvSeedChain (m :: rest) kacc oacc nacc km om nm =
 -- count here, derive it: `ls -d test/effect_polarity_fixtures/*/ | wc -l`)
 -- flipping to REJECT, `write-opaque-export` and `contra-opaque-export` stayed
 -- ACCEPT until this chain existed.
+--
+-- The state is a PAIR -- (accumulator, per-module seed table) -- rather than the
+-- table alone, so the chain can be resumed from a prefix instead of restarted.
+-- See `DeclEnvAcc`.
 declEnvPolarityChain : List DeclEnvModule ->
-  List (TabKey, List Polarity) ->
-  OrdMap (List (TabKey, List Polarity)) ->
-  OrdMap (List (TabKey, List Polarity))
-declEnvPolarityChain [] _ pm = pm
-declEnvPolarityChain (m :: rest) pacc pm =
-  declEnvPolarityChain
-    rest
-    (declEnvRowPolarityEntries (m.demOrd + 1) m pacc ++ pacc)
-    (omInsert m.demId pacc pm)
+  (List (TabKey, List Polarity), OrdMap (List (TabKey, List Polarity))) ->
+  (List (TabKey, List Polarity), OrdMap (List (TabKey, List Polarity)))
+declEnvPolarityChain [] s = s
+declEnvPolarityChain (m :: rest) (pacc, pm) =
+  let entries = declEnvRowPolarityEntries (m.demOrd + 1) m pacc
+  declEnvPolarityChain rest (entries ++ pacc, omInsert m.demId pacc pm)
 
 -- ── #2110 S2-1: the ATOM-GUARANTEE seed chain ────────────────────────────
 -- `declEnvPolarityChain`'s shape, one table over: the same ordinal-ascending
@@ -4115,16 +4226,17 @@ declEnvPolarityChain (m :: rest) pacc pm =
 -- REJECTED through the module boundary.  The direction is over-rejection, so
 -- the gap was loud rather than a launder, but it made #2110 inapplicable to
 -- every abstractly-exported wrapper.
+--
+-- The state is the PAIR -- (accumulator, per-module seed table) -- that
+-- `declEnvPolarityChain` carries, for the same reason.  This chain is NOT resumed
+-- from a cached prefix, though: see `deAtomsBefore`'s note in `buildDeclEnvsFrom`.
 declEnvRowAtomsChain : List DeclEnvModule ->
-  List (TabKey, List (List Atom)) ->
-  OrdMap (List (TabKey, List (List Atom))) ->
-  OrdMap (List (TabKey, List (List Atom)))
-declEnvRowAtomsChain [] _ am = am
-declEnvRowAtomsChain (m :: rest) aacc am =
-  declEnvRowAtomsChain
-    rest
-    (declEnvRowAtomsEntries (m.demOrd + 1) m ++ aacc)
-    (omInsert m.demId aacc am)
+  (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom)))) ->
+  (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom))))
+declEnvRowAtomsChain [] s = s
+declEnvRowAtomsChain (m :: rest) (aacc, am) =
+  let entries = declEnvRowAtomsEntries (m.demOrd + 1) m
+  declEnvRowAtomsChain rest (entries ++ aacc, omInsert m.demId aacc am)
 
 -- The atom entries of row [m] a reader at ordinal [cur] may see — the peer of
 -- `declEnvRowKindEntries` and `declEnvRowPolarityEntries`, composed from the
@@ -4733,31 +4845,30 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 deSeedRowN : DeclEnvModule
 deSeedRowN = declEnvModule 1 "n" deKindFixtureDecls
 
-deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+-- The bare zero, NOT `emptyDeclEnvSeedAcc`: these probes assert which ROWS were
+-- folded, and the `""` core-pass seed would be an extra key in every assertion.
+deSeedChainProbeZero : DeclEnvSeedAcc
+deSeedChainProbeZero = DeclEnvSeedAcc {
+  dsKAcc = [],
+  dsOAcc = omEmpty,
+  dsNAcc = omEmpty,
+  dsKinds = omEmpty,
+  dsOwners = omEmpty,
+  dsNames = omEmpty,
+}
+
+deSeedChainProbe : DeclEnvSeedAcc
 deSeedChainProbe =
-  declEnvSeedChain
-    [deKindRow0, deSeedRowN]
-    []
-    omEmpty
-    omEmpty
-    omEmpty
-    omEmpty
-    omEmpty
+  declEnvSeedChain [deKindRow0, deSeedRowN] deSeedChainProbeZero
 
 deSeedChainKinds : OrdMap (List (TabKey, List Kind))
-deSeedChainKinds =
-  let (km, _, _) = deSeedChainProbe
-  km
+deSeedChainKinds = deSeedChainProbe.dsKinds
 
 deSeedChainOwners : OrdMap (OrdMap (List String))
-deSeedChainOwners =
-  let (_, om, _) = deSeedChainProbe
-  om
+deSeedChainOwners = deSeedChainProbe.dsOwners
 
 deSeedChainNames : OrdMap (OrdMap Unit)
-deSeedChainNames =
-  let (_, _, nm) = deSeedChainProbe
-  nm
+deSeedChainNames = deSeedChainProbe.dsNames
 
 -- The accumulated name set for [mid] vs. the retired rebuild, computed here off
 -- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
@@ -4857,31 +4968,18 @@ deNameIdxModD =
 
 deNameIdxChain : OrdMap (OrdMap Unit)
 deNameIdxChain =
-  let (_, _, nm) =
+  let s =
     declEnvSeedChain
       [deNameIdxModA, deNameIdxModB, deNameIdxModC, deNameIdxModD]
-      []
-      omEmpty
-      omEmpty
-      omEmpty
-      omEmpty
-      omEmpty
-  nm
+      deSeedChainProbeZero
+  s.dsNames
 
 -- The SAME chain with the two data-free rows removed.  Comparing against this is
 -- what turns "unrelated code is unaffected" into an assertion rather than a hope.
 deNameIdxChainNoUnrelated : OrdMap (OrdMap Unit)
 deNameIdxChainNoUnrelated =
-  let (_, _, nm) =
-    declEnvSeedChain
-      [deNameIdxModA, deNameIdxModB]
-      []
-      omEmpty
-      omEmpty
-      omEmpty
-      omEmpty
-      omEmpty
-  nm
+  let s = declEnvSeedChain [deNameIdxModA, deNameIdxModB] deSeedChainProbeZero
+  s.dsNames
 
 deNameIdxAt : OrdMap (OrdMap Unit) -> String -> List String
 deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
@@ -5104,12 +5202,15 @@ emptyDataEnv = DataEnv {
 -- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
 -- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
 buildDataEnv : List DeclEnvModule -> DataEnv
-buildDataEnv rows =
-  let env = dataEnvFromRowsGo rows emptyDataEnv
-  DataEnv { env |
-    deRecordIdents = omMapValues reverseL env.deRecordIdents,
-    deFieldOwnerIdents = omMapValues reverseL env.deFieldOwnerIdents,
-  }
+buildDataEnv rows = dataEnvFinish (dataEnvFromRowsGo rows emptyDataEnv)
+
+-- Both ident indexes are accumulated newest-first per key and reversed once here,
+-- so the fold that fills them stays resumable (see `DeclEnvAcc`).
+dataEnvFinish : DataEnv -> DataEnv
+dataEnvFinish env = DataEnv { env |
+  deRecordIdents = omMapValues reverseL env.deRecordIdents,
+  deFieldOwnerIdents = omMapValues reverseL env.deFieldOwnerIdents,
+}
 
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 dataEnvFromRowsGo [] acc = acc
@@ -5840,17 +5941,43 @@ emptyImplEnv = ImplEnv {
 -- Fold the envelope's modules, in ordinal order, into one whole-graph registry.
 -- The sequence number runs across the WHOLE build (not per module), which is what
 -- makes `InstRef` unique without relying on `(mid, ord)` being injective.
-buildImplEnv : List DeclEnvModule -> ImplEnv
-buildImplEnv mods =
-  let env = buildImplEnvGo mods 0 emptyImplEnv
-  let env2 = ImplEnv { env | ieRows = reverseL env.ieRows }
-  ImplEnv { env2 | ieUnivSnaps = ieBuildSnaps env2.ieRows }
+-- The impl fold's whole state: the registry, the build-wide sequence number, and
+-- the `ieUnivSnaps` accumulator.  One record so the fold can be RESUMED from a
+-- prefix rather than restarted -- see `DeclEnvAcc`.
+data ImplAcc = ImplAcc {
+  iaEnv : ImplEnv,
+  iaSeq : Int,
+  iaSnaps : (List (Int, ImplUniverse), ImplUniverse),
+}
 
-buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
-buildImplEnvGo [] _ env = env
-buildImplEnvGo (m :: rest) seq env =
-  let rows = implRowsOf m.demId m.demOrd seq (implDeclFacts m.demDecls)
-  buildImplEnvGo rest (seq + listLen rows) (ieAddRows rows env)
+emptyImplAcc : ImplAcc
+emptyImplAcc = ImplAcc {
+  iaEnv = emptyImplEnv,
+  iaSeq = 0,
+  iaSnaps = ieSnapZero,
+}
+
+buildImplEnv : List DeclEnvModule -> ImplEnv
+buildImplEnv mods = implAccFinish (buildImplEnvGo mods emptyImplAcc)
+
+-- `ieRows` and `ieUnivSnaps` are both built newest-first and reversed once here.
+implAccFinish : ImplAcc -> ImplEnv
+implAccFinish ia =
+  let env = ia.iaEnv
+  ImplEnv { env |
+    ieRows = reverseL env.ieRows,
+    ieUnivSnaps = reverseL (fst ia.iaSnaps),
+  }
+
+buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
+buildImplEnvGo [] ia = ia
+buildImplEnvGo (m :: rest) ia =
+  let rows = implRowsOf m.demId m.demOrd ia.iaSeq (implDeclFacts m.demDecls)
+  buildImplEnvGo rest ImplAcc {
+    iaEnv = ieAddRows rows ia.iaEnv,
+    iaSeq = ia.iaSeq + listLen rows,
+    iaSnaps = ieSnapStep rows ia.iaSnaps,
+  }
 
 -- ── ARCH B-2.1-a2 (Stage B sprint): the FLAT arm's `ImplEnv` ─────────────────
 --
@@ -5926,23 +6053,42 @@ ieIndexRows (r :: rest) env = ieIndexRows rest (ieFileRow r env)
 -- Emits one entry per DISTINCT ordinal (a module declaring no impl contributes no
 -- entry, which is why `ieSnapAt` selects the LAST visible entry rather than indexing).
 ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
-ieBuildSnaps rows = ieBuildSnapsGo rows emptyImplUniverse
+ieBuildSnaps rows = reverseL (fst (ieBuildSnapsGo rows ieSnapZero))
 
-ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
-ieBuildSnapsGo [] _ = []
-ieBuildSnapsGo (r :: rest) univ =
-  ieBuildSnapsEmit r rest (insertUnivImpl univ (ieRowTriple r))
+ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
+ieSnapZero = ([], emptyImplUniverse)
 
--- Emit a snapshot only when the NEXT row starts a new ordinal (or there is none), so
--- one module's several impls fold into a single entry.
-ieBuildSnapsEmit : ImplRow ->
+ieBuildSnapsGo : List ImplRow ->
+  (List (Int, ImplUniverse), ImplUniverse) ->
+  (List (Int, ImplUniverse), ImplUniverse)
+ieBuildSnapsGo [] acc = acc
+ieBuildSnapsGo (r :: rest) acc =
+  let (run, more) = ieSameOrdRun (ieRowOrd r) (r :: rest) []
+  ieBuildSnapsGo more (ieSnapStep run acc)
+
+-- ONE same-ordinal run of rows into the accumulator (newest entry first, plus the
+-- running universe).  The run contributes a single entry taken after every row in
+-- it; an EMPTY run contributes none, which is what keeps a module declaring no
+-- impl out of the snapshot list.  The graph builder folds module by module through
+-- this same step -- a module's rows all carry its ordinal -- so a resumed prefix
+-- and a whole-list build are the same function of the same rows.
+ieSnapStep : List ImplRow ->
+  (List (Int, ImplUniverse), ImplUniverse) ->
+  (List (Int, ImplUniverse), ImplUniverse)
+ieSnapStep [] acc = acc
+ieSnapStep (r :: rest) (snaps, univ) =
+  let univ2 = growImplUniverse (map ieRowTriple (r :: rest)) univ
+  ((ieRowOrd r, univ2) :: snaps, univ2)
+
+-- the leading run of rows carrying ordinal [o], and what follows it.
+ieSameOrdRun : Int ->
   List ImplRow ->
-  ImplUniverse ->
-  List (Int, ImplUniverse)
-ieBuildSnapsEmit r [] univ = [(ieRowOrd r, univ)]
-ieBuildSnapsEmit r (r2 :: rest2) univ
-  | ieRowOrd r2 == ieRowOrd r = ieBuildSnapsGo (r2 :: rest2) univ
-  | otherwise = (ieRowOrd r, univ) :: ieBuildSnapsGo (r2 :: rest2) univ
+  List ImplRow ->
+  (List ImplRow, List ImplRow)
+ieSameOrdRun _ [] acc = (reverseL acc, [])
+ieSameOrdRun o (r :: rest) acc
+  | ieRowOrd r == o = ieSameOrdRun o rest (r :: acc)
+  | otherwise = (reverseL acc, r :: rest)
 
 -- ⚠️ LOCKSTEP WITH `implDeclsWithReqs` / `implDeclWithReqs`: same `DAttrib` unwrap,
 -- same single-`DImpl` arm, same order.  The two are kept separate rather than one
@@ -38710,9 +38856,15 @@ graphMethodExports : List Decl ->
   List (String, List Decl) ->
   OrdMap (List (String, Ident))
 graphMethodExports coreDecls modules =
-  graphMethodExportsGo
-    (omInsert "core" (declMethodIdents coreDecls) omEmpty)
-    modules
+  graphMethodExportsFrom (declMethodIdents coreDecls) modules
+
+-- The same index, resuming from the prelude's own rows -- the one part of it a
+-- driver with a prelude key derives once per process (`preludePreambleFor`).
+graphMethodExportsFrom : List (String, Ident) ->
+  List (String, List Decl) ->
+  OrdMap (List (String, Ident))
+graphMethodExportsFrom coreIdents modules =
+  graphMethodExportsGo (omInsert "core" coreIdents omEmpty) modules
 
 graphMethodExportsGo : OrdMap (List (String, Ident)) ->
   List (String, List Decl) ->
@@ -38844,9 +38996,14 @@ graphIfaceMethods : List Decl ->
   List (String, List Decl) ->
   OrdMap (List (String, List String))
 graphIfaceMethods coreDecls modules =
-  graphIfaceMethodsGo
-    (omInsert "core" (ifaceMethodRows coreDecls) omEmpty)
-    modules
+  graphIfaceMethodsFrom (ifaceMethodRows coreDecls) modules
+
+-- `graphMethodExportsFrom`'s type-namespace peer, same shape, same reason.
+graphIfaceMethodsFrom : List (String, List String) ->
+  List (String, List Decl) ->
+  OrdMap (List (String, List String))
+graphIfaceMethodsFrom coreRows modules =
+  graphIfaceMethodsGo (omInsert "core" coreRows omEmpty) modules
 
 graphIfaceMethodsGo : OrdMap (List (String, List String)) ->
   List (String, List Decl) ->
@@ -39015,9 +39172,14 @@ graphCtorExports : List Decl ->
   List (String, List Decl) ->
   OrdMap (List (String, String, Ident))
 graphCtorExports coreDecls modules =
-  graphCtorExportsGo
-    (omInsert "core" (declCtorIdents coreDecls) omEmpty)
-    modules
+  graphCtorExportsFrom (declCtorIdents coreDecls) modules
+
+-- `graphMethodExportsFrom`'s constructor peer, same shape, same reason.
+graphCtorExportsFrom : List (String, String, Ident) ->
+  List (String, List Decl) ->
+  OrdMap (List (String, String, Ident))
+graphCtorExportsFrom coreIdents modules =
+  graphCtorExportsGo (omInsert "core" coreIdents omEmpty) modules
 
 graphCtorExportsGo : OrdMap (List (String, String, Ident)) ->
   List (String, List Decl) ->
@@ -40408,8 +40570,10 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 --   * the `driverState` fields the core pass writes and a later module could read
 --     before overwriting them (`restoreCoreDriverFields`).
 -- Everything user-dependent that the preamble installs BEFORE the core pass
--- (graph indexes, `declEnvs`, effect domains, abstract record types) is still
--- derived on every call; the memo covers exactly the `checkModuleFull` of core
+-- (effect domains, abstract record types, and the user modules' contribution to
+-- the graph indexes and to `declEnvs` -- the PRELUDE's contribution to those two
+-- is itself memoized now, see `PreludePreamble`) is still derived on every call;
+-- the memo covers exactly the `checkModuleFull` of core
 -- and the one line after it.  `perRun` is re-minted on a hit: every module check
 -- opens with `resetState ()`, so nothing downstream reads the residue either way.
 -- One entry only (the prelude does not change under a process); a different
@@ -40561,6 +40725,89 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
         }
     coreSchemes
 
+-- ── prelude-preamble memo ────────────────────────────────────────────────────
+-- The whole-graph derivations below run on every analyze, and on an LSP keystroke
+-- almost everything they walk is the PRELUDE: the entry module's source changed,
+-- its imports' did not, and core's cannot change under a process.  So the
+-- prelude's own contribution to each is derived once and RESUMED -- the envelope
+-- fold from its accumulator (`DeclEnvAcc`), the three graph identity indexes from
+-- core's rows, the mark sets from core's decl-level facts.  MEASURED on the
+-- `import list` warm analyze of ruling 7's LSP proxy: `checkModulesPreambleK` was
+-- 49.6M of 97.2M Ir, of which `buildDeclEnvs` 33.2M and `markSetsOf` 11.3M.
+--
+-- The key is the SAME `desugaredPreludeKey` generation pair `checkCoreMemoized`
+-- uses, and for the same reason: the AST carries mutable Refs and no equality, so
+-- identity cannot be recovered from the decls, and a caller handing in a MODIFIED
+-- prelude (`autoPrintPinCore`) passes `None` and must not be able to hit.  An
+-- unkeyed call neither hits nor stores, so a one-shot `run`/`build` pays exactly
+-- what it paid before -- no key is hashed and no source is concatenated.
+--
+-- WHAT A HIT MAY CARRY: every field must be a pure function of `coreDecls`.  Not
+-- "holds no `Ref`" -- that is weaker, and the weaker reading is what let an
+-- effect-domain READ into an earlier draft of this record.  Two consequences:
+--   * no `Decl` and no `Ref`.  The tree is re-stamped into FRESH decls on every
+--     analyze (`stampGraphTyOrigins`), so a shared decl would hand this analyze a
+--     live cell minted into an older tree.  A `Scheme` is excluded for the same
+--     reason read the other way -- it carries live union-find cells -- so
+--     `externSchemes` is still derived per analyze.
+--   * no read of process-global state either, however immutable the RESULT looks:
+--     a cached value derived through such a read is a function of WHEN it was
+--     first taken, and a hit pins that reading for the process.  `DeclEnvAcc`'s
+--     own note carries the worked instance (the atom seed, and why it is derived
+--     per call instead).
+--
+-- Two things a hit does not do, neither of them load-bearing: it retains
+-- `pmfConstrainedBodyVars` (every `=>`-constrained prelude name with its body's
+-- EVars) for the process lifetime, where the parent recomputed it transiently;
+-- and it does not re-walk the prelude, so `opBump` (`support/opcount.mdk`, default
+-- off, profiler-only) counts the prelude's steps once per process rather than once
+-- per analyze.
+data PreludePreamble = PreludePreamble {
+  ppEnvAcc : DeclEnvAcc,
+  ppMethodIdents : List (String, Ident),
+  ppIfaceMethodRows : List (String, List String),
+  ppCtorIdents : List (String, String, Ident),
+  ppMangledFunDefs : Bool,
+  ppMarkFacts : PreludeMarkFacts,
+}
+
+preludePreambleMemoRef : Ref (Option ((Int, Int), PreludePreamble))
+preludePreambleMemoRef = Ref None
+
+preludePreambleOf : List Decl -> DeclEnvModule -> PreludePreamble
+preludePreambleOf coreDecls coreRow = PreludePreamble {
+  ppEnvAcc = declEnvAccOf [coreRow] emptyDeclEnvAcc,
+  ppMethodIdents = declMethodIdents coreDecls,
+  ppIfaceMethodRows = ifaceMethodRows coreDecls,
+  ppCtorIdents = declCtorIdents coreDecls,
+  ppMangledFunDefs = unitCarriesMangledFunDefs "core" (funDefs coreDecls),
+  ppMarkFacts = preludeMarkFactsOf coreDecls,
+}
+
+preludePreambleFor : Option (Int, Int) ->
+  List Decl ->
+  DeclEnvModule ->
+  PreludePreamble
+preludePreambleFor None coreDecls coreRow = preludePreambleOf coreDecls coreRow
+preludePreambleFor (Some k) coreDecls coreRow = match !preludePreambleMemoRef
+  Some entry =>
+    if fst entry == k then
+      snd entry
+    else
+      preludePreambleStore k coreDecls coreRow
+  None => preludePreambleStore k coreDecls coreRow
+
+-- One entry only (the prelude does not change under a process); a different
+-- prelude simply misses and replaces it.
+preludePreambleStore : (Int, Int) ->
+  List Decl ->
+  DeclEnvModule ->
+  PreludePreamble
+preludePreambleStore k coreDecls coreRow =
+  let p = preludePreambleOf coreDecls coreRow
+  preludePreambleMemoRef := Some (k, p)
+  p
+
 -- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
 -- `coreDecls` (see the core-check memo above); `None` = unkeyed, no memo.
 checkModulesPreambleK : Option (Int, Int) ->
@@ -40584,14 +40831,39 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- misses — which IS F1's symptom.  The writer set is therefore a NECESSARY conjunct, not
   -- "the wrong question": the two Module-mode driver entries that must carry this line are
   -- `checkModulesPreambleK` (here) and `elaborateModules`.
+  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
+  -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
+  -- loop, so a module using an effect declared in ANOTHER module sees its domain.
+  -- resetState no longer re-seeds, so this survives every per-module reset below.
+  -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
+  --
+  -- It must also precede the declaration ENVELOPE below, and that ordering is the
+  -- newer half of the constraint: the envelope's atom-guarantee seed
+  -- (`declEnvRowAtomsEntries` → `dtopFor`) READS this table, so an envelope built
+  -- first degrades every parameterized label to its ⊤ and over-rejects an honest
+  -- relay into an abstractly-exported wrapper.  `elaborateModules` carries the
+  -- identical ordering, for the identical reason.
+  --
+  -- #1112 A-3.1: the units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
+  -- in the same order; `populateEffectDomainsGraph` walks them without building
+  -- that concatenation a second time.
+  let _ = populateEffectDomainsGraph coreDecls modules
+  -- the prelude's own contribution to every derivation below, from the memo when
+  -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
+  -- HERE, not inside the memo, because it carries THIS analyze's decls.
+  let coreRow = declEnvModule 0 "core" coreDecls
+  let modRows = declEnvModulesFrom 1 modules
+  let prelude = preludePreambleFor preludeKey coreDecls coreRow
   driverState.value.graphMethodExportsRef :=
-    graphMethodExports coreDecls modules
+    graphMethodExportsFrom prelude.ppMethodIdents modules
   -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
   -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
-  driverState.value.graphIfaceMethodsRef := graphIfaceMethods coreDecls modules
+  driverState.value.graphIfaceMethodsRef :=
+    graphIfaceMethodsFrom prelude.ppIfaceMethodRows modules
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of the line above, under the
   -- identical two-part property.  Both driver entries carry both lines or neither works.
-  driverState.value.graphCtorExportsRef := graphCtorExports coreDecls modules
+  driverState.value.graphCtorExportsRef :=
+    graphCtorExportsFrom prelude.ppCtorIdents modules
   -- L3 (xmod-identity #1351 spine): the graph-level mangled-funDefs fact, under the
   -- SAME two-part safety property as the three lines above (F3: unconditional
   -- whole-value overwrite at BOTH Module-mode driver entries + no reset point in
@@ -40599,22 +40871,13 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- `graphMethodExports`).  `elaborateModules` carries the identical derivation,
   -- from the identical `("core", coreDecls)::modules` unit list.
   driverState.value.mangledFunDefsPresentRef :=
-    graphCarriesMangledFunDefs (("core", coreDecls) :: modules)
+    prelude.ppMangledFunDefs || graphCarriesMangledFunDefs modules
   -- #1112 A-3.1: the whole-graph declaration envelope, under the SAME two-part
   -- property as the three lines above (`driverState` has no reset point, and both
   -- Module-mode driver entries write it unconditionally).  `elaborateModules`
   -- carries the identical line.  See `buildDeclEnvs`.
-  let declEnvs = buildDeclEnvs coreDecls modules
+  let declEnvs = buildDeclEnvsFrom prelude.ppEnvAcc coreRow modRows
   driverState.value.declEnvsRef := declEnvs
-  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
-  -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
-  -- loop, so a module using an effect declared in ANOTHER module sees its domain.
-  -- resetState no longer re-seeds, so this survives every per-module reset below.
-  -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
-  -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` (see
-  -- `declEnvDeclsOf`) — the same list value, now derived from the envelope so a
-  -- module the envelope drops is loud here rather than silent.
-  let _ = populateEffectDomains declEnvs.deAllDecls
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (each caller's
   -- `stampGraphTyOrigins` line above), but the scope is derived from its type
   -- NAMES, not its origins, so it is the same map either way.
@@ -40625,10 +40888,13 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- which marks each module's groups on the schedule, so a module is marked at the
   -- point it is checked — after any memo restore of `graphRun`, never before, which
   -- is what keeps a minted cell indexing the table it was minted into).  A check
-  -- driver never sets the promotion-eligible set, so its dict-name set stays bare;
-  -- the harvest is cleared here so a previous elaboration in this process cannot
-  -- leak promoted names into it.
-  let _ = markSetsOf coreDecls modules declEnvs.deAllDecls
+  -- driver never promotes, so its dict-name set stays bare: the promotion-eligible
+  -- set and the harvest are both CLEARED here, because an elaboration earlier in
+  -- this process (`run`'s auto-print re-check runs after its elaboration; the
+  -- playground analyzes after an emit) leaves both populated on `driverState`,
+  -- which no reset touches, and `maybeInferConstraint` reads the set.
+  let _ = markSetsFrom prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls
+  let _ = setDictEligible []
   driverState.value.promotionHarvestRef := []
   -- the core pass, memoized under the caller's prelude key — see `checkCoreMemoized`.
   let coreSchemes = checkCoreMemoized preludeKey coreDecls runtimeSeed
@@ -40641,8 +40907,8 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
 -- #1508 (U2a): this worker used to call `checkModuleFull`, i.e. `checkModuleFullImpl ""`,
 -- DISCARDING the module id `foldModules` hands it — so on the `checkModules` driver every
 -- USER module reached `checkBodyImpl`'s Module arm claiming to be the prelude (`""`,
--- `declEnvsOrdOf` ordinal 0).  Its two sibling workers (`cmDiagsWorker`, `cmEntryWorker`)
--- always passed the real `mid` through `checkModuleFullDiags`; this one was the outlier.
+-- `declEnvsOrdOf` ordinal 0).  Its sibling worker (`cmModuleWorker`) always passed the
+-- real `mid` through `checkModuleFullDiags`; this one was the outlier.
 -- It calls `checkModuleFullImpl` directly rather than `checkModuleFull` so the id can be
 -- threaded — everything else (`accData`, the `[]` implDecls that keep the #154 PR-C perf
 -- property) is byte-identically what `checkModuleFull` passed.
@@ -40909,22 +41175,46 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- worker: ISOLATED per-module diagnostics harvest (checkModuleFullDiags — see its
 -- doc above).  Surfaces this module's own `schemes` (for pubV) plus its
 -- (schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like cmCheckWorker;
--- NOT a flat union.
--- ⚠️ #2246: the payload carries `schemes` a SECOND time — exactly as `cmEntryWorker`
--- does, and for exactly the same reason.  `foldModules` hands the worker's FIRST
--- component to the NEXT module (it is the fold's seed, never `collect`'s), so the
+-- NOT a flat union.  ONE worker serves BOTH check-family drivers — the per-module
+-- diagnostics fold (`checkModulesDiags` / `checkModulesDiagsChain`, behind
+-- `analyzeProject` and the LSP) and the entry report (`checkModulesEntryFullSplitK`);
+-- they differ in their `collect`, never in what a module is checked against.  Keeping
+-- it one function is what makes that a property of the code rather than of two
+-- comments: the drivers CANNOT drift on the universe or the seed.
+--
+-- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module,
+-- exactly as the emit driver's `elabWorker` (`elabModuleStamp mid seed accData
+-- (accAll ++ prog) prog`) builds it.  `foldModules` never folds a module into its own
+-- `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this module's own
+-- decls too must fold [prog] in itself"), and `checkBodyImpl`'s `groundUniverse` binding
+-- reads `implDecls` RAW on the Module arm — so bare `accAll` makes
+-- `groundMultiParamObligations` ground a multi-param obligation against a universe with
+-- NONE of the module's own impls in it.  MEASURED, `medaka check` / `medaka build` on
+-- `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module file: `interface
+-- Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`): with bare
+-- `accAll` the return-only `v` never grounds, so the enclosing `Display v` rejects with
+-- `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to `Int` and the
+-- program checks, builds and prints `42`, as it does on the Flat arm.  The 2+-module
+-- promotion of the same shape — the grounding impl in the ENTRY module of a graph — is
+-- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`.
+-- Cost: the concat mirrors `elabWorker`'s exactly (growing accumulator on the RIGHT, so
+-- O(|prog|) per module), and neither driver is the perf-gated `checkModules` path.
+--
+-- #2246: the payload carries `schemes` a SECOND time.  `foldModules` hands the worker's
+-- FIRST component to the NEXT module (it is the fold's seed, never `collect`'s), so the
 -- only way the terminal module's own bindings reach `cmDiagsCollect` — which owes
--- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  Costs nothing:
+-- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  `cmEntryCollect`
+-- needs the same triple to keep the terminal module's OWN schemes/warns.  Costs nothing:
 -- `checkModuleFullDiags` already computed them.
-cmDiagsWorker : String ->
+cmModuleWorker : String ->
   List (String, Scheme) ->
   List Decl ->
   List Decl ->
   List Decl ->
   (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
-cmDiagsWorker mid seed accData accAll prog =
+cmModuleWorker mid seed accData accAll prog =
   let (schemes, _, errs, warns) =
-    checkModuleFullDiags mid seed accData accAll prog
+    checkModuleFullDiags mid seed accData (accAll ++ prog) prog
   (schemes, (schemes, errs, warns))
 
 -- collect for checkModulesDiags: strips the payload's `schemes` back off so the
@@ -41073,7 +41363,7 @@ chainPrefix (st :: sts) (k :: ks) total acc last =
     None => (reverseL acc, last)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
--- keys are available.  Mirrors `foldModules True True cmDiagsWorker cmDiagsCollect`
+-- keys are available.  Mirrors `foldModules True True cmModuleWorker cmDiagsCollect`
 -- exactly: import-scoped seed, pubV threading, both accumulator concats, the
 -- entry-only `mainSchemeRef` write.  `results` and the returned steps are newest
 -- first.
@@ -41089,12 +41379,12 @@ chainGo : List (String, Scheme) ->
 chainGo _ _ _ _ _ results _ [] = (results, [])
 chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
   let seed = baseSeed ++ importSeed prog depEnv
-  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let (schemes, (_, errs, warns)) = cmModuleWorker mid seed accData accAll prog
   let _ = setMainSchemeIfEntry True schemes
   ((mid, (errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
   let seed = baseSeed ++ importSeed prog depEnv
-  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let (schemes, (_, errs, warns)) = cmModuleWorker mid seed accData accAll prog
   let pubV =
     pickSchemes (publicValNames prog) schemes ++ reexportSeed coreV prog depEnv
   let depEnv2 = (mid, pubV) :: depEnv
@@ -41149,16 +41439,15 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
   let modules2 = modules
-  -- #154 PR-C: cmDiagsWorker reads BOTH accData (buildOracle `prog ++ accData` +
+  -- #154 PR-C: cmModuleWorker reads BOTH accData (buildOracle `prog ++ accData` +
   -- runFinalChecks) and accAll (checkModuleFullImpl implDecls + runFinalChecks), and both
   -- are order-observable (oracle first-wins, runFinalChecks scan order), so both concats
-  -- are RETAINED verbatim — this diagnostics path stays byte-identical (not the perf-gate
-  -- path; it is a byte-identity witness).
+  -- are RETAINED verbatim — this is not the perf-gate path, which is `cmCheckWorker`'s.
   let perMod =
     foldModules
       True
       True
-      cmDiagsWorker
+      cmModuleWorker
       cmDiagsCollect
       []
       (runtimeSeed ++ coreSchemes)
@@ -41314,14 +41603,14 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK effectivePreludeKey runtimeDecls coreDecls modules
   let modules2 = modules
-  -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
-  -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
-  -- witness, not the perf-gate path).
+  -- #154 PR-C: the SAME worker the diagnostics fold uses, so both concats are RETAINED
+  -- here too; only the `collect` differs.  Not the perf-gate path, which is
+  -- `cmCheckWorker`'s.
   let (schemes, errs, warns) =
     foldModules
       True
       True
-      cmEntryWorker
+      cmModuleWorker
       cmEntryCollect
       ([], [], [])
       (runtimeSeed ++ coreSchemes)
@@ -41385,42 +41674,6 @@ prependDiagOpt : String ->
 prependDiagOpt _ _ _ None ds = ds
 prependDiagOpt code sev help (Some msg) ds =
   TcDiag code sev None msg help None :: ds
-
--- worker: same ISOLATED per-module diagnostics as cmDiagsWorker, but surfaces the
--- FULL triple (schemes, errs, warns) as its payload so cmEntryCollect can keep the
--- terminal module's OWN schemes/warns.  IMPORT-SCOPED seed, exactly like the others.
-cmEntryWorker : String ->
-  List (String, Scheme) ->
-  List Decl ->
-  List Decl ->
-  List Decl ->
-  (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
--- ⚠️ `accAll ++ prog`, NOT bare `accAll` — this worker's impl universe includes THIS
--- module, exactly as the emit driver's `elabWorker` (`elabModuleStamp mid seed accData
--- (accAll ++ prog) prog`) has always built it.  `foldModules` never folds a module into
--- its own `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this
--- module's own decls too must fold [prog] in itself"), and `checkBodyImpl`'s
--- `groundUniverse` binding reads `implDecls` RAW on the Module arm — so passing bare
--- `accAll` made `groundMultiParamObligations` ground a multi-param obligation against a
--- universe with NONE of the module's own impls in it.  MEASURED, `medaka check` /
--- `medaka build` on `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module
--- file: `interface Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`):
--- with bare `accAll` the return-only `v` never grounds, so the enclosing `Display v`
--- rejects with `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to
--- `Int` and the program checks, builds and prints `42`, as it does on the Flat arm and
--- on `main`.  This was invisible until E-1 (#1115) routed the no-import front door
--- through `checkModulesEntryFull` — the 1-module graph is the case where `accAll` is
--- still its initial value and the omission is total.
--- Cost: the concat mirrors `elabWorker`'s exactly (growing accumulator on the RIGHT, so
--- O(|prog|) per module), and this driver is not the perf-gated `checkModules` path.
--- ⚠️ MIRROR NOT CHANGED: `cmDiagsWorker` (checkModulesDiags, the `analyzeProject`
--- multi-module path) passes bare `accAll` too and has the same hole — but only for a
--- module's OWN impls in a 2+-module graph, which is pre-existing on `main` and not this
--- regression; see the F18 report.
-cmEntryWorker mid seed accData accAll prog =
-  let (schemes, _, errs, warns) =
-    checkModuleFullDiags mid seed accData (accAll ++ prog) prog
-  (schemes, (schemes, errs, warns))
 
 -- collect: the ENTRY report keeps the ENTRY (last/terminal) module's SCHEMES and
 -- WARNINGS (those belong to the entry's report), but ACCUMULATES type errors from
@@ -41774,21 +42027,35 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
   -- including the reset note above, which it inherits verbatim (same `driverState`).
   driverState.value.graphCtorExportsRef := graphCtorExports coreDecls modules
+  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
+  -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass
+  -- + the elabModuleStamp loop both call it) can read them — resetState no longer
+  -- re-seeds, and effectDomains has a single writer per driver entry, so this
+  -- persists untouched through the whole emit pass.
+  --
+  -- It must also precede the ENVELOPE below, which is why it moved above it: the
+  -- envelope's atom-guarantee seed (`declEnvRowAtomsEntries` → `dtopFor`) reads this
+  -- table.  `checkModulesPreambleK` carries the identical ordering — a `build` that
+  -- degraded a label here and a `check` that did not would be a #1070 divergence.
+  --
+  -- #1112 A-3.1: the units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
+  -- in the same order.
+  let _ = populateEffectDomainsGraph coreDecls modules
   -- #1112 A-3.1: the whole-graph declaration envelope — the identical line
   -- `checkModulesPreambleK` carries, for the driver that does not use that preamble.
   -- It inherits the reset note above for the same reason the three peers do: the
   -- ref is on `driverState`, which `resetCrossModuleState` does not touch.
   let declEnvs = buildDeclEnvs coreDecls modules
   driverState.value.declEnvsRef := declEnvs
+  -- The abstract-record set `resolveFieldRecord` consults for `T-ABSTRACT-FIELD`
+  -- is seeded at BOTH Module-mode driver entries, like the four refs above:
+  -- `checkModulesPreambleK` carries the identical line.  A driver that skips it
+  -- reads an empty set and never rejects a dot-access on an abstractly exported
+  -- record, so `run` would execute what `check` rejects.
+  let _ = seedAbstractRecordTypes coreDecls modules
   -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` — the same list
-  -- value (see `declEnvDeclsOf`), now derived from the envelope.
+  -- value (see `declEnvDeclsOf`), derived from the envelope.
   let allDecls = declEnvs.deAllDecls
-  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
-  -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass
-  -- + the elabModuleStamp loop both call it) can read them — resetState no longer
-  -- re-seeds, and effectDomains has a single writer (populateEffectDomains), so this
-  -- persists untouched through the whole emit pass.
-  let _ = populateEffectDomains allDecls
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
   -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.
@@ -42476,18 +42743,34 @@ lastComponent [] = ""
 lastComponent [x] = x
 lastComponent (_ :: rest) = lastComponent rest
 
+-- Every `=>`-constrained prelude signature name with the EVars of its own
+-- definition body, in `constrainedSigNames` order.  The one prelude-only input of
+-- the set below, and its expensive one: it walks every prelude body once per
+-- candidate.
+preludeConstrainedBodyVars : List Decl -> List (String, List String)
+preludeConstrainedBodyVars preludeDecls =
+  map (n => (n, declBodyVars n preludeDecls)) (constrainedSigNames preludeDecls)
+
 -- E6: the `=>`-constrained-function dict-name set for the module emit path,
 -- mirroring the single-file driver (llvm_emit_typed_main.runEmit): prelude return-
 -- AND arg-position constrained fns (clamp/debugListItems/displayListItems/…) plus
 -- every module's own constrained signatures.  Both eval and emit paths return the
 -- same set; guarded so prePass/dictPass both see the SAME set.
-moduleDictNames : List Decl ->
-  List Decl ->
+--
+-- The first two are `preludeReturnPosDictNames` (the prelude names whose own body
+-- reaches a return-position method) and `preludeArgPosDictNames` (the rest), term
+-- for term, with their two inputs held APART: the prelude's constrained names with
+-- their body EVars, and the GRAPH's return-position method names.  Only the first
+-- is prelude-only, so holding them apart is what lets a driver with a prelude key
+-- derive it once per process and re-derive only the second per analyze.
+moduleDictNames : List (String, List String) ->
+  List String ->
   List (String, List Decl) ->
   List String
-moduleDictNames coreDecls allDecls modules =
-  preludeReturnPosDictNames coreDecls allDecls
-    ++ preludeArgPosDictNames coreDecls allDecls
+moduleDictNames bodyVars rpNames modules =
+  let rpSet = map fst (filterList (p => anyMember (snd p) rpNames) bodyVars)
+  rpSet
+    ++ filterList (n => not (contains n rpSet)) (map fst bodyVars)
     ++ constrainedSigNames (flatMap snd modules)
 -- EVAL path: even with arg-position stamping OFF, the constrained prelude/module
 -- fns MUST be dict-passed.  DRIVER-COLLAPSE Phase 2: the MODULE part now uses the
@@ -43213,25 +43496,64 @@ data MarkSets = MarkSets {
 -- derives them.
 markSetsOf : List Decl -> List (String, List Decl) -> List Decl -> MarkSets
 markSetsOf coreDecls modules allDecls =
+  markSetsFrom (preludeMarkFactsOf coreDecls) coreDecls modules allDecls
+
+-- The prelude-only half of `markSetsFrom`'s inputs.  Every field is a pure value
+-- of `coreDecls` alone, holding only `String`/`Int`/`IfaceRef` rows -- see
+-- `PreludePreamble` for why nothing decl-shaped may live here.
+data PreludeMarkFacts = PreludeMarkFacts {
+  pmfReturnPos : List String,
+  pmfMethodConstraints : List String,
+  pmfArgDispatch : List (String, Int),
+  pmfArgDispatchById : List ((IfaceRef, String), Int),
+  pmfConstrainedBodyVars : List (String, List String),
+}
+
+preludeMarkFactsOf : List Decl -> PreludeMarkFacts
+preludeMarkFactsOf coreDecls = PreludeMarkFacts {
+  pmfReturnPos = returnPosMethodNames coreDecls,
+  pmfMethodConstraints = methodConstraintNames coreDecls,
+  pmfArgDispatch = argDispatchIndices coreDecls,
+  pmfArgDispatchById = argDispatchIndicesById coreDecls,
+  pmfConstrainedBodyVars = preludeConstrainedBodyVars coreDecls,
+}
+
+-- `allDecls` IS `coreDecls ++ flatMap snd modules` -- the envelope's
+-- `deAllDecls`, see `declEnvDeclsOf` -- and every list split on that seam here is
+-- a `flatMap` over decls (`returnPosMethodNames`, `methodConstraintNames`,
+-- `argDispatchIndices`, `argDispatchIndicesById`), so `f (xs ++ ys)` is
+-- `f xs ++ f ys` for each.  That is what makes the prelude half separable WITHOUT
+-- changing the order any of them produces, and the order is observable: `dedup`
+-- keeps the first occurrence.
+markSetsFrom : PreludeMarkFacts ->
+  List Decl ->
+  List (String, List Decl) ->
+  List Decl ->
+  MarkSets
+markSetsFrom pmf coreDecls modules allDecls =
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
   -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.
   let units = ("core", coreDecls) :: modules
+  let userDecls = flatMap snd modules
   driverState.value.mangledShadowMapRef :=
     computeMangledShadowMap allDecls units
-  driverState.value.argDispatchIdxByIdRef := argDispatchIndicesById allDecls
-  let rpNames = returnPosMethodNames allDecls
-  let markSharedNames = dedup (rpNames ++ methodConstraintNames allDecls)
-  let graphShadowNames =
-    buildStandaloneShadowsGraph allDecls (flatMap snd modules)
+  driverState.value.argDispatchIdxByIdRef :=
+    pmf.pmfArgDispatchById ++ argDispatchIndicesById userDecls
+  let rpNames = pmf.pmfReturnPos ++ returnPosMethodNames userDecls
+  let markSharedNames =
+    dedup
+      (rpNames ++ pmf.pmfMethodConstraints ++ methodConstraintNames userDecls)
+  let graphShadowNames = buildStandaloneShadowsGraph allDecls userDecls
   let ms = MarkSets {
     msMarkRpNames = dedup (markSharedNames ++ graphShadowNames),
     msMarkSharedNames = markSharedNames,
     msGraphShadowNames = graphShadowNames,
-    msArgNames = map fst (argDispatchIndices allDecls),
+    msArgNames = map fst (pmf.pmfArgDispatch ++ argDispatchIndices userDecls),
     msCoreShadowMap =
       coreShadowMapFor coreDecls driverState.value.mangledShadowMapRef.value,
-    msBareDictNames = dedup (moduleDictNames coreDecls allDecls modules),
+    msBareDictNames =
+      dedup (moduleDictNames pmf.pmfConstrainedBodyVars rpNames modules),
     msUnits = units,
   }
   driverState.value.markSetsRef := Some ms

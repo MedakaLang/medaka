@@ -1842,11 +1842,11 @@ per-module path for a graph. It is not.
   them are stated against.
 
 **The place someone will push back, and what U2 actually says about it.** The doctest
-runner splits on whether the file under test has imports (`runChosen`,
-`compiler/tools/test_cmd.mdk:213-216`, on `hasUseDecls`), and the split is deliberate
-and documented. It is **not** a second elaboration mode — `runSingle`'s own comment
-says so (*"route the degenerate no-import file through the SAME multi-module path …
-the 1-module wrappers"*, `:225-227`), and both arms reach `elaborateModules`. So U2 is
+runner splits on whether the file under test has imports (`driveAll`,
+`compiler/tools/test_cmd.mdk`, on `hasUseDecls`), and the split is deliberate
+and documented. It is **not** a second elaboration mode — the no-import file goes
+through the degenerate 1-module list `[(rootId, decls)]`, and every arm reaches
+`elaborateModules` (the doctest arm via the wrapper `elaborateOne`). So U2 is
 not violated by the split *as a driver choice*. What the split carries is a residual
 **flatten**: the prelude is concatenated into the user's declaration list rather than
 being a node of the graph, which is why the no-import arm must first compute
@@ -1860,8 +1860,8 @@ that judgement rather than leaving it to taste.
 
 ⚠️ **This enumeration was incomplete — there was a THIRD residual, not a defect of the
 flatten but of the *name* the single-target arm gave its own node — PARTIALLY fixed
-by #1521 (ARCH E-5), which owns #1223 but does not close it.** `runSingle` used to
-stamp a single-target test file's declarations under a synthetic module id,
+by #1521 (ARCH E-5), which owns #1223 but does not close it.** The prelude-only arm
+used to stamp a single-target test file's declarations under a synthetic module id,
 `"__user__"`, hardcoded at four sites in `compiler/tools/test_cmd.mdk`, while
 `loadProgram` stamped the *same file* under its loader-derived id — so one
 declaration carried two identities across a single `medaka test <dir>` process

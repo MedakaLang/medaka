@@ -1,0 +1,15 @@
+-- The DEFINING module.  `xmod_abstract_wrapper_row_atoms`' `Slot`, one label over:
+-- the wrapper re-supplies a PARAMETERIZED label rather than the atomic `Stdout`.
+--
+-- `FileRead` carries a `Prefix` domain (`seedEffectDomains`, `compiler/types/
+-- typecheck.mdk`), so the atom this declaration guarantees is
+-- `Atom "FileRead" (PPrefix (Some "x/*"))` -- and deriving that ⊤ parameter is a
+-- READ of the effect-domain registry (`atomOfWritten` -> `dtopFor`).  With the
+-- registry unpopulated the same declaration yields `Atom "FileRead" PUnit`, the
+-- guarantee no longer matches the relay's written row, and the entry's `stash` is
+-- rejected as laundering.  That is what this fixture is for: the atomic-label
+-- sibling cannot see it, because `Stdout` has no domain parameter to degrade.
+export data UserSlot (e : Effect) = UserSlot (Unit -> <FileRead "x/*" | e> Unit)
+
+export mkUserSlot : (Unit -> <FileRead "x/*" | e> Unit) -> UserSlot e
+mkUserSlot f = UserSlot f
