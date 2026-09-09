@@ -1,0 +1,8 @@
+error: test/error_quality_fixtures/eval/analyzefinish_order_resolve.mdk:5:35: cannot derive 'Bogus' for 'Widget'; supported: Eq, Ord, Debug, Display, Generic, Hashable
+  |
+5 | data Widget = Widget Int deriving (Bogus)
+  |                                    ^
+error: test/error_quality_fixtures/eval/analyzefinish_order_resolve.mdk:7:15: Unbound variable: unknownName
+  |
+7 | main = println unknownName
+  |                ^

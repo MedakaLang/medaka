@@ -255,9 +255,10 @@ import support.ordmap.{
   omMapValues,
   omSize,
 }
-import list.{replicate}
+import list.{replicate, drop}
 import support.util.{
   listLen,
+  matchingStepPrefix,
   lookupAssoc,
   contains,
   endsWith,
@@ -12761,7 +12762,7 @@ expandSupersFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    expandSupersFix allDecls next (dropN (listLen acc) next)
+    expandSupersFix allDecls next (drop (listLen acc) next)
 
 -- S-slot-key-vector (#1866): keyed on the WHOLE PREDICATE — slot AND argument vector — so
 -- the vector DOES participate in the arity decision.  `(Ix a Char, Ix a Bool) => …` is two
@@ -12853,15 +12854,6 @@ filterMaybeIds : List (Option Int) -> List Int
 filterMaybeIds [] = []
 filterMaybeIds ((Some x) :: rest) = x :: filterMaybeIds rest
 filterMaybeIds (None :: rest) = filterMaybeIds rest
-
--- U1b (#1482): one polymorphic drop, replacing the byte-identical `dropPairs` /
--- `dropVecObls` pair (the payload widening would otherwise have made it three).
-dropN : Int -> List a -> List a
-dropN n xs
-  | n <= 0 = xs
-  | otherwise = match xs
-    [] => []
-    _ :: rest => dropN (n - 1) rest
 
 -- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
 -- deliberately — this key feeds the dedup that decides how many dict slots a constrained
@@ -25311,7 +25303,7 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 --  1. `keyForSite` is reached ONLY from the five `resolve*` stamp passes, and those now
 --     run during the graph-end drain (`drainStampQueue` / `runStampCtxs`, #2548), itself
 --     reached only from inside `elaborateModules`.  `medaka check` on a multi-module
---     project goes `analyzeProject` → `typecheckPass` → `checkModulesDiags` →
+--     project goes `analyzeProject` → `typecheckPassFull` → `checkModulesDiags` →
 --     `checkModuleFullDiags`, which typechecks and never stamps a route.  (Door 4's two
 --     guards DO reach `check` because they fire during typecheck proper, in the
 --     obligation channel.)
@@ -36953,7 +36945,7 @@ censusSuperCloseFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    censusSuperCloseFix allDecls next (dropN (listLen acc) next)
+    censusSuperCloseFix allDecls next (drop (listLen acc) next)
 
 censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperSlotsOf allDecls (iface, id) =
@@ -36980,7 +36972,7 @@ censusSuperCloseVecFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    censusSuperCloseVecFix allDecls next (dropN (listLen acc) next)
+    censusSuperCloseVecFix allDecls next (drop (listLen acc) next)
 
 -- the direct super vectors of one (iface, ids) predicate: the interface's typarams map
 -- POSITIONALLY onto ids (so a multi-param super carries the right per-arg ids, not a
@@ -41214,16 +41206,20 @@ cmModuleWorker mid seed accData accAll prog =
     checkModuleFullDiags mid seed accData (accAll ++ prog) prog
   (schemes, (schemes, errs, warns))
 
--- collect for checkModulesDiags: strips the payload's `schemes` back off so the
--- returned list shape stays `(mid, (errs, warns))` — `checkModulesDiags`'s exported
--- signature (a selfproc LEG A row) is UNCHANGED by #2246 — but first, on the
--- TERMINAL module only, records that module's `main` scheme.
+-- collect for the diagnostics fold: keeps the worker's whole `(schemes, errs, warns)`
+-- payload per module, and on the TERMINAL module only records that module's `main`
+-- scheme.  The `schemes` half is what lets a caller derive the ENTRY REPORT — the
+-- terminal module's own schemes and warnings, plus every module's errors — from this
+-- one pass instead of from a second, entry-only driver over the same graph
+-- (`checkModulesEntryFromDiags` below is that projection, and it is `cmEntryCollect`
+-- written as a fold over this list).  `checkModulesDiagsChain`'s exported signature
+-- (a selfproc LEG A row) keeps the narrower `(errs, warns)` shape: it projects.
 --
 -- #2246: this is the multi-module `analyzeProject` path's ONLY producer of
 -- `mainSchemeRef`.  S-3 (#2234) made `mainShapeWarnings` pure — it now READS the ref
 -- rather than re-elaborating — which was correct for every caller that had a
 -- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
--- `analyzeProject` → `typecheckPass` → here, and nothing on that chain wrote it.
+-- `analyzeProject` → `typecheckPassFull` → here, and nothing on that chain wrote it.
 -- Both directions of that hole are pinned:
 --   * fresh process — the ref is `None`, `mainTypeIsUnit ()` answers False on `None`,
 --     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
@@ -41239,11 +41235,49 @@ cmModuleWorker mid seed accData accAll prog =
 cmDiagsCollect : Bool ->
   String ->
   (List (String, Scheme), List TcDiag, List TcDiag) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  List (String, (List TcDiag, List TcDiag))
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 cmDiagsCollect isLast mid (schemes, errs, warns) rest =
   let _ = setMainSchemeIfEntry isLast schemes
-  (mid, (errs, warns)) :: rest
+  (mid, (schemes, errs, warns)) :: rest
+
+-- the `(errs, warns)` projection of one full per-module entry, for the exported
+-- drivers whose contract is the narrower pair.
+export
+dropModSchemes : (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  (String, (List TcDiag, List TcDiag))
+dropModSchemes (mid, (_, errs, warns)) = (mid, (errs, warns))
+
+-- `cmEntryCollect` as a projection over the full per-module list: the TERMINAL
+-- module's own schemes and warnings, and every module's errors accumulated
+-- dependency-first.  Same clause structure as `cmEntryCollect`, so the entry report
+-- and the diagnostics fold read one typecheck rather than two.
+--
+-- The whole-graph coherence verdict is already attached by the driver
+-- (`attachCoherenceConflict`): the soft half sits at the front of the terminal
+-- module's warnings, exactly where `checkModulesEntryFullSplitK` prepends it.  The
+-- hard half sits at the front of the terminal module's ERRORS rather than at the
+-- front of the accumulated list, which differs only on a graph that has both a
+-- conflict and an imported-module type error — a graph whose caller has already
+-- reported errors and exited.
+export
+checkModulesEntryFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  (List (String, Scheme), List TcDiag, List TcDiag)
+checkModulesEntryFromDiags [] = ([], [], [])
+checkModulesEntryFromDiags [(_, (s, e, w))] = (s, e, w)
+checkModulesEntryFromDiags ((_, (_, e, _)) :: rest) =
+  let (eS, eE, eW) = checkModulesEntryFromDiags rest
+  (eS, e ++ eE, eW)
+
+-- `checkModulesEntryReport`'s renderer, over per-module diagnostics a driver already
+-- produced.  Both must render identically or `check`'s multi-module report changes
+-- shape, which is why the match below is `checkModulesEntryReport`'s verbatim.
+export
+entryReportFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  String
+entryReportFromDiags perMod = match checkModulesEntryFromDiags perMod
+  (schemes, [], warns) => joinNl (schemeLines schemes ++ map tcMsg warns)
+  (_, errs, _) => joinNl (typeErrorLines (map tcMsg errs))
 
 -- The SET-OR-CLEAR write itself, on the terminal (entry) module only.  Split out of
 -- `cmDiagsCollect` so the "never a partial write" property is one two-clause
@@ -41271,7 +41305,7 @@ data ChainStep = ChainStep {
   csDepEnv : List (String, List (String, Scheme)),
   csAccData : List Decl,
   csAccAll : List Decl,
-  csResults : List (String, (List TcDiag, List TcDiag)),
+  csResults : List (String, (List (String, Scheme), List TcDiag, List TcDiag)),
   csCrossRun : CrossRun,
   csGraphRun : GraphRun,
   csDriver : DriverState,
@@ -41284,6 +41318,19 @@ moduleChainMemoRef = Ref None
 
 -- `checkModulesDiagsK` resuming from the module-chain memo.  `stepKeys` pairs
 -- with `modules0` positionally.
+-- The per-module payload is the worker's whole `(schemes, errs, warns)` triple: a
+-- caller that also needs the graph's ENTRY REPORT derives it from this list
+-- (`entryReportFromDiags`) instead of running a second, entry-only driver over the
+-- same graph.  `dropModSchemes` is the narrower `(errs, warns)` projection the
+-- bucketing fold consumes.
+
+-- The whole-graph memo key both prefix memos (the typecheck chain here, the
+-- resolve chain in `driver/diagnostics.mdk`) compare their stored key against:
+-- the prelude generation pair plus the chain key.  One definition, so the two
+-- memos cannot drift apart on what "the same graph" means.
+export
+chainFullKey : Int -> Int -> String -> String
+chainFullKey rk ck chainKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
 export
 checkModulesDiagsChain : Option (Int, Int) ->
   String ->
@@ -41291,18 +41338,19 @@ checkModulesDiagsChain : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag))
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsK None runtimeDecls coreDecls0 modules0
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
-  let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+  let fullKey = chainFullKey rk ck chainKey
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []
-  let (kept, restored) = chainPrefix steps stepKeys (listLen modules) [] None
+  let (kept, restored) =
+    matchingStepPrefix (st => st.csKey) steps stepKeys (listLen modules)
   let (depEnv, accData, accAll, results) = match restored
     None => ([], publicDataDecls coreDecls, coreDecls, [])
     Some st =>
@@ -41320,13 +41368,13 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
       accData
       accAll
       results
-      (dropN n stepKeys)
+      (drop n stepKeys)
       -- #2705: each suffix module is marked as it is checked (`checkBodyImpl`), i.e.
       -- after the prefix restore above replaced `graphRun` — a cell minted before
       -- that restore would index the older, shorter table and `methodCellOf` would
       -- panic on the next analyze.  The restored prefix keeps its own cells (they
       -- ride the snapshot).
-      (dropN n modules)
+      (drop n modules)
   moduleChainMemoRef := Some
     ChainMemo {
       chKey = fullKey,
@@ -41336,28 +41384,6 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   -- module, and any module after the last recorded step) — see `chainGo`.
   let _ = checkGraphFinish ()
   attachCoherenceConflict (reverseL finalResults)
-
--- The longest prefix of `steps` whose keys match `keys` positionally, never
--- covering the last of `total` modules.  Returns (matching steps in order, the
--- last matching step).
-chainPrefix : List ChainStep ->
-  List (Option String) ->
-  Int ->
-  List ChainStep ->
-  Option ChainStep ->
-  (List ChainStep, Option ChainStep)
-chainPrefix [] _ _ acc last = (reverseL acc, last)
-chainPrefix _ [] _ acc last = (reverseL acc, last)
-chainPrefix (st :: sts) (k :: ks) total acc last =
-  if listLen acc + 1 >= total then
-    (reverseL acc, last)
-  else match k
-    Some key =>
-      if key == st.csKey then
-        chainPrefix sts ks total (st :: acc) (Some st)
-      else
-        (reverseL acc, last)
-    None => (reverseL acc, last)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `foldModules True True cmModuleWorker cmDiagsCollect`
@@ -41369,16 +41395,16 @@ chainGo : List (String, Scheme) ->
   List (String, List (String, Scheme)) ->
   List Decl ->
   List Decl ->
-  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
   List (Option String) ->
   List (String, List Decl) ->
-  (List (String, (List TcDiag, List TcDiag)), List ChainStep)
+  (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List ChainStep)
 chainGo _ _ _ _ _ results _ [] = (results, [])
 chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
   let seed = baseSeed ++ importSeed prog depEnv
   let (schemes, (_, errs, warns)) = cmModuleWorker mid seed accData accAll prog
   let _ = setMainSchemeIfEntry True schemes
-  ((mid, (errs, warns)) :: results, [])
+  ((mid, (schemes, errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
   let seed = baseSeed ++ importSeed prog depEnv
   let (schemes, (_, errs, warns)) = cmModuleWorker mid seed accData accAll prog
@@ -41387,7 +41413,7 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
   let depEnv2 = (mid, pubV) :: depEnv
   let accData2 = accData ++ publicDataDecls prog
   let accAll2 = accAll ++ prog
-  let results2 = (mid, (errs, warns)) :: results
+  let results2 = (mid, (schemes, errs, warns)) :: results
   let (key, keys2) = match keys
     k :: ks => (k, ks)
     [] => (None, [])
@@ -41427,7 +41453,7 @@ checkModulesDiagsK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag))
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
@@ -41466,46 +41492,52 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   attachCoherenceConflict perMod
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —
--- the tail every diagnostics-fold driver (`checkModulesDiagsK`,
--- `checkModulesDiagsChain`) ends with.
-attachCoherenceConflict : List (String, (List TcDiag, List TcDiag)) ->
-  List (String, (List TcDiag, List TcDiag))
+-- the tail the diagnostics-fold drivers (`checkModulesDiagsK`,
+-- `checkModulesDiagsChain`) end with.  `elaborateModules` ends with the pair-shaped
+-- twin below; the two differ only in the payload they reach into, so the traversal
+-- and both messages are shared.
+attachCoherenceConflict : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 attachCoherenceConflict perMod =
   match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
-    (hard, soft) => attachEntryWarnOpt soft (attachEntryDiagOpt hard perMod)
+    (None, None) => perMod
+    (hard, soft) => attachEntryPayload (cohOntoFull hard soft) perMod
 
-attachEntryDiagOpt : Option String ->
-  List (String, (List TcDiag, List TcDiag)) ->
+-- the `(errs, warns)` twin, for the drivers whose per-module payload is the pair.
+attachCoherenceConflictPair : List (String, (List TcDiag, List TcDiag)) ->
   List (String, (List TcDiag, List TcDiag))
-attachEntryDiagOpt None perMod = perMod
-attachEntryDiagOpt (Some msg) perMod =
-  attachEntryDiag (TcDiag "T-CONFLICTING-IMPL" 1 None msg None None) perMod
+attachCoherenceConflictPair perMod =
+  match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
+    (None, None) => perMod
+    (hard, soft) => attachEntryPayload (cohOntoPair hard soft) perMod
 
-attachEntryWarnOpt : Option String ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  List (String, (List TcDiag, List TcDiag))
-attachEntryWarnOpt None perMod = perMod
-attachEntryWarnOpt (Some msg) perMod =
-  attachEntryWarn
-    (TcDiag "W-INCOMPARABLE-IMPLS" 2 None msg (Some cohIncomparableHelp) None)
-    perMod
+cohOntoFull : Option String ->
+  Option String ->
+  (List (String, Scheme), List TcDiag, List TcDiag) ->
+  (List (String, Scheme), List TcDiag, List TcDiag)
+cohOntoFull hard soft (schemes, errs, warns) =
+  (schemes, cohHardOnto hard errs, cohSoftOnto soft warns)
 
--- prepend a warning to the LAST module's (errs, warns) in a per-module diag list —
--- the warning-channel twin of `attachEntryDiag`, same entry-module attribution.
-attachEntryWarn : TcDiag ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  List (String, (List TcDiag, List TcDiag))
-attachEntryWarn _ [] = []
-attachEntryWarn w [(mid, (errs, warns))] = [(mid, (errs, w :: warns))]
-attachEntryWarn w (m :: rest) = m :: attachEntryWarn w rest
+cohOntoPair : Option String ->
+  Option String ->
+  (List TcDiag, List TcDiag) ->
+  (List TcDiag, List TcDiag)
+cohOntoPair hard soft (errs, warns) =
+  (cohHardOnto hard errs, cohSoftOnto soft warns)
 
--- prepend an error to the LAST module's (errs, warns) in a per-module diag list.
-attachEntryDiag : TcDiag ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  List (String, (List TcDiag, List TcDiag))
-attachEntryDiag _ [] = []
-attachEntryDiag e [(mid, (errs, warns))] = [(mid, (e :: errs, warns))]
-attachEntryDiag e (m :: rest) = m :: attachEntryDiag e rest
+cohHardOnto : Option String -> List TcDiag -> List TcDiag
+cohHardOnto hard errs = prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs
+
+cohSoftOnto : Option String -> List TcDiag -> List TcDiag
+cohSoftOnto soft warns =
+  prependDiagOpt "W-INCOMPARABLE-IMPLS" 2 (Some cohIncomparableHelp) soft warns
+
+-- rewrite the LAST module's payload in a per-module diag list (the entry module is
+-- last in dependency-first order).
+attachEntryPayload : (p -> p) -> List (String, p) -> List (String, p)
+attachEntryPayload _ [] = []
+attachEntryPayload f [(mid, p)] = [(mid, f p)]
+attachEntryPayload f (m :: rest) = m :: attachEntryPayload f rest
 
 -- the entry module is last in dependency-first order
 export
@@ -41896,20 +41928,12 @@ allModuleLines ((mid, ss) :: rest) =
   "## MODULE " ++ mid :: schemeLines ss ++ allModuleLines rest
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────
--- The multi-module analog of `elaborate`: the composition of `checkModules`
--- (per-module-frame typecheck, dependency-first) and the EMethodAt route-
--- stamping `elaborate` does single-module.  prePasses the prelude + every module
--- (rewriting return-position method occurrences to EMethodAt over the WHOLE
--- program's RP method set), typechecks each module in dependency order (seeded
--- like checkModules), and STAMPS each module's route refs from its now-resolved
--- result types.  Returns the SAME trees (refs filled) so evalModules can route
--- return-position dispatch (`pure`/`andThen` — the Parser monad) by RKey instead
--- of the untyped arg-tag fallback.  RKey-only (dictNames = []): the bootstrap
--- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
--- and no pendingDictApps / pendingRecDictApps to resolve.
-export
--- The third component is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per
--- user module in load order, with the whole-graph coherence verdict attached to the
+-- `ElabResult` is what a multi-module elaboration returns: the core decls, the
+-- elaborated modules, and three diagnostic/evidence views over the same run.
+-- The first component is the elaborated CORE decls (prelude, post dict-pass).
+-- The second is the elaborated user MODULES, in load order, trees refs filled.
+-- The third is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per user
+-- module in load order, with the whole-graph coherence verdict attached to the
 -- entry module — the same list `checkModulesDiagsK` returns, produced by the same
 -- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
 -- `recordTypeError` writes both channels, so every per-module error is in the
@@ -41920,23 +41944,32 @@ export
 -- residual to gate on `hadTypeErrors` — never both.
 -- #2544 (M4): the fourth component is the RESIDUAL — every diagnostic this
 -- elaboration recorded and left standing, tagged with its module id, per goal with
--- its own `Loc`, in push order.
--- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
--- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
--- to this call.
+-- its own `Loc`, in push order.  Callers that gate on `hadTypeErrors` render it
+-- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
+-- same list the sticky channel holds, cut to this call.
 -- #2549 M2: the fifth component is the EVIDENCE TABLE — every goal this
 -- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
 -- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
 -- cell.  Nothing consumes it yet: the routes it carries are the same routes already
 -- stamped into the trees' own cells, so a caller that ignores it loses nothing.
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)
+
+-- The multi-module analog of `elaborate`: the composition of `checkModules`
+-- (per-module-frame typecheck, dependency-first) and the EMethodAt route-
+-- stamping `elaborate` does single-module.  prePasses the prelude + every module
+-- (rewriting return-position method occurrences to EMethodAt over the WHOLE
+-- program's RP method set), typechecks each module in dependency order (seeded
+-- like checkModules), and STAMPS each module's route refs from its now-resolved
+-- result types.  Returns the SAME trees (refs filled) so evalModules can route
+-- return-position dispatch (`pure`/`andThen` — the Parser monad) by RKey instead
+-- of the untyped arg-tag fallback.  RKey-only (dictNames = []): the bootstrap
+-- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
+-- and no pendingDictApps / pendingRecDictApps to resolve.  Return shape: `ElabResult`.
+export
 elaborateModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl,
-    List (String, List Decl),
-    List (String, (List TcDiag, List TcDiag)),
-    List (String, TcDiag),
-    EvTable)
+  ElabResult
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
@@ -42151,7 +42184,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   (
     coreD,
     map resolveAliasMethodSpellings modules3,
-    attachCoherenceConflict perModDiags,
+    attachCoherenceConflictPair perModDiags,
     stickyTypeErrorDiagsSince stickyBefore,
     graphRun.value.evTable.value,
   )

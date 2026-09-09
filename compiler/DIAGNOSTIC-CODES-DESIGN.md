@@ -598,6 +598,6 @@ that CLI surface until ≥2 `fix` categories exist.
   must be reviewed against the §1 table so codes stay accurate (a wrong code is
   worse than none for the agent audience).
 - **Multi-module warn-loc threading** widens `checkModulesDiags`'s return type —
-  audit every caller (`typecheckPass`, LSP `analyzeProject`) for the shape change.
+  audit every caller (`typecheckPassFull`, LSP `analyzeProject`) for the shape change.
 - **Code stability contract:** once shipped, codes are append-only. Document that
   in this file's header when Stage 1 lands.
