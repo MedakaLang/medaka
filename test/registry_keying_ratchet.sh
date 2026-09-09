@@ -262,7 +262,6 @@ promotionHarvestRef -- accumulated directly-promoted fn names across modules (#1
 mainSchemeRef -- the entry module inferred `main` scheme; last writer (dependency-order last) wins
 sigNameSetRef -- signature NAME set, OrdMap membership mirror
 sigTyMapRef -- signature name -> Ty map
-implInferEnabled -- toggle: whether impl-body inference is active on this pass
 stdlibOwnedModsRef -- #2072/#2096 (FFI declaration rules): module ids owned by the stdlib root, read by ffiStampMode's Module arm to decide whether a checked program is exempt from the two user-extern declaration guards (the FFI-label rule and the crossable-set rule). Named for the FFI STAMP it originally gated; F1 (epic #2070) deleted that stamp and the Bool now gates the checks that replaced it
 flatEntryIsStdlibRef -- #2072/#2096 (FFI declaration rules; the field is named for the deleted stamp): whether the Flat-arm entry file is itself stdlib-owned, read by ffiStampMode's Flat arm for the same exemption decision
 localPinDisabledRef -- sprint argtag-decidability (#2445) S-1: the MEDAKA_ARGTAG_UNPIN diagnostic hatch, driver-set-once via setLocalPinDisabled (default False, so any entry point that never calls it keeps the pin), read by localPinPairs to short-circuit local-pin constraint-pair computation when off

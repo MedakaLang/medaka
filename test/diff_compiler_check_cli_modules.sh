@@ -1504,6 +1504,97 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-build (native build failed)\n'
 fi
 
+# ── #1302 and #1530, DRAINED by #2705 — re-pointed here rather than deleted ───
+#
+# Both pinned the same FALSE REJECT: a method occurrence whose bare spelling has
+# two or more admitted declarations in the module's scope (S2-DECL (d)) had its
+# obligation built from `methodIfaceParamsRef`'s last-write-wins floor row, so the
+# reject named an interface the program never meant — `MSIP`, private to another
+# module, in #1302 (`import mspriv.*` beside `import ifb.{IB, mth}`); `IP`, from a
+# selective re-export merge, in #1530.  `recordImplObligation` now records such an
+# occurrence against the whole admitted SET and `checkAdmittedOccObls` decides it by
+# (d) once the receiver has grounded: an impl at the receiver's head under ANY
+# admitted declaration accepts; none rejects, naming every admitted interface.
+# Three legs: the two drained programs ACCEPT with their pinned values, and the
+# no-impl variant of #1530 still REJECTS — the arm the floor's coin flip used to
+# get right by accident must stay loud.
+cat > "$TMP/x1302_ifb.mdk" <<'EOF'
+export interface IB a where
+  mth : a -> Int
+EOF
+cat > "$TMP/x1302_mspriv.mdk" <<'EOF'
+interface MSIP a where
+  mth : a -> Int
+
+export helper : Int -> Int
+helper n = n + 1
+EOF
+cat > "$TMP/x1302_main.mdk" <<'EOF'
+import x1302_ifb.{IB, mth}
+import x1302_mspriv.*
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mth b = 5
+
+main = println (helper (mth Blob))
+EOF
+x1302_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1302_main.mdk" 2>&1)"
+x1302_run_code=$?
+if [ "$x1302_run_code" -eq 0 ] && [ "$x1302_run" = "6" ]; then
+  pass=$((pass+1)); printf 'ok   S2-DECL/1302-private-iface-under-wildcard-accepts (6)\n'
+else
+  fail=$((fail+1)); printf 'FAIL S2-DECL/1302-private-iface-under-wildcard-accepts (exit %d, got [%s], want 6)\n' "$x1302_run_code" "$x1302_run"
+fi
+cat > "$TMP/x1530_g.mdk" <<'EOF'
+export interface IG f where
+  mth : f a -> Int
+EOF
+cat > "$TMP/x1530_p.mdk" <<'EOF'
+export interface IP f where
+  mth : f a -> Int
+EOF
+cat > "$TMP/x1530_mid.mdk" <<'EOF'
+export import x1530_g.{IG, mth}
+export import x1530_p.{IP, mth}
+EOF
+cat > "$TMP/x1530_main.mdk" <<'EOF'
+import x1530_mid.{IP, IG, mth}
+
+data W a = MkW a
+
+impl IG W where
+  mth w = 5
+
+main = println (mth (MkW 1))
+EOF
+x1530_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1530_main.mdk" 2>&1)"
+x1530_run_code=$?
+if [ "$x1530_run_code" -eq 0 ] && [ "$x1530_run" = "5" ]; then
+  pass=$((pass+1)); printf 'ok   S2-DECL/1530-reexport-merge-collision-accepts (5)\n'
+else
+  fail=$((fail+1)); printf 'FAIL S2-DECL/1530-reexport-merge-collision-accepts (exit %d, got [%s], want 5)\n' "$x1530_run_code" "$x1530_run"
+fi
+cat > "$TMP/x1530_noimpl.mdk" <<'EOF'
+import x1530_mid.{IP, IG, mth}
+
+data W a = MkW a
+
+main = println (mth (MkW 1))
+EOF
+x1530_no="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x1530_noimpl.mdk" 2>&1)"
+x1530_no_code=$?
+case "$x1530_no" in
+  *"No impl of IG or IP"*|*"No impl of IP or IG"*) x1530_no_named=1 ;;
+  *) x1530_no_named=0 ;;
+esac
+if [ "$x1530_no_code" -eq 1 ] && [ "$x1530_no_named" -eq 1 ]; then
+  pass=$((pass+1)); printf 'ok   S2-DECL/1530-reexport-merge-no-impl-rejects (names both admitted interfaces)\n'
+else
+  fail=$((fail+1)); printf 'FAIL S2-DECL/1530-reexport-merge-no-impl-rejects (exit %d, got [%s])\n' "$x1530_no_code" "$x1530_no"
+fi
+
 # ── #1810, DRAINED — re-pointed here rather than deleted ──────────────────────
 #
 # `test/must_fail_fixtures/1810-rdict-filtertagged-drops-iface-identity/` pinned

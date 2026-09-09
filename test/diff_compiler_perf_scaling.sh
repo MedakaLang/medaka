@@ -520,10 +520,35 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 #           discharged only by a lowering that stops materialising one branch per
 #           head with the full wildcard tail (e.g. sharing the guard chain), which
 #           is a codegen change, not a data-structure swap.
+#   conlocal — the CONSTRAINED-BINDING shape's WHOLE-RUN allocation (issue #2030, the
+#           same `localPinPairs` mechanism its `conlocal:typecheck` / `conlocal:elaborate`
+#           OP rows are ledgered for in KNOWN_SLOW_OPS). Until #2705 the check path
+#           did not solve, so the typecheck stage's quadratic ALLOC sat under the
+#           ceiling and only elaborate's showed: the ledger note for the op row
+#           records total alloc r1 2.57 r2 2.89. #2705 makes every driver mark and
+#           solve — the typecheck stage now walks the same pinned-binding channels
+#           elaborate always did — and the whole-run ratio crossed the line by the
+#           width of that walk. MEASURED on this box, net alloc after BASE_ALLOC
+#           subtraction, N=400/800/1600, branch `typecheck-rearch-2` vs its base
+#           `2a0a1e0f3` (the base binary read 2.56 / 2.87 in the same session):
+#               561.7 -> 1500.9 -> 4504.0 MB   r1 2.67  r2 3.00
+#           OBSERVED RED before ledgering, verbatim:
+#               $ PERF_ONLY=conlocal sh test/diff_compiler_perf_scaling.sh
+#               conlocal  400  561.7 MB  1500.9 MB  4504.0 MB  2.67  3.00 \
+#                 ** SUPERLINEAR (ALLOC) ** (r2 > 3.0x)
+#           CEILING 3.30 = the measured r2 (3.00) + 10% (S-2's headroom convention),
+#           capped well under the 4.0 a pure quadratic converges to, so a worse
+#           regression on this shape still reds the row. FIXED 2.60 is the file-wide
+#           convention. It self-drains with the op rows: indexing the pin bookkeeping
+#           (#2030) drops all three under 2.60 and this row PROMOTES, demanding
+#           removal. A per-binding solve memo (#2719) does not drain it — the walk is
+#           per pinned binding, not per analyze.
 KNOWN_SUPERLINEAR="
 guardwild
+conlocal
 "
 KNOWN_CEIL_guardwild="${KNOWN_CEIL_guardwild:-3.68}";  KNOWN_FIXED_guardwild="${KNOWN_FIXED_guardwild:-2.60}"
+KNOWN_CEIL_conlocal="${KNOWN_CEIL_conlocal:-3.30}";    KNOWN_FIXED_conlocal="${KNOWN_FIXED_conlocal:-2.60}"
 
 # ── PERF_LEDGER_EXTRA: the DELIBERATE-RED SEAM for the ledger branches (#2150) ──
 #

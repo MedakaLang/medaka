@@ -1,5 +1,5 @@
 # META
-source_lines=576
+source_lines=615
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
@@ -245,6 +245,45 @@ evRoutesOf : EvVal -> List Route
 evRoutesOf (EvMany rs) = rs
 evRoutesOf (EvOne _) =
   panic "evidence table: a dictionary application solved to a single route"
+evRoutesOf (EvMethod _ _ _) =
+  panic
+    "evidence table: a dictionary application answered by a method occurrence"
+
+-- The answer published for a method occurrence: its dispatch route, the selected
+-- impl's `requires` dicts and the method's own `=>` dicts — the three cells an
+-- `EMethodAt` node used to carry, in that order.
+--
+-- Unlike `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
+-- one entry per `EMethodAt` node at the moment it constructs the node and
+-- publishes every one of them, so an id with no entry can only mean the table
+-- installed is not the one this node's elaboration published — the install-
+-- ordering hazard the header above describes, surfaced instead of answered with
+-- an unrouted dispatch.
+export
+evMethodRoutes : EvId -> (Route, List Route, List Route)
+evMethodRoutes (EvId m i) = match !evidenceRef
+  None =>
+    panic
+      "evidence table: no elaboration has published one (looking up method \{m}#\{intToString i})"
+  Some arr =>
+    if i >= arrayLength arr then
+      panic
+        "evidence table: method occurrence \{m}#\{intToString i} was never published"
+    else match arrayGetUnsafe i arr
+      None =>
+        panic
+          "evidence table: method occurrence \{m}#\{intToString i} was never published"
+      Some (EvEntry (EvId m2 _) v) =>
+        if m2 == m then
+          evMethodOf v
+        else
+          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
+
+evMethodOf : EvVal -> (Route, List Route, List Route)
+evMethodOf (EvMethod r impls meths) = (r, impls, meths)
+evMethodOf _ =
+  panic
+    "evidence table: a method occurrence answered by a dictionary application"
 
 -- ── the interface half of the word ────────────────────────────────────────
 -- `module::Iface` when the interface's origin is known, and the BARE name when
@@ -596,6 +635,12 @@ rkTyList =
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
+(DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
+(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evMethodRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up method ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published"))))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evMethodOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString "")))))))))))
+(DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evMethodOf" ((PCon "EvMethod" (PVar "r") (PVar "impls") (PVar "meths"))) (ETuple (EVar "r") (EVar "impls") (EVar "meths")))
+(DFunDef false "evMethodOf" (PWild) (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by a dictionary application"))))
 (DTypeSig true "ifaceWordOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceWordOf" ((PVar "o") (PVar "name")) (EMatch (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "name")) (arm (PLit (LString "")) () (EVar "name")) (arm (PVar "ident") () (EVar "ident"))))
 (DTypeSig true "funHeadTag" (TyCon "String"))
@@ -659,6 +704,12 @@ rkTyList =
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
+(DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
+(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evMethodRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up method ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published"))))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evMethodOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString "")))))))))))
+(DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evMethodOf" ((PCon "EvMethod" (PVar "r") (PVar "impls") (PVar "meths"))) (ETuple (EVar "r") (EVar "impls") (EVar "meths")))
+(DFunDef false "evMethodOf" (PWild) (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by a dictionary application"))))
 (DTypeSig true "ifaceWordOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceWordOf" ((PVar "o") (PVar "name")) (EMatch (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "name")) (arm (PLit (LString "")) () (EVar "name")) (arm (PVar "ident") () (EVar "ident"))))
 (DTypeSig true "funHeadTag" (TyCon "String"))
