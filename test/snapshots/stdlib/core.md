@@ -1,5 +1,5 @@
 # META
-source_lines=1983
+source_lines=1992
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1720,7 +1720,16 @@ apply f a = f a
 
    `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
    candidates, tried in order to reduce a failing example; it defaults to
-   none. -}
+   none.
+
+   `medaka test` draws each `prop` parameter from its declared type. A
+   user-defined type that takes no type arguments is drawn through its
+   `Arbitrary` instance when one is in scope, and built from its constructors
+   otherwise. Every other parameter type the runner builds itself: `Int`,
+   `Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
+   `Result`, tuples, and any type applied to arguments, so an instance at one
+   of those is not consulted. Counterexamples are shrunk by the runner, so
+   `shrink` serves hand-written generators. -}
 export interface Arbitrary a where
   arbitrary : Unit -> <Rand> a
   shrink : a -> List a

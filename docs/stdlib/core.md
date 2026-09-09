@@ -1217,6 +1217,15 @@ Types that can generate random values for property tests.
 candidates, tried in order to reduce a failing example; it defaults to
 none.
 
+`medaka test` draws each `prop` parameter from its declared type. A
+user-defined type that takes no type arguments is drawn through its
+`Arbitrary` instance when one is in scope, and built from its constructors
+otherwise. Every other parameter type the runner builds itself: `Int`,
+`Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
+`Result`, tuples, and any type applied to arguments, so an instance at one
+of those is not consulted. Counterexamples are shrunk by the runner, so
+`shrink` serves hand-written generators.
+
 ### `arbitraryString`
 
 ```

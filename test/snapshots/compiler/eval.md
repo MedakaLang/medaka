@@ -1,5 +1,5 @@
 # META
-source_lines=4862
+source_lines=4863
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1617,6 +1617,7 @@ oneOrMultiV many _ = VMulti many
 -- while a canonical key always does — so this can't cross-match.  This is what
 -- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
 -- narrow to the one the checker picked instead of first-impl-wins.
+export
 hasTag : String -> Value e -> Bool
 hasTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
 hasTag _ _ = False
@@ -5377,7 +5378,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
 (DFunDef false "oneOrMultiV" ((PList) (PVar "original")) (EApp (EVar "VMulti") (EVar "original")))
 (DFunDef false "oneOrMultiV" ((PVar "many") PWild) (EApp (EVar "VMulti") (EVar "many")))
-(DTypeSig false "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DTypeSig true "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
 (DFunDef false "hasTag" ((PVar "tag") (PCon "VTypedImpl" (PVar "t") (PVar "k") PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))))
 (DFunDef false "hasTag" (PWild PWild) (EVar "False"))
 (DTypeSig false "matchesTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
@@ -6899,7 +6900,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
 (DFunDef false "oneOrMultiV" ((PList) (PVar "original")) (EApp (EVar "VMulti") (EVar "original")))
 (DFunDef false "oneOrMultiV" ((PVar "many") PWild) (EApp (EVar "VMulti") (EVar "many")))
-(DTypeSig false "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DTypeSig true "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
 (DFunDef false "hasTag" ((PVar "tag") (PCon "VTypedImpl" (PVar "t") (PVar "k") PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))))
 (DFunDef false "hasTag" (PWild PWild) (EVar "False"))
 (DTypeSig false "matchesTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))

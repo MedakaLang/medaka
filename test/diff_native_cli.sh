@@ -160,7 +160,6 @@ REPL_IN="$ROOT/test/repl_fixtures/session.in"
 REPL_GOLDEN="$ROOT/test/repl_fixtures/session.golden"
 repl_probe="$(printf ':quit\n' | MEDAKA_ROOT="$ROOT" bound "$MEDAKA" repl 2>&1)"
 case "$repl_probe" in
-  *"not yet in native CLI"*) REPL_WIRED=0 ;;
   *) REPL_WIRED=1 ;;
 esac
 if [ "$REPL_WIRED" = 1 ] && [ -f "$REPL_IN" ] && [ -f "$REPL_GOLDEN" ]; then
@@ -228,7 +227,6 @@ fi
 RUN_FIXTURES="hello arith recur adt listsum strcat"
 run_probe="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$FIX/run/hello.mdk" 2>&1)"
 case "$run_probe" in
-  *"not yet in native CLI"*) RUN_WIRED=0 ;;
   *) RUN_WIRED=1 ;;
 esac
 if [ "$RUN_WIRED" = 1 ]; then
@@ -271,7 +269,6 @@ fi
 TEST_FIXTURES="doc prop nodoc"
 test_probe="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$FIX/test/doc.mdk" 2>&1)"
 case "$test_probe" in
-  *"not yet in native CLI"*) TEST_WIRED=0 ;;
   *) TEST_WIRED=1 ;;
 esac
 if [ "$TEST_WIRED" = 1 ]; then

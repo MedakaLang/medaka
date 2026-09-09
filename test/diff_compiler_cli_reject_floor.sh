@@ -384,11 +384,6 @@ U_ENTRIES=$(grep -rEln '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*" ?::' "$ROOT/compiler/entr
 #                     codemod's flag vocabulary is per-codemod and not
 #                     statically knowable (§4); contract-scoped migration
 #                     wasn't named in S-2/S-3's actual landed scope.
-#   parsePolicyGo/  — DEAD CODE: medaka_cli.mdk builds PolicyArgs/
-#   parseManifestGo    ManifestArgs itself now (verified: grep -rn
-#                     parsePolicyArgs\\|parseManifestArgs compiler/ shows no
-#                     caller beyond their own definitions and one doc
-#                     comment). A cleanup finding, not a live unrouted arm.
 #   parseCiArgs/    — medaka gate ci / medaka gate balance: undocumented,
 #   parseBalArgs       maintainer-only subcommands, not part of the sixteen-
 #                     verb medaka help surface docs/ops/CLI-CONFORMANCE.md
@@ -401,8 +396,6 @@ compiler/driver/medaka_cli.mdk:runMcpCmd
 compiler/driver/medaka_cli.mdk:runArgvFilter
 compiler/driver/medaka_cli.mdk:splitCodemodArgv
 compiler/tools/codemod.mdk:parseEffectArgs
-compiler/tools/check_policy.mdk:parsePolicyGo
-compiler/tools/check_policy.mdk:parseManifestGo
 compiler/tools/gate_cmd.mdk:parseCiArgs
 compiler/tools/gate_cmd.mdk:parseBalArgs
 "
