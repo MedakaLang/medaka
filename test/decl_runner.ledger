@@ -1,0 +1,14 @@
+DAttrib	compile-time-only: attribute wrapper; every consumer unwraps to the inner decl and uses ITS runner
+DData	compile-time-only: registers a type + constructors for typecheck/eval, no body of its own
+DEffect	compile-time-only: registers an effect domain for typecheck (typecheck.mdk populateGo)
+DExtern	compile-time-only: binds a name to a runtime primitive implemented in runtime/medaka_rt.c, not to a Medaka body
+DFunDef	medaka run / medaka build: eval.mdk installGroups evaluates the body; llvm_emit.mdk emits it
+DImpl	medaka run / medaka build: eval.mdk installs impl methods into dispatch; llvm_emit.mdk emits them
+DInterface	compile-time-only: default method bodies are specialized into DImpl copies by desugar.mdk fillImplDefaults before anything executes them
+DLetGroup	medaka run / medaka build: eval.mdk installGroups evaluates each binding, same as DFunDef
+DNewtype	compile-time-only: registers a wrapper type + constructor for typecheck/eval, no body of its own
+DProp	medaka test: compiler/tools/prop_runner.mdk
+DTest	medaka test: compiler/tools/test_runner.mdk via tools/test_cmd.mdk
+DTypeAlias	compile-time-only: type-level alias consumed by typecheck, erased before eval/backend
+DTypeSig	compile-time-only: signature consumed by typecheck, no body
+DUse	compile-time-only: import resolved by driver/loader.mdk and frontend/resolve.mdk
