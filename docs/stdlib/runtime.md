@@ -142,6 +142,20 @@ writeFileBytes : String -> Array Int -> <FileWrite _> Result String Unit
 Writes bytes, `0` to `255` each, to a file, replacing any existing
 contents.
 
+### `writeFileMode`
+
+```
+writeFileMode : String -> Int -> String -> <FileWrite _> Result String Unit
+```
+
+Writes a string to a file, replacing any existing contents, and leaves
+the file at exactly the permission bits `mode` names (`384` is
+`rw-------`, `420` is `rw-r--r--`).
+
+The contents never exist at a wider mode: the mode is set on the open
+file before the first byte is written, so neither the process umask nor a
+pre-existing file's own mode can widen the result.
+
 ### `appendFile`
 
 ```
@@ -157,6 +171,15 @@ fileExists : String -> <FileRead _> Bool
 ```
 
 Whether a path exists.
+
+### `fileMode`
+
+```
+fileMode : String -> <FileRead _> Result String Int
+```
+
+A path's permission bits, `0` to `4095` (`384` is `rw-------`), or
+`Err` with the host's message. Symbolic links are followed.
 
 ### `canonicalizePath`
 

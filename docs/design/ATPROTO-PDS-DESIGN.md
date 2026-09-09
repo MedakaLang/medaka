@@ -357,18 +357,17 @@ its own staleness and mode problems, for the benefit of not asking a client to l
 after a server restart. The credential record IS persisted, because a server that
 forgot the account password on restart could not accept a login at all.
 
-**File modes are a real gap, stated plainly.** Medaka has no primitive that sets a
-file mode: `writeFile` is `fopen(path, "wb")`, and there is no `chmod`, no `umask`,
-and no mode argument anywhere in the runtime or the stdlib. So the generated session
-secret and the stored credential record land at 0644 — world-readable — and
-`pds/serve.mdk` says so loudly on stderr, naming the path and the mode, whenever it
-creates one. It never names the contents: a warning that quoted the secret would be a
-far larger disclosure than the mode it warns about. On a shared machine an operator
-should pre-create the file under their own umask and hand it in with `--token-secret`.
-This is a gap to close with a mode-taking write primitive, not a residual risk that
-has been accepted; the two available workarounds are both worse than saying so
-(shelling out to `chmod` leaves a real world-readable window between the create and
-the chmod and grants the server an `<Exec>` capability to protect one file).
+**Secrets at rest are owner-only, and a wider one is refused rather than warned
+about.** The generated session secret and the stored credential record are written
+through `io.writeFilePrivate` over the `writeFileMode` primitive, which sets the mode
+on the open descriptor before the first byte is written — so the contents never exist
+at a wider mode, and neither the process umask nor a pre-existing file's own mode can
+widen them. In the other direction, `pds/serve.mdk` grades every hex secret file it
+READS (`--key` and `--token-secret`) with `fileMode` and refuses to start when any
+account but the owner can read one: a signing key the rest of the box can read has
+already been exposed, and serving anyway would hide that. The refusal names the path
+and the mode and never the contents. Encryption at rest is a separate question and is
+deferred past 0.1.0: these are plaintext files under restrictive permissions.
 
 **The password never appears in an argument.** `--password-file PATH` is the only way
 one reaches the server: an argument value is visible in `ps` output to every user on

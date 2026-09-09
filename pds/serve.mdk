@@ -36,15 +36,18 @@
    credential` holds a salt, an iteration count, and a derived key. A run whose
    data directory already holds that record needs no `--password-file` at all.
 
-   A file this program creates is world-readable, mode 0644. Medaka has
-   no primitive that sets a file mode — `writeFile` is `fopen(p, "wb")` and
-   there is no `chmod`, no `umask`, and no mode field anywhere in the runtime
-   or the stdlib — so the generated session secret and the credential record
-   land readable by every user on the box, and this program says so loudly on
-   stderr when it creates one. An operator who needs the session secret at
-   0600 pre-creates it under their own umask and hands it in with
-   `--token-secret`; the credential record has no equivalent pre-create flag
-   (#2611). -}
+   Every file this program creates holding a secret — the generated session
+   secret and the credential record — is written at mode 0600, and a secret
+   file it READS at any wider mode is refused before the listener binds rather
+   than used: a signing key or session-token secret that another account on
+   the box can read is not a secret, and serving anyway would be
+   indistinguishable from a correctly permissioned deployment right up until
+   somebody used it.
+
+   A failed configuration leaves nothing behind either: every secret the flags
+   SUPPLY is read and admitted before any secret this program GENERATES is
+   written, so a run rejected for a bad password file leaves no session secret
+   on disk for the next run to adopt. -}
 
 import args.{
   Args,
@@ -60,6 +63,7 @@ import args.{
 import async.{Async, liftIO}
 import fs.{isDir}
 import hex.{decode, encode}
+import io.{isPrivateMode, writeFilePrivate}
 import lib.blob.{validMimeShape}
 import lib.credential.{
   CredentialRecord,
@@ -143,10 +147,34 @@ requiredPort parsed = do
       else
         Ok port
 
--- Neither key reaches a diagnostic: the read error names the path, and
--- `hex.decode`'s own messages do not echo what they were given.
+-- The mode as `chmod` and `stat -c %a` spell it, so an operator can compare a
+-- rejection to the `0600` its remedy names without converting anything.
+octalMode : Int -> String
+octalMode mode =
+  let digit = shift => intToString (bitAnd (shiftRight mode shift) 7)
+  "0\{digit 6}\{digit 3}\{digit 0}"
+
+{- | Refuse a secret file any account but its owner can read.
+
+   This is a startup check, not a warning: a group- or world-readable signing
+   key has already been exposed to every other account on the box for as long
+   as it has been there, and a server that serves anyway hides that. -}
+requirePrivateMode : String -> String -> <FileRead "_"> Result String Unit
+requirePrivateMode label path = do
+  mode <- match fileMode path
+    Err message => Err "unreadable \{label} \{path}: \{message}"
+    Ok given => Ok given
+  if isPrivateMode mode then
+    Ok ()
+  else
+    Err
+      "refusing to start: \{label} \{path} is mode \{octalMode mode}, readable by accounts other than its owner; restrict it (chmod 0600 \{path}) and restart"
+
+-- Neither key reaches a diagnostic: the mode and read errors name the path,
+-- and `hex.decode`'s own messages do not echo what they were given.
 readHexBytes : String -> String -> <FileRead "_"> Result String (Array Int)
 readHexBytes label path = do
+  () <- requirePrivateMode label path
   text <- match readFile path
     Err message => Err "unreadable \{label} \{path}: \{message}"
     Ok given => Ok given
@@ -160,59 +188,46 @@ sessionSecretPath dir = "\{dir}/session-secret"
 credentialPath : String -> String
 credentialPath dir = "\{dir}/credential"
 
-{- | The mode warning, emitted once per file this program creates. `remedy`
-   is call-site-specific: the two files this program creates do not share a
-   remediation, so it is a parameter rather than baked into the message.
-
-   It names the PATH and the mode and nothing else: the whole point of the
-   file is its contents, so a warning that quoted them would be a far larger
-   leak than the mode it is warning about.
-
-   A mode-taking write primitive (`chmod`, or a `writeFileBytes` taking a mode)
-   would let the session secret and the credential record land 0600 instead;
-   that gap is tracked at #2611. Until one exists the only routes to
-   0600 are `runCommand "chmod"` — which opens a real world-readable window
-   between the create and the chmod, and grants this process an `<Exec>`
-   capability to protect one file — and a new native extern, which is
-   compiler-source work this entry point cannot do. -}
-warnWorldReadable : String -> String -> <Stderr> Unit
-warnWorldReadable path remedy =
-  ePutStrLn
-    "serve: WARNING: created \{path} world-readable (mode 0644): Medaka has no file-mode primitive, so this program cannot create a private file. \{remedy}"
-
-{- | Generate this server's session-token secret and keep it. It is drawn from
-   `osEntropyBytes`, the OS entropy source, and never from `randomInt`, whose
-   SplitMix64 generator is seeded deterministically and would make every
-   session token on every deployment forgeable from a public constant. -}
+{- | Generate this server's session-token secret and keep it, at mode 0600. It
+   is drawn from `osEntropyBytes`, the OS entropy source, and never from
+   `randomInt`, whose SplitMix64 generator is seeded deterministically and
+   would make every session token on every deployment forgeable from a public
+   constant. -}
 generateSessionSecret : String ->
-  <FileWrite "_", Rand, Stderr> Result String (Array Int)
+  <FileWrite "_", Rand> Result String (Array Int)
 generateSessionSecret dir = do
   let bytes = osEntropyBytes serverSecretBytes
-  () <- match writeFile (sessionSecretPath dir) "\{encode bytes}\n"
+  () <- match writeFilePrivate (sessionSecretPath dir) "\{encode bytes}\n"
     Err message =>
       Err "unwritable session secret \{sessionSecretPath dir}: \{message}"
     Ok () => Ok ()
-  let () =
-    warnWorldReadable
-      (sessionSecretPath dir)
-      "On a shared machine, pre-create this file yourself under a 0600 umask (--token-secret takes a pre-created session secret)."
   Ok bytes
 
-{- | This server's session-token secret: the one `--token-secret` names, else
-   the one kept in the data directory, else a freshly generated one.
+{- | The session-token secret this run already has: the one `--token-secret`
+   names, else the one kept in the data directory, else `None` — meaning one
+   must be generated.
 
-   A PRESENT but unusable secret IS an error, refused before the listener binds
-   rather than at the first request that needed it. -}
-resolveSessionSecret : Args ->
+   This is the READ half, and it writes nothing, so a later failure cannot
+   strand a secret it created. A PRESENT but unusable secret IS an error,
+   refused before the listener binds rather than at the first request that
+   needed it. -}
+suppliedSessionSecret : Args ->
   String ->
-  <FileRead "_", FileWrite "_", Rand, Stderr> Result String (Array Int)
-resolveSessionSecret parsed dir = match flagValue "--token-secret" parsed
-  Some path => readHexBytes "session-token secret" path
+  <FileRead "_"> Result String (Option (Array Int))
+suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
+  Some path => map Some (readHexBytes "session-token secret" path)
   None =>
     if fileExists (sessionSecretPath dir) then
-      readHexBytes "session-token secret" (sessionSecretPath dir)
+      map Some (readHexBytes "session-token secret" (sessionSecretPath dir))
     else
-      generateSessionSecret dir
+      Ok None
+
+-- The WRITE half: generate the secret only when the read half found none.
+establishSessionSecret : String ->
+  Option (Array Int) ->
+  <FileWrite "_", Rand> Result String (Array Int)
+establishSessionSecret _ (Some bytes) = Ok bytes
+establishSessionSecret dir None = generateSessionSecret dir
 
 {- | The account password, as the file holds it: everything in the file with
    one trailing newline removed, which is what `printf %s\\n` and every text
@@ -232,27 +247,25 @@ credentialText : CredentialRecord -> String
 credentialText record =
   "\{intToString (credentialIterations record)}\n\{encode (credentialSalt record)}\n\{encode (credentialDigest record)}\n"
 
-{- | Derive the account credential from `--password-file` and keep it. The salt
-   is drawn here, from `osEntropyBytes`: `lib.credential` takes a
-   caller-supplied salt and draws no entropy of its own. -}
+-- The password `--password-file` supplies, read and admitted but not yet
+-- turned into anything: `planCredential` returns it so the derive-and-keep
+-- can happen after every other supplied secret has been admitted too.
+-- Neither arm is a failure, so `Result` would be the wrong shape: it would
+-- read a supplied password as an error to be recovered from.
+-- lint-disable-next-line rule-clone-type
+data CredentialSource = Kept CredentialRecord | Bootstrap String
+
+{- | Derive the account credential from an admitted password and keep it, at
+   mode 0600. The salt is drawn here, from `osEntropyBytes`: `lib.credential`
+   takes a caller-supplied salt and draws no entropy of its own. -}
 bootstrapCredential : String ->
   String ->
-  <FileRead "_", FileWrite "_", Rand, Stderr> Result String CredentialRecord
-bootstrapCredential dir path = do
-  text <- match readFile path
-    Err message => Err "unreadable password file \{path}: \{message}"
-    Ok given => Ok given
-  password <- match passwordOf text
-    Err message => Err "\{path}: \{message}"
-    Ok given => Ok given
+  <FileWrite "_", Rand> Result String CredentialRecord
+bootstrapCredential dir password = do
   record <- makeCredential (osEntropyBytes saltBytes) defaultIterations password
-  () <- match writeFile (credentialPath dir) (credentialText record)
+  () <- match writeFilePrivate (credentialPath dir) (credentialText record)
     Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
     Ok () => Ok ()
-  let () =
-    warnWorldReadable
-      (credentialPath dir)
-      "There is currently no pre-create path for this file (#2611); restrict this data directory's own permissions instead."
   Ok record
 
 loadCredential : String -> <FileRead "_"> Result String CredentialRecord
@@ -274,27 +287,44 @@ loadCredential dir = do
       Err
         "credential \{credentialPath dir}: expected three lines (iterations, salt, derived key)"
 
-{- | The account's password credential: the one the data directory already
-   holds, else one bootstrapped from `--password-file`.
+{- | Where the account's password credential comes from: the one the data
+   directory already holds, else the password `--password-file` supplies.
 
-   With neither, the server refuses to start. The alternative — starting with
-   no credential and refusing every login — would look identical to a correctly
-   configured server right up until somebody tried to use it, and the fix would
-   be invisible from the outside. -}
-resolveCredential : Args ->
-  String ->
-  <FileRead "_", FileWrite "_", Rand, Stderr> Result String CredentialRecord
-resolveCredential parsed dir =
+   This is the READ half, and it writes nothing. With neither, the server
+   refuses to start. The alternative — starting with no credential and
+   refusing every login — would look identical to a correctly configured
+   server right up until somebody tried to use it, and the fix would be
+   invisible from the outside. -}
+planCredential : Args -> String -> <FileRead "_"> Result String CredentialSource
+planCredential parsed dir =
   let exists = fileExists (credentialPath dir)
   match (exists, flagValue "--password-file" parsed)
-    (True, None) => loadCredential dir
+    (True, None) => map Kept (loadCredential dir)
     (True, Some _) =>
       Err
         "refusing to start: \{credentialPath dir} already exists and --password-file was given; in-place rotation is not supported, so remove \{credentialPath dir} first if you intend to replace the password"
     (False, None) =>
       Err
         "no account credential in \{credentialPath dir}: pass --password-file PATH once, holding the account password, to bootstrap one (the password is never taken from an argument value, and there is no terminal prompt)"
-    (False, Some path) => bootstrapCredential dir path
+    (False, Some path) => map Bootstrap (readPassword path)
+
+-- The supplied password, admitted: unreadable or empty is a rejection here,
+-- where nothing has been written yet.
+readPassword : String -> <FileRead "_"> Result String String
+readPassword path = do
+  text <- match readFile path
+    Err message => Err "unreadable password file \{path}: \{message}"
+    Ok given => Ok given
+  match passwordOf text
+    Err message => Err "\{path}: \{message}"
+    Ok given => Ok given
+
+-- The WRITE half: derive and keep only the password the read half admitted.
+establishCredential : String ->
+  CredentialSource ->
+  <FileWrite "_", Rand> Result String CredentialRecord
+establishCredential _ (Kept record) = Ok record
+establishCredential dir (Bootstrap password) = bootstrapCredential dir password
 
 requireDir : String -> <FileRead "_"> Result String Unit
 requireDir dir = match isDir dir
@@ -372,7 +402,7 @@ openRepo True dir did keyBytes secret =
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, and the port. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Result String (Server, Store, String, Int, TrustedProxy)
+  <Clock, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, TrustedProxy)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -386,8 +416,14 @@ configure parsed = do
   secret <- secretKeyFromBytes keyBytes
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
-  sessionSecret <- resolveSessionSecret parsed dir
-  credential <- resolveCredential parsed dir
+  -- Every SUPPLIED secret is read and admitted first, and only then may a
+  -- GENERATED one reach the disk: a run rejected for a bad password file or a
+  -- world-readable --token-secret must leave no session secret behind for the
+  -- next run to adopt as its own (#2659).
+  suppliedSecret <- suppliedSessionSecret parsed dir
+  credentialSource <- planCredential parsed dir
+  sessionSecret <- establishSessionSecret dir suppliedSecret
+  credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
   withSecret <- storeWithServerSecret sessionSecret withBlobs
   Ok (

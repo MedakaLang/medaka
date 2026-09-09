@@ -26,19 +26,28 @@ fail() {
   exit 1
 }
 
-# The server's stderr must hold nothing but the file-mode warnings it is
-# REQUIRED to emit (`pds/serve.mdk`): a file this program creates is 0644,
-# because Medaka has no file-mode primitive, and saying so loudly is the whole
-# mitigation. Filtering them here rather than dropping the check keeps every
-# other stderr line a failure — an exception for one known line, not an
-# amnesty.
+# The server's stderr must be EMPTY. It carried an exception while a file this
+# program created was necessarily 0644; now that every secret it writes lands
+# 0600 there is nothing left to warn about, so any stderr line at all is a
+# failure again.
 require_empty() {
-  grep -v '^serve: WARNING: created .* world-readable (mode 0644)' "$1" \
-    > "$WORK/stderr.rest" 2>/dev/null || true
-  [ ! -s "$WORK/stderr.rest" ] || {
-    cat "$WORK/stderr.rest" >&2
+  [ ! -s "$1" ] || {
+    cat "$1" >&2
     fail "$2 emitted stderr"
   }
+}
+
+# A path's permission bits as three octal digits. Both arms are live: CI is
+# Linux, and this gate must still run on macOS.
+file_mode() {
+  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
+}
+
+# Every file the server creates holding a secret is owner-only. A gate that
+# asserted only that the file EXISTS would pass on a world-readable one.
+require_owner_only() {
+  got=$(file_mode "$1")
+  [ "$got" = "600" ] || fail "$2: $1 is mode $got, expected 600"
 }
 
 [ -x "$MEDAKA" ] || fail "build medaka first (missing $MEDAKA)"
@@ -100,6 +109,11 @@ mkdir -p "$DATA"
 printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
 printf '%s\n' "$TOKEN_SECRET_HEX" > "$WORK/token.hex"
 printf '%s\n' "$PASSWORD" > "$WORK/password"
+# The server refuses a group- or world-readable signing key or session-token
+# secret before it binds (case 25 below proves the refusal), so every hex
+# secret this gate hands it is owner-only. `mktemp -d` already made $WORK 0700;
+# these are the files inside it the server actually grades.
+chmod 600 "$WORK/key.hex" "$WORK/token.hex"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -421,6 +435,7 @@ KEY10A_HEX='c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
 KEY10B_HEX='29988895eae3bb77b1ec1be453a7168eba4422c3897bc846a168a1495a67fa99'
 printf '%s\n' "$KEY10A_HEX" > "$WORK/key10a.hex"
 printf '%s\n' "$KEY10B_HEX" > "$WORK/key10b.hex"
+chmod 600 "$WORK/key10a.hex" "$WORK/key10b.hex"
 
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
@@ -438,24 +453,20 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 
 # 13. first-run bootstrap, observed on the one server this gate starts with
-#    no --token-secret: it generates its own session secret, keeps it in the
-#    data directory, and says on stderr that the file it just created is
-#    world-readable. The warning names the PATH and the mode; it must not name
-#    the secret, which would make the warning a larger leak than the mode it
-#    warns about.
+#    no --token-secret: it generates its own session secret and keeps it in
+#    the data directory, alongside the credential it derived from the password
+#    file. BOTH are owner-only, 0600 — that is the property, not the mere
+#    existence of the files, and the umask this gate happens to run under must
+#    not be able to widen either of them.
 [ -f "$DATA10/session-secret" ] \
   || fail 'case 13: first run did not generate a session secret'
 [ -f "$DATA10/credential" ] \
   || fail 'case 13: first run did not store an account credential'
-grep -F "created $DATA10/session-secret world-readable (mode 0644)" \
-  "$WORK/serve10a.err" >/dev/null \
-  || fail 'case 13: no world-readable warning for the generated session secret'
-grep -F "created $DATA10/credential world-readable (mode 0644)" \
-  "$WORK/serve10a.err" >/dev/null \
-  || fail 'case 13: no world-readable warning for the stored credential'
+require_owner_only "$DATA10/session-secret" 'case 13: generated session secret'
+require_owner_only "$DATA10/credential" 'case 13: stored credential'
 GENERATED_SECRET=$(cat "$DATA10/session-secret")
 if grep -F "$GENERATED_SECRET" "$WORK/serve10a.err" >/dev/null 2>&1; then
-  fail 'case 13: the warning printed the generated secret itself'
+  fail 'case 13: the generated secret reached the server output'
 fi
 if grep -F "$PASSWORD" "$WORK/serve10a.err" "$WORK/serve10a.out" >/dev/null 2>&1
 then
@@ -504,6 +515,75 @@ SERVER_PID=""
 HEAD_AFTER=$(cksum "$DATA10/head")
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || fail 'case 10: second --init with a different key modified the existing head file'
+
+# ── fifth and sixth --data dirs: secrets at rest (#2611, #2659 item 4) ─────
+
+# Runs pdsd to completion (it must NOT bind) with the flags given, and stores
+# the exit code in RC. A refusal that instead started serving would hang a
+# plain synchronous run, so this bounds the wait the way case 10 does.
+run_until_exit() {
+  outfile=$1
+  errfile=$2
+  shift 2
+  "$WORK/pdsd" "$@" >"$outfile" 2>"$errfile" &
+  SERVER_PID=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+    fail 'a run that had to refuse is still running — it bound and is serving'
+  fi
+  RC=0
+  wait "$SERVER_PID" 2>/dev/null || RC=$?
+  SERVER_PID=""
+}
+
+# 25. a --key file any other account on the box can read is refused BEFORE the
+#    listener binds. The exit status alone would also be produced by a
+#    malformed DID or an unreadable file, so this asserts the refusal's own
+#    identity — its message — and that the readiness line never appeared.
+DATA25="$WORK/data25"
+mkdir -p "$DATA25"
+cp "$WORK/key.hex" "$WORK/key25.hex"
+chmod 644 "$WORK/key25.hex"
+run_until_exit "$WORK/serve25.out" "$WORK/serve25.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key25.hex" --password-file "$WORK/password" \
+  --data "$DATA25" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 25: a 0644 signing key was accepted'
+grep -F "signing key $WORK/key25.hex is mode 0644, readable by accounts other than its owner" \
+  "$WORK/serve25.err" >/dev/null \
+  || fail 'case 25: the refusal did not name the mode and the path'
+if grep -F 'serve: listening on' "$WORK/serve25.out" >/dev/null 2>&1; then
+  fail 'case 25: the listener bound before the key was graded'
+fi
+if grep -F "$SECRET_HEX" "$WORK/serve25.err" >/dev/null 2>&1; then
+  fail 'case 25: the refusal printed the signing key itself'
+fi
+
+# 26. a configuration rejected for a bad SUPPLIED secret leaves no GENERATED
+#    one on disk (#2659 item 4). The password file is empty, so the run is
+#    refused; before the fix the session secret had already been generated and
+#    written by then, and the next run would have adopted a secret nobody
+#    asked for from a directory the operator believes is unconfigured.
+DATA26="$WORK/data26"
+mkdir -p "$DATA26"
+: > "$WORK/password26"
+run_until_exit "$WORK/serve26.out" "$WORK/serve26.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password26" \
+  --data "$DATA26" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 26: an empty password file was accepted'
+[ ! -e "$DATA26/session-secret" ] \
+  || fail 'case 26: a failed configuration left a generated session secret behind'
+[ ! -e "$DATA26/credential" ] \
+  || fail 'case 26: a failed configuration left a credential behind'
 
 # ── fourth, independent --data dir: rate limiting (#2612) ──────────────────
 # `--trusted-proxy` is on here and nowhere else in this gate — every other
@@ -626,4 +706,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind'
