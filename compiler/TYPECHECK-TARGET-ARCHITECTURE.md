@@ -700,6 +700,52 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    the mangled tree keeps its `Loc`s; the parent would run resolve only), at the cost of
    flipping the #2089 gate hard and giving the child a warning channel; the question is
    posted on #2705.
+14. **One impl universe, one preamble per prelude, and the last two check-then-elaborate
+   verbs, 2026-09-09** (the batch after #2790).  Four moves, each measured alone before
+   the merge.  (a) `checkModulesPreambleK`'s derivations (`buildDeclEnvs`, `markSetsOf`,
+   the three graph identity indexes) split at the prelude/user-modules seam; the prelude
+   half is computed once per process under the `desugaredPreludeKey` pair
+   `checkCoreMemoized` already keys on (#2719 slice 2).  `buildDeclEnvs` is a resumable
+   per-row fold (`DeclEnvAcc`, one accumulator per table, each table's own fold), and
+   `markSetsOf` splits on distributivity of every derived list.  The invariant the memo
+   states is stronger than "holds no `Decl` or `Ref`": every cached field is a pure
+   function of the prelude's decls, because the review found the atom-guarantee seed
+   reading the process-global effect-domain table, which the preamble populated only
+   AFTER the memo — so the domains are now populated before the envelope at BOTH driver
+   entries and the atom seed is derived per call.  That ordering also fixes #2789: a
+   one-shot `check`/`run` rejected an abstractly-exported wrapper re-supplying a
+   prefix-domain effect atom because the first analyze of any process saw an empty domain
+   table (`check_module_fixtures/xmod_abstract_wrapper_prefix_atom` pins the accept).
+   Warm LSP analyze −62%/−42% Ir, cold −1%.  (b) `cmDiagsWorker` and `cmEntryWorker`
+   collapse into `cmModuleWorker` with the `accAll ++ prog` impl universe every other
+   driver already used (the design's §S3 precondition; #2792): `check` rejected a
+   2+-module program whose entry module owns the grounding impl of a return-only
+   dispatch while `run`/`build` executed it.  3,387-entry `check` corpus, 0 verdict flips;
+   34 must-fail pins, 0 drained.  (c) `medaka test`'s import-bearing arm loads once (the
+   located loader) and elaborates once for its three phases; the gate cannot read the
+   doctest-injected tree (a `<Clock>` doctest's synthesized binding is an effectful value),
+   so with doctests the gate is the check driver over the loaded graph and without them
+   the elaboration's own per-module diagnostics — which is why (b) had to land first, and
+   `diff_compiler_test_typecheck`'s cell n holds the two verbs to the same verdict.
+   Compile-side −27% Ir; a prop-heavy target pays ~5% more per prop case for the located
+   bodies, which is what buys the three runtime diagnostics that used to print `:0:0:`.
+   (d) `run`'s single-file arm composes `analyzeSurface` (the raw-tree passes) with the
+   elaboration's own diagnostics through `analyzeFinish`, keeping `analyzeFrom`'s result
+   order; `elaborateRun` hands back the PLAIN pass's per-module diagnostics beside the
+   Async-wrapped trees, so a wrap-only failure still rejects through the residual while a
+   plain diagnostic renders located instead of as "detected during elaboration".  The
+   residual gate is landed on this arm (2,675 single-module files, 0 flips) but has no
+   witness yet.  `run` of a single-file program −33% Ir.  The auto-print re-check stays
+   (it needs `mainSchemeRef`; retiring it needs the `Display` obligation discoverable from
+   the unwrapped elaboration).  The review of (d) found #2791: `elaborateModules` never
+   seeded `abstractRecordTypesRef`, so under the elaborate driver `T-ABSTRACT-FIELD` was
+   never raised and `run` executed a dot-access on an abstractly exported record that
+   `check`/`build` reject — live on main for the import-bearing arm since (13c).  Seeded
+   at both driver entries now; three `run_check_agreement` fixtures pin it.  The lesson
+   for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
+   `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
+   `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
+   carry, and `registry_keying_ratchet` should be the place that says so.
 
 ### SA-11. Artifacts
 
