@@ -1,0 +1,5 @@
+export r1 n = if n == 0 then l0 n else r2 (n - 1)
+
+r2 n = r1 n + l0 n
+
+l0 x = x + x

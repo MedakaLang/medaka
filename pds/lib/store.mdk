@@ -43,6 +43,7 @@
 
 import lib.blockstore.{
   BlockStore,
+  blockStoreCids,
   blockStoreEmpty,
   blockStoreEntries,
   blockStoreGet,
@@ -319,6 +320,16 @@ storeBlobMimeType cid (Store (BlobHalf _ mimeTypes) _ _) =
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
 storeBlobEntries (Store (BlobHalf blocks _) _ _) = blockStoreEntries blocks
+
+{- | Every distinct verified CID in the blob half, in canonical CID order and
+   carrying no bytes — what `sync.listBlobs` pages over.
+
+   `storeBlobEntries` answers the same question, but copies every blob's bytes
+   to do it, so listing the names of an account's blobs would otherwise cost
+   the whole blob half. -}
+export
+storeBlobCids : Store -> List Cid
+storeBlobCids (Store (BlobHalf blocks _) _ _) = blockStoreCids blocks
 
 {- | The blob half's declared-type index: every CID text that has a declared
    MIME type, paired with it, in CID-text order and carrying no bytes.

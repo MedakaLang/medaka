@@ -147,6 +147,35 @@ readTypedResponse conn pending = match findHeaderEnd pending 0
       else
         readTypedResponse conn (appendBytes pending chunk)
 
+{- | Same read as `readTypedResponse`, but keeps the raw header block text
+   instead of parsing only the status and content type out of it — for the
+   rate-limit cases, which must assert directly on the `ratelimit-*`
+   response headers no other reader keeps. -}
+readHeaderResponse : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Int, String, Array Int, Array Int)
+readHeaderResponse conn pending = match findHeaderEnd pending 0
+  Some headerEnd => do
+    let bodyStart = headerEnd + 4
+    let headerBlock = sliceClamped 0 headerEnd pending
+    let headerText = fromUtf8 headerBlock
+    (status, _, len) <- parseHeaderBlock headerBlock
+    let need = bodyStart + len
+    full <- recvAtLeast conn pending need
+    Ok (
+      status,
+      headerText,
+      sliceClamped bodyStart need full,
+      sliceClamped need (arrayLength full) full,
+    )
+  None => match recv conn 4096
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "serve_client: connection closed before response headers"
+      else
+        readHeaderResponse conn (appendBytes pending chunk)
+
 -- | The same read for the cases that do not care what media type came back.
 readResponse : Connection ->
   Array Int ->
@@ -179,6 +208,19 @@ getRequestWith : String -> String -> Array Int
 getRequestWith token path =
   toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
 
+-- | An empty `xff` sends no header at all, so a rate-limit case run without
+-- `--trusted-proxy` on the server exercises the untrusted, single-bucket
+-- path with the exact same request builder as the trusted one.
+xffHeader : String -> String
+xffHeader "" = ""
+xffHeader xff = "X-Forwarded-For: \{xff}\r\n"
+
+-- | The same GET, carrying a forwarded-for identity rather than a token —
+-- what the rate-limit cases use to tell one client identity from another.
+getRequestXff : String -> String -> Array Int
+getRequestXff xff path =
+  toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\r\n"
+
 oneChunk : Array Int -> Array Int
 oneChunk chunkBytes = concat [|
   toUtf8 "\{toHexString (arrayLength chunkBytes)}\r\n",
@@ -208,6 +250,19 @@ postRequest token path bodyJson =
   concat [|
     toUtf8
       "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+    body,
+  |]
+
+-- | The same content-length JSON POST as `postRequest`, carrying a
+-- forwarded-for identity instead of (or alongside) a bearer token — the
+-- write and createSession rate-limit cases use this to run two identities
+-- against the server at once.
+postRequestXff : String -> String -> String -> String -> Array Int
+postRequestXff xff token path bodyJson =
+  let body = toUtf8 bodyJson
+  concat [|
+    toUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
     body,
   |]
 
@@ -304,6 +359,9 @@ getSessionPath = xrpcPath "com.atproto.server.getSession"
 
 uploadBlobPath : String
 uploadBlobPath = xrpcPath "com.atproto.repo.uploadBlob"
+
+getRepoPath : String -> String
+getRepoPath did = "\{xrpcPath "com.atproto.sync.getRepo"}?did=\{did}"
 
 getBlobPath : String -> String -> String
 getBlobPath did cid =
@@ -752,9 +810,210 @@ runWriteStatus port token did collection rkey want =
   let () = expectStatus "WRITE\{intToString want}" want (readResponse conn [||])
   ignoreResult (close conn)
 
+-- # Rate-limit cases (#2612)
+--
+-- Every case below drives one `pds/lib/ratelimit.mdk` class to its ceiling
+-- from a single identity (an `X-Forwarded-For` value, `xff`) and grades the
+-- LAST response of `count` sent: `want` is what the caller expects that one
+-- to be — 429 with the `RateLimit-*` headers and `RateLimitExceeded` once
+-- the identity's own budget is spent, or the ordinary success status when
+-- `count` stays under the ceiling (used to prove a SECOND identity is still
+-- served while the first is refused, which is the check that matters).
+
+-- | One request/response round trip over an existing connection, using
+-- whatever bytes `readHeaderResponse` already buffered past the previous
+-- response.
+floodStep : Connection ->
+  Array Int ->
+  Array Int ->
+  <Net "_"> (Int, String, Array Int, Array Int)
+floodStep conn pending requestBytes =
+  let () = mustSend conn requestBytes
+  match readHeaderResponse conn pending
+    Ok result => result
+    Err message => panic "serve_client: rate-limit case failed: \{message}"
+
+-- | Sends `count` requests one after another over ONE connection — each
+-- built from its 1-based index, so a write case can hand every request a
+-- distinct record key — and reports only the LAST response, the one that
+-- observes the class's ceiling if `count` exceeds it.
+floodLoop : Connection ->
+  Int ->
+  (Int -> Array Int) ->
+  <Net "_"> (Int, String, Array Int)
+floodLoop conn count buildRequest = floodLoopGo conn count buildRequest 1 [||]
+
+floodLoopGo : Connection ->
+  Int ->
+  (Int -> Array Int) ->
+  Int ->
+  Array Int ->
+  <Net "_"> (Int, String, Array Int)
+floodLoopGo conn count buildRequest i pending =
+  let (status, headerText, body, rest) = floodStep conn pending (buildRequest i)
+  if i >= count then
+    (status, headerText, body)
+  else
+    floodLoopGo conn count buildRequest (i + 1) rest
+
+-- | The connections-class case needs a NEW connection each time — that class
+-- is charged once per connection, on its first request, never on a reused
+-- one — so it cannot share `floodLoop`'s single-connection shape.
+floodConnections : Int -> String -> Int -> <Net "_"> (Int, String, Array Int)
+floodConnections port xff count = floodConnectionsGo port xff count 1
+
+floodConnectionsGo : Int ->
+  String ->
+  Int ->
+  Int ->
+  <Net "_"> (Int, String, Array Int)
+floodConnectionsGo port xff count i =
+  let conn = mustConnect port
+  let (status, headerText, body, _) =
+    floodStep conn [||] (getRequestXff xff atprotoDidPath)
+  let () = ignoreResult (close conn)
+  if i >= count then
+    (status, headerText, body)
+  else
+    floodConnectionsGo port xff count (i + 1)
+
+-- | Grades one rate-limit case's last response against `want`. A 429 must
+-- also carry all three `RateLimit-*` headers and the `RateLimitExceeded`
+-- error name; any other expected status is graded on the status alone,
+-- since that is what a second, still-served identity actually gets back.
+reportRateLimit : String -> Int -> Int -> String -> Array Int -> <IO> Unit
+reportRateLimit label want status headerText body =
+  if status /= want then
+    report
+      label
+      False
+      "want status \{intToString want}, got \{intToString status}"
+  else if want == 429 then
+    let bodyText = fromUtf8 body
+    let headersPresent =
+      contains "ratelimit-limit:" headerText
+        && contains "ratelimit-remaining:" headerText
+        && contains "ratelimit-reset:" headerText
+    if headersPresent && contains "\"RateLimitExceeded\"" bodyText then
+      report label True ""
+    else
+      report
+        label
+        False
+        "429 missing RateLimit-* headers or RateLimitExceeded body: \{headerText}"
+  else
+    report label True ""
+
+runRateLimitConn : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitConn port xff count want =
+  let (status, headerText, body) = floodConnections port xff count
+  reportRateLimit "RLCONN" want status headerText body
+
+runRateLimitReq : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitReq port xff count want =
+  let conn = mustConnect port
+  let (status, headerText, body) =
+    floodLoop conn count (_ => getRequestXff xff atprotoDidPath)
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLREQ" want status headerText body
+
+-- | `com.atproto.sync.getRepo` has its own ceiling because one call's response
+-- is a whole-repository CAR, bounded by `maxCarBytes` and not by any count of
+-- requests. Driven over ONE connection so the flood observes that ceiling
+-- rather than the far lower per-connection one.
+runRateLimitRepo : Int -> String -> Int -> Int -> String -> <IO, Net "_"> Unit
+runRateLimitRepo port xff count want did =
+  let conn = mustConnect port
+  let (status, headerText, body) =
+    floodLoop conn count (_ => getRequestXff xff (getRepoPath did))
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLREPO" want status headerText body
+
+{- | A request that is answered 400 but never routed, in one of two shapes: it
+   frames and fails to PARSE (`framed`), or no framer can complete it at all
+   (`unframed`). Both are work the server performs for an unidentifiable
+   caller, so both are charged.
+
+   Each goes on a fresh connection because neither response is keep-alive:
+   the server closes after answering a request it could not parse. -}
+malformedRequest : String -> Array Int
+malformedRequest "framed" =
+  toUtf8 "GET /xrpc/x HTTP/1.1\r\n\{hostHeader}Content-Length: abc\r\n\r\n"
+malformedRequest "unframed" = toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n"
+malformedRequest shape = panic "serve_client: unknown malformed shape \{shape}"
+
+floodMalformed : Int -> String -> Int -> <Net "_"> (Int, String, Array Int)
+floodMalformed port shape count = floodMalformedGo port shape count 1
+
+floodMalformedGo : Int ->
+  String ->
+  Int ->
+  Int ->
+  <Net "_"> (Int, String, Array Int)
+floodMalformedGo port shape count i =
+  let conn = mustConnect port
+  let (status, headerText, body, _) =
+    floodStep conn [||] (malformedRequest shape)
+  let () = ignoreResult (close conn)
+  if i >= count then
+    (status, headerText, body)
+  else
+    floodMalformedGo port shape count (i + 1)
+
+runRateLimitMalformed : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitMalformed port shape count want =
+  let (status, headerText, body) = floodMalformed port shape count
+  reportRateLimit "RLMALFORMED" want status headerText body
+
+-- | `rkeyPrefix` keeps two identities' record keys from colliding when both
+-- run against the same collection in the same gate: the rate limiter charges
+-- a write's class before `applyRequest` ever sees it, but the record key
+-- still has to be one `createRecord` accepts as new.
+runRateLimitWrite : Int ->
+  String ->
+  Int ->
+  Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runRateLimitWrite port xff count want token did collection rkeyPrefix =
+  let conn = mustConnect port
+  let (status, headerText, body) = floodLoop conn count (i =>
+    postRequestXff
+      xff
+      token
+      createRecordPath
+      (createRecordJson
+        did
+        collection
+        "\{rkeyPrefix}-\{intToString i}"
+        "rate limit probe"))
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLWRITE" want status headerText body
+
+runRateLimitSession : Int ->
+  String ->
+  Int ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runRateLimitSession port xff count want identifier password =
+  let conn = mustConnect port
+  let (status, headerText, body) = floodLoop conn count (_ =>
+    postRequestXff
+      xff
+      ""
+      createSessionPath
+      (createSessionJson identifier password))
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLSESSION" want status headerText body
+
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -788,6 +1047,36 @@ main = match args ()
     runGetBlob (mustPort port) did cid mimeType text
   ["get-blob-missing", port, did, cid] =>
     runGetBlobMissing (mustPort port) did cid
+  ["rl-conn", port, xff, count, want] =>
+    runRateLimitConn (mustPort port) xff (mustCount count) (mustStatus want)
+  ["rl-req", port, xff, count, want] =>
+    runRateLimitReq (mustPort port) xff (mustCount count) (mustStatus want)
+  ["rl-write", port, xff, count, want, token, did, collection, rkeyPrefix] =>
+    runRateLimitWrite
+      (mustPort port)
+      xff
+      (mustCount count)
+      (mustStatus want)
+      token
+      did
+      collection
+      rkeyPrefix
+  ["rl-repo", port, xff, count, want, did] =>
+    runRateLimitRepo (mustPort port) xff (mustCount count) (mustStatus want) did
+  ["rl-malformed", port, shape, count, want] =>
+    runRateLimitMalformed
+      (mustPort port)
+      shape
+      (mustCount count)
+      (mustStatus want)
+  ["rl-session", port, xff, count, want, identifier, password] =>
+    runRateLimitSession
+      (mustPort port)
+      xff
+      (mustCount count)
+      (mustStatus want)
+      identifier
+      password
   _ => panic usage
 
 {- | Upload one blob and print the CID the server content-addressed it to.
@@ -876,3 +1165,9 @@ mustPort : String -> Int
 mustPort text = match toInt text
   Some n => n
   None => panic "serve_client: not a port: \{text}"
+
+-- | A rate-limit case's request count, as the shell gate spells it.
+mustCount : String -> Int
+mustCount text = match toInt text
+  Some n => n
+  None => panic "serve_client: not a count: \{text}"

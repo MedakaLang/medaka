@@ -1,0 +1,7 @@
+-- #2768. r1/r2 are an unsignatured mutually recursive pair that inherits its `Num a =>`
+-- constraint through a call to l0, a promoted non-member of the group. check accepts and
+-- run prints the correct 6; the native binary segfaults on the exact same program. See
+-- claim.txt.
+import lib.{r1}
+
+main = println (r1 (3 : Int))

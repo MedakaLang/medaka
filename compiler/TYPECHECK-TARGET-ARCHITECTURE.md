@@ -617,6 +617,52 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    differ in rendering and in growing the dict-name set, which is what those two units
    remove.
 
+12. **Step 7 phase 2, third unit: the promotion fixpoint is gone, 2026-09-08** (#2705,
+   branch `typecheck-rearch-3`).  Marking is on the schedule, §E clause (1), as written:
+   `checkBodyImpl`'s Module arm marks each binding group as `processSCC` reaches it
+   (`markGroupClauses`), after the group's callees have generalized, with the dict-name
+   set as it stands — the bare set, every promotion made by an earlier module
+   (`promotionHarvestRef`, which already crossed module boundaries; §E clause (2) needed
+   nothing new) or an earlier group of this module, and the module's own import aliases
+   of those names (`beginModuleMarking`; core, which imports nothing, is therefore no
+   longer marked with every user module's alias locals as the graph-wide set had it — a
+   narrowing in the correct direction, inert on the def side since `dictArityOf` reads
+   the per-module-scoped slot table).  Resolve's binding-id stamp then runs over the
+   marked clauses of that group alone (`stampTopScope`/`stampClauseWith`, the two halves
+   of `stampBindingIds`), so inference reads the stamped twin and the module's returned
+   tree is the marked, unstamped one every downstream consumer already reads.  The one
+   occurrence a callee has not generalized under is inside its own group: at group close
+   the members `registerInferredConstraints` promoted join the set and the group's own
+   occurrences of them are rewritten (`markRecursiveOccurrences`), each carrying the
+   `RecDictApp` goal `inferDictAtFound`'s recursive arm would have pushed — the arm's
+   only effect beyond returning the instantiated type — realized at the graph-end drain
+   as before (gen-rec, unchanged).  The tail bodies (impl, default, prop, test, bench) are
+   marked with the module's final set before their inference.  `elabPromotionFixpoint`,
+   `ElabSweep`, `elabSweep`, `clearSweepCells`, `markGraph`/`markCore`/`markUnits` and
+   `prePassModulePairArg` are deleted (`moduleMarkCtx` keeps its S1 filter, applied once
+   per module); `elaborateModules` is one sweep; the check drivers' preamble no longer
+   hands back a deferred marker — every Module-arm driver marks inside the per-module
+   pass, which is structurally after any memo restore of `graphRun`.  The whole-tree
+   pre-pass survives only on the Flat arm (`elaborateDict`, `snapshot`), E-2b's business.
+   Behaviour-preserving, measured: a two-arm `check`+`run` differential over the
+   shadow/dict/argtag/eval-modules/run-check-agreement corpora (436 entries) found no
+   divergence; every route-contract gate green; ruling 7's Ir matrix flat (every cell
+   within +0.35% of the merge base, against a ~25% soft ceiling).  Three consequences a
+   later reader needs: (a) a program that references a later-defined function only from
+   a construct `allEVars` does not walk (a `Map {…}`/`Set {…}` literal, `EHeadAnnot`) was
+   and is rejected as an unbound variable, because the dependency graph orders inference
+   too — the schedule's "callees first" is exactly the order inference already required,
+   so a missing dependency edge is loud, not a silent under-application; (b) an earlier
+   module's occurrences of a bare name a LATER module promotes are no longer marked (the
+   fixpoint's graph-wide re-mark marked them and `inferDictAtFound`'s #739 arm then routed
+   nothing), which is the direction §E wants; (c) `EvId`'s module half now names the
+   module the node was minted in — the ordinal alone was ever the key.  The design
+   review's remaining observation is an `inferVarId`-vs-recursive-arm asymmetry on a
+   group-recursive occurrence of a promoted member whose name collides with a core
+   constrained function (`declaredCrossModuleObls`' bare-name fallback), the same
+   fallback every non-promoted recursive occurrence already takes; no fixture in the
+   corpus exhibits it.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under

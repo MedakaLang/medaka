@@ -49,7 +49,7 @@ import frontend.marker.{
 }
 import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneDiagsK, checkModulesDiagsChain, checkModules, entryOwnSchemes,
+  checkOneDiagsK, checkModulesDiagsChain, checkModulesK, entryOwnSchemes,
   setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit,
   mainTypeIsAsync
 }
@@ -1139,7 +1139,7 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
 
 -- LSP project-aware hover/completion: load the graph rooted at `entry` (the same
 -- loader + cache + read disk-fallback analyzeProject uses) and return the ENTRY
--- module's own top-level schemes.  Running `checkModules` ALSO populates the
+-- module's own top-level schemes.  Running `checkModulesK` ALSO populates the
 -- typecheck hover side-channels (localSchemesOut/seedSchemesOut) for the entry
 -- module (checked last), so its locals and its import-scoped seed (runtime + core
 -- + imported names) are available to the hover lookup fallback chain.  None on a
@@ -1158,12 +1158,21 @@ projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let wread = p => wrappedRead cacheRef staleRef read p
   let runtimeP = preludeDesugared runtimeSrc
   let coreP = preludeDesugared coreSrc
+  -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
+  -- shares the process-wide core-check memo instead of re-typechecking and
+  -- re-solving runtime + core on every request.
+  let preludeKey =
+    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
   match loadProgramFilesLocatedCached parseCacheRef wread entry roots
     Err _ => None
     Ok mods =>
       Some
         (entryOwnSchemes
-          (checkModules runtimeP coreP (map midToDesugaredPair mods)))
+          (checkModulesK
+            preludeKey
+            runtimeP
+            coreP
+            (map midToDesugaredPair mods)))
 
 -- resolve per module (threading exports), bucketing by file.
 
