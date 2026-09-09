@@ -41198,6 +41198,13 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  `cmEntryCollect`
 -- needs the same triple to keep the terminal module's OWN schemes/warns.  Costs nothing:
 -- `checkModuleFullDiags` already computed them.
+-- One module's row in a graph drive's per-module diagnostics: its own value
+-- schemes, its isolated errors and its isolated warnings, under its module id.
+-- The schemes half is what lets the ENTRY REPORT be a projection of the same list
+-- rather than a second pass (`checkModulesEntryFromDiags`); `dropModSchemes` is the
+-- narrower `(errs, warns)` view the bucketing fold consumes.
+export type ModDiags = (String, (List (String, Scheme), List TcDiag, List TcDiag))
+
 cmModuleWorker : String ->
   List (String, Scheme) ->
   List Decl ->
@@ -41238,8 +41245,8 @@ cmModuleWorker mid seed accData accAll prog =
 cmDiagsCollect : Bool ->
   String ->
   (List (String, Scheme), List TcDiag, List TcDiag) ->
-  List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
-  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
+  List ModDiags ->
+  List ModDiags
 cmDiagsCollect isLast mid (schemes, errs, warns) rest =
   let _ = setMainSchemeIfEntry isLast schemes
   (mid, (schemes, errs, warns)) :: rest
@@ -41247,8 +41254,7 @@ cmDiagsCollect isLast mid (schemes, errs, warns) rest =
 -- the `(errs, warns)` projection of one full per-module entry, for the exported
 -- drivers whose contract is the narrower pair.
 export
-dropModSchemes : (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
-  (String, (List TcDiag, List TcDiag))
+dropModSchemes : ModDiags -> (String, (List TcDiag, List TcDiag))
 dropModSchemes (mid, (_, errs, warns)) = (mid, (errs, warns))
 
 -- `cmEntryCollect` as a projection over the full per-module list: the TERMINAL
@@ -41264,7 +41270,7 @@ dropModSchemes (mid, (_, errs, warns)) = (mid, (errs, warns))
 -- conflict and an imported-module type error — a graph whose caller has already
 -- reported errors and exited.
 export
-checkModulesEntryFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+checkModulesEntryFromDiags : List ModDiags ->
   (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFromDiags [] = ([], [], [])
 checkModulesEntryFromDiags [(_, (s, e, w))] = (s, e, w)
@@ -41276,8 +41282,7 @@ checkModulesEntryFromDiags ((_, (_, e, _)) :: rest) =
 -- produced.  Both must render identically or `check`'s multi-module report changes
 -- shape, which is why the match below is `checkModulesEntryReport`'s verbatim.
 export
-entryReportFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
-  String
+entryReportFromDiags : List ModDiags -> String
 entryReportFromDiags perMod = match checkModulesEntryFromDiags perMod
   (schemes, [], warns) => joinNl (schemeLines schemes ++ map tcMsg warns)
   (_, errs, _) => joinNl (typeErrorLines (map tcMsg errs))
@@ -41308,7 +41313,7 @@ data ChainStep = ChainStep {
   csDepEnv : List (String, List (String, Scheme)),
   csAccData : List Decl,
   csAccAll : List Decl,
-  csResults : List (String, (List (String, Scheme), List TcDiag, List TcDiag)),
+  csResults : List ModDiags,
   csCrossRun : CrossRun,
   csGraphRun : GraphRun,
   csDriver : DriverState,
@@ -41333,7 +41338,7 @@ checkModulesDiagsChain : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
+  List ModDiags
 checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsK None runtimeDecls coreDecls0 modules0
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
@@ -41390,10 +41395,10 @@ chainGo : List (String, Scheme) ->
   List (String, List (String, Scheme)) ->
   List Decl ->
   List Decl ->
-  List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  List ModDiags ->
   List (Option String) ->
   List (String, List Decl) ->
-  (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List ChainStep)
+  (List ModDiags, List ChainStep)
 chainGo _ _ _ _ _ results _ [] = (results, [])
 chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
   let seed = baseSeed ++ importSeed prog depEnv
@@ -41448,7 +41453,7 @@ checkModulesDiagsK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
+  List ModDiags
 checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
@@ -41491,8 +41496,7 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
 -- `checkModulesDiagsChain`) end with.  `elaborateModules` ends with the pair-shaped
 -- twin below; the two differ only in the payload they reach into, so the traversal
 -- and both messages are shared.
-attachCoherenceConflict : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
-  List (String, (List (String, Scheme), List TcDiag, List TcDiag))
+attachCoherenceConflict : List ModDiags -> List ModDiags
 attachCoherenceConflict perMod =
   match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
     (None, None) => perMod

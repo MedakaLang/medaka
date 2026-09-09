@@ -48,11 +48,11 @@ import frontend.marker.{
   preludeStandaloneSet,
   preludeStandaloneShadowsWith,
 }
-import types.repr.{Scheme(..)}
+import types.repr.{Scheme}
 import types.typecheck.{
   checkOneDiagsK, checkModulesDiagsChain, checkModulesK, entryOwnSchemes,
-  dropModSchemes, setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg,
-  mainTypeIsUnit, mainTypeIsAsync
+  dropModSchemes, ModDiags, setCoherenceUserDecls, setStdlibOwnership,
+  TcDiag(..), tcMsg, mainTypeIsUnit, mainTypeIsAsync
 }
 import driver.loader.{
   LoadMsg,
@@ -1208,7 +1208,7 @@ analyzeProjectFull : Bool ->
   List String ->
   String ->
   String ->
-  <IO> (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
+  <IO> (List ModDiags, List (String, List Diag))
 analyzeProjectFull allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
@@ -1272,7 +1272,7 @@ projectDiagsLoadedFull : Bool ->
   Option (Int, Int) ->
   String ->
   List (String, String, List Decl) ->
-  (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
+  (List ModDiags, List (String, List Diag))
 projectDiagsLoadedFull allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
   let modPairs = desugaredModPairs mods
   typecheckPassFull
@@ -1512,7 +1512,7 @@ typecheckPassFull : List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Diag) ->
-  (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List (String, List Diag))
+  (List ModDiags, List (String, List Diag))
 typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets =
   -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
   -- resumed from its snapshot, so only the modules after it are re-checked.

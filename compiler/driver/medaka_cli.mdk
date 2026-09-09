@@ -189,11 +189,11 @@ import types.typecheck.{
   hadTypeErrors,
   TcDiag,
   ElabResult,
+  ModDiags,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
 }
-import types.repr.{Scheme}
 import driver.main_autoprint.{
   shouldAsyncWrapMain,
   asyncWrapModules,
@@ -877,7 +877,7 @@ locatedProjectDiags : Bool ->
   List String ->
   String ->
   String ->
-  <IO> (Option String, List (String, String, List Diag), Int, List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
+  <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
 locatedProjectDiags allowInternal trusted target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
