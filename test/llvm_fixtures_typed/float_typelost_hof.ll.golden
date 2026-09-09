@@ -168,6 +168,7 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
@@ -199,19 +200,23 @@ entry:
   call void @mdk_print_float(double %t19)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_identity(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
+; mdk-module program
 define i64 @mdk_fid(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
+; mdk-module program
 define double @mdk_fid__fw(double %arg0) {
 entry:
   ret double %arg0
 }
 
+; mdk-module program
 @mdk_g_compute = global i64 0

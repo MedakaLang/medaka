@@ -168,10 +168,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_impl_List_append(i64 ptrtoint (ptr @mdk_dc_1 to i64), i64 ptrtoint (ptr @mdk_dc_3 to i64))
+  %t0 = call i64 @mdk_impl_List_append(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 ptrtoint (ptr @mdk_dc.program.3 to i64))
   %t1 = alloca i64
   %t4 = and i64 %t0, 1
   %t5 = icmp eq i64 %t4, 1
@@ -304,13 +305,18 @@ decend2:
   call void @mdk_print_int(i64 %t91)
   ret i32 0
 }
+; mdk-module impl:List_append
 define i64 @mdk_impl_List_append(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_list_append(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-@mdk_dc_0 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 562949953421315]
-@mdk_dc_1 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc_0 to i64)]
-@mdk_dc_2 = internal constant [3 x i64] [i64 281474976710656, i64 9, i64 562949953421315]
-@mdk_dc_3 = internal constant [3 x i64] [i64 281474976710656, i64 7, i64 ptrtoint (ptr @mdk_dc_2 to i64)]
+; mdk-module program
+@mdk_dc.program.0 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 562949953421315]
+; mdk-module program
+@mdk_dc.program.1 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc.program.0 to i64)]
+; mdk-module program
+@mdk_dc.program.2 = internal constant [3 x i64] [i64 281474976710656, i64 9, i64 562949953421315]
+; mdk-module program
+@mdk_dc.program.3 = internal constant [3 x i64] [i64 281474976710656, i64 7, i64 ptrtoint (ptr @mdk_dc.program.2 to i64)]
