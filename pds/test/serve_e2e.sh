@@ -291,6 +291,24 @@ client idle "$PORT1" || fail 'case 8: idle timeout'
 client unframed-flood "$PORT1" 300 15 \
   || fail 'case 8b: an unrelated caller went unanswered under an un-framed flood'
 
+# 8c. THIS CELL PINS A LIVE DEFECT AND ASSERTS THE WRONG BEHAVIOR ON PURPOSE.
+#    #2772 is OPEN. Case 8b proves its HEADER half is fixed; its BODY half is
+#    not. A connection that TERMINATES its headers and declares a large
+#    Content-Length leaves the un-framed census entirely, and then holds one
+#    of maxConcurrentConnections (256) for the whole of requestTimeout (60 s)
+#    while sending nothing. So this reports PASS when the unrelated caller is
+#    DENIED, and goes RED when it starts being answered — which is exactly
+#    what a fix to #2772's body half will do, forcing whoever lands it to
+#    rewrite this into the positive assertion 8b already makes. Do not
+#    "repair" a red here by loosening it.
+#    The 12 s budget is the discriminator: far below the 60 s the denial
+#    lasts today, and above any body-phase budget a fix would plausibly
+#    impose (it must be under idleTimeout, 30 s). Note that the stall needs
+#    no dribbled byte — past the header section the silence budget is
+#    idleTimeout, so 12 s of pure silence holds the slot outright.
+client body-stall-flood "$PORT1" 300 12 \
+  || fail 'case 8c: #2772 body-phase pin — see the comment above, this cell asserts the CURRENT BAD behavior; a failure here most likely means the hole is FIXED and the pin must be rewritten as a positive assertion'
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
@@ -639,8 +657,12 @@ fi
 "$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
   > "$WORK/keygen2.out" 2> "$WORK/keygen2.err" \
   && fail 'case 28: keygen overwrote an existing signing key'
-grep -F "keygen refuses $KEYGEN_DIR/key.hex" "$WORK/keygen2.err" >/dev/null \
+# Exactly one `keygen:` prefix: the wrapper in `pds/serve.mdk` adds it, so a
+# message that also carries its own reads `keygen: keygen refuses ...`.
+grep -F "keygen: refusing $KEYGEN_DIR/key.hex" "$WORK/keygen2.err" >/dev/null \
   || fail 'case 28: the overwrite refusal did not name the path'
+grep -E -q '^keygen: keygen' "$WORK/keygen2.err" \
+  && fail 'case 28: the refusal carries a doubled keygen: prefix'
 [ "$(tr -d '\n' < "$KEYGEN_DIR/key.hex")" = "$KEYGEN_SECRET" ] \
   || fail 'case 28: the refused second keygen changed the key on disk'
 # 28b. and what keygen wrote is what serve accepts: a whole genesis server
@@ -923,4 +945,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'

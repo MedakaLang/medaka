@@ -39,7 +39,7 @@ keygenSecretBytes : Int -> <Rand> Result String (Array Int)
 keygenSecretBytes attempts =
   if attempts < 1 then
     Err
-      "keygen: the entropy source produced no scalar in 1..n-1; refusing to write a key"
+      "the entropy source produced no scalar in 1..n-1; refusing to write a key"
   else
     let candidate = osEntropyBytes signingKeyBytes
     match secretKeyFromBytes candidate
@@ -65,21 +65,36 @@ keygenSummary bytes = do
   let publicKey = publicKeyForSecret secret
   Ok (encode (publicKeyCompressed publicKey), didKeyFromPublicKey publicKey)
 
-{- | Write one generated secret to `path` at mode 0600, refusing a path that
-   already exists.
+{- | Refuse `path` if it already exists, drawing no entropy and writing
+   nothing.
 
    The refusal is the point: `keygen` overwriting a signing key would destroy
    the only thing that can sign this account's next commit, and an operator
-   who meant to rotate can say so by moving the old file aside. -}
+   who meant to rotate can say so by moving the old file aside.
+
+   It is exported because the caller must apply it to EVERY destination a run
+   names before any of them is written: a run that generated a key, announced
+   it, and then refused the second destination would leave a valid 0600 key on
+   disk under a failure exit code, which an operator reading the exit code
+   would take as "nothing happened". -}
+export
+keygenRefusePath : String -> String -> <FileRead "_"> Result String Unit
+keygenRefusePath label path =
+  if fileExists path then
+    Err
+      "refusing \{path}: it already exists, and overwriting a \{label} destroys it; move it aside first if you mean to replace it"
+  else
+    Ok ()
+
+-- | Write one generated secret to `path` at mode 0600. The existence refusal
+-- is re-applied here so no write path can bypass it, whatever the caller did.
 keygenWrite : String ->
   String ->
   Array Int ->
   <FileRead "_", FileWrite "_"> Result String Unit
-keygenWrite label path bytes =
-  if fileExists path then
-    Err
-      "keygen refuses \{path}: it already exists, and overwriting a \{label} destroys it; move it aside first if you mean to replace it"
-  else match writeFilePrivate path "\{encode bytes}\n"
+keygenWrite label path bytes = match keygenRefusePath label path
+  Err message => Err message
+  Ok () => match writeFilePrivate path "\{encode bytes}\n"
     Err message => Err "unwritable \{label} \{path}: \{message}"
     Ok () => Ok ()
 

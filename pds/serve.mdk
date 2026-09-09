@@ -105,7 +105,7 @@ import lib.store.{
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead}
-import shell.keygen.{keygenSigningKey, keygenTokenSecret}
+import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
 import shell.persist.{
   credentialPath,
   persistCredential,
@@ -431,7 +431,11 @@ establishCredential dir (Bootstrap password) = bootstrapCredential dir password
 
    Neither flag has a default, and a run naming neither is an error rather
    than a no-op: a `keygen` that silently generated nothing would look exactly
-   like one whose output the operator was about to configure. -}
+   like one whose output the operator was about to configure.
+
+   EVERY destination is refused-or-admitted before ANY of them is written, the
+   shape `configure` takes for #2659 item 4: a run rejected for its second
+   file must leave no secret behind from its first. -}
 runKeygen : Args ->
   <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
 runKeygen parsed = match (
@@ -440,12 +444,29 @@ runKeygen parsed = match (
 )
   (None, None) =>
     Err
-      "keygen: name at least one file to write (--key PATH for the signing key, --token-secret PATH for the session-token secret)"
-  (Some keyPath, None) => keygenSigningKey keyPath
-  (None, Some secretPath) => keygenTokenSecret secretPath
+      "name at least one file to write (--key PATH for the signing key, --token-secret PATH for the session-token secret)"
+  (Some keyPath, None) => do
+    () <- keygenRefusePath "signing key" keyPath
+    keygenSigningKey keyPath
+  (None, Some secretPath) => do
+    () <- keygenRefusePath "session-token secret" secretPath
+    keygenTokenSecret secretPath
   (Some keyPath, Some secretPath) => do
+    -- Two names for one file pass both existence checks and would still write
+    -- twice, so distinctness is part of admitting the destinations.
+    () <- requireDistinctDestinations keyPath secretPath
+    () <- keygenRefusePath "signing key" keyPath
+    () <- keygenRefusePath "session-token secret" secretPath
     () <- keygenSigningKey keyPath
     keygenTokenSecret secretPath
+
+requireDistinctDestinations : String -> String -> Result String Unit
+requireDistinctDestinations keyPath secretPath =
+  if keyPath == secretPath then
+    Err
+      "refusing \{keyPath}: --key and --token-secret name the same file, and the two secrets are not interchangeable; name two files"
+  else
+    Ok ()
 
 requireDir : String -> <FileRead "_"> Result String Unit
 requireDir dir = match isDir dir

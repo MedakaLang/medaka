@@ -311,9 +311,16 @@ the bootstrap budget the previous count was set against. The derivation now runs
 inside `applyRequest`'s single indivisible sequence (`pds/shell/server.mdk`), so it is
 also the time one `com.atproto.server.createSession` attempt — including a WRONG one —
 blocks every other connection for. `maxCreateSessionPerWindow` is 30 per 60 s per
-identity (`pds/lib/resource_limits.mdk`), so at 500 ms one identity can hold the
-server for at most 7.5 s of each minute; the budget is set where that stays a
-fraction rather than a majority of the window.
+identity (`pds/lib/resource_limits.mdk`), so at the 500 ms budget one identity can
+hold the server for **15 s of each minute**, and at the chosen count's measured
+~440 ms for **~13 s**. Two things sharpen that further, and both are load-bearing:
+the derivation is inside an indivisible sequence, so those seconds are the whole
+single-threaded server, not one connection's share of it; and **without
+`--trusted-proxy` every caller shares the one `"direct"` identity bucket** (see
+"The identity a request is charged against", below), so the 30 are 30 logins *in
+total* — wrong passwords
+included — and any client can spend them. The budget is set where that stays a
+fraction rather than a majority of the window; it does not make it a small one.
 
 *The chosen count.* 0.147 ms × 3,000 = **~440 ms**, the largest round count inside the
 budget. `defaultIterations = 3000` (`pds/lib/credential.mdk`), pinned by a cell in
