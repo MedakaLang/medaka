@@ -14,7 +14,7 @@
    arm. Every assertion is therefore a property of the diagnostic text,
    not an agreement between two engines. -}
 
-import effect_domain_test_support.{
+import compiler_cli_test_support.{
   expectCheckAccept,
   expectCheckReject,
   fixtureIn,

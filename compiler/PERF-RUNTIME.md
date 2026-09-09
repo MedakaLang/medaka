@@ -697,8 +697,25 @@ machinery. Stage it: start with fully-concrete-primitive dicts on top-level cons
 fns (e.g. `Ord`/`Num`), gated by `selfcompile_fixpoint` + `diff_compiler_llvm`/`_dict`.
 Largest ceiling; a real multi-stage project (not a single-session change).
 
-### D. Separate compilation (the BUILD-latency caching lever) — ❌ MOOT
-**Measured this session: a full native compiler rebuild is ~8s (clang ~3.3s).** The
-~127s clang figure in PERF-RESULTS that motivated this lever is stale/wrong. There is
-no large clang cost to cache or split, so separate compilation / build caching has
-~nothing to gain. Build latency is not a performance problem; runtime is the target.
+### D. Separate compilation (the BUILD-latency caching lever) — OPEN
+The 2026-06-17 verdict below was correct for its day, when the compiler's own IR was
+small enough (12MB) that a full rebuild really did take single-digit seconds. The
+compiler has grown since, and that verdict is now the opposite of true.
+
+**Measured 2026-09-08, dev box (Debian 13, 12-core/32GB), `main` @ `f308c5e47`:** a cold
+worktree `sh test/build_native_medaka.sh` takes **191.7s** wall (116% CPU); a warm
+forced rebuild (`FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR= sh
+test/build_native_medaka.sh`) is **~160s** = emitA 18s + clangA 11s (8-way parallel
+emitter link) + emitB 40–59s + clangB **72s** (single-threaded `clang -O2` over 34.6MB /
+998k lines of IR, the CLI link). Box load moves these figures 30–40% run to run;
+interleave cold/warm measurements and repeat rather than trusting one sample.
+`medaka check compiler/driver/medaka_cli.mdk` alone is 36.8s. This is roughly the ~127s
+clang figure the 2026-06-17 verdict dismissed as stale — by today's numbers it was
+approximately right.
+
+There is now a large clang cost to cache or split. Tracked: #2725 (ThinLTO both links —
+projected 72s → 24s cold, ~1s cached), #2727 (per-module partition object cache),
+#2728 (single-binary / stage-1-loop, a design decision still open), #2726 (gensym
+scoping, a prerequisite of #2727), #2724 (typecheck superlinearity — the emit-phase
+pole). Re-derive the numbers above with the commands quoted; don't trust this table
+past the next few hundred kLOC of compiler growth.
