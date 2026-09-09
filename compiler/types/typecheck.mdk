@@ -40266,17 +40266,18 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
       (if wantAll then accAll ++ prog else accAll)
       rest)
 
--- Shared preamble of the three `check*` module drivers (the "three verbatim entry
--- wrappers" of #151): reset the cross-module accumulators, register abstract
--- record types, and seed runtime + core schemes.  Returns (runtimeSeed,
--- coreSchemes) for the caller to thread into foldModules.  elaborateModules does
--- NOT use this — its preamble additionally marks/prePasses the graph and stamps
--- core via elabModuleStamp.
+-- Shared preamble of every `check*` module driver (the "verbatim entry wrappers" of
+-- #151 — derive the callers with `grep -n 'checkModulesPreambleK ' …`, the count has
+-- rotted twice): reset the cross-module accumulators, register abstract record
+-- types, and seed runtime + core schemes.  Returns (runtimeSeed, coreSchemes) for
+-- the caller to thread into foldModules.  elaborateModules does NOT use this — its
+-- preamble additionally sets the promotion-eligible set and stamps core via
+-- elabModuleStamp.
 --
--- ⚠️ #1110: each of the three callers acquires type-constructor identity FIRST
+-- ⚠️ #1110: each caller acquires type-constructor identity FIRST
 -- (`stampGraphTyOrigins`, the resolve→typecheck channel) and hands this preamble
 -- the ALREADY-STAMPED prelude and modules.  It is not done here, where one line
--- would serve all three, for a specific reason: this function's inferred type is
+-- would serve them all, for a specific reason: this function's inferred type is
 -- pinned by the selfproc LEG A golden, and widening its result to carry the
 -- stamped decls back out is the one change that would make that golden's move
 -- non-additive.  A fourth driver must therefore remember to stamp — hence the
@@ -41555,9 +41556,13 @@ export
 -- The third component is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per
 -- user module in load order, with the whole-graph coherence verdict attached to the
 -- entry module — the same list `checkModulesDiagsK` returns, produced by the same
--- `checkModuleFullDiags` worker.  It is what `run`/`build` render; the drain's own
--- diagnostics are NOT in it (they come after every module has closed) and stay in the
--- residual below.
+-- `checkModuleFullDiags` worker.  It is NOT a partition with the residual below:
+-- `recordTypeError` writes both channels, so every per-module error is in the
+-- residual too; the residual additionally holds what the graph-end drain raised
+-- (after every module closed), and this list additionally holds the coherence
+-- verdict, which `globalCoherenceConflict` pushes to neither channel.  A consumer
+-- renders ONE of them for errors — this one to report as `check` does, the
+-- residual to gate on `hadTypeErrors` — never both.
 -- #2544 (M4): the fourth component is the RESIDUAL — every diagnostic this
 -- elaboration recorded and left standing, tagged with its module id, per goal with
 -- its own `Loc`, in push order.
@@ -41737,8 +41742,10 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- wantData=False drops the dead accData concat (`[]` initial).
   -- #154 PR-C: `wantData` is True here (it was False while this driver had no
   -- oracle to seed): `checkModuleFullDiags`' oracle recipe reads `accData`, so the
-  -- concat the diagnostics path already pays is now paid on this path too — once,
-  -- instead of once by the check pass this driver replaces.
+  -- O(modules²) concat the diagnostics path pays is paid on this path too.  While
+  -- `run`/`build` still run the check pass ahead of this driver that is twice per
+  -- verb (measured within noise on a 60-module graph); it becomes once when the
+  -- check pass goes.
   let (modules2, perModDiags) =
     foldModules
       True
