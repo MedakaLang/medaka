@@ -78,5 +78,26 @@ got=$(bound "$OUT" 2>&1 | strip_unit | strip_paths)
 rm -f "$OUT"
 check_one build "$got"
 
+# ── same source, two packages ────────────────────────────────────────────────
+# samesrc/proj/user.mdk and samesrc/depdir/user.mdk are BYTE-IDENTICAL; the
+# loader rewrites each one's `import helper` for the package that owns it, and
+# only proj's helper exports `h`.  A per-analyze desugar memo keyed on source
+# text alone hands the dep's module the consumer's tree and the genuine
+# R-PRIVATE-NAME on depdir/user.mdk goes silent (check --json exit 0).  The memo
+# is keyed on path + source; this pins the reject on the machine channel, where
+# the human path (a plain desugar) never showed the difference.
+SAMESRC="$FIX/samesrc/proj/main.mdk"
+got=$(bound "$MEDAKA" check --json "$SAMESRC" 2>/dev/null)
+rc=$?
+if [ "$rc" -eq 1 ] \
+  && printf '%s' "$got" | grep -q 'R-PRIVATE-NAME' \
+  && printf '%s' "$got" | grep -q 'depdir/user.mdk'; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL samesrc_check_json: expected exit 1 with R-PRIVATE-NAME on depdir/user.mdk, got exit $rc"
+  printf '%s\n' "$got" | sed 's/^/  /' | head -20
+fi
+
 echo "cross_project_deps: $pass/$((pass + fail))"
 [ "$fail" -eq 0 ]

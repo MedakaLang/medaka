@@ -309,7 +309,7 @@ check "project didOpen → per-file publishDiagnostics (== check --json; bad imp
 P6="$TMP/p6"
 mkdir -p "$P6"
 printf '[package]\nname = "p6"\nversion = "0.1.0"\n' > "$P6/medaka.toml"
-python3 - "$MEDAKA" "$ROOT" "$P6" <<'PY'
+perl -e 'alarm 300; exec @ARGV' -- python3 - "$MEDAKA" "$ROOT" "$P6" <<'PY'
 import json, os, subprocess, sys
 
 MEDAKA, ROOT, P6 = sys.argv[1], sys.argv[2], sys.argv[3]

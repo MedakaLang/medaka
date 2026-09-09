@@ -3099,6 +3099,7 @@ data PreludeScope = PreludeScope {
   psValuesM : OrdMap Unit,
   psTypesM : OrdMap Unit,
   psCtorsM : OrdMap Unit,
+  psExternsM : OrdMap Unit,
   psCoreExports : ModuleExports,
 }
 
@@ -3119,6 +3120,7 @@ preludeScopeOf runtimeDecls preludeDecls =
     psValuesM = omFromNames (externNames runtimeDecls ++ vls) omEmpty,
     psTypesM = omFromNames (primitiveTypes ++ tys) omEmpty,
     psCtorsM = omFromNames (primitiveConstructors ++ cts) omEmpty,
+    psExternsM = omFromNames (externNames runtimeDecls) omEmpty,
     psCoreExports = coreExports preludeDecls,
   }
 
@@ -3147,15 +3149,15 @@ preludeScopeStore k runtimeDecls preludeDecls =
 
 -- ── buildEnv (multi-module): like buildEnv but validating imports ──────────
 -- `preludeKey` keys the `PreludeScope` above; `None` derives it inline.
-buildEnvMM : Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
+buildEnvMM : PreludeScope ->
   OrdMap ModuleExports ->
   List Decl ->
   List String ->
   (Env, List ResError)
-buildEnvMM preludeKey runtimeDecls preludeDecls known prog internalGuard =
-  let ps = preludeScopeFor preludeKey runtimeDecls preludeDecls
+buildEnvMM ps known prog internalGuard =
+  -- `ps` is the caller's (`resolveModuleG` derives or looks it up once per
+  -- module), so an unkeyed caller pays one derivation per module, as it did
+  -- before the scope was hoisted.
   -- `seed` is False for exactly one program — the prelude resolved AS a module —
   -- which gets no prelude names seeded into its own scope and so cannot resume
   -- from the shared maps.  It builds its three from `omEmpty` as before.
@@ -3174,7 +3176,7 @@ buildEnvMM preludeKey runtimeDecls preludeDecls known prog internalGuard =
   let valuesM = omFromNames (userValueNames prog ++ adds.iaValues) (if seed then
     ps.psValuesM
   else
-    omFromNames (externNames runtimeDecls) omEmpty)
+    ps.psExternsM)
   let typesM = omFromNames (dataRecordNames prog ++ adds.iaTypes) (if seed then
     ps.psTypesM
   else
@@ -3582,8 +3584,7 @@ resolveModuleG : List String ->
   (ModuleExports, List ResError)
 resolveModuleG internalGuard preludeKey runtimeDecls preludeDecls known modId prog =
   let ps = preludeScopeFor preludeKey runtimeDecls preludeDecls
-  let (env, importErrs) =
-    buildEnvMM preludeKey runtimeDecls preludeDecls known prog internalGuard
+  let (env, importErrs) = buildEnvMM ps known prog internalGuard
   let errs =
     dedupResErrors
       (buildErrors preludeDecls prog

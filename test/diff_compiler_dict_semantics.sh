@@ -1425,7 +1425,7 @@ done
 #   entry | label | verb | assertion
 #     verb in {check, run, build, run-json}  (`medaka build` has NO --json flag)
 #     ⚠️ `check` grades STDERR ONLY here, like the others. The ENTRY module's warnings
-#     go to `check`'s STDOUT (runCheckModules bundles them into the scheme dump), so a
+#     go to `check`'s STDOUT (`checkRoute`'s multi-module arm bundles them into the scheme dump), so a
 #     stderr row is specifically about an IMPORTED module's -- which is the half that
 #     was silent.
 #     assertion in:

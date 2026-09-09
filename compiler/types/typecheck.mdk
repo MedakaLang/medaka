@@ -25305,7 +25305,7 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 --  1. `keyForSite` is reached ONLY from the five `resolve*` stamp passes, and those now
 --     run during the graph-end drain (`drainStampQueue` / `runStampCtxs`, #2548), itself
 --     reached only from inside `elaborateModules`.  `medaka check` on a multi-module
---     project goes `analyzeProject` → `typecheckPass` → `checkModulesDiags` →
+--     project goes `analyzeProject` → `typecheckPassFull` → `checkModulesDiags` →
 --     `checkModuleFullDiags`, which typechecks and never stamps a route.  (Door 4's two
 --     guards DO reach `check` because they fire during typecheck proper, in the
 --     obligation channel.)
@@ -41222,7 +41222,7 @@ cmModuleWorker mid seed accData accAll prog =
 -- `mainSchemeRef`.  S-3 (#2234) made `mainShapeWarnings` pure — it now READS the ref
 -- rather than re-elaborating — which was correct for every caller that had a
 -- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
--- `analyzeProject` → `typecheckPass` → here, and nothing on that chain wrote it.
+-- `analyzeProject` → `typecheckPassFull` → here, and nothing on that chain wrote it.
 -- Both directions of that hole are pinned:
 --   * fresh process — the ref is `None`, `mainTypeIsUnit ()` answers False on `None`,
 --     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every

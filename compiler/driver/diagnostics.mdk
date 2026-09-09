@@ -1252,25 +1252,15 @@ projectDiagsLoaded : Bool ->
   List (String, String, List Decl) ->
   List (String, List Diag)
 projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
-  -- ONE `desugarModule` per module for the whole analyze: the resolve half and
-  -- the typecheck half read the same trees.
-  let modPairs = desugaredModPairs mods
-  typecheckPass
-    runtimeP
-    coreP
-    preludeKey
-    chainKey
-    mods
-    modPairs
-    (resolvedBuckets
+  snd
+    (projectDiagsLoadedFull
       allowInternal
       trustedMods
-      preludeKey
-      chainKey
       runtimeP
       coreP
-      mods
-      modPairs)
+      preludeKey
+      chainKey
+      mods)
 
 -- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
 -- see `typecheckPassFull`.  One `desugarModule` per module here too: the resolve
@@ -1507,24 +1497,13 @@ resolvePass allowInternal trustedMods preludeKey rt core known keys ((mid, path,
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
 -- bucketed per file alongside the module's type diagnostics.
-typecheckPass : List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, List Diag) ->
-  List (String, List Diag)
-typecheckPass runtimeP coreP preludeKey chainKey mods modPairs buckets =
-  snd
-    (typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets)
-
--- `typecheckPass` also handing back the per-module `(schemes, errs, warns)` the
--- driver produced, so a caller that needs the graph's ENTRY REPORT as well as its
--- bucketed diagnostics (human `check`'s multi-module arm) reads them both out of
--- ONE typecheck.  `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the
--- schemes are a projection beside the fold, never an input to it.  `modPairs` is
--- the caller's, so the graph is desugared once per analyze.
+-- It hands back the per-module `(schemes, errs, warns)` the driver produced
+-- beside the bucketed diagnostics, so a caller that needs the graph's ENTRY
+-- REPORT as well (human `check`'s multi-module arm) reads both out of ONE
+-- typecheck; `medaka test`'s gate takes `snd`.  `typecheckDiagsFold` keeps
+-- consuming exactly `(errs, warns)`: the schemes are a projection beside the
+-- fold, never an input to it.  `modPairs` is the caller's, so the graph is
+-- desugared once per analyze.
 export
 typecheckPassFull : List Decl ->
   List Decl ->
@@ -1556,7 +1535,7 @@ typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets =
       buckets,
   )
 
--- The non-typecheck half of `typecheckPass`, over per-module `(errs, warns)` a
+-- The non-typecheck half of `typecheckPassFull`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
 -- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
 -- `run`/`build` reach it with the diagnostics `elaborateModules` returned, so the
@@ -1564,7 +1543,7 @@ typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets =
 -- `projectDiagsFromTc` below reaches it the same way for `medaka test`.  Both
 -- drivers' diagnostics must bucket, filter and order identically, which is why
 -- there is one fold.
--- `modPairs` is passed in rather than re-derived: `typecheckPass` needs it for the
+-- `modPairs` is passed in rather than re-derived: `typecheckPassFull` needs it for the
 -- chain memo's keys, and desugaring the graph twice was the cost this split would
 -- otherwise add.
 export
@@ -1721,22 +1700,29 @@ moduleStepKey : (String, String, List Decl) -> Option String
 moduleStepKey (mid, path, _) =
   map (src => joinNl [mid, path, src]) (loadedSourceOf path)
 
--- `desugar prog`, memoized by the module's loaded source: the desugared tree is
--- what the typechecker stamps and checks, and re-deriving it per call was the
--- other per-import cost besides the check itself.  Falls back to a plain desugar
--- when the loader has no source record for the path.  Bounded MRU.
+-- `desugar prog`, memoized by the module's PATH and loaded source: the desugared
+-- tree is what the typechecker stamps and checks (and what the resolve half reads),
+-- and re-deriving it per call was the other per-import cost besides the check
+-- itself.  The key carries the path because `prog` is not a function of the source
+-- alone: the loader rewrites each `import` target for the package that OWNS the
+-- path (`rewriteDecls`), so two byte-identical sources in two packages are two
+-- different trees, and a source-only key hands the second module the first one's
+-- imports.  Falls back to a plain desugar when the loader has no source record for
+-- the path.  Bounded MRU.
 desugarModule : String -> List Decl -> List Decl
 desugarModule path prog = match loadedSourceOf path
   None => desugar prog
-  Some src => match lookupAssoc src !moduleDesugarCacheRef
-    Some decls => decls
-    None =>
-      let decls = desugar prog
-      moduleDesugarCacheRef :=
-        takeFirstN
-          moduleDesugarCacheLimit
-          ((src, decls) :: dropAssoc src !moduleDesugarCacheRef)
-      decls
+  Some src =>
+    let key = joinNl [path, src]
+    match lookupAssoc key !moduleDesugarCacheRef
+      Some decls => decls
+      None =>
+        let decls = desugar prog
+        moduleDesugarCacheRef :=
+          takeFirstN
+            moduleDesugarCacheLimit
+            ((key, decls) :: dropAssoc key !moduleDesugarCacheRef)
+        decls
 
 moduleDesugarCacheLimit : Int
 moduleDesugarCacheLimit = 24
@@ -1784,7 +1770,7 @@ isRedundantUnbound existing d
 -- guard-exhaustiveness warnings from the raw decls, and bucket by path.
 -- (mid, desugaredDecls) lookup, sibling of `lookupTcDiags` — used by
 -- `foldModuleTc` to fetch the already-desugared decls for a module (computed
--- once by `typecheckPass`'s `modPairs`) instead of re-desugaring or reading raw.
+-- once by `typecheckPassFull`'s `modPairs`) instead of re-desugaring or reading raw.
 lookupDesugaredMod : String -> List (String, List Decl) -> List Decl
 lookupDesugaredMod _ [] = []
 lookupDesugaredMod mid ((m, d) :: rest)
@@ -1816,7 +1802,7 @@ foldModuleTc shadowPool oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid
   -- against the prelude standalones, bucketed by this module's own path and
   -- named by its own module id.  Empty intersection ⇒ `[]` ⇒ byte-identical.
   -- Reads the DESUGARED decls (already computed once in `modPairs` by
-  -- `typecheckPass`), not raw — see the FLAT-half comment in `analyzeFrom`
+  -- `typecheckPassFull`), not raw — see the FLAT-half comment in `analyzeFrom`
   -- for why a defaulted `IfaceMethod` double-fires over the raw tree (F2).
   let shadowDiags =
     map
@@ -2213,7 +2199,7 @@ mainNonUnitWarning decls = match findMainFunDef decls
 --     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
 --     that used to be masked by the elaborate this comment replaces.
 --   * `checkJsonSingle` (below) — `analyzeLocatedG` → `analyzeFrom`.
---   * `checkJsonFile` multi-module (below) — `analyzeProject` → `typecheckPass` →
+--   * `checkJsonFile` multi-module (below) — `analyzeProject` → `typecheckPassFull` →
 --     `checkModulesDiags`.  ⚠️ This bullet used to name `analyzeProject` flatly and
 --     was WRONG: until #2246 that chain wrote the ref NOWHERE, which is the F1 hole
 --     S-3's deletion of the extra `elaborateModules` left behind (fresh process ⇒

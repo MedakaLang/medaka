@@ -16,7 +16,7 @@ bindOneOrigin : Map String String -> String -> String -> List (String, String)
 bindTypeOrigin : Map String String -> (String, String) -> List (String, String)
 bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
-buildEnvMM : Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
+buildEnvMM : PreludeScope -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
 buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
