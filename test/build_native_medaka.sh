@@ -223,8 +223,14 @@ fi
 # identical source down the two paths are NOT the same bytes — and a key that did
 # not carry it would serve one path's binary under the other's name, making any
 # later before/after measurement a comparison of one binary with itself.
+#
+# The `mod` names the PARTITIONING SCHEME, not just the tool. It is there because
+# the round-robin scheme this replaced also spelled itself `thinlto-<N>`, so a
+# binary one scheme cached would be served under the other's key and launder
+# exactly the before/after measurement this field exists to protect. A future
+# scheme gets its own word here, in the same commit that introduces it.
 if [ -n "$PCG_BIN" ]; then
-  PCG_MODE="thinlto-$MEDAKA_CODEGEN_PARTS"
+  PCG_MODE="thinlto-mod-$MEDAKA_CODEGEN_PARTS"
 else
   PCG_MODE="plain"
 fi
