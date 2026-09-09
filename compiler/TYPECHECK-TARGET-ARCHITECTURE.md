@@ -792,6 +792,73 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    by `registry_keying_ratchet`'s check 6 (#2796), `ElabResult` names the elaboration's
    5-tuple, and `analyzeFinish`'s diagnostic order is pinned in three gates.
 
+16. **`build`'s second typecheck is NOT redundant — ruling 3's shape (a) is refuted by
+   measurement, 2026-09-09** (branch `rearch3-build-child`, off `20869bcc7`; not merged).
+   Shape (a) — the `medaka_emitter` child owns the whole verdict, the parent runs resolve
+   only — was implemented in full: the child loads with `loadProgramFilesLocatedE`, renders
+   its per-module diagnostics through `emitGateDiags` (the same `typecheckDiagsFold` +
+   `renderTriple*` face `check` uses), the #2089 gate is hard by default, the child signals a
+   located diagnostic with `emitDiagExitCode` and `build_cmd` forwards its stderr verbatim in
+   both exit cases.  Two of the eight acceptance items pass: the build is clean and
+   `selfcompile_fixpoint` reports **C3a PASS and C3b PASS** with the gate hard, and emitted IR
+   is **byte-identical** across the loader swap on three graphs measured with one source tree
+   and two emitter binaries (compiler `medaka_cli` 36,719,781 B; emitter entry 17,947,581 B;
+   an `llvm_fixtures` single file 424,794 B) — so `ELoc` transparency is measured, not assumed.
+   What refutes the shape is the diagnostic verdict, not the bytes:
+   **the child elaborates the MANGLED graph, and the mangled graph is not the program the
+   user's diagnostics are about.**
+   - **Rejections are lost (S0).**  `diff_compiler_run_check_agreement` goes 143 passed /
+     5 failed with `check REJECT, run REJECT, build ACCEPT` on
+     `reject_845_xmod_inferred_{alias,reexport,reexport_2hop,selective}` and
+     `reject_ambiguous_reexport_inside_map_literal`; the first builds a binary that dies
+     `E-FATAL-SIGNAL: fatal memory fault`, the second runs and prints `[(1, 2)]`.  This is
+     PRE-EXISTING in the child and independent of this branch: `MEDAKA_STRICT=1
+     ./medaka_emitter … <fixture>` on the **base** `20869bcc7` emitter emits IR at exit 0 for
+     all five, with empty stderr.  `elaborateModules` over the same graph unmangled — what
+     the parent runs today — rejects them.  So the parent's pass is the only thing catching
+     this class, and dropping it is a `[W-QUIETER]` severity increase.
+   - **Mangling artifacts are reported as user errors (S2).**  `must_fail`'s
+     `1359-reexport-ctor-mangle-miss` flips to DRAINED, and the drain is a **phantom**: the
+     #1359 mangler gap is not fixed, its `E-PANIC` is merely replaced by three located errors
+     against correct source (`Unknown constructor: Wid`, `Unbound variable: Wid`, `Ambiguous
+     instance for Display`), so `build` now rejects what `check` and `run` accept, blaming the
+     user's file for a rename the mangler failed to make.
+   - **Mangled names leak into diagnostic text (S2).**  `amod__bad`,
+     `s4_gen_sig_body_needs_more_rejected__noCtx`, `reject_toplevel_letrec_nonfunction__loop`,
+     and a `non-exhaustive match` naming `s6_1c_unrelated_warning_not_surfaced__Blue`.
+   - **The two drivers still differ on a single file.**  Same fixture, different column or a
+     different message: `p0_18/p0_19/p0_21` move the caret from the application to the
+     argument, `s1_constrained_shadow_dispatch` reports `Type mismatch: Int literal vs Box`
+     where the check driver reports `No impl of Num for Box`, and three `s6-*` fixtures gain
+     an `Overlapping impls` warning the check driver does not raise.  The premise that after
+     #2705 "the remaining difference is the rendering" does not hold for the mangled arm.
+   **Ruling 2's flip is separately blocked, and by the same disagreement.**
+   `diff_compiler_test_native` fails on `native_test_abort.mdk`: the child rejects the
+   synthesized `test` shim with `Ambiguous instance for Debug`/`Eq` on `expectEqual 3 3`, so
+   `1/4 passed` becomes `0/4`.  That is the hard gate alone, not the parent's removal — the
+   **base** `20869bcc7` binary reproduces it exactly under `MEDAKA_STRICT=1` (same eight
+   `Ambiguous instance` lines, same `0/4`) and gives `1/4` without it.  The flip's recorded
+   precondition (a fixpoint measured with the gate on) is met and is not sufficient: the
+   emit-path elaboration is clean on the compiler's own graph and not on `medaka test`'s.
+
+   Measured over `test/{run_check_agreement,dict,eval_modules,llvm}_fixtures*`,
+   `error_quality_fixtures/build` and `engine_fixtures`: **1022 fixtures, 28 divergent**
+   (stdout+stderr+exit+the built binary's own output, two arms, temp paths normalised);
+   `diff_compiler_dict_semantics` passes unchanged.  `build --json` was NOT converged and
+   still runs `checkJsonFileParts` plus the child: the child has no machine channel, and
+   `runCommand` takes no environment, so signalling one needs an argv flag or a `setEnv`
+   primitive — a separate slice, and not worth cutting while (a) itself is refuted.
+   **Answer to the owner question in `DESIGN-remaining-double-typechecks.md` §S4: neither
+   (a) nor (b).  `build` has two elaborations of two DIFFERENT trees, and neither can be
+   dropped — the mangled one because the backend consumes it, the unmangled one because it
+   is the only one whose verdict is about the user's program.**  The prerequisite for
+   re-opening (a) is making the mangled graph's elaboration agree with the unmangled one;
+   until then §E's "one elaboration" is a claim about `run`/`check`/`test`, not about `build`.
+   Filed: #2809 (S0, the child's elaboration accepts what the front end rejects) and #2810
+   (S1, the hard gate breaks `medaka test --native`).  Owner disposition (2026-09-09): the
+   ruling stands as the target; #2809 is its prerequisite; `build` keeps both typechecks.
+
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
