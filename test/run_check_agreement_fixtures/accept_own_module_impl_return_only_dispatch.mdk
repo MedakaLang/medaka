@@ -1,0 +1,21 @@
+-- The 2+-module promotion of test/engine_fixtures/return_only_param_dispatch.mdk: the
+-- grounding `impl Get (Box a) a` lives in the ENTRY module, and `get1`'s `v` appears
+-- only in return position, so `Debug v` grounds only if the impl universe the entry
+-- module is checked under contains the entry module's OWN impls.
+--
+-- `foldModules` never folds a module into its own `accAll`, so every per-module worker
+-- must fold `prog` in itself; a driver that passes bare `accAll` rejects this program
+-- with `Ambiguous instance for `Debug``. That is why the fixture is here rather than in
+-- an engine corpus: `check`, `run` and `build` reach inference through three different
+-- drivers, and this shape is what tells them apart.
+--
+-- EXPECTED VALUE DERIVED BY HAND, not captured: `get1 (Box 42)` is `42 : Int` and
+-- `debug` on an Int renders its decimal form, so `main` prints 42.
+import lib.rop_own_get.{Box(..), Get, get1}
+
+impl Get (Box a) a where
+  get1 (Box x) = x
+
+shown = debug (get1 (Box 42))
+
+main = println shown

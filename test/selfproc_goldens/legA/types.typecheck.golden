@@ -415,9 +415,8 @@ closedRowEqCheck : List Atom -> List Atom -> Unit
 closedRowMismatchMsg : List Atom -> List Atom -> String
 cmCheckWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List (String, Scheme))
 cmDiagsCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
-cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
 cmEntryCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag)
-cmEntryWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
+cmModuleWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
 cohCrossModuleMsg : String -> String -> String -> String

@@ -40904,8 +40904,8 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
 -- #1508 (U2a): this worker used to call `checkModuleFull`, i.e. `checkModuleFullImpl ""`,
 -- DISCARDING the module id `foldModules` hands it — so on the `checkModules` driver every
 -- USER module reached `checkBodyImpl`'s Module arm claiming to be the prelude (`""`,
--- `declEnvsOrdOf` ordinal 0).  Its two sibling workers (`cmDiagsWorker`, `cmEntryWorker`)
--- always passed the real `mid` through `checkModuleFullDiags`; this one was the outlier.
+-- `declEnvsOrdOf` ordinal 0).  Its sibling worker (`cmModuleWorker`) always passed the
+-- real `mid` through `checkModuleFullDiags`; this one was the outlier.
 -- It calls `checkModuleFullImpl` directly rather than `checkModuleFull` so the id can be
 -- threaded — everything else (`accData`, the `[]` implDecls that keep the #154 PR-C perf
 -- property) is byte-identically what `checkModuleFull` passed.
@@ -41172,22 +41172,46 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- worker: ISOLATED per-module diagnostics harvest (checkModuleFullDiags — see its
 -- doc above).  Surfaces this module's own `schemes` (for pubV) plus its
 -- (schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like cmCheckWorker;
--- NOT a flat union.
--- ⚠️ #2246: the payload carries `schemes` a SECOND time — exactly as `cmEntryWorker`
--- does, and for exactly the same reason.  `foldModules` hands the worker's FIRST
--- component to the NEXT module (it is the fold's seed, never `collect`'s), so the
+-- NOT a flat union.  ONE worker serves BOTH check-family drivers — the per-module
+-- diagnostics fold (`checkModulesDiags` / `checkModulesDiagsChain`, behind
+-- `analyzeProject` and the LSP) and the entry report (`checkModulesEntryFullSplitK`);
+-- they differ in their `collect`, never in what a module is checked against.  Keeping
+-- it one function is what makes that a property of the code rather than of two
+-- comments: the drivers CANNOT drift on the universe or the seed.
+--
+-- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module,
+-- exactly as the emit driver's `elabWorker` (`elabModuleStamp mid seed accData
+-- (accAll ++ prog) prog`) builds it.  `foldModules` never folds a module into its own
+-- `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this module's own
+-- decls too must fold [prog] in itself"), and `checkBodyImpl`'s `groundUniverse` binding
+-- reads `implDecls` RAW on the Module arm — so bare `accAll` makes
+-- `groundMultiParamObligations` ground a multi-param obligation against a universe with
+-- NONE of the module's own impls in it.  MEASURED, `medaka check` / `medaka build` on
+-- `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module file: `interface
+-- Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`): with bare
+-- `accAll` the return-only `v` never grounds, so the enclosing `Display v` rejects with
+-- `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to `Int` and the
+-- program checks, builds and prints `42`, as it does on the Flat arm.  The 2+-module
+-- promotion of the same shape — the grounding impl in the ENTRY module of a graph — is
+-- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`.
+-- Cost: the concat mirrors `elabWorker`'s exactly (growing accumulator on the RIGHT, so
+-- O(|prog|) per module), and neither driver is the perf-gated `checkModules` path.
+--
+-- #2246: the payload carries `schemes` a SECOND time.  `foldModules` hands the worker's
+-- FIRST component to the NEXT module (it is the fold's seed, never `collect`'s), so the
 -- only way the terminal module's own bindings reach `cmDiagsCollect` — which owes
--- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  Costs nothing:
+-- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  `cmEntryCollect`
+-- needs the same triple to keep the terminal module's OWN schemes/warns.  Costs nothing:
 -- `checkModuleFullDiags` already computed them.
-cmDiagsWorker : String ->
+cmModuleWorker : String ->
   List (String, Scheme) ->
   List Decl ->
   List Decl ->
   List Decl ->
   (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
-cmDiagsWorker mid seed accData accAll prog =
+cmModuleWorker mid seed accData accAll prog =
   let (schemes, _, errs, warns) =
-    checkModuleFullDiags mid seed accData accAll prog
+    checkModuleFullDiags mid seed accData (accAll ++ prog) prog
   (schemes, (schemes, errs, warns))
 
 -- collect for checkModulesDiags: strips the payload's `schemes` back off so the
@@ -41336,7 +41360,7 @@ chainPrefix (st :: sts) (k :: ks) total acc last =
     None => (reverseL acc, last)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
--- keys are available.  Mirrors `foldModules True True cmDiagsWorker cmDiagsCollect`
+-- keys are available.  Mirrors `foldModules True True cmModuleWorker cmDiagsCollect`
 -- exactly: import-scoped seed, pubV threading, both accumulator concats, the
 -- entry-only `mainSchemeRef` write.  `results` and the returned steps are newest
 -- first.
@@ -41352,12 +41376,12 @@ chainGo : List (String, Scheme) ->
 chainGo _ _ _ _ _ results _ [] = (results, [])
 chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
   let seed = baseSeed ++ importSeed prog depEnv
-  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let (schemes, (_, errs, warns)) = cmModuleWorker mid seed accData accAll prog
   let _ = setMainSchemeIfEntry True schemes
   ((mid, (errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
   let seed = baseSeed ++ importSeed prog depEnv
-  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let (schemes, (_, errs, warns)) = cmModuleWorker mid seed accData accAll prog
   let pubV =
     pickSchemes (publicValNames prog) schemes ++ reexportSeed coreV prog depEnv
   let depEnv2 = (mid, pubV) :: depEnv
@@ -41412,16 +41436,15 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
   let modules2 = modules
-  -- #154 PR-C: cmDiagsWorker reads BOTH accData (buildOracle `prog ++ accData` +
+  -- #154 PR-C: cmModuleWorker reads BOTH accData (buildOracle `prog ++ accData` +
   -- runFinalChecks) and accAll (checkModuleFullImpl implDecls + runFinalChecks), and both
   -- are order-observable (oracle first-wins, runFinalChecks scan order), so both concats
-  -- are RETAINED verbatim — this diagnostics path stays byte-identical (not the perf-gate
-  -- path; it is a byte-identity witness).
+  -- are RETAINED verbatim — this is not the perf-gate path, which is `cmCheckWorker`'s.
   let perMod =
     foldModules
       True
       True
-      cmDiagsWorker
+      cmModuleWorker
       cmDiagsCollect
       []
       (runtimeSeed ++ coreSchemes)
@@ -41577,14 +41600,14 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK effectivePreludeKey runtimeDecls coreDecls modules
   let modules2 = modules
-  -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
-  -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
-  -- witness, not the perf-gate path).
+  -- #154 PR-C: the SAME worker the diagnostics fold uses, so both concats are RETAINED
+  -- here too; only the `collect` differs.  Not the perf-gate path, which is
+  -- `cmCheckWorker`'s.
   let (schemes, errs, warns) =
     foldModules
       True
       True
-      cmEntryWorker
+      cmModuleWorker
       cmEntryCollect
       ([], [], [])
       (runtimeSeed ++ coreSchemes)
@@ -41648,42 +41671,6 @@ prependDiagOpt : String ->
 prependDiagOpt _ _ _ None ds = ds
 prependDiagOpt code sev help (Some msg) ds =
   TcDiag code sev None msg help None :: ds
-
--- worker: same ISOLATED per-module diagnostics as cmDiagsWorker, but surfaces the
--- FULL triple (schemes, errs, warns) as its payload so cmEntryCollect can keep the
--- terminal module's OWN schemes/warns.  IMPORT-SCOPED seed, exactly like the others.
-cmEntryWorker : String ->
-  List (String, Scheme) ->
-  List Decl ->
-  List Decl ->
-  List Decl ->
-  (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
--- ⚠️ `accAll ++ prog`, NOT bare `accAll` — this worker's impl universe includes THIS
--- module, exactly as the emit driver's `elabWorker` (`elabModuleStamp mid seed accData
--- (accAll ++ prog) prog`) has always built it.  `foldModules` never folds a module into
--- its own `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this
--- module's own decls too must fold [prog] in itself"), and `checkBodyImpl`'s
--- `groundUniverse` binding reads `implDecls` RAW on the Module arm — so passing bare
--- `accAll` made `groundMultiParamObligations` ground a multi-param obligation against a
--- universe with NONE of the module's own impls in it.  MEASURED, `medaka check` /
--- `medaka build` on `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module
--- file: `interface Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`):
--- with bare `accAll` the return-only `v` never grounds, so the enclosing `Display v`
--- rejects with `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to
--- `Int` and the program checks, builds and prints `42`, as it does on the Flat arm and
--- on `main`.  This was invisible until E-1 (#1115) routed the no-import front door
--- through `checkModulesEntryFull` — the 1-module graph is the case where `accAll` is
--- still its initial value and the omission is total.
--- Cost: the concat mirrors `elabWorker`'s exactly (growing accumulator on the RIGHT, so
--- O(|prog|) per module), and this driver is not the perf-gated `checkModules` path.
--- ⚠️ MIRROR NOT CHANGED: `cmDiagsWorker` (checkModulesDiags, the `analyzeProject`
--- multi-module path) passes bare `accAll` too and has the same hole — but only for a
--- module's OWN impls in a 2+-module graph, which is pre-existing on `main` and not this
--- regression; see the F18 report.
-cmEntryWorker mid seed accData accAll prog =
-  let (schemes, _, errs, warns) =
-    checkModuleFullDiags mid seed accData (accAll ++ prog) prog
-  (schemes, (schemes, errs, warns))
 
 -- collect: the ENTRY report keeps the ENTRY (last/terminal) module's SCHEMES and
 -- WARNINGS (those belong to the entry's report), but ACCUMULATES type errors from
