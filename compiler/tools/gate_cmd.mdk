@@ -5358,9 +5358,16 @@ budgetUncostedLines commitMessage (n :: ns) =
       n, ack,
       " — remedy: re-ingest the baseline (test/gate_cost_ingest.sh) so this",
       " gate gets a sample; the `cost` field is present, the packer just has",
-      " no price yet, so there is nothing to declare or split here.",
+      " no price yet, so there is nothing to declare or split here — a",
+      " brand-new gate has no baseline row until the nightly ingest runs.",
       " To accept unpriced on purpose, paste:\n    Gate-Budget-Override: ", tok,
-      "\n"
+      "\n", " This is usually a BRAND-NEW gate, which reds a second, separate",
+      " required check too: `ci-gen-drift` runs `medaka gate balance --check`,",
+      " and the balancer hard-refuses to run in the same commit that adds a",
+      " gate with no cost sample — a hand-chosen `shard` does not fix this,",
+      " only `medaka gate balance` may derive one. Discharge both in the same",
+      " commit: get a real cost sample, then `medaka gate balance && make",
+      " gen-ci` and commit both alongside this override.\n"
     ]
     :: budgetUncostedLines commitMessage ns
 

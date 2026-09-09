@@ -1152,10 +1152,9 @@ Same shape and same reason as §13's `gate-balance` job: this gate grades a numb
 (the projected pole/floor) that a packing bug could move if the gate itself were
 packed, so it cannot be a member of the set it certifies.
 
-### Not yet required
+### Required as of sprint cost-governor-on S4
 
-`ci-gen-drift` is the one context of this family actually in the required-checks
-ruleset today; `gate-cost`, `gate-balance`, and this gate's `gate-budget` job are not.
-Adding a required context is a separate, non-atomic `gh api` ruleset edit
-(AGENTS.md [W-REQUIRED-CHECKS]) — out of scope for this slice; see its report for the
-exact command.
+`ci-gen-drift` and this gate's `gate-budget` job are both in the required-checks
+ruleset (AGENTS.md [W-REQUIRED-CHECKS]); `gate-cost` and `gate-balance` are still
+not. Adding a required context is a separate, non-atomic `gh api` ruleset edit — see
+S4's report for the exact command used.
