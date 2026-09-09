@@ -1185,9 +1185,11 @@ newStale : Unit -> Ref (List (String, Diag))
 newStale _ = Ref []
 
 -- (modId, path, decls) → path (the bucket key) and the desugared decls helper.
+export
 midPath : (String, String, List Decl) -> String
 midPath (_, p, _) = p
 
+export
 seedAll : List String -> List (String, List Diag) -> List (String, List Diag)
 seedAll [] buckets = buckets
 seedAll (f :: fs) buckets = seedAll fs (seedBucket f buckets)
@@ -1277,6 +1279,25 @@ typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
       runtimeP
       coreP
       modPairs
+  typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets
+
+-- The non-typecheck half of `typecheckPass`, over per-module `(errs, warns)` a
+-- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
+-- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
+-- `run`/`build` reach it with the diagnostics `elaborateModules` returned, so the
+-- graph is rendered from ONE typecheck rather than from a second, check-only one.
+-- `modPairs` is passed in rather than re-derived: `typecheckPass` needs it for the
+-- chain memo's keys, and desugaring the graph twice was the cost this split would
+-- otherwise add.
+export
+typecheckDiagsFold : List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, List Diag) ->
+  List (String, List Diag)
+typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   -- Oracle superset = prelude + EVERY loaded module's decls, so a multi-clause
   -- function over an imported ADT isn't false-flagged as non-exhaustive.
   let oracleDecls = runtimeP ++ coreP ++ flatMap rawDeclsOfMod mods
@@ -1292,6 +1313,7 @@ rawDeclsOfMod : (String, String, List Decl) -> List Decl
 rawDeclsOfMod (_, _, prog) = prog
 
 -- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiags.
+export
 midToDesugaredPair : (String, String, List Decl) -> (String, List Decl)
 midToDesugaredPair (mid, path, prog) = (mid, desugarModule path prog)
 

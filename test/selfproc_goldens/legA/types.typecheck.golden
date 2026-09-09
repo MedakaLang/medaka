@@ -57,6 +57,7 @@ aliasMethodKeysFor : String -> String -> Loc -> List (String, String, String, Id
 aliasMethodRenames : List (String, List String) -> List Decl -> List (String, String)
 aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, String)
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
+aliasMethodSpellings : List Decl -> List (String, String)
 aliasNamesAt : Int -> List String
 aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasQualifiedMethodEntries : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
@@ -65,6 +66,7 @@ aliasRowKey : (String, String, String, Ident, Loc) -> String
 aliasRowLastLoc : List (String, String, String, Ident, Loc) -> Option Loc
 aliasRowMethodOf : List (String, String, String, Ident, Loc) -> String
 aliasRowModule : (String, String, String, Ident, Loc) -> String
+aliasRowSpelling : (String, String, String, Ident, Loc) -> (String, String)
 aliasSchemeEntry : List (String, List (String, Scheme)) -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : List (String, List (String, Scheme)) -> String -> List (String, Scheme) -> List (String, Scheme)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
@@ -1631,6 +1633,7 @@ ordCompareOp : Mono -> Mono -> Mono
 ordinalIsSentinel : Int -> Bool
 ordinalSentinelGuard : Int -> Unit
 ordinalSentinelMsg : String
+originMethodName : String -> String
 originPhrase : TyConOrigin -> String
 originRowsOf : List (String, (String, String)) -> List (String, String)
 overAppliedMsg : String -> Int -> Int -> String
@@ -1956,6 +1959,7 @@ residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualReduceFuel : Int
 residualRefutableNow : IfaceRef -> List Mono -> Bool
 residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
+resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
 resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
 resolveArgStamps : List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
@@ -2313,6 +2317,7 @@ wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
+withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
 xmodOblArgId : Mono -> List Int
 xmodVecObl : CSlot -> List Mono -> VecObl
 zipIfaceMethodSchemeIds : List (IfaceRef, String) -> List (String, Scheme) -> List ((IfaceRef, String), Scheme)

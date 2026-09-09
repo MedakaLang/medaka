@@ -143,6 +143,9 @@ import driver.diagnostics.{
   flushRunEnvelope,
   pendingStaleNotice,
   readDiagSrc,
+  typecheckDiagsFold,
+  seedAll,
+  midPath,
   parseErrCode,
   parseErrHelpFix,
   codeKind,
@@ -811,27 +814,6 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
             target
             (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
 
--- Render every ERROR diagnostic across a loaded multi-module project as located
--- human text (`file:L:C: msg` + caret), reusing the SAME `analyzeProject` the
--- `--json` path uses (line ~549).  This is what lets `check`/`run`/`build`
--- surface an IMPORTED-module type error WITH its location — not just the entry
--- module, and not the loc-free `TYPE ERROR: …`/boolean-deflection they used to
--- collapse to.  `None` when the project has no error diagnostics (clean).
--- Dependency-first file order (helper before entry), same as the loader/JSON.
-locatedProjectErrors : Bool ->
-  List String ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option String
-locatedProjectErrors allowInternal trusted target roots rsrc csrc =
-  errTextOf (locatedProjectDiags allowInternal trusted target roots rsrc csrc)
-
-errTextOf : (Option String, List (String, String, List Diag), Int) ->
-  Option String
-errTextOf (errText, _, _) = errText
-
 -- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
 -- errors (exactly what `locatedProjectErrors` returns) AND the COHERENCE warnings.
 --
@@ -953,44 +935,66 @@ renderTripleWarnings (path, src, diags) =
     _ => map (ppDiagCliLines (srcLinesArr src) path) ws
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
--- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
--- typecheckGateRoute's note): once that gate has already fired, render the located
--- per-module diagnostics for the human message, falling back to the generic
--- deflection only if analyzeProject surfaces none (never leaves the user with
--- exit 1 and no text).
+-- looser `hadTypeErrors`: once that gate has already fired, render the residual —
+-- the graph-end drain's own diagnostics, which the per-module lists do not carry
+-- (they close before the drain runs) — falling back to the generic deflection only
+-- if the residual carries nothing (never leaves the user with exit 1 and no text).
 --
--- 🚨 #1813: the None arm must NOT send the user to `medaka check`.  This arm fires
--- EXACTLY when `analyzeProject` (check's own predicate) surfaced nothing while the
--- elaborate pass armed `hadTypeErrors` — i.e. precisely the #1812 divergence, where
--- `medaka check` on this program exits 0 and reports success.  The old text read
--- "Run `medaka check` for details" and so named the one command guaranteed to
--- confirm the wrong thing.  #2544 (M4): the elaborate pass's residual IS reachable
--- now — `elaborateModules` returns every diagnostic the elaboration left standing,
--- each with its own `Loc`, and the caller hands that list here — so the arm renders
--- it located, through the same face `check` uses.  The generic text survives only
--- for a residual that carries nothing (a `hadTypeErrors` armed by a push this
--- channel does not see), and it still says WHERE the error was detected and that
--- `check` may not show it.
-locatedOrGeneric : Bool ->
-  List String ->
-  List (String, String) ->
-  String ->
-  List String ->
-  String ->
+-- #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
+-- when the per-module diagnostics this elaboration produced were empty while the
+-- same elaboration armed `hadTypeErrors` — i.e. precisely the #1812 divergence,
+-- where `medaka check` on this program exits 0 and reports success.  The old text
+-- read "Run `medaka check` for details" and so named the one command guaranteed to
+-- confirm the wrong thing.  #2544 (M4): the residual IS reachable — `elaborateModules`
+-- returns every diagnostic the elaboration left standing, each with its own `Loc` —
+-- so this renders it located, through the same face `check` uses.
+--
+-- The `analyzeProject` re-run this used to prefer over the residual is gone with the
+-- second typecheck it belonged to: the per-module errors the caller already rendered
+-- ARE that pass's output, and they were empty on every path that reaches here.
+residualOrGeneric : List (String, String) ->
   String ->
   List (String, TcDiag) ->
   <IO> String
-locatedOrGeneric allowInternal trusted pathMap target roots rsrc csrc residual =
-  match locatedProjectErrors allowInternal trusted target roots rsrc csrc
-    Some t => t
-    None => match renderTcDiags pathMap residual
-      [] =>
-        "error: type error in "
-          ++ target
-          ++ ", detected during elaboration (the run/build type pass); no located"
-          ++ " diagnostic is available for it, and `medaka check` may not report this"
-          ++ " program at all — see issue #1812"
-      rendered => joinNl rendered
+residualOrGeneric pathMap target residual = match renderTcDiags pathMap residual
+  [] =>
+    "error: type error in "
+      ++ target
+      ++ ", detected during elaboration (the run/build type pass); no located"
+      ++ " diagnostic is available for it, and `medaka check` may not report this"
+      ++ " program at all — see issue #1812"
+  rendered => joinNl rendered
+
+-- The rendering half of `locatedProjectDiags`, over per-module diagnostics an
+-- elaboration already produced: the same `foldModuleTc` tail `analyzeProject` runs
+-- (guard exhaustiveness, `deriving`, prelude-standalone shadows, bucketed per file)
+-- and the same three channels the triple carries.  `run`/`build` reach the triple
+-- through here instead of through a second, check-only typecheck of the graph.
+--
+-- The buckets start empty rather than from `resolvePass`: both callers run
+-- `resolveModulesErrorsByFile` first and abort on any resolve error, so
+-- `isRedundantUnbound` has nothing to filter against.
+elaboratedProjectDiags : List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  <IO> (Option String, List (String, String, List Diag), Int)
+elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
+  let results =
+    typecheckDiagsFold
+      rtD
+      coreD
+      modsWithPath
+      modsD
+      perMod
+      (seedAll (map midPath modsWithPath) [])
+  let triples = map readDiagSrc results
+  (
+    joinedOrNone (flatMap renderTripleErrors triples),
+    map cohWarnsOfTriple triples,
+    length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
+  )
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -2412,7 +2416,7 @@ typecheckGate allowInternal root input =
             csrc
             tsrc
             input
-            mods
+            modsWithPath
 
 -- Route by module count.  A single loaded module (no non-core imports) runs the
 -- ACCURATE located check `medaka check` uses for single files — analyzeLocatedG
@@ -2456,9 +2460,9 @@ typecheckGateRoute : Bool ->
   String ->
   String ->
   String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
   <IO> Result String (List String)
-typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
+typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _path, decls)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
   -- S-3/#164 (F-converge): the SAME conversion `checkRoute`'s single-module arm
@@ -2498,12 +2502,13 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
           ++ nonEmptyTriples [(target, tsrc, mainWarns)]
       Ok (flatMap renderTripleWarnings allWarns)
     _ => Err (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
-typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
+typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target modsWithPath =
   -- S-1/#2234 (F-converge): live use (they feed `resolveModulesErrorsByFile`
   -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
   -- content-keyed memo of exactly `desugar (parsePrelude src)`.
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
+  let mods = map dropModPath modsWithPath
   let modsD = map desugarPair mods
   -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
   -- loader's modId → path map — the SAME `resolveModulesErrorsByFile` seam
@@ -2513,33 +2518,27 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
     ppResolveErrorsByFile
       (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
   match resDiags
-    "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
-      -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
-      -- what `medaka check` prints and to what `--json` reports.
-      -- ⚠️ "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
-      -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
-      -- module's warnings; this gate's `Ok` payload carries EVERY module's
-      -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
-      -- incomparable overlap warns where `check` of the entry does not.  That is the
-      -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
-      -- not identity, and reading it as identity is how the next reader "restores"
-      -- the entry-only scoping and re-silences the imported case.
-      (Some errText, _, _) => Err errText
-      (None, projWarns, _) =>
-        let _ = resetTypeErrorsSticky ()
-        let (_, _, _, residual, _) = elaborateModules rtD coreD modsD
-        match hadTypeErrors ()
-          True =>
-            Err
-              (locatedOrGeneric
-                allowInternal
-                trusted
-                pathMap
-                target
-                roots
-                rsrc
-                csrc
-                residual)
+    "" =>
+      -- ONE typecheck of the graph (ARCH §E): the elaboration `build` needs anyway
+      -- is also the diagnostics producer, so the CHECK-STRENGTH gate below reads
+      -- ITS per-module output instead of a second, check-only pass over the same
+      -- graph.
+      let _ = resetTypeErrorsSticky ()
+      let (_, _, perMod, residual, _) = elaborateModules rtD coreD modsD
+      match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
+        -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
+        -- what `medaka check` prints and to what `--json` reports.
+        -- "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
+        -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
+        -- module's warnings; this gate's `Ok` payload carries EVERY module's
+        -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
+        -- incomparable overlap warns where `check` of the entry does not.  That is the
+        -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
+        -- not identity, and reading it as identity is how the next reader "restores"
+        -- the entry-only scoping and re-silences the imported case.
+        (Some errText, _, _) => Err errText
+        (None, projWarns, _) => match hadTypeErrors ()
+          True => Err (residualOrGeneric pathMap target residual)
           -- #1236: same main-shape fold as the single-module arm above.
           -- `elaborateModules` just ran over the WHOLE graph (line above), so
           -- mainSchemeRef is already populated — no second typecheck pass.
@@ -2933,47 +2932,32 @@ runRunCmd argv =
                 coreD
                 modsD)
           match resDiags
-            -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
-            -- single `analyzeProject` pass, but keeping the WARNINGS the
-            -- errors-only accessor discarded (see its own note).
+            -- ONE typecheck of the graph (ARCH §E): the elaboration `run` needs
+            -- for eval is also the diagnostics producer, so the located
+            -- per-module report below is rendered from ITS output rather than
+            -- from a second, check-only pass over the same graph.
             "" =>
-              match (locatedProjectDiags
-                allowInternal
-                trusted
-                target
-                roots
-                rsrc
-                csrc)
+              let _ = resetTypeErrorsSticky ()
+              let (coreE, modsE, perMod, residual, _) =
+                elaborateRun rtD coreD modsD
+              match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
                 (Some errText, _, _) => runAbort errText
-                (None, projWarns, _) =>
-                  let _ = resetTypeErrorsSticky ()
-                  let (coreE, modsE, _, residual, _) =
-                    elaborateRun rtD coreD modsD
-                  match hadTypeErrors ()
-                    True =>
-                      -- Belt-and-braces: anything only the emit/eval
-                      -- elaboration can see still aborts before eval.
-                      runAbort
-                        (locatedOrGeneric
-                          allowInternal
-                          trusted
-                          pathMap
-                          target
-                          roots
-                          rsrc
-                          csrc
-                          residual)
-                    False =>
-                      let perfTCheck = now ()
-                      let _ =
-                        emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                      finishRunEval
-                        target
-                        jsonMode
-                        (coreE, modsE)
-                        mods
-                        projWarns
-                        (runEvalPerf perfOn target perfT0 perfTCheck)
+                (None, projWarns, _) => match hadTypeErrors ()
+                  True =>
+                    -- Belt-and-braces: anything only the graph-end drain can
+                    -- see still aborts before eval.
+                    runAbort (residualOrGeneric pathMap target residual)
+                  False =>
+                    let perfTCheck = now ()
+                    let _ =
+                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                    finishRunEval
+                      target
+                      jsonMode
+                      (coreE, modsE)
+                      mods
+                      projWarns
+                      (runEvalPerf perfOn target perfT0 perfTCheck)
             _ => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the

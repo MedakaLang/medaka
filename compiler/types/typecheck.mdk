@@ -9496,6 +9496,7 @@ data PerRun = PerRun {
   bodyImplEnvRef : Ref ImplEnv,
   methodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
   methodAdmittedIfacesRef : Ref (OrdMap (List IfaceRef)),
+  aliasMethodOriginsRef : Ref (OrdMap String),  -- #1386: the alias-qualified method spellings this module's imports bring into scope (`import m as A` ⇒ `A.mth`), each mapped to the ORIGIN method name.  A projection of the same candidate rows that supply `methodIfaceParamsRef`'s alias entries, UNFILTERED (the supply drops ambiguous and unresolvable keys; see `aliasMethodSpellings`), so this table is a superset of the supply's key set; read through `originMethodName`.
   -- ⚠️ `registeredIfacesRef` was HERE and is RETIRED by #1569 — see the sibling
   -- `CrossRun.universeRegisteredIfacesRef`'s retirement note for the history.
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
@@ -9599,6 +9600,7 @@ freshPerRun _ = PerRun {
   bodyImplEnvRef = Ref emptyImplEnv,
   methodIfaceParamsRef = Ref omEmpty,
   methodAdmittedIfacesRef = Ref omEmpty,
+  aliasMethodOriginsRef = Ref omEmpty,
   implObls = wNew (),
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
@@ -11897,7 +11899,17 @@ argDispatchOf name =
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchIdxScoped name byId = match admittedIfaceFor name
   None => None
-  Some iface => lookupIdxById iface name byId
+  Some iface => lookupIdxById iface (originMethodName name) byId
+
+-- #1386: `import m as A` puts `A.mth` in scope as a second SPELLING of the method
+-- `mth`, and an occurrence written that way keeps it — `renameAliasedMethods` no
+-- longer rewrites it, because rewriting erased the distinction that makes the
+-- occurrence decidable (see `aliasQualifiedMethodEntries`).  The rows above are
+-- keyed by the method's OWN declared name, so the spelling has to be resolved back
+-- to it before the row can match.  A bare occurrence is its own origin.
+originMethodName : String -> String
+originMethodName name =
+  optionOr name (omLookup name perRun.value.aliasMethodOriginsRef.value)
 
 -- ⚠️ ONE `admittedIfaceFor`, NOT TWO.  Leg 1 (this reader) and Leg 3
 -- (`ieImplExistsForHead`) both need "which declaration does this module admit for
@@ -20954,10 +20966,13 @@ ieImplExistsForHead env name hk =
 -- body verbatim; the three existence READS above are unchanged and still route through
 -- the single-argument spelling, so no read has been split off from the set.
 ieImplExistsForHeadOf : ImplEnv -> String -> HeadKey -> Option IfaceRef -> Bool
+-- #1386: a row's method set is keyed by the method's own DECLARED name, so an
+-- alias-qualified occurrence is resolved to its origin here — once per query, beside
+-- the admitted declaration, never inside the row scan.
 ieImplExistsForHeadOf env name hk admitted =
   ieImplExistsForHeadGo
     (ieHeadRows (Some hk) env)
-    name
+    (originMethodName name)
     (dispHeadTab hk)
     admitted
 
@@ -22987,12 +23002,11 @@ applyMethodScopeOverrides prog floor =
     floor
 
 -- ── #1386 / #1276: SUPPLY the ALIAS-QUALIFIED method spellings ──────────────────
--- `import m as A` … `A.mth` keeps its `A.mth` spelling on the diagnostic-producing
--- `check` path: only `elaborateModules` runs `renameAliasedMethods`, and the three
--- `check*` drivers do not, so every reader keyed by the OCCURRENCE name misses.
--- `recordImplObligation` is one of them, which is why an alias-qualified method call
--- has NO impl obligation recorded at all (#1386, S0 — `check` exits 0 on a program
--- with no matching impl anywhere).
+-- `import m as A` … `A.mth` keeps its `A.mth` spelling all the way through inference,
+-- on every driver, so every reader keyed by the OCCURRENCE name misses unless it is
+-- supplied.  `recordImplObligation` is one of them, which is why an alias-qualified
+-- method call had NO impl obligation recorded at all (#1386, S0 — `check` exits 0 on a
+-- program with no matching impl anywhere).
 --
 -- The remedy is a SUPPLY, not a re-key and not a rewrite: add `A.<method>` → the entry
 -- `m`'s OWN declaration identity gives, for every method `m` exports.  Additive against
@@ -23118,6 +23132,30 @@ aliasMethodKeyEntry k ((_, mname, _, ident, _) :: _) tab =
 
 aliasRowKey : (String, String, String, Ident, Loc) -> String
 aliasRowKey (k, _, _, _, _) = k
+
+-- ── #1386: the alias-qualified spellings, as a NAME MAP ─────────────────────────
+-- The candidate rows above answer "what does `A.mth` mean"; three readers downstream
+-- ask the cheaper question "which occurrence spellings are a method of this module's
+-- import scope, and what is the origin name behind each".  This projection is over
+-- the RAW candidate rows; the supply (`aliasMethodKeyApply`) additionally drops a
+-- key whose candidates are ambiguous (`T-AMBIGUOUS-ALIAS-METHOD`, loud) or whose
+-- method lookup misses (silent).  So the three readers below see a SUPERSET of the
+-- supply's spellings: on the ambiguous key the program is rejected anyway; on the
+-- miss the readers treat a spelling as a method the supply has no entry for — no
+-- program reaching that arm has been constructed, and the invariant is stated here
+-- rather than assumed:
+--   * `moduleMarkCtx` — the mark sets are keyed by the OCCURRENCE, so the dotted
+--     spelling has to join them or `rewriteArgScoped` never marks the occurrence.
+--   * `originMethodName` — the by-identity dispatch-index rows are keyed by the
+--     method's own declared name, which the dotted spelling is not.
+--   * `resolveAliasMethodSpellings` — after inference, the dotted spelling goes back
+--     to the origin so every bare-name method table downstream (eval's coalesced
+--     cells and per-tag `requires` counts, the emitter's method tables) is unchanged.
+aliasMethodSpellings : List Decl -> List (String, String)
+aliasMethodSpellings prog = map aliasRowSpelling (aliasMethodKeyCands prog)
+
+aliasRowSpelling : (String, String, String, Ident, Loc) -> (String, String)
+aliasRowSpelling (k, mname, _, _, _) = (k, mname)
 
 aliasRowModule : (String, String, String, Ident, Loc) -> String
 aliasRowModule (_, _, m, _, _) = m
@@ -23458,14 +23496,12 @@ anyUsePathBinds (_ :: rest) wide n c = anyUsePathBinds rest wide n c
 -- branch, and left #1276's repro printing `2` at exit 0, unchanged.  That measurement
 -- alone covers every surface, and it is what the refutation rests on.
 --
--- A SECOND, WEAKER observation bounds the `check` path specifically, and is scoped here
--- because it does not generalise: `renameAliasedMethods` has exactly one caller,
--- `elaborateModules` (`grep -n renameAliasedMethods compiler/types/typecheck.mdk`), so
--- the three `check*` drivers never perform the alias rewrite and `A.mth` never becomes a
--- bare-`mth` occurrence for this table on THAT path.  ⚠️ It says nothing about the
--- run/elaborate path, which DOES rename and DOES emit type errors — F1 was precisely a
--- case where `check` was clean and `run` reported one, so "check is silent" must never
--- again be read as "no surface reports anything".  CONTROL for the check half, on a
+-- A SECOND observation: `A.mth` never becomes a bare-`mth` occurrence for this table on
+-- ANY path.  It used to hold on the `check` drivers alone, because `renameAliasedMethods`
+-- has one caller (`elaborateModules`) and they do not use it; the module-alias arm of
+-- that rewrite is now gone, so the elaborate path keeps the spelling too.  Neither half
+-- may be read as "no surface reports anything" — F1 was precisely a case where `check`
+-- was clean and `run` reported a type error.  CONTROL for the check half, on a
 -- binary built from this branch: `import ifacea as A`, `data Blob`, NO impl anywhere —
 -- `medaka check` exits 0 with no diagnostic while `medaka run` panics `unbound
 -- identifier: mth`.  #1276's fix is a driver / AST-carrier change; the alias arm was
@@ -25967,7 +26003,14 @@ ieSelectRowByMethod env name goals = match goalHeadCon goals
       env
       (pickMostSpecificEntry
         goals
-        (ieCandidatesForMethod env hk name (admittedIfaceFor name) goals))
+        -- #1386: interface from the OCCURRENCE spelling, method-set membership from
+        -- its ORIGIN — both projected off the one name, inside the one query.
+        (ieCandidatesForMethod
+          env
+          hk
+          (originMethodName name)
+          (admittedIfaceFor name)
+          goals))
   None => None
 
 -- The inverse of `keyEntryOfRow`, and it is EXACT rather than heuristic: the
@@ -26218,8 +26261,12 @@ ieCountHeadByIfaceGo ((ImplRow _ _ ir tys _ _) :: rest) iface goal
 -- `headTabOf`/`headTabEq`, for the reason derived in full on `ieCountHeadByIface`.
 ieCountHeadByMethod : ImplEnv -> String -> Option HeadKey -> Int
 ieCountHeadByMethod env name hd =
-  -- goal-side key projected ONCE, here — see `headTabOf`.
-  ieCountHeadByMethodGo (ieHeadRows hd env) name (headTabOf hd)
+  -- goal-side key projected ONCE, here — see `headTabOf`.  #1386: so is the
+  -- occurrence's origin name, which is what a row's method set is keyed by.
+  ieCountHeadByMethodGo
+    (ieHeadRows hd env)
+    (originMethodName name)
+    (headTabOf hd)
 
 ieCountHeadByMethodGo : List ImplRow -> String -> Option TabKey -> Int
 ieCountHeadByMethodGo [] _ _ = 0
@@ -28676,6 +28723,12 @@ checkBodyImpl seed mode prog0 =
           (applyMethodScopeOverrides
             prog
             crossRun.value.universeMethodIfaceParamsRef.value)
+      -- #1386: the ORIGIN name behind each of those alias-qualified keys, from the
+      -- same rows, in the same module scope, on the same line as the supply they
+      -- accompany — `originMethodName`'s source.  Empty on the Flat arm, whose
+      -- single file has no import graph.
+      perRun.value.aliasMethodOriginsRef :=
+        omFromPairs (aliasMethodSpellings prog) omEmpty
       -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
       -- the winner above is a floor rather than a decision.  Written HERE, beside the
       -- projection it accompanies, so the two can never be derived from different
@@ -38106,10 +38159,14 @@ pickSchemesByDecl (n :: ns) table byId = match admittedSchemeFor n byId
 -- scope does not decide it", and the caller keeps the bare-name answer — never a
 -- guess, the same discipline `scopedMethodEntry` states for the table itself.
 admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+-- #1386: the row half is keyed by the method's OWN declared name, the same asymmetry
+-- `dispatchIdxScoped` carries — an alias-qualified occurrence resolves its interface
+-- from the spelling and its row from the origin.  Both projections are read HERE, off
+-- the one name, so they cannot be given two different scopes.
 admittedSchemeFor n byId =
   match omLookup n perRun.value.methodIfaceParamsRef.value
     None => None
-    Some (iface, _, _, _) => lookupSchemeById iface n byId
+    Some (iface, _, _, _) => lookupSchemeById iface (originMethodName n) byId
 
 -- ⚠️ `sameTyConHead`, not a bare `irName` compare: this is a LOOKUP, where a false HIT
 -- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus
@@ -38505,10 +38562,19 @@ aliasEntriesFor _ _ _ = []
 -- NOT a per-module binding (eval.mdk's globalCells / coalesceImpls).  So an alias of a
 -- method is not a new binding at all: it is a second SPELLING of the same method.
 --
--- Resolve it back to the origin name here, once, right after resolve has validated the
--- alias and before ANY marking / route-stamping / dict-arity machinery runs.  Every
--- downstream stage — marker, typecheck route stamping, private_mangle, the emitter, both
--- eval drivers — then sees an ordinary method reference and needs no alias awareness.
+-- MEMBER aliases (`import m.{area as computeArea}`) are resolved back to the origin
+-- name here, once, before any marking / route-stamping / dict-arity machinery runs.
+-- A member alias is an undotted local name, indistinguishable in every reader from a
+-- standalone's, so the rewrite is what binds it at all.
+--
+-- MODULE aliases (`import m as A` … `A.area`) are NOT resolved here.  The dotted
+-- spelling is what makes the occurrence decidable — erasing it makes `A.area` the same
+-- name as an unrelated imported standalone `area`, and the standalone shadow wins
+-- (#1386 Repro B).  Inference gets the spelling supplied to it
+-- (`aliasQualifiedMethodEntries`, `moduleMarkCtx`, `originMethodName`) and
+-- `resolveAliasMethodSpellings` puts the occurrence back under its origin name once
+-- inference is done, so every stage after elaboration still sees an ordinary method
+-- reference and needs no alias awareness.
 --
 -- That is also precisely why the METHOD-side predicate carrier and its qualified
 -- scoped projection need no alias re-keying the
@@ -38517,15 +38583,16 @@ aliasEntriesFor _ _ _ = []
 -- bindings that keep their local name, which is why they needed the re-keying.
 --
 -- Caveat, shared with the marker's own shadowRename: the rewrite is scope-blind, so a
--- LOCAL binder whose name equals an alias local would also be rewritten.  An alias local
--- is chosen by the importing file, so this is a self-inflicted collision.
+-- LOCAL binder whose name equals a member-alias local would also be rewritten.  An alias
+-- local is chosen by the importing file, so this is a self-inflicted collision.
 -- The rewrite has TWO halves, and they must agree: rewriting only the references would
 -- leave them bound to nothing.
---   (a) every reference to an aliased method  → the origin method name
---   (b) the module's own `DUse` decls          → import that method under its ORIGIN name
--- With (b) in place, the import seed (typecheck), the import frame (eval) and the
--- rename map (private_mangle) all bind the origin name by their ORDINARY un-aliased
--- paths — none of them needs to learn anything about aliases.
+--   (a) every reference to a member-aliased method → the origin method name
+--   (b) the module's own `DUse` decls               → import that method under its ORIGIN name
+-- (b) also runs for a module alias, where it is the whole of the work: the alias `DUse`
+-- keeps its own non-method values and an `import m.{…m's methods…}` is appended beside
+-- it, so the origin name is in scope for the occurrence `resolveAliasMethodSpellings`
+-- resolves it to.
 renameAliasedMethods : List Decl ->
   List (String, List Decl) ->
   List (String, List Decl)
@@ -39018,20 +39085,28 @@ rowBoundByMember m (cn, owner, _) = memberBindsCtorName cn owner m
 renameAliasedMethodsIn : List (String, List String) ->
   (String, List Decl) ->
   (String, List Decl)
+-- Half (b) runs UNCONDITIONALLY.  It used to be gated on half (a) finding a rename,
+-- which was sound only while a MODULE alias produced one: with the module-alias arm
+-- of (a) gone, gating (b) on (a) would stop `import m as A` bringing `m`'s methods
+-- into scope under their origin name at all — `run`/`build` would go SILENT on the
+-- #1812 shape they reject today (`test/must_fail_fixtures/1812-…`, whose claim names
+-- that outcome and forbids it) and an alias-qualified call would lose its dispatch.
+-- The pass is a no-op on a module whose imports name no method, so running it always
+-- costs a walk and changes nothing else.
 renameAliasedMethodsIn methodsPerMid (mid, prog) =
+  let prog2 = flatMap (deAliasMethodImports methodsPerMid) prog
   match aliasMethodRenames methodsPerMid prog
-    [] => (mid, prog)
-    renames =>
-      let prog2 = flatMap (deAliasMethodImports methodsPerMid) prog
-      (mid, mapProg (renameMethodVar renames) prog2)
+    [] => (mid, prog2)
+    renames => (mid, mapProg (renameMethodVar renames) prog2)
 
 -- (b): make each import bind the METHODS it names under their ORIGIN name.
 --   `import m.{area as computeArea}` → `import m.{area}`  (the alias is dropped: a method
 --                                      is global-by-name, so the rename already points
 --                                      every reference at `area`)
 --   `import m as A`                  → keep it (its non-method values are still `A.f`)
---                                      and ADD `import m.{…m's methods…}`, which is what
---                                      `A.area` was rewritten to refer to.
+--                                      and ADD `import m.{…m's methods…}`, the origin
+--                                      name `resolveAliasMethodSpellings` resolves
+--                                      `A.area` to once inference is done.
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodImports mm (DAttrib attrs d) =
   map (DAttrib attrs) (deAliasMethodImports mm d)
@@ -39062,7 +39137,32 @@ renameMethodVar renames (e@(EVar x)) = match lookupAssoc x renames
 renameMethodVar renames (e@(EVarId x _)) = match lookupAssoc x renames
   Some origin => EVar origin
   None => e
+-- A marked occurrence: `resolveAliasMethodSpellings` runs after inference, on a tree
+-- the schedule has already marked.  Only the NAME moves — the route cell carries the
+-- dispatch decision inference reached under the alias-qualified spelling.
+renameMethodVar renames (e@(EMethodAt x sym ev)) = match lookupAssoc x renames
+  Some origin => EMethodAt origin sym ev
+  None => e
 renameMethodVar _ e = e
+
+-- ── #1386: the alias-qualified spelling, resolved AFTER inference ───────────────
+-- `A.mth` reaches inference spelled as it was written, because that spelling is what
+-- makes the occurrence decidable: rewriting it to a bare `mth` up front makes it the
+-- same name as an unrelated imported standalone `mth`, and the standalone shadow wins
+-- (`aliasQualifiedMethodEntries`' header, #1386 Repro B).  Every reader inference needs
+-- is supplied under that spelling — the obligation table, the mark sets, the dispatch
+-- index — so the distinction survives exactly as long as it decides something.
+--
+-- It must not survive further.  Everything DOWNSTREAM of elaboration keys a method by
+-- its origin name and only its origin name: eval's coalesced method cells and its
+-- per-(method, tag) `requires` counts (`methodReqCountRef`, whose miss would turn a
+-- dispatch into the inherited-default path), the Core-IR interpreter's twin, and the
+-- emitter's method tables.  Resolving the spelling here leaves all of them the tree
+-- they get today, so the fix is a VERDICT change and nothing else.
+resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
+resolveAliasMethodSpellings (mid, prog) = match aliasMethodSpellings prog
+  [] => (mid, prog)
+  rows => (mid, mapProg (renameMethodVar rows) prog)
 
 -- (localName, originMethodName) for every import in [prog] whose ORIGIN is a method of
 -- the module it comes from.  Only an alias yields an entry — an un-aliased import already
@@ -39084,10 +39184,15 @@ aliasMethodRenamesOf mm (DUse _ path _) =
 aliasMethodRenamesOf _ _ = []
 
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
--- `import m as A` → `A.area` is method `area`
-aliasMethodRenamesOfPath methods (UseAlias _ a) =
-  map (n => (qualifiedLocal a n, n)) methods
--- `import m.{area as computeArea}` → `computeArea` is method `area`
+-- `import m.{area as computeArea}` → `computeArea` is method `area`.  A member alias
+-- is an UNDOTTED local name, so it is not a spelling any shadow rule can tell apart
+-- from a standalone's — the rewrite is what binds it at all.
+--
+-- #1386: `import m as A` used to be here too, mapping `A.area` → `area`.  It is gone:
+-- the dotted spelling is what makes the occurrence decidable, and erasing it up front
+-- let an unrelated imported standalone `area` capture the occurrence.  The spelling is
+-- now supplied to the readers that need it and resolved after inference instead — see
+-- `resolveAliasMethodSpellings`.
 aliasMethodRenamesOfPath methods (UseGroup _ ms) =
   flatMap (memberMethodRename methods) ms
 aliasMethodRenamesOfPath _ _ = []
@@ -41603,10 +41708,12 @@ elaborateModules : List Decl ->
 -- lint-disable-next-line rule-prefer-assign-op
 elaborateModules runtimeDecls coreDecls0 modulesIn =
   let stickyBefore = typeErrorsStickyDiags.value
-  -- IMPORT ALIASING of an interface/impl METHOD — resolve it back to the origin name
-  -- before ANY of the marking / stamping / dict-arity machinery below runs.  See
-  -- renameAliasedMethods: a method is global-by-name, so an alias of one is a second
-  -- SPELLING, not a second binding.
+  -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
+  -- alias of one is a second SPELLING, not a second binding.  A MEMBER alias is
+  -- resolved to the origin name here, before any marking / stamping / dict-arity
+  -- machinery runs; a MODULE alias keeps its dotted spelling through inference and is
+  -- resolved at the end of this driver (`resolveAliasMethodSpellings`).  See
+  -- `renameAliasedMethods`.
   --
   -- #1110: `stampGraphTyOrigins` is the resolve→typecheck channel (see its own doc
   -- comment).  It runs HERE, not in a driver, because this is the seam the RUN path
@@ -41773,9 +41880,13 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
       coreDecls
       modules
   let (coreD, modules3) = dictPassModulesIfEnabled dictNames core2 modules2
+  -- `resolveAliasMethodSpellings` restores the origin name behind every alias-
+  -- qualified method occurrence (`A.mth` -> `mth`) that inference kept.  Only the
+  -- user modules go through it: core imports nothing, so it holds no alias-
+  -- qualified spelling to restore.
   (
     coreD,
-    modules3,
+    map resolveAliasMethodSpellings modules3,
     attachCoherenceConflict perModDiags,
     stickyTypeErrorDiagsSince stickyBefore,
     graphRun.value.evTable.value,
@@ -42510,14 +42621,18 @@ moduleMarkCtx ms _ prog
   -- to forbid.  If the two ever diverged this arm would run with an EMPTY iface index and
   -- filter out every imported and prelude shadow name, failing CLOSED into the S4/#410 class
   -- that `nameableIfaceShadows` says must never happen.
-  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = MarkCtx {
-    mcRp =
-      omFromNames
-        (dedup (ms.msMarkSharedNames ++ ms.msGraphShadowNames))
-        omEmpty,
-    mcAn = omFromNames ms.msArgNames omEmpty,
-    mcSm = driverState.value.mangledShadowMapRef.value,
-  }
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 =
+    let aliasRows = aliasMethodSpellings prog
+    MarkCtx {
+      mcRp =
+        withAliasMethodNames
+          aliasRows
+          (omFromNames
+            (dedup (ms.msMarkSharedNames ++ ms.msGraphShadowNames))
+            omEmpty),
+      mcAn = withAliasMethodNames aliasRows (omFromNames ms.msArgNames omEmpty),
+      mcSm = driverState.value.mangledShadowMapRef.value,
+    }
   | otherwise =
     -- 🔒 S1-NS (b), THE CLOSURE INVARIANT.  The spec requires the predicate deciding
     -- SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH ELIGIBILITY, and rules two
@@ -42551,18 +42666,24 @@ moduleMarkCtx ms _ prog
     let nameable = nameableIfaceMethodSet prog
     let keep = n => omHasKey n nameable
     let shadowMap = driverState.value.mangledShadowMapRef.value
+    let aliasRows = aliasMethodSpellings prog
     MarkCtx {
       mcRp =
-        omFromNames
-          (dedup
-            (filterList keep ms.msMarkSharedNames
-              ++ filterList
-                (n =>
-                  omHasKey (shadowBareName shadowMap n) nameable
-                    && shadowSymSpelledBare prog shadowMap n)
-                ms.msGraphShadowNames))
-          omEmpty,
-      mcAn = omFromNames (filterList keep ms.msArgNames) omEmpty,
+        withAliasMethodNames
+          aliasRows
+          (omFromNames
+            (dedup
+              (filterList keep ms.msMarkSharedNames
+                ++ filterList
+                  (n =>
+                    omHasKey (shadowBareName shadowMap n) nameable
+                      && shadowSymSpelledBare prog shadowMap n)
+                  ms.msGraphShadowNames))
+            omEmpty),
+      mcAn =
+        withAliasMethodNames
+          aliasRows
+          (omFromNames (filterList keep ms.msArgNames) omEmpty),
       mcSm =
         filterList
           (e =>
@@ -42570,6 +42691,15 @@ moduleMarkCtx ms _ prog
               && moduleSpellsShadowBare prog (fst e) (snd e))
           shadowMap,
     }
+
+-- #1386: the alias-qualified spellings of the methods ALREADY in [set], added to it.
+-- The dotted spelling is a second spelling of one of the module's own in-scope
+-- methods, so it inherits whatever decided the origin's membership — including the
+-- S1 filter above, which is why this wraps each set rather than joining the raw
+-- name lists ahead of it.  A method the filter dropped contributes no spelling.
+withAliasMethodNames : List (String, String) -> OrdMap Unit -> OrdMap Unit
+withAliasMethodNames rows set =
+  omFromNames (map fst (filterList (r => omHasKey (snd r) set) rows)) set
 
 -- ── #2153: S1's `nameable in M` for the PRELUDE unit ─────────────────────────
 -- `moduleMarkCtx` (above) filters the definer-shadow map at the CONSUMING module.
