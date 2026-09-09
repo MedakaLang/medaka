@@ -518,7 +518,7 @@ and `Decl` form (`compiler/frontend/ast.mdk`) against the walk.
 - *`ELit`* → wildcard `[]` (literals carry no reference) — correct.
 
 **`declBodies`/`declRefs` — Decl forms:** `DFunDef`, `DImpl` (method bodies),
-`DInterface` (default bodies), `DProp`/`DTest`/`DBench` already walked.
+`DInterface` (default bodies), `DProp`/`DTest` already walked.
 **Added (OBS5):** `DAttrib _ d` → `declBodies d`; `DLetGroup _ binds` →
 clause bodies. Both were holes in the reference walk.
 

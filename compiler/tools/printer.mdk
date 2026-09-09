@@ -2285,12 +2285,6 @@ printDecl (DTest pub testName testBody) =
     (Cat
       (text "test ")
       (Cat (text (escStringLit testName)) (printDefRhs testBody)))
-printDecl (DBench pub benchName benchBody) =
-  Cat
-    (if pub then text "export " else Nil)
-    (Cat
-      (text "bench ")
-      (Cat (text (escStringLit benchName)) (printDefRhs benchBody)))
 printDecl (DAttrib attrs inner) =
   Cat (concatD (map attrDoc attrs)) (printDecl inner)
 

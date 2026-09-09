@@ -1438,7 +1438,6 @@ checkDecl env (DExtern _ _ t) = checkType None env t
 checkDecl env (DData { dataCtors = vs }) = flatMap (checkVariant env) vs
 checkDecl env (DProp _ _ params body) = checkProp env params body
 checkDecl env (DTest _ _ body) = checkExpr None env emptyScope body
-checkDecl env (DBench _ _ body) = checkExpr None env emptyScope body
 checkDecl env (DInterface { supers, methods, ... }) =
   checkInterfaceDecl env supers methods
 checkDecl env (DImpl { iface, tys, reqs, methods, ... }) =
@@ -3882,7 +3881,6 @@ stampDecl top (DFunDef p n pats body) =
 stampDecl top (DProp p n params body) =
   DProp p n params (stampExpr (insertZero (map propParamName params) top) body)
 stampDecl top (DTest p n body) = DTest p n (stampExpr top body)
-stampDecl top (DBench p n body) = DBench p n (stampExpr top body)
 stampDecl top (DLetGroup p binds) = DLetGroup p (map (stampLetBind top) binds)
 stampDecl top (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (stampIfaceMethod top) methods }

@@ -270,8 +270,6 @@ declSexp (DProp pub name params body) = node "DProp" [
 ]
 declSexp (DTest pub name body) =
   node "DTest" [boolStr pub, escStr name, exprSexp body]
-declSexp (DBench pub name body) =
-  node "DBench" [boolStr pub, escStr name, exprSexp body]
 -- #1110: `tyAliasOrigin` is STRIPPED, exactly as `TyCon`'s origin and `ELoc` are.
 -- That is what keeps the dump byte-identical across the carrier PRs.
 declSexp (DTypeAlias { tyAliasPub = p, tyAliasName = n, tyAliasParams = ps, tyAliasRhs = t }) =

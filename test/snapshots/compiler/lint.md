@@ -5470,7 +5470,7 @@ exportedNameL _ = []
 -- NAME a binding, they don't reference it — including a sig would make every
 -- signed private helper look reachable) and pure type/import decls.
 -- Kinds that NAME a binding or a type/import rather than referencing a value are
--- matched positionally and skipped; everything else (DProp/DTest/DBench/
+-- matched positionally and skipped; everything else (DProp/DTest/
 -- DInterface/DImpl/DLetGroup) is a body-bearing root.
 nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd

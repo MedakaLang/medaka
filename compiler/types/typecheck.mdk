@@ -20571,7 +20571,7 @@ data ArgRw =
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
--- DTest / DBench / DAttrib; everything else — incl. DLetGroup — left unchanged),
+-- DTest / DAttrib; everything else — incl. DLetGroup — left unchanged),
 -- so with the emit path off this would degenerate to the same node set mapProg
 -- visits.
 prePassDeclScoped : ArgRw -> Decl -> Decl
@@ -20589,8 +20589,6 @@ prePassDeclScoped rw (DProp pub name params body) =
     (rewriteArgScoped rw (boundOfList (propParamNamesTc params)) body)
 prePassDeclScoped rw (DTest pub name body) =
   DTest pub name (rewriteArgScoped rw omEmpty body)
-prePassDeclScoped rw (DBench pub name body) =
-  DBench pub name (rewriteArgScoped rw omEmpty body)
 prePassDeclScoped rw (DAttrib attrs d) = DAttrib attrs (prePassDeclScoped rw d)
 -- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
 -- so a constrained-fn occurrence inside a group body would never be rewritten to
@@ -39583,7 +39581,6 @@ declRefNames (DAttrib _ d) = declRefNames d
 declRefNames (DFunDef _ _ _ body) = allEVars body
 declRefNames (DProp _ _ _ body) = allEVars body
 declRefNames (DTest _ _ body) = allEVars body
-declRefNames (DBench _ _ body) = allEVars body
 declRefNames (DLetGroup _ binds) = flatMap letBindEVars binds
 declRefNames (DImpl { methods, ... }) = flatMap implMethodEVars methods
 declRefNames (DInterface { methods, ... }) = flatMap ifaceMethodEVars methods

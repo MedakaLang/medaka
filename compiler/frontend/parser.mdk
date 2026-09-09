@@ -2880,14 +2880,20 @@ parseTestRest pub _ (TString _) = defer
   deferPure (DTest pub name body)
 parseTestRest _ testPos _ = fatalAtP (reservedKeywordMsg "test") testPos
 
+-- `bench "name" = expr` is removed: no verb and no runner ever consumed the
+-- declaration, so it typechecked and then did nothing.  `bench` stays a lexer
+-- keyword solely so this located message can name the replacement instead of a
+-- generic parse failure — the same shape as `let mut` / `record` / `function`.
+-- `fatalAtP` (not `failP`) so the message survives `parseProgram`'s enclosing
+-- `many` recovery, at the `bench` token's own position.
+benchRemovedMsg : String
+benchRemovedMsg =
+  "`bench` has been removed — no runner ever consumed a `bench` declaration. Benchmark with `test/bench.sh`"
+
 parseBench : Bool -> Parser Decl
-parseBench pub = defer
-  expectTok TBench
-  name <- stringLitP
-  expectTok TEqual
-  body <- parseBody
-  skipNewlines
-  deferPure (DBench pub name body)
+parseBench _ = defer
+  benchPos <- getPos
+  fatalAtP benchRemovedMsg benchPos
 
 -- `effect Foo` declares a user/platform effect label (Phase 146 gap 2).
 -- `effect Foo` (atomic), `effect Net Prefix` (domain-carrying).  The optional
@@ -4238,8 +4244,6 @@ declNameTokIdxAt toks (DEffect _ _ _) i =
 declNameTokIdxAt toks (DProp _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DTest _ _ _) i =
-  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DBench _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DInterface { ... }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
