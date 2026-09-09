@@ -817,6 +817,7 @@ Assertions for a test that runs a program.
 - [`medakaBin`](test_process.md#medakabin)
 - [`spawnTimeoutSeconds`](test_process.md#spawntimeoutseconds)
 - [`boundedVerb`](test_process.md#boundedverb)
+- [`boundedVerbSeconds`](test_process.md#boundedverbseconds)
 - [`scratchDir`](test_process.md#scratchdir)
 - [`expectSpawnOk`](test_process.md#expectspawnok)
 - [`expectSpawnFails`](test_process.md#expectspawnfails)

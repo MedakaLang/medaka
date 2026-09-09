@@ -98,6 +98,25 @@ timer present on both Linux and macOS without a coreutils dependency.
 Ok (3, "hi", "")
 ```
 
+### `boundedVerbSeconds`
+
+```
+boundedVerbSeconds : Int -> String -> List String -> <Exec _> Result String (Int, String, String)
+```
+
+`boundedVerb` with the ceiling named at the call site, for a sweep whose
+one spawn is genuinely slower than `spawnTimeoutSeconds` allows.
+
+A sweep that spawns a whole compile-and-link pipeline per row needs a
+ceiling sized to that pipeline, and one sized to it would be far too loose
+for the sweeps that spawn a single verb, so the ceiling is a parameter
+rather than one constant stretched to cover both.
+
+```medaka
+> boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
+Ok (3, "hi", "")
+```
+
 ### `scratchDir`
 
 ```

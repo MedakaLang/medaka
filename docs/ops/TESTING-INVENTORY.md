@@ -168,7 +168,7 @@
 | `test/diff_compiler_fmt_write_safety.sh` | CLI-CONTRACT | none | N | NO | NATIVE-KIND-RUNNER | 822 | 203 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_guide_render.sh` | DOC-ROT | none | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 706 | 149 | REWRITE: probe/static text becomes library calls [node] |
 | `test/diff_compiler_iface_order.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 9274 | 651 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
-| `test/diff_compiler_import_order.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 105360 | 732 | WRAP: spawns ./medaka + diffs, module does the same [clang,gh] |
+| `test/import_order_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 105360 | 732 | WRAP: spawns ./medaka + diffs, module does the same [clang,gh] |
 | `test/diff_compiler_index.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 392 | 90 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_index_oob.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 6576 | 158 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_internal_extern.sh` | CLI-CONTRACT | multiple | N | NO | NATIVE-KIND-RUNNER | 4530 | 360 | WRAP: spawns ./medaka + diffs, module does the same |

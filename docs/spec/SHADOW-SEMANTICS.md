@@ -1055,7 +1055,7 @@ Given an occurrence of bare name `N` in module `M`:
   > clauses are swapped is non-conformant **whatever value it produces** — including
   > when the two orders differ only in *accepting* versus *rejecting*. The
   > instrument is a permutation differential, not a golden:
-  > `test/diff_compiler_import_order.sh`.
+  > `test/import_order_test.mdk`.
   >
   > **What it costs, stated as a cost.** One cell **narrows**: two admitted,
   > disagreeing declarations plus a standalone `N` compiles today and stops
