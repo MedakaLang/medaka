@@ -1,5 +1,5 @@
 # META
-source_lines=637
+source_lines=653
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -89,11 +89,27 @@ extern writeFileBytes : String ->
   Array Int ->
   <FileWrite "_"> Result String Unit
 
+-- | Writes a string to a file, replacing any existing contents, and leaves
+-- the file at exactly the permission bits `mode` names (`384` is
+-- `rw-------`, `420` is `rw-r--r--`).
+--
+-- The contents never exist at a wider mode: the mode is set on the open
+-- file before the first byte is written, so neither the process umask nor a
+-- pre-existing file's own mode can widen the result.
+extern writeFileMode : String ->
+  Int ->
+  String ->
+  <FileWrite "_"> Result String Unit
+
 -- | Appends a string to a file, creating it when it does not exist.
 extern appendFile : String -> String -> <FileWrite "_"> Result String Unit
 
 -- | Whether a path exists.
 extern fileExists : String -> <FileRead "_"> Bool
+
+-- | A path's permission bits, `0` to `4095` (`384` is `rw-------`), or
+-- `Err` with the host's message. Symbolic links are followed.
+extern fileMode : String -> <FileRead "_"> Result String Int
 
 -- | The absolute path with `.`, `..`, and symbolic links resolved. The
 -- input, unchanged, when it cannot be resolved.
@@ -655,8 +671,10 @@ extern stringToLower : String -> String
 (DExtern false "readFileBytes" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
 (DExtern false "writeFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "writeFileBytes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "writeFileMode" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DExtern false "appendFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "fileExists" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "Bool"))))
+(DExtern false "fileMode" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "canonicalizePath" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "String"))))
 (DExtern false "listDir" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DExtern false "makeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
@@ -802,8 +820,10 @@ extern stringToLower : String -> String
 (DExtern false "readFileBytes" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
 (DExtern false "writeFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "writeFileBytes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "writeFileMode" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DExtern false "appendFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "fileExists" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "Bool"))))
+(DExtern false "fileMode" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "canonicalizePath" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "String"))))
 (DExtern false "listDir" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DExtern false "makeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))

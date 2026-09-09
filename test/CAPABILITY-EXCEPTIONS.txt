@@ -250,4 +250,6 @@ removeFile	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-f
 rename	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam
 runCommand	wasm	WASM-GAP	ported in llvm (isFileExtern family, <Exec>), not yet in wasm — a subprocess-exec seam has no obvious browser equivalent either, but it isn't documented PERMANENT anywhere in wasm_emit.mdk the way net is, so filed WASM-GAP not PERMANENT
 statFile	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam
+fileMode	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to report
 writeFile	wasm	WASM-GAP	ported in llvm (isFileExtern); wasm has writeFileBytes but not the text-mode writeFile
+writeFileMode	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to set

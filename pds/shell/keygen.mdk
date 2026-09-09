@@ -1,0 +1,125 @@
+{- | Generating the two secrets `pds serve` will not generate for an operator:
+   the account signing key, and the session-token secret.
+
+   This is shell work, not `pds/lib` work: it reads OS entropy and writes
+   files, and `pds/lib` draws no entropy and performs no I/O. What it does NOT
+   own is the flag vocabulary — `pds/serve.mdk` holds `keygen`'s roster beside
+   `serve`'s, so the file a key is written to is named the same way the file a
+   key is read from is.
+
+   Nothing here renders a secret. A generated scalar reaches its file and the
+   two public values derived from it, and no other output; the failure paths
+   name the file and the rule and never the value. -}
+
+import hex.{encode}
+import io.{writeFilePrivate}
+import lib.did_key.{didKeyFromPublicKey}
+import lib.jwt.{serverSecretBytes}
+import lib.sign.{publicKeyCompressed, publicKeyForSecret, secretKeyFromBytes}
+
+{- | How many candidate scalars `keygen` will draw before giving up.
+
+   A uniformly random 32-byte value is outside `[1, n)` with probability below
+   2^-127, so a bound of eight is a bound on a broken entropy source and on
+   nothing else: the loop is not expected to take a second turn. -}
+keygenAttempts : Int
+keygenAttempts = 8
+
+{- | A fresh secp256k1 secret scalar, admitted by the same
+   `lib.sign.secretKeyFromBytes` the server admits `--key` with — so `keygen`
+   can produce no value `serve` would later refuse, and admits `d` only in
+   `[1, n)`.
+
+   The bytes come from `osEntropyBytes`, the OS entropy source, and never from
+   `randomInt`, whose SplitMix64 generator is seeded deterministically and
+   would make every key this ever generated derivable from a public constant.
+   No candidate, admitted or rejected, reaches the failure message. -}
+export
+keygenSecretBytes : Int -> <Rand> Result String (Array Int)
+keygenSecretBytes attempts =
+  if attempts < 1 then
+    Err
+      "the entropy source produced no scalar in 1..n-1; refusing to write a key"
+  else
+    let candidate = osEntropyBytes signingKeyBytes
+    match secretKeyFromBytes candidate
+      Err _ => keygenSecretBytes (attempts - 1)
+      Ok _ => Ok candidate
+
+-- | How many bytes a secp256k1 secret scalar is.
+signingKeyBytes : Int
+signingKeyBytes = 32
+
+{- | The two PUBLIC values of a signing key: its compressed SEC 1 public key
+   as hex, and the `did:key` that names it. Both are derived through exactly
+   the boundary `lib.repo` signs commits with, so what `keygen` prints is what
+   the network will see this key as, and neither value discloses the scalar.
+
+   This is the whole of `keygen`'s derivation, exported so
+   `pds/test/secp256k1_public_key_main.mdk` can grade it against the official
+   corpora rather than against this program's own output. -}
+export
+keygenSummary : Array Int -> Result String (String, String)
+keygenSummary bytes = do
+  secret <- secretKeyFromBytes bytes
+  let publicKey = publicKeyForSecret secret
+  Ok (encode (publicKeyCompressed publicKey), didKeyFromPublicKey publicKey)
+
+{- | Refuse `path` if it already exists, drawing no entropy and writing
+   nothing.
+
+   The refusal is the point: `keygen` overwriting a signing key would destroy
+   the only thing that can sign this account's next commit, and an operator
+   who meant to rotate can say so by moving the old file aside.
+
+   It is exported because the caller must apply it to EVERY destination a run
+   names before any of them is written: a run that generated a key, announced
+   it, and then refused the second destination would leave a valid 0600 key on
+   disk under a failure exit code, which an operator reading the exit code
+   would take as "nothing happened". -}
+export
+keygenRefusePath : String -> String -> <FileRead "_"> Result String Unit
+keygenRefusePath label path =
+  if fileExists path then
+    Err
+      "refusing \{path}: it already exists, and overwriting a \{label} destroys it; move it aside first if you mean to replace it"
+  else
+    Ok ()
+
+-- | Write one generated secret to `path` at mode 0600. The existence refusal
+-- is re-applied here so no write path can bypass it, whatever the caller did.
+keygenWrite : String ->
+  String ->
+  Array Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+keygenWrite label path bytes = match keygenRefusePath label path
+  Err message => Err message
+  Ok () => match writeFilePrivate path "\{encode bytes}\n"
+    Err message => Err "unwritable \{label} \{path}: \{message}"
+    Ok () => Ok ()
+
+-- | Generate the signing key `--key` names, and report the two public values
+-- that identify it. The scalar itself goes to the file and nowhere else.
+export
+keygenSigningKey : String ->
+  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+keygenSigningKey path = do
+  bytes <- keygenSecretBytes keygenAttempts
+  (publicHex, did) <- keygenSummary bytes
+  () <- keygenWrite "signing key" path bytes
+  let () = putStrLn "keygen: wrote signing key \{path} (mode 0600)"
+  let () = putStrLn "keygen: public key \{publicHex}"
+  let () = putStrLn "keygen: did:key \{did}"
+  Ok ()
+
+-- | Generate the session-token secret `--token-secret` names.
+export
+keygenTokenSecret : String ->
+  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+keygenTokenSecret path = do
+  () <- keygenWrite
+    "session-token secret"
+    path
+    (osEntropyBytes serverSecretBytes)
+  let () = putStrLn "keygen: wrote session-token secret \{path} (mode 0600)"
+  Ok ()

@@ -2966,8 +2966,10 @@ isFileExtern name = contains name [
   "readFileBytes",
   "writeFile",
   "writeFileBytes",
+  "writeFileMode",
   "appendFile",
   "fileExists",
+  "fileMode",
   "canonicalizePath",
   "listDir",
   "readLine",
@@ -3015,6 +3017,21 @@ emitFileExtern e env "writeFileBytes" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_write_file_bytes(i64 \{p}, i64 \{a})"
     (r, LTCon)
   _ => panic "llvm: writeFileBytes takes two arguments"
+emitFileExtern e env "writeFileMode" args = match emitArgs e env args
+  [p, m, c] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_write_file_mode(i64 \{p}, i64 \{m}, i64 \{c})"
+    (r, LTCon)
+  _ => panic "llvm: writeFileMode takes three arguments"
+emitFileExtern e env "fileMode" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_file_mode(i64 \{p})"
+    (r, LTCon)
+  _ => panic "llvm: fileMode takes one argument"
 emitFileExtern e env "appendFile" args = match emitArgs e env args
   [p, c] =>
     let r = freshReg e
