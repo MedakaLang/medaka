@@ -1502,7 +1502,7 @@ moduleRefNameSet : List Decl -> Map String Unit
 moduleSpellsShadowBare : List Decl -> String -> String -> Bool
 moduleStampOrder : List StampStep
 moduleUserFnNames : List (String, List Decl) -> List String
-moduleWindow : Ref (List a) -> Int -> List a
+moduleWindow : Int -> Int -> List a -> List a
 monoArgUnboundIds : Mono -> List Int
 monoClosed : Mono -> Bool
 monoHasArrow : Mono -> Bool
@@ -1579,6 +1579,7 @@ numlitMismatchHint : Option Loc -> List Mono -> String
 numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitMismatchPush : List Mono -> Option Loc -> Unit
 numlitReframeLoc : Option Loc -> Bool
+numlitSince : Int -> List (Mono, Ref (Option Float), Int, Ref Route)
 oblArgKey : Mono -> String
 oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
 oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool
@@ -1743,6 +1744,7 @@ pushIncompleteImpl : (Option Loc, String) -> Unit
 pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
 pushMethodDictGoal : PendingMethodDict -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
+pushNumlit : (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> Unit
 pushRecDictAppGoal : RecDictApp -> Unit
 pushSiteGoal : GoalKind -> PendingEntry -> Unit
