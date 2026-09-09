@@ -20059,7 +20059,7 @@ unifyClauses env v ((pats, body) :: rest) =
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
-  let (coreD, modules, _, _) =
+  let (coreD, modules, _, _, _) =
     elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
 
@@ -40635,7 +40635,7 @@ checkModuleFullDiags : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List TcDiag, List TcDiag)
+  (List (String, Scheme), List Decl, List TcDiag, List TcDiag)
 checkModuleFullDiags mid seedVars accData accAll prog =
   -- #415 item 1: same seeding preamble as the flat entry points (one body), but the
   -- oracle decls are THIS module's own first.
@@ -40705,7 +40705,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- residual #738 fixed only for the prelude/core coreSchemeObligationsRef flow).  The
   -- source-exact keying makes it MISS for a genuinely-unconstrained same-name import
   -- (#739's `q.f`, attributed nowhere), so no over-rejection is reintroduced.
-  let (schemes, _) = checkModuleFullImpl mid seedVars accData accAll prog
+  let (schemes, marked) = checkModuleFullImpl mid seedVars accData accAll prog
   -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
   -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool above and `moduleImplUniv`
   -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
@@ -40731,6 +40731,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
       True
   (
     schemes,
+    marked,
     reverseL perRun.value.typeErrors.items.value,
     reverseL driverState.value.matchWarnings.value,
   )
@@ -40776,7 +40777,8 @@ cmDiagsWorker : String ->
   List Decl ->
   (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
 cmDiagsWorker mid seed accData accAll prog =
-  let (schemes, errs, warns) = checkModuleFullDiags mid seed accData accAll prog
+  let (schemes, _, errs, warns) =
+    checkModuleFullDiags mid seed accData accAll prog
   (schemes, (schemes, errs, warns))
 
 -- collect for checkModulesDiags: strips the payload's `schemes` back off so the
@@ -41270,7 +41272,7 @@ cmEntryWorker : String ->
 -- module's OWN impls in a 2+-module graph, which is pre-existing on `main` and not this
 -- regression; see the F18 report.
 cmEntryWorker mid seed accData accAll prog =
-  let (schemes, errs, warns) =
+  let (schemes, _, errs, warns) =
     checkModuleFullDiags mid seed accData (accAll ++ prog) prog
   (schemes, (schemes, errs, warns))
 
@@ -41510,13 +41512,19 @@ allModuleLines ((mid, ss) :: rest) =
 -- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
 -- and no pendingDictApps / pendingRecDictApps to resolve.
 export
--- #2544 (M4): the third component is the RESIDUAL — every diagnostic this
+-- The third component is the PER-MODULE diagnostics, one `(mid, (errs, warns))` per
+-- user module in load order, with the whole-graph coherence verdict attached to the
+-- entry module — the same list `checkModulesDiagsK` returns, produced by the same
+-- `checkModuleFullDiags` worker.  It is what `run`/`build` render; the drain's own
+-- diagnostics are NOT in it (they come after every module has closed) and stay in the
+-- residual below.
+-- #2544 (M4): the fourth component is the RESIDUAL — every diagnostic this
 -- elaboration recorded and left standing, tagged with its module id, per goal with
 -- its own `Loc`, in push order.
 -- Callers that gate on `hadTypeErrors` render it instead of a deflection; the emit
 -- driver's #2089 gate prints it.  It is the same list the sticky channel holds, cut
 -- to this call.
--- #2549 M2: the fourth component is the EVIDENCE TABLE — every goal this
+-- #2549 M2: the fifth component is the EVIDENCE TABLE — every goal this
 -- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
 -- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
 -- cell.  Nothing consumes it yet: the routes it carries are the same routes already
@@ -41524,7 +41532,11 @@ export
 elaborateModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl), List (String, TcDiag), EvTable)
+  (List Decl,
+    List (String, List Decl),
+    List (String, (List TcDiag, List TcDiag)),
+    List (String, TcDiag),
+    EvTable)
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
@@ -41585,13 +41597,14 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- `driver/medaka_cli.mdk:1729,2006`, DO read it — this leak is only silent through
   -- `runEmitWith`).  Clean exit 0, SIGSEGV at runtime.
   --
-  -- Minting the empty oracle here restores today's behaviour DETERMINISTICALLY instead of
-  -- by luck: every reader misses no matter which arm (or none) ran before.  It does NOT
-  -- make this driver check exhaustiveness/narrowing — it never did, and `check` runs those
-  -- readers ahead of every `build`.  Seeding a CORRECT oracle from this driver's own
-  -- (mangled, stamped) decls is the strictly-better fix and is deliberately NOT done here:
-  -- it would newly ENABLE those readers on the emit path, on the compiler's own graph,
-  -- with no gate in this slice's acceptance set to catch a new fail-closed reject.
+  -- Minting the empty oracle here means no reader can see a previous run's residue, no
+  -- matter which arm (or none) ran before.  It is what the CORE pass below runs against;
+  -- each USER module then overwrites it from its own decls (`checkModuleFullDiags` →
+  -- `seedCheckRun`).  So the narrowing/exhaustiveness readers ARE enabled on this driver,
+  -- against an oracle built from the tree this driver is actually walking — mangled on
+  -- the emit path, un-mangled on `run`/`build` — and an interleaved re-check can no
+  -- longer decide their answers, because nothing it left behind survives the per-module
+  -- re-seed.
   driverState.value.matchOracle := buildOracle []
   let _ = resetCrossModuleState ()
   -- #1111 A-2.5b: the graph's method-identity index — the identical line
@@ -41683,17 +41696,21 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- resolveSites) but forwards accData only to checkModuleFullImpl's dead Module
   -- `accData` field.  wantAll=True keeps the impl-universe concat byte-identical;
   -- wantData=False drops the dead accData concat (`[]` initial).
-  let modules2 =
+  -- #154 PR-C: `wantData` is True here (it was False while this driver had no
+  -- oracle to seed): `checkModuleFullDiags`' oracle recipe reads `accData`, so the
+  -- concat the diagnostics path already pays is now paid on this path too — once,
+  -- instead of once by the check pass this driver replaces.
+  let (modules2, perModDiags) =
     foldModules
-      False
+      True
       True
       elabHarvestWorker
-      (_last mid marked rest => (mid, marked) :: rest)
-      []
+      elabCollect
+      ([], [])
       (runtimeSeed ++ coreSchemes)
       coreSchemes
       []
-      []
+      (publicDataDecls coreDecls)
       coreDecls
       modules
   -- #2548: quiescence.  Every module (core first) has been inferred and has queued
@@ -41713,6 +41730,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   (
     coreD,
     modules3,
+    attachCoherenceConflict perModDiags,
     stickyTypeErrorDiagsSince stickyBefore,
     graphRun.value.evTable.value,
   )
@@ -42660,6 +42678,28 @@ elabModuleStamp mid seedVars accData implDecls prog =
   -- `drainStampQueue` once the whole graph has been inferred — see `StampCtx` and
   -- `moduleStampOrder`.  `setNumlitFloats ()` went with them (as `SSNumlitFloats`).
   checkModuleFullImpl mid seedVars accData implDecls prog
+
+-- `elabModuleStamp` for a USER module: the same per-module elaboration, harvested
+-- through `checkModuleFullDiags` so this driver seeds the constructor/match ORACLE
+-- from the module's own decls and runs `runFinalChecks` (coherence, interface
+-- cycles, phantom methods, super impls) exactly as the check drivers do, and
+-- returns the module's isolated `(errs, warns)` alongside its marked tree.
+--
+-- The CORE pass stays on `elabModuleStamp`: `check` never runs `checkModuleFullDiags`
+-- over the prelude either (`checkModulesPreambleK` owns that pass and does not surface
+-- its diagnostics), so seeding an oracle from core or running coherence over it would
+-- be a new population, not a shared one.
+elabModuleStampDiags : String ->
+  List (String, Scheme) ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  (List (String, Scheme), List Decl, List TcDiag, List TcDiag)
+-- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+-- lint-disable-next-line rule-prefer-assign-op
+elabModuleStampDiags mid seedVars accData implDecls prog =
+  let _ = driverState.value.superDeclsRef := implDecls  -- WS-1b: interfaces in scope for super expansion
+  checkModuleFullDiags mid seedVars accData implDecls prog
 -- DRIVER-COLLAPSE Phase 2: pass the return-position method names (was `[]`) so
 -- resolveSite's RDict-case routes a RETURN-position method site RDictFwd (forward the
 -- enclosing dict's nested reqs) rather than RDict (arg-position).  Flat elaborateDict
@@ -42720,13 +42760,14 @@ elabWorker : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl)
+  (List (String, Scheme), (List Decl, List TcDiag, List TcDiag))
 elabWorker mid seed accData accAll prog =
-  let (schemes, marked) = elabModuleStamp mid seed accData (accAll ++ prog) prog
+  let (schemes, marked, errs, warns) =
+    elabModuleStampDiags mid seed accData (accAll ++ prog) prog
   let _ = match lookupAssoc "main" schemes
     Some s => driverState.value.mainSchemeRef := Some s
     None => ()
-  (schemes, marked)
+  (schemes, (marked, errs, warns))
 
 -- #194: elabWorker + harvest.  Runs the identical per-module elaboration, then unions
 -- THIS module's directly-promoted fns (promotedRef, populated by
@@ -42740,7 +42781,7 @@ elabHarvestWorker : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl)
+  (List (String, Scheme), (List Decl, List TcDiag, List TcDiag))
 elabHarvestWorker mid seed accData accAll prog =
   let result = elabWorker mid seed accData accAll prog
   driverState.value.promotionHarvestRef :=
@@ -42748,6 +42789,18 @@ elabHarvestWorker mid seed accData accAll prog =
       (driverState.value.promotionHarvestRef.value
         ++ perRun.value.promotedRef.value)
   result
+
+-- collect for `elaborateModules`' fold: the module's MARKED tree (for
+-- `dictPassModulesIfEnabled`) and its ISOLATED `(errs, warns)` (for the caller's
+-- rendering), both in load order.  Two accumulators rather than two folds: the
+-- worker computes both in one per-module pass.
+elabCollect : Bool ->
+  String ->
+  (List Decl, List TcDiag, List TcDiag) ->
+  (List (String, List Decl), List (String, (List TcDiag, List TcDiag))) ->
+  (List (String, List Decl), List (String, (List TcDiag, List TcDiag)))
+elabCollect _isLast mid (marked, errs, warns) (markedRest, diagsRest) =
+  ((mid, marked) :: markedRest, (mid, (errs, warns)) :: diagsRest)
 
 -- ── #2548 / DICT §6.2 T4: the stamper order, written once ────────────────────
 -- One step per route-stamping resolver, plus the Float literal stamp.  #1116: the
