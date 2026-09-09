@@ -72,7 +72,7 @@
 #     demonstration reused verbatim) pins clause (c).
 #   - `budget_orphan.{toml,json}` pins clause (d) ALONE: one costed gate
 #     matching the registry exactly, plus a second baseline row naming a
-#     gate the registry does not declare (sprint cost-governor-on S1).
+#     gate the registry does not declare.
 #   - `budget_clean.{toml,json}` is a well-formed registry with zero
 #     violations.
 #
@@ -121,10 +121,22 @@ if _budget budget_uncosted "$out_a_red"; then
   sed -e 's/^/        /' "$out_a_red"
 else
   if grep -q 'no cost baseline entry (clause a): 1' "$out_a_red" \
-     && grep -q '^  lonely — remedy:' "$out_a_red"; then
-    ok "clause (a) alone reds: an uncosted schedulable gate, named"
+     && grep -q "^  lonely (baseline key 'lonely') — remedy:" "$out_a_red"; then
+    ok "clause (a) alone reds: an uncosted schedulable gate, named WITH the baseline key it was looked up under"
   else
     bad "clause (a) fixture refused, but not for the uncosted reason"
+    sed -e 's/^/        /' "$out_a_red"
+  fi
+  # The `ci-gen-drift` half of the message (review S4). A clause-(a) red on a
+  # brand-new gate is never alone — the balancer refuses the same commit — and
+  # an author who reads only the first sentence discharges half the problem.
+  # Assert the stacking sentence and the rename cause it must not crowd out.
+  if grep -q 'ci-gen-drift` runs `medaka gate balance --check`' "$out_a_red" \
+     && grep -q 'hard-refuses to run in the same commit' "$out_a_red" \
+     && grep -q 'whose `run` path was renamed' "$out_a_red"; then
+    ok "clause (a) names both the ci-gen-drift stacking and the run-rename cause"
+  else
+    bad "clause (a) message dropped the ci-gen-drift half or the run-rename cause"
     sed -e 's/^/        /' "$out_a_red"
   fi
 fi
@@ -231,6 +243,16 @@ else
     ok "clause (d) alone reds: an orphaned baseline row, named"
   else
     bad "clause (d) fixture refused, but not for the orphan reason"
+    sed -e 's/^/        /' "$out_d_red"
+  fi
+  # The remedy must stay the one that WORKS: test/gate_cost_ingest.sh has no
+  # prune mode and never reads the registry (#2770), so pointing the author at
+  # a re-ingest is a dead end. Pin the hand edit and the issue that explains it.
+  if grep -q 'delete the row from test/gate_cost_baseline.json BY HAND' "$out_d_red" \
+     && grep -q '#2770' "$out_d_red"; then
+    ok "clause (d) names a remedy that works today and cites #2770"
+  else
+    bad "clause (d) remedy no longer names the by-hand edit or #2770"
     sed -e 's/^/        /' "$out_d_red"
   fi
 fi

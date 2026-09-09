@@ -178,11 +178,11 @@ is a REQUIRED context and its script runs `medaka gate balance --check`
 (`test/diff_compiler_ci_gen_drift.sh:80`), so the refusal reds a required check and the PR
 cannot merge** — "enrol now, discharge in a follow-up" is not available, and three sprints
 lost a cycle discovering that. Derive the required set rather than trusting this list
-([W-REQUIRED-CHECKS]); `gate-balance` is a separate, still-ADVISORY job, so its red is
-not what blocks you — but `gate-budget` IS required (sprint cost-governor-on S4, #2596
-item 2): a brand-new gate reds `gate-budget` clause (a) too, alongside this same
-`ci-gen-drift` red, and its own failure message names both — carry a
-`Gate-Budget-Override: uncosted:<name>` trailer until the nightly ingest prices it.
+([W-REQUIRED-CHECKS]) — `gate-balance` and `gate-budget` included; this file states no
+membership for either, because its own rule forbids the list. What is durable is the
+CONSEQUENCE: a brand-new gate reds `medaka gate budget` clause (a) as well, alongside this
+same `ci-gen-drift` red, and the clause-(a) message names both. The acknowledgment is a
+`Gate-Budget-Override: uncosted:<name>` trailer, carried until the nightly ingest prices it.
 The discharge, before merge: enrol with a
 guessed `shard`, get a real cost sample, then `medaka gate balance && make gen-ci` and
 commit both. Two traps in getting that sample, each paid for twice: a guessed `shard` can

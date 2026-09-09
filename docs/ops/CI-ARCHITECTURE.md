@@ -330,9 +330,10 @@ GHC's perf-notes model applied to CI cost:
 job (`shard = "other-job"`, same "cannot certify a number it can move" reason as
 `gate-balance`). The override is a `Gate-Budget-Override: <token>` trailer on an AUTHORED
 commit message in the change under test — the one thing a `merge_group` run can always see,
-since it has no PR body. **REQUIRED as of sprint cost-governor-on S4** (#2596 item 2) — a
-separate, non-atomic `gh api` edit to the ruleset, landed once the slice's PR was otherwise
-ready. `gate-cost`/`gate-balance` are still not in the required-checks set.
+since it has no PR body. **REQUIRED as of sprint cost-governor-on S4** (#2596 item 2);
+`gate-cost`/`gate-balance` are not. Adding a required context is a `gh api` ruleset edit,
+never something a commit can carry, so the two can never be atomic — derive the live set
+rather than reading any list, here or elsewhere ([W-REQUIRED-CHECKS]).
 
 ⚠️ **The trailer is NOT read with `git log -1` on HEAD** (that was S-5's bug; review finding
 S1-2, fixed by FR-2). `actions/checkout@v4` with no `ref:` checks out a SYNTHETIC merge

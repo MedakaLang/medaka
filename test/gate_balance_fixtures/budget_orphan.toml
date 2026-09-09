@@ -1,7 +1,7 @@
 # test/gate_balance_fixtures/budget_orphan.toml — SYNTHETIC, hand-written.
 #
 # Pins clause (d) of `medaka gate budget` (test/diff_compiler_gate_budget.sh,
-# sprint cost-governor-on S1) IN ISOLATION: the registry names one costed
+# #2180) IN ISOLATION: the registry names one costed
 # gate ("tidy"), comfortably inside its declared class's tolerance-adjusted
 # ceiling and alone on its one open row (pole/floor 1.000, same shape as
 # budget_clean.toml) — no clause (a)/(b)/(c) violation rides along. The

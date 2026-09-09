@@ -54,7 +54,7 @@ Seven reports, scratch-only; the load-bearing numbers, each with its source repo
 | `gates_5` contents | one gate, `diff_compiler_stage_ir_scaling` (median 648 s over 9 CI samples, range 460–782) | D, H |
 | pds share of modeled cost | 1,589 s (29.5%); all subprojects 34.8% | C, D |
 | CPU saved by removing every genuine duplicate | ~5 s; ~7 s if the `bootstrap_*` ladder is retired (a decision §5.2 leaves to the owner); ~28 near-clone scripts, 108 redundant goldens | C |
-| Gate-budget enforcement | built (3 clauses + override trailer), **a required check** (sprint cost-governor-on S4, #2596 item 2) | D |
+| Gate-budget enforcement | built (4 clauses + override trailer), **a required check** (sprint cost-governor-on S4, #2596 item 2) | D |
 | Native vehicle real deficiencies | no IO/subprocess under eval (`testCapableExterns` = 5 names); a panic kills the run and every later file on a dir target; no derived `*_test.mdk` discovery | B |
 | Native vehicle folklore that is false | takes one file (dirs and multi-target work); sibling can't see subject (it loads the graph); doesn't typecheck (it does, except under paths without a `compiler`/`stdlib` segment — all 24 pds/sqlite `_test.mdk` files) | B |
 | `medaka test` on `pds/test/scalar_test.mdk` | 311–324 s wall for 38 decls, **dev box**. Separately: the whole 15-file `pds_test_inlang_test_oracle` gate is a 419 s **CI** median. Different machines, so no share is quoted; the direction (one file dominates) is the finding | B, F |
@@ -342,8 +342,7 @@ that already exists.
 
 **Cost.**
 - `gate-budget` is a required context (sprint cost-governor-on S4, #2596 item 2; D §4:
-  built, three clauses, override trailer). The ruleset edit was add → swap → delete with
-  read-back ([W-GH-WRITE-VERIFY]). **Consequence stated in the failure message:** clause
+  built, four clauses, override trailer). **Consequence stated in the failure message:** clause
   (a) reds any schedulable gate with no baseline row (`balUncosted`,
   `gate_pack.mdk`), and a brand-new gate has none until the nightly ingest, so
   every gate-adding PR carries a `Gate-Budget-Override: uncosted:<name>` trailer until

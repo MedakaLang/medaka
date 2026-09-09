@@ -142,7 +142,7 @@ jobs:
 
   # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
   stage-ir-scaling-full:
-    name: "stage_ir_scaling FULL (the six shapes the merge tier cannot afford)"
+    name: "stage_ir_scaling FULL (all eight shapes; the merge tier affords two)"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -163,9 +163,13 @@ jobs:
       # ⚠️ THIS JOB IS THE OTHER HALF OF A REQUIRED GATE, NOT AN EXTRA.
       #
       # ci.yml's `gates` matrix runs this gate at its DEFAULT tier (`merge`), which
-      # grades `match` + `modules` — one shape per profiler, both grading paths. The
-      # other six shapes (xref vchain constrained wideiface guardwild scoperefs) are
-      # graded here, at STAGE_IR_TIER=full. Grading all eight costs ~11 min of
+      # grades `match` + `modules` — one shape per profiler, both grading paths. This
+      # job runs STAGE_IR_TIER=full, which grades ALL EIGHT shapes, the merge tier's
+      # two included: a grading configuration asserts its own scope rather than
+      # narrowing to the delta, so the nightly verdict stands alone and does not have
+      # to be read alongside whichever merge run happened to precede it. The six the
+      # merge tier never sees are xref vchain constrained wideiface guardwild
+      # scoperefs. Grading all eight costs ~11 min of
       # Callgrind and made this gate the indivisible floor of the `gates` matrix
       # (`medaka gate balance --check` named it as such at pole/floor 1.000).
       #
@@ -183,7 +187,7 @@ jobs:
         if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
-          job-name: "stage_ir_scaling FULL (the six shapes the merge tier cannot afford)"
+          job-name: "stage_ir_scaling FULL (all eight shapes; the merge tier affords two)"
           gate-label: "stage_ir_scaling FULL"
 
   # Charter clause: N4 (docs/ops/CI-ARCHITECTURE.md §3.6 — advisory / non-blocking by construction — files a finding rather than gating the diff).
