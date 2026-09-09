@@ -1,5 +1,5 @@
 # META
-source_lines=382
+source_lines=383
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -259,10 +259,11 @@ wrapCall callee body = EApp (EVar callee) body
 -- `hadTypeErrors`.  The DISCRIMINATOR was the module id, not the arm: passing a rootId
 -- other than `mid` (`"__user__"`, any constant) made the same `Module`-arm call emit
 -- byte-identical IR, because the stale rows then keyed somewhere the reader never looks.
--- Fixed at the seam, not here: `elaborateModules` now mints its own empty oracle, so no
--- interleaved check of any arm can reach its readers.  See that line in
--- `compiler/types/typecheck.mdk` for the full mechanism and for why seeding a CORRECT
--- oracle there is a separate, larger change.
+-- Fixed at the seam, not here: `elaborateModules` seeds the oracle itself — an empty
+-- one before its core pass, and each user module's own (`seedCheckRun`, through
+-- `checkModuleFullDiags`) before that module is inferred — so its readers never see
+-- rows an interleaved check of any arm left behind.  The mechanism is documented at
+-- the `matchOracle` write in `elaborateModules` (`compiler/types/typecheck.mdk`).
 export
 underivedMainDiags : List Decl ->
   List Decl ->

@@ -1,0 +1,16 @@
+-- #1675 (T-AMBIGUOUS-REEXPORT), occurrence inside a container literal: `lib.arl_hub`
+-- re-exports `g` from two modules that both define it, and this module's ONLY
+-- occurrence of `g` sits inside a `Map { … }` literal (desugared to `EHeadAnnot`).
+-- The occurrence walk that decides whether an ambiguous re-export is USED
+-- (`moduleRefNameSet` over `allEVars`) is the walk that builds the top-level
+-- dependency graph; until it descended into container literals this program
+-- was silently accepted with the first definition winning.  Rejected on every
+-- verb.
+import lib.arl_hub.*
+import map.{Map, toList}
+
+m : Map Int Int
+m = Map { 1 => g }
+
+main : <IO> Unit
+main = println (toList m)
