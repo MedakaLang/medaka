@@ -342,7 +342,7 @@ echo
 # is later wired into the CLI, that reference is what catches it.
 echo "-- U: unrouted flag-literal argv arms outside stdlib/args.mdk --"
 
-# Raw scan 1: compiler/driver + compiler/tools (NOT entries/), function
+# Raw scan 1: all of compiler/ except entries/ (so support/ too), function
 # clauses only — a dispatch-table \`match\` arm always ends \`=>\` and is
 # excluded by that shape.
 U_NONENTRY=$(grep -rEn '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*" ?::' "$ROOT/compiler" --include=*.mdk 2>/dev/null \

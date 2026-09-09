@@ -1,5 +1,5 @@
 # META
-source_lines=1951
+source_lines=2400
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -63,7 +63,7 @@ import driver.loader.{
   findProjectRoot,
   findProjectRootOrSelf,
 }
-import driver.build_cmd.{readPreludeFile}
+import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import types.typecheck.{elaborateOne, elaborateModules}
 import backend.private_mangle.{mangleCtorCollisionsPair}
 import frontend.lexer.{collectComments}
@@ -99,6 +99,7 @@ import tools.doctest.{
   exampleInput,
   exampleLine,
   synthName,
+  exResultJsonFields,
 }
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
@@ -109,6 +110,9 @@ import tools.prop_runner.{
   PropResult,
   filterProps,
   filterPropsByName,
+  propResultName,
+  propResultPassed,
+  propResultDetail,
 }
 import tools.test_runner.{collectTests, runOneTest, hasTests, uncapableExterns}
 import driver.diagnostics.{
@@ -130,8 +134,19 @@ import support.util.{
   filterList,
   endsWith,
   splitOnChar,
+  contains,
+  joinWith,
+  splitNl,
+  startsWith,
+  stringTrim,
 }
 import support.path.{dirOf, baseOf}
+import args.{
+  ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
+}
+import json.{Json, JInt, JString, JBool, jObject, jArray}
+import tools.lint.{splitLintNames}
+import string.{toInt}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -1953,26 +1968,464 @@ runTestsCollect : List (String, Value e) ->
 runTestsCollect _ [] = []
 runTestsCollect env ((name, line, body) :: rest) =
   (name, line, runOneTest env body) :: runTestsCollect env rest
+
+-- ── test: flags, engine selection, --json rendering ─────────────────────
+-- Moved from `driver/medaka_cli.mdk` (S-test-verb): the engine/flag
+-- vocabulary and the `--json` envelope for `medaka test`. The verb's entry
+-- point (`runTestCmd`/`runTestJsonCmd`/`runTestManyTargets`) stays in
+-- `medaka_cli.mdk` because it calls `requireArgs`/`dieMsg`, both defined
+-- there and shared across verbs; routing those calls through here would
+-- make this file import `driver.medaka_cli` while `medaka_cli.mdk` already
+-- imports this module, a cycle `driver/loader.mdk` rejects.
+
+export
+testHelpText : String
+testHelpText = stringConcat [
+  "medaka test — Run doctests + property tests\n", "\n", "Usage:\n",
+  "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n",
+  "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n", "\n",
+  "  --native            run doctests through a compiled native binary\n",
+  "                      instead of the interpreter (shorthand for\n",
+  "                      --engines native)\n",
+  "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n",
+  "                      exit code is the AND across engines\n",
+  "  --json               emit a {\"file\":...,\"doctests\":...,\"properties\":...,\n",
+  "                      \"tests\":...,\"summary\":...} JSON object instead of\n",
+  "                      human text (single file.mdk target only; agrees with\n",
+  "                      the human report's pass/fail counts on all three\n",
+  "                      phases)\n",
+  "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n",
+  "                      name (or, for a doctest, input expression) contains\n",
+  "                      <substring>\n",
+  "  --seed <n>           seed the property-test RNG (printed on every prop\n",
+  "                      failure so the counterexample is replayable); never\n",
+  "                      affects a program under test's own random draws\n",
+  "  --cases <n>           run each property with <n> generated cases\n",
+  "                      instead of the default 100\n", "\n",
+  "--native and --engines are mutually exclusive. With neither, the default\n",
+  "is the interpreter (eval) alone. A file.mdk or dir target is required.\n"
+]
+
+-- #2316: any `--`-prefixed token must be one of the known `medaka test`
+-- flags. The pre-#2316 `testTargets` fallthrough (`startsWith "--" x =
+-- testTargets rest`) dropped ANY unrecognized `--`-shaped token
+-- unconditionally — so `--engines=native` (the `=`-form, which nothing then
+-- parsed as `--engines`) silently vanished, `parseTestEngines` saw no
+-- `--engines`/`--native` at all, and the run defaulted to the interpreter and
+-- exited 0 with no diagnostic.  The spec below is what rejects it now.
+-- Declaration order is the roster order, reproducing the old
+-- `testBoolFlags ++ testValueFlags` rendering.
+--
+-- `--seed`/`--cases` are `value`, not `intValue`, and `--engines` is `value`,
+-- not `oneOf`: their rejection sentences are `parseTestIntFlag`'s and
+-- `parseEngineNames`'s own hand-written ones, and this slice keeps every one
+-- of them verbatim (convergence onto `args.mdk`'s `invalidValueMessage` is a
+-- later decision, not this slice's).
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path (AS-FILENAME); now C2-rejected like `--x`.
+export
+testArgSpec : ArgSpec
+testArgSpec =
+  withStrictDash
+    (spec "test" [
+      switch ["--native"] "shorthand for --engines native",
+      switch ["--json"] "emit the structured-diagnostics envelope",
+      value ["--engines"] "eval,native" "engines to run each example under",
+      value ["--filter"] "SUBSTRING" "run only matching examples",
+      value ["--seed"] "N" "seed the property RNG",
+      value ["--cases"] "N" "property cases per test",
+    ])
+
+-- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
+-- rejection style as an unknown engine name (`parseEngineNames`), not a
+-- silent fall-through to the default.
+export
+parseTestIntFlag : String -> Args -> Result String (Option Int)
+parseTestIntFlag nm a = match flagValue nm a
+  None => Ok None
+  Some s => match toInt s
+    Some n => Ok (Some n)
+    None => Err "\{nm} requires an integer value, got '\{s}'"
+
+-- `--cases 0`/`--cases -3` parse as integers but `findFailure`'s `run >
+-- maxTests` guard makes any `n <= 0` an instant vacuous pass (0 draws,
+-- exit 0) — reject non-positive `--cases` the same "named + located" way
+-- as an unparseable one, instead of silently degrading to a vacuous green.
+export
+parseTestCasesFlag : Args -> Result String (Option Int)
+parseTestCasesFlag a = match parseTestIntFlag "--cases" a
+  Err msg => Err msg
+  Ok None => Ok None
+  Ok (Some n) =>
+    if n <= 0 then
+      Err "--cases requires a positive integer value, got '\{intToString n}'"
+    else
+      Ok (Some n)
+
+-- `--engines <list>` and `--native` are MUTUALLY EXCLUSIVE — not "--engines
+-- silently wins". Letting one silently override the other reproduces, in
+-- miniature, the exact "flag quietly does something other than what the user
+-- asked" failure the whole --native/--engines split exists to remove: a user
+-- who typed --native and got only `--engines`'s answer, with no diagnostic,
+-- has no way to know --native was ignored. So both together is a hard error
+-- naming both flags, not a silent pick.  With neither given, the default is
+-- `[EngInterp]`.
+export
+parseTestEngines : Args -> Result String (List Engine)
+parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
+  (Some _, True) =>
+    Err
+      "--native and --engines are mutually exclusive; --native is shorthand for --engines native"
+  (Some spec, False) => parseEngineList spec
+  (None, True) => Ok [EngNative]
+  (None, False) => Ok [EngInterp]
+
+-- Comma list of engine names (`eval`/`native`) — mirrors `medaka snapshot
+-- --stages a,b`'s `parseStages`: an unknown name is a hard error naming the
+-- known set, not a silent drop.
+parseEngineList : String -> Result String (List Engine)
+parseEngineList spec =
+  let names = filterList (/= "") (map stringTrim (splitLintNames spec))
+  match names
+    [] => Err "--engines requires at least one of: eval, native"
+    _ => parseEngineNames names
+
+parseEngineNames : List String -> Result String (List Engine)
+parseEngineNames [] = Ok []
+parseEngineNames (n :: rest) = match engineOfName n
+  None => Err "unknown engine '\{n}' (known: eval, native)"
+  Some e => map (e :: _) (parseEngineNames rest)
+
+engineOfName : String -> Option Engine
+engineOfName "eval" = Some EngInterp
+engineOfName "native" = Some EngNative
+engineOfName _ = None
+
+-- `testFlagValue`/`testTargets` are gone: `Args.positionals` is exactly the
+-- non-flag args minus every value-taking flag's VALUE, and `flagValue` is the
+-- first-occurrence read they performed.  Their final `startsWith "--"` arms
+-- were already unreachable (the flag floor ran first), so nothing that could
+-- silently drop a token survives.
+
+-- Original single-file path, unchanged: read <MEDAKA_ROOT>/stdlib sources,
+-- build search roots, run `runTest`, exit 1 on any failure/read-error.
+export
+runTestOne : List Engine -> Int -> Option String -> String -> <IO> Unit
+runTestOne engines cases filterOpt target =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let rtPath = root ++ "/stdlib/runtime.mdk"
+  let corePath = root ++ "/stdlib/core.mdk"
+  let stdlibDir = root ++ "/stdlib"
+  let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
+  let ok = runTest engines rtPath corePath target roots cases filterOpt
+  if ok then () else exit 1
+
+export
+cliTestReportOk : Option String ->
+  List (Engine, RunResult) ->
+  List PropResult ->
+  List (Engine, String, Int, ExResult) ->
+  Bool
+cliTestReportOk typeError runs props tests =
+  isNone typeError
+    && cliAllDoctestRunsOk runs
+    && cliAllPropsPass props
+    && cliAllTestsPass tests
+
+cliAllDoctestRunsOk : List (Engine, RunResult) -> Bool
+cliAllDoctestRunsOk [] = True
+cliAllDoctestRunsOk ((_, run) :: rest) =
+  runFailed run == 0 && runErrors run == 0 && cliAllDoctestRunsOk rest
+
+cliAllPropsPass : List PropResult -> Bool
+cliAllPropsPass [] = True
+cliAllPropsPass (p :: rest) = propResultPassed p && cliAllPropsPass rest
+
+cliAllTestsPass : List (Engine, String, Int, ExResult) -> Bool
+cliAllTestsPass [] = True
+cliAllTestsPass ((_, _, _, Pass _ _) :: rest) = cliAllTestsPass rest
+cliAllTestsPass (_ :: _) = False
+
+cliPrimaryDoctestRun : List (Engine, RunResult) -> RunResult
+cliPrimaryDoctestRun [] = RunResult 0 0 0 0 []
+cliPrimaryDoctestRun ((_, run) :: _) = run
+
+cliCountPassProps : List PropResult -> Int
+cliCountPassProps [] = 0
+cliCountPassProps (p :: rest) =
+  (if propResultPassed p then 1 else 0) + cliCountPassProps rest
+
+cliCountFailProps : List PropResult -> Int
+cliCountFailProps [] = 0
+cliCountFailProps (p :: rest) =
+  (if propResultPassed p then 0 else 1) + cliCountFailProps rest
+
+cliCountPassTests : List (Engine, String, Int, ExResult) -> Int
+cliCountPassTests [] = 0
+cliCountPassTests ((_, _, _, Pass _ _) :: rest) = 1 + cliCountPassTests rest
+cliCountPassTests (_ :: rest) = cliCountPassTests rest
+
+cliCountFailTests : List (Engine, String, Int, ExResult) -> Int
+cliCountFailTests [] = 0
+cliCountFailTests ((_, _, _, Pass _ _) :: rest) = cliCountFailTests rest
+cliCountFailTests (_ :: rest) = 1 + cliCountFailTests rest
+
+cliExampleJson : (Example, ExResult) -> Json
+-- Structurally identical to mcp.mdk's `exampleJson` now that both render an
+-- `ExResult` through the shared `exResultJsonFields`; the part worth sharing
+-- already lives in tools/doctest.mdk, and each module owns its own `--json`
+-- envelope.
+-- lint-disable-next-line rule-duplicate-body
+cliExampleJson (ex, res) =
+  jObject
+    ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))]
+      ++ exResultJsonFields res)
+
+cliDoctestsJson : RunResult -> Json
+cliDoctestsJson run = jObject [
+  ("total", JInt (runPassed run + runFailed run + runErrors run)),
+  ("passed", JInt (runPassed run)),
+  ("failed", JInt (runFailed run)),
+  ("errors", JInt (runErrors run)),
+  ("examples", jArray (map cliExampleJson (runDetails run))),
+]
+
+cliPropJson : PropResult -> Json
+-- Structurally identical to mcp.mdk's `propJson` — both render the same
+-- `PropResult` shape for their own JSON envelope, and neither module imports
+-- the other (mcp.mdk is a CLI-independent server surface); not worth a shared
+-- module for one 5-line function.
+-- lint-disable-next-line rule-duplicate-body
+cliPropJson p = jObject [
+  ("name", JString (propResultName p)),
+  ("status", JString (if propResultPassed p then "pass" else "fail")),
+  ("detail", JString (propResultDetail p)),
+]
+
+-- #2588: every `test "…"` result names the engine that produced it. Under
+-- `--engines eval,native` the same test appears twice, once per engine, and the
+-- field is what tells the two apart; under the default single engine it still
+-- says which one ran, so a reader never has to infer it from the flags.
+cliTestJson : (Engine, String, Int, ExResult) -> Json
+cliTestJson (engine, name, line, result) =
+  jObject
+    ([
+        ("name", JString name),
+        ("line", JInt line),
+        ("engine", JString (engineName engine)),
+      ]
+      ++ exResultJsonFields result)
+
+cliTypeErrorField : Option String -> List (String, Json)
+cliTypeErrorField None = []
+cliTypeErrorField (Some errText) = [("typeError", JString errText)]
+
+-- F7 (#1680/#1443): present only when True — see `mcp.mdk`'s
+-- `typecheckSkippedField` (the CLI JSON envelope's own twin of the human
+-- arm's stderr `typecheckSkipNotice`).
+cliTypecheckSkippedField : Bool -> List (String, Json)
+cliTypecheckSkippedField False = []
+cliTypecheckSkippedField True = [("typecheckSkipped", JBool True)]
+
+-- The full envelope: doctests + properties (same shape `medaka_test`'s
+-- `testReportJson` uses) PLUS a `tests` array for `test "…"` decls, and a
+-- `summary` folding all three phases together — this is the field
+-- `testReportJson` cannot provide (it never runs this phase, by its own
+-- documented scope), and the one this slice's acceptance check depends on.
+export
+cliTestReportJson : String ->
+  Option String ->
+  List (Engine, RunResult) ->
+  List PropResult ->
+  List (Engine, String, Int, ExResult) ->
+  Bool ->
+  Json
+cliTestReportJson path typeError runs props tests typecheckSkipped =
+  jObject
+    ([("file", JString path)]
+      ++ cliTypeErrorField typeError
+      ++ cliTypecheckSkippedField typecheckSkipped
+      ++ [
+        ("doctests", cliDoctestsJson (cliPrimaryDoctestRun runs)),
+        ("properties", jArray (map cliPropJson props)),
+        ("tests", jArray (map cliTestJson tests)),
+        (
+          "summary",
+          jObject [
+            (
+              "passed",
+              JInt
+                (runPassed (cliPrimaryDoctestRun runs)
+                  + cliCountPassProps props
+                  + cliCountPassTests tests),
+            ),
+            (
+              "failed",
+              JInt
+                (runFailed (cliPrimaryDoctestRun runs)
+                  + runErrors (cliPrimaryDoctestRun runs)
+                  + cliCountFailProps props
+                  + cliCountFailTests tests),
+            ),
+            ("ok", JBool (cliTestReportOk typeError runs props tests)),
+          ],
+        ),
+      ])
+
+-- #2589 item 2: roster-completeness for `*_test.mdk` discovery. The recursive
+-- walk (`expandLintTarget`/`collectMdkFiles` in
+-- `compiler/support/cli_targets.mdk`, called from `medaka_cli.mdk`'s
+-- `runTestManyTargets`) already finds every
+-- `_test.mdk` sibling on disk by extension alone — it cannot structurally
+-- miss one (§4's "already walks `_test.mdk` siblings like any other .mdk").
+-- What it CAN miss is a file that is git-TRACKED but absent from the walked
+-- `files` set for some other reason (a stray symlink, a target typo, a path
+-- the walk's dot-entry skip swallowed). Ported from
+-- `pds/test/inlang_test_oracle_test.mdk`'s pattern — enumerate, require each
+-- accounted for, fail named on a gap — WITHOUT that gate's hand-maintained
+-- roster: the "expected" side here is `git ls-files` itself, so a new
+-- `foo_test.mdk` needs no roster edit to be covered (#2589 item 2's
+-- acceptance shape). Not a new gate script: this runs INSIDE `medaka test
+-- <dir>` itself, so no new CI enrollment is needed either.
+--
+-- Both sides MUST be in the same path form, or every entry looks "missing"
+-- on a false positive. `git ls-files` alone prints paths relative to the
+-- process's CWD (not the repo root) unless told otherwise, while `files`
+-- carries whatever form the CALLER's target argument was in — [T-WORKTREE-
+-- PATHS] tells every agent to pass ABSOLUTE paths in a worktree, since cwd
+-- resets between calls there, and `medaka test <absolute dir>` reported a
+-- FALSE roster failure on an all-green run before this fix (every file
+-- "git-tracked but not discovered" despite each one having just run).
+-- `--full-name` makes `git ls-files` always print repo-root-relative paths
+-- regardless of cwd (a pathspec can still be absolute; only the OUTPUT form
+-- changes), and `stripRootPrefix` puts `files` into that same root-relative
+-- form before comparing.
+export
+checkTestMdkRoster : String -> List String -> List String -> <IO> Bool
+checkTestMdkRoster root targets files =
+  match runCommand "git" (["ls-files", "--full-name", "--"] ++ targets)
+    Err _ => True
+    Ok (0, out, _) =>
+      let tracked =
+        filterList (endsWith "_test.mdk") (filterList (/= "") (splitNl out))
+      let relFiles = map (stripRootPrefix root) files
+      let missing = filterList (t => not (contains t relFiles)) tracked
+      match missing
+        [] => True
+        _ =>
+          let _ =
+            ePutStrLn
+              "medaka test: git-tracked but not discovered: \{joinWith ", " missing}"
+          False
+    Ok (_, _, _) => True
+
+-- Drops a `root ++ "/"` prefix if `p` carries one, otherwise `p` unchanged
+-- (already root-relative, e.g. when the caller's target was relative).
+stripRootPrefix : String -> String -> String
+stripRootPrefix root p =
+  let prefix = root ++ "/"
+  if startsWith prefix p then
+    stringSlice (stringLength prefix) (stringLength p) p
+  else
+    p
+
+-- Reconstructs the argv for a per-file CHILD `medaka test` invocation
+-- (containment, below) from the already-resolved engine list/case
+-- count/filter — the same three knobs `runTestCmd` read from its OWN argv,
+-- round-tripped rather than re-parsed by the child.
+testChildArgs : List Engine -> Int -> Option String -> String -> List String
+testChildArgs engines cases filterOpt f =
+  [
+      "test",
+      f,
+      "--engines",
+      joinWith "," (map engineName engines),
+      "--cases",
+      intToString cases,
+    ]
+    ++ (match filterOpt
+      Some s => ["--filter", s]
+      None => [])
+
+-- Fold over an expanded file list, aggregating whether ANY file failed
+-- (tests failed, the file itself couldn't be read/parsed, or the child
+-- process died). Each file runs `runTest` in its OWN child process — a
+-- panic in file 3 of 20 used to abort the whole in-process loop, so files
+-- 4-20 never printed anything (#2589 item 1). Spawning per file means a
+-- dead file is contained to its own `runCommand` result: its stdout up to
+-- the crash still prints, it is named DEAD in the aggregate, and the walk
+-- continues. `envOr "MEDAKA" (executablePath ())` mirrors
+-- `native_doctest.mdk`'s spawn precedent but defaults to the RUNNING
+-- binary's own absolute path rather than a bare "medaka" that a bare `PATH`
+-- lookup might resolve to a different, stale binary.
+export
+testFilesGo : List Engine ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Option String ->
+  List String ->
+  Bool ->
+  <IO> Bool
+testFilesGo _ _ _ _ _ _ [] acc = acc
+testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
+  let medaka = envOr "MEDAKA" (executablePath ())
+  let args = testChildArgs engines cases filterOpt f
+  let ok = match runCommand medaka args
+    Err e =>
+      let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
+      False
+    Ok (code, out, err) =>
+      let _ = putStr out
+      -- `putStr` writes to buffered <Stdout>; `ePutStr`/`ePutStrLn` below write
+      -- straight through to unbuffered <Stderr>. Under a merged capture
+      -- (`2>&1`), the stderr write can hit disk before this file's still-
+      -- buffered stdout content flushes, splicing this file's DEAD notice
+      -- into the MIDDLE of an earlier or later file's own output. Flushing
+      -- here pins the ordering: this file's captured stdout is fully on disk
+      -- before any stderr write for it (or the next file) can occur.
+      let _ = flushStdout ()
+      if code == 0 then
+        True
+      else
+        let _ = ePutStr err
+        let _ =
+          ePutStrLn "medaka test: \{f}: DEAD (child exited \{intToString code})"
+        False
+  testFilesGo
+    engines
+    rtPath
+    corePath
+    stdlibDir
+    cases
+    filterOpt
+    rest
+    (acc || not ok)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgram" false) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "evalOneWith" false) (mem "evalModulesWith" false) (mem "evalModulesRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
+(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
@@ -2193,26 +2646,105 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DTypeSig false "runTestsCollect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))
 (DFunDef false "runTestsCollect" (PWild (PList)) (EListLit))
 (DFunDef false "runTestsCollect" ((PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "rest"))))
+(DTypeSig true "testHelpText" (TyCon "String"))
+(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "  --json               emit a {\"file\":...,\"doctests\":...,\"properties\":...,\n")) (ELit (LString "                      \"tests\":...,\"summary\":...} JSON object instead of\n")) (ELit (LString "                      human text (single file.mdk target only; agrees with\n")) (ELit (LString "                      the human report's pass/fail counts on all three\n")) (ELit (LString "                      phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DTypeSig true "testArgSpec" (TyCon "ArgSpec"))
+(DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test")))))))
+(DTypeSig true "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "parseTestIntFlag" ((PVar "nm") (PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (EVar "nm")) (EVar "a")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "s")) () (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "nm"))) (ELit (LString " requires an integer value, got '"))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "'")))))))))
+(DTypeSig true "parseTestCasesFlag" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "parseTestCasesFlag" ((PVar "a")) (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--cases"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PCon "None")) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Ok" (PCon "Some" (PVar "n"))) () (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--cases requires a positive integer value, got '")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "'")))) (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))))))
+(DTypeSig true "parseTestEngines" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp"))))))
+(DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "map") (EVar "stringTrim")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
+(DTypeSig false "parseEngineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "parseEngineNames" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "parseEngineNames" ((PCons (PVar "n") (PVar "rest"))) (EMatch (EApp (EVar "engineOfName") (EVar "n")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown engine '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' (known: eval, native)"))))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "e") (EVar "_s")))) (EApp (EVar "parseEngineNames") (EVar "rest"))))))
+(DTypeSig false "engineOfName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Engine"))))
+(DFunDef false "engineOfName" ((PLit (LString "eval"))) (EApp (EVar "Some") (EVar "EngInterp")))
+(DFunDef false "engineOfName" ((PLit (LString "native"))) (EApp (EVar "Some") (EVar "EngNative")))
+(DFunDef false "engineOfName" (PWild) (EVar "None"))
+(DTypeSig true "runTestOne" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
+(DFunDef false "runTestOne" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "target")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1)))))))
+(DTypeSig true "cliTestReportOk" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Bool"))))))
+(DFunDef false "cliTestReportOk" ((PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "cliAllDoctestRunsOk") (EVar "runs"))) (EApp (EVar "cliAllPropsPass") (EVar "props"))) (EApp (EVar "cliAllTestsPass") (EVar "tests"))))
+(DTypeSig false "cliAllDoctestRunsOk" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "Bool")))
+(DFunDef false "cliAllDoctestRunsOk" ((PList)) (EVar "True"))
+(DFunDef false "cliAllDoctestRunsOk" ((PCons (PTuple PWild (PVar "run")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "runFailed") (EVar "run")) (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "runErrors") (EVar "run")) (ELit (LInt 0)))) (EApp (EVar "cliAllDoctestRunsOk") (EVar "rest"))))
+(DTypeSig false "cliAllPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Bool")))
+(DFunDef false "cliAllPropsPass" ((PList)) (EVar "True"))
+(DFunDef false "cliAllPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "propResultPassed") (EVar "p")) (EApp (EVar "cliAllPropsPass") (EVar "rest"))))
+(DTypeSig false "cliAllTestsPass" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Bool")))
+(DFunDef false "cliAllTestsPass" ((PList)) (EVar "True"))
+(DFunDef false "cliAllTestsPass" ((PCons (PTuple PWild PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliAllTestsPass") (EVar "rest")))
+(DFunDef false "cliAllTestsPass" ((PCons PWild PWild)) (EVar "False"))
+(DTypeSig false "cliPrimaryDoctestRun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "RunResult")))
+(DFunDef false "cliPrimaryDoctestRun" ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
+(DFunDef false "cliPrimaryDoctestRun" ((PCons (PTuple PWild (PVar "run")) PWild)) (EVar "run"))
+(DTypeSig false "cliCountPassProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "cliCountPassProps" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountPassProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 1)) (ELit (LInt 0))) (EApp (EVar "cliCountPassProps") (EVar "rest"))))
+(DTypeSig false "cliCountFailProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "cliCountFailProps" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "cliCountFailProps") (EVar "rest"))))
+(DTypeSig false "cliCountPassTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
+(DFunDef false "cliCountPassTests" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountPassTests" ((PCons (PTuple PWild PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountPassTests") (EVar "rest"))))
+(DFunDef false "cliCountPassTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "cliCountPassTests") (EVar "rest")))
+(DTypeSig false "cliCountFailTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
+(DFunDef false "cliCountFailTests" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountFailTests" ((PCons (PTuple PWild PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliCountFailTests") (EVar "rest")))
+(DFunDef false "cliCountFailTests" ((PCons PWild (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountFailTests") (EVar "rest"))))
+(DTypeSig false "cliExampleJson" (TyFun (TyTuple (TyCon "Example") (TyCon "ExResult")) (TyCon "Json")))
+(DFunDef false "cliExampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
+(DTypeSig false "cliDoctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
+(DFunDef false "cliDoctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "cliExampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
+(DTypeSig false "cliPropJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
+(DFunDef false "cliPropJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LString "pass")) (ELit (LString "fail"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))))))
+(DTypeSig false "cliTestJson" (TyFun (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult")) (TyCon "Json")))
+(DFunDef false "cliTestJson" ((PTuple (PVar "engine") (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "engineName") (EVar "engine"))))) (EApp (EVar "exResultJsonFields") (EVar "result")))))
+(DTypeSig false "cliTypeErrorField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "cliTypeErrorField" ((PCon "None")) (EListLit))
+(DFunDef false "cliTypeErrorField" ((PCon "Some" (PVar "errText"))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EVar "errText")))))
+(DTypeSig false "cliTypecheckSkippedField" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "cliTypecheckSkippedField" ((PCon "False")) (EListLit))
+(DFunDef false "cliTypecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
+(DTypeSig true "cliTestReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
+(DFunDef false "cliTestReportJson" ((PVar "path") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path")))) (EApp (EVar "cliTypeErrorField") (EVar "typeError"))) (EApp (EVar "cliTypecheckSkippedField") (EVar "typecheckSkipped"))) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "cliDoctestsJson") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "cliPropJson")) (EVar "props")))) (ETuple (ELit (LString "tests")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "cliTestJson")) (EVar "tests")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs"))) (EApp (EVar "cliCountPassProps") (EVar "props"))) (EApp (EVar "cliCountPassTests") (EVar "tests"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs")))) (EApp (EVar "cliCountFailProps") (EVar "props"))) (EApp (EVar "cliCountFailTests") (EVar "tests"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EApp (EVar "cliTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests")))))))))))
+(DTypeSig true "checkTestMdkRoster" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "checkTestMdkRoster" ((PVar "root") (PVar "targets") (PVar "files")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EListLit (ELit (LString "ls-files")) (ELit (LString "--full-name")) (ELit (LString "--"))) (EVar "targets"))) (arm (PCon "Err" PWild) () (EVar "True")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "tracked") (EApp (EApp (EVar "filterList") (EApp (EVar "endsWith") (ELit (LString "_test.mdk")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitNl") (EVar "out"))))) (DoLet false false (PVar "relFiles") (EApp (EApp (EVar "map") (EApp (EVar "stripRootPrefix") (EVar "root"))) (EVar "files"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "filterList") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "t")) (EVar "relFiles"))))) (EVar "tracked"))) (DoExpr (EMatch (EVar "missing") (arm (PList) () (EVar "True")) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: git-tracked but not discovered: ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "missing")))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))) (arm (PCon "Ok" (PTuple PWild PWild PWild)) () (EVar "True"))))
+(DTypeSig false "stripRootPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "stripRootPrefix" ((PVar "root") (PVar "p")) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EVar "root") (ELit (LString "/")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "p")) (EVar "p")))))
+(DTypeSig false "testChildArgs" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "testChildArgs" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "f")) (EBinOp "++" (EListLit (ELit (LString "test")) (EVar "f") (ELit (LString "--engines")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "engineName")) (EVar "engines"))) (ELit (LString "--cases")) (EApp (EVar "intToString") (EVar "cases"))) (EMatch (EVar "filterOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--filter")) (EVar "s"))) (arm (PCon "None") () (EListLit)))))
+(DTypeSig true "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))))))
+(DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "args") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "f"))) (DoLet false false (PVar "ok") (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": DEAD (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgram" false) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "evalOneWith" false) (mem "evalModulesWith" false) (mem "evalModulesRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
+(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
@@ -2433,3 +2965,78 @@ runTestsCollect env ((name, line, body) :: rest) =
 (DTypeSig false "runTestsCollect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))
 (DFunDef false "runTestsCollect" (PWild (PList)) (EListLit))
 (DFunDef false "runTestsCollect" ((PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "rest"))))
+(DTypeSig true "testHelpText" (TyCon "String"))
+(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "  --json               emit a {\"file\":...,\"doctests\":...,\"properties\":...,\n")) (ELit (LString "                      \"tests\":...,\"summary\":...} JSON object instead of\n")) (ELit (LString "                      human text (single file.mdk target only; agrees with\n")) (ELit (LString "                      the human report's pass/fail counts on all three\n")) (ELit (LString "                      phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DTypeSig true "testArgSpec" (TyCon "ArgSpec"))
+(DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test")))))))
+(DTypeSig true "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "parseTestIntFlag" ((PVar "nm") (PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (EVar "nm")) (EVar "a")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "s")) () (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "nm"))) (ELit (LString " requires an integer value, got '"))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "'")))))))))
+(DTypeSig true "parseTestCasesFlag" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "parseTestCasesFlag" ((PVar "a")) (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--cases"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PCon "None")) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Ok" (PCon "Some" (PVar "n"))) () (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--cases requires a positive integer value, got '")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "'")))) (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))))))
+(DTypeSig true "parseTestEngines" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp"))))))
+(DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EMethodRef "map") (EVar "stringTrim")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
+(DTypeSig false "parseEngineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "parseEngineNames" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "parseEngineNames" ((PCons (PVar "n") (PVar "rest"))) (EMatch (EApp (EVar "engineOfName") (EVar "n")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown engine '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' (known: eval, native)"))))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "e") (EVar "_s")))) (EApp (EVar "parseEngineNames") (EVar "rest"))))))
+(DTypeSig false "engineOfName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Engine"))))
+(DFunDef false "engineOfName" ((PLit (LString "eval"))) (EApp (EVar "Some") (EVar "EngInterp")))
+(DFunDef false "engineOfName" ((PLit (LString "native"))) (EApp (EVar "Some") (EVar "EngNative")))
+(DFunDef false "engineOfName" (PWild) (EVar "None"))
+(DTypeSig true "runTestOne" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
+(DFunDef false "runTestOne" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "target")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1)))))))
+(DTypeSig true "cliTestReportOk" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Bool"))))))
+(DFunDef false "cliTestReportOk" ((PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "cliAllDoctestRunsOk") (EVar "runs"))) (EApp (EVar "cliAllPropsPass") (EVar "props"))) (EApp (EVar "cliAllTestsPass") (EVar "tests"))))
+(DTypeSig false "cliAllDoctestRunsOk" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "Bool")))
+(DFunDef false "cliAllDoctestRunsOk" ((PList)) (EVar "True"))
+(DFunDef false "cliAllDoctestRunsOk" ((PCons (PTuple PWild (PVar "run")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "runFailed") (EVar "run")) (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "runErrors") (EVar "run")) (ELit (LInt 0)))) (EApp (EVar "cliAllDoctestRunsOk") (EVar "rest"))))
+(DTypeSig false "cliAllPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Bool")))
+(DFunDef false "cliAllPropsPass" ((PList)) (EVar "True"))
+(DFunDef false "cliAllPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "propResultPassed") (EVar "p")) (EApp (EVar "cliAllPropsPass") (EVar "rest"))))
+(DTypeSig false "cliAllTestsPass" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Bool")))
+(DFunDef false "cliAllTestsPass" ((PList)) (EVar "True"))
+(DFunDef false "cliAllTestsPass" ((PCons (PTuple PWild PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliAllTestsPass") (EVar "rest")))
+(DFunDef false "cliAllTestsPass" ((PCons PWild PWild)) (EVar "False"))
+(DTypeSig false "cliPrimaryDoctestRun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "RunResult")))
+(DFunDef false "cliPrimaryDoctestRun" ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
+(DFunDef false "cliPrimaryDoctestRun" ((PCons (PTuple PWild (PVar "run")) PWild)) (EVar "run"))
+(DTypeSig false "cliCountPassProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "cliCountPassProps" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountPassProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 1)) (ELit (LInt 0))) (EApp (EVar "cliCountPassProps") (EVar "rest"))))
+(DTypeSig false "cliCountFailProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "cliCountFailProps" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "cliCountFailProps") (EVar "rest"))))
+(DTypeSig false "cliCountPassTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
+(DFunDef false "cliCountPassTests" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountPassTests" ((PCons (PTuple PWild PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountPassTests") (EVar "rest"))))
+(DFunDef false "cliCountPassTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "cliCountPassTests") (EVar "rest")))
+(DTypeSig false "cliCountFailTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyCon "Int")))
+(DFunDef false "cliCountFailTests" ((PList)) (ELit (LInt 0)))
+(DFunDef false "cliCountFailTests" ((PCons (PTuple PWild PWild PWild (PCon "Pass" PWild PWild)) (PVar "rest"))) (EApp (EVar "cliCountFailTests") (EVar "rest")))
+(DFunDef false "cliCountFailTests" ((PCons PWild (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "cliCountFailTests") (EVar "rest"))))
+(DTypeSig false "cliExampleJson" (TyFun (TyTuple (TyCon "Example") (TyCon "ExResult")) (TyCon "Json")))
+(DFunDef false "cliExampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
+(DTypeSig false "cliDoctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
+(DFunDef false "cliDoctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "cliExampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
+(DTypeSig false "cliPropJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
+(DFunDef false "cliPropJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LString "pass")) (ELit (LString "fail"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))))))
+(DTypeSig false "cliTestJson" (TyFun (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult")) (TyCon "Json")))
+(DFunDef false "cliTestJson" ((PTuple (PVar "engine") (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "engineName") (EVar "engine"))))) (EApp (EVar "exResultJsonFields") (EVar "result")))))
+(DTypeSig false "cliTypeErrorField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "cliTypeErrorField" ((PCon "None")) (EListLit))
+(DFunDef false "cliTypeErrorField" ((PCon "Some" (PVar "errText"))) (EListLit (ETuple (ELit (LString "typeError")) (EApp (EVar "JString") (EVar "errText")))))
+(DTypeSig false "cliTypecheckSkippedField" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "cliTypecheckSkippedField" ((PCon "False")) (EListLit))
+(DFunDef false "cliTypecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
+(DTypeSig true "cliTestReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult"))) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
+(DFunDef false "cliTestReportJson" ((PVar "path") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path")))) (EApp (EVar "cliTypeErrorField") (EVar "typeError"))) (EApp (EVar "cliTypecheckSkippedField") (EVar "typecheckSkipped"))) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "cliDoctestsJson") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "cliPropJson")) (EVar "props")))) (ETuple (ELit (LString "tests")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "cliTestJson")) (EVar "tests")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs"))) (EApp (EVar "cliCountPassProps") (EVar "props"))) (EApp (EVar "cliCountPassTests") (EVar "tests"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "cliPrimaryDoctestRun") (EVar "runs")))) (EApp (EVar "cliCountFailProps") (EVar "props"))) (EApp (EVar "cliCountFailTests") (EVar "tests"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EApp (EVar "cliTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests")))))))))))
+(DTypeSig true "checkTestMdkRoster" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "checkTestMdkRoster" ((PVar "root") (PVar "targets") (PVar "files")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EListLit (ELit (LString "ls-files")) (ELit (LString "--full-name")) (ELit (LString "--"))) (EVar "targets"))) (arm (PCon "Err" PWild) () (EVar "True")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "tracked") (EApp (EApp (EVar "filterList") (EApp (EVar "endsWith") (ELit (LString "_test.mdk")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitNl") (EVar "out"))))) (DoLet false false (PVar "relFiles") (EApp (EApp (EMethodRef "map") (EApp (EVar "stripRootPrefix") (EVar "root"))) (EVar "files"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "filterList") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "t")) (EVar "relFiles"))))) (EVar "tracked"))) (DoExpr (EMatch (EVar "missing") (arm (PList) () (EVar "True")) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: git-tracked but not discovered: ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "missing")))) (ELit (LString ""))))) (DoExpr (EVar "False")))))))) (arm (PCon "Ok" (PTuple PWild PWild PWild)) () (EVar "True"))))
+(DTypeSig false "stripRootPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "stripRootPrefix" ((PVar "root") (PVar "p")) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EVar "root") (ELit (LString "/")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "p")) (EVar "p")))))
+(DTypeSig false "testChildArgs" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "testChildArgs" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "f")) (EBinOp "++" (EListLit (ELit (LString "test")) (EVar "f") (ELit (LString "--engines")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "engineName")) (EVar "engines"))) (ELit (LString "--cases")) (EApp (EVar "intToString") (EVar "cases"))) (EMatch (EVar "filterOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--filter")) (EVar "s"))) (arm (PCon "None") () (EListLit)))))
+(DTypeSig true "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))))))
+(DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "args") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "f"))) (DoLet false false (PVar "ok") (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": DEAD (child exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
