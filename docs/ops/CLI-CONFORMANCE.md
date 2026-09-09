@@ -363,9 +363,10 @@ baseline.**
 
 ### 5c. `--json` availability and channel (C4) — probe `medaka <verb> --json bad.mdk`
 
-**Re-derived against the current binary.** The probe target (`bad.mdk`) doesn't exist, so for
-`run` this exercises the module-resolution error path, not a compile-error path — `run --json`
-on an actual compile error is covered separately in §4(a), now DRAINED.
+**Re-derived against the current binary.** The probe target (`bad.mdk`) is a STATIC TYPE ERROR
+(`main = println (1 + True)`, `test/cli_conformance_lib.sh`), not a missing file, so `run`'s row
+below exercises the SAME compile-error path §4(a) covers directly — §2798 drained it, and this
+census confirms the drain from the outside.
 
 | Verb | Channel | rc | Verdict |
 |---|---|---|---|
@@ -373,7 +374,7 @@ on an actual compile error is covered separately in §4(a), now DRAINED.
 | `build` | stdout | 1 | ✅ |
 | `lint` | stdout | 0 | ✅ |
 | `test` | stdout | 1 | ✅ |
-| `run` | none (prose only on this probe path) | 1 | ⚠️ deliberate that stdout is the program's; on this specific probe `--json` is accepted and ignored because the failure is a module-resolution error, not a diagnosable file — see §4(a) for the compile-error path, now routed cleanly to stderr |
+| `run` | stderr | 1 | ✅ envelope on STDERR — a stdout consumer sees nothing; deliberate that stdout is the program's own (§4), and §4(a)'s routing (perf/staleness INTO the envelope) applies here too |
 | `doc` | none | 1 | ✅ honestly rejected (`medaka doc: unrecognized flag '--json' (known: none)`) — was accepted-and-ignored |
 | `check-policy` | none | 1 | ✅ honestly rejected (`medaka check-policy: unrecognized flag '--json' (known: --allow, --fn)`) — was read as the FILENAME |
 | `manifest` | none | 1 | ✅ honestly rejected (`medaka manifest: unrecognized flag '--json' (known: --fn)`) — was read as the FILENAME |
@@ -469,8 +470,12 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
   the block is deliberately abbreviated. Property B checks that what usage DOES cite resolves;
   nothing checks that it cites everything.
 * **Prose semantics.** `run --help`'s `--json` paragraph describes WHEN an envelope appears.
-  That the compile-error half of it was false (now written down as a KNOWN GAP in the help
-  text itself) is not a flag-existence question, and A/B/C are blind to it.
+  §2798 drained the resolve/type half of what used to be a blanket "any compile-time failure"
+  KNOWN GAP; the help text now names only the residual (a usage error or a load/parse failure)
+  as still prose-only, plus the two silences MEASURED on both arms and pre-existing — a clean
+  run emits no envelope at all (`flushRunEnvelope`'s `([], []) => ()`), and a multi-module
+  program's warnings are not reported by `run` (#2818). Whether any of those claims holds is a
+  flag-existence question A/B/C are still blind to.
 * **A and B ask "is this flag rejected as unknown", not "is it honoured."** An
   accepted-but-ignored flag reads as parsed — which is why `gate run --jobs`, conforming dead
   surface under E6, is correctly not flagged.

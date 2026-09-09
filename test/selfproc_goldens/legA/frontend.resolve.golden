@@ -284,7 +284,6 @@ resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> Opt
 resolveModulesErrorsG : Bool -> List String -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
 resolveModulesErrorsPairsG : Bool -> List String -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
-resolveModulesToLinesG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
 resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List ResError
 resolveToLines : List Decl -> List Decl -> List Decl -> String

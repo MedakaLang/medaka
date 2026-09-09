@@ -815,19 +815,35 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 6 — #2796: Module-mode ENTRY PARITY (the #2791 class)
 # ═══════════════════════════════════════════════════════════════════════════
-# THE PROPOSITION. Two Module-mode driver entries build the whole-graph state the
-# typechecker reads -- `checkModulesPreambleK` (check, LSP, analyzeProject,
-# `medaka test`'s gate) and `elaborateModules` (run, build, the other phases of
-# `medaka test`). Each must carry the SAME whole-graph writer/seed set
-# (TYPECHECK-TARGET-ARCHITECTURE.md SA-10a item 14). Until this check, that
-# contract was PROSE ONLY -- item 14's own closing sentence and each entry's own
-# comments ("`elaborateModules` carries the identical line") -- so a driver that
-# dropped one call silently diverged. That is exactly how #2791 happened:
-# `elaborateModules` never called `seedAbstractRecordTypes`, no gate noticed, and
-# `run` executed a dot-access on an abstractly exported record that `check`
-# rejects.
+# THE PROPOSITION, STRENGTHENED (SA-10a item 16). There is now exactly ONE
+# Module-mode driver entry -- `graphPreamble` -- and it builds the whole-graph
+# state the typechecker reads for BOTH output selections (`GOutDiags`: check, LSP,
+# analyzeProject, `medaka test`'s gate; `GOutTrees`: run, build, the other phases
+# of `medaka test`). Before the consolidation there were two entries and this check
+# proved they AGREED; it now proves the stronger property that makes agreement
+# unnecessary -- that the set lives in one body and that no consumer carries a
+# second copy of it.
 #
-# THE SET, derived from the two bodies (not from prose), one row per call, with
+# The weaker property is what #2791 cost: `elaborateModules` never called
+# `seedAbstractRecordTypes`, no gate noticed, and `run` executed a dot-access on an
+# abstractly exported record that `check` rejects. Both halves below fail closed.
+#
+# REASON ROW for the shape change: the two-entry parity rows are retired because
+# the second entry is GONE, not because a row stopped applying. The rows themselves
+# are all kept, re-pointed at `graphPreamble`, and two NEW rows are added: the
+# SOLE-SITE row (every mention of a writer's NAME in this file, outside the writer's
+# own column-0 definition lines, must fall inside `graphPreamble`'s body) and the
+# single-entry row (`graphPreamble` must have exactly the two call sites the
+# consolidation leaves -- `driveGraphK` and `checkModulesPreambleK`'s projection).
+#
+# The sole-site row is file-wide on purpose. A row keyed on one consumer's body can
+# only fire for a writer copied into THAT body, and it can only fire at all if the
+# pattern it greps for is a spelling that compiles there -- neither is a property
+# worth resting #2791 on. Scanning the file for the callee's NAME costs the same and
+# fires wherever a second copy grows: a consumer, the driver itself, the keyed chain
+# fold, or a brand-new top-level body that never calls `graphPreamble` at all.
+#
+# THE SET, derived from the body (not from prose), one row per call, with
 # a one-line reason -- the same discipline `driver_allowed` above uses:
 #   resetCrossModuleState        -- opens both entries; DriverState has no reset
 #                                    point, so this is the only place the run's
@@ -840,85 +856,142 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 #   mangledFunDefsPresentRef :=  -- graph-level "carries a mangled funDef" fact (L3, #1351 spine)
 #   declEnvsRef :=               -- the whole-graph declaration ENVELOPE, stage K (#1112 A-3.1)
 #   seedAbstractRecordTypes      -- abstract-record TYPE names; #2791's own missing row
-#   mark sets                    -- markSetsFrom (check entry) / markSetsOf (elaborate
-#                                    entry) -- ONE fact (ARCH §E marking-on-the-schedule),
-#                                    two entry-specific spellings, so this check accepts
-#                                    either at its own entry rather than one shared string
-#   promotionHarvestRef :=       -- cleared/opened at both entries (#194 harvest)
+#   mark sets                    -- markSetsOf -- ONE fact (ARCH §E marking-on-the-
+#                                    schedule), and after the consolidation ONE spelling
+#   promotionHarvestRef := []    -- the harvest is cleared at the entry (#194)
 #
-# 🚨 REMEDY WHEN ANY ROW FIRES: add the missing writer/seed call to the naming entry
-# in lockstep with the other entry's own line -- or, if a row genuinely no longer
-# applies to one entry, add a one-line justified EXEMPTION row here rather than
-# deleting the check. Never widen a pattern to make a row stop firing.
-echo "checking #2796 Module-mode driver entry parity (checkModulesPreambleK / elaborateModules) ..."
+# REMEDY WHEN ANY ROW FIRES: add the missing writer/seed call to `graphPreamble`
+# (compiler/types/typecheck.mdk) -- or, if a row genuinely no longer applies, add a
+# one-line justified EXEMPTION row here rather than deleting the check. Never widen
+# a pattern to make a row stop firing, and never satisfy the sole-site row by
+# moving a writer OUT of graphPreamble into a consumer: that re-creates #2791.
+#
+# MUTATIONS THIS CHECK HAS BEEN SEEN TO FAIL ON (run in a scratch copy of
+# `compiler/` + `test/`; the control tree passes):
+#   1  delete `seedAbstractRecordTypes` from `graphPreamble`
+#   2  add `seedAbstractRecordTypes coreDecls0 modulesIn` to `elaborateModules`
+#   2b add `seedAbstractRecordTypes coreDecls modules` to `elaborateModules`
+#      (graphPreamble's own spelling, which would not compile there)
+#   2c add `populateEffectDomainsGraph coreDecls0 modulesIn` to `elaborateModules`
+#   2d add a duplicate `seedAbstractRecordTypes coreDecls modules` inside
+#      `driveGraphK`, where those two names ARE locals
+#   3  add a third `graphPreamble` call site
+#   M4 add a new top-level body that inlines `resetCrossModuleState ()`,
+#      `populateEffectDomainsGraph`, the three `graph*ExportsRef :=` writes and
+#      `declEnvsRef :=`, and never calls `graphPreamble`
+# 2, 2c, 2d and M4 all passed the earlier one-consumer form of the sole-site row.
+echo "checking #2796 Module-mode driver entry: one preamble carries the whole-graph set ..."
 
-preamble_body=$(body_of "$TC" '^checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =')
-elaborate_body=$(body_of "$TC" '^elaborateModules runtimeDecls coreDecls0 modulesIn =')
+preamble_body=$(body_of "$TC" '^graphPreamble sel preludeKey runtimeDecls coreDecls modules =')
 
 preamble_n=$(printf '%s\n' "$preamble_body" | grep -c . || true)
-elaborate_n=$(printf '%s\n' "$elaborate_body" | grep -c . || true)
-if [ "$preamble_n" -eq 0 ] || [ "$elaborate_n" -eq 0 ]; then
-  echo "FAIL: check 6 extracted ZERO lines for checkModulesPreambleK ($preamble_n) or"
-  echo "  elaborateModules ($elaborate_n). Either entry's equation line changed shape"
-  echo "  (the two start markers this check greps for) or this check just validated"
-  echo "  nothing. Update the start markers -- do NOT treat a zero extraction as a pass."
+if [ "$preamble_n" -eq 0 ]; then
+  echo "FAIL: check 6 extracted ZERO lines for graphPreamble ($preamble_n). Its"
+  echo "  equation line changed shape (the start marker this check greps for) or"
+  echo "  this check just validated nothing. Update the start marker -- do NOT"
+  echo "  treat a zero extraction as a pass."
   exit 1
 fi
 
-# check_parity_row LABEL PATTERN: fail-closed, naming the ENTRY and the ROW.
+# graphPreamble's LINE RANGE in $TC: its equation line through the last line before
+# the next column-0 binding. The sole-site half below asks whether each mention of a
+# writer falls inside it, so the range must be derived, not assumed.
+preamble_range=$(awk '
+  /^graphPreamble sel preludeKey runtimeDecls coreDecls modules =/ { found=1; lo=NR; next }
+  found && /^[A-Za-z_]/ { print lo, NR-1; found=0; exit }
+  END { if (found) print lo, NR }
+' "$TC")
+preamble_lo=${preamble_range% *}
+preamble_hi=${preamble_range#* }
+if [ -z "$preamble_lo" ] || [ -z "$preamble_hi" ] || [ "$preamble_hi" -le "$preamble_lo" ]; then
+  echo "FAIL: check 6 could not derive graphPreamble's line range (got"
+  echo "  '$preamble_range'). Do NOT treat an underived range as a pass."
+  exit 1
+fi
+
+# check_parity_row LABEL PATTERN NAME: fail-closed, naming the ROW. Two halves:
+#   (a) `graphPreamble` CARRIES the call, spelled exactly as PATTERN;
+#   (b) SOLE SITE -- every non-comment line of this file that mentions NAME (the
+#       callee/ref alone, so the check does not depend on any one caller's parameter
+#       names) is inside graphPreamble's body, apart from NAME's own column-0
+#       definition lines. A mention anywhere else is a second copy of the whole-graph
+#       writer set, which is exactly what #2791 exploited.
 check_parity_row() {
   label="$1"
   pattern="$2"
+  name="$3"
   cc=$(printf '%s\n' "$preamble_body" | grep -Fc "$pattern")
   if [ "$cc" -lt 1 ]; then
-    echo "FAIL: checkModulesPreambleK is missing the '$label' writer/seed call"
+    echo "FAIL: graphPreamble is missing the '$label' writer/seed call"
     echo "  (looked for: $pattern)."
-    echo "  REMEDY: add it to checkModulesPreambleK (compiler/types/typecheck.mdk), in"
-    echo "  lockstep with elaborateModules's own line -- or, if this row no longer"
-    echo "  applies to check, add a one-line justified exemption row to this script"
+    echo "  REMEDY: add it to graphPreamble (compiler/types/typecheck.mdk).  This is"
+    echo "  the #2791 shape: a whole-graph seed the typechecker reads, absent at the"
+    echo "  driver entry, so run/check disagree with no diagnostic.  Or, if this row"
+    echo "  no longer applies, add a one-line justified exemption row to this script"
     echo "  instead of deleting the check."
     exit 1
   fi
-  ec=$(printf '%s\n' "$elaborate_body" | grep -Fc "$pattern")
-  if [ "$ec" -lt 1 ]; then
-    echo "FAIL: elaborateModules is missing the '$label' writer/seed call"
-    echo "  (looked for: $pattern)."
-    echo "  REMEDY: add it to elaborateModules (compiler/types/typecheck.mdk), in"
-    echo "  lockstep with checkModulesPreambleK's own line -- this is the #2791 shape,"
-    echo "  where a fix landed in one Module-mode entry and not the other -- or, if"
-    echo "  this row no longer applies to elaborate, add a one-line justified"
-    echo "  exemption row to this script instead of deleting the check."
+  stray=$(awk -v name="$name" -v lo="$preamble_lo" -v hi="$preamble_hi" '
+    {
+      if (index($0, name) == 0) next
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ /^--/) next
+      if (index($0, name) == 1) next
+      if (NR >= lo && NR <= hi) next
+      printf "    %d: %s\n", NR, line
+    }
+  ' "$TC")
+  if [ -n "$stray" ]; then
+    echo "FAIL: the '$label' writer/seed appears OUTSIDE graphPreamble"
+    echo "  (looked for: $name), at:"
+    printf '%s\n' "$stray"
+    echo "  graphPreamble is the one Module-mode driver entry; every other whole-graph"
+    echo "  body -- elaborateModules, driveGraphK, chainGo, a new top-level driver --"
+    echo "  must PROJECT it, never carry its own copy.  A second copy is what #2791"
+    echo "  exploited: a fix landing in one entry and not the other, silently, with"
+    echo "  run and check disagreeing."
+    echo "  REMEDY: put the call in graphPreamble, behind the output selection if it"
+    echo "  only applies to one, and let the other bodies keep projecting."
     exit 1
   fi
 }
 
-check_parity_row "resetCrossModuleState" "resetCrossModuleState ()"
-check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules"
-check_parity_row "graphMethodExportsRef :=" "graphMethodExportsRef :="
-check_parity_row "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :="
-check_parity_row "graphCtorExportsRef :=" "graphCtorExportsRef :="
-check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
-check_parity_row "declEnvsRef :=" "declEnvsRef :="
-check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules"
-check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []"
+check_parity_row "resetCrossModuleState" "resetCrossModuleState ()" "resetCrossModuleState"
+check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules" "populateEffectDomainsGraph"
+check_parity_row "graphMethodExportsRef :=" "graphMethodExportsRef :=" "graphMethodExportsRef :="
+check_parity_row "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :=" "graphIfaceMethodsRef :="
+check_parity_row "graphCtorExportsRef :=" "graphCtorExportsRef :=" "graphCtorExportsRef :="
+check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
+check_parity_row "declEnvsRef :=" "declEnvsRef :=" "declEnvsRef :="
+check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules" "seedAbstractRecordTypes"
+# The harvest CLEAR is the entry-only fact; `graphModuleWorker`'s per-module
+# accumulation writes the same ref and is not a second copy of it, so this row's
+# sole-site half keys on the cleared spelling rather than on the bare ref name.
+check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []" "promotionHarvestRef := []"
 
-# the mark sets: one fact, two entry-specific spellings -- checked separately
-# because the shared-pattern form check_parity_row uses does not apply.
-mark_c=$(printf '%s\n' "$preamble_body" | grep -Fc 'markSetsFrom prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls')
-if [ "$mark_c" -lt 1 ]; then
-  echo "FAIL: checkModulesPreambleK is missing its mark-sets call (markSetsFrom)."
-  echo "  REMEDY: add it in lockstep with elaborateModules's markSetsOf call -- ONE"
-  echo "  fact (ARCH §E marking-on-the-schedule), two entry-specific spellings."
+check_parity_row "mark sets" "markSetsOf prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls" "markSetsOf"
+echo "  ok: graphPreamble carries the whole-graph writer/seed set, and no other body"
+echo "      in the file carries a copy of any row"
+
+# THE SINGLE-ENTRY ROW. The rows above prove each writer has exactly one site and
+# that the site is graphPreamble. This one proves the CALL COUNT: graphPreamble
+# is called from exactly the two sites the consolidation leaves -- `driveGraphK`
+# (the one graph driver) and `checkModulesPreambleK` (its two-component projection,
+# for the schemes-only `checkModulesK`). A third call site is a new Module-mode
+# entry and must be adjudicated here, not merged silently.
+# every non-comment mention of the name that is not one of its own two definition
+# lines (signature + equation, both at column 0) is a call site.
+gp_calls=$(grep -n 'graphPreamble' "$TC" | grep -v ':[[:space:]]*--' | grep -vc '^[0-9]*:graphPreamble ' || true)
+if [ "$gp_calls" -ne 2 ]; then
+  echo "FAIL: graphPreamble has $gp_calls call site(s) in compiler/types/typecheck.mdk,"
+  echo "  expected exactly 2 (driveGraphK, and checkModulesPreambleK's projection)."
+  echo "  A third caller is a new Module-mode driver entry.  REMEDY: route it through"
+  echo "  driveGraphK's output selection instead, or -- if a genuinely new entry is"
+  echo "  intended -- raise this count HERE, in the same commit, with a reason."
   exit 1
 fi
-mark_e=$(printf '%s\n' "$elaborate_body" | grep -Fc 'markSetsOf coreDecls modules allDecls')
-if [ "$mark_e" -lt 1 ]; then
-  echo "FAIL: elaborateModules is missing its mark-sets call (markSetsOf)."
-  echo "  REMEDY: add it in lockstep with checkModulesPreambleK's markSetsFrom call --"
-  echo "  ONE fact (ARCH §E marking-on-the-schedule), two entry-specific spellings."
-  exit 1
-fi
-echo "  ok: both Module-mode driver entries carry the whole-graph writer/seed set"
+echo "  ok: graphPreamble has exactly 2 call sites (one driver + one projection)"
 
 # ORDER: populateEffectDomainsGraph must precede the declEnvsRef := write, at BOTH
 # entries -- the #2789 class. An envelope built before effect domains are
@@ -943,8 +1016,7 @@ check_order() {
     exit 1
   fi
 }
-check_order "checkModulesPreambleK" "$preamble_body"
-check_order "elaborateModules" "$elaborate_body"
-echo "  ok: populateEffectDomainsGraph precedes declEnvsRef := at both entries"
+check_order "graphPreamble" "$preamble_body"
+echo "  ok: populateEffectDomainsGraph precedes declEnvsRef := at the driver entry"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 Module-mode entry parity)."
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry)."

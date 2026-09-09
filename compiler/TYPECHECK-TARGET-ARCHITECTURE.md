@@ -792,6 +792,177 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    by `registry_keying_ratchet`'s check 6 (#2796), `ElabResult` names the elaboration's
    5-tuple, and `analyzeFinish`'s diagnostic order is pinned in three gates.
 
+16. **`build`'s second typecheck is NOT redundant — ruling 3's shape (a) is refuted by
+   measurement, 2026-09-09** (branch `rearch3-build-child`, off `20869bcc7`; not merged).
+   Shape (a) — the `medaka_emitter` child owns the whole verdict, the parent runs resolve
+   only — was implemented in full: the child loads with `loadProgramFilesLocatedE`, renders
+   its per-module diagnostics through `emitGateDiags` (the same `typecheckDiagsFold` +
+   `renderTriple*` face `check` uses), the #2089 gate is hard by default, the child signals a
+   located diagnostic with `emitDiagExitCode` and `build_cmd` forwards its stderr verbatim in
+   both exit cases.  Two of the eight acceptance items pass: the build is clean and
+   `selfcompile_fixpoint` reports **C3a PASS and C3b PASS** with the gate hard, and emitted IR
+   is **byte-identical** across the loader swap on three graphs measured with one source tree
+   and two emitter binaries (compiler `medaka_cli` 36,719,781 B; emitter entry 17,947,581 B;
+   an `llvm_fixtures` single file 424,794 B) — so `ELoc` transparency is measured, not assumed.
+   What refutes the shape is the diagnostic verdict, not the bytes:
+   **the child elaborates the MANGLED graph, and the mangled graph is not the program the
+   user's diagnostics are about.**
+   - **Rejections are lost (S0).**  `diff_compiler_run_check_agreement` goes 143 passed /
+     5 failed with `check REJECT, run REJECT, build ACCEPT` on
+     `reject_845_xmod_inferred_{alias,reexport,reexport_2hop,selective}` and
+     `reject_ambiguous_reexport_inside_map_literal`; the first builds a binary that dies
+     `E-FATAL-SIGNAL: fatal memory fault`, the second runs and prints `[(1, 2)]`.  This is
+     PRE-EXISTING in the child and independent of this branch: `MEDAKA_STRICT=1
+     ./medaka_emitter … <fixture>` on the **base** `20869bcc7` emitter emits IR at exit 0 for
+     all five, with empty stderr.  `elaborateModules` over the same graph unmangled — what
+     the parent runs today — rejects them.  So the parent's pass is the only thing catching
+     this class, and dropping it is a `[W-QUIETER]` severity increase.
+   - **Mangling artifacts are reported as user errors (S2).**  `must_fail`'s
+     `1359-reexport-ctor-mangle-miss` flips to DRAINED, and the drain is a **phantom**: the
+     #1359 mangler gap is not fixed, its `E-PANIC` is merely replaced by three located errors
+     against correct source (`Unknown constructor: Wid`, `Unbound variable: Wid`, `Ambiguous
+     instance for Display`), so `build` now rejects what `check` and `run` accept, blaming the
+     user's file for a rename the mangler failed to make.
+   - **Mangled names leak into diagnostic text (S2).**  `amod__bad`,
+     `s4_gen_sig_body_needs_more_rejected__noCtx`, `reject_toplevel_letrec_nonfunction__loop`,
+     and a `non-exhaustive match` naming `s6_1c_unrelated_warning_not_surfaced__Blue`.
+   - **The two drivers still differ on a single file.**  Same fixture, different column or a
+     different message: `p0_18/p0_19/p0_21` move the caret from the application to the
+     argument, `s1_constrained_shadow_dispatch` reports `Type mismatch: Int literal vs Box`
+     where the check driver reports `No impl of Num for Box`, and three `s6-*` fixtures gain
+     an `Overlapping impls` warning the check driver does not raise.  The premise that after
+     #2705 "the remaining difference is the rendering" does not hold for the mangled arm.
+   **Ruling 2's flip is separately blocked, and by the same disagreement.**
+   `diff_compiler_test_native` fails on `native_test_abort.mdk`: the child rejects the
+   synthesized `test` shim with `Ambiguous instance for Debug`/`Eq` on `expectEqual 3 3`, so
+   `1/4 passed` becomes `0/4`.  That is the hard gate alone, not the parent's removal — the
+   **base** `20869bcc7` binary reproduces it exactly under `MEDAKA_STRICT=1` (same eight
+   `Ambiguous instance` lines, same `0/4`) and gives `1/4` without it.  The flip's recorded
+   precondition (a fixpoint measured with the gate on) is met and is not sufficient: the
+   emit-path elaboration is clean on the compiler's own graph and not on `medaka test`'s.
+
+   Measured over `test/{run_check_agreement,dict,eval_modules,llvm}_fixtures*`,
+   `error_quality_fixtures/build` and `engine_fixtures`: **1022 fixtures, 28 divergent**
+   (stdout+stderr+exit+the built binary's own output, two arms, temp paths normalised);
+   `diff_compiler_dict_semantics` passes unchanged.  `build --json` was NOT converged and
+   still runs `checkJsonFileParts` plus the child: the child has no machine channel, and
+   `runCommand` takes no environment, so signalling one needs an argv flag or a `setEnv`
+   primitive — a separate slice, and not worth cutting while (a) itself is refuted.
+   **Answer to the owner question in `DESIGN-remaining-double-typechecks.md` §S4: neither
+   (a) nor (b).  `build` has two elaborations of two DIFFERENT trees, and neither can be
+   dropped — the mangled one because the backend consumes it, the unmangled one because it
+   is the only one whose verdict is about the user's program.**  The prerequisite for
+   re-opening (a) is making the mangled graph's elaboration agree with the unmangled one;
+   until then §E's "one elaboration" is a claim about `run`/`check`/`test`, not about `build`.
+   Filed: #2809 (S0, the child's elaboration accepts what the front end rejects) and #2810
+   (S1, the hard gate breaks `medaka test --native`).  Owner disposition (2026-09-09): the
+   ruling stands as the target; #2809 is its prerequisite; `build` keeps both typechecks.
+
+17. **ONE graph driver, 2026-09-09** (#2705, branch `rearch3-one-driver`, off item 15's
+   `20869bcc7`).  §E's "one driver, one mode" is now the code, not the plan.
+   `driveGraphK` drives the whole module graph once — stamp, one `graphPreamble`, one
+   `graphModuleWorker` through `foldModules`, one graph-end drain, one coherence attach —
+   under two parameters:
+   * `GraphOut` — `GOutDiags` (per-module diagnostics and schemes) or `GOutTrees` (those
+     plus the dict-passed trees, the residual and the evidence table).  The selection gates
+     more than writes; DERIVE the sites rather than trusting a count here
+     (`grep -n 'match sel' compiler/types/typecheck.mdk`, minus the one unrelated
+     `selectReqImpl` hit).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
+     oracle, `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the
+     core pass is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked
+     decls, and a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef`
+     writes.  Three are not writes and are real behavioural differences: `renameAliasedMethods`
+     runs on the tree arm only (`modulesAliased`); `graphCollect` accumulates the marked tree
+     on the tree arm only (the diags arm returns `gdModules = []`, so keeping it would hold
+     every module's marked forms live for the whole drive); and the tree arm's finish runs
+     `dictPassModulesIfEnabled`, `resolveAliasMethodSpellings` and publishes the residual.
+     The file header names the first of those three as one of the two remaining
+     by-construction divergences between the selections, so "and nothing else" would
+     contradict it.
+   * `DrainDiags` — `DrainRollback` or `DrainKeep`, with its deletion condition in the code.
+   `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK`
+   are projections.  The memo layer stays OUTSIDE and wraps `GOutDiags` only: `ChainStep`
+   captures no marked tree, so a memo over the tree arm is a different data structure, and
+   re-deriving only the suffix's trees from the prefix restore is NOT done here.
+   Deleted: `checkModulesDiagsK`, `cmModuleWorker`, `cmDiagsCollect`, `cmEntryCollect`,
+   `elabWorker`, `elabHarvestWorker`, `elabCollect`, `elabModuleStampDiags`,
+   `attachCoherenceConflictPair`, `cohOntoPair`, the five eager `graph*`/`buildDeclEnvs`/
+   `markSetsOf` wrappers whose only caller was `elaborateModules`' inline preamble (the
+   resumable `*From` variants take their names), and item 14's two genuinely caller-less
+   `tools/check.mdk` entries `runCheckModules` / `checkModulesHasErrors`.  DERIVED, not
+   asserted: whole-graph `foldModules` call sites in `types/typecheck.mdk` fall **4 → 2**
+   (`grep -n 'foldModules$' compiler/types/typecheck.mdk` minus its own definition —
+   `checkModulesK`, `checkModulesDiagsK`, `checkModulesEntryFullSplitK`, `elaborateModules`
+   become `checkModulesK`, `driveGraphK`; the memo's own `chainGo` fold is unchanged in
+   both).  `types.typecheck`'s LEG A golden loses 20 rows and gains 10 (5 genuinely new
+   bindings — `driveGraphK`, `graphPreamble`, `graphModuleWorker`, `graphCollect`,
+   `graphDrainFinish` — and 5 renames, each a lost pair and a gained row);
+   `tools.check` loses 2.  `ModDiags` names the per-module payload the widening had spelled
+   out.  DERIVE the size of that widening rather than reading a number here, and say WHICH
+   count you mean: `git grep -c` for the exact spelling
+   `List (String, (List (String, Scheme), List TcDiag, List TcDiag))` over `compiler/*.mdk`
+   gives 16 lines at `026c44160` and `ModDiags` gives 20 at head, while the DIFF touches
+   more than either, because the widening also rewrote the narrower `(errs, warns)`
+   spellings around it.  "16 sites" named the first of those and read as if it named all of
+   them.  `ModDiags` is also a NEW export of
+   `types/typecheck.mdk` (`export type ModDiags`), which an `^export$` count cannot see;
+   `compiler/tools/check.mdk` loses two exports over the same commit.
+   **The one behavior change** is the entry report's HARD coherence conflict: it now sits at
+   the front of the ENTRY module's errors rather than the accumulated list.  That differs only
+   on a graph with both a conflict and an imported-module type error, and **the differing
+   branch is currently unreachable**: every caller of `checkModulesEntryFullSplitK` /
+   `…FullK` / `…Full` / `…Report` / `…HasErrors` passes a SINGLETON module list, and the
+   multi-module `check` route reaches the entry report through `entryReportFromDiags` instead.
+   Witnessed rather than argued: the shape it names (`t9` — a cross-module hard `impl`
+   conflict plus a type error in the imported module) is byte-identical on both arms under
+   `check`, `check --json`, `run`, `run --json`, `build` and `medaka test`.  So a future
+   multi-module caller of the entry-report driver lights up code no fixture covers.
+   **`registry_keying_ratchet` check 6 was strengthened, not weakened**: with one entry, the
+   per-row half proves each writer of the whole-graph set has exactly ONE site in
+   `types/typecheck.mdk` and that the site is inside `graphPreamble` (file-wide, so a copy in
+   `elaborateModules`, in `driveGraphK`, in `chainGo` or in a new top-level body all fire it),
+   and the single-entry row proves `graphPreamble` has exactly two call sites.  The mutations
+   it has been seen to fail on are listed in the check's own header.
+   **Measured.**  Two-arm four-verb differential (`check`, `check --json`, `run`,
+   `medaka test`) over every multi-module fixture corpus plus `stdlib` — 317 entries, 1,268
+   cells, **0 divergences**.  Two-arm cachegrind against `20869bcc7`: ruling 7's two warm LSP
+   workloads −0.20% / +0.08% Ir (ceiling ~25%); `check stdlib/map.mdk` −0.05%,
+   `check compiler/driver/medaka_cli.mdk` −0.23%, `run` multi-module −0.31%,
+   `medaka test stdlib/list.mdk --cases 1` −0.11% (bound +0.5%).
+   **Ruling 1's T4 census, re-derived rather than quoted.**  Item 11 measured the drain's
+   diagnostics wrong on 33 of 3,386 accepted files.  On this tree, a two-arm corpus (one arm
+   with the rollback removed and the residual rendered as entry warnings) over every `.mdk`
+   under `test/` and `stdlib/` the compiler accepts gives **2 of 2,548**:
+   `test/engine_fixtures/where_dict_forward.mdk` (`Ambiguous instance for `Ord``) and
+   `test/parse_fixtures/blocks.mdk` (`Ambiguous instance for `Display``) — both the
+   D1-undefaulted-literal class #2646 owes, neither `panic "…"` (#2315) nor a route
+   re-unification duplicate.  The population the ruling has to adjudicate is now two files
+   of one kind, not three kinds.
+
+18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms
+   — SIX of them; derive rather than trust this number, `grep -n 'runAbortJson'
+   compiler/driver/medaka_cli.mdk` minus the definition's two lines and the three comment
+   mentions — stage their diagnostics into the same `pendingRunDiags` envelope `check --json`
+   and the runtime-error path already use (stderr, `run`'s machine channel), so the `[perf]` and
+   staleness notices ride inside the document instead of corrupting it; the residual-only arm
+   emits a `T-RESIDUAL` diagnostic for the entry rather than an empty envelope; multi-module
+   paths are relativized as `check --json`'s are; warnings ride beside errors so the
+   per-file `diagnostics` arrays match `check --json` element-wise. Two pre-existing
+   `.json.out` goldens had pinned the prose.
+   **Three qualifications on "the arrays match", all measured.** (a) It holds PER FILE THAT
+   HAS DIAGNOSTICS. (b) The `files` array itself differs: `check --json` emits
+   `{"file":…,"diagnostics":[]}` rows for clean modules and `run --json` drops them
+   (`nonEmptyTriples`), so a consumer keying on `files[0].file` sees a different document.
+   (c) On the ACCEPT path there is nothing to match — a clean `run --json` emits no envelope
+   at all (`flushRunEnvelope`'s `([], []) => ()`), and a multi-module program's warnings are
+   not reported by `run` at all (#2818). Both are pre-existing and reproduce on the base arm;
+   `run --help` describes them as they are.
+   **`T-RESIDUAL` is a new diagnostic code** and is now a row in
+   `compiler/DIAGNOSTIC-CODES-DESIGN.md`. Nothing known reaches it: `test/diag_census.sh`
+   only sees codes that FIRE, so its "0 undocumented" was structurally blind to this one.
+   Found alongside, pre-existing and filed: a user file named `core.mdk` bypasses `run`'s static
+   gate (#2811).
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under

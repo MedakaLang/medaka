@@ -1,0 +1,11 @@
+cmd: medaka run
+exit: 1
+---
+error: test/error_quality_fixtures/eval/xmod2798/lib.mdk:3:6: Type mismatch: Int vs String
+  |
+3 | bad = 1 + "x"
+  |       ^
+error: test/error_quality_fixtures/eval/xmod2798/lib.mdk:3:6: No impl of Num for String
+  |
+3 | bad = 1 + "x"
+  |       ^
