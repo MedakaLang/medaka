@@ -12,6 +12,10 @@ The two jobs are deliberately separate: a grader that also resolved the
 binary would have to name a verb, and callers need `check`, `run` and
 `test`.
 
+A test that spawns many subjects in one sweep reaches for `boundedVerb`,
+so one hanging subject fails its own row instead of the job, and
+`scratchDir`, so concurrent gate runs do not write over each other.
+
 A test that grades a whole directory of `medaka test` suites reads their
 executed-assertion counts with `testAssertionCount`, and keeps its roster
 closed over the directory with `testFileStem`, `unrosteredTestFiles` and
@@ -60,6 +64,58 @@ The default is a path, never the bare name `medaka`, so an unset
 `MEDAKA` cannot resolve to some other build on `PATH`, or to nothing at
 all, which still spawns and exits 127 with no output, an outcome any
 assertion phrased over the output would accept.
+
+## Spawning
+
+### `spawnTimeoutSeconds`
+
+```
+spawnTimeoutSeconds : Int
+```
+
+The wall-clock ceiling `boundedVerb` puts on one spawn, in seconds.
+
+A sweep that spawns a compiler once per fixture has to distinguish "this
+fixture hangs" from "the whole job hung": without a per-spawn ceiling the
+first hanging fixture consumes the job's own timeout and the sweep names
+nothing.
+
+### `boundedVerb`
+
+```
+boundedVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+```
+
+`runVerb`, with `cmd` killed after `spawnTimeoutSeconds`.
+
+A killed spawn is an ordinary nonzero exit, not an `Err`, so a caller
+grading exit codes sees a failure on the row that hung rather than losing
+the whole run. `perl` carries the alarm because it is the one interval
+timer present on both Linux and macOS without a coreutils dependency.
+
+```medaka
+> boundedVerb "sh" ["-c", "printf hi; exit 3"]
+Ok (3, "hi", "")
+```
+
+### `scratchDir`
+
+```
+scratchDir : <Exec _> Result String String
+```
+
+A fresh, empty directory of the host's choosing, for a test that has to
+write files.
+
+Gates run concurrently over one tree, so a scratch path spelled as a
+constant collides between two runs of the same test; only the host can
+hand out a name nothing else holds. The caller owns the directory and is
+responsible for removing it.
+
+```medaka
+> map (startsWith "/") scratchDir
+Ok True
+```
 
 ## Grading a spawn
 

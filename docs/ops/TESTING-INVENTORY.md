@@ -209,10 +209,10 @@
 | `test/diff_compiler_resolve_batch.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 221 | 28 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_resolve_modules.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 1240 | 78 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_rt_obj.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 30299 | 239 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
-| `test/diff_compiler_run_check_agreement.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 108345 | 159 | WRAP: spawns ./medaka + diffs, module does the same |
+| `test/run_check_agreement_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 108345 | 159 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_run_entry_subdir.sh` | CLI-CONTRACT | multiple | N | NO | NATIVE-KIND-RUNNER | 1685 | 119 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_run_stdout_flush.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER | 4843 | 161 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/diff_compiler_shadow_semantics.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 95446 | 499 | WRAP: spawns ./medaka + diffs, module does the same [node] |
+| `test/shadow_semantics_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 95446 | 499 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `test/diff_compiler_slice_oob.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 6337 | 153 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_snapshot_bless.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 927 | 160 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_snapshot_core_ir.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 133 | 119 | WRAP: spawns ./medaka + diffs, module does the same |

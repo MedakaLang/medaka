@@ -1,0 +1,206 @@
+{- | Gate for `check` == `run` == `build` agreement over
+   `test/run_check_agreement_fixtures`.
+
+   `check` runs the full diagnostic pass — resolve, typecheck, constraint,
+   coherence and no-impl — and is the source of truth for whether a program
+   is well formed. `run` and `build` share that front end and differ only in
+   engine, so a program the three verbs disagree about is a program one of
+   them decided on less information than the others. Each fixture pins the
+   answer all three owe in a sibling `<name>.expected` holding exactly
+   `ACCEPT` or `REJECT`.
+
+   Two grades beyond the verdict, each closing a hole a verdict cannot see:
+
+   - An `ACCEPT` fixture must ship a `<name>.out` pinning its exact stdout,
+     and the run engine's stdout, the built binary's stdout and that pin
+     must all agree. A missing pin is `NOPIN`, a failure and never a skip:
+     two engines agreeing with each other prove nothing when they agree on
+     garbage, which is exactly the shape a build exiting 0 while printing
+     the wrong number takes. `REJECT` fixtures never execute, so they are
+     exempt, and no fixture takes a ledgered exception. When minting a pin,
+     read the fixture and decide the value the program owes; do not capture
+     whatever the binary prints today.
+
+   - A `REJECT` fixture must be rejected by a diagnostic, never by a runtime
+     panic (`RANPANIC` on the run engine, `EMITPANIC` on the build path).
+     Both outcomes exit 1, so the verdict column is blind to the difference,
+     and that blindness is how multi-module `run` once shipped executing
+     ill-typed programs with this corpus green. A stdout probe cannot stand
+     in either: `medaka run` discards buffered stdout when the program
+     panics, so a `println` placed ahead of the ill-typed expression
+     vanishes. The diagnostic is the only observable that differs.
+
+   Only the corpus root holds fixtures. `lib/` beneath it holds modules the
+   multi-file fixtures import, which are not entry points and have no pinned
+   verdict of their own.
+
+   The per-fixture verdict table is rendered into the failure message rather
+   than printed: `medaka test --native` runs a test body inside a probe whose
+   stdout it parses back as a sentinel transcript, so anything the body
+   prints on its own account is absorbed there and never reaches a reader. A
+   red run therefore names every disagreeing fixture and its columns at once.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{Agreement(..), checkRunBuild, verdictOf}
+import fs.{fixtureFiles}
+import io.{runVerb}
+import list.{somes, sort}
+import path.{dirname, stem}
+import string.{contains, endsWith, padRight, trim, unlines}
+import test.{Expectation, fail, pass}
+import test_process.{medakaRoot, scratchDir}
+
+-- Fixtures are located through MEDAKA_ROOT rather than the working
+-- directory: `medaka gate run` exports it and inherits whatever cwd the
+-- caller had.
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/run_check_agreement_fixtures"
+
+{- | One fixture's graded row. `note` carries a structural failure — a
+   fixture missing its verdict pin, a spawn that could not start — which
+   has no verdict columns of its own to report. -}
+data Row = Row {
+  base : String,
+  expected : String,
+  checkV : String,
+  runV : String,
+  buildV : String,
+  grade : String,
+  ok : Bool,
+  note : String,
+}
+
+-- The value grades that are failures. A row also fails on any verdict
+-- disagreement; these are the ones the verdict columns cannot express.
+badValues : List String
+badValues = ["DIFF", "WRONG", "NOPIN", "RANPANIC", "EMITPANIC"]
+
+-- The third argument is the `<name>.out` file's contents, `Err` when it is
+-- absent.
+valueColumn : String -> Agreement -> Result String String -> String
+valueColumn "REJECT" a _ =
+  if contains "E-PANIC" a.runErr then
+    "RANPANIC"
+  else if contains "E-PANIC" a.buildLog then
+    "EMITPANIC"
+  else
+    "-"
+valueColumn "ACCEPT" _ (Err _) = "NOPIN"
+valueColumn "ACCEPT" a (Ok want) =
+  if a.runCode /= 0 || a.buildCode /= 0 then
+    "-"
+  else if a.binOut /= a.runOut then
+    "DIFF"
+  else if want /= a.runOut then
+    "WRONG"
+  else
+    "ok"
+valueColumn _ _ _ = "-"
+
+structuralRow : String -> String -> Row
+structuralRow base note = Row {
+  base = base,
+  expected = "-",
+  checkV = "-",
+  runV = "-",
+  buildV = "-",
+  grade = "-",
+  ok = False,
+  note = note,
+}
+
+gradeOne : String -> String -> <Exec "_", FileRead "_", IO> Row
+gradeOne scratch path =
+  let base = stem path
+  let sibling = "\{corpus}/\{base}"
+  match readFile "\{sibling}.expected"
+    Err e => structuralRow base "no readable .expected file: \{e}"
+    Ok raw => match checkRunBuild path "\{scratch}/\{base}.bin"
+      Err e => structuralRow base e
+      Ok a =>
+        let expected = trim raw
+        let value = valueColumn expected a (readFile "\{sibling}.out")
+        let checkV = verdictOf a.checkCode
+        let runV = verdictOf a.runCode
+        let buildV = verdictOf a.buildCode
+        Row {
+          base = base,
+          expected = expected,
+          checkV = checkV,
+          runV = runV,
+          buildV = buildV,
+          grade = value,
+          ok =
+            checkV == expected
+              && runV == expected
+              && buildV == expected
+              && not (elem value badValues),
+          note = "",
+        }
+
+rowFailure : Row -> Option String
+rowFailure r =
+  if r.ok then
+    None
+  else
+    Some
+      "  \{padRight 46 ' ' r.base} expect=\{padRight 7 ' ' r.expected} check=\{padRight 7 ' ' r.checkV} run=\{padRight 7 ' ' r.runV} build=\{padRight 7 ' ' r.buildV} value=\{r.grade} \{r.note}"
+
+-- The whole verdict table for the failing fixtures, since the vehicle
+-- swallows anything a test body prints: a red run has to name every
+-- disagreeing fixture in one message or lose the rest.
+summarize : String -> Int -> List String -> Expectation
+summarize _ _ [] = pass
+summarize what graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} fixtures \{what}:\n\{unlines failures}"
+
+sweep : List String -> <Exec "_", FileRead "_", IO> Expectation
+sweep entries = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let rows = map (gradeOne scratch) entries
+    let failures = somes (map rowFailure rows)
+    let _ = runVerb "rm" ["-rf", scratch]
+    summarize
+      "disagree with their pinned verdict or value"
+      (length rows)
+      failures
+
+{- | The corpus's fixtures: its top-level `.mdk` files. `fixtureFiles`
+   carries the anti-vacuity floor, so a corpus that reads cleanly but holds
+   nothing is an `Err` rather than a green run over zero rows; it walks
+   recursively, and `lib/` holds imported modules rather than entry points,
+   so only the root's own files are fixtures. -}
+mdkFixtures : <FileRead "_", IO> Result String (List String)
+mdkFixtures = match fixtureFiles corpus
+  Err e => Err e
+  Ok paths =>
+    match sort (filter (p => endsWith ".mdk" p && dirname p == corpus) paths)
+      [] => Err "no top-level .mdk fixtures"
+      fixtures => Ok fixtures
+
+pinnedVerdict : String -> <FileRead "_", IO> Option String
+pinnedVerdict path = match readFile "\{corpus}/\{stem path}.expected"
+  Err _ => Some "  \{stem path}: no .expected file pinning ACCEPT or REJECT"
+  Ok raw =>
+    let v = trim raw
+    if v == "ACCEPT" || v == "REJECT" then
+      None
+    else
+      Some "  \{stem path}: .expected reads \{debug v}, not ACCEPT or REJECT"
+
+test "every fixture pins exactly one of ACCEPT or REJECT" = match mdkFixtures
+  Err e => fail "\{corpus}: \{e}"
+  Ok entries =>
+    summarize
+      "do not pin a verdict"
+      (length entries)
+      (somes (map pinnedVerdict entries))
+
+test "check, run and build agree with every fixture's pinned verdict and value" =
+  match mdkFixtures
+    Err e => fail "\{corpus}: \{e}"
+    Ok entries => sweep entries

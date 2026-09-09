@@ -10,6 +10,10 @@
    binary would have to name a verb, and callers need `check`, `run` and
    `test`.
 
+   A test that spawns many subjects in one sweep reaches for `boundedVerb`,
+   so one hanging subject fails its own row instead of the job, and
+   `scratchDir`, so concurrent gate runs do not write over each other.
+
    A test that grades a whole directory of `medaka test` suites reads their
    executed-assertion counts with `testAssertionCount`, and keeps its roster
    closed over the directory with `testFileStem`, `unrosteredTestFiles` and
@@ -24,7 +28,9 @@
 import io.{getEnvOr, runVerb}
 import json.{asInt, get, parse}
 import list.{somes}
-import string.{contains, endsWith, lines, stripSuffix, unwords}
+import string.{
+  contains, endsWith, lines, startsWith, stripSuffix, trim, unwords
+}
 import test.{Expectation(..)}
 
 -- # Locating the tree
@@ -55,6 +61,54 @@ underRoot rel = "\{medakaRoot}/\{rel}"
 export
 medakaBin : <IO> String
 medakaBin = getEnvOr "MEDAKA" "\{medakaRoot}/medaka"
+
+-- # Spawning
+
+{- | The wall-clock ceiling `boundedVerb` puts on one spawn, in seconds.
+
+   A sweep that spawns a compiler once per fixture has to distinguish "this
+   fixture hangs" from "the whole job hung": without a per-spawn ceiling the
+   first hanging fixture consumes the job's own timeout and the sweep names
+   nothing. -}
+export
+spawnTimeoutSeconds : Int
+spawnTimeoutSeconds = 60
+
+{- | `runVerb`, with `cmd` killed after `spawnTimeoutSeconds`.
+
+   A killed spawn is an ordinary nonzero exit, not an `Err`, so a caller
+   grading exit codes sees a failure on the row that hung rather than losing
+   the whole run. `perl` carries the alarm because it is the one interval
+   timer present on both Linux and macOS without a coreutils dependency.
+
+   > boundedVerb "sh" ["-c", "printf hi; exit 3"]
+   Ok (3, "hi", "") -}
+export
+boundedVerb : String ->
+  List String ->
+  <Exec "_"> Result String (Int, String, String)
+boundedVerb cmd args =
+  runVerb
+    "perl"
+    (["-e", "alarm \{intToString spawnTimeoutSeconds}; exec @ARGV", cmd]
+      ++ args)
+
+{- | A fresh, empty directory of the host's choosing, for a test that has to
+   write files.
+
+   Gates run concurrently over one tree, so a scratch path spelled as a
+   constant collides between two runs of the same test; only the host can
+   hand out a name nothing else holds. The caller owns the directory and is
+   responsible for removing it.
+
+   > map (startsWith "/") scratchDir
+   Ok True -}
+export
+scratchDir : <Exec "_"> Result String String
+scratchDir = match runVerb "mktemp" ["-d"]
+  Err e => Err e
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
 
 -- # Grading a spawn
 

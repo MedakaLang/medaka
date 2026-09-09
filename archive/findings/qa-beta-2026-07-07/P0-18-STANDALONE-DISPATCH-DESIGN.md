@@ -26,7 +26,7 @@ per-receiver fix)** and asked that it be **the first thing tackled next session*
 the complete diagnosis + plan so the next agent starts from the map, not a treasure hunt.
 
 It is the **last failing fixture** in the run≡check agreement gate
-(`test/diff_compiler_run_check_agreement.sh` → 12 pass / **1 fail** =
+(`test/run_check_agreement_test.mdk` → 12 pass / **1 fail** =
 `p0_18_standalone_fn_shadows_iface_method`). Every other fixture is green. When this lands and
 `.expected` stays `ACCEPT`, the gate goes 13/0 and Theme 1 (run≠check) is fully closed.
 

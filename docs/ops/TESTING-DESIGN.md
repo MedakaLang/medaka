@@ -296,7 +296,7 @@ is four lines of code.
 
 Only ~15 scripts are *genuinely* differential or metamorphic, and those are the ones
 worth keeping and **growing**: `bootstrap_*.sh`, `selfcompile_*.sh` (IR byte-identity
-fixpoint), `fuzz_diff.sh`, `diff_compiler_run_check_agreement.sh`.
+fixpoint), `fuzz_diff.sh`, `run_check_agreement_test.mdk`.
 
 ### 2.2 The probe-binary layer exists only because the driver is bash
 
@@ -654,7 +654,7 @@ carries the design rules, and the one that matters most is *run it, don't reason
 Two things worth knowing before extending it:
 
 - **The mechanism already existed twice in embryo and was never generalized.**
-  `test/diff_compiler_shadow_semantics.sh` has must-fail rows keyed to open issues (`d11`
+  `test/shadow_semantics_test.mdk` has must-fail rows keyed to open issues (`d11`
   *is* #54; `d18` *is* #410), and its `BUILD_CRASH` row has already fired once when PR #25
   fixed the bug it pinned. `sqlite/findings/verify_compiler_bugs.sh` re-runs every repro
   and prints OPEN/FIXED — it is the only reason we know 4 of those 11 bugs had self-fixed.

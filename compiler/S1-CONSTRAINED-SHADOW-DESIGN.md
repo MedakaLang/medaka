@@ -509,7 +509,7 @@ agent, per the workstream).
 
 ## 7. The gates that will prove the fix
 
-**Owner gate:** `test/diff_compiler_run_check_agreement.sh` — it now compares the **value**
+**Owner gate:** `test/run_check_agreement_test.mdk` — it now compares the **value**
 (`run` stdout == built-binary stdout, plus an optional `.out` pin), which is the only reason
 this class of bug is visible at all. **Both directions are owed:**
 
