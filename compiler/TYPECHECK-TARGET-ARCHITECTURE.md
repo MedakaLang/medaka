@@ -745,7 +745,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
    `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
    `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
-   carry, and `registry_keying_ratchet` should be the place that says so.
+   carry, and `registry_keying_ratchet`'s check 6 (#2796) is that place.
 
 ### SA-11. Artifacts
 
