@@ -1,5 +1,5 @@
 # META
-source_lines=725
+source_lines=732
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -78,6 +78,13 @@ import support.util.{
   splitNl,
   joinNl,
 }
+
+-- ── `medaka fmt`'s three output modes ─────────────
+-- Rewrite the file, print the formatted text, or only report that it differs.
+-- Only `FmtWrite` mutates; the other two are read-only, which is why the
+-- default is `FmtCheck`.  The flags that select one are parsed by the verb in
+-- `compiler/driver/medaka_cli.mdk`.
+public export data FmtMode = FmtWrite | FmtStdout | FmtCheck
 
 -- ── State ─────────────────────────────────────────
 -- pieces : output fragments, REVERSED (cons-prepend, reverse+concat at end)
@@ -733,6 +740,7 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false))))
+(DData Public "FmtMode" () ((variant "FmtWrite" (ConPos)) (variant "FmtStdout" (ConPos)) (variant "FmtCheck" (ConPos))) ())
 (DData Private "FmtState" () ((variant "FmtState" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Bool") (TyCon "Int")))) ())
 (DTypeSig false "countNl" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "countNl" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "countNlChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "s")))) (ELit (LInt 0))))
@@ -908,6 +916,7 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false))))
+(DData Public "FmtMode" () ((variant "FmtWrite" (ConPos)) (variant "FmtStdout" (ConPos)) (variant "FmtCheck" (ConPos))) ())
 (DData Private "FmtState" () ((variant "FmtState" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Bool") (TyCon "Int")))) ())
 (DTypeSig false "countNl" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "countNl" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "countNlChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "s")))) (ELit (LInt 0))))

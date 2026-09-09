@@ -1,5 +1,5 @@
 # META
-source_lines=628
+source_lines=652
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cost.mdk — the per-gate cost baseline reader (#2178, epic #2182).
@@ -34,7 +34,7 @@ stages=DESUGAR,MARK
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
 import json.{JNull, Json, asArray, asBool, asInt, asString, get, parse}
-import support.util.{joinWith, listLen, splitOnChar, startsWith}
+import support.util.{contains, joinWith, listLen, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
    the LOWER median of the retained raw samples, in milliseconds.  `samples`
@@ -592,6 +592,30 @@ costRowOfKey k (c :: cs)
   | c.name == k = Some c
   | otherwise = costRowOfKey k cs
 
+{- | Baseline rows whose key names no gate in `liveKeys` — a cost history kept
+   for a gate the registry no longer declares.  The reverse direction of
+   `costOf`'s "a miss is a miss": that join asks "does this registry gate have
+   a price", and nothing anywhere asks the other question, "does this priced
+   row still name a gate".  `liveKeys` is the caller's `baselineKey g.run` for
+   every registry entry — this module takes the already-derived keys rather
+   than the registry's `Gate` type, so it stays free of a dependency on
+   `gate_cmd.mdk`'s types.
+
+   > orphanBaselineNames ["a", "b"] []
+   []
+
+   > orphanBaselineNames ["a"] (GateCost { name = "a", medianMs = 1, samples = 1, ms = [1], sampleRuns = [""] } :: [])
+   []
+
+   > orphanBaselineNames ["a"] (GateCost { name = "gone", medianMs = 1, samples = 1, ms = [1], sampleRuns = [""] } :: [])
+   ["gone"] -}
+export
+orphanBaselineNames : List String -> List GateCost -> List String
+orphanBaselineNames _ [] = []
+orphanBaselineNames liveKeys (c :: cs)
+  | contains c.name liveKeys = orphanBaselineNames liveKeys cs
+  | otherwise = c.name :: orphanBaselineNames liveKeys cs
+
 -- ── Properties ──────────────────────────────────────────────────────────────
 
 prop "baselineKey leaves a test/ gate's stem alone" (n : Int) =
@@ -632,7 +656,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
     /= gateSetDigest ("a\{intToString n}" :: "c\{intToString n}" :: [])
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EApp (EVar "dropTestMdk") (EVar "run")))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EVar "flat")))))
@@ -720,6 +744,9 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DTypeSig false "costRowOfKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "Option") (TyCon "GateCost")))))
 (DFunDef false "costRowOfKey" (PWild (PList)) (EVar "None"))
 (DFunDef false "costRowOfKey" ((PVar "k") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "name") (EVar "k")) (EApp (EVar "Some") (EVar "c")) (EIf (EVar "otherwise") (EApp (EApp (EVar "costRowOfKey") (EVar "k")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "orphanBaselineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "orphanBaselineNames" (PWild (PList)) (EListLit))
+(DFunDef false "orphanBaselineNames" ((PVar "liveKeys") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "c") "name")) (EVar "liveKeys")) (EApp (EApp (EVar "orphanBaselineNames") (EVar "liveKeys")) (EVar "cs")) (EIf (EVar "otherwise") (EBinOp "::" (EFieldAccess (EVar "c") "name") (EApp (EApp (EVar "orphanBaselineNames") (EVar "liveKeys")) (EVar "cs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DProp false "baselineKey leaves a test/ gate's stem alone" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey flattens every separator" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "a/b/c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "a_b_c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey is idempotent on an already-flat key" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))
@@ -730,7 +757,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DProp false "gateSetDigest separates a same-size swap" ((pp "n" (TyCon "Int"))) (EBinOp "/=" (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit)))) (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit))))))
 # MARK
 (DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EApp (EVar "dropTestMdk") (EVar "run")))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EDictApp "flat")))))
@@ -818,6 +845,9 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DTypeSig false "costRowOfKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "Option") (TyCon "GateCost")))))
 (DFunDef false "costRowOfKey" (PWild (PList)) (EVar "None"))
 (DFunDef false "costRowOfKey" ((PVar "k") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "name") (EVar "k")) (EApp (EVar "Some") (EVar "c")) (EIf (EVar "otherwise") (EApp (EApp (EVar "costRowOfKey") (EVar "k")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "orphanBaselineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "orphanBaselineNames" (PWild (PList)) (EListLit))
+(DFunDef false "orphanBaselineNames" ((PVar "liveKeys") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "c") "name")) (EVar "liveKeys")) (EApp (EApp (EVar "orphanBaselineNames") (EVar "liveKeys")) (EVar "cs")) (EIf (EVar "otherwise") (EBinOp "::" (EFieldAccess (EVar "c") "name") (EApp (EApp (EVar "orphanBaselineNames") (EVar "liveKeys")) (EVar "cs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DProp false "baselineKey leaves a test/ gate's stem alone" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey flattens every separator" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "a/b/c")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "a_b_c")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey is idempotent on an already-flat key" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))

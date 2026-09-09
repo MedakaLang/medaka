@@ -1,5 +1,5 @@
 # META
-source_lines=313
+source_lines=319
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -63,6 +63,12 @@ import support.util.{
 }
 
 -- ── public types ───────────────────────────────────────────────────────────
+
+-- What a codemod run does with the rewritten text.  `CmDry` is the default and
+-- writes nothing, so idempotence is a plain exit-code check; only `CmWrite`
+-- mutates, and only for files that actually change.  The flags that select one
+-- are parsed by the verb in `compiler/driver/medaka_cli.mdk`.
+public export data CodeMode = CmDry | CmWrite | CmStdout
 
 -- A registered codemod.  `mk` parses the codemod-specific CLI arguments and
 -- returns EITHER an error message OR the per-decl transform `Decl -> (Decl,
@@ -321,6 +327,7 @@ declEffectWarn _ _ = []
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DData Public "CodeMode" () ((variant "CmDry" (ConPos)) (variant "CmWrite" (ConPos)) (variant "CmStdout" (ConPos))) ())
 (DData Public "Codemod" () ((variant "Codemod" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "argHelp" (TyCon "String")) (field "mk" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))) (field "warn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))))) ())
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
 (DFunDef false "allCodemods" () (EListLit (EVar "effectLabelsCodemod")))
@@ -403,6 +410,7 @@ declEffectWarn _ _ = []
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DData Public "CodeMode" () ((variant "CmDry" (ConPos)) (variant "CmWrite" (ConPos)) (variant "CmStdout" (ConPos))) ())
 (DData Public "Codemod" () ((variant "Codemod" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "argHelp" (TyCon "String")) (field "mk" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))) (field "warn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))))) ())
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
 (DFunDef false "allCodemods" () (EListLit (EVar "effectLabelsCodemod")))

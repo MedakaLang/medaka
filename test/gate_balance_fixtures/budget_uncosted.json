@@ -1,6 +1,6 @@
 {
   "schema": "gate-cost-baseline/1",
-  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_budget.sh. Hand-written, not ingested. 'lonely' deliberately has no entry; 'unrelated' is only present because an empty 'gates' array is itself a parse error (parseCostBaseline) and is not read by anything in the paired registry.",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_budget.sh. Hand-written, not ingested. 'lonely' deliberately has no entry; 'unrelated' is present so the array is non-empty (parseCostBaseline refuses one that is) and, since clause (d), it also matches an [[gate]] entry in the paired registry with the same low cost, so it stays clean and does not confuse this fixture's clause (a) isolation.",
   "generated": "2026-08-30T00:00:00Z",
   "maxSamples": 9,
   "runs": [],

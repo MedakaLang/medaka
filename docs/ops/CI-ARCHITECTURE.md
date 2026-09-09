@@ -14,7 +14,7 @@ Per-section status — derive the authoritative version from the issues
 | 3.2 generated `ci.yml` | #2177 | BUILT (`ci-gen-drift` is a required context) |
 | 3.3 identity ⊥ scheduling | #2178 | BUILT — derived assignment, area-reported failures, and the neutral executor names |
 | 3.4 graph-scoped project suites | #2179 | BUILT — `medaka gate reach`, preflight-widened locally, and `merge_group`-scoped in `ci.yml` (`detect.project_reach`). The compiler half still never narrows. |
-| 3.5 cost ratchet | #2180 | BUILT. ⚠️ Its `gate-budget` job is NOT in the required-check set (derived from ruleset 18885875, 2026-08-30) — a red budget does not block a merge. `ci-gen-drift` IS required, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; an over-budget one is not. The baseline auto-advance loop is CLOSED as of 2026-09-02 (nightly pushes, the build box's cron lands — see §3.5 "Closing the loop"). |
+| 3.5 cost ratchet | #2180 | BUILT and REQUIRED (sprint cost-governor-on S4, #2596 item 2). `gate-budget` is in the required-check set (ruleset 18885875) — a red budget blocks a merge unless every violation carries a `Gate-Budget-Override: <token>` trailer on the authored commit message. `ci-gen-drift` is required too, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; a brand-new uncosted gate reds **both** checks at once until the nightly ingest gives it a cost sample — `gate budget`'s own clause (a) message names both. `gate-cost`/`gate-balance` are still not required. The baseline auto-advance loop is CLOSED as of 2026-09-02 (nightly pushes, the build box's cron lands — see §3.5 "Closing the loop"). |
 | 3.6 tier-3 charter | #2181 | NOT STARTED |
 
 ---
@@ -330,8 +330,10 @@ GHC's perf-notes model applied to CI cost:
 job (`shard = "other-job"`, same "cannot certify a number it can move" reason as
 `gate-balance`). The override is a `Gate-Budget-Override: <token>` trailer on an AUTHORED
 commit message in the change under test — the one thing a `merge_group` run can always see,
-since it has no PR body. Not yet in the required-checks ruleset, the same state
-`gate-cost`/`gate-balance` are still in — a separate, non-atomic `gh api` edit.
+since it has no PR body. **REQUIRED as of sprint cost-governor-on S4** (#2596 item 2);
+`gate-cost`/`gate-balance` are not. Adding a required context is a `gh api` ruleset edit,
+never something a commit can carry, so the two can never be atomic — derive the live set
+rather than reading any list, here or elsewhere ([W-REQUIRED-CHECKS]).
 
 ⚠️ **The trailer is NOT read with `git log -1` on HEAD** (that was S-5's bug; review finding
 S1-2, fixed by FR-2). `actions/checkout@v4` with no `ref:` checks out a SYNTHETIC merge
