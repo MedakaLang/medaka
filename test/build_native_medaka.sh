@@ -132,6 +132,15 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # outside the LTO unit would have fixed the cache too and cost ~7.7% of interpreter
 # runtime over 3 interleaved reps — the trade the naive-split arm below already lost.
 #
+# ONE BUILD PER WORKTREE IS UN-PARTITIONED BY CONSTRUCTION, and that is not a bug to
+# fix. Stage A always runs the PREVIOUS generation's emitter, so in a worktree whose
+# ./medaka_emitter was built before the `; mdk-module` markers existed, stage A's IR
+# has none. pcg_partition degrades that to a single ThinLTO module, labelled
+# thinlto-nomark-1 in the log and in the build-cache key (it is a different binary
+# from a partitioned one and must not be served as one). The emitter stage A builds
+# from that IR does emit markers, so stage B and every build after it partition
+# normally. A marker that is present but unreadable is still a hard failure.
+#
 # Measured on this box (Debian 13, 12-core/32GB) on 2026-09-08, on the real emitted
 # CLI IR (34.6 MB):
 #   * FULL-MISS BUILD is unmoved by granularity: stage-B link 43.5s at 8 partitions
@@ -269,11 +278,15 @@ fi
 # The job count is deliberately absent: it changes how long the link takes, never
 # what it produces, so folding it in would split the cache for no gain.
 PCG_PARTS_USED=""
+PCG_MODE_USED=""
 if [ -n "$PCG_BIN" ]; then
   PCG_MODE="thinlto-mod-${MEDAKA_CODEGEN_PARTS:-auto}"
 else
   PCG_MODE="plain"
 fi
+# What the build ACTUALLY used. pcg_link overwrites it per input; on the plain path,
+# and before any link has run, it is just $PCG_MODE.
+PCG_MODE_USED="$PCG_MODE"
 
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping (opt-in)"; exit 2; }
 
@@ -527,8 +540,18 @@ cache_tag() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
 # The -O defaults are spelled the same way the two clang invocations spell them, so a
 # key can never claim an optimization level the link did not use.
-EMITTER_KEY="emitter-$(cache_tag "$FP_FULL")-$(cache_tag "${EMITTER_OPT:--O2}")-$(cache_tag "$PCG_MODE")"
-CLI_KEY="medaka-$(cache_tag "$FP_COMPILER")-$(cache_tag "$FP_RUNTIME")-$(cache_tag "${CLI_OPT:--O2}")-$(cache_tag "$PCG_MODE")-$(cache_tag "$BUILD_COMMIT")-$(cache_tag "$BUILD_DATE")"
+# Keyed on the codegen mode the build actually used, which is not always the one
+# chosen up front: marker-less stage-A IR degrades to thinlto-nomark-1 and produces a
+# different binary, so it must not be stored under the name of a partitioned one.
+emitter_key_for() {
+  printf 'emitter-%s-%s-%s' "$(cache_tag "$FP_FULL")" "$(cache_tag "${EMITTER_OPT:--O2}")" "$(cache_tag "$1")"
+}
+EMITTER_KEY="$(emitter_key_for "$PCG_MODE")"
+cli_key_for() {
+  printf 'medaka-%s-%s-%s-%s-%s-%s' "$(cache_tag "$FP_COMPILER")" "$(cache_tag "$FP_RUNTIME")" \
+    "$(cache_tag "${CLI_OPT:--O2}")" "$(cache_tag "$1")" "$(cache_tag "$BUILD_COMMIT")" "$(cache_tag "$BUILD_DATE")"
+}
+CLI_KEY="$(cli_key_for "$PCG_MODE")"
 
 # Each entry is two files: <key>.bin (the binary) and <key>.sha (the digest of exactly
 # those stored bytes). Validation recomputes the digest BEFORE the entry is copied
@@ -704,11 +727,23 @@ trap 'rm -rf "$WORK"' EXIT
 # ---- pcg_partition: cut the emitted IR by SOURCE MODULE ------------------------
 #
 #   pcg_partition <in.ll> <outdir> <n>     -> writes <outdir>/p0 .. p<k-1>,
-#                                             prints k
+#                                             prints "<k> mod" or "<k> nomark"
 #
 # <n> empty means DERIVE k: one partition per module scope, each `impl:` group
 # folded onto the module scope that precedes it, `program` alone at the end. <n>
 # nonzero coalesces to exactly n instead (see MEDAKA_CODEGEN_PARTS).
+#
+# IR WITH NO MARKERS AT ALL degrades to one partition holding the input verbatim,
+# printing "1 nomark", because the caller cannot avoid meeting it: stage A always
+# runs the PREVIOUS generation's emitter, and in every worktree whose
+# ./medaka_emitter predates the markers that emitter is what produces stage A's IR.
+# Failing there would make the first build after this landed a hard error for every
+# developer and every warm CI cache, for one build — stage B, run by the emitter
+# stage A just rebuilt, partitions normally, and so does every build after it.
+#
+# A marker that IS present but unusable stays a hard failure: it means the emitter
+# is producing corrupt IR, and binning by a marker this file cannot read would put
+# entities in the preamble and duplicate them into every partition.
 #
 # The emitter precedes every top-level entity with a `; mdk-module <scope>` comment,
 # where <scope> is a module id (`frontend_lexer`), an impl-group key (`impl:List_eq`)
@@ -763,6 +798,7 @@ pcg_partition() {
   function die(msg) { print "pcg: " msg > "/dev/stderr"; bad = 1; exit 1 }
   function note(s) { if (!(s in sz)) { sz[s] = 0; ord[++nord] = s } }
   function assign(   i, s, tot, mp, tgt, cum, p, cnt) {
+    if (markers == 0) { DEG = 1; NPARTS = 1; part[""] = 0; OF[0] = DIR "/p0"; return }
     if (PARTS == "") {
       # Derived: a partition per module scope. An `impl:` group joins the module
       # before it — impl groups are numerous (337 of the CLI IR s 411 scopes) and
@@ -814,7 +850,12 @@ pcg_partition() {
   # ---- pass 1: scope sizes, symbol owners, and each symbol s external declaration
   NR == FNR {
     if (ind) { sz[cur]++; if ($0 ~ /^\}/) ind = 0; next }
-    if ($0 ~ /^; mdk-module /) { cur = substr($0, 14); markers++; note(cur); next }
+    if ($0 ~ /^; mdk-module($| )/) {
+      cur = substr($0, 14)
+      sub(/^[ \t]+/, "", cur); sub(/[ \t]+$/, "", cur)
+      if (cur == "") die("`; mdk-module` marker with no scope name at line " FNR " — the emitted IR is corrupt")
+      markers++; note(cur); next
+    }
     sz[cur]++
     if ($0 ~ /^define /) {
       ind = 1
@@ -847,8 +888,15 @@ pcg_partition() {
   # ---- pass 2: write each line to its partition (preamble to all of them)
   {
     if (!assigned) { assign(); assigned = 1 }
+    # Degraded: one partition, byte-identical to the input. No linkage promotion and
+    # no synthesized declarations, because nothing crosses a partition boundary.
+    if (DEG) { print > OF[0]; next }
     if (ind) { emit($0); if ($0 ~ /^\}/) ind = 0; next }
-    if ($0 ~ /^; mdk-module /) { cur = substr($0, 14); tp = part[cur]; next }
+    if ($0 ~ /^; mdk-module($| )/) {
+      cur = substr($0, 14)
+      sub(/^[ \t]+/, "", cur); sub(/[ \t]+$/, "", cur)
+      tp = part[cur]; next
+    }
     l = $0
     if (l ~ /^define /) ind = 1
     else if (l ~ /^@/) { sub(/ = private /, " = hidden ", l); sub(/ = internal /, " = hidden ", l) }
@@ -857,14 +905,14 @@ pcg_partition() {
 
   END {
     if (bad) exit 1
-    if (markers == 0) die("input IR carries no `; mdk-module` markers — it was emitted by an emitter that predates them")
+    if (DEG) { print "1 nomark"; exit 0 }
     for (k in ref) {
       split(k, A, SUBSEP); q = A[1] + 0; sym = A[2]
       if (!(sym in owner)) continue
       if (part[owner[sym]] == q) continue
       print decl[sym] > OF[q]
     }
-    print NPARTS
+    print NPARTS " mod"
   }
   ' "$1" "$1"
 }
@@ -913,13 +961,21 @@ pcg_link() {
   rm -rf "$_pdir"
   mkdir -p "$_pdir" || { echo "pcg: cannot create $_pdir" >>"$_perr"; return 1; }
 
-  # PCG_PARTS_USED is how many partitions this input actually yielded — a per-input
-  # number under the derived default, so the caller's log line reads it from here
-  # rather than from $MEDAKA_CODEGEN_PARTS, which is usually empty.
-  PCG_PARTS_USED="$(pcg_partition "$_ll" "$_pdir" "$MEDAKA_CODEGEN_PARTS" 2>>"$_perr")"
+  # PCG_PARTS_USED and PCG_MODE_USED are what this input actually got: both are
+  # per-input (the count under the derived default, the scheme when marker-less IR
+  # degrades), so the caller's log line and its cache key read them from here rather
+  # than from $MEDAKA_CODEGEN_PARTS and $PCG_MODE, which are decided before any IR
+  # exists.
+  _pinfo="$(pcg_partition "$_ll" "$_pdir" "$MEDAKA_CODEGEN_PARTS" 2>>"$_perr")"
+  PCG_PARTS_USED="${_pinfo% *}"
   case "$PCG_PARTS_USED" in
     ''|*[!0-9]*) echo "pcg: module partitioning failed" >>"$_perr"; return 1 ;;
   esac
+  if [ "${_pinfo#* }" = "nomark" ]; then
+    PCG_MODE_USED="thinlto-nomark-1"
+  else
+    PCG_MODE_USED="$PCG_MODE"
+  fi
 
   (
     cd "$_pdir" || exit 1
@@ -1086,9 +1142,16 @@ else
       echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
     fi
   fi
-  echo "stage A: link done ($PCG_MODE${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_A_T0 ))s)."
+  if [ "$PCG_MODE_USED" != "$PCG_MODE" ]; then
+    echo "stage A: this emitter emits no \`; mdk-module\` markers (it predates them), so its IR"
+    echo "         was NOT partitioned — one ThinLTO module, no partition parallelism, and its own"
+    echo "         build-cache key. The emitter this stage just built does emit them, so stage B"
+    echo "         and every later build partition normally."
+    EMITTER_KEY="$(emitter_key_for "$PCG_MODE_USED")"
+  fi
+  echo "stage A: link done ($PCG_MODE_USED${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_A_T0 ))s)."
   mv "$EMIT_NEW" "$EMITTER"
-  echo "stage A: rebuilt $EMITTER from current source ($PCG_MODE, $(( $(date +%s) - STAGE_A_T0 ))s for emit + link)."
+  echo "stage A: rebuilt $EMITTER from current source ($PCG_MODE_USED, $(( $(date +%s) - STAGE_A_T0 ))s for emit + link)."
   cache_put "$EMITTER_KEY" "$EMITTER"
 fi
 
@@ -1198,9 +1261,13 @@ else
       echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
     fi
   fi
-  echo "stage B: link done ($PCG_MODE${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_B_T0 ))s)."
+  if [ "$PCG_MODE_USED" != "$PCG_MODE" ]; then
+    echo "stage B: emitter IR carries no \`; mdk-module\` markers — un-partitioned, own cache key."
+    CLI_KEY="$(cli_key_for "$PCG_MODE_USED")"
+  fi
+  echo "stage B: link done ($PCG_MODE_USED${PCG_PARTS_USED:+, $PCG_PARTS_USED partitions}, $(( $(date +%s) - LINK_B_T0 ))s)."
   mv "$OUT_NEW" "$OUT"
-  echo "stage B: built $OUT ($PCG_MODE, $(( $(date +%s) - STAGE_B_T0 ))s for emit + link)."
+  echo "stage B: built $OUT ($PCG_MODE_USED, $(( $(date +%s) - STAGE_B_T0 ))s for emit + link)."
   cache_put "$CLI_KEY" "$OUT"
 fi
 
