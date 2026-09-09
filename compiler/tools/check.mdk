@@ -41,7 +41,10 @@ import types.typecheck.{
   checkOneErrorsWithRuntime,
   checkModulesEntryReport,
   checkModulesEntryHasErrors,
+  entryReportFromDiags,
+  TcDiag,
 }
+import types.repr.{Scheme}
 
 -- exported so the batch typecheck harness's synthetic entry can pull this
 -- module into a single union closure (does not change its inferred schemes),
@@ -158,6 +161,20 @@ runCheckModules allowInternal trustedMods rtD coreD mods =
   let exWarns = entryExhaust rtD coreD mods
   let report = checkModulesEntryReport rtD coreD mods
   joinNonEmpty exWarns report
+
+-- `runCheckModules` over per-module diagnostics a driver already produced: the same
+-- guard-exhaustiveness pass (AST-only, no typecheck) over the same entry module,
+-- and the same entry report — rendered from the pass the caller already ran instead
+-- of from a second one.  `check`'s multi-module arm reaches the report through here.
+export
+runCheckModulesFromDiags : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  String
+runCheckModulesFromDiags rtD coreD mods perMod =
+  let exWarns = entryExhaust rtD coreD mods
+  joinNonEmpty exWarns (entryReportFromDiags perMod)
 
 -- exit-code predicate analog of checkHasErrors for the multi-module path: a
 -- resolve error OR any type error in the entry module.

@@ -1,5 +1,5 @@
 # META
-source_lines=196
+source_lines=213
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -45,7 +45,10 @@ import types.typecheck.{
   checkOneErrorsWithRuntime,
   checkModulesEntryReport,
   checkModulesEntryHasErrors,
+  entryReportFromDiags,
+  TcDiag,
 }
+import types.repr.{Scheme}
 
 -- exported so the batch typecheck harness's synthetic entry can pull this
 -- module into a single union closure (does not change its inferred schemes),
@@ -163,6 +166,20 @@ runCheckModules allowInternal trustedMods rtD coreD mods =
   let report = checkModulesEntryReport rtD coreD mods
   joinNonEmpty exWarns report
 
+-- `runCheckModules` over per-module diagnostics a driver already produced: the same
+-- guard-exhaustiveness pass (AST-only, no typecheck) over the same entry module,
+-- and the same entry report — rendered from the pass the caller already ran instead
+-- of from a second one.  `check`'s multi-module arm reaches the report through here.
+export
+runCheckModulesFromDiags : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, (List (String, Scheme), List TcDiag, List TcDiag)) ->
+  String
+runCheckModulesFromDiags rtD coreD mods perMod =
+  let exWarns = entryExhaust rtD coreD mods
+  joinNonEmpty exWarns (entryReportFromDiags perMod)
+
 -- exit-code predicate analog of checkHasErrors for the multi-module path: a
 -- resolve error OR any type error in the entry module.
 export
@@ -206,7 +223,8 @@ entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "resolveModulesToLines" false) (mem "resolveModulesToLinesG" false) (mem "singleFileImportErrors" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "checkModulesEntryReport" false) (mem "checkModulesEntryHasErrors" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "checkModulesEntryReport" false) (mem "checkModulesEntryHasErrors" false) (mem "entryReportFromDiags" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "runCheck" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "parse") (EVar "tsrc"))))
 (DTypeSig true "runCheckFromDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
@@ -227,6 +245,8 @@ entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 (DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoExpr (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "runCheckModules" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))))
 (DFunDef false "runCheckModules" ((PVar "allowInternal") (PVar "trustedMods") (PVar "rtD") (PVar "coreD") (PVar "mods")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EApp (EVar "entryExhaust") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "report")))))
+(DTypeSig true "runCheckModulesFromDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyCon "String"))))))
+(DFunDef false "runCheckModulesFromDiags" ((PVar "rtD") (PVar "coreD") (PVar "mods") (PVar "perMod")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EApp (EVar "entryExhaust") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))))
 (DTypeSig true "checkModulesHasErrors" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))))
 (DFunDef false "checkModulesHasErrors" ((PVar "allowInternal") (PVar "trustedMods") (PVar "rtD") (PVar "coreD") (PVar "mods")) (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesToLinesG") (EVar "allowInternal")) (EVar "trustedMods")) (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (arm PWild () (EVar "True"))))))
 (DTypeSig false "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -245,7 +265,8 @@ entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "resolveModulesToLines" false) (mem "resolveModulesToLinesG" false) (mem "singleFileImportErrors" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "checkModulesEntryReport" false) (mem "checkModulesEntryHasErrors" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "checkModulesEntryReport" false) (mem "checkModulesEntryHasErrors" false) (mem "entryReportFromDiags" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "runCheck" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "parse") (EVar "tsrc"))))
 (DTypeSig true "runCheckFromDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
@@ -266,6 +287,8 @@ entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 (DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoExpr (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "runCheckModules" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))))
 (DFunDef false "runCheckModules" ((PVar "allowInternal") (PVar "trustedMods") (PVar "rtD") (PVar "coreD") (PVar "mods")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EApp (EVar "entryExhaust") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "report")))))
+(DTypeSig true "runCheckModulesFromDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyCon "String"))))))
+(DFunDef false "runCheckModulesFromDiags" ((PVar "rtD") (PVar "coreD") (PVar "mods") (PVar "perMod")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EApp (EVar "entryExhaust") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))))
 (DTypeSig true "checkModulesHasErrors" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))))
 (DFunDef false "checkModulesHasErrors" ((PVar "allowInternal") (PVar "trustedMods") (PVar "rtD") (PVar "coreD") (PVar "mods")) (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesToLinesG") (EVar "allowInternal")) (EVar "trustedMods")) (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (arm PWild () (EVar "True"))))))
 (DTypeSig false "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
