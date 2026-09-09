@@ -1,5 +1,5 @@
 # META
-source_lines=43253
+source_lines=43266
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3583,7 +3583,7 @@ emptyDeclEnvs = DeclEnvs {
 -- ⚠️ Must run AFTER the driver's `stampGraphTyOrigins`, for the same reason
 -- `graphMethodExports` must: identity lives on the decls, so an envelope built
 -- from the unstamped tree would carry a different one.  Both current call sites
--- (`checkModulesPreamble`, `elaborateModules`) sit after their driver's stamp.
+-- (`checkModulesPreambleK`, `elaborateModules`) sit after their driver's stamp.
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
   let mods = declEnvModulesFrom 0 (("core", coreDecls) :: modules)
@@ -5859,7 +5859,7 @@ buildImplEnvGo (m :: rest) seq env =
 -- ── ARCH B-2.1-a2 (Stage B sprint): the FLAT arm's `ImplEnv` ─────────────────
 --
 -- `buildImplEnv` above needs an ENVELOPE (`List DeclEnvModule`), which only the
--- graph drivers build (`buildDeclEnvs` ← `checkModulesPreamble` / `elaborateModules`).
+-- graph drivers build (`buildDeclEnvs` ← `checkModulesPreambleK` / `elaborateModules`).
 -- The FLAT path — `checkProgramSeededSplit` → `checkBodyImpl (Flat coreProg)`, reached
 -- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, `lint`'s policy pass,
 -- `snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries via
@@ -8198,7 +8198,7 @@ data CrossRun = CrossRun {
 -- It never BIT because the zero is overwritten before anything dereferences it: the only
 -- readers of `universeDataEnv` sit on the `Module` arm (`registerAllData
 -- crossRun.value.universeDataEnv.value`), and every multi-module entry calls
--- `resetCrossModuleState ()` FIRST (`checkModulesPreamble`, `elaborateModules`), which
+-- `resetCrossModuleState ()` FIRST (`checkModulesPreambleK`, `elaborateModules`), which
 -- replaces the whole poisoned bundle once `initialEnv` is properly set.  That is luck, not
 -- design — native's failure mode is a SILENT zero where wasm traps loudly, which is the
 -- only reason #543 was noticed at all.  The general fix (an emitter-side eager-reachability
@@ -9654,7 +9654,7 @@ perRun = Ref (freshPerRun ())
 -- every field, so the set that resets == the set in PerRun, enforced by the constructor.
 -- #80/#201: resetState does NOT (re-)seed effect domains.  effectDomains is now owned by
 -- populateEffectDomains, called ONCE per compile over the WHOLE import graph
--- (checkProgramSeededSplit for the flat path; checkModulesPreamble / elaborateModules driver
+-- (checkProgramSeededSplit for the flat path; checkModulesPreambleK / elaborateModules driver
 -- preambles for the multi-module paths).  A per-module re-seed here would wipe module A's
 -- declared effect domains before module B is checked — a module using an effect declared in A
 -- would then see only builtins.  effectDomains has exactly ONE writer (populateEffectDomains →
@@ -10461,7 +10461,7 @@ ppSchemeNamed n s =
 -- `prelude ++ buffer`, so `println` renders `Display a => a -> <IO> Unit`.  On the
 -- MODULE arm each module gets its own `resetState`, and the prelude's obligations
 -- are snapshotted out to `crossRun.coreSchemeObligationsRef` by
--- `checkModulesPreamble` — the same name-keyed store `declaredCrossModuleObls`
+-- `checkModulesPreambleK` — the same name-keyed store `declaredCrossModuleObls`
 -- lookup (2) already treats as the source-exact home of a prelude name's context.
 -- Rendering a Module-arm prelude scheme through plain `ppSchemeNamed` therefore
 -- DROPS the context (MEASURED: 34 of the 125 empty-prefix completions on a bare
@@ -22558,7 +22558,7 @@ pushMatchWarningOnceAt code loc msg help =
 -- module's own desugared decls as `foldModules` holds them.  `ieRowsOwnedBy ordHere`
 -- returns the rows `implRowsOf` built from `demDecls` at that ordinal.  Those are the
 -- same list VALUE: `checkModulesDiags` stamps once (`stampGraphTyOrigins`) and hands
--- the SAME `modules` to `checkModulesPreamble` → `buildDeclEnvs` and to `foldModules`,
+-- the SAME `modules` to `checkModulesPreambleK` → `buildDeclEnvs` and to `foldModules`,
 -- and `foldModules` passes each `(mid, prog)` pair's `prog` to the worker verbatim —
 -- no transform on either side.  Harvest equality holds too: `implDeclFact` and the
 -- retired `cohImplsOfMid` match arm-for-arm (unwrap `DAttrib`, take `DImpl`, drop
@@ -28257,7 +28257,7 @@ checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 -- this is byte-for-byte the old checkProgramSeeded (that is the multi-module discovery,
 -- elaborateDict, and probe-entry path).
 -- #1110 flat-identity: the FLAT half of the resolve→typecheck channel.
--- `checkModulesPreamble` and `elaborateModules` cover every graph driver; this is
+-- `checkModulesPreambleK` and `elaborateModules` cover every graph driver; this is
 -- the one remaining seam a program reaches typecheck through without a module graph
 -- (`medaka check` on a no-import file arrives via checkToLinesWithRuntime).
 --
@@ -28421,7 +28421,7 @@ checkBodyImpl seed mode prog0 =
     Module _ _ implDecls => prog ++ implDecls
   driverState.value.superDeclsRef := superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
-  -- preamble (checkModulesPreamble / elaborateModules) populating ONCE over the whole
+  -- preamble (checkModulesPreambleK / elaborateModules) populating ONCE over the whole
   -- import graph — a per-module populate would wipe another module's domains.
   let _ = match mode
     Flat _ =>
@@ -37745,7 +37745,7 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
 -- class, up to `no impl of method … for type …` on a valid program and a SIGSEGV variant.
 -- Adding shadow-hood is the pre-existing behaviour.  So an ABSENT index answers True for
 -- every name rather than False: `graphIfaceMethodsRef` is written unconditionally at both
--- Module-mode driver entries (`checkModulesPreamble`, `elaborateModules` — the conjunction
+-- Module-mode driver entries (`checkModulesPreambleK`, `elaborateModules` — the conjunction
 -- stated in full on `graphMethodExports`, which this ref is written beside), and a driver
 -- that ever omits that write must degrade to today's graph-global answer, not to "nothing
 -- is a shadow anywhere".
@@ -38572,7 +38572,7 @@ reexportedMethodsOf _ _ = []
 -- `depExportsMethodIdent`.  What makes that safe is BOTH of:
 --
 --   (a) UNCONDITIONAL WHOLE-VALUE OVERWRITE AT EVERY Module-MODE DRIVER ENTRY.  The two
---       entries are `checkModulesPreamble` and `elaborateModules`, each doing
+--       entries are `checkModulesPreambleK` and `elaborateModules`, each doing
 --       `setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)`
 --       over THAT compile's graph.  Never `omInsert`, never a merge — so compile N's rows
 --       cannot reach compile N+1.  This half is NECESSARY: `freshDriverState` initialises
@@ -38592,7 +38592,7 @@ reexportedMethodsOf _ _ = []
 -- is spelled out at `checkModuleFullDiags` as well.
 --
 -- ⚠️ Must run on the STAMPED graph: identity comes from `DInterface.ifaceOrigin`, which
--- `stampGraphTyOrigins` writes.  Both call sites (`checkModulesPreamble`,
+-- `stampGraphTyOrigins` writes.  Both call sites (`checkModulesPreambleK`,
 -- `elaborateModules`) sit after their driver's stamp.
 --
 -- 🚨 THERE IS NO `pub` FILTER, so "exports" is the WRONG word for a row and this comment
@@ -38892,7 +38892,7 @@ narrowRowToNamed named r
 -- `depExportsCtorIdent`.  Its SAFETY PROPERTY is the conjunction stated in full on
 -- `graphMethodExports` and it is the SAME conjunction, not a similar one:
 --   (a) unconditional whole-value overwrite at EVERY Module-mode driver entry —
---       `checkModulesPreamble` and `elaborateModules`, each carrying the line
+--       `checkModulesPreambleK` and `elaborateModules`, each carrying the line
 --       `setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)`;
 --   (b) no reset point in between — `DriverState` has none, which is why this ref lives
 --       there and not on `CrossRun` (`resetCrossModuleState` would clear it between the
@@ -39944,7 +39944,7 @@ graphAmbigValues mid =
 -- first graph's answers.  This table is instead a FIELD of the value it is a function of.
 -- `deDefiners` is derived from `mods` and from nothing else, in the same constructor, so
 -- it cannot outlive its input: every write of `declEnvsRef` (both Module-mode driver
--- entries write it unconditionally — see `checkModulesPreamble` and `elaborateModules`)
+-- entries write it unconditionally — see `checkModulesPreambleK` and `elaborateModules`)
 -- replaces the whole envelope, table included, and a driver that never calls
 -- `buildDeclEnvs` reads `emptyDeclEnvs`' empty one.  There is no state to forget to clear.
 --
@@ -40254,7 +40254,7 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 -- identical, greppable `#1110` line at the head of each caller below.
 -- ── core-check memo ──────────────────────────────────────────────────────────
 -- The prelude (runtime + core) is typechecked at the head of EVERY driver entry
--- (`checkModulesPreamble` below): `medaka check`, the LSP on each didChange, and
+-- (`checkModulesPreambleK` below): `medaka check`, the LSP on each didChange, and
 -- the playground on each keystroke all pay it again for the same two decl lists.
 -- Measured natively, a warm single-file analyze is ~52ms of which ~50ms is this
 -- pass.  So the core pass is memoized — keyed by the prelude trees' identity,
@@ -40426,13 +40426,6 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
         }
     coreSchemes
 
-checkModulesPreamble : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme))
-checkModulesPreamble runtimeDecls coreDecls modules =
-  checkModulesPreambleK None runtimeDecls coreDecls modules
-
 -- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
 -- `coreDecls` (see the core-check memo above); `None` = unkeyed, no memo.
 checkModulesPreambleK : Option (Int, Int) ->
@@ -40455,7 +40448,7 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- `omEmpty`, so a driver that does not write it reads an empty index and every candidate
   -- misses — which IS F1's symptom.  The writer set is therefore a NECESSARY conjunct, not
   -- "the wrong question": the two Module-mode driver entries that must carry this line are
-  -- `checkModulesPreamble` (here) and `elaborateModules`.
+  -- `checkModulesPreambleK` (here) and `elaborateModules`.
   driverState.value.graphMethodExportsRef :=
     graphMethodExports coreDecls modules
   -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
@@ -40566,12 +40559,32 @@ checkModules : List Decl ->
   List (String, List Decl) ->
   List (String, List (String, Scheme))
 checkModules runtimeDecls coreDecls0 modules0 =
+  checkModulesK None runtimeDecls coreDecls0 modules0
+
+-- Keyed form of `checkModules`.  `preludeKey` is the desugar-cache generation pair
+-- identifying `runtimeDecls`/`coreDecls0`; passing it lets `checkCoreMemoized` hit
+-- the process-wide core memo instead of re-typechecking AND re-solving the whole
+-- prelude on every call.  `None` reproduces the unkeyed behavior exactly.
+--
+-- #2719 (a1): the LSP hover/completion driver (`projectEntrySchemes`) used the
+-- unkeyed `checkModules`, so `coreCheckMemoHit None` never hit and every hover paid
+-- a cold prelude check-and-solve.  Storing a memo entry from HERE cannot poison a
+-- later analyze: the miss arm computes the identical thing either way
+-- (`checkModuleFull` over core, then `checkGraphFinish`), and this driver's own
+-- worker (`cmCheckWorker`) queues no stamping context, so no drain interacts.
+export
+checkModulesK : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List (String, Scheme))
+checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
-  -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
+  -- unstamped tree.  See `checkModulesPreambleK` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
-    checkModulesPreamble runtimeDecls coreDecls modules
+    checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
   -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param), so
   -- both concats are pure waste here — the residual O(modules^2) the PR-A review found.
@@ -40623,7 +40636,7 @@ checkModules runtimeDecls coreDecls0 modules0 =
 -- `run`/`build` reported a type error).  For it the precondition is not "clear before the
 -- first module" but **"OVERWRITE with this run's graph before the first module"**:
 --     setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
--- which `checkModulesPreamble` and `elaborateModules` both do.  ⚠️ The failure modes differ
+-- which `checkModulesPreambleK` and `elaborateModules` both do.  ⚠️ The failure modes differ
 -- in KIND, which is why this is worth spelling out rather than folding into the list above:
 -- skipping `resetCrossModuleState` leaks the previous run's universe; skipping THIS write
 -- leaves the previous run's INDEX in place, and a stale index can pick a wrong interface
@@ -40994,7 +41007,7 @@ checkModulesDiagsK : Option (Int, Int) ->
 checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
-  -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
+  -- unstamped tree.  See `checkModulesPreambleK` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
@@ -41116,7 +41129,7 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
   (schemes, errs, warns)
 
 -- S-full-env-scheme-entry (#1116): the SAME driver, but ALSO returning the
--- prelude's own schemes — the `coreSchemes` `checkModulesPreamble` already
+-- prelude's own schemes — the `coreSchemes` `checkModulesPreambleK` already
 -- computes and this function has always had in scope but dropped on the floor.
 -- Nothing else changes: `checkModulesEntryFull` above is this minus the first
 -- component, so every existing caller is byte-identical.
@@ -41158,7 +41171,7 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
       _ => (preludeKey, coreDecls0, modules0)
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
-  -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
+  -- unstamped tree.  See `checkModulesPreambleK` for why it is here and not there.
   let (coreDecls, modules) =
     stampGraphTyOrigins effectiveCoreDecls0 effectiveModules0
   let (runtimeSeed, coreSchemes) =
@@ -41324,7 +41337,7 @@ checkModulesEntryHasErrors runtimeDecls coreDecls modules =
 -- same way `elaborateOne` runs it through `elaborateModules`.  `checkModulesEntryFull`
 -- is the Diags-returning whole-graph driver `elaborateModules` mirrors on the
 -- scheme/diagnostic tree (see the file-header "TWO DRIVERS" note and
--- `checkModulesPreamble`'s per-entry doc) — it already performs BOTH halves of the
+-- `checkModulesPreambleK`'s per-entry doc) — it already performs BOTH halves of the
 -- two-part safety property a standalone `Module`-arm caller must uphold
 -- (`resetCrossModuleState` AND the unconditional `graphMethodExportsRef`/
 -- `graphIfaceMethodsRef`/`graphCtorExportsRef`/`mangledFunDefsPresentRef`/`declEnvsRef`
@@ -41593,7 +41606,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   driverState.value.matchOracle := buildOracle []
   let _ = resetCrossModuleState ()
   -- #1111 A-2.5b: the graph's method-identity index — the identical line
-  -- `checkModulesPreamble` carries, for the one Module-mode driver that does not use
+  -- `checkModulesPreambleK` carries, for the one Module-mode driver that does not use
   -- that preamble.  See `graphMethodExports`.
   --
   -- The ref is on `driverState`, which neither `resetCrossModuleState` nor the
@@ -41608,7 +41621,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- including the reset note above, which it inherits verbatim (same `driverState`).
   driverState.value.graphCtorExportsRef := graphCtorExports coreDecls modules
   -- #1112 A-3.1: the whole-graph declaration envelope — the identical line
-  -- `checkModulesPreamble` carries, for the driver that does not use that preamble.
+  -- `checkModulesPreambleK` carries, for the driver that does not use that preamble.
   -- It inherits the reset note above for the same reason the three peers do: the
   -- ref is on `driverState`, which `resetCrossModuleState` does not touch.
   let declEnvs = buildDeclEnvs coreDecls modules
@@ -41664,7 +41677,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let ms = markSetsOf coreDecls modules allDecls
   let _ = setDictEligible (moduleUserFnNames modules)
   driverState.value.promotionHarvestRef := []
-  -- #1280: the EMIT arm's copy of `checkModulesPreamble`'s line — the same scope,
+  -- #1280: the EMIT arm's copy of `checkModulesPreambleK`'s line — the same scope,
   -- for the driver that does not use that preamble.  This is the seam `run` and
   -- the separate `medaka_emitter` process share, so an extern head stamped here
   -- and not there would be a fresh check≠build divergence.
@@ -49408,14 +49421,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "restoreCoreDriverFields" ((PVar "d")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef")) (EFieldAccess (EFieldAccess (EVar "d") "builtinExternNamesRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EFieldAccess (EVar "d") "superDeclsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EFieldAccess (EFieldAccess (EVar "d") "standaloneValuesRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EVar "d") "methodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EFieldAccess (EFieldAccess (EVar "d") "sigNameSetRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EFieldAccess (EFieldAccess (EVar "d") "sigTyMapRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EFieldAccess (EFieldAccess (EVar "d") "matchOracle") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EFieldAccess (EFieldAccess (EVar "d") "matchWarnings") "value")))))
 (DTypeSig false "checkCoreMemoized" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "checkCoreMemoized" ((PVar "key") (PVar "coreDecls") (PVar "runtimeSeed")) (EMatch (EApp (EVar "coreCheckMemoHit") (EVar "key")) (arm (PCon "Some" (PVar "m")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "m") "ccmCrossRun")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "copyGraphRun") (EFieldAccess (EVar "m") "ccmGraphRun")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "restoreCoreDriverFields") (EFieldAccess (EVar "m") "ccmDriver"))) (DoExpr (EFieldAccess (EVar "m") "ccmCoreSchemes")))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "coreSchemes") PWild) (EApp (EApp (EApp (EVar "checkModuleFull") (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls"))) (DoLet false false PWild (EApp (EVar "checkGraphFinish") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "snd") (EVar "kv"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))) (EVar "omEmpty")))) (DoLet false false PWild (EMatch (EVar "key") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "k")) () (EApp (EApp (EVar "setRef") (EVar "coreCheckMemoRef")) (EApp (EVar "Some") (ERecordCreate "CoreCheckMemo" ((fa "ccmKey" (EVar "k")) (fa "ccmCoreSchemes" (EVar "coreSchemes")) (fa "ccmCrossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "crossRun") "value"))) (fa "ccmGraphRun" (EApp (EVar "copyGraphRun") (EFieldAccess (EVar "graphRun") "value"))) (fa "ccmDriver" (EApp (EVar "copyDriverState") (EFieldAccess (EVar "driverState") "value")))))))))) (DoExpr (EVar "coreSchemes"))))))
-(DTypeSig false "checkModulesPreamble" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "checkModulesPreamble" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")))
 (DTypeSig false "checkModulesPreambleK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModulesPreambleK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EVar "resetCrossModuleState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef")) (EApp (EApp (EVar "graphMethodExports") (EVar "coreDecls")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef")) (EApp (EApp (EVar "graphIfaceMethods") (EVar "coreDecls")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphCtorExportsRef")) (EApp (EApp (EVar "graphCtorExports") (EVar "coreDecls")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledFunDefsPresentRef")) (EApp (EVar "graphCarriesMangledFunDefs") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EVar "buildDeclEnvs") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false PWild (EApp (EVar "populateEffectDomains") (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "markSetsOf") (EVar "coreDecls")) (EVar "modules")) (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EListLit))) (DoLet false false (PVar "coreSchemes") (EApp (EApp (EApp (EVar "checkCoreMemoized") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "runtimeSeed"))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EApp (EApp (EApp (EVar "Module") (EVar "mid")) (EVar "accData")) (EListLit))) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
 (DTypeSig true "checkModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
-(DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
+(DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
+(DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
+(DFunDef false "checkModulesK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig false "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
 (DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "cmDiagsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
@@ -55847,14 +55860,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "restoreCoreDriverFields" ((PVar "d")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef")) (EFieldAccess (EFieldAccess (EVar "d") "builtinExternNamesRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EFieldAccess (EVar "d") "superDeclsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EFieldAccess (EFieldAccess (EVar "d") "standaloneValuesRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EVar "d") "methodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EFieldAccess (EFieldAccess (EVar "d") "sigNameSetRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EFieldAccess (EFieldAccess (EVar "d") "sigTyMapRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EFieldAccess (EFieldAccess (EVar "d") "matchOracle") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EFieldAccess (EFieldAccess (EVar "d") "matchWarnings") "value")))))
 (DTypeSig false "checkCoreMemoized" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "checkCoreMemoized" ((PVar "key") (PVar "coreDecls") (PVar "runtimeSeed")) (EMatch (EApp (EVar "coreCheckMemoHit") (EVar "key")) (arm (PCon "Some" (PVar "m")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "m") "ccmCrossRun")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "copyGraphRun") (EFieldAccess (EVar "m") "ccmGraphRun")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "restoreCoreDriverFields") (EFieldAccess (EVar "m") "ccmDriver"))) (DoExpr (EFieldAccess (EVar "m") "ccmCoreSchemes")))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "coreSchemes") PWild) (EApp (EApp (EApp (EVar "checkModuleFull") (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls"))) (DoLet false false PWild (EApp (EVar "checkGraphFinish") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "snd") (EVar "kv"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))) (EVar "omEmpty")))) (DoLet false false PWild (EMatch (EVar "key") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "k")) () (EApp (EApp (EVar "setRef") (EVar "coreCheckMemoRef")) (EApp (EVar "Some") (ERecordCreate "CoreCheckMemo" ((fa "ccmKey" (EVar "k")) (fa "ccmCoreSchemes" (EVar "coreSchemes")) (fa "ccmCrossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "crossRun") "value"))) (fa "ccmGraphRun" (EApp (EVar "copyGraphRun") (EFieldAccess (EVar "graphRun") "value"))) (fa "ccmDriver" (EApp (EVar "copyDriverState") (EFieldAccess (EVar "driverState") "value")))))))))) (DoExpr (EVar "coreSchemes"))))))
-(DTypeSig false "checkModulesPreamble" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "checkModulesPreamble" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")))
 (DTypeSig false "checkModulesPreambleK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModulesPreambleK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EVar "resetCrossModuleState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef")) (EApp (EApp (EVar "graphMethodExports") (EVar "coreDecls")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef")) (EApp (EApp (EVar "graphIfaceMethods") (EVar "coreDecls")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphCtorExportsRef")) (EApp (EApp (EVar "graphCtorExports") (EVar "coreDecls")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledFunDefsPresentRef")) (EApp (EVar "graphCarriesMangledFunDefs") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EVar "buildDeclEnvs") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false PWild (EApp (EVar "populateEffectDomains") (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "markSetsOf") (EVar "coreDecls")) (EVar "modules")) (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EListLit))) (DoLet false false (PVar "coreSchemes") (EApp (EApp (EApp (EVar "checkCoreMemoized") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "runtimeSeed"))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EApp (EApp (EApp (EVar "Module") (EVar "mid")) (EVar "accData")) (EListLit))) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
 (DTypeSig true "checkModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
-(DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
+(DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
+(DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
+(DFunDef false "checkModulesK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig false "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
 (DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "cmDiagsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
