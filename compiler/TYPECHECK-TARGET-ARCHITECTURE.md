@@ -624,7 +624,10 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    set as it stands — the bare set, every promotion made by an earlier module
    (`promotionHarvestRef`, which already crossed module boundaries; §E clause (2) needed
    nothing new) or an earlier group of this module, and the module's own import aliases
-   of those names (`beginModuleMarking`).  Resolve's binding-id stamp then runs over the
+   of those names (`beginModuleMarking`; core, which imports nothing, is therefore no
+   longer marked with every user module's alias locals as the graph-wide set had it — a
+   narrowing in the correct direction, inert on the def side since `dictArityOf` reads
+   the per-module-scoped slot table).  Resolve's binding-id stamp then runs over the
    marked clauses of that group alone (`stampTopScope`/`stampClauseWith`, the two halves
    of `stampBindingIds`), so inference reads the stamped twin and the module's returned
    tree is the marked, unstamped one every downstream consumer already reads.  The one

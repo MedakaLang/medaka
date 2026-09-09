@@ -69,7 +69,7 @@ registerData	Decl	1/15
 registerMethodIfaceParamsDecl	Decl	2/15
 renderCallArg	Expr	9/41
 returnPosOfDecl	Decl	1/15
-rewriteArgScoped	Expr	34/41
+rewriteArgScoped	Expr	33/41
 rewriteBinopExpr	Expr	3/41
 rewriteRPDict	Expr	1/41
 rewriteRPDictArg	Expr	1/41

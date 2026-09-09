@@ -1,5 +1,5 @@
 # META
-source_lines=43245
+source_lines=43253
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -6669,8 +6669,8 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- 🚨 THE `DL` MEASUREMENT §9.5 OWES — DISCHARGED, not cited-and-skipped.  A-3.4's
 -- own block above says A-3.2/A-3.3 "must measure their own projections; they
 -- may not cite 'DL is discharged'".  This unit's projection over `demDecls` is
--- prePass-INVARIANT, so there is nothing for the elaborate path's
--- `prePassModulePairArg` rewrite to disagree with: `prePassDeclScoped`'s
+-- prePass-INVARIANT, so there is nothing for the schedule's mark of the tail
+-- declarations (`markTailDecls`) to disagree with: `prePassDeclScoped`'s
 -- `DInterface` arm rewrites only `methods`, via `prePassIfaceMethodScoped`,
 -- which itself rewrites only a method's `MethodDefault` BODY (the `Some (…, e)`
 -- arm's `e`) — never `n`/`ty`, and the `None` (no default) arm is untouched
@@ -8306,13 +8306,16 @@ consSiteFn fn x idx = omInsert fn (x :: sitesFor fn idx) idx
 sitesFor : String -> OrdMap (List a) -> List a
 sitesFor fn idx = optionOr [] (omLookup fn idx)
 
--- #194: cross-module accumulator for one elaboration sweep's direct promotions.
--- resetState clears promotedRef per module, so elabHarvestWorker unions each
--- module's promotedRef.value into here right after that module's elabModuleStamp
--- (before the next module's resetState wipes it).  `elabPromotionFixpoint` reads it
--- after each sweep: an empty delta over the grown set ends the fixpoint, anything
--- else discards the sweep and re-runs with the union.  Set to [] by `elabSweep`
--- before each sweep; NOT touched by resetState.
+-- The graph's promoted names so far, in load order.  `resetState` clears
+-- `promotedRef` per module, so `elabHarvestWorker` unions each module's
+-- `promotedRef.value` into here right after that module's `elabModuleStamp` (before
+-- the next module's `resetState` wipes it).  Its reader is `beginModuleMarking`: a
+-- module's dict-name set is the bare set plus THIS list, which is what lets one
+-- sweep mark a promoted callee's cross-module call sites (ARCH §E).  Cleared at
+-- every Module-arm driver entry (`elaborateModules`, `checkModulesPreambleK`) so an
+-- earlier elaboration in the process cannot leak promoted names into a later mark
+-- set; NOT touched by `resetState`.  `elaborateModules` reads it once more at the
+-- end, for the set `dictPass` prepends dict params over (`markDictNames`).
 
 -- O(log n) membership index of dictEligibleRef.  #415 item 3: DERIVED from the list by
 -- `setDictEligible`, the single writer of both — not mirrored at each set site, so the
@@ -8616,7 +8619,7 @@ typeErrorsSticky = Ref False
 -- rather than merely THAT it was armed — it is what `elaborateModules` returns as its
 -- residual, each entry with its own `Loc`.  Written only by `recordTypeError`, cleared
 -- only by `resetTypeErrorsSticky`, and rolled back wherever `typeErrorsSticky` is
--- (`elabPromotionFixpoint`) — the same pairing obligation the detection counter states.
+-- (`checkGraphFinish`) — the same pairing obligation the detection counter states.
 typeErrorsStickyDiags : Ref (List (String, TcDiag))
 typeErrorsStickyDiags = Ref []
 
@@ -8690,10 +8693,10 @@ hadTypeErrors _ = !typeErrorsSticky
 -- ⚠️ ONE standing obligation, and it is not discharged here: anywhere the channel is
 -- ROLLED BACK, this counter must be rolled back WITH it, or a region straddling the
 -- rollback would see a detection that no longer has a diagnostic behind it.  No site
--- rolls the channel back within one `perRun` lifetime today: `elabPromotionFixpoint`
+-- rolls the channel back within one `perRun` lifetime today: `checkGraphFinish`
 -- rolls back only the two cells that OUTLIVE a module (`typeErrorsSticky` and its
--- message list) and lets the next sweep's `resetState` re-mint the rest.  Any future
--- rollback of `typeErrors` owes the same pairing.
+-- message list), around the graph-end drain.  Any future rollback of `typeErrors`
+-- owes the same pairing.
 --
 -- ⚠️ The funnel is not cosmetic.  Before it there were SIX push sites, not the five
 -- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
@@ -9067,9 +9070,8 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- whole-graph resolve pass (#2548) can read them at quiescence, and the two counters
 -- that keep every tyvar/effvar id unique across the graph so an entry recorded in one
 -- module can never alias one recorded in another.  Minted once per graph by
--- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble,
--- and each sweep of `elabPromotionFixpoint`) and from `checkBodyImpl`'s Flat arm (a
--- loader-less driver IS its whole graph).
+-- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble)
+-- and from `checkBodyImpl`'s Flat arm (a loader-less driver IS its whole graph).
 --
 -- The channels are still DRAINED PER MODULE today, by the stamper sequence in
 -- `elabModuleStamp` / `elaborateDict`, and that drain must see exactly this module's
@@ -11725,7 +11727,8 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
 -- dispatches a method in ARGUMENT position (`f s = display s`) never
 -- surfaces its inferred constraint to inferredConstraintIds → never gets
 -- promoted → no leading dict param on the build path → dict word 0 (SIGSEGV/
--- silent).  Inert unless promotion (`elabPromotionFixpoint`) consumes it.
+-- silent).  Inert unless promotion (`registerInferredConstraints`, whose result the
+-- schedule marks with) consumes it.
 
 -- C5: queue a standalone-shadow method occurrence's discriminating-arg mono cell so
 -- resolveRLocalSites can stamp RLocal once inference grounds the receiver.  Only
@@ -11856,9 +11859,9 @@ argDispatchOf name =
 --     colliding name maps to; it does not NARROW the key set.  So this reader's domain
 --     is a SUPERSET of the retired bare tables' domain, not a subset of it — the
 --     direction that makes the fall-back dead rather than load-bearing.
---   * `argNames`' consumer was ALREADY scoped: `prePassModulePairArg` hands
+--   * `argNames`' consumer was ALREADY scoped: `moduleMarkCtx` keeps only
 --     `filterList keep argNames` (keep = `nameableIfaceMethodSet` of the module's own
---     decls) to `prePassDictArg`, so a name this module cannot name is never marked
+--     decls) for the group marker, so a name this module cannot name is never marked
 --     `EMethodAt` and never reaches here.
 --   * MEASURED, panic-instrumented, before the edit: across 327 programs
 --     (`shadow_fixtures`, `import_order_fixtures`, `must_fail_fixtures`) on `check`,
@@ -20507,18 +20510,9 @@ rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
   | omHasKey n an && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
   | omHasKey n dn && not (omHasKey n bound) = mintDictAt onDict n
   | otherwise = EVar n
--- An occurrence resolve has already stamped with its binding id (`stampBindingIds`
--- runs before the schedule marks a group).  The same four arms, on the same name:
--- a marked node never carried a binding id (the whole-tree pre-pass marked before
--- resolve stamped), so dropping the id here yields the tree that order produced.
-rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVarId n id)
-  | not (omHasKey n bound) && isSome (lookupAssoc n sm) = match lookupAssoc n sm
-    Some bare => EMethodAt bare n (mintMethodCell n)
-    None => EVarId n id
-  | omHasKey n rp && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n an && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n dn && not (omHasKey n bound) = mintDictAt onDict n
-  | otherwise = EVarId n id
+-- No `EVarId` arm: every marker runs BEFORE resolve's binding-id stamp (the Flat
+-- arm's whole-program pre-pass, and the schedule's per-group `markGroupClauses` →
+-- `stampGroupClauses`), so a stamped occurrence never reaches this rewrite.
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
   ELam ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
@@ -29461,8 +29455,8 @@ inferDefaultMethods env iface dscope typarams (m :: rest) =
 -- union-find state that `defaultBodyLocalNum` reads below — its job (#873) is grounding
 -- body-local `Num` vars so the right impl is selected — so skipping it moves GROUNDING,
 -- hence dispatch, not just what prints.  On the ordinary path that is harmless because
--- a detection here means the program is rejected anyway; inside a non-final sweep of
--- `elabPromotionFixpoint`, whose diagnostics are rolled back, that premise is
+-- a detection here means the program is rejected anyway; across the check drivers'
+-- graph-end drain, whose diagnostics `checkGraphFinish` rolls back, that premise is
 -- unavailable (see there).
 -- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
 -- diagnostic list (issue 1146).
@@ -37797,7 +37791,7 @@ nameableIfaceShadows prog names
 -- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and EVERY filter in the
 -- mark pass read THIS set.  Named rather than counted, because a count rots silently and
 -- this sentence already did (it said "all three" for a week after `rpNames` became the
--- fourth): `prePassModulePairArg` filters `rpNames`, `shadowNames` (through
+-- fourth): `moduleMarkCtx` filters `rpNames`, `shadowNames` (through
 -- `shadowBareName`), `argNames` and `shadowMap` — its own `otherwise` arm enumerates them
 -- against what `rewriteArgScoped` can turn into an `EMethodAt`.  S1-NS (b) requires
 -- shadow-hood to be a superset of dispatch
@@ -41602,21 +41596,20 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- `checkModulesPreamble` carries, for the one Module-mode driver that does not use
   -- that preamble.  See `graphMethodExports`.
   --
-  -- This driver runs the `Module` arm once per sweep of `elabPromotionFixpoint`, and
-  -- every sweep after the first begins with another `resetCrossModuleState ()`.  This
-  -- one write covers all of them ONLY because the ref is on `driverState`, which that
-  -- reset does not touch (F1).
+  -- The ref is on `driverState`, which neither `resetCrossModuleState` nor the
+  -- per-module `resetState` touches (F1), so this one write outlives every reset
+  -- the sweep below performs.
   driverState.value.graphMethodExportsRef :=
     graphMethodExports coreDecls modules
   -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
   -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
   driverState.value.graphIfaceMethodsRef := graphIfaceMethods coreDecls modules
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
-  -- including the two-sweep note above, which it inherits verbatim (same `driverState`).
+  -- including the reset note above, which it inherits verbatim (same `driverState`).
   driverState.value.graphCtorExportsRef := graphCtorExports coreDecls modules
   -- #1112 A-3.1: the whole-graph declaration envelope — the identical line
   -- `checkModulesPreamble` carries, for the driver that does not use that preamble.
-  -- It inherits the two-sweep note above for the same reason the three peers do: the
+  -- It inherits the reset note above for the same reason the three peers do: the
   -- ref is on `driverState`, which `resetCrossModuleState` does not touch.
   let declEnvs = buildDeclEnvs coreDecls modules
   driverState.value.declEnvsRef := declEnvs
@@ -41741,9 +41734,11 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- `Monoid a => …`) is discovered + registered in promotedRef/funConstraintsRef/
 -- activeDictVars, and the promoted names join the dict-name set so their call sites
 -- are marked EDictAt (caller supplies the dict ARGUMENT) and their defs get the
--- leading dict PARAM.  Since #2543 the discovery is `elabPromotionFixpoint`, a
--- fixpoint over the real per-module sweep; the joint-flattened Flat-arm scratch pass
--- it replaced survives only in `elaborateDict`'s single-file `discoverPromoted`.
+-- leading dict PARAM.  The discovery is `registerInferredConstraints` at each
+-- group's close, and the schedule marks with its result (`markRecursiveOccurrences`
+-- for the group's own occurrences, `beginModuleMarking` for every later group and
+-- module); the joint-flattened Flat-arm scratch pass survives only in
+-- `elaborateDict`'s single-file `discoverPromoted`.
 
 -- E6: dict-name set for the `=>`-constrained-function layer, mirroring the
 -- single-file emit driver's assembly (llvm_emit_typed_main.runEmit): prelude
@@ -42895,9 +42890,8 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 --
 -- The route-time diagnostics the drain raises are NOT reported by a check driver,
 -- and do not arm the sticky gate here (`run`'s multi-module arm reads
--- `hadTypeErrors` right after its check pass): the sticky cells are rolled back
--- across the drain exactly as `elabPromotionFixpoint` rolls a discarded sweep
--- back.  On the elaborate side they stay live and `elaborateModules` returns them
+-- `hadTypeErrors` right after its check pass): the sticky cells are saved before
+-- the drain and restored after it.  On the elaborate side they stay live and `elaborateModules` returns them
 -- as its residual.  They are not a verdict yet: a resolver rejects as ambiguous a
 -- `Num` literal a test/prop body never defaulted (the D1 quiescence step #2646
 -- names as owed) and `panic "…"` (#2315), and re-unifies at a site the obligation
@@ -42961,7 +42955,7 @@ evValueOf (EvRoutes rs) = EvMany !rs
 --
 -- `msMarkRpNames` (the unsplit set: return-position + method-constrained methods +
 -- the graph-wide standalone shadows) is what CORE is marked with; the split halves
--- `msMarkSharedNames`/`msGraphShadowNames` let `prePassModulePairArg` scope the
+-- `msMarkSharedNames`/`msGraphShadowNames` let `moduleMarkCtx` scope the
 -- shadow component per user module (#1354).  `msArgNames` is the arg-dispatch NAME
 -- set (#1351 L5: names only — the indices are answered by the identity-keyed
 -- `argDispatchIdxByIdRef`, written here so a marked tree can be inferred by
@@ -43099,9 +43093,15 @@ mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) ->
   List String ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
+-- The map keeps a name's clauses newest-first (`groupClausesGo`); `f` is applied in
+-- SOURCE order (`clausesOf`) so the evidence ids it mints follow the source, and the
+-- result is stored back in the map's own order.
 mapGroupClauses _ [] grouped = grouped
 mapGroupClauses f (m :: rest) grouped =
-  mapGroupClauses f rest (omInsert m (map f (clausesAt m grouped)) grouped)
+  mapGroupClauses
+    f
+    rest
+    (omInsert m (revClauses (map f (clausesOf m grouped)) []) grouped)
 
 -- At group close: the members this group promoted join the dict-name set, and the
 -- group's own occurrences of them — the recursive calls, which were still `EVar`
@@ -43119,10 +43119,14 @@ markRecursiveOccurrences : ModuleMarking ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
 markRecursiveOccurrences mm placeholders members grouped =
-  let promoted = perRun.value.promotedRef.value
+  -- `promotedRef` is this module's promoted names so far (cumulative within the
+  -- module); a member already in the dict-name set — a bare-name collision with a
+  -- signatured graph name or an earlier module's promotion — was marked before
+  -- inference and needs nothing here.
+  let promoted = omFromNames perRun.value.promotedRef.value omEmpty
   let fresh =
     filterList
-      (m => contains m promoted && not (omHasKey m mm.mmDictSet.value))
+      (m => omHasKey m promoted && not (omHasKey m mm.mmDictSet.value))
       members
   match fresh
     [] => grouped
@@ -43185,6 +43189,10 @@ stampTailDecl top d = stampDeclWith top d
 -- `funDefs` flattens `DFunDef` clauses and `DLetGroup` bindings in declaration
 -- order and `clausesOf` returns a name's clauses in that order, so consuming them
 -- head-first as the declarations are walked restores every clause to its own slot.
+-- The arms below are `funDefs`' arms, and must stay that set: a declaration shape
+-- `funDefs` collects clauses from but this walk passes through would drop those
+-- clauses' marks from the returned tree without a panic (the reverse direction
+-- panics in `popMarkedClause`).
 rebuildGroupDecls : OrdMap (List (List Pat, Expr)) -> List Decl -> List Decl
 rebuildGroupDecls grouped prog = fst (rebuildGroupDeclsGo grouped omEmpty prog)
 
@@ -46566,7 +46574,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "boundOfList" ((PVar "ns")) (EApp (EApp (EVar "boundInsert") (EVar "ns")) (EVar "omEmpty")))
 (DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm") (PVar "onDict")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EVar "n")) (EApp (EVar "mintMethodCell") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "mintDictAt") (EVar "onDict")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
-(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm") (PVar "onDict")) (PVar "bound") (PCon "EVarId" (PVar "n") (PVar "id"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EVar "n")) (EApp (EVar "mintMethodCell") (EVar "n")))) (arm (PCon "None") () (EApp (EApp (EVar "EVarId") (EVar "n")) (EVar "id")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "mintDictAt") (EVar "onDict")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EVar "EVarId") (EVar "n")) (EVar "id")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsert") (EApp (EVar "letBindNamesTc") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
@@ -49651,9 +49658,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stampGroupClauses" ((PVar "mm") (PVar "members") (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EVar "stampClauseWith") (EFieldAccess (EVar "mm") "mmTop"))) (EVar "members")) (EVar "grouped")))
 (DTypeSig false "mapGroupClauses" (TyFun (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
 (DFunDef false "mapGroupClauses" (PWild (PList) (PVar "grouped")) (EVar "grouped"))
-(DFunDef false "mapGroupClauses" ((PVar "f") (PCons (PVar "m") (PVar "rest")) (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EVar "f")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EVar "map") (EVar "f")) (EApp (EApp (EVar "clausesAt") (EVar "m")) (EVar "grouped")))) (EVar "grouped"))))
+(DFunDef false "mapGroupClauses" ((PVar "f") (PCons (PVar "m") (PVar "rest")) (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EVar "f")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EVar "revClauses") (EApp (EApp (EVar "map") (EVar "f")) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped")))) (EListLit))) (EVar "grouped"))))
 (DTypeSig false "markRecursiveOccurrences" (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
-(DFunDef false "markRecursiveOccurrences" ((PVar "mm") (PVar "placeholders") (PVar "members") (PVar "grouped")) (EBlock (DoLet false false (PVar "promoted") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value")) (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "m")) (EVar "promoted")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))))) (EVar "members"))) (DoExpr (EMatch (EVar "fresh") (arm (PList) () (EVar "grouped")) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "mm") "mmDictSet")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "omEmpty"))) (EVar "placeholders")) (EVar "members")) (EVar "grouped")))))))))
+(DFunDef false "markRecursiveOccurrences" ((PVar "mm") (PVar "placeholders") (PVar "members") (PVar "grouped")) (EBlock (DoLet false false (PVar "promoted") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value")) (EVar "omEmpty"))) (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "promoted")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))))) (EVar "members"))) (DoExpr (EMatch (EVar "fresh") (arm (PList) () (EVar "grouped")) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "mm") "mmDictSet")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "omEmpty"))) (EVar "placeholders")) (EVar "members")) (EVar "grouped")))))))))
 (DTypeSig false "recMarkMembers" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
 (DFunDef false "recMarkMembers" (PWild PWild (PList) (PVar "grouped")) (EVar "grouped"))
 (DFunDef false "recMarkMembers" ((PVar "dn") (PVar "placeholders") (PCons (PVar "m") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EVar "pushRecDictAppGoal") (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "dn")) (EVar "placeholders")) (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EVar "markClauseWith") (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped"))))))
@@ -53006,7 +53013,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "boundOfList" ((PVar "ns")) (EApp (EApp (EVar "boundInsert") (EVar "ns")) (EVar "omEmpty")))
 (DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm") (PVar "onDict")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EVar "n")) (EApp (EVar "mintMethodCell") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "mintDictAt") (EVar "onDict")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
-(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm") (PVar "onDict")) (PVar "bound") (PCon "EVarId" (PVar "n") (PVar "id"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EVar "n")) (EApp (EVar "mintMethodCell") (EVar "n")))) (arm (PCon "None") () (EApp (EApp (EVar "EVarId") (EVar "n")) (EVar "id")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "mintDictAt") (EVar "onDict")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EVar "EVarId") (EVar "n")) (EVar "id")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsert") (EApp (EVar "letBindNamesTc") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
@@ -56091,9 +56097,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stampGroupClauses" ((PVar "mm") (PVar "members") (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EVar "stampClauseWith") (EFieldAccess (EVar "mm") "mmTop"))) (EVar "members")) (EVar "grouped")))
 (DTypeSig false "mapGroupClauses" (TyFun (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
 (DFunDef false "mapGroupClauses" (PWild (PList) (PVar "grouped")) (EVar "grouped"))
-(DFunDef false "mapGroupClauses" ((PVar "f") (PCons (PVar "m") (PVar "rest")) (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EVar "f")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EApp (EApp (EVar "clausesAt") (EVar "m")) (EVar "grouped")))) (EVar "grouped"))))
+(DFunDef false "mapGroupClauses" ((PVar "f") (PCons (PVar "m") (PVar "rest")) (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EVar "f")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EApp (EApp (EVar "revClauses") (EApp (EApp (EMethodRef "map") (EVar "f")) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped")))) (EListLit))) (EVar "grouped"))))
 (DTypeSig false "markRecursiveOccurrences" (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
-(DFunDef false "markRecursiveOccurrences" ((PVar "mm") (PVar "placeholders") (PVar "members") (PVar "grouped")) (EBlock (DoLet false false (PVar "promoted") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value")) (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "m")) (EVar "promoted")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))))) (EVar "members"))) (DoExpr (EMatch (EVar "fresh") (arm (PList) () (EVar "grouped")) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "mm") "mmDictSet")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "omEmpty"))) (EVar "placeholders")) (EVar "members")) (EVar "grouped")))))))))
+(DFunDef false "markRecursiveOccurrences" ((PVar "mm") (PVar "placeholders") (PVar "members") (PVar "grouped")) (EBlock (DoLet false false (PVar "promoted") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value")) (EVar "omEmpty"))) (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "promoted")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))))) (EVar "members"))) (DoExpr (EMatch (EVar "fresh") (arm (PList) () (EVar "grouped")) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "mm") "mmDictSet")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "omEmpty"))) (EVar "placeholders")) (EVar "members")) (EVar "grouped")))))))))
 (DTypeSig false "recMarkMembers" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
 (DFunDef false "recMarkMembers" (PWild PWild (PList) (PVar "grouped")) (EVar "grouped"))
 (DFunDef false "recMarkMembers" ((PVar "dn") (PVar "placeholders") (PCons (PVar "m") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EVar "pushRecDictAppGoal") (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "dn")) (EVar "placeholders")) (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EVar "markClauseWith") (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped"))))))
