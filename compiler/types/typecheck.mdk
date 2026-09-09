@@ -21876,8 +21876,21 @@ stampOpRouteVal : Bool -> String -> String -> Mono -> String -> Route
 stampOpRouteVal isBinop encl method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
+  -- #2356: a builtin head is not a dispatch, but it is not nothing either.  A
+  -- comparison whose operand GROUNDS to `Int` gets the positive scalar stamp
+  -- `RScalar "Int"`, the same carrier resolveArithSite uses for Float, so the
+  -- native emitter can compare the two tagged words inline instead of calling the
+  -- opaque @mdk_value_eq/@mdk_value_lt runtime discriminators.  The stamp is the
+  -- ONLY sound witness for that: the emitter's own `LTInt` is its default for an
+  -- operand whose type it could not recover, so an `icmp` keyed on LTy would
+  -- compare boxed String/Float POINTERS as integers.  Every other builtin head
+  -- (Float/String/Bool/Char) and every ungrounded operand stay RNone, i.e. on the
+  -- runtime-discriminated path they are on today.
   if isBuiltin then
-    RNone
+    if isBinop && tag == "Int" && isCompareMethod method then
+      RScalar "Int"
+    else
+      RNone
   else
     -- #609: no interface param vector is recoverable at an operator site (the
     -- node carries one operand mono, not a method occurrence), so the goal is the
@@ -21916,6 +21929,13 @@ stampOpRouteVal isBinop encl method operandMono tag =
 innerDefaultMethod : String -> String
 innerDefaultMethod m =
   if contains m ["lt", "gt", "lte", "gte", "min", "max"] then "compare" else m
+
+-- #2356: the five comparison OPERATOR methods (`==`/`/=` -> `eq`, `<`/`>`/`<=`/`>=`
+-- -> `lt`/`gt`/`lte`/`gte`).  `min`/`max` are deliberately absent: they are Ord
+-- methods but no operator records a site for them, so a name-only match on them
+-- would stamp nothing and claim a reach this predicate does not have.
+isCompareMethod : String -> Bool
+isCompareMethod m = contains m ["eq", "lt", "gt", "lte", "gte"]
 
 -- ── ARCH B-2.1-h (Stage B repair): THE METHOD-SET GUARD, GRAPH-GLOBAL ────────
 -- 🚨 THE PREDECESSOR (`implDefinesMethodAt`, over the cumulative-prefix
