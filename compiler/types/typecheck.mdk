@@ -214,6 +214,9 @@ import frontend.marker.{localBoundNames}
 import frontend.resolve.{
   programIsCore,
   stampBindingIds,
+  stampTopScope,
+  stampDeclWith,
+  stampClauseWith,
   stampGraphTyOrigins,
   stampFlatTyOrigins,
   stampDeclOrigins,
@@ -6662,8 +6665,8 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- 🚨 THE `DL` MEASUREMENT §9.5 OWES — DISCHARGED, not cited-and-skipped.  A-3.4's
 -- own block above says A-3.2/A-3.3 "must measure their own projections; they
 -- may not cite 'DL is discharged'".  This unit's projection over `demDecls` is
--- prePass-INVARIANT, so there is nothing for the elaborate path's
--- `prePassModulePairArg` rewrite to disagree with: `prePassDeclScoped`'s
+-- prePass-INVARIANT, so there is nothing for the schedule's mark of the tail
+-- declarations (`markTailDecls`) to disagree with: `prePassDeclScoped`'s
 -- `DInterface` arm rewrites only `methods`, via `prePassIfaceMethodScoped`,
 -- which itself rewrites only a method's `MethodDefault` BODY (the `Some (…, e)`
 -- arm's `e`) — never `n`/`ty`, and the `None` (no default) arm is untouched
@@ -7286,6 +7289,11 @@ data DriverState = DriverState {
   -- diagnostic with its module, since a `Loc` carries no file on the elaborate path
   -- and the graph's residual would otherwise be unattributable.
   currentModuleRef : Ref String,
+  -- The graph's mark sets (`markSetsOf`), written by the Module-arm driver
+  -- preambles and read by `checkBodyImpl` to mark each module's groups on the
+  -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
+  -- driver that skipped its preamble, and fails loud.
+  markSetsRef : Ref (Option MarkSets),
 }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -7320,6 +7328,7 @@ freshDriverState _ = DriverState {
   sigTyMapRef = Ref omEmpty,
   localPinDisabledRef = Ref False,
   currentModuleRef = Ref "",
+  markSetsRef = Ref None,
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -8293,13 +8302,16 @@ consSiteFn fn x idx = omInsert fn (x :: sitesFor fn idx) idx
 sitesFor : String -> OrdMap (List a) -> List a
 sitesFor fn idx = optionOr [] (omLookup fn idx)
 
--- #194: cross-module accumulator for one elaboration sweep's direct promotions.
--- resetState clears promotedRef per module, so elabHarvestWorker unions each
--- module's promotedRef.value into here right after that module's elabModuleStamp
--- (before the next module's resetState wipes it).  `elabPromotionFixpoint` reads it
--- after each sweep: an empty delta over the grown set ends the fixpoint, anything
--- else discards the sweep and re-runs with the union.  Set to [] by `elabSweep`
--- before each sweep; NOT touched by resetState.
+-- The graph's promoted names so far, in load order.  `resetState` clears
+-- `promotedRef` per module, so `elabHarvestWorker` unions each module's
+-- `promotedRef.value` into here right after that module's `elabModuleStamp` (before
+-- the next module's `resetState` wipes it).  Its reader is `beginModuleMarking`: a
+-- module's dict-name set is the bare set plus THIS list, which is what lets one
+-- sweep mark a promoted callee's cross-module call sites (ARCH §E).  Cleared at
+-- every Module-arm driver entry (`elaborateModules`, `checkModulesPreambleK`) so an
+-- earlier elaboration in the process cannot leak promoted names into a later mark
+-- set; NOT touched by `resetState`.  `elaborateModules` reads it once more at the
+-- end, for the set `dictPass` prepends dict params over (`markDictNames`).
 
 -- O(log n) membership index of dictEligibleRef.  #415 item 3: DERIVED from the list by
 -- `setDictEligible`, the single writer of both — not mirrored at each set site, so the
@@ -8603,7 +8615,7 @@ typeErrorsSticky = Ref False
 -- rather than merely THAT it was armed — it is what `elaborateModules` returns as its
 -- residual, each entry with its own `Loc`.  Written only by `recordTypeError`, cleared
 -- only by `resetTypeErrorsSticky`, and rolled back wherever `typeErrorsSticky` is
--- (`elabPromotionFixpoint`) — the same pairing obligation the detection counter states.
+-- (`checkGraphFinish`) — the same pairing obligation the detection counter states.
 typeErrorsStickyDiags : Ref (List (String, TcDiag))
 typeErrorsStickyDiags = Ref []
 
@@ -8677,10 +8689,10 @@ hadTypeErrors _ = !typeErrorsSticky
 -- ⚠️ ONE standing obligation, and it is not discharged here: anywhere the channel is
 -- ROLLED BACK, this counter must be rolled back WITH it, or a region straddling the
 -- rollback would see a detection that no longer has a diagnostic behind it.  No site
--- rolls the channel back within one `perRun` lifetime today: `elabPromotionFixpoint`
+-- rolls the channel back within one `perRun` lifetime today: `checkGraphFinish`
 -- rolls back only the two cells that OUTLIVE a module (`typeErrorsSticky` and its
--- message list) and lets the next sweep's `resetState` re-mint the rest.  Any future
--- rollback of `typeErrors` owes the same pairing.
+-- message list), around the graph-end drain.  Any future rollback of `typeErrors`
+-- owes the same pairing.
 --
 -- ⚠️ The funnel is not cosmetic.  Before it there were SIX push sites, not the five
 -- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
@@ -9054,9 +9066,8 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- whole-graph resolve pass (#2548) can read them at quiescence, and the two counters
 -- that keep every tyvar/effvar id unique across the graph so an entry recorded in one
 -- module can never alias one recorded in another.  Minted once per graph by
--- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble,
--- and each sweep of `elabPromotionFixpoint`) and from `checkBodyImpl`'s Flat arm (a
--- loader-less driver IS its whole graph).
+-- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble)
+-- and from `checkBodyImpl`'s Flat arm (a loader-less driver IS its whole graph).
 --
 -- The channels are still DRAINED PER MODULE today, by the stamper sequence in
 -- `elabModuleStamp` / `elaborateDict`, and that drain must see exactly this module's
@@ -9541,6 +9552,11 @@ data PerRun = PerRun {
   -- on the (hot, allocation-sensitive) unify path.  Per-module by construction:
   -- freshPerRun re-mints it, so a stale entry cannot label a later module.
   pinnedLocals : Ref (List (Mono, String, String, Option Loc)),
+  -- This module's marking state (`ModuleMarking`): the mark context computed once
+  -- at module start, the top-level binding-id scope, and the dict-name set the
+  -- schedule grows as the module's own groups promote.  `None` on the Flat arm,
+  -- whose callers mark the whole program before inference.
+  markingRef : Ref (Option ModuleMarking),
 }
 
 -- ⚠️ #1557 A-3.5c REMOVED `ifaceParamKindsRef` from this record, and with it the
@@ -9623,6 +9639,7 @@ freshPerRun _ = PerRun {
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
   pinnedLocals = Ref [],
+  markingRef = Ref None,
 }
 
 -- The single module-level cell holding the current run's per-module accumulator bundle.
@@ -11706,7 +11723,8 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
 -- dispatches a method in ARGUMENT position (`f s = display s`) never
 -- surfaces its inferred constraint to inferredConstraintIds → never gets
 -- promoted → no leading dict param on the build path → dict word 0 (SIGSEGV/
--- silent).  Inert unless promotion (`elabPromotionFixpoint`) consumes it.
+-- silent).  Inert unless promotion (`registerInferredConstraints`, whose result the
+-- schedule marks with) consumes it.
 
 -- C5: queue a standalone-shadow method occurrence's discriminating-arg mono cell so
 -- resolveRLocalSites can stamp RLocal once inference grounds the receiver.  Only
@@ -11837,9 +11855,9 @@ argDispatchOf name =
 --     colliding name maps to; it does not NARROW the key set.  So this reader's domain
 --     is a SUPERSET of the retired bare tables' domain, not a subset of it — the
 --     direction that makes the fall-back dead rather than load-bearing.
---   * `argNames`' consumer was ALREADY scoped: `prePassModulePairArg` hands
+--   * `argNames`' consumer was ALREADY scoped: `moduleMarkCtx` keeps only
 --     `filterList keep argNames` (keep = `nameableIfaceMethodSet` of the module's own
---     decls) to `prePassDictArg`, so a name this module cannot name is never marked
+--     decls) for the group marker, so a name this module cannot name is never marked
 --     `EMethodAt` and never reaches here.
 --   * MEASURED, panic-instrumented, before the edit: across 327 programs
 --     (`shadow_fixtures`, `import_order_fixtures`, `must_fail_fixtures`) on `check`,
@@ -20354,8 +20372,22 @@ prePassDictArg rpNames dictNames argNames shadowMap prog =
         (omFromNames rpNames omEmpty)
         (omFromNames dictNames omEmpty)
         (omFromNames argNames omEmpty)
-        shadowMap))
+        shadowMap
+        noDictHook))
     prog
+
+-- The `ArgRw` hook that records nothing: every marker but the group-recursive one
+-- (`markRecursiveOccurrences`) reads the dict application's route out of the goal
+-- inference pushes for it, so it has nothing to do at mark time.
+noDictHook : String -> EvId -> Unit
+noDictHook _ _ = ()
+
+-- Mint one dict-application node and tell the hook about it.
+mintDictAt : (String -> EvId -> Unit) -> String -> Expr
+mintDictAt onDict n =
+  let ev = freshEvId ()
+  let _ = onDict n ev
+  EDictAt n ev
 
 rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDictArg rpNames dictNames argNames (EVar n)
@@ -20373,8 +20405,11 @@ rewriteRPDictArg _ _ _ e = e
 -- ⚠️ #2189: rp/dn/an are OrdMap-backed SETS, not `List String` scanned by
 -- `contains` — the same treatment `bound` already gets below, and for the same
 -- reason: they grow with the program while the rewrite visits every EVar.
+-- The fifth field is called once per `EDictAt` the rewrite mints, with the callee
+-- name and the minted evidence id; `noDictHook` for every marker except the
+-- schedule's group-recursive one, which pushes the application's goal from it.
 data ArgRw =
-  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String))
+  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit)
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
@@ -20459,7 +20494,7 @@ boundOfList ns = boundInsert ns omEmpty
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
 rewriteArgScoped : ArgRw -> OrdMap Unit -> Expr -> Expr
-rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
+rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
@@ -20469,8 +20504,11 @@ rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
     None => EVar n
   | omHasKey n rp && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
   | omHasKey n an && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (freshEvId ())
+  | omHasKey n dn && not (omHasKey n bound) = mintDictAt onDict n
   | otherwise = EVar n
+-- No `EVarId` arm: every marker runs BEFORE resolve's binding-id stamp (the Flat
+-- arm's whole-program pre-pass, and the schedule's per-group `markGroupClauses` →
+-- `stampGroupClauses`), so a stamped occurrence never reaches this rewrite.
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
   ELam ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
@@ -28257,7 +28295,7 @@ checkProgramSeededSplit seed coreProg0 userProg0 =
   -- the ARGUMENTS a driver passed, not in the stamping.
   let _ = noteOriginTrace "core" coreProg
   let _ = noteOriginTrace "user" userProg
-  checkBodyImpl seed (Flat coreProg) userProg
+  fst (checkBodyImpl seed (Flat coreProg) userProg)
 
 -- #80: the SINGLE whole-program typecheck body, shared by the flat/single-file path
 -- (checkProgramSeededSplit, `Flat coreProg`) and the per-module path
@@ -28283,7 +28321,7 @@ modeModuleId (Module mid _ _) = mid
 checkBodyImpl : List (String, Scheme) ->
   CheckMode ->
   List Decl ->
-  List (String, Scheme)
+  (List (String, Scheme), List Decl)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 checkBodyImpl seed mode prog0 =
@@ -28315,10 +28353,19 @@ checkBodyImpl seed mode prog0 =
   -- itself stays unstamped for the pre-inference analyses (shadows/key table/…),
   -- which do not need ids; only the inferred bodies (defs + impl/default/prop/test)
   -- carry EVarId, and schemeDefIdsRef feeds registerSchemeObligations the top-level
-  -- members' ids.  A single walk (top-level frame built over the whole `prog`, so a
-  -- user body referencing a prelude fn gets the prelude fn's id), then split back
-  -- into core/user slices for the two-phase Flat inference.
-  let stampRes = stampBindingIds prog
+  -- members' ids.  Flat: a single walk (top-level frame built over the whole `prog`,
+  -- so a user body referencing a prelude fn gets the prelude fn's id), then split
+  -- back into core/user slices for the two-phase Flat inference.  Module: the
+  -- scope alone is minted here; each binding group is MARKED and then stamped as the
+  -- schedule reaches it (`processSCC`), and the tail bodies after the groups, so
+  -- `progS` is the module's UNMARKED, unstamped tree and `progT` below its inferred
+  -- twin.  The Flat callers marked their whole program before this call.
+  let stampRes = match mode
+    Flat _ => stampBindingIds prog
+    Module mid _ _ =>
+      let (top, ids) = stampTopScope prog
+      let _ = beginModuleMarking mid prog top
+      (prog, ids)
   let progS = fst stampRes
   -- #907: index name→id as an OrdMap (was a List scanned linearly per rendered
   -- scheme in ppSchemeNamed / per SCC member in registerSchemeObligations → O(decls²)).
@@ -28866,7 +28913,17 @@ checkBodyImpl seed mode prog0 =
   let env1 =
     extendVars (extendVars (extendVars dataEnv seed) globalS) shadowLayer
   let defs = funDefs progS
-  let topSchemes = processTopGroups env1 sigs defs (groupNames defs omEmpty)
+  let (topSchemes, groupedOut) =
+    processTopGroups env1 sigs defs (groupNames defs omEmpty)
+  -- Module: the marked tree this call returns (the groups' marked clauses written
+  -- back, the tail bodies marked with the module's final dict-name set) and its
+  -- stamped twin, which the tail-body inference below reads.  Flat: `progS` is both.
+  let progOut = match perRun.value.markingRef.value
+    Some mm => finishModuleMarking mm groupedOut progS
+    None => progS
+  let progT = match perRun.value.markingRef.value
+    Some mm => stampTailDecls mm.mmTop progOut
+    None => progS
   -- (#2 / BREAK #1) inference plan.  FLAT runs the TWO-PHASE prelude-then-user scoped
   -- inference (dropSchemesNamed drops user schemes shadowing an interface method so the
   -- prelude's own bodies see the METHOD; scopeShadowsCore/User gate the per-body shadow
@@ -28912,10 +28969,10 @@ checkBodyImpl seed mode prog0 =
       -- run_check_agreement, dict_semantics, engines, argtag_matrix, the LEG A golden —
       -- driven through `medaka build`): no golden moved.  allProg = implDecls
       -- (interfaces + accumulated impls) grounds the field types.
-      let _ = inferUserImplBodies bodyEnv implDecls progS
-      let _ = inferDefaultBodiesIfEnabled bodyEnv progS
-      let _ = inferPropBodies bodyEnv progS
-      let _ = inferTestBodies bodyEnv progS
+      let _ = inferUserImplBodies bodyEnv implDecls progT
+      let _ = inferDefaultBodiesIfEnabled bodyEnv progT
+      let _ = inferPropBodies bodyEnv progT
+      let _ = inferTestBodies bodyEnv progT
       ()
   -- (#3) cross-module dict-threading SNAPSHOT — MODULE ONLY (flat SKIPS: running it would
   -- pollute the cross-module accumulators with a phantom single-file attribution).
@@ -29055,7 +29112,7 @@ checkBodyImpl seed mode prog0 =
     -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
     -- reload reads the alias universe at this module's own ordinal.
     Module mid _ _ => appendDataUniverse mid prog0
-  globalS ++ topSchemes
+  (globalS ++ topSchemes, progOut)
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (the LetRecNonFunction guard,
 -- which fires for
@@ -29394,8 +29451,8 @@ inferDefaultMethods env iface dscope typarams (m :: rest) =
 -- union-find state that `defaultBodyLocalNum` reads below — its job (#873) is grounding
 -- body-local `Num` vars so the right impl is selected — so skipping it moves GROUNDING,
 -- hence dispatch, not just what prints.  On the ordinary path that is harmless because
--- a detection here means the program is rejected anyway; inside a non-final sweep of
--- `elabPromotionFixpoint`, whose diagnostics are rolled back, that premise is
+-- a detection here means the program is rejected anyway; across the check drivers'
+-- graph-end drain, whose diagnostics `checkGraphFinish` rolls back, that premise is
 -- unavailable (see there).
 -- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
 -- diagnostic list (issue 1146).
@@ -34172,7 +34229,40 @@ allEVars (ERecordUpdate e fs _) = allEVars e ++ flatMap fieldAssignEVars fs
 allEVars (EVariantUpdate _ e fs) = allEVars e ++ flatMap fieldAssignEVars fs
 allEVars (ELoc _ e) = allEVars e
 allEVars (EDoOrigin _ e) = allEVars e
+allEVars (EHeadAnnot e _) = allEVars e
+allEVars (EAsPat _ e) = allEVars e
+allEVars (EMapLit _ kvs) = flatMap kvEVars kvs
+allEVars (ESetLit _ es) = flatMap allEVars es
+allEVars (EDo _ stmts) = flatMap doStmtEVars stmts
+allEVars (EStringInterp parts) = flatMap interpEVars parts
+allEVars (EGuards arms) = flatMap guardArmEVars arms
+allEVars (ESection s) = sectionEVars s
+-- The arms above mirror `rewriteArgScoped`'s traversal (children only; binders do
+-- not matter for the over-approximation `depsOf` consumes).  What is left for the
+-- catch-all, derived against `Expr`'s full constructor set, is exactly four
+-- constructors that carry no sub-`Expr` reachable here:
+--   ENumLit, EDictApp  — leaves;
+--   EMethodRef         — no production verb mints one (see `declRefNames` below);
+--   EVarAt             — minted by `annotateProgram`, which runs after typecheck.
+-- A new reference-bearing constructor therefore needs an arm above: falling to the
+-- catch-all silently drops a dependency edge rather than erroring.
 allEVars _ = []
+
+kvEVars : (Expr, Expr) -> List String
+kvEVars (k, v) = allEVars k ++ allEVars v
+
+interpEVars : InterpPart -> List String
+interpEVars (InterpStr _) = []
+interpEVars (InterpExpr e) = allEVars e
+
+guardArmEVars : GuardArm -> List String
+guardArmEVars (GuardArm guards body) =
+  flatMap guardEVars guards ++ allEVars body
+
+sectionEVars : Section -> List String
+sectionEVars (SecBare op) = [op]
+sectionEVars (SecRight op e) = op :: allEVars e
+sectionEVars (SecLeft e op) = op :: allEVars e
 
 letBindEVars : LetBind -> List String
 letBindEVars (LetBind _ clauses) = flatMap funClauseEVars clauses
@@ -34383,7 +34473,7 @@ processTopGroups : TcEnv ->
   List (String, Ty) ->
   List (String, (List Pat, Expr)) ->
   List String ->
-  List (String, Scheme)
+  (List (String, Scheme), OrdMap (List (List Pat, Expr)))
 processTopGroups env sigs defs names =
   driverState.value.sigNameSetRef := sigNamesToSet sigs omEmpty
   driverState.value.sigTyMapRef := omFromPairs (reverseL sigs) omEmpty
@@ -34412,16 +34502,19 @@ keepGroupNames nameSet refs = filterList (r => omHasKey r nameSet) refs
 filterNonSelf : String -> List String -> List String
 filterNonSelf name xs = filterList (/= name) xs
 
--- process each SCC as a letrec group in topological order
+-- process each SCC as a letrec group in topological order.  The clause map is
+-- threaded through and returned: a Module-arm group's clauses come back MARKED
+-- (`processSCC`), and `checkBodyImpl` writes them back into the module's tree.
 processSCCs : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
   List (List String) ->
-  List (String, Scheme)
-processSCCs _ _ _ [] = []
+  (List (String, Scheme), OrdMap (List (List Pat, Expr)))
+processSCCs _ _ grouped [] = ([], grouped)
 processSCCs env sigs grouped (scc :: rest) =
-  let er = processSCC env sigs grouped scc
-  snd er ++ processSCCs (fst er) sigs grouped rest
+  let (env2, schemes, grouped2) = processSCC env sigs grouped scc
+  let (restSchemes, grouped3) = processSCCs env2 sigs grouped2 rest
+  (schemes ++ restSchemes, grouped3)
 
 -- #23 support: synthesize impl-obligation-shaped Num entries from a group's
 -- pendingCallObligations / pendingDictApps deltas.  The Num constraint of an
@@ -34565,8 +34658,19 @@ processSCC : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
   List String ->
-  (TcEnv, List (String, Scheme))
-processSCC env sigs grouped members =
+  (TcEnv, List (String, Scheme), OrdMap (List (List Pat, Expr)))
+processSCC env sigs grouped0 members =
+  -- Marking on the schedule (ARCH §E): a Module-arm group is marked HERE, after
+  -- every group it depends on has generalized, with the dict-name set as it stands;
+  -- inference reads the stamped twin of the marked clauses.  Flat (`None`): the
+  -- caller marked and stamped the whole program, the map is used as given.
+  let marking = perRun.value.markingRef.value
+  let grouped = match marking
+    Some mm => markGroupClauses mm members grouped0
+    None => grouped0
+  let groupedStamped = match marking
+    Some mm => stampGroupClauses mm members grouped
+    None => grouped
   let _ = scopeShadowsForGroup members
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
@@ -34590,7 +34694,7 @@ processSCC env sigs grouped members =
   -- top-level `g` in a later body (a phantom `Num a =>` on types/numlit_bidir's
   -- signed fn).  Registration/lookup now key by (name, binding-id), so a top-level
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
-  let _ = inferMembers env2 sigs grouped placeholders
+  let _ = inferMembers env2 sigs groupedStamped placeholders
   perRun.value.groupConstraintMonosRef := []
   let _ = checkSigsTooGeneral sigTvMaps
   let _ = registerConstraintRegs regs
@@ -34616,8 +34720,8 @@ processSCC env sigs grouped members =
   let _ = defaultEachMember defaultObls placeholders
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)  -- RETPOS soundness
   let schemes =
-    sccSchemes env2 sigs grouped (isLetrecGroup members) placeholders
-  let _ = checkSigsOverExpansive env2 grouped sigTvMaps
+    sccSchemes env2 sigs groupedStamped (isLetrecGroup members) placeholders
+  let _ = checkSigsOverExpansive env2 groupedStamped sigTvMaps
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
   -- callee (living on the call delta, never in addedObls) into schemeObligationsRef,
   -- so a caller of this group re-instantiates them and its own group can ground the
@@ -34651,6 +34755,11 @@ processSCC env sigs grouped members =
       addedObls
       schemes
   let _ = registerInferredConstraints sigs callOblsDelta addedObls schemes
+  -- The group's own occurrences of the members it just promoted (see
+  -- `markRecursiveOccurrences`); Flat marks nothing here.
+  let groupedOut = match marking
+    Some mm => markRecursiveOccurrences mm placeholders members grouped
+    None => grouped
   -- FLAT-PATH SHADOW FIX (facet 1): thread forward only the NON-method-shadowing
   -- schemes, so a method name a user fn shadows keeps resolving to the METHOD
   -- (base env / globalS) for later prelude bindings.  The shadowing scheme is still
@@ -34660,6 +34769,7 @@ processSCC env sigs grouped members =
       env
       (dropSchemesNamed perRun.value.methodShadowNamesRef.value schemes),
     schemes,
+    groupedOut,
   )
 
 -- A multi-member SCC is a mutually-recursive group (always a function group, like
@@ -37155,7 +37265,7 @@ checkProgramDiags runtimeDecls coreProg userProg =
 checkModuleFull : List (String, Scheme) ->
   List Decl ->
   List Decl ->
-  List (String, Scheme)
+  (List (String, Scheme), List Decl)
 checkModuleFull seedVars accData prog =
   checkModuleFullImpl "" seedVars accData [] prog
 
@@ -37175,17 +37285,17 @@ checkModuleFullImpl : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  List (String, Scheme)
+  (List (String, Scheme), List Decl)
 checkModuleFullImpl mid seedVars accData implDecls prog =
-  let schemes = checkBodyImpl seedVars (Module mid accData implDecls) prog
+  let result = checkBodyImpl seedVars (Module mid accData implDecls) prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
   -- checks — `check`, `run`, `build`, the LSP alike — cuts its stamping context
   -- here, at the point its stampers used to run, for the one graph-end drain
   -- (`drainStampQueue`, DICT §6.2 T4).  A driver that queues and never drains
   -- leaves the queue for the next driver entry, so every Module-arm driver ends
-  -- with `checkGraphFinish` (or `elabSweep`'s own drain).
+  -- with `checkGraphFinish` (or `elaborateModules`' own drain).
   let _ = enqueueStampCtx mid implDecls
-  schemes
+  result
 -- C5: compute this module's standalone-shadow set BEFORE inference, so the
 -- inferMethodAt arg-position record can gate on it (resetState cleared it via
 -- pendingRLocalSites, but standaloneValuesRef is set fresh here per module).
@@ -37710,7 +37820,7 @@ nameableIfaceShadows prog names
 -- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and EVERY filter in the
 -- mark pass read THIS set.  Named rather than counted, because a count rots silently and
 -- this sentence already did (it said "all three" for a week after `rpNames` became the
--- fourth): `prePassModulePairArg` filters `rpNames`, `shadowNames` (through
+-- fourth): `moduleMarkCtx` filters `rpNames`, `shadowNames` (through
 -- `shadowBareName`), `argNames` and `shadowMap` — its own `otherwise` arm enumerates them
 -- against what `rewriteArgScoped` can turn into an `EMethodAt`.  S1-NS (b) requires
 -- shadow-hood to be a superset of dispatch
@@ -40280,6 +40390,7 @@ copyDriverState d = DriverState {
   sigTyMapRef = Ref d.sigTyMapRef.value,
   localPinDisabledRef = Ref d.localPinDisabledRef.value,
   currentModuleRef = Ref d.currentModuleRef.value,
+  markSetsRef = Ref d.markSetsRef.value,
 }
 
 -- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)
@@ -40300,56 +40411,54 @@ restoreCoreDriverFields d =
 -- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
 -- `coreSchemeObligationsRef` on a miss; installs the snapshot on a hit.
 checkCoreMemoized : Option (Int, Int) ->
-  MarkSets ->
-  List String ->
   List Decl ->
   List (String, Scheme) ->
   List (String, Scheme)
-checkCoreMemoized key ms dictNames coreDecls runtimeSeed =
-  match coreCheckMemoHit key
-    Some m =>
-      crossRun := copyCrossRun m.ccmCrossRun
-      graphRun := copyGraphRun m.ccmGraphRun
-      perRun := freshPerRun ()
-      let _ = restoreCoreDriverFields m.ccmDriver
-      m.ccmCoreSchemes
-    None =>
-      -- #2705: core is marked here, on the miss, with the unsplit set (`markCore`).
-      let coreSchemes =
-        checkModuleFull runtimeSeed [] (markCore ms dictNames coreDecls)
-      -- #2705: drain core's stamping context BEFORE the snapshot below, so a hit
-      -- restores a graph whose queue is empty and core is solved once per process
-      -- rather than once per analyze.  This treats core as closed at its own end —
-      -- the closure the memo already assumes by snapshotting core's solution here.
-      let _ = checkGraphFinish ()
-      -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
-      -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
-      -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
-      -- its Display obligation lands on the located check path instead of being dropped.
-      -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
-      -- bare cross-module name); drop the binding-id component of each (name, id) key.
-      crossRun.value.coreSchemeObligationsRef :=
-        omFromPairs
-          (map
-            (kv => (fst (fst kv), snd kv))
-            perRun.value.schemeObligationsRef.value)
-          omEmpty
-      let _ = match key
-        None => ()
-        Some k =>
-          coreCheckMemoRef := Some CoreCheckMemo {
-            ccmKey = k,
-            ccmCoreSchemes = coreSchemes,
-            ccmCrossRun = copyCrossRun crossRun.value,
-            ccmGraphRun = copyGraphRun graphRun.value,
-            ccmDriver = copyDriverState driverState.value,
-          }
-      coreSchemes
+checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
+  Some m =>
+    crossRun := copyCrossRun m.ccmCrossRun
+    graphRun := copyGraphRun m.ccmGraphRun
+    perRun := freshPerRun ()
+    let _ = restoreCoreDriverFields m.ccmDriver
+    m.ccmCoreSchemes
+  None =>
+    -- #2705: core is marked inside the pass, on the miss, with the unsplit set
+    -- (`moduleMarkCtx`'s core arm) — so its cells are minted into the graph the
+    -- snapshot below records, never into one a hit would replace.
+    let (coreSchemes, _) = checkModuleFull runtimeSeed [] coreDecls
+    -- #2705: drain core's stamping context BEFORE the snapshot below, so a hit
+    -- restores a graph whose queue is empty and core is solved once per process
+    -- rather than once per analyze.  This treats core as closed at its own end —
+    -- the closure the memo already assumes by snapshotting core's solution here.
+    let _ = checkGraphFinish ()
+    -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
+    -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
+    -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
+    -- its Display obligation lands on the located check path instead of being dropped.
+    -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
+    -- bare cross-module name); drop the binding-id component of each (name, id) key.
+    crossRun.value.coreSchemeObligationsRef :=
+      omFromPairs
+        (map
+          (kv => (fst (fst kv), snd kv))
+          perRun.value.schemeObligationsRef.value)
+        omEmpty
+    let _ = match key
+      None => ()
+      Some k =>
+        coreCheckMemoRef := Some CoreCheckMemo {
+          ccmKey = k,
+          ccmCoreSchemes = coreSchemes,
+          ccmCrossRun = copyCrossRun crossRun.value,
+          ccmGraphRun = copyGraphRun graphRun.value,
+          ccmDriver = copyDriverState driverState.value,
+        }
+    coreSchemes
 
 checkModulesPreamble : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme), List (String, List Decl) -> List (String, List Decl))
+  (List (String, Scheme), List (String, Scheme))
 checkModulesPreamble runtimeDecls coreDecls modules =
   checkModulesPreambleK None runtimeDecls coreDecls modules
 
@@ -40359,7 +40468,7 @@ checkModulesPreambleK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme), List (String, List Decl) -> List (String, List Decl))
+  (List (String, Scheme), List (String, Scheme))
 checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   let _ = resetCrossModuleState ()
   -- #1111 A-2.5b: derive the graph's method-identity index over the whole
@@ -40413,21 +40522,18 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
   let _ = seedAbstractRecordTypes coreDecls modules
   -- #2705: the check drivers MARK (solving is not optional).  The sets are the ones
-  -- `elaborateModules` marks with; the dict-name set is the bare one — a check
-  -- driver never dict-passes, so a promoted callee's call site left unmarked costs
-  -- it nothing, and the promotion fixpoint stays the elaborate side's.
-  let ms = markSetsOf coreDecls modules declEnvs.deAllDecls
+  -- `elaborateModules` marks with (`markSetsOf` publishes them to `checkBodyImpl`,
+  -- which marks each module's groups on the schedule, so a module is marked at the
+  -- point it is checked — after any memo restore of `graphRun`, never before, which
+  -- is what keeps a minted cell indexing the table it was minted into).  A check
+  -- driver never sets the promotion-eligible set, so its dict-name set stays bare;
+  -- the harvest is cleared here so a previous elaboration in this process cannot
+  -- leak promoted names into it.
+  let _ = markSetsOf coreDecls modules declEnvs.deAllDecls
+  driverState.value.promotionHarvestRef := []
   -- the core pass, memoized under the caller's prelude key — see `checkCoreMemoized`.
-  -- Core is marked inside the miss arm: a hit REPLACES `graphRun` with the snapshot,
-  -- so cells minted before it would be lost.  The user modules are NOT marked here
-  -- for the same reason, one memo layer down: `checkModulesDiagsChain` restores a
-  -- recorded prefix's `graphRun` AFTER this preamble, and a cell minted for a suffix
-  -- module before that restore would index an older, shorter table — the driver
-  -- marks what it checks, at the point it checks it, with the marker returned here.
-  let dictNames = markDictNames ms.msBareDictNames coreDecls modules
-  let coreSchemes =
-    checkCoreMemoized preludeKey ms dictNames coreDecls runtimeSeed
-  (runtimeSeed, coreSchemes, markUnits ms dictNames)
+  let coreSchemes = checkCoreMemoized preludeKey coreDecls runtimeSeed
+  (runtimeSeed, coreSchemes)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
 -- `schemes` twice — once as the pubV source foldModules needs, once as the payload
@@ -40478,7 +40584,7 @@ cmCheckWorker mid seed accData _accAll prog =
   -- to red `diff_compiler_perf_scaling`'s `modules` row at 4.48 against a 4.2
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
-  let schemes = checkBodyImpl seed (Module mid accData []) prog
+  let (schemes, _) = checkBodyImpl seed (Module mid accData []) prog
   (schemes, schemes)
 
 -- check every module in dependency order against a shared prelude + runtime.
@@ -40493,7 +40599,7 @@ checkModules runtimeDecls coreDecls0 modules0 =
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, marker) =
+  let (runtimeSeed, coreSchemes) =
     checkModulesPreamble runtimeDecls coreDecls modules
   -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
   -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param), so
@@ -40513,7 +40619,7 @@ checkModules runtimeDecls coreDecls0 modules0 =
     []
     []
     []
-    (marker modules)
+    modules
 
 -- ── per-module ISOLATED diagnostics (the analyzeProject typecheck stage) ────
 -- Like checkModuleFull but ALSO harvests THIS module's type diagnostics: it shares the
@@ -40626,7 +40732,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- residual #738 fixed only for the prelude/core coreSchemeObligationsRef flow).  The
   -- source-exact keying makes it MISS for a genuinely-unconstrained same-name import
   -- (#739's `q.f`, attributed nowhere), so no over-rejection is reintroduced.
-  let schemes = checkModuleFullImpl mid seedVars accData accAll prog
+  let (schemes, _) = checkModuleFullImpl mid seedVars accData accAll prog
   -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
   -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool above and `moduleImplUniv`
   -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
@@ -40782,7 +40888,7 @@ checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsK None runtimeDecls coreDecls0 modules0
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, marker) =
+  let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
   let steps = match !moduleChainMemoRef
@@ -40807,11 +40913,12 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
       accAll
       results
       (dropN n stepKeys)
-      -- #2705: the suffix is marked HERE, after the prefix restore above replaced
-      -- `graphRun` — a cell minted before that restore would index the older, shorter
-      -- table and `methodCellOf` would panic on the next analyze.  The restored
-      -- prefix keeps its own cells (they ride the snapshot).
-      (marker (dropN n modules))
+      -- #2705: each suffix module is marked as it is checked (`checkBodyImpl`), i.e.
+      -- after the prefix restore above replaced `graphRun` — a cell minted before
+      -- that restore would index the older, shorter table and `methodCellOf` would
+      -- panic on the next analyze.  The restored prefix keeps its own cells (they
+      -- ride the snapshot).
+      (dropN n modules)
   moduleChainMemoRef := Some
     ChainMemo {
       chKey = fullKey,
@@ -40918,9 +41025,9 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes, marker) =
+  let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
-  let modules2 = marker modules
+  let modules2 = modules
   -- #154 PR-C: cmDiagsWorker reads BOTH accData (buildOracle `prog ++ accData` +
   -- runFinalChecks) and accAll (checkModuleFullImpl implDecls + runFinalChecks), and both
   -- are order-observable (oracle first-wins, runFinalChecks scan order), so both concats
@@ -41083,9 +41190,9 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) =
     stampGraphTyOrigins effectiveCoreDecls0 effectiveModules0
-  let (runtimeSeed, coreSchemes, marker) =
+  let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK effectivePreludeKey runtimeDecls coreDecls modules
-  let modules2 = marker modules
+  let modules2 = modules
   -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
   -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
   -- witness, not the perf-gate path).
@@ -41458,9 +41565,10 @@ elaborateModules : List Decl ->
 -- `medaka test stdlib/map.mdk`).
 --
 -- #2705: what distinguishes this driver from the check drivers is no longer WHAT is
--- solved — both mark (`markSetsOf`), both infer impl bodies, both drain at graph
--- end — but that this one grows the dict-name set to its promotion fixpoint and
--- then dict-passes the marked trees.
+-- solved — both mark (`markSetsOf`, each module on the schedule in `checkBodyImpl`),
+-- both infer impl bodies, both drain at graph end — but that this one sets the
+-- promotion-eligible set (so its groups PROMOTE and their call sites are marked as
+-- dict applications), publishes the evidence table and dict-passes the marked trees.
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 elaborateModules runtimeDecls coreDecls0 modulesIn =
@@ -41517,21 +41625,20 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- `checkModulesPreamble` carries, for the one Module-mode driver that does not use
   -- that preamble.  See `graphMethodExports`.
   --
-  -- This driver runs the `Module` arm once per sweep of `elabPromotionFixpoint`, and
-  -- every sweep after the first begins with another `resetCrossModuleState ()`.  This
-  -- one write covers all of them ONLY because the ref is on `driverState`, which that
-  -- reset does not touch (F1).
+  -- The ref is on `driverState`, which neither `resetCrossModuleState` nor the
+  -- per-module `resetState` touches (F1), so this one write outlives every reset
+  -- the sweep below performs.
   driverState.value.graphMethodExportsRef :=
     graphMethodExports coreDecls modules
   -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
   -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
   driverState.value.graphIfaceMethodsRef := graphIfaceMethods coreDecls modules
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
-  -- including the two-sweep note above, which it inherits verbatim (same `driverState`).
+  -- including the reset note above, which it inherits verbatim (same `driverState`).
   driverState.value.graphCtorExportsRef := graphCtorExports coreDecls modules
   -- #1112 A-3.1: the whole-graph declaration envelope — the identical line
   -- `checkModulesPreamble` carries, for the driver that does not use that preamble.
-  -- It inherits the two-sweep note above for the same reason the three peers do: the
+  -- It inherits the reset note above for the same reason the three peers do: the
   -- ref is on `driverState`, which `resetCrossModuleState` does not touch.
   let declEnvs = buildDeclEnvs coreDecls modules
   driverState.value.declEnvsRef := declEnvs
@@ -41558,15 +41665,10 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let _ =
     driverState.value.userIfaceNamesRef :=
       namesToSet (collectIfaceNames (flatMap snd modules)) omEmpty  -- WS-1b: gate super-expansion to user interfaces
-  let ms = markSetsOf coreDecls modules allDecls
-  let _ = setDictEligible (moduleUserFnNames modules)
-  -- #194: eliminate the redundant MANDATORY promotion-discovery whole-program
-  -- typecheck.  Direct-promotion == ∅ ⟹ full-promoted == ∅ (inherited promotion needs a
-  -- leaf direct promotion to inherit from), so a SINGLE bare-dict elaboration sweep that
-  -- harvests zero direct promotions is ALREADY the final, correct answer — no discovery
-  -- pass, no second sweep.  The bare-dict names (moduleDictNames + aliases, WITHOUT any
-  -- promoted set) drive both the prePass marking and the final dictPass.
-  let bareDictNames0 = ms.msBareDictNames
+  -- The mark sets are `markSetsOf`'s — the same computation the check drivers'
+  -- preamble runs, so `check` and `build` mark one tree the same way; each module is
+  -- marked on the schedule by `checkBodyImpl` (see "Marking on the schedule").
+  --
   -- #1354 unit A (#1353): the mark set is split so its SHADOW component can be scoped per
   -- module.  `buildStandaloneShadowsGraph` is graph-global by construction (its own header
   -- says "graph-wide"), and so is `argNames` — both hand one name set to a rewriter that
@@ -41574,9 +41676,9 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- explicitly-imported standalone on the run/build path.  `markRpNames` (the unsplit set)
   -- is still what CORE is marked with: `core` is the prelude, every interface it declares
   -- is nameable in it, and S1 makes a `core.mdk` occurrence no user standalone's shadow
-  -- anyway (P0-21).  Scoping happens in `prePassModulePairArg`, which has the module's own
-  -- decls in hand — INCLUDING `rpNames`, which `prePassModulePairArg` filters with the same
-  -- predicate as everything else it marks.
+  -- anyway (P0-21).  Scoping happens in `moduleMarkCtx`, which has the module's own
+  -- decls in hand — INCLUDING `rpNames`, which it filters with the same predicate as
+  -- everything else it marks.
   --
   -- 🚨 THIS COMMENT USED TO SAY `rpNames` WAS "deliberately NOT scoped here: a different
   -- axis with no filed repro", AND THAT CARVE-OUT WAS AN S0.  The repro was missing because
@@ -41584,38 +41686,59 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- mentioned its typaram in an ARGUMENT, so 52 assertions were green while a
   -- RETURN-position method of a non-nameable interface gave `run` 777 against a built binary
   -- of 42, both at exit 0 with no diagnostic.  "No filed repro" was a fact about the
-  -- corpus, not about the code.  See `prePassModulePairArg` for the full enumeration of
+  -- corpus, not about the code.  See `moduleMarkCtx` for the full enumeration of
   -- every input that can become an `EMethodAt`, and
   -- `test/shadow_fixtures/d24_definer_return_pos_not_nameable/` for the cell that now
   -- expresses the axis.
-  -- (The mark sets themselves are `markSetsOf`'s — the same computation the check
-  -- drivers' preamble runs, so `check` and `build` mark one tree the same way.)
-  --
+  let ms = markSetsOf coreDecls modules allDecls
+  let _ = setDictEligible (moduleUserFnNames modules)
+  driverState.value.promotionHarvestRef := []
   -- #1280: the EMIT arm's copy of `checkModulesPreamble`'s line — the same scope,
   -- for the driver that does not use that preamble.  This is the seam `run` and
   -- the separate `medaka_emitter` process share, so an extern head stamped here
   -- and not there would be a fresh check≠build divergence.
   let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
-  -- #2543 (ARCH E-2a): promotion discovery is a Module-arm FIXPOINT over this one
-  -- sweep.  The seed sweep marks with the bare dict-name set; each module's direct
-  -- promotions (registerInferredConstraints → promotedRef, unioned per module by
-  -- elabHarvestWorker) grow the set; the sweep repeats until nothing new is
-  -- promoted, and the sweep that closes the fixpoint IS the real elaboration — its
-  -- marking used the complete set, so its stamped trees go straight to dictPass.
-  -- On a program that promotes NOTHING — every compiler self-compile and any
-  -- promotion-free program — that is exactly one sweep (the #194 win, kept).  See
-  -- `elabPromotionFixpoint` for what a non-final sweep leaves behind and why.
-  let sweep = ElabSweep {
-    esCoreDecls = coreDecls,
-    esModules = modules,
-    esAllDecls = allDecls,
-    esMarkSets = ms,
-    esRuntimeSeed = runtimeSeed,
-  }
-  let (coreD, modules2) = elabPromotionFixpoint sweep bareDictNames0
+  -- ONE sweep (ARCH §E).  Core, then each module in dependency order, each marked
+  -- on the schedule inside `checkBodyImpl` with every promotion made before it;
+  -- `elabHarvestWorker` unions each module's promotions into `promotionHarvestRef`
+  -- as the sweep goes, and returns the module's marked tree as its payload.
+  let (coreSchemes, core2) =
+    elabModuleStamp "" runtimeSeed [] coreDecls coreDecls
+  -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
+  -- impl-body universe (`accAll ++ prog`, order-observable through buildImplTable/
+  -- resolveSites) but forwards accData only to checkModuleFullImpl's dead Module
+  -- `accData` field.  wantAll=True keeps the impl-universe concat byte-identical;
+  -- wantData=False drops the dead accData concat (`[]` initial).
+  let modules2 =
+    foldModules
+      False
+      True
+      elabHarvestWorker
+      (_last mid marked rest => (mid, marked) :: rest)
+      []
+      (runtimeSeed ++ coreSchemes)
+      coreSchemes
+      []
+      []
+      coreDecls
+      modules
+  -- #2548: quiescence.  Every module (core first) has been inferred and has queued
+  -- its stamping context; drain them all now, in module order, before the trees go
+  -- to `dictPassModulesIfEnabled`.
+  let _ = drainStampQueue ()
+  -- The set `dictPass` prepends dict params for: the bare set plus every promotion
+  -- the sweep made, with the import aliases of both — the union of what every
+  -- module was marked with (`beginModuleMarking`, `markRecursiveOccurrences`).
+  let dictNames =
+    markDictNames
+      (dedup
+        (ms.msBareDictNames ++ driverState.value.promotionHarvestRef.value))
+      coreDecls
+      modules
+  let (coreD, modules3) = dictPassModulesIfEnabled dictNames core2 modules2
   (
     coreD,
-    modules2,
+    modules3,
     stickyTypeErrorDiagsSince stickyBefore,
     graphRun.value.evTable.value,
   )
@@ -41640,9 +41763,11 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- `Monoid a => …`) is discovered + registered in promotedRef/funConstraintsRef/
 -- activeDictVars, and the promoted names join the dict-name set so their call sites
 -- are marked EDictAt (caller supplies the dict ARGUMENT) and their defs get the
--- leading dict PARAM.  Since #2543 the discovery is `elabPromotionFixpoint`, a
--- fixpoint over the real per-module sweep; the joint-flattened Flat-arm scratch pass
--- it replaced survives only in `elaborateDict`'s single-file `discoverPromoted`.
+-- leading dict PARAM.  The discovery is `registerInferredConstraints` at each
+-- group's close, and the schedule marks with its result (`markRecursiveOccurrences`
+-- for the group's own occurrences, `beginModuleMarking` for every later group and
+-- module); the joint-flattened Flat-arm scratch pass survives only in
+-- `elaborateDict`'s single-file `discoverPromoted`.
 
 -- E6: dict-name set for the `=>`-constrained-function layer, mirroring the
 -- single-file emit driver's assembly (llvm_emit_typed_main.runEmit): prelude
@@ -42296,14 +42421,48 @@ prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
 -- sibling site.  It was the THIRD copy of the sentence.  Nothing in this tree links a claim
 -- to the code it describes, so when one of these turns out to be false, check the SET of
 -- sites that assert it — not the one you were handed.
-prePassModulePairArg : List String ->
-  List String ->
-  List String ->
-  List String ->
-  List (String, String) ->
-  (String, List Decl) ->
-  (String, List Decl)
-prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog)
+-- The mark inputs for ONE module, minus the dict-name set: the return-position /
+-- method-constraint names, the arg-dispatch names and the definer-shadow map, each
+-- filtered to what is nameable in the module (the S1 filter below).  Computed once
+-- per module by `checkBodyImpl` and applied to each binding group as the schedule
+-- reaches it (`markGroupClauses`); the dict-name set is the one input the schedule
+-- grows, so it lives beside this in `ModuleMarking`, not in it.
+data MarkCtx = MarkCtx {
+  mcRp : OrdMap Unit,
+  mcAn : OrdMap Unit,
+  mcSm : List (String, String),
+}
+
+argRwOf : MarkCtx -> OrdMap Unit -> (String -> EvId -> Unit) -> ArgRw
+argRwOf mc dn onDict = ArgRw mc.mcRp dn mc.mcAn mc.mcSm onDict
+
+-- Mark the declarations of one module that are not binding groups (impl, default,
+-- prop, test and bench bodies) with the module's final dict-name set.  Binding
+-- groups were marked on the schedule (`markGroupClauses`) and are left alone.
+markTailDecls : MarkCtx -> OrdMap Unit -> List Decl -> List Decl
+markTailDecls mc dn decls = map (markTailDecl (argRwOf mc dn noDictHook)) decls
+
+markTailDecl : ArgRw -> Decl -> Decl
+markTailDecl _ (d@(DFunDef _ _ _ _)) = d
+markTailDecl _ (d@(DLetGroup _ _)) = d
+markTailDecl rw (DAttrib attrs d) = DAttrib attrs (markTailDecl rw d)
+markTailDecl rw d = prePassDeclScoped rw d
+
+markClauseWith : ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
+markClauseWith rw (ps, e) =
+  (ps, rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
+
+-- `moduleMarkCtx ms mid prog`: core (`mid == ""`) is marked with the unsplit set and
+-- the core-scoped shadow map (#2153) and no S1 filter — every interface it declares
+-- is nameable in it, and S1 makes a `core.mdk` occurrence no user standalone's
+-- shadow (P0-21).  A user module gets the split set, scoped by the filter below.
+moduleMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
+moduleMarkCtx ms "" _ = MarkCtx {
+  mcRp = omFromNames ms.msMarkRpNames omEmpty,
+  mcAn = omFromNames ms.msArgNames omEmpty,
+  mcSm = ms.msCoreShadowMap,
+}
+moduleMarkCtx ms _ prog
   -- fail OPEN when the graph index is absent, for the reason stated on
   -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
   -- S4/#410 class.
@@ -42313,15 +42472,14 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
   -- to forbid.  If the two ever diverged this arm would run with an EMPTY iface index and
   -- filter out every imported and prelude shadow name, failing CLOSED into the S4/#410 class
   -- that `nameableIfaceShadows` says must never happen.
-  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = (
-    mid,
-    prePassDictArg
-      (dedup (rpNames ++ shadowNames))
-      dictNames
-      argNames
-      shadowMap
-      prog,
-  )
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = MarkCtx {
+    mcRp =
+      omFromNames
+        (dedup (ms.msMarkSharedNames ++ ms.msGraphShadowNames))
+        omEmpty,
+    mcAn = omFromNames ms.msArgNames omEmpty,
+    mcSm = driverState.value.mangledShadowMapRef.value,
+  }
   | otherwise =
     -- 🔒 S1-NS (b), THE CLOSURE INVARIANT.  The spec requires the predicate deciding
     -- SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH ELIGIBILITY, and rules two
@@ -42354,30 +42512,31 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
     -- argued (see `test/shadow_fixtures/`'s return-position cells and the PR body).
     let nameable = nameableIfaceMethodSet prog
     let keep = n => omHasKey n nameable
-    (
-      mid,
-      prePassDictArg
-        (dedup
-          (filterList keep rpNames
-            ++ filterList
-              (n =>
-                omHasKey (shadowBareName shadowMap n) nameable
-                  && shadowSymSpelledBare prog shadowMap n)
-              shadowNames))
-        dictNames
-        (filterList keep argNames)
-        (filterList
+    let shadowMap = driverState.value.mangledShadowMapRef.value
+    MarkCtx {
+      mcRp =
+        omFromNames
+          (dedup
+            (filterList keep ms.msMarkSharedNames
+              ++ filterList
+                (n =>
+                  omHasKey (shadowBareName shadowMap n) nameable
+                    && shadowSymSpelledBare prog shadowMap n)
+                ms.msGraphShadowNames))
+          omEmpty,
+      mcAn = omFromNames (filterList keep ms.msArgNames) omEmpty,
+      mcSm =
+        filterList
           (e =>
             omHasKey (snd e) nameable
               && moduleSpellsShadowBare prog (fst e) (snd e))
-          shadowMap)
-        prog,
-    )
+          shadowMap,
+    }
 
 -- ── #2153: S1's `nameable in M` for the PRELUDE unit ─────────────────────────
--- `prePassModulePairArg` (above) filters the definer-shadow map at the CONSUMING module.
--- `core` is the one unit that never goes through it: `elaborateModules` prepasses
--- `coreDecls` with `prePassDictArg` directly, handing it the RAW graph-wide map.  That is
+-- `moduleMarkCtx` (above) filters the definer-shadow map at the CONSUMING module.
+-- `core` is the one unit that never goes through that filter: its context is built
+-- from the RAW graph-wide map.  That is
 -- fine for `rpNames`/`argNames` — they are BARE method names, and core's references to its
 -- own standalones are all mangled `core__<n>` by the time this runs, so neither set can
 -- match one (the P0-21 argument `elaborateModules` states at `markRpNames`).  It is NOT
@@ -42518,7 +42677,7 @@ elabModuleStamp : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  List (String, Scheme)
+  (List (String, Scheme), List Decl)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 elabModuleStamp mid seedVars accData implDecls prog =
@@ -42582,19 +42741,20 @@ elabModuleStamp mid seedVars accData implDecls prog =
 -- import; implDecls (`accAll ++ prog`) is the cumulative impl-body universe.
 -- Side-effects mainSchemeRef when this module binds `main` — the entry module (last
 -- in dependency order) wins, exactly as the old head-recursive loop.  Payload is
--- Unit; elaborateModules discards foldModules' result and re-reads the stamped trees.
+-- the module's MARKED tree (`checkBodyImpl` marks each group on the schedule),
+-- which `elaborateModules` collects for `dictPassModulesIfEnabled`.
 elabWorker : String ->
   List (String, Scheme) ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), Unit)
+  (List (String, Scheme), List Decl)
 elabWorker mid seed accData accAll prog =
-  let schemes = elabModuleStamp mid seed accData (accAll ++ prog) prog
+  let (schemes, marked) = elabModuleStamp mid seed accData (accAll ++ prog) prog
   let _ = match lookupAssoc "main" schemes
     Some s => driverState.value.mainSchemeRef := Some s
     None => ()
-  (schemes, ())
+  (schemes, marked)
 
 -- #194: elabWorker + harvest.  Runs the identical per-module elaboration, then unions
 -- THIS module's directly-promoted fns (promotedRef, populated by
@@ -42608,7 +42768,7 @@ elabHarvestWorker : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), Unit)
+  (List (String, Scheme), List Decl)
 elabHarvestWorker mid seed accData accAll prog =
   let result = elabWorker mid seed accData accAll prog
   driverState.value.promotionHarvestRef :=
@@ -42759,9 +42919,8 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 --
 -- The route-time diagnostics the drain raises are NOT reported by a check driver,
 -- and do not arm the sticky gate here (`run`'s multi-module arm reads
--- `hadTypeErrors` right after its check pass): the sticky cells are rolled back
--- across the drain exactly as `elabPromotionFixpoint` rolls a discarded sweep
--- back.  On the elaborate side they stay live and `elaborateModules` returns them
+-- `hadTypeErrors` right after its check pass): the sticky cells are saved before
+-- the drain and restored after it.  On the elaborate side they stay live and `elaborateModules` returns them
 -- as its residual.  They are not a verdict yet: a resolver rejects as ambiguous a
 -- `Num` literal a test/prop body never defaulted (the D1 quiescence step #2646
 -- names as owed) and `panic "…"` (#2315), and re-unifies at a site the obligation
@@ -42825,7 +42984,7 @@ evValueOf (EvRoutes rs) = EvMany !rs
 --
 -- `msMarkRpNames` (the unsplit set: return-position + method-constrained methods +
 -- the graph-wide standalone shadows) is what CORE is marked with; the split halves
--- `msMarkSharedNames`/`msGraphShadowNames` let `prePassModulePairArg` scope the
+-- `msMarkSharedNames`/`msGraphShadowNames` let `moduleMarkCtx` scope the
 -- shadow component per user module (#1354).  `msArgNames` is the arg-dispatch NAME
 -- set (#1351 L5: names only — the indices are answered by the identity-keyed
 -- `argDispatchIdxByIdRef`, written here so a marked tree can be inferred by
@@ -42840,25 +42999,29 @@ data MarkSets = MarkSets {
   msArgNames : List String,
   msCoreShadowMap : List (String, String),
   msBareDictNames : List String,
+  msUnits : List (String, List Decl),  -- `("core", coreDecls) :: modules`, for import-alias expansion
 }
 
--- Writes `mangledShadowMapRef` and `argDispatchIdxByIdRef` as a side effect: both are
--- read by the inference of a marked tree (P0-18 shadow recovery, `argDispatchOf`),
--- so the driver that marks must be the driver that sets them.  Empty / index-only on
--- the un-mangled check path, exactly as the emit path derives them.
+-- Writes `mangledShadowMapRef`, `argDispatchIdxByIdRef` and `markSetsRef` as a side
+-- effect: the first two are read by the inference of a marked tree (P0-18 shadow
+-- recovery, `argDispatchOf`), the third by `checkBodyImpl`, which marks each module's
+-- groups on the schedule — so the driver that marks must be the driver that sets
+-- them.  Empty / index-only on the un-mangled check path, exactly as the emit path
+-- derives them.
 markSetsOf : List Decl -> List (String, List Decl) -> List Decl -> MarkSets
 markSetsOf coreDecls modules allDecls =
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
   -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.
+  let units = ("core", coreDecls) :: modules
   driverState.value.mangledShadowMapRef :=
-    computeMangledShadowMap allDecls (("core", coreDecls) :: modules)
+    computeMangledShadowMap allDecls units
   driverState.value.argDispatchIdxByIdRef := argDispatchIndicesById allDecls
   let rpNames = returnPosMethodNames allDecls
   let markSharedNames = dedup (rpNames ++ methodConstraintNames allDecls)
   let graphShadowNames =
     buildStandaloneShadowsGraph allDecls (flatMap snd modules)
-  MarkSets {
+  let ms = MarkSets {
     msMarkRpNames = dedup (markSharedNames ++ graphShadowNames),
     msMarkSharedNames = markSharedNames,
     msGraphShadowNames = graphShadowNames,
@@ -42866,188 +43029,257 @@ markSetsOf coreDecls modules allDecls =
     msCoreShadowMap =
       coreShadowMapFor coreDecls driverState.value.mangledShadowMapRef.value,
     msBareDictNames = dedup (moduleDictNames coreDecls allDecls modules),
+    msUnits = units,
   }
+  driverState.value.markSetsRef := Some ms
+  ms
 
--- The mark pass over one graph: core with the unsplit set, each module scoped.
--- [grown] is the dict-name set (the bare set, plus every promotion found so far on
--- the elaborate side); its import aliases are added here.
+-- The dict-name set `dictPass` consumes: [names] (the bare set plus every promotion
+-- the graph made) and its import aliases across every module.  The same names, per
+-- module, are what `beginModuleMarking` marked with — the def side and the call side
+-- must agree on this set or the callee is under-applied (`unbound identifier:
+-- $dict_…`, the Phase-134 shape).
 --
--- IMPORT ALIASING: prePassDict* marks a call site `EVar n` as a dict application
--- only when `n` is in dictNames — a set of DEFINITION names.  An aliased call site
--- writes the LOCAL name, so unless the alias locals are added here the call is never
+-- IMPORT ALIASING: the marker rewrites a call site `EVar n` into a dict application
+-- only when `n` is in the dict-name set — a set of DEFINITION names.  An aliased call
+-- site writes the LOCAL name, so unless the alias locals are added the call is never
 -- marked, receives no dict arguments, and silently UNDER-APPLIES: `check` stays
--- green and `run` dies downstream with a type-confused value (the Phase-134 shape).
-markGraph : MarkSets ->
-  List String ->
-  List Decl ->
-  List (String, List Decl) ->
-  (List String, List Decl, List (String, List Decl))
-markGraph ms grown coreDecls modules =
-  let dictNames = markDictNames grown coreDecls modules
-  (dictNames, markCore ms dictNames coreDecls, markUnits ms dictNames modules)
-
+-- green and `run` dies downstream with a type-confused value.
 markDictNames : List String ->
   List Decl ->
   List (String, List Decl) ->
   List String
-markDictNames grown coreDecls modules =
-  dedup (grown ++ aliasDictNames grown (("core", coreDecls) :: modules) modules)
+markDictNames names coreDecls modules =
+  dedup (names ++ aliasDictNames names (("core", coreDecls) :: modules) modules)
 
-markCore : MarkSets -> List String -> List Decl -> List Decl
-markCore ms dictNames coreDecls =
-  prePassDictArg
-    ms.msMarkRpNames
-    dictNames
-    ms.msArgNames
-    ms.msCoreShadowMap
-    coreDecls
-
-markUnits : MarkSets ->
-  List String ->
-  List (String, List Decl) ->
-  List (String, List Decl)
-markUnits ms dictNames modules =
-  map
-    (prePassModulePairArg
-      ms.msMarkSharedNames
-      ms.msGraphShadowNames
-      dictNames
-      ms.msArgNames
-      driverState.value.mangledShadowMapRef.value)
-    modules
-
--- #2543: everything one Module-arm sweep of `elaborateModules` needs, bundled so
--- the promotion fixpoint can re-run the sweep with a grown dict-name set.
-data ElabSweep = ElabSweep {
-  esCoreDecls : List Decl,
-  esModules : List (String, List Decl),
-  esMarkSets : MarkSets,
-  esAllDecls : List Decl,
-  esRuntimeSeed : List (String, Scheme),
+-- ── Marking on the schedule (ARCH §E) ────────────────────────────────────────
+-- Marking is the `EVar` → `EDictAt`/`EMethodAt` rewrite; every input it needs is
+-- declaration-level EXCEPT the promoted set — the unsignatured functions that infer
+-- a constraint and so gain a leading dict parameter — which only inference can
+-- supply.  A whole-tree pre-pass therefore had to be re-run once per layer of a
+-- promoted call chain (`elabPromotionFixpoint`, retired).  Instead `checkBodyImpl`
+-- marks each binding group as the schedule reaches it, after its callees have
+-- generalized: a callee promoted in an earlier group (or module — the loader orders
+-- modules dependency-first) is already in the set when its caller's group is marked,
+-- so one sweep marks what the fixpoint's closing sweep marked.  The one place a
+-- callee has NOT generalized when its caller is marked is its own group; those
+-- occurrences are rewritten when the group closes (`markRecursiveOccurrences`),
+-- carrying the goal inference would have pushed for them.
+--
+-- One module's marking state: the mark context (`moduleMarkCtx`), the binding-id
+-- scope resolve's `stampTopScope` minted for the module, and the dict-name set —
+-- the bare set plus every promotion so far (earlier modules through
+-- `promotionHarvestRef`, this module's earlier groups through
+-- `markRecursiveOccurrences`) plus this module's import aliases of those names.
+data ModuleMarking = ModuleMarking {
+  mmCtx : MarkCtx,
+  mmTop : OrdMap Int,
+  mmDictSet : Ref (OrdMap Unit),
 }
 
--- One Module-arm sweep over the graph, marking with `grown` (the bare dict-name set
--- plus every promotion found so far) and its import aliases: prePass core and each
--- module (`markGraph`), stamp core, then fold the modules through
--- `elabHarvestWorker`, which unions each module's direct promotions into
--- `promotionHarvestRef`.  Returns the dict-name set it marked with and the marked
--- trees — what `dictPassModulesIfEnabled` consumes when this sweep turns out to be
--- the last.
-elabSweep : ElabSweep ->
+-- Install the module's marking state at module start.  Reads the graph's mark sets
+-- off the driver preamble; a Module arm reached without one is a driver bug, and
+-- fails loud rather than marking nothing.
+beginModuleMarking : String -> List Decl -> OrdMap Int -> Unit
+beginModuleMarking mid prog top =
+  let ms = match driverState.value.markSetsRef.value
+    Some s => s
+    None =>
+      panic
+        "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
+  let known =
+    dedup (ms.msBareDictNames ++ driverState.value.promotionHarvestRef.value)
+  let names = known ++ aliasDictNames known ms.msUnits [(mid, prog)]
+  perRun.value.markingRef := Some ModuleMarking {
+    mmCtx = moduleMarkCtx ms mid prog,
+    mmTop = top,
+    mmDictSet = Ref (omFromNames names omEmpty),
+  }
+
+-- Mark one binding group's clauses (in the stored, newest-first order the map keeps)
+-- with the dict-name set as it stands when the schedule reaches the group.
+markGroupClauses : ModuleMarking ->
   List String ->
-  (List String, List Decl, List (String, List Decl))
-elabSweep es grown =
-  let (dictNames, core2, modules2) =
-    markGraph es.esMarkSets grown es.esCoreDecls es.esModules
-  driverState.value.promotionHarvestRef := []
-  let coreSchemes = elabModuleStamp "" es.esRuntimeSeed [] core2 core2
-  -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
-  -- impl-body universe (`accAll ++ prog`, order-observable through buildImplTable/
-  -- resolveSites) but forwards accData only to checkModuleFullImpl's dead Module
-  -- `accData` field.  wantAll=True keeps the impl-universe concat byte-identical;
-  -- wantData=False drops the dead accData concat (`[]` initial).
-  let _ =
-    foldModules
-      False
-      True
-      elabHarvestWorker
-      (_last _mid _extra _rest => ())
-      ()
-      (es.esRuntimeSeed ++ coreSchemes)
-      coreSchemes
-      []
-      []
-      core2
-      modules2
-  -- #2548: quiescence.  Every module (core first) has been inferred and has queued
-  -- its stamping context; drain them all now, in module order, before the caller
-  -- hands the trees to `dictPassModulesIfEnabled`.
-  let _ = drainStampQueue ()
-  (dictNames, core2, modules2)
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+markGroupClauses mm members grouped =
+  mapGroupClauses
+    (markClauseWith (argRwOf mm.mmCtx mm.mmDictSet.value noDictHook))
+    members
+    grouped
 
--- #2543 (ARCH E-2a): promotion discovery as a Module-arm fixpoint.  `grown` is the
--- bare dict-name set plus every promotion found so far.  Sweep; if the harvest adds
--- nothing, this sweep marked with the complete set and its trees are final — hand
--- them to dictPass.  Otherwise the sweep typechecked the call sites of a newly
--- promoted callee UNMARKED (its body already routes RDict while its callers pass no
--- dict), so nothing of it may survive into the next sweep:
---   * its diagnostics — `typeErrorsSticky`, the sticky message list and the match
---     warnings are the cells that outlive a module (`perRun` is re-minted by the next
---     sweep's first `resetState`), so those are rolled back to what they were;
---   * its cross-module accumulators — the Module arm's `appendUniverseAccums` GROWS
---     them per module, so a second sweep over the same graph would double every
---     universe: `resetCrossModuleState` wipes them, `mainSchemeRef` is re-armed for
---     last-wins, and `superDeclsRef` is restored to the whole graph (the sweep left
---     it at the LAST module's value).
--- The cross-module constraint tables need no snapshot: the per-module pass seeds
--- `funPredicateSlotsRef` from `crossModuleFunPredicateSlotsRef` at step 21 and
--- writes it back at module end, so a promoted callee's arity is visible to every
--- later module in dependency order — the only direction a call can go.
--- Before #2543 this was a SCRATCH joint typecheck over the flattened graph on the
--- Flat arm, that arm's only production consumer; its prelude-shadow special case
--- (`dropShadowedCore`) has no subject once discovery is the per-module pass, which
--- honours shadowing in each module's own scope.  The discovery SCHEDULE changed
--- with it: one flat SCC over the joint program became per-module SCCs in
--- dependency order.
-elabPromotionFixpoint : ElabSweep ->
+-- The stamped twin of the group's marked clauses — what inference reads.  Binding
+-- ids are minted over the module's declaration heads (`stampTopScope`), so stamping
+-- one group at a time yields the ids `stampBindingIds` would have.
+stampGroupClauses : ModuleMarking ->
   List String ->
-  (List Decl, List (String, List Decl))
-elabPromotionFixpoint es grown =
-  let savedSticky = !typeErrorsSticky
-  let savedStickyDiags = typeErrorsStickyDiags.value
-  let savedMatchWarnings = driverState.value.matchWarnings.value
-  let (dictNames, core2, modules2) = elabSweep es grown
-  let next = dedup (grown ++ driverState.value.promotionHarvestRef.value)
-  if listLen next == listLen grown then
-    dictPassModulesIfEnabled dictNames core2 modules2
-  else
-    typeErrorsSticky := savedSticky
-    typeErrorsStickyDiags := savedStickyDiags
-    driverState.value.matchWarnings := savedMatchWarnings
-    let _ = clearSweepCells ()
-    let _ = resetCrossModuleState ()
-    driverState.value.mainSchemeRef := None
-    driverState.value.superDeclsRef := es.esAllDecls
-    elabPromotionFixpoint es next
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+stampGroupClauses mm members grouped =
+  mapGroupClauses (stampClauseWith mm.mmTop) members grouped
 
--- A discarded sweep stamped route cells that live in the AST the next sweep
--- re-infers over.  Clear every cell the sweep recorded a goal or numeric literal
--- for, so a site the next sweep does not re-record (or records but cannot resolve)
--- cannot keep a route derived from the discarded promotion set.  Runs before
--- `resetGraphState` drops the channel that names those cells.
-clearSweepCells : Unit -> Unit
-clearSweepCells _ =
-  let g = graphRun.value
-  let _ = clearGoalCells g.goals.value
-  let _ = clearNumlitCells g.numlitRefs.value
-  -- NOT the same condition as the two calls above.  Those are needed because the cells
-  -- they clear live in the AST and outlive the graph reset; `evTable` is a `GraphRun`
-  -- field and does not — this function's only caller runs `resetCrossModuleState ()` on
-  -- the next line, which reaches `resetGraphState` and re-mints the field through
-  -- `freshGraphRun`.  So this write is unobservable today: defensive, not load-bearing.
-  -- It stays because fail-closed is this file's convention and because a reordering
-  -- that cleared without resetting would need it.
-  -- `evCells` is deliberately NOT cleared: `resetGraphState` carries it (the Flat arm
-  -- mints before its reset), so a discarded sweep's cells stay in the index and are
-  -- published, unread, by the final sweep — ordinals are monotone, so they cannot
-  -- collide with a live node's.  Bounding that growth is with the cumulative-ordinal
-  -- sizing #2705 records, not this function's.
-  g.evTable := []
+mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) ->
+  List String ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+-- The map keeps a name's clauses newest-first (`groupClausesGo`); `f` is applied in
+-- SOURCE order (`clausesOf`) so the evidence ids it mints follow the source, and the
+-- result is stored back in the map's own order.
+mapGroupClauses _ [] grouped = grouped
+mapGroupClauses f (m :: rest) grouped =
+  mapGroupClauses
+    f
+    rest
+    (omInsert m (revClauses (map f (clausesOf m grouped)) []) grouped)
 
-clearGoalCells : List Obligation -> Unit
-clearGoalCells [] = ()
-clearGoalCells (o :: rest) =
-  let _ = match o.oDest
-    EvRoute r => r := RNone
-    EvRoutes rs => rs := []
-  clearGoalCells rest
+-- At group close: the members this group promoted join the dict-name set, and the
+-- group's own occurrences of them — the recursive calls, which were still `EVar`
+-- when the group was marked because their callee had not generalized — become
+-- dict applications.  Each carries the goal `inferDictAtFound`'s recursive arm
+-- pushes for a callee that is a placeholder of the current group (`RecDictApp`,
+-- realized at the graph-end drain against the callee's now-registered slots): the
+-- callee's placeholder mono is the occurrence's instantiated type, the enclosing
+-- member is the clause's own.  That arm is the ONLY effect the recursive arm has
+-- beyond returning the instantiated type, which the `EVar` path returned too, so
+-- rewriting after inference leaves the group's inference unchanged.
+markRecursiveOccurrences : ModuleMarking ->
+  List (String, Mono) ->
+  List String ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+markRecursiveOccurrences mm placeholders members grouped =
+  -- `promotedRef` is this module's promoted names so far (cumulative within the
+  -- module); a member already in the dict-name set — a bare-name collision with a
+  -- signatured graph name or an earlier module's promotion — was marked before
+  -- inference and needs nothing here.
+  let promoted = omFromNames perRun.value.promotedRef.value omEmpty
+  let fresh =
+    filterList
+      (m => omHasKey m promoted && not (omHasKey m mm.mmDictSet.value))
+      members
+  match fresh
+    [] => grouped
+    _ =>
+      mm.mmDictSet := omFromNames fresh mm.mmDictSet.value
+      recMarkMembers (omFromNames fresh omEmpty) placeholders members grouped
 
-clearNumlitCells : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
-clearNumlitCells [] = ()
-clearNumlitCells ((_, fref, _, dref) :: rest) =
-  fref := None
-  dref := RNone
-  clearNumlitCells rest
+recMarkMembers : OrdMap Unit ->
+  List (String, Mono) ->
+  List String ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+recMarkMembers _ _ [] grouped = grouped
+recMarkMembers dn placeholders (m :: rest) grouped =
+  let onDict =
+    callee ev =>
+      pushRecDictAppGoal
+        (RecDictApp
+          (Ref [])
+          callee
+          m
+          (placeholderMonoOf callee placeholders)
+          ev)
+  let rw = ArgRw omEmpty dn omEmpty [] onDict
+  recMarkMembers
+    dn
+    placeholders
+    rest
+    (mapGroupClauses (markClauseWith rw) [m] grouped)
+
+placeholderMonoOf : String -> List (String, Mono) -> Mono
+placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
+  Some v => v
+  None =>
+    panic "markRecursiveOccurrences: \{callee} is not a member of the group"
+
+-- The module's marked tree: its binding groups' marked clauses written back into the
+-- declarations in source order, then the remaining bodies (impl, default, prop,
+-- test, bench) marked with the module's final dict-name set — they are inferred
+-- after every group, so every promotion the module made is in the set by then.
+finishModuleMarking : ModuleMarking ->
+  OrdMap (List (List Pat, Expr)) ->
+  List Decl ->
+  List Decl
+finishModuleMarking mm grouped prog =
+  markTailDecls mm.mmCtx mm.mmDictSet.value (rebuildGroupDecls grouped prog)
+
+-- The stamped twin of the tail declarations, for their inference; binding groups
+-- were stamped as the schedule reached them and are not walked again.
+stampTailDecls : OrdMap Int -> List Decl -> List Decl
+stampTailDecls top decls = map (stampTailDecl top) decls
+
+stampTailDecl : OrdMap Int -> Decl -> Decl
+stampTailDecl _ (d@(DFunDef _ _ _ _)) = d
+stampTailDecl _ (d@(DLetGroup _ _)) = d
+stampTailDecl top (DAttrib attrs d) = DAttrib attrs (stampTailDecl top d)
+stampTailDecl top d = stampDeclWith top d
+
+-- Write each group's marked clauses back over the declarations that produced them.
+-- `funDefs` flattens `DFunDef` clauses and `DLetGroup` bindings in declaration
+-- order and `clausesOf` returns a name's clauses in that order, so consuming them
+-- head-first as the declarations are walked restores every clause to its own slot.
+-- The arms below are `funDefs`' arms, and must stay that set: a declaration shape
+-- `funDefs` collects clauses from but this walk passes through would drop those
+-- clauses' marks from the returned tree without a panic (the reverse direction
+-- panics in `popMarkedClause`).
+rebuildGroupDecls : OrdMap (List (List Pat, Expr)) -> List Decl -> List Decl
+rebuildGroupDecls grouped prog = fst (rebuildGroupDeclsGo grouped omEmpty prog)
+
+rebuildGroupDeclsGo : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List Decl ->
+  (List Decl, OrdMap (List (List Pat, Expr)))
+rebuildGroupDeclsGo _ pending [] = ([], pending)
+rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _) :: rest) =
+  let ((ps, e), pending2) = popMarkedClause grouped pending n
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (DFunDef pub n ps e :: ds, pending3)
+rebuildGroupDeclsGo grouped pending ((DLetGroup pub binds) :: rest) =
+  let (binds2, pending2) = rebuildLetBinds grouped pending binds
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (DLetGroup pub binds2 :: ds, pending3)
+rebuildGroupDeclsGo grouped pending ((DAttrib attrs d) :: rest) =
+  let (inner, pending2) = rebuildGroupDeclsGo grouped pending [d]
+  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
+  (map (d2 => DAttrib attrs d2) inner ++ ds, pending3)
+rebuildGroupDeclsGo grouped pending (d :: rest) =
+  let (ds, pending2) = rebuildGroupDeclsGo grouped pending rest
+  (d :: ds, pending2)
+
+rebuildLetBinds : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List LetBind ->
+  (List LetBind, OrdMap (List (List Pat, Expr)))
+rebuildLetBinds _ pending [] = ([], pending)
+rebuildLetBinds grouped pending ((LetBind n clauses) :: rest) =
+  let (clauses2, pending2) = rebuildFunClauses grouped pending n clauses
+  let (binds, pending3) = rebuildLetBinds grouped pending2 rest
+  (LetBind n clauses2 :: binds, pending3)
+
+rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  String ->
+  List FunClause ->
+  (List FunClause, OrdMap (List (List Pat, Expr)))
+rebuildFunClauses _ pending _ [] = ([], pending)
+rebuildFunClauses grouped pending n (_ :: rest) =
+  let ((ps, e), pending2) = popMarkedClause grouped pending n
+  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
+  (FunClause ps e :: cs, pending3)
+
+-- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
+-- written back, in source order, minted from `clausesOf` on first use.
+popMarkedClause : OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr)) ->
+  String ->
+  ((List Pat, Expr), OrdMap (List (List Pat, Expr)))
+popMarkedClause grouped pending n =
+  let remaining = match omLookup n pending
+    Some cs => cs
+    None => clausesOf n grouped
+  match remaining
+    c :: cs => (c, omInsert n cs pending)
+    [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []

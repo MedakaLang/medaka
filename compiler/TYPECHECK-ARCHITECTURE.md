@@ -328,7 +328,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
 | **The spine** | `checkBodyImpl` | **835 / 10,917 / 110** | — |
-| **Promotion fixpoint** | `discoverAll` → `discoverPromoted` → `discoverNext` per module; `elabPromotionFixpoint` re-sweeps the graph until the promoted set is stable (#2543) | ~175 lines + 2 banner regions | — |
+| **Promotion, on the schedule** | `beginModuleMarking` → `markGroupClauses` per SCC → `markRecursiveOccurrences` at group close (ARCH §E; the Module-arm `elabPromotionFixpoint` re-sweep is gone). `discoverAll` → `discoverPromoted` → `discoverNext` survives on the Flat arm only (`elaborateDict`) | ~250 lines | — |
 | Inferred-constraint registration | `registerInferredConstraints`, `setDictEligible` | ~204 lines | DICT §4 `gen` |
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
 | Multi-module check drivers | `checkModules`, `checkModuleFullImpl`, `checkProgramSeededSplit` + the `check*` tails | ~590 lines | — |
@@ -396,15 +396,15 @@ safest extraction candidate in the file (§7.4).
 ```
 elaborateModules
   │
-  ├─ BARE SWEEP (always)
-  │    foldModules elabHarvestWorker → elabWorker → elabModuleStamp
-  │      → checkModuleFullImpl → checkBodyImpl (Module …)   ← resetState at module START
-  │
-  └─ elabPromotionFixpoint (#2543): compare promotionHarvestRef to the grown set
-       no delta → the sweep IS final — one whole-program typecheck (the #194 win)
-       delta    → DISCARD it (clearSweepCells; resetCrossModuleState) and re-sweep the
-                  Module arm with the union — never a flattened joint program
-              then a second real marking sweep with the promotion-augmented dict set
+  └─ ONE SWEEP (ARCH §E, marking on the schedule)
+       foldModules elabHarvestWorker → elabWorker → elabModuleStamp
+         → checkModuleFullImpl → checkBodyImpl (Module …)   ← resetState at module START
+              beginModuleMarking: dict set = bare ∪ promotionHarvestRef ∪ this module's aliases
+              processSCC: markGroupClauses (mark) → stampGroupClauses (ids) → infer
+                          → registerInferredConstraints → markRecursiveOccurrences
+              tail bodies (impl/default/prop/test) marked with the module's final set
+         elabHarvestWorker unions promotedRef into promotionHarvestRef, returns the marked tree
+       drainStampQueue → dictPassModulesIfEnabled (markDictNames (bare ∪ harvest))
 ```
 
 Three things this shape makes true that a linear reading does not:
@@ -446,12 +446,11 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
 
 (`stampBindingIds` is not local — the spine calls out to `compiler/frontend/resolve.mdk`.)
 
-⚠️ **This sequence is ONE ITERATION, not the control flow.** On the eligible-name path the
-promotion fixpoint re-enters it until the dict-passed set stabilizes: *"a mark+typecheck
-pass discovers each eligible unsignatured fn's inferred constraints; we grow the
-dict-passed set and re-run until it stabilizes"* (grep `re-run until it stabilizes`). Any
-perf or ordering argument
-built on "linear phase sequence" is wrong by a factor of the fixpoint depth.
+This sequence runs ONCE per module on the Module arm: marking happens inside it, per
+binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's
+call sites are marked in the same sweep that promoted it and no re-run is needed. The
+Flat arm (`elaborateDict`) still discovers promotion by re-running `discoverPromoted` over
+the whole single-file program until the set stabilizes.
 
 **`Flat` vs `Module` bimodality is threaded through 20 `match mode` branches inside this
 one function** — the #992 fork shape, one level up and unfiled.

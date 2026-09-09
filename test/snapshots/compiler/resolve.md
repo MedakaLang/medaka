@@ -1,5 +1,5 @@
 # META
-source_lines=4892
+source_lines=4913
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -3918,8 +3918,29 @@ stampImplMethod top (ImplMethod nm pats body) =
 export
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampBindingIds decls =
+  let (top, ids) = stampTopScope decls
+  (map (stampDecl top) decls, ids)
+
+-- The two halves of `stampBindingIds`, for a driver that stamps one binding group
+-- at a time: the top-level scope (name → minted id) plus the `defIds` pair list,
+-- and the per-declaration / per-clause walks over that scope.  A clause is stamped
+-- under its own params shadow-inserted over `top`, exactly as `stampDecl`'s
+-- `DFunDef` arm does; the id table is a pure function of the declaration heads, so
+-- stamping the groups in any order yields the same ids `stampBindingIds` mints.
+export
+stampTopScope : List Decl -> (OrdMap Int, List (String, Int))
+stampTopScope decls =
   let top = numberFrom 1 (dedup (topBinderNames decls))
-  (map (stampDecl (omFromPairs top omEmpty)) decls, top)
+  (omFromPairs top omEmpty, top)
+
+export
+stampDeclWith : OrdMap Int -> Decl -> Decl
+stampDeclWith top d = stampDecl top d
+
+export
+stampClauseWith : OrdMap Int -> (List Pat, Expr) -> (List Pat, Expr)
+stampClauseWith top (pats, body) =
+  (pats, stampExpr (insertParams pats top) body)
 
 -- ── #1110: type-constructor ORIGIN acquisition ──────────────────────────────
 -- `ast.mdk`'s `TyCon.tyConOrigin` (the A-1 carrier, PR #1211) says WHERE a
@@ -6014,7 +6035,13 @@ takeOriginTrace _ =
 (DTypeSig false "stampImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
 (DFunDef false "stampImplMethod" ((PVar "top") (PCon "ImplMethod" (PVar "nm") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
+(DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "decls"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EVar "top"))) (EVar "decls")) (EVar "ids")))))
+(DTypeSig true "stampTopScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "stampTopScope" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")) (EVar "top")))))
+(DTypeSig true "stampDeclWith" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclWith" ((PVar "top") (PVar "d")) (EApp (EApp (EVar "stampDecl") (EVar "top")) (EVar "d")))
+(DTypeSig true "stampClauseWith" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
+(DFunDef false "stampClauseWith" ((PVar "top") (PTuple (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))
 (DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
 (DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "builtinLayer") (EVar "builtinTyOrigins")) (DoLet false false (PVar "preludeLayer") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (DoLet false false (PVar "importLayer") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (DoLet false false (PVar "ownLayer") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (DoExpr (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "builtinLayer") (EVar "preludeLayer")) (EVar "importLayer")) (EVar "ownLayer"))) (EVar "omEmpty")))))
 (DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
@@ -7243,7 +7270,13 @@ takeOriginTrace _ =
 (DTypeSig false "stampImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
 (DFunDef false "stampImplMethod" ((PVar "top") (PCon "ImplMethod" (PVar "nm") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
+(DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "decls"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EVar "top"))) (EVar "decls")) (EVar "ids")))))
+(DTypeSig true "stampTopScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "stampTopScope" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")) (EVar "top")))))
+(DTypeSig true "stampDeclWith" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclWith" ((PVar "top") (PVar "d")) (EApp (EApp (EVar "stampDecl") (EVar "top")) (EVar "d")))
+(DTypeSig true "stampClauseWith" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
+(DFunDef false "stampClauseWith" ((PVar "top") (PTuple (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))
 (DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
 (DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "builtinLayer") (EVar "builtinTyOrigins")) (DoLet false false (PVar "preludeLayer") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (DoLet false false (PVar "importLayer") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (DoLet false false (PVar "ownLayer") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (DoExpr (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "builtinLayer") (EVar "preludeLayer")) (EVar "importLayer")) (EVar "ownLayer"))) (EVar "omEmpty")))))
 (DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))

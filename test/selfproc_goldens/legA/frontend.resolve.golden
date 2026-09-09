@@ -297,10 +297,12 @@ singleFileImportErrors : List Decl -> List ResError
 stampArm : Map String Int -> Arm -> Arm
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampClause : Map String Int -> FunClause -> FunClause
+stampClauseWith : Map String Int -> (List Pat, Expr) -> (List Pat, Expr)
 stampDecl : Map String Int -> Decl -> Decl
 stampDeclOrigin : String -> Decl -> Decl
 stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
+stampDeclWith : Map String Int -> Decl -> Decl
 stampExpr : Map String Int -> Expr -> Expr
 stampFieldAssign : Map String Int -> FieldAssign -> FieldAssign
 stampFlatTyOrigins : List Decl -> List Decl -> List Decl
@@ -319,6 +321,7 @@ stampModulesGo : List (String, String) -> Map String (List (String, String)) -> 
 stampOneModule : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> List Decl
 stampSection : Map String Int -> Section -> Section
 stampStmts : Map String Int -> List DoStmt -> List DoStmt
+stampTopScope : List Decl -> (Map String Int, List (String, Int))
 stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)
 stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
