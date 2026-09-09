@@ -535,33 +535,34 @@ done
 client rl-conn "$PORTRL" 203.0.113.1 121 429 \
   || fail 'case 19: connections class did not refuse at its ceiling'
 client rl-conn "$PORTRL" 203.0.113.2 1 200 \
-  || fail 'case 19: a second identity was refused by the first ones ceiling'
+  || fail 'case 19: a second identity was refused by the first one's ceiling'
 
 # 20. requests class, same shape, one connection per identity reused across
 #    every request sent on it.
 client rl-req "$PORTRL" 203.0.113.11 3001 429 \
   || fail 'case 20: requests class did not refuse at its ceiling'
 client rl-req "$PORTRL" 203.0.113.12 1 200 \
-  || fail 'case 20: a second identity was refused by the first ones ceiling'
+  || fail 'case 20: a second identity was refused by the first one's ceiling'
 
 # 21. writes class: createRecord is rate-limited independently of the plain
-#    requests ceiling above it. `maxWritesPerWindow` is lowered from its
-#    #2612 placeholder for this gate alone (see the resource_limits.mdk
-#    comment): 300 real signed writes do not fit inside one 60s window on
-#    this box, so a gate built against the placeholder value would report a
-#    false PASS whenever the flood happened to straddle a window boundary
-#    (measured: 301 writes took ~72s against the 300 placeholder).
+#    requests ceiling above it. The ceiling driven here is the shipped
+#    `maxWritesPerWindow`, not a gate-scoped override — there is none. It is
+#    low enough that a real signed write's cost (MST update, commit signing,
+#    disk persistence) fits many multiples of the ceiling inside one window,
+#    which is also what makes this case drivable: a ceiling whose flood
+#    outlasts the window can never be reached, since the count resets
+#    mid-flood (measured: 301 writes take ~72s against a 60s window).
 client rl-write "$PORTRL" 203.0.113.21 61 429 "$RLACCESS" "$DID" "$COLLECTION" rl-a \
   || fail 'case 21: writes class did not refuse at its ceiling'
 client rl-write "$PORTRL" 203.0.113.22 1 200 "$RLACCESS" "$DID" "$COLLECTION" rl-b \
-  || fail 'case 21: a second identity was refused by the first ones ceiling'
+  || fail 'case 21: a second identity was refused by the first one's ceiling'
 
 # 22. createSession class: login itself is rate-limited, independent of
 #    every other class.
 client rl-session "$PORTRL" 203.0.113.31 31 429 "$HANDLE" "$PASSWORD" \
   || fail 'case 22: createSession class did not refuse at its ceiling'
 client rl-session "$PORTRL" 203.0.113.32 1 200 "$HANDLE" "$PASSWORD" \
-  || fail 'case 22: a second identity was refused by the first ones ceiling'
+  || fail 'case 22: a second identity was refused by the first one's ceiling'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
