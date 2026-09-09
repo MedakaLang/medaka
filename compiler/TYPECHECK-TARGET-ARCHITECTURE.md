@@ -780,7 +780,12 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `R-PRIVATE-NAME` went silent on `check --json`, the LSP, MCP and `medaka test` (the
    typecheck half had carried the same exposure since the memo existed).  The key is path +
    source; `cross_project_fixtures/samesrc` pins the reject.  Still open: the 24-entry MRU
-   cliff in the parse and desugar caches (#2797: 2.4M → 46.9M per analyze past 24 modules),
+   cliff in the parse and desugar caches (#2797: 2.4M → 46.9M per analyze past 24 modules)
+   and, behind it, the loader's 64-entry source table (`loadedSourcesLimit`): both prefix memos
+   key on the loaded source, so past 64 modules the earliest entries are evicted first and the
+   replayable prefix collapses to empty — the marginal warm cost per module steps from ~6.5M
+   to ~15.7M between 65 and 67 modules, and the compiler's own graph is 76 (the two limits
+   have to move together),
    `sugValues`/`sugTypes` built unconditionally on the clean path, `medaka test`'s no-doctest
    arm passing no prelude key (so no hoist there), and `run --json` printing prose for a
    static error (#2798).  Also in this batch: the writer-set contract of item 14 is enforced

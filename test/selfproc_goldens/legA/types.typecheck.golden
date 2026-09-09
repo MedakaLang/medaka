@@ -284,6 +284,7 @@ censusSuperCloseVec : List Decl -> List VecObl -> List VecObl
 censusSuperCloseVecFix : List Decl -> List VecObl -> List VecObl -> List VecObl
 censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperSlotsVecOf : List Decl -> VecObl -> List VecObl
+chainFullKey : Int -> Int -> String -> String
 chainGo : List (String, Scheme) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List ChainStep)
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
 checkAdmittedOccObls : Unit -> Unit

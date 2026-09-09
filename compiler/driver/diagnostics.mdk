@@ -50,9 +50,9 @@ import frontend.marker.{
 }
 import types.repr.{Scheme(..)}
 import types.typecheck.{
-  checkOneDiagsK, checkModulesDiagsChain, checkModulesK, entryOwnSchemes,
-  dropModSchemes, setCoherenceUserDecls, setStdlibOwnership, TcDiag(..), tcMsg,
-  mainTypeIsUnit, mainTypeIsAsync
+  checkOneDiagsK, checkModulesDiagsChain, chainFullKey, checkModulesK,
+  entryOwnSchemes, dropModSchemes, setCoherenceUserDecls, setStdlibOwnership,
+  TcDiag(..), tcMsg, mainTypeIsUnit, mainTypeIsAsync
 }
 import driver.loader.{
   LoadMsg,
@@ -1599,7 +1599,7 @@ resolvedBuckets allowInternal trustedMods preludeKey chainKey runtimeP coreP mod
           dmods
           seeded)
     Some (rk, ck) =>
-      let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+      let fullKey = chainFullKey rk ck chainKey
       let steps = match !resolveChainMemoRef
         Some m => if m.rmKey == fullKey then m.rmSteps else []
         None => []
@@ -1674,7 +1674,7 @@ projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
 
 -- The desugared `(modId, decls)` pairs `projectDiagsFromTc` will bucket against,
 -- for a caller that must hand the SAME trees to a graph driver.  Shares
--- `desugarModule`'s source-keyed memo with the check path.
+-- `desugarModule`'s path-and-source-keyed memo with the check path.
 export
 desugaredModPairs : List (String, String, List Decl) -> List (String, List Decl)
 desugaredModPairs mods = map midToDesugaredPair mods

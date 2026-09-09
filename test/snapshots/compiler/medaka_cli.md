@@ -1159,7 +1159,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `cmDiagsCollect`
         -- / `chainGo`'s terminal clause (types/typecheck.mdk), whose SET-OR-CLEAR
         -- write on the terminal module fills the ref.  A module-chain memo HIT
-        -- cannot lose it: `chainPrefix` never covers the terminal module, so the
+        -- cannot lose it: `matchingStepPrefix` never covers the terminal module, so the
         -- write runs on every call, and `restoreCoreDriverFields` — the only thing
         -- a hit restores out of the snapshotted `DriverState` — does not name
         -- `mainSchemeRef`.

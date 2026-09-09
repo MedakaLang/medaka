@@ -41326,6 +41326,14 @@ moduleChainMemoRef = Ref None
 -- (`entryReportFromDiags`) instead of running a second, entry-only driver over the
 -- same graph.  `dropModSchemes` is the narrower `(errs, warns)` projection the
 -- bucketing fold consumes.
+
+-- The whole-graph memo key both prefix memos (the typecheck chain here, the
+-- resolve chain in `driver/diagnostics.mdk`) compare their stored key against:
+-- the prelude generation pair plus the chain key.  One definition, so the two
+-- memos cannot drift apart on what "the same graph" means.
+export
+chainFullKey : Int -> Int -> String -> String
+chainFullKey rk ck chainKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
 export
 checkModulesDiagsChain : Option (Int, Int) ->
   String ->
@@ -41340,7 +41348,7 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
-  let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+  let fullKey = chainFullKey rk ck chainKey
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []

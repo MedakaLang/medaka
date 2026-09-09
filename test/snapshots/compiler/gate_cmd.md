@@ -1,5 +1,5 @@
 # META
-source_lines=2819
+source_lines=2816
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -813,11 +813,8 @@ runGatesLoop env (g :: gs) acc =
 
 -- The offset just PAST the `want`-th newline — i.e. where the last
 -- `total - want` lines begin.  Sliced out of the original string rather than
--- dropped off the head of `splitNl`'s list and rejoined, because a generic
--- list drop here would be a byte-identical twin of `typecheck.dropN` (which is
--- private, so it cannot be shared) and `rule-duplicate-body` is a CROSS-FILE
--- rule — it would fire on typecheck.mdk too, and silencing it there would move
--- a LEG A golden for a 200-line output bound.
+-- dropped off the head of `splitNl`'s list and rejoined: one pass over the
+-- string, no intermediate list, for a 200-line output bound.
 afterNewlines : Array Char -> Int -> Int -> Int -> Int
 afterNewlines cs i len want
   | i >= len = len
