@@ -736,6 +736,21 @@ analyzeLocatedG modName allowInternal runtimeSrc coreSrc progSrc =
     (parseLocated progSrc)
     (internalGuardFor allowInternal)
 
+-- The RAW/AST-level half of `analyzeFrom`, plus the derived trees its typecheck
+-- half consumes.  `surfaceDiags` holds the first four groups of `analyzeFrom`'s
+-- fixed result order (derives, guard exhaustiveness, prelude-standalone shadows,
+-- resolve); `analyzeFinish` appends the typecheck half and the auto-print half
+-- after them.  `resolveClean` is False when `resolveProgramG2` reported, and no
+-- caller may typecheck a program resolve rejected.
+public export data SurfaceAnalysis = SurfaceAnalysis {
+  surfaceDiags : List Diag,
+  resolveClean : Bool,
+  surfaceDesugared : List Decl,
+  surfaceRuntimeP : List Decl,
+  surfaceCoreP : List Decl,
+  surfacePreludeKey : Option (Int, Int),
+}
+
 -- Shared analysis body, parameterised over the already-parsed target program
 -- (so `analyze` can pass placeholder-loc `parse` decls and `analyzeLocated` can
 -- pass real-loc `parseLocated` decls without duplicating the pipeline).
@@ -757,6 +772,30 @@ analyzeFrom : String ->
   List String ->
   List Diag
 analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
+  let s = analyzeSurface modName runtimeSrc coreSrc raw internalGuard
+  let tcDiags = match s.resolveClean
+    True =>
+      let (tcErrs, tcWarns) = checkOneDiagsK
+        s.surfacePreludeKey
+        s.surfaceRuntimeP
+        s.surfaceCoreP
+        ("__user__", s.surfaceDesugared)
+      map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
+    False => []
+  analyzeFinish s tcDiags
+
+-- Everything `analyzeFrom` runs except the typecheck: parse-independent,
+-- AST-level, and safe to run before a caller decides WHICH typecheck produces
+-- the other half.  `run`'s single-file arm takes that half from the elaboration
+-- it already performs for eval instead of from a second, check-only pass.
+export
+analyzeSurface : String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  SurfaceAnalysis
+analyzeSurface modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
   let runtimeP = desugaredPrelude runtimeSrc
   let coreP = desugaredPrelude coreSrc
@@ -781,26 +820,61 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let resErrs = resolveProgramG2 internalGuard runtimeP coreP desugared
   let resDiags = map diagOfResError resErrs
   let _ = setCoherenceUserDecls desugared
-  let tcDiags = match resErrs
-    [] =>
-      let (tcErrs, tcWarns) =
-        checkOneDiagsK preludeKey runtimeP coreP ("__user__", desugared)
-      map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
-    _ => []
-  -- AUTO-PRINT visibility (composite-main design §10): a bare non-Unit VALUE main
-  -- (`main = (Red, 5)`) is auto-printed via `Display` at emit, so its Display
-  -- obligation must surface in `check`/LSP/playground too — not only at `build`.
-  -- Mirror the emit driver's wrap+recheck: wrap `main = <e>` → `main = println <e>`
-  -- and re-run the check gate on the wrapped single module (underivedMainDiags).
-  -- Gated on shouldAutoPrintMain (needs the elaborate above to have set main's
-  -- type), so a Unit/Async/function main and a satisfied value main add nothing.
-  let autoDiags = match resErrs
-    [] =>
-      filterNewDiags tcDiags (autoPrintObligationDiags runtimeP coreP desugared)
-    _ => []
   let guardDiags = map guardWarnToDiag guardWarns
   let shadowDiags = map (preludeShadowWarnToDiag modName) shadowWarns
-  deriveDiags ++ guardDiags ++ shadowDiags ++ resDiags ++ tcDiags ++ autoDiags
+  let clean = match resErrs
+    [] => True
+    _ => False
+  SurfaceAnalysis {
+    surfaceDiags = deriveDiags ++ guardDiags ++ shadowDiags ++ resDiags,
+    resolveClean = clean,
+    surfaceDesugared = desugared,
+    surfaceRuntimeP = runtimeP,
+    surfaceCoreP = coreP,
+    surfacePreludeKey = preludeKey,
+  }
+
+-- The surface half, the typecheck half and the auto-print half, in the result
+-- order every `analyzeFrom` consumer depends on.
+--
+-- AUTO-PRINT visibility (composite-main design §10): a bare non-Unit VALUE main
+-- (`main = (Red, 5)`) is auto-printed via `Display` at emit, so its Display
+-- obligation must surface in `check`/LSP/playground too — not only at `build`.
+-- Mirror the emit driver's wrap+recheck: wrap `main = <e>` → `main = println <e>`
+-- and re-run the check gate on the wrapped single module (underivedMainDiags).
+-- Gated on shouldAutoPrintMain, which reads the `mainSchemeRef` only a typecheck
+-- of the program sets, so this must run AFTER the caller's typecheck half — a
+-- Unit/Async/function main and a satisfied value main then add nothing.
+export
+analyzeFinish : SurfaceAnalysis -> List Diag -> List Diag
+analyzeFinish s tcDiags =
+  let autoDiags = match s.resolveClean
+    True =>
+      filterNewDiags
+        tcDiags
+        (autoPrintObligationDiags
+          s.surfaceRuntimeP
+          s.surfaceCoreP
+          s.surfaceDesugared)
+    False => []
+  s.surfaceDiags ++ tcDiags ++ autoDiags
+
+-- An elaboration's per-module `(errs, warns)` as `analyzeFrom`'s typecheck half:
+-- the same `diagOfTypeError`/`diagOfTypeWarning` conversion, errors before
+-- warnings, which is the order the entry driver's half is built in.  For the
+-- FLAT (one module) callers only — the multi-module report buckets the same
+-- payload per file through `typecheckDiagsFold` instead.
+export
+tcHalfOfPerModule : List (String, (List TcDiag, List TcDiag)) -> List Diag
+tcHalfOfPerModule perMod =
+  map diagOfTypeError (flatMap perModuleErrs perMod)
+    ++ map diagOfTypeWarning (flatMap perModuleWarns perMod)
+
+perModuleErrs : (String, (List TcDiag, List TcDiag)) -> List TcDiag
+perModuleErrs (_, (errs, _)) = errs
+
+perModuleWarns : (String, (List TcDiag, List TcDiag)) -> List TcDiag
+perModuleWarns (_, (_, warns)) = warns
 
 -- The auto-print Display obligation for a bare non-Unit value main, as located
 -- Diags (empty when the wrap doesn't fire or the obligation is satisfied).
