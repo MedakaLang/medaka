@@ -8,7 +8,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import hex.{encode}
-import map.{Map(..), get, set, size, toList}
+import map.{Map(..), get, set, size, entries}
 import lib.cid.{Cid, cidCodec, cidEqual, cidForDagCbor, cidForRaw, cidToBytes}
 import lib.multiformats.{multicodecDagCbor}
 
@@ -103,8 +103,7 @@ entryValues ((_, entry) :: rest) = entry :: entryValues rest
 -- | Canonical CID-sorted defensive entry view.
 export
 blockStoreEntries : BlockStore -> List (Cid, Array Int)
-blockStoreEntries (BlockStore entries) =
-  copyEntries (entryValues (toList entries))
+blockStoreEntries (BlockStore m) = copyEntries (entryValues (entries m))
 
 -- | Verify and immutably merge every entry from the right-hand store.
 export

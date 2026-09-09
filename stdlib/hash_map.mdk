@@ -247,22 +247,14 @@ collectBuckets arr i n acc
   | i >= n = acc
   | otherwise = collectBuckets arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
 
--- Private collector behind the exported `toList`.  It is deliberately not
--- named `toList` itself: `toList` is a `Foldable` method (returning
--- elements), and `HashMap` isn't `Foldable`, so a file-local `toList` used
--- from the definitions below risks being read as the method and mistyped
--- (`List v` vs the pairs `List (k, v)`).
+{- | The entries as pairs, in unspecified order.
+
+   > entries (fromList [(5, 50)])
+   [(5, 50)] -}
+export
 entries : HashMap k v -> List (k, v)
 entries (HashMap buckets _) =
   collectBuckets !buckets 0 (arrayLength !buckets) []
-
-{- | The entries as pairs, in unspecified order.
-
-   > toList (fromList [(5, 50)])
-   [(5, 50)] -}
-export
-toList : HashMap k v -> List (k, v)
-toList m = entries m
 
 {- | The keys, in unspecified order.
 
@@ -306,7 +298,7 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 -- `Display` may not be: a rendering that changes when the table is rebuilt
 -- with the same entries is not a rendering of the value.  So `Display` sorts
 -- by key, which is why it asks for `Ord k` that `Debug` does not, and the law
--- it buys is `display m == display (fromList (toList m))`.  The sort is
+-- it buys is `display m == display (fromList (entries m))`.  The sort is
 -- `list.sortOn fst`: one ordering routine for the whole stdlib.
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
@@ -348,8 +340,8 @@ export impl Index (HashMap k v) k v requires Eq k, Hashable k where
 -- and it is what `Debug` -- documented as hash-ordered -- cannot satisfy.
 prop "Display HashMap is layout-independent" (xs : List (Int, Int)) =
   let m = fromList xs
-  display m == display (fromList (toList m))
-    && display m == display (fromList (L.reverse (toList m)))
+  display m == display (fromList (entries m))
+    && display m == display (fromList (L.reverse (entries m)))
 
 -- LAW: the fixed order is ASCENDING BY KEY, and `Display` agrees with `Eq` --
 -- two tables that compare equal render identically.

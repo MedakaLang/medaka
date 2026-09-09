@@ -1,5 +1,5 @@
 # META
-source_lines=373
+source_lines=365
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable hash table from keys to values.
@@ -251,22 +251,14 @@ collectBuckets arr i n acc
   | i >= n = acc
   | otherwise = collectBuckets arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
 
--- Private collector behind the exported `toList`.  It is deliberately not
--- named `toList` itself: `toList` is a `Foldable` method (returning
--- elements), and `HashMap` isn't `Foldable`, so a file-local `toList` used
--- from the definitions below risks being read as the method and mistyped
--- (`List v` vs the pairs `List (k, v)`).
+{- | The entries as pairs, in unspecified order.
+
+   > entries (fromList [(5, 50)])
+   [(5, 50)] -}
+export
 entries : HashMap k v -> List (k, v)
 entries (HashMap buckets _) =
   collectBuckets !buckets 0 (arrayLength !buckets) []
-
-{- | The entries as pairs, in unspecified order.
-
-   > toList (fromList [(5, 50)])
-   [(5, 50)] -}
-export
-toList : HashMap k v -> List (k, v)
-toList m = entries m
 
 {- | The keys, in unspecified order.
 
@@ -310,7 +302,7 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 -- `Display` may not be: a rendering that changes when the table is rebuilt
 -- with the same entries is not a rendering of the value.  So `Display` sorts
 -- by key, which is why it asks for `Ord k` that `Debug` does not, and the law
--- it buys is `display m == display (fromList (toList m))`.  The sort is
+-- it buys is `display m == display (fromList (entries m))`.  The sort is
 -- `list.sortOn fst`: one ordering routine for the whole stdlib.
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
@@ -352,8 +344,8 @@ export impl Index (HashMap k v) k v requires Eq k, Hashable k where
 -- and it is what `Debug` -- documented as hash-ordered -- cannot satisfy.
 prop "Display HashMap is layout-independent" (xs : List (Int, Int)) =
   let m = fromList xs
-  display m == display (fromList (toList m))
-    && display m == display (fromList (L.reverse (toList m)))
+  display m == display (fromList (entries m))
+    && display m == display (fromList (L.reverse (entries m)))
 
 -- LAW: the fixed order is ASCENDING BY KEY, and `Display` agrees with `Eq` --
 -- two tables that compare equal render identically.
@@ -430,10 +422,8 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "deleteAt" ((PVar "key") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EVar "bucketHas") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EVar "bucketRemove") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "-" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectBuckets" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
 (DFunDef false "collectBuckets" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "collectBuckets") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "entries" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
+(DTypeSig true "entries" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
 (DFunDef false "entries" ((PCon "HashMap" (PVar "buckets") PWild)) (EApp (EApp (EApp (EApp (EVar "collectBuckets") (EUnOp "!" (EVar "buckets"))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EUnOp "!" (EVar "buckets")))) (EListLit)))
-(DTypeSig true "toList" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "toList" ((PVar "m")) (EApp (EVar "entries") (EVar "m")))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
@@ -449,7 +439,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "displayEntries" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "displayEntries") (EVar "rest")))) (ELit (LString ""))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Display" ((TyVar "k"))) (req "Display" ((TyVar "v"))) (req "Ord" ((TyVar "k")))) ((im "display" ((PVar "m")) (EMatch (EApp (EApp (EVar "L.sortOn") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))) (arm (PList) () (ELit (LString "HashMap {}"))) (arm (PVar "es") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashMap { ")) (EApp (EVar "display") (EApp (EVar "displayEntries") (EVar "es")))) (ELit (LString " }"))))))))
 (DImpl true "Index" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Eq" ((TyVar "k"))) (req "Hashable" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (ELit (LString "key not found"))))))))
-(DProp false "Display HashMap is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "m")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "toList") (EVar "m"))))) (EBinOp "==" (EApp (EVar "display") (EVar "m")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EApp (EVar "toList") (EVar "m"))))))))))
+(DProp false "Display HashMap is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "m")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "entries") (EVar "m"))))) (EBinOp "==" (EApp (EVar "display") (EVar "m")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EApp (EVar "entries") (EVar "m"))))))))))
 (DProp false "Display HashMap agrees with Eq and lists keys ascending" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EVar "ascendingKeys") (EApp (EApp (EVar "L.sortOn") (EVar "fst")) (EApp (EVar "entries") (EVar "a")))) (EBinOp "==" (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))))))))
 (DTypeSig false "ascendingKeys" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Bool"))))
 (DFunDef false "ascendingKeys" ((PList)) (EVar "True"))
@@ -511,10 +501,8 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "deleteAt" ((PVar "key") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EDictApp "bucketHas") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EDictApp "bucketRemove") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "-" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectBuckets" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
 (DFunDef false "collectBuckets" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "collectBuckets") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "entries" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
+(DTypeSig true "entries" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
 (DFunDef false "entries" ((PCon "HashMap" (PVar "buckets") PWild)) (EApp (EApp (EApp (EApp (EVar "collectBuckets") (EUnOp "!" (EVar "buckets"))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EUnOp "!" (EVar "buckets")))) (EListLit)))
-(DTypeSig true "toList#shadow" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "toList#shadow" ((PVar "m")) (EApp (EVar "entries") (EVar "m")))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
@@ -530,7 +518,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "displayEntries" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "displayEntries") (EVar "rest")))) (ELit (LString ""))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Display" ((TyVar "k"))) (req "Display" ((TyVar "v"))) (req "Ord" ((TyVar "k")))) ((im "display" ((PVar "m")) (EMatch (EApp (EApp (EVar "L.sortOn") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))) (arm (PList) () (ELit (LString "HashMap {}"))) (arm (PVar "es") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashMap { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayEntries") (EVar "es")))) (ELit (LString " }"))))))))
 (DImpl true "Index" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Eq" ((TyVar "k"))) (req "Hashable" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (ELit (LString "key not found"))))))))
-(DProp false "Display HashMap is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "m")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "toList#shadow") (EVar "m"))))) (EBinOp "==" (EApp (EMethodRef "display") (EVar "m")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EApp (EVar "toList#shadow") (EVar "m"))))))))))
+(DProp false "Display HashMap is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "m")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "entries") (EVar "m"))))) (EBinOp "==" (EApp (EMethodRef "display") (EVar "m")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EApp (EVar "entries") (EVar "m"))))))))))
 (DProp false "Display HashMap agrees with Eq and lists keys ascending" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EDictApp "ascendingKeys") (EApp (EApp (EVar "L.sortOn") (EVar "fst")) (EApp (EVar "entries") (EVar "a")))) (EBinOp "==" (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "b"))))))))
 (DTypeSig false "ascendingKeys" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Bool"))))
 (DFunDef false "ascendingKeys" ((PList)) (EVar "True"))

@@ -79,8 +79,8 @@
 -- pull it in is the anti-pattern `AGENTS.md` measures at +34 KB / +4.8%
 -- self-compile (DCE keeps a `DImpl`/`DInterface` whole once it is
 -- reachable at all) — this module avoids that by riding the SAME `OrdMap`
--- everything else already rides. `map.{toList}` below is likewise
--- already-forced surface (`toList` operates on the already-forced `Map`
+-- everything else already rides. `map.{entries}` below is likewise
+-- already-forced surface (`entries` operates on the already-forced `Map`
 -- type), so it adds no new retained instance surface.
 --
 -- ── `identKey`: the ONE renderer, collision-free by construction ───────────
@@ -174,7 +174,7 @@ import support.ordmap.{
   omSize,
 }
 import support.util.{lenKey, listLen, joinWith, filterList}
-import map.{toList}
+import map.{entries}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
 
@@ -460,7 +460,7 @@ regDelete ident r = regDeleteK (regKeyOf ident) r
 -- still has to review" in the module doc-comment. It IS deterministic.
 export
 regEntries : Registry v -> List (RegKey, v)
-regEntries (Registry m) = map snd (toList m)
+regEntries (Registry m) = map snd (entries m)
 
 -- Symmetry with `mregKeys`/`sregKeys`. Derivable (`map fst (regEntries r)`),
 -- added anyway because an API where two of three registry types can enumerate
@@ -597,7 +597,7 @@ mregLookup ident mr = mregLookupK (regKeyOf ident) mr
 -- `regEntries`.
 export
 mregEntries : MultiRegistry v -> List (RegKey, List v)
-mregEntries (MultiRegistry m) = map snd (toList m)
+mregEntries (MultiRegistry m) = map snd (entries m)
 
 export
 mregKeys : MultiRegistry v -> List RegKey
@@ -657,7 +657,7 @@ sregSize (SetRegistry m) = omSize m
 
 export
 sregKeys : SetRegistry -> List RegKey
-sregKeys (SetRegistry m) = map snd (toList m)
+sregKeys (SetRegistry m) = map snd (entries m)
 
 export
 sregMerge : SetRegistry -> SetRegistry -> SetRegistry

@@ -151,16 +151,16 @@ Nothing happens when the key is absent.
 
 ## Iteration
 
-### `toList`
+### `entries`
 
 ```
-toList : HashMap k v -> List (k, v)
+entries : HashMap k v -> List (k, v)
 ```
 
 The entries as pairs, in unspecified order.
 
 ```medaka
-> toList (fromList [(5, 50)])
+> entries (fromList [(5, 50)])
 [(5, 50)]
 ```
 
