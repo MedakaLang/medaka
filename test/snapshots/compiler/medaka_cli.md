@@ -1156,7 +1156,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         let _ = emitHiddenDiagNote hiddenCount
         -- 0.1.0 main-shape warning (see below).  `mainShapeWarnings` runs no
         -- elaboration of its own (pure since S-3/#2234); this route's producer of
-        -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `cmDiagsCollect`
+        -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `graphCollect`
         -- / `chainGo`'s terminal clause (types/typecheck.mdk), whose SET-OR-CLEAR
         -- write on the terminal module fills the ref.  A module-chain memo HIT
         -- cannot lose it: `chainPrefix` never covers the terminal module, so the

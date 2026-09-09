@@ -2193,7 +2193,7 @@ mainNonUnitWarning decls = match findMainFunDef decls
 -- FIRES, but a WRONG scheme makes it VANISH):
 --   * `checkRoute` single-module (medaka_cli) — `analyzeLocatedG`, then `runCheck`.
 --   * `checkRoute` multi-module (medaka_cli) — `locatedProjectDiags`, whose fold
---     writes the ref on the terminal module (`cmDiagsCollect`).
+--     writes the ref on the terminal module (`graphCollect`).
 --   * `typecheckGateRoute` single-module (medaka_cli, the build/run gate) —
 --     `analyzeLocatedG` alone.  This is the caller the deletion nearly broke: see
 --     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
@@ -2206,7 +2206,7 @@ mainNonUnitWarning decls = match findMainFunDef decls
 --     `None` ⇒ W-MAIN-SHAPE fired on a clean Unit main; long-lived `mcp`/`lsp`
 --     process ⇒ a previous request's scheme masked a real non-Unit warning).  It is
 --     a true producer NOW because `checkModulesDiags`'s fold carries the SET-OR-CLEAR
---     write (`cmDiagsCollect`/`setMainSchemeIfEntry`, types/typecheck.mdk), mirroring
+--     write (`graphCollect`/`setMainSchemeIfEntry`, types/typecheck.mdk), mirroring
 --     `checkModulesEntryFullSplit`'s.
 -- `rtD`/`coreD`/`modsDFull` are retained in the SIGNATURE (they are what a future
 -- caller with no prior typecheck of its own would need) but are IGNORED by the body,
