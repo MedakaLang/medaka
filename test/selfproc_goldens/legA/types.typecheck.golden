@@ -1344,6 +1344,7 @@ intersectDeclAtoms : List (List Atom) -> List Atom
 ioAliasLabels : List String
 isArithBinop : String -> Bool
 isBareTyvarMono : Mono -> Bool
+isCompareMethod : String -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
 isCtorAppSpine : TcEnv -> Expr -> Bool

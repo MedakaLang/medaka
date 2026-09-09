@@ -1,5 +1,5 @@
 # META
-source_lines=43811
+source_lines=43831
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -21880,8 +21880,21 @@ stampOpRouteVal : Bool -> String -> String -> Mono -> String -> Route
 stampOpRouteVal isBinop encl method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
+  -- #2356: a builtin head is not a dispatch, but it is not nothing either.  A
+  -- comparison whose operand GROUNDS to `Int` gets the positive scalar stamp
+  -- `RScalar "Int"`, the same carrier resolveArithSite uses for Float, so the
+  -- native emitter can compare the two tagged words inline instead of calling the
+  -- opaque @mdk_value_eq/@mdk_value_lt runtime discriminators.  The stamp is the
+  -- ONLY sound witness for that: the emitter's own `LTInt` is its default for an
+  -- operand whose type it could not recover, so an `icmp` keyed on LTy would
+  -- compare boxed String/Float POINTERS as integers.  Every other builtin head
+  -- (Float/String/Bool/Char) and every ungrounded operand stay RNone, i.e. on the
+  -- runtime-discriminated path they are on today.
   if isBuiltin then
-    RNone
+    if isBinop && tag == "Int" && isCompareMethod method then
+      RScalar "Int"
+    else
+      RNone
   else
     -- #609: no interface param vector is recoverable at an operator site (the
     -- node carries one operand mono, not a method occurrence), so the goal is the
@@ -21920,6 +21933,13 @@ stampOpRouteVal isBinop encl method operandMono tag =
 innerDefaultMethod : String -> String
 innerDefaultMethod m =
   if contains m ["lt", "gt", "lte", "gte", "min", "max"] then "compare" else m
+
+-- #2356: the five comparison OPERATOR methods (`==`/`/=` -> `eq`, `<`/`>`/`<=`/`>=`
+-- -> `lt`/`gt`/`lte`/`gte`).  `min`/`max` are deliberately absent: they are Ord
+-- methods but no operator records a site for them, so a name-only match on them
+-- would stamp nothing and claim a reach this predicate does not have.
+isCompareMethod : String -> Bool
+isCompareMethod m = contains m ["eq", "lt", "gt", "lte", "gte"]
 
 -- ── ARCH B-2.1-h (Stage B repair): THE METHOD-SET GUARD, GRAPH-GLOBAL ────────
 -- 🚨 THE PREDECESSOR (`implDefinesMethodAt`, over the cumulative-prefix
@@ -47386,9 +47406,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveOpSite" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "Mono") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
 (DFunDef false "resolveOpSite" ((PVar "isBinop") (PVar "method") (PVar "tagRef") (PVar "operandMono") (PVar "inImpl") (PVar "encl")) (EMatch (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "entail") (EVar "method")) (EVar "operandMono")) (EVar "encl")) (EApp (EApp (EVar "EKOp") (EVar "isBinop")) (EVar "inImpl")))) (arm (PCon "RNone") () (ELit LUnit)) (arm (PVar "route") () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route")))))
 (DTypeSig false "stampOpRouteVal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Route")))))))
-(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EVar "RNone") (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
+(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "isBinop") (EBinOp "==" (EVar "tag") (ELit (LString "Int")))) (EApp (EVar "isCompareMethod") (EVar "method"))) (EApp (EVar "RScalar") (ELit (LString "Int"))) (EVar "RNone")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
 (DTypeSig false "innerDefaultMethod" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "innerDefaultMethod" ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")) (ELit (LString "min")) (ELit (LString "max")))) (ELit (LString "compare")) (EVar "m")))
+(DTypeSig false "isCompareMethod" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCompareMethod" ((PVar "m")) (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "eq")) (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")))))
 (DTypeSig false "ieDefinesReqMethodAt" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "Bool")))))
 (DFunDef false "ieDefinesReqMethodAt" ((PVar "env") (PVar "method") (PVar "hd")) (EApp (EApp (EApp (EVar "ieDefinesReqMethodAtGo") (EApp (EApp (EVar "ieHeadRows") (EVar "hd")) (EVar "env"))) (EVar "method")) (EApp (EVar "headTabOf") (EVar "hd"))))
 (DTypeSig false "ieDefinesReqMethodAtGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "Bool")))))
@@ -53909,9 +53931,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveOpSite" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "Mono") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
 (DFunDef false "resolveOpSite" ((PVar "isBinop") (PVar "method") (PVar "tagRef") (PVar "operandMono") (PVar "inImpl") (PVar "encl")) (EMatch (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "entail") (EVar "method")) (EVar "operandMono")) (EVar "encl")) (EApp (EApp (EVar "EKOp") (EVar "isBinop")) (EVar "inImpl")))) (arm (PCon "RNone") () (ELit LUnit)) (arm (PVar "route") () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route")))))
 (DTypeSig false "stampOpRouteVal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Route")))))))
-(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EVar "RNone") (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
+(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "isBinop") (EBinOp "==" (EVar "tag") (ELit (LString "Int")))) (EApp (EVar "isCompareMethod") (EVar "method"))) (EApp (EVar "RScalar") (ELit (LString "Int"))) (EVar "RNone")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
 (DTypeSig false "innerDefaultMethod" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "innerDefaultMethod" ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")) (ELit (LString "min")) (ELit (LString "max")))) (ELit (LString "compare")) (EVar "m")))
+(DTypeSig false "isCompareMethod" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCompareMethod" ((PVar "m")) (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "eq")) (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")))))
 (DTypeSig false "ieDefinesReqMethodAt" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "Bool")))))
 (DFunDef false "ieDefinesReqMethodAt" ((PVar "env") (PVar "method") (PVar "hd")) (EApp (EApp (EApp (EVar "ieDefinesReqMethodAtGo") (EApp (EApp (EVar "ieHeadRows") (EVar "hd")) (EVar "env"))) (EVar "method")) (EApp (EVar "headTabOf") (EVar "hd"))))
 (DTypeSig false "ieDefinesReqMethodAtGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "Bool")))))
