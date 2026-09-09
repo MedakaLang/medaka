@@ -1,7 +1,7 @@
 # Declaration-Shadowing Semantics (standalone fn ⇄ interface method)
 
 **Status:** ENFORCED — the decision matrix is a GATE
-(`test/shadow_semantics_test.mdk`): it runs every fixture in
+(`test/diff_compiler_shadow_semantics_test.mdk`): it runs every fixture in
 `test/shadow_fixtures/` through `check` + `run` + `build`, asserting each cell's
 verdict AND (per **S7**) that `run` and the built binary print the same pinned
 value. **Every cell with a fixture is conformant** (2026-07-17). S-3 (row 26,
@@ -161,7 +161,7 @@ enforcement table. Where the binary disagrees with a clause, the matrix row says
 scheme selection → SIGSEGV, cross-module registration `cfc4fa5a`) because each
 stage made its own keying assumption about the same rule (§3 makes those keys
 explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
-`test/shadow_semantics_test.mdk` — see §4. History/context: memory
+`test/diff_compiler_shadow_semantics_test.mdk` — see §4. History/context: memory
 `project_phase112_standalone_vs_method`, `qa-beta-2026-07-07/P0-18-*.md`.
 
 ## 0. Terminology
@@ -463,7 +463,7 @@ Given an occurrence of bare name `N` in module `M`:
   > `i13` (ACCEPT 300 → located REJECT), `i15` (7 → 99), `i17/main.mdk` (7 → 99),
   > `i17/order-swapped.mdk` (REJECT → ACCEPT 99), plus `i19` above. This list is a floor and
   > a pointer, not a census: re-derive it by building the base and re-running
-  > `test/shadow_semantics_test.mdk` rather than by trusting a count written here.
+  > `test/diff_compiler_shadow_semantics_test.mdk` rather than by trusting a count written here.
   >
   > **Explicitly NOT changed:** S2's graph-global impl universe (`DICT-SEMANTICS.md` §8
   > I5). S1-NS constrains a set of NAMES; it cannot narrow an instance environment.
@@ -1055,7 +1055,7 @@ Given an occurrence of bare name `N` in module `M`:
   > clauses are swapped is non-conformant **whatever value it produces** — including
   > when the two orders differ only in *accepting* versus *rejecting*. The
   > instrument is a permutation differential, not a golden:
-  > `test/import_order_test.mdk`.
+  > `test/diff_compiler_import_order_test.mdk`.
   >
   > **What it costs, stated as a cost.** One cell **narrows**: two admitted,
   > disagreeing declarations plus a standalone `N` compiles today and stops
@@ -1554,7 +1554,7 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 > paragraphs below *said so*. A spec that says BUG where the binary says OK
 > sends the next agent down a wrong hypothesis; that is exactly what it did.
 > Every Status below is now re-observed empirically **and enforced by
-> `test/shadow_semantics_test.mdk`**, which drives every fixture
+> `test/diff_compiler_shadow_semantics_test.mdk`**, which drives every fixture
 > through `check` + `run` + `build` and pins the value. This column can no
 > longer drift without a gate going red.
 
@@ -1637,7 +1637,7 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 >
 > **Where the Status column for 33–45 comes from, stated because it is not a fresh
 > local run** (2026-08-10). It is read off each unit's pinned expectation in
-> `test/shadow_semantics_test.mdk`, which asserts verdict **and** value on
+> `test/diff_compiler_shadow_semantics_test.mdk`, which asserts verdict **and** value on
 > all three verbs per unit and runs in CI's `types` shard — so a Status here that
 > disagreed with the binary would be a red gate rather than a stale cell, which is
 > the property the note above this table demands. **The Specified-outcome column
@@ -1665,7 +1665,7 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 46 | **PRELUDE standalone** as the candidate left operand · interface declared in `M` · receiver at a head with **no impl** of that interface but **inside** the prelude standalone's domain — the LOUD, discriminating cell | S1-PRELUDE (a) | the prelude is **not** in S1's left operand → **not a shadow** → the bare name is the **interface method** → ordinary dispatch finds no impl → **located REJECT** | `x1_prelude_standalone_not_left_operand.mdk` | reject | reject | reject | **OK** — the cell #1375 item 2 left open and **the corpus had none**: every other unit puts the standalone in `M` or imports it explicitly, so this axis graded nowhere. The **rejected** reading (admit a prelude standalone as an *importer* shadow) ACCEPTS the same source and prints `False`, because S2's importer arm falls back to the standalone when no impl sits at the head — that difference is what makes this cell discriminating. ⚠️ Value **hand-derived from the ruling, not captured**: `eval` is a known-wrong oracle on this collision (see row 49) |
 | 47 | row 46 with **ZERO impls** of the colliding interface | S1-PRELUDE (a) | same → **located REJECT** | `x2_prelude_standalone_zeroimpls.mdk` | reject | reject | reject | **OK** — the `d1b`/`d19` move applied to the prelude cell, and it closes a *different* escape hatch: an implementation that consulted the impl universe **before** deciding the name would answer row 46 correctly for the wrong reason. With no impl to consult, only the interface method having taken the name outright can produce this reject — which is (a)'s actual content (*"no S2 arm applies; the impl universe is never consulted to decide the name"*) |
 | 48 | row 46 at **ARITY-DIFFERING** width — prelude `count`'s two arguments against an interface `count`'s one | S1-PRELUDE (a) + S8 | same → **located REJECT** (over-application **and** no impl at the function argument's head) | `x3_prelude_standalone_arity_differ.mdk` | reject | reject | reject | **OK** — rows 46/47 both collide with an arity-**matching** standalone, so a reader could conclude the rule is gated on the signatures lining up. It is not. Under the rejected reading this ACCEPTS and prints `3` |
-| 49 | **PRELUDE standalone** collision where **BOTH denotations are well-typed at the SAME receiver** (an `impl` of the colliding interface at the receiver's head, so the interface method applies exactly where the prelude standalone also would) | S1-PRELUDE (a) + **S7** | (a) gives the **interface method**; `check`, `run` and the built binary must agree on it | `test/shadow_fixtures/x4_prelude_standalone_live_impl_receiver.mdk` (unconstrained), `x5_prelude_constrained_standalone_live_impl.mdk` (constrained) — added by the `prelude-shadow-agreement` sprint; [#1497](https://github.com/MedakaLang/medaka/issues/1497)'s must-fail pin is DRAINED (`test/must_fail_fixtures/1497-*` no longer exists) | **the PRELUDE standalone's answer** | **the INTERFACE METHOD's answer** | accept, **0 diagnostics** | ✅ **CONFORMANT, measured 2026-08-28 on this tree** (post `S-prelude-cell-agreement` `89268878` + `F1` `abf203ba`, sprint `prelude-shadow-agreement`). `check`/`run`/`build`+binary all agree on the **INTERFACE METHOD's** answer, matching (a) — both on the two gated fixtures (x4: `True`/`True`/`True`; x5: `7`/`7`/`7`, all `ACCEPT ACCEPT ACCEPT`, `shadow_semantics_test.mdk`) and on a further hand-run sample (`length`, `abs`, `compare`, `sum`, plus a cross-module importer variant of `abs`) — see the LOUD/SILENT/PRELUDE-INTERNAL bullets under S1-PRELUDE's Conformance for the individual re-measurements. **This sample is not a re-run of the review round's original 55-name census**, so this row does not claim conformance for every prelude name, only for what was re-measured. Issues [#1492](https://github.com/MedakaLang/medaka/issues/1492) and #1497 remain **OPEN** on the tracker (closing them is not this doc edit's call), but neither issue's own repro, nor this row's own fixtures, reproduce a run/build divergence on this tree any more; [#1493](https://github.com/MedakaLang/medaka/issues/1493) (the PRELUDE-INTERNAL sibling) is **CLOSED**. **No mechanism is asserted** for why the prior divergence closed (see the ⚠️ under S1-PRELUDE's Conformance: the partial-application account was already measured false, and no replacement account is offered here). 🚨 **STILL NOT CAPTURABLE as an engine-recorded golden** — even though the arms currently agree, per this document's own corpus rule (`WT-GOLDEN-ENSHRINES`) a captured golden records what an engine DID, and this cell's own history (a silent divergence existed once, unnoticed, until #1497 was filed) is the argument against ever letting one arm's output alone stand as this cell's ground truth. It is graded by `x4`/`x5`'s hand-derived `ALL_EXACT` run+build-agreement assertions instead, never a capture |
+| 49 | **PRELUDE standalone** collision where **BOTH denotations are well-typed at the SAME receiver** (an `impl` of the colliding interface at the receiver's head, so the interface method applies exactly where the prelude standalone also would) | S1-PRELUDE (a) + **S7** | (a) gives the **interface method**; `check`, `run` and the built binary must agree on it | `test/shadow_fixtures/x4_prelude_standalone_live_impl_receiver.mdk` (unconstrained), `x5_prelude_constrained_standalone_live_impl.mdk` (constrained) — added by the `prelude-shadow-agreement` sprint; [#1497](https://github.com/MedakaLang/medaka/issues/1497)'s must-fail pin is DRAINED (`test/must_fail_fixtures/1497-*` no longer exists) | **the PRELUDE standalone's answer** | **the INTERFACE METHOD's answer** | accept, **0 diagnostics** | ✅ **CONFORMANT, measured 2026-08-28 on this tree** (post `S-prelude-cell-agreement` `89268878` + `F1` `abf203ba`, sprint `prelude-shadow-agreement`). `check`/`run`/`build`+binary all agree on the **INTERFACE METHOD's** answer, matching (a) — both on the two gated fixtures (x4: `True`/`True`/`True`; x5: `7`/`7`/`7`, all `ACCEPT ACCEPT ACCEPT`, `diff_compiler_shadow_semantics_test.mdk`) and on a further hand-run sample (`length`, `abs`, `compare`, `sum`, plus a cross-module importer variant of `abs`) — see the LOUD/SILENT/PRELUDE-INTERNAL bullets under S1-PRELUDE's Conformance for the individual re-measurements. **This sample is not a re-run of the review round's original 55-name census**, so this row does not claim conformance for every prelude name, only for what was re-measured. Issues [#1492](https://github.com/MedakaLang/medaka/issues/1492) and #1497 remain **OPEN** on the tracker (closing them is not this doc edit's call), but neither issue's own repro, nor this row's own fixtures, reproduce a run/build divergence on this tree any more; [#1493](https://github.com/MedakaLang/medaka/issues/1493) (the PRELUDE-INTERNAL sibling) is **CLOSED**. **No mechanism is asserted** for why the prior divergence closed (see the ⚠️ under S1-PRELUDE's Conformance: the partial-application account was already measured false, and no replacement account is offered here). 🚨 **STILL NOT CAPTURABLE as an engine-recorded golden** — even though the arms currently agree, per this document's own corpus rule (`WT-GOLDEN-ENSHRINES`) a captured golden records what an engine DID, and this cell's own history (a silent divergence existed once, unnoticed, until #1497 was filed) is the argument against ever letting one arm's output alone stand as this cell's ground truth. It is graded by `x4`/`x5`'s hand-derived `ALL_EXACT` run+build-agreement assertions instead, never a capture |
 
 **Tally — DERIVE IT, do not read it.** The status distribution moves with every
 row added, and the figure this line used to carry
@@ -1885,7 +1885,7 @@ change to the shadow machinery — and row 30, added UNVERIFIED at the same time
 >
 > **Rows 15–20 (importer shadows) did NOT move, and must not.** They are the Fork-1
 > boundary. If any of them moves, the inversion has leaked out of definer scope —
-> `test/shadow_semantics_test.mdk` is the tripwire, and during development it
+> `test/diff_compiler_shadow_semantics_test.mdk` is the tripwire, and during development it
 > caught exactly that, twice. It is also what proved the #54 fix stayed in scope: **row
 > 26 moved (deliberately) and rows 15–20 did not**, on the same run.
 >
@@ -1934,7 +1934,7 @@ Line numbers at `cfc4fa5a`.
 | S9 dicts (typecheck) | `shadowStandaloneDicts` / `shadowStandaloneDictSlotsAt` (slot monos, expanded-supers, from the SIGNATURE's id space) → carried on `pendingRLocalSites` (an `RLocalSite` record) → resolved **inside** `resolveRLocalSites` via `routesOfMonosTop` | the standalone's own `=>` dicts, stamped by the SAME single writer as the route | ⚠️ resolve them **inside the stamp** — `resolveRLocalSites` runs BEFORE `resolveDictApps` in `elabModuleStamp`, so routing them through `pendingDictApps` reads `[]` and reproduces the bug with more code |
 | S9 reject direction | `recordStandaloneSigObligations` → `recordCallObligations` → `checkCallObligations` | `size "hi"` ⇒ located `No impl of Num for String` | ⚠️ obligations must come from the **signature**, not `schemeObligationsRef`: for a signatured binding those are **different id spaces** (generalization vs `sigToSchemeTvs`), so the id lookup silently finds nothing |
 
-## 4. The gate (`test/shadow_semantics_test.mdk`)
+## 4. The gate (`test/diff_compiler_shadow_semantics_test.mdk`)
 
 **The matrix in §2 is enforced.** One gate owns the whole corpus
 (`test/shadow_fixtures/` — single-file `.mdk` units plus the `d8`/`i*`

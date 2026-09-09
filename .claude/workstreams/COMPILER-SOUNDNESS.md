@@ -10,7 +10,7 @@ gh issue list --label "ws:soundness" --state open
 > **This repo's #1 bug class is `check` green / `run` or `build` wrong.** A *silent* one — a compiled
 > binary printing a wrong answer with no error — is the worst outcome the project has.
 
-**The gate that owns this class:** `test/run_check_agreement_test.mdk`. It compares the
+**The gate that owns this class:** `test/diff_compiler_run_check_agreement_test.mdk`. It compares the
 **value** (`run` stdout == built-binary stdout), and a rejected program must be rejected by a
 **DIAGNOSTIC, never a runtime panic**. Add a fixture for every fix, **in both directions**.
 
@@ -201,6 +201,6 @@ discarded stdout on panic**, so a `println` probe returned nothing whether the p
 - `docs/spec/DICT-SEMANTICS.md` — dictionary-passing semantics (D1–D10, all closed).
 - `docs/spec/EMITTER-SEMANTICS.md` — the native-backend refinement contract (observation
   preservation, value rep, numeric/trap laws, determinism); §9 is the live conformance table.
-- `test/shadow_semantics_test.mdk` — pins every shadow cell, **including the KNOWN-BAD ones**.
+- `test/diff_compiler_shadow_semantics_test.mdk` — pins every shadow cell, **including the KNOWN-BAD ones**.
   A fix must update the pin **in the same PR**.
 </content>

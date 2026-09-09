@@ -168,7 +168,7 @@
 | `test/diff_compiler_fmt_write_safety.sh` | CLI-CONTRACT | none | N | NO | NATIVE-KIND-RUNNER | 822 | 203 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_guide_render.sh` | DOC-ROT | none | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 706 | 149 | REWRITE: probe/static text becomes library calls [node] |
 | `test/diff_compiler_iface_order.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 9274 | 651 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
-| `test/import_order_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 105360 | 732 | WRAP: spawns ./medaka + diffs, module does the same [clang,gh] |
+| `test/diff_compiler_import_order_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 105360 | 732 | WRAP: spawns ./medaka + diffs, module does the same [clang,gh] |
 | `test/diff_compiler_index.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 392 | 90 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_index_oob.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 6576 | 158 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_internal_extern.sh` | CLI-CONTRACT | multiple | N | NO | NATIVE-KIND-RUNNER | 4530 | 360 | WRAP: spawns ./medaka + diffs, module does the same |
@@ -209,10 +209,10 @@
 | `test/diff_compiler_resolve_batch.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 221 | 28 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_resolve_modules.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 1240 | 78 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_rt_obj.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 30299 | 239 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
-| `test/run_check_agreement_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 108345 | 159 | WRAP: spawns ./medaka + diffs, module does the same |
+| `test/diff_compiler_run_check_agreement_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 108345 | 159 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_run_entry_subdir.sh` | CLI-CONTRACT | multiple | N | NO | NATIVE-KIND-RUNNER | 1685 | 119 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_run_stdout_flush.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER | 4843 | 161 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/shadow_semantics_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 95446 | 499 | WRAP: spawns ./medaka + diffs, module does the same [node] |
+| `test/diff_compiler_shadow_semantics_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 95446 | 499 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `test/diff_compiler_slice_oob.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 6337 | 153 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_snapshot_bless.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 927 | 160 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_snapshot_core_ir.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 133 | 119 | WRAP: spawns ./medaka + diffs, module does the same |
