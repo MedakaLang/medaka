@@ -443,6 +443,26 @@ populateEffectDomains decls =
   let _ = seedEffectDomains ()
   populateGo decls
 
+-- The same thing over a module GRAPH, in `deAllDecls` order (prelude first, then
+-- the loader's dependency-first modules) but without flattening it: the Module-mode
+-- drivers must populate the table BEFORE they build the declaration envelope (the
+-- envelope's atom seed reads it -- see `declEnvRowAtomsEntries`), and at that point
+-- `deAllDecls` does not exist yet.  Registering unit by unit is the same sequence of
+-- `registerEffectDomain` calls the flattened list produces, so the resulting table is
+-- the same value; spelling it this way is what keeps the concatenation from being
+-- built twice per analyze.
+populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
+populateEffectDomainsGraph coreDecls modules =
+  let _ = seedEffectDomains ()
+  let _ = populateGo coreDecls
+  populateUnitsGo modules
+
+populateUnitsGo : List (String, List Decl) -> Unit
+populateUnitsGo [] = ()
+populateUnitsGo ((_, prog) :: rest) =
+  let _ = populateGo prog
+  populateUnitsGo rest
+
 populateGo : List Decl -> Unit
 populateGo [] = ()
 populateGo ((DEffect _ name domain) :: rest) =
@@ -3583,7 +3603,10 @@ emptyDeclEnvs = DeclEnvs {
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
   let coreRow = declEnvModule 0 "core" coreDecls
-  buildDeclEnvsFrom (declEnvAccOf [coreRow] emptyDeclEnvAcc) coreRow modules
+  buildDeclEnvsFrom
+    (declEnvAccOf [coreRow] emptyDeclEnvAcc)
+    coreRow
+    (declEnvModulesFrom 1 modules)
 
 -- ── the envelope fold's state ────────────────────────────────────────────────
 -- One accumulator per table.  The point of the record is that the fold can be
@@ -3591,12 +3614,21 @@ buildDeclEnvs coreDecls modules =
 -- so a driver that has a prelude key folds it once per process
 -- (`preludePreambleFor`) and resumes here with the user modules.
 --
--- EVERY FIELD IS A PURE VALUE AND NONE OF THEM HOLDS A `Decl`.  That is what
--- makes a resumed prefix safe to share across analyses: `Decl` carries mutable
--- `Ref`s, and the tree is re-stamped (`stampGraphTyOrigins`) into FRESH decls every
--- analyze, so a shared decl would be a live cell from an older tree.  The two
--- decl-carrying fields of `DeclEnvs` (`deModules`, `deAllDecls`) are therefore
--- rebuilt from the caller's decls on every call and are NOT in this record.
+-- WHAT MAY BE A FIELD HERE: a table whose prelude contribution is a pure function
+-- of `coreDecls` -- of the DECLS, and of nothing else a process carries.  Two
+-- disqualifications, and the second is the one that is easy to miss:
+--   * it may not hold a `Decl`.  `Decl` carries mutable `Ref`s, and the tree is
+--     re-stamped (`stampGraphTyOrigins`) into FRESH decls on every analyze, so a
+--     shared decl would be a live cell from an older tree.  `DeclEnvs`' two
+--     decl-carrying fields (`deModules`, `deAllDecls`) are rebuilt from the
+--     caller's decls every call and are NOT in this record.
+--   * it may not READ process-global state.  A read is as disqualifying as a
+--     `Ref` field: the value is then a function of WHEN it was first derived, and
+--     a resumed prefix pins that first reading for the life of the process.  This
+--     is why the ATOM-GUARANTEE seed is not here -- `declEnvRowAtomEntries`
+--     bottoms out in `dtopFor`, which reads `driverState.effectDomains`, a table
+--     the graph's own `effect` decls fill.  `buildDeclEnvsFrom` derives it over
+--     every row on every call, the way `deReach` is derived.
 data DeclEnvAcc = DeclEnvAcc {
   daOrdIndex : OrdMap Int,
   daDefiners : OrdMap (List (String, (String, String))),
@@ -3606,7 +3638,6 @@ data DeclEnvAcc = DeclEnvAcc {
   daIfaces : ClassEnv,
   daSeeds : DeclEnvSeedAcc,
   daPolarity : (List (TabKey, List Polarity), OrdMap (List (TabKey, List Polarity))),
-  daAtoms : (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom)))),
   daOwnerModules : OrdMap (List String),
 }
 
@@ -3620,7 +3651,6 @@ emptyDeclEnvAcc = DeclEnvAcc {
   daIfaces = emptyClassEnv,
   daSeeds = emptyDeclEnvSeedAcc,
   daPolarity = ([], omInsert "" [] omEmpty),
-  daAtoms = ([], omInsert "" [] omEmpty),
   daOwnerModules = omEmpty,
 }
 
@@ -3647,7 +3677,6 @@ declEnvAccOf (m :: rest) a =
     daIfaces = buildClassEnvGo [m] a.daIfaces,
     daSeeds = declEnvSeedChain [m] a.daSeeds,
     daPolarity = declEnvPolarityChain [m] a.daPolarity,
-    daAtoms = declEnvRowAtomsChain [m] a.daAtoms,
     daOwnerModules = declEnvOwnerModules [m] a.daOwnerModules,
   }
 
@@ -3661,12 +3690,15 @@ declEnvAccOf (m :: rest) a =
 -- `coreRow` is the CALLER'S row even when `acc` is a resumed prefix: it is what
 -- `deModules`/`deAllDecls` publish, and those must name the decls this analyze
 -- stamped.  See `DeclEnvAcc`.
+--
+-- The rows arrive built rather than being derived here, because the Module-mode
+-- drivers need the same rows earlier -- `populateEffectDomainsGraph` has to run
+-- before this function does (`deAtomsBefore` below reads the table it fills).
 buildDeclEnvsFrom : DeclEnvAcc ->
   DeclEnvModule ->
-  List (String, List Decl) ->
+  List DeclEnvModule ->
   DeclEnvs
-buildDeclEnvsFrom acc coreRow modules =
-  let modRows = declEnvModulesFrom 1 modules
+buildDeclEnvsFrom acc coreRow modRows =
   let mods = coreRow :: modRows
   let a = declEnvAccOf modRows acc
   DeclEnvs {
@@ -3703,7 +3735,15 @@ buildDeclEnvsFrom acc coreRow modules =
     -- (see its note -- an occurrence reached through another type's spine drives
     -- the intersection empty), so this chain needs neither its own read edge nor
     -- a fixpoint.
-    deAtomsBefore = snd a.daAtoms,
+    --
+    -- It is derived over EVERY row here rather than resumed from `acc`, and that
+    -- placement is load-bearing: an entry's ⊤ parameter comes from `dtopFor`,
+    -- which reads `driverState.effectDomains`.  That table is filled from the
+    -- WHOLE graph's `effect` decls, so a prelude entry cached under a
+    -- prelude-only key would pin whichever reading the first analyze in the
+    -- process happened to take.  See `DeclEnvAcc`.
+    deAtomsBefore =
+      snd (declEnvRowAtomsChain mods ([], omInsert "" [] omEmpty)),
     deOwnersBefore = a.daSeeds.dsOwners,
     -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
     -- whole-graph and reader-independent (the reader is applied at the READ, in
@@ -4159,8 +4199,10 @@ declEnvSeedChain (m :: rest) s =
 -- count here, derive it: `ls -d test/effect_polarity_fixtures/*/ | wc -l`)
 -- flipping to REJECT, `write-opaque-export` and `contra-opaque-export` stayed
 -- ACCEPT until this chain existed.
--- (accumulator, per-module seed table), so the chain is resumable from a prefix --
--- see `DeclEnvAcc`.
+--
+-- The state is a PAIR -- (accumulator, per-module seed table) -- rather than the
+-- table alone, so the chain can be resumed from a prefix instead of restarted.
+-- See `DeclEnvAcc`.
 declEnvPolarityChain : List DeclEnvModule ->
   (List (TabKey, List Polarity), OrdMap (List (TabKey, List Polarity))) ->
   (List (TabKey, List Polarity), OrdMap (List (TabKey, List Polarity)))
@@ -4184,8 +4226,10 @@ declEnvPolarityChain (m :: rest) (pacc, pm) =
 -- REJECTED through the module boundary.  The direction is over-rejection, so
 -- the gap was loud rather than a launder, but it made #2110 inapplicable to
 -- every abstractly-exported wrapper.
--- (accumulator, per-module seed table), the shape `declEnvPolarityChain` carries
--- and for the same reason.
+--
+-- The state is the PAIR -- (accumulator, per-module seed table) -- that
+-- `declEnvPolarityChain` carries, for the same reason.  This chain is NOT resumed
+-- from a cached prefix, though: see `deAtomsBefore`'s note in `buildDeclEnvsFrom`.
 declEnvRowAtomsChain : List DeclEnvModule ->
   (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom)))) ->
   (List (TabKey, List (List Atom)), OrdMap (List (TabKey, List (List Atom))))
@@ -40420,8 +40464,10 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 --   * the `driverState` fields the core pass writes and a later module could read
 --     before overwriting them (`restoreCoreDriverFields`).
 -- Everything user-dependent that the preamble installs BEFORE the core pass
--- (graph indexes, `declEnvs`, effect domains, abstract record types) is still
--- derived on every call; the memo covers exactly the `checkModuleFull` of core
+-- (effect domains, abstract record types, and the user modules' contribution to
+-- the graph indexes and to `declEnvs` -- the PRELUDE's contribution to those two
+-- is itself memoized now, see `PreludePreamble`) is still derived on every call;
+-- the memo covers exactly the `checkModuleFull` of core
 -- and the one line after it.  `perRun` is re-minted on a hit: every module check
 -- opens with `resetState ()`, so nothing downstream reads the residue either way.
 -- One entry only (the prelude does not change under a process); a different
@@ -40590,13 +40636,26 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
 -- unkeyed call neither hits nor stores, so a one-shot `run`/`build` pays exactly
 -- what it paid before -- no key is hashed and no source is concatenated.
 --
--- WHAT A HIT MAY CARRY.  Nothing in here holds a `Decl` or a `Ref`.  The tree
--- is re-stamped into FRESH decls on every analyze (`stampGraphTyOrigins`), so a
--- shared decl would hand this analyze a live cell minted into an older tree;
--- `DeclEnvAcc`'s own note states that for the envelope half, and the other halves
--- are `Ident`/`String`/`Int` rows, which are structural. A `Scheme` is excluded
--- for the same reason read the other way -- it carries live union-find cells --
--- so `externSchemes` is still derived per analyze.
+-- WHAT A HIT MAY CARRY: every field must be a pure function of `coreDecls`.  Not
+-- "holds no `Ref`" -- that is weaker, and the weaker reading is what let an
+-- effect-domain READ into an earlier draft of this record.  Two consequences:
+--   * no `Decl` and no `Ref`.  The tree is re-stamped into FRESH decls on every
+--     analyze (`stampGraphTyOrigins`), so a shared decl would hand this analyze a
+--     live cell minted into an older tree.  A `Scheme` is excluded for the same
+--     reason read the other way -- it carries live union-find cells -- so
+--     `externSchemes` is still derived per analyze.
+--   * no read of process-global state either, however immutable the RESULT looks:
+--     a cached value derived through such a read is a function of WHEN it was
+--     first taken, and a hit pins that reading for the process.  `DeclEnvAcc`'s
+--     own note carries the worked instance (the atom seed, and why it is derived
+--     per call instead).
+--
+-- Two things a hit does not do, neither of them load-bearing: it retains
+-- `pmfConstrainedBodyVars` (every `=>`-constrained prelude name with its body's
+-- EVars) for the process lifetime, where the parent recomputed it transiently;
+-- and it does not re-walk the prelude, so `opBump` (`support/opcount.mdk`, default
+-- off, profiler-only) counts the prelude's steps once per process rather than once
+-- per analyze.
 data PreludePreamble = PreludePreamble {
   ppEnvAcc : DeclEnvAcc,
   ppMethodIdents : List (String, Ident),
@@ -40666,10 +40725,28 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- misses — which IS F1's symptom.  The writer set is therefore a NECESSARY conjunct, not
   -- "the wrong question": the two Module-mode driver entries that must carry this line are
   -- `checkModulesPreambleK` (here) and `elaborateModules`.
+  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
+  -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
+  -- loop, so a module using an effect declared in ANOTHER module sees its domain.
+  -- resetState no longer re-seeds, so this survives every per-module reset below.
+  -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
+  --
+  -- It must also precede the declaration ENVELOPE below, and that ordering is the
+  -- newer half of the constraint: the envelope's atom-guarantee seed
+  -- (`declEnvRowAtomsEntries` → `dtopFor`) READS this table, so an envelope built
+  -- first degrades every parameterized label to its ⊤ and over-rejects an honest
+  -- relay into an abstractly-exported wrapper.  `elaborateModules` carries the
+  -- identical ordering, for the identical reason.
+  --
+  -- #1112 A-3.1: the units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
+  -- in the same order; `populateEffectDomainsGraph` walks them without building
+  -- that concatenation a second time.
+  let _ = populateEffectDomainsGraph coreDecls modules
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.
   let coreRow = declEnvModule 0 "core" coreDecls
+  let modRows = declEnvModulesFrom 1 modules
   let prelude = preludePreambleFor preludeKey coreDecls coreRow
   driverState.value.graphMethodExportsRef :=
     graphMethodExportsFrom prelude.ppMethodIdents modules
@@ -40693,17 +40770,8 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   -- property as the three lines above (`driverState` has no reset point, and both
   -- Module-mode driver entries write it unconditionally).  `elaborateModules`
   -- carries the identical line.  See `buildDeclEnvs`.
-  let declEnvs = buildDeclEnvsFrom prelude.ppEnvAcc coreRow modules
+  let declEnvs = buildDeclEnvsFrom prelude.ppEnvAcc coreRow modRows
   driverState.value.declEnvsRef := declEnvs
-  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
-  -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
-  -- loop, so a module using an effect declared in ANOTHER module sees its domain.
-  -- resetState no longer re-seeds, so this survives every per-module reset below.
-  -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
-  -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` (see
-  -- `declEnvDeclsOf`) — the same list value, now derived from the envelope so a
-  -- module the envelope drops is loud here rather than silent.
-  let _ = populateEffectDomains declEnvs.deAllDecls
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (each caller's
   -- `stampGraphTyOrigins` line above), but the scope is derived from its type
   -- NAMES, not its origins, so it is the same map either way.
@@ -41857,6 +41925,20 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
   -- including the reset note above, which it inherits verbatim (same `driverState`).
   driverState.value.graphCtorExportsRef := graphCtorExports coreDecls modules
+  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
+  -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass
+  -- + the elabModuleStamp loop both call it) can read them — resetState no longer
+  -- re-seeds, and effectDomains has a single writer per driver entry, so this
+  -- persists untouched through the whole emit pass.
+  --
+  -- It must also precede the ENVELOPE below, which is why it moved above it: the
+  -- envelope's atom-guarantee seed (`declEnvRowAtomsEntries` → `dtopFor`) reads this
+  -- table.  `checkModulesPreambleK` carries the identical ordering — a `build` that
+  -- degraded a label here and a `check` that did not would be a #1070 divergence.
+  --
+  -- #1112 A-3.1: the units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
+  -- in the same order.
+  let _ = populateEffectDomainsGraph coreDecls modules
   -- #1112 A-3.1: the whole-graph declaration envelope — the identical line
   -- `checkModulesPreambleK` carries, for the driver that does not use that preamble.
   -- It inherits the reset note above for the same reason the three peers do: the
@@ -41864,14 +41946,8 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let declEnvs = buildDeclEnvs coreDecls modules
   driverState.value.declEnvsRef := declEnvs
   -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` — the same list
-  -- value (see `declEnvDeclsOf`), now derived from the envelope.
+  -- value (see `declEnvDeclsOf`), derived from the envelope.
   let allDecls = declEnvs.deAllDecls
-  -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
-  -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass
-  -- + the elabModuleStamp loop both call it) can read them — resetState no longer
-  -- re-seeds, and effectDomains has a single writer (populateEffectDomains), so this
-  -- persists untouched through the whole emit pass.
-  let _ = populateEffectDomains allDecls
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
   -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.

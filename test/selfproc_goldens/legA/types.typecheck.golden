@@ -208,7 +208,7 @@ buildClassEnv : List DeclEnvModule -> ClassEnv
 buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List DeclEnvModule -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
-buildDeclEnvsFrom : DeclEnvAcc -> DeclEnvModule -> List (String, List Decl) -> DeclEnvs
+buildDeclEnvsFrom : DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
@@ -1725,7 +1725,9 @@ polarityEq : Polarity -> Polarity -> Bool
 polarityPublicKeys : List Decl -> List TabKey
 popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))
 populateEffectDomains : List Decl -> Unit
+populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
 populateGo : List Decl -> Unit
+populateUnitsGo : List (String, List Decl) -> Unit
 ppSchemeNamed : String -> Scheme -> String
 ppSchemeNamedFull : String -> Scheme -> String
 prePassDeclScoped : ArgRw -> Decl -> Decl
