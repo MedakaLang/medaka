@@ -42,19 +42,19 @@ SUMS = ("Expr", "Decl")
 # here gets the `TODO` placeholder (see module docstring).
 DECL_RUNNERS = {
     "DTypeSig": "compile-time-only: signature consumed by typecheck, no body",
-    "DExtern": "compile-time-only: binds a name to a runtime primitive implemented in runtime/medaka_rt.c, not to a Medaka body",
+    "DExtern": "medaka run / medaka build: binds a name to a primitive with no Medaka body of its own — the interpreter supplies it from eval.mdk's extern table, the native backend from runtime/medaka_rt.c",
     "DFunDef": "medaka run / medaka build: eval.mdk installGroups evaluates the body; llvm_emit.mdk emits it",
     "DData": "compile-time-only: registers a type + constructors for typecheck/eval, no body of its own",
     "DUse": "compile-time-only: import resolved by driver/loader.mdk and frontend/resolve.mdk",
     "DEffect": "compile-time-only: registers an effect domain for typecheck (typecheck.mdk populateGo)",
     "DProp": "medaka test: compiler/tools/prop_runner.mdk",
     "DTest": "medaka test: compiler/tools/test_runner.mdk via tools/test_cmd.mdk",
-    "DInterface": "compile-time-only: default method bodies are specialized into DImpl copies by desugar.mdk fillImplDefaults before anything executes them",
+    "DInterface": "medaka run / medaka build: a default method body IS code. eval.mdk declImplEntries installs it as a dispatch entry and core_ir_lower.mdk lowerDefault lowers it to CImplDefault. desugar.mdk fillImplDefaults specializes same-module impls only, so the cross-module fallback runs this body directly",
     "DImpl": "medaka run / medaka build: eval.mdk installs impl methods into dispatch; llvm_emit.mdk emits them",
     "DTypeAlias": "compile-time-only: type-level alias consumed by typecheck, erased before eval/backend",
     "DNewtype": "compile-time-only: registers a wrapper type + constructor for typecheck/eval, no body of its own",
     "DLetGroup": "medaka run / medaka build: eval.mdk installGroups evaluates each binding, same as DFunDef",
-    "DAttrib": "compile-time-only: attribute wrapper; every consumer unwraps to the inner decl and uses ITS runner",
+    "DAttrib": "compile-time-only in itself: a wrapper carrying no body. Consumers that dispatch on it unwrap to the inner decl and use ITS runner; the sibling catch-all census is what keeps that unwrapping honest",
 }
 
 
