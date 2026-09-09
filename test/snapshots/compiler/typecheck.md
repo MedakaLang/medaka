@@ -1,5 +1,5 @@
 # META
-source_lines=42926
+source_lines=42934
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -37665,12 +37665,17 @@ computeMangledShadowMap allDecls units =
   let methodNames = allIfaceMethodNames allDecls
   flatMap (unitMangledShadows methodNames) units
 
+-- The unit's funDef names are an INDEX, not a list: this probes once per interface
+-- method, so a `contains` here is O(methods x funDefs) — a shape where both grow
+-- together (N interfaces beside N top-level bindings) makes it quadratic.  Same
+-- treatment as `prePassDictArg`'s name sets (#2189).
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 unitMangledShadows methodNames (mid, decls) =
-  let fns = dedup (map fst (funDefs decls))
+  let fns = omFromNames (map fst (funDefs decls)) omEmpty
   flatMap
     (m =>
-      if contains (mangledName mid m) fns then [(mangledName mid m, m)] else [])
+      let sym = mangledName mid m
+      if omHasKey sym fns then [(sym, m)] else [])
     methodNames
 
 -- L3 (xmod-identity #1351 spine, RUN-XMOD-022/026): the graph-level fact "this
@@ -37727,9 +37732,12 @@ unitCarriesMangledFunDefs mid ((n, _) :: rest) =
 
 buildStandaloneShadowsGraph : List Decl -> List Decl -> List String
 buildStandaloneShadowsGraph allDecls userDecls =
-  let methodNames = allIfaceMethodNames allDecls
+  -- INDEX, not a list: this probes once per user funDef, so a `contains` over the
+  -- interface-method names is O(funDefs x methods) — quadratic on a program whose
+  -- interface count and top-level binding count grow together.
+  let methodNames = omFromNames (allIfaceMethodNames allDecls) omEmpty
   let fns = dedup (map fst (funDefs userDecls))
-  let direct = filter (n => contains n methodNames) fns
+  let direct = filter (n => omHasKey n methodNames) fns
   -- P0-18: on the EMIT path the funDef names are MANGLED (`<mid>__toList`), so the
   -- `direct` name-intersection misses them; recover them via the mangle map so the
   -- prePass marks their (mangled) occurrences `EMethodAt`.  Empty on the un-mangled
@@ -48671,7 +48679,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "computeMangledShadowMap" ((PVar "allDecls") (PVar "units")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "unitMangledShadows") (EVar "methodNames"))) (EVar "units")))))
 (DTypeSig false "unitMangledShadows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls"))))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (EVar "fns")) (EListLit (ETuple (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m")) (EVar "m"))) (EListLit)))) (EVar "methodNames")))))
+(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EVar "fns")) (EListLit (ETuple (EVar "sym") (EVar "m"))) (EListLit)))))) (EVar "methodNames")))))
 (DTypeSig false "graphCarriesMangledFunDefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "graphCarriesMangledFunDefs" ((PList)) (EVar "False"))
 (DFunDef false "graphCarriesMangledFunDefs" ((PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EApp (EApp (EVar "unitCarriesMangledFunDefs") (EVar "mid")) (EApp (EVar "funDefs") (EVar "decls"))) (EVar "True") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "rest"))))
@@ -48679,7 +48687,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unitCarriesMangledFunDefs" ((PVar "mid") (PList)) (EVar "False"))
 (DFunDef false "unitCarriesMangledFunDefs" ((PVar "mid") (PCons (PTuple (PVar "n") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "isMangledFor") (EVar "mid")) (EVar "n")) (EVar "True") (EApp (EApp (EVar "unitCarriesMangledFunDefs") (EVar "mid")) (EVar "rest"))))
 (DTypeSig false "buildStandaloneShadowsGraph" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "buildStandaloneShadowsGraph" ((PVar "allDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "userDecls"))))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methodNames")))) (EVar "fns"))) (DoLet false false (PVar "mangled") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value"))))) (EVar "fns"))) (DoExpr (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "mangled"))))))
+(DFunDef false "buildStandaloneShadowsGraph" ((PVar "allDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EApp (EVar "omFromNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "userDecls"))))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "methodNames")))) (EVar "fns"))) (DoLet false false (PVar "mangled") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value"))))) (EVar "fns"))) (DoExpr (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "mangled"))))))
 (DTypeSig false "publicDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "publicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (EVar "True"))
 (DFunDef false "publicDataDecl" ((PRec "DInterface" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
@@ -55055,7 +55063,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "computeMangledShadowMap" ((PVar "allDecls") (PVar "units")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "unitMangledShadows") (EVar "methodNames"))) (EVar "units")))))
 (DTypeSig false "unitMangledShadows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls"))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (EVar "fns")) (EListLit (ETuple (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m")) (EVar "m"))) (EListLit)))) (EVar "methodNames")))))
+(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EVar "fns")) (EListLit (ETuple (EVar "sym") (EVar "m"))) (EListLit)))))) (EVar "methodNames")))))
 (DTypeSig false "graphCarriesMangledFunDefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "graphCarriesMangledFunDefs" ((PList)) (EVar "False"))
 (DFunDef false "graphCarriesMangledFunDefs" ((PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EApp (EApp (EVar "unitCarriesMangledFunDefs") (EVar "mid")) (EApp (EVar "funDefs") (EVar "decls"))) (EVar "True") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "rest"))))
@@ -55063,7 +55071,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unitCarriesMangledFunDefs" ((PVar "mid") (PList)) (EVar "False"))
 (DFunDef false "unitCarriesMangledFunDefs" ((PVar "mid") (PCons (PTuple (PVar "n") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "isMangledFor") (EVar "mid")) (EVar "n")) (EVar "True") (EApp (EApp (EVar "unitCarriesMangledFunDefs") (EVar "mid")) (EVar "rest"))))
 (DTypeSig false "buildStandaloneShadowsGraph" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "buildStandaloneShadowsGraph" ((PVar "allDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "userDecls"))))) (DoLet false false (PVar "direct") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methodNames")))) (EVar "fns"))) (DoLet false false (PVar "mangled") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value"))))) (EVar "fns"))) (DoExpr (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "mangled"))))))
+(DFunDef false "buildStandaloneShadowsGraph" ((PVar "allDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EApp (EVar "omFromNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "userDecls"))))) (DoLet false false (PVar "direct") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "methodNames")))) (EVar "fns"))) (DoLet false false (PVar "mangled") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value"))))) (EVar "fns"))) (DoExpr (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "mangled"))))))
 (DTypeSig false "publicDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "publicDataDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (EVar "True"))
 (DFunDef false "publicDataDecl" ((PRec "DInterface" ((rf "pub" (PCon "True"))) true)) (EVar "True"))
