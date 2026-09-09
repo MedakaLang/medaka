@@ -238,7 +238,7 @@ is a debt row the waves drain, not a violation, and it needs no header. The clos
 **This field and its `verify` pairing land first, alone, before any of §4.1.** They need
 nothing from the native arm, they are the only brake on the 174-scripts-per-60-days
 bleed, and seeding 256 rows in one PR conflicts with every concurrent gate-adding PR, so
-it must be that PR's only content. `balSplice` (`gate_cmd.mdk:4693-4702`) is
+it must be that PR's only content. `balSplice` (`gate_pack.mdk`) is
 line-targeted, so the cost auto-lander will not drop the new field.
 
 `migration` is a claim. `verify` checks its shape and its pairing with the header, not
@@ -345,7 +345,7 @@ that already exists.
   trailer; non-required only as sequencing). Ruleset edit is add → swap → delete with
   read-back ([W-GH-WRITE-VERIFY]). **Consequence to state in the failure message:** clause
   (a) reds any schedulable gate with no baseline row (`balUncosted`,
-  `gate_cmd.mdk:3295-3302`), and a brand-new gate has none until the nightly ingest, so
+  `gate_pack.mdk`), and a brand-new gate has none until the nightly ingest, so
   every gate-adding PR carries a `Gate-Budget-Override: uncosted:<name>` trailer until
   then. That is the intended moment of acknowledgment, and it stacks with
   [W-SHARD-DERIVED]'s existing `ci-gen-drift` red; the message says both.

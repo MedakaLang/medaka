@@ -3995,7 +3995,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_ci_gen_drift.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 
@@ -4059,7 +4059,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_gate_balance.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
 corpus = ["test/gate_balance_fixtures"]
 toolchain = []
 
@@ -4091,7 +4091,7 @@ kind = "exec"
 migration = "shell:trust-anchor"
 run = "test/diff_compiler_gate_budget.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 

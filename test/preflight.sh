@@ -975,6 +975,23 @@ while IFS= read -r f; do
       add 'diff_compiler_cli_reject_floor'
       add 'diff_compiler_tier_drift'
       add 'diff_compiler_check*' ;;
+    # S-gate-pack (#2735): gate_pack.mdk holds the bin-packing scheduler and the
+    # budget governor that `medaka gate balance` and `medaka gate budget` are
+    # the CLI wrappers around, so it mirrors gate_cmd.mdk's arm rather than a
+    # hand-picked subset — the split moved code between two files, not between
+    # concerns. Same shadowing rule as gate_cmd.mdk above — it is also an
+    # ordinary compiler/tools/*.mdk file, so it must keep the catch-all's
+    # `diff_compiler_check*` line or this arm silently narrows it away.
+    compiler/tools/gate_pack.mdk)
+      add 'diff_compiler_gate_registry'
+      add 'diff_compiler_ci_gen_drift'
+      add 'diff_compiler_ci_shard_coverage'
+      add 'diff_compiler_prose_classifier'
+      add 'diff_compiler_gate_balance'
+      add 'diff_compiler_cli_help_conformance'
+      add 'diff_compiler_cli_reject_floor'
+      add 'diff_compiler_tier_drift'
+      add 'diff_compiler_check*' ;;
     # #2178 (S-3-S-balancer): the cost-baseline READER the balancer joins on.
     # Same shadowing rule as gate_cmd.mdk above — it is also an ordinary
     # compiler/tools/*.mdk file, so it must keep the catch-all's

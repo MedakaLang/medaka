@@ -390,7 +390,7 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
 
 - ~~**`shard` is HAND-ASSIGNED DATA AWAITING THE BALANCER, not a derived output.**~~
   **CLOSED (S-4-S-derived-assignment, #2178)** — `shard` is now a DERIVED OUTPUT.
-  `medaka gate balance` (`compiler/tools/gate_cmd.mdk`) packs every schedulable
+  `medaka gate balance` (`compiler/tools/gate_pack.mdk`) packs every schedulable
   gate onto the open rows from the per-gate costs in
   `test/gate_cost_baseline.json`, subject to each row's `wasm_arm` toolchain
   constraint and `full_cores` closure and to an enforced pole/floor budget (§13), and
@@ -867,7 +867,7 @@ anyway (see *What it costs*, below).
 
 ### The mechanism
 
-`balPickStable` (`compiler/tools/gate_cmd.mdk`) takes the LPT pick as its baseline
+`balPickStable` (`compiler/tools/gate_pack.mdk`) takes the LPT pick as its baseline
 and keeps the gate's **committed** row instead when all three of these hold:
 
 1. the incumbent row is open, and
@@ -1102,7 +1102,7 @@ Gate-Budget-Override: <token>  [free-text reason, never machine-checked]
 ```
 
 where `<token>` is `uncosted:<gate-name>`, `over-class:<gate-name>`, or the literal
-`pole-floor` — one line per violation accepted. `gate_cmd.mdk` never touches git itself
+`pole-floor` — one line per violation accepted. `medaka gate budget` never touches git itself
 (it stays testable on plain strings via `--commit-message`). The failing gate prints the
 exact trailer to paste for each unacknowledged violation, so the remedy is inline for a
 reader with no other context, and every acceptance is a `grep`-able line in `git log`

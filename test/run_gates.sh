@@ -483,7 +483,7 @@ export INNER_JOBS
 #
 # Longest-processing-time first is the standard list-scheduling heuristic, and
 # it is the one `medaka gate balance` MODELS this pool with when it scores a
-# row's makespan (`balAdd`/`balBucketAdd`, compiler/tools/gate_cmd.mdk). That
+# row's makespan (`balAdd`/`balBucketAdd`, compiler/tools/gate_pack.mdk). That
 # is the real reason this is not merely a speed-up: until execution order here
 # is deterministic AND matches the model, no makespan prediction is falsifiable
 # — the same assignment would produce a different wall clock run to run, and a
