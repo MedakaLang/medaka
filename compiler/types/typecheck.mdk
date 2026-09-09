@@ -40813,9 +40813,14 @@ data GraphOut = GOutDiags | GOutTrees
 --
 -- DELETION CONDITION: this parameter goes away, and every caller takes one
 -- behavior, when ruling 1's T4 census over the drain's diagnostics population
--- (#2705) decides once whether they are reported.  The population is measured,
--- not assumed: see `docs/` — the census re-derivation recorded in
--- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a.
+-- (#2705) decides once whether they are reported.  The population is MEASURED,
+-- never assumed, and it is small: re-derived on this tree as a two-arm corpus
+-- (one arm with the rollback removed and the residual rendered) over every `.mdk`
+-- under `test/` and `stdlib/` this compiler accepts, it is 2 of 2,548 accepted
+-- files — `test/engine_fixtures/where_dict_forward.mdk` and
+-- `test/parse_fixtures/blocks.mdk`, both an `Ambiguous instance` on a literal the
+-- graph never defaulted (#2646's owed D1 quiescence step).  Recorded in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 16.
 data DrainDiags = DrainRollback | DrainKeep
 
 -- The drain, under the caller's choice of the bit above.

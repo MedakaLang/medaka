@@ -787,6 +787,59 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    by `registry_keying_ratchet`'s check 6 (#2796), `ElabResult` names the elaboration's
    5-tuple, and `analyzeFinish`'s diagnostic order is pinned in three gates.
 
+16. **ONE graph driver, 2026-09-09** (#2705, branch `rearch3-one-driver`, off item 15's
+   `20869bcc7`).  §E's "one driver, one mode" is now the code, not the plan.
+   `driveGraphK` drives the whole module graph once — stamp, one `graphPreamble`, one
+   `graphModuleWorker` through `foldModules`, one graph-end drain, one coherence attach —
+   under two parameters:
+   * `GraphOut` — `GOutDiags` (per-module diagnostics and schemes) or `GOutTrees` (those
+     plus the dict-passed trees, the residual and the evidence table).  The selection gates
+     six writes and nothing else: `mainSchemeRef`'s clear, the empty ctor oracle,
+     `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the core pass
+     is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked decls, and
+     a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef` writes.
+   * `DrainDiags` — `DrainRollback` or `DrainKeep`, with its deletion condition in the code.
+   `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK`
+   are projections.  The memo layer stays OUTSIDE and wraps `GOutDiags` only: `ChainStep`
+   captures no marked tree, so a memo over the tree arm is a different data structure, and
+   re-deriving only the suffix's trees from the prefix restore is NOT done here.
+   Deleted: `checkModulesDiagsK`, `cmModuleWorker`, `cmDiagsCollect`, `cmEntryCollect`,
+   `elabWorker`, `elabHarvestWorker`, `elabCollect`, `elabModuleStampDiags`,
+   `attachCoherenceConflictPair`, `cohOntoPair`, the five eager `graph*`/`buildDeclEnvs`/
+   `markSetsOf` wrappers whose only caller was `elaborateModules`' inline preamble (the
+   resumable `*From` variants take their names), and item 14's two genuinely caller-less
+   `tools/check.mdk` entries `runCheckModules` / `checkModulesHasErrors`.  DERIVED, not
+   asserted: whole-graph `foldModules` call sites in `types/typecheck.mdk` fall **4 → 2**
+   (`grep -n 'foldModules$' compiler/types/typecheck.mdk` minus its own definition —
+   `checkModulesK`, `checkModulesDiagsK`, `checkModulesEntryFullSplitK`, `elaborateModules`
+   become `checkModulesK`, `driveGraphK`; the memo's own `chainGo` fold is unchanged in
+   both).  `types.typecheck`'s LEG A golden loses 20 rows and gains 10 (5 genuinely new
+   bindings — `driveGraphK`, `graphPreamble`, `graphModuleWorker`, `graphCollect`,
+   `graphDrainFinish` — and 5 renames, each a lost pair and a gained row);
+   `tools.check` loses 2.  `ModDiags` names the per-module payload the widening had spelled
+   out at 16 sites.
+   **The one behavior change** is the entry report's HARD coherence conflict: it now sits at
+   the front of the ENTRY module's errors rather than the accumulated list, differing only on
+   a graph with both a conflict and an imported-module type error.
+   **`registry_keying_ratchet` check 6 was strengthened, not weakened**: with one entry it
+   proves the set lives in `graphPreamble`, that `elaborateModules` carries none of it, and
+   that `graphPreamble` has exactly two call sites.
+   **Measured.**  Two-arm four-verb differential (`check`, `check --json`, `run`,
+   `medaka test`) over every multi-module fixture corpus plus `stdlib` — 317 entries, 1,268
+   cells, **0 divergences**.  Two-arm cachegrind against `20869bcc7`: ruling 7's two warm LSP
+   workloads −0.20% / +0.08% Ir (ceiling ~25%); `check stdlib/map.mdk` −0.05%,
+   `check compiler/driver/medaka_cli.mdk` −0.23%, `run` multi-module −0.31%,
+   `medaka test stdlib/list.mdk --cases 1` −0.11% (bound +0.5%).
+   **Ruling 1's T4 census, re-derived rather than quoted.**  Item 11 measured the drain's
+   diagnostics wrong on 33 of 3,386 accepted files.  On this tree, a two-arm corpus (one arm
+   with the rollback removed and the residual rendered as entry warnings) over every `.mdk`
+   under `test/` and `stdlib/` the compiler accepts gives **2 of 2,548**:
+   `test/engine_fixtures/where_dict_forward.mdk` (`Ambiguous instance for `Ord``) and
+   `test/parse_fixtures/blocks.mdk` (`Ambiguous instance for `Display``) — both the
+   D1-undefaulted-literal class #2646 owes, neither `panic "…"` (#2315) nor a route
+   re-unification duplicate.  The population the ruling has to adjudicate is now two files
+   of one kind, not three kinds.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
