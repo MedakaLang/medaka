@@ -252,7 +252,7 @@ test "a * (b + c) = a*b + a*c" =
 -- this suite runs on. Over all 33 `samples` this ONE assertion measured
 -- 6m34s for the whole file; over the six representatives below it measures
 -- well under a minute, and this suite runs as a CI gate
--- (pds/test/inlang_test_oracle.sh).
+-- (pds/test/inlang_test_oracle_test.mdk, which runs this file natively).
 --
 -- Nothing is lost: `inverse` is graded against the EXTERNAL answer key over
 -- 52 inputs — including 0, 1, n-1, n_h, n_h+1 and 16 pseudo-random values —

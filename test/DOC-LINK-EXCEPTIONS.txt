@@ -175,5 +175,7 @@ REF	test/effect_set_domain.sh	migrated to a `kind = "native"` gate module in #25
 
 # ── REF: pds/ — #1722 widened the bare-path matcher to include pds/… ────────
 REF	pds/main.mdk	pds/README.md documents the intentional ABSENCE of pds/main.mdk — pds/medaka.toml has no `entry` key on purpose, so this citation is deliberately naming a file that must not exist
+REF	pds/test/inlang_test_oracle.sh	migrated to a `kind = "native"` gate module in #2592 (pds/test/inlang_test_oracle_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	pds/test/trust_boundary_guards.sh	migrated to a `kind = "native"` gate module in #2592 (pds/test/trust_boundary_guards_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
 
 REF	test/README.md	GATE-REGISTRY-DESIGN.md §9 (S-4, #2200) cites this as one of `diff_compiler_prose_classifier.sh`'s 26 probe paths, deliberately naming a file that does not exist to exercise the classifier's NONDOC-vs-PROSE boundary next to `testfile.md` — not a real doc citation

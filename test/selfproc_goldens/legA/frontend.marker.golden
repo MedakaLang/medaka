@@ -57,7 +57,7 @@ preludeStandaloneShadowsWith : Map String Unit -> List Decl -> List (String, Str
 recFieldBindings : RecPatField -> List String
 renameDecl : List String -> Decl -> Decl
 renameVar : List String -> Expr -> Expr
-routeExtraRefs : Route -> List String
+seedExtraRefs : String -> List String
 shadowRename : List String -> List Decl -> List Decl
 shadowRenames : List String -> List Decl -> List String
 shadowedMethodsOf : Map String Unit -> String -> List IfaceMethod -> List (String, String, Option Loc)

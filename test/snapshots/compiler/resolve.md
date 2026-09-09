@@ -670,7 +670,7 @@ checkExpr _ _ _ (EDictApp _) = []
 -- these arms are unreachable.
 checkExpr _ _ _ (EVarAt _ _) =
   panic "unreachable: EVarAt is introduced by annotateProgram after resolve"
-checkExpr _ _ _ (EMethodAt _ _ _ _) =
+checkExpr _ _ _ (EMethodAt _ _ _) =
   panic
     "unreachable: EMethodAt is introduced by typecheck elaboration after resolve"
 checkExpr _ _ _ (EDictAt _ _) =
@@ -3751,7 +3751,7 @@ stampExpr _ (ELit l) = ELit l
 stampExpr _ (ENumLit n r d lx) = ENumLit n r d lx
 stampExpr _ (EMethodRef m) = EMethodRef m
 stampExpr _ (EDictApp d) = EDictApp d
-stampExpr _ (EMethodAt name r ir mr) = EMethodAt name r ir mr
+stampExpr _ (EMethodAt name seed ev) = EMethodAt name seed ev
 stampExpr _ (EDictAt name r) = EDictAt name r
 stampExpr _ (EVarAt n a) = EVarAt n a
 stampExpr _ (EVarId n i) = EVarId n i
@@ -5034,7 +5034,7 @@ takeOriginTrace _ =
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodRef" PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EDictApp" PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EVarAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EVarAt is introduced by annotateProgram after resolve"))))
-(DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodAt" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EMethodAt is introduced by typecheck elaboration after resolve"))))
+(DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodAt" PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EMethodAt is introduced by typecheck elaboration after resolve"))))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EDictAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EDictAt is introduced by typecheck elaboration after resolve"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EVar" (PVar "n"))) (EApp (EApp (EApp (EApp (EVar "checkVar") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "n")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "f")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "x"))))
@@ -5926,7 +5926,7 @@ takeOriginTrace _ =
 (DFunDef false "stampExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
 (DFunDef false "stampExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "stampExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
-(DFunDef false "stampExpr" (PWild (PCon "EMethodAt" (PVar "name") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (EVar "r")) (EVar "ir")) (EVar "mr")))
+(DFunDef false "stampExpr" (PWild (PCon "EMethodAt" (PVar "name") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (EVar "seed")) (EVar "ev")))
 (DFunDef false "stampExpr" (PWild (PCon "EDictAt" (PVar "name") (PVar "r"))) (EApp (EApp (EVar "EDictAt") (EVar "name")) (EVar "r")))
 (DFunDef false "stampExpr" (PWild (PCon "EVarAt" (PVar "n") (PVar "a"))) (EApp (EApp (EVar "EVarAt") (EVar "n")) (EVar "a")))
 (DFunDef false "stampExpr" (PWild (PCon "EVarId" (PVar "n") (PVar "i"))) (EApp (EApp (EVar "EVarId") (EVar "n")) (EVar "i")))
@@ -6263,7 +6263,7 @@ takeOriginTrace _ =
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodRef" PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EDictApp" PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EVarAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EVarAt is introduced by annotateProgram after resolve"))))
-(DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodAt" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EMethodAt is introduced by typecheck elaboration after resolve"))))
+(DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodAt" PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EMethodAt is introduced by typecheck elaboration after resolve"))))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EDictAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: EDictAt is introduced by typecheck elaboration after resolve"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EVar" (PVar "n"))) (EApp (EApp (EApp (EApp (EVar "checkVar") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "n")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "f")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "x"))))
@@ -7155,7 +7155,7 @@ takeOriginTrace _ =
 (DFunDef false "stampExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
 (DFunDef false "stampExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "stampExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
-(DFunDef false "stampExpr" (PWild (PCon "EMethodAt" (PVar "name") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (EVar "r")) (EVar "ir")) (EVar "mr")))
+(DFunDef false "stampExpr" (PWild (PCon "EMethodAt" (PVar "name") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (EVar "seed")) (EVar "ev")))
 (DFunDef false "stampExpr" (PWild (PCon "EDictAt" (PVar "name") (PVar "r"))) (EApp (EApp (EVar "EDictAt") (EVar "name")) (EVar "r")))
 (DFunDef false "stampExpr" (PWild (PCon "EVarAt" (PVar "n") (PVar "a"))) (EApp (EApp (EVar "EVarAt") (EVar "n")) (EVar "a")))
 (DFunDef false "stampExpr" (PWild (PCon "EVarId" (PVar "n") (PVar "i"))) (EApp (EApp (EVar "EVarId") (EVar "n")) (EVar "i")))

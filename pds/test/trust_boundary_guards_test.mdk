@@ -1,0 +1,133 @@
+{- | Trust-boundary PANIC guards for RUN-PDS0-036 and #1727, migrated from
+   `pds/test/trust_boundary_guards.sh` under #2592.
+
+   The SHA-256 and base58 byte domains and `uvarintEncode`'s non-negative
+   domain abort instead of returning a value: their result types have no
+   `Result` channel. Medaka has no catchable panics, so they cannot be
+   asserted IN PROCESS — the first abort would shadow every later assertion.
+   This gate spawns `pds/test/guard_probes_main.mdk` ONE CASE PER PROCESS
+   (`medaka run … <case>`) and grades the outcome from outside, exactly as
+   the retired script did — `io.runVerb`, reached here through
+   `test_process`, is the same spawn the shell used.
+
+   Every guard is graded in BOTH directions:
+     PANIC cell   — must exit nonzero AND print the guard's own message.
+                    Grading the message, not just the code, is
+                    load-bearing: an exit-code-only check cannot tell this
+                    guard from an unrelated abort (a typo, a missing import,
+                    an OOM), so it would stay green after the guard was
+                    deleted. `expectSpawnFails` is exactly this shape.
+     CONTROL cell — must exit 0 AND print its expected "OK …" line. This is
+                    the half that catches an over-tight bound;
+                    `sha256-edges` uses the two INCLUSIVE endpoints 0 and
+                    255 for exactly that reason.
+
+   SCOPE, stated honestly (inherited from the retired script): this is the
+   EVAL arm only (`medaka run`). The native arm of the sha256 domain scan is
+   covered by `pds/test/sha256_vectors.sh` phase B; base58's cells are
+   eval-only; `uvarintEncode` has no native cell.
+
+   ANTI-ROT FLOOR (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
+   indistinguishable from "this passed"): `cells` below is the roster every
+   case is drawn from, run exactly once and shared by every assertion —
+   dropping a row lowers `length results` below `cellFloor` and fails the
+   floor check rather than silently running fewer cases. -}
+
+import list.{lookup}
+import test.{Expectation(..)}
+import test_process.{
+  expectSpawnFails,
+  expectSpawnOkLine,
+  medakaBin,
+  underRoot,
+}
+
+probe : <IO> String
+probe = underRoot "pds/test/guard_probes_main.mdk"
+
+{- | Passes when spawning the probe under `caseName` exits 0 AND one whole
+   line of its output equals `wantLine`. The CONTROL half of the grading;
+   `expectSpawnFails` is the PANIC half.
+
+   Whole-line, not substring: the retired script graded these with
+   `grep -q "^…$"`, and a substring accepts a probe that printed
+   `NOT OK sha256-edges len=32` for the line `OK sha256-edges len=32`, which
+   is the exact inversion a control case exists to catch. -}
+expectControlCase : String -> String -> <Exec "_", IO> Expectation
+expectControlCase caseName wantLine =
+  expectSpawnOkLine medakaBin ["run", probe, caseName] wantLine
+
+-- The eight cells, verbatim from RUN-PDS0-036 / #1727: case name paired
+-- with its grading shape and the exact text that must appear. `Err` is a
+-- PANIC cell (the guard's own message); `Ok` is a CONTROL cell (its "OK …"
+-- line) — the two directions the retired script's `expect_panic`/`expect_ok`
+-- graded, not a `Result` this module computes.
+cells : List (String, Result String String)
+cells = [
+  ("sha256-over", Err "sha256: every element must be a byte in 0..255"),
+  ("sha256-under", Err "sha256: every element must be a byte in 0..255"),
+  ("sha256-edges", Ok "OK sha256-edges len=32"),
+  (
+    "base58-over",
+    Err "base58btcEncode: every element must be a byte in 0..255",
+  ),
+  (
+    "base58-under",
+    Err "base58btcEncode: every element must be a byte in 0..255",
+  ),
+  ("base58-edges", Ok "OK base58-edges value=15Q"),
+  ("uvarint-neg", Err "unsigned-varint encodes non-negative values only"),
+  ("uvarint-ok", Ok "OK uvarint-ok len=2"),
+]
+
+cellFloor : Int
+cellFloor = 8
+
+runCell : (String, Result String String) -> <Exec "_", IO> (String, Expectation)
+runCell (name, Err wantMessage) =
+  (name, expectSpawnFails medakaBin ["run", probe, name] wantMessage)
+runCell (name, Ok wantLine) = (name, expectControlCase name wantLine)
+
+-- Every cell spawned exactly once, shared by every assertion below —
+-- top-level nullary bindings are memoized, so a spawn placed here and read
+-- from several `test` decls executes once, not twice.
+results : <Exec "_", IO> List (String, Expectation)
+results = map runCell cells
+
+cellExpectation : String -> <Exec "_", IO> Expectation
+cellExpectation name = match lookup name results
+  None => Fail "\{name} has no `results` entry" "" ""
+  Some e => e
+
+test "sha256-over panics with the guard's own message" =
+  cellExpectation "sha256-over"
+
+test "sha256-under panics with the guard's own message" =
+  cellExpectation "sha256-under"
+
+test "sha256-edges control case is unaffected" = cellExpectation "sha256-edges"
+
+test "base58-over panics with the guard's own message" =
+  cellExpectation "base58-over"
+
+test "base58-under panics with the guard's own message" =
+  cellExpectation "base58-under"
+
+test "base58-edges control case is unaffected" = cellExpectation "base58-edges"
+
+test "uvarint-neg panics with the guard's own message" =
+  cellExpectation "uvarint-neg"
+
+test "uvarint-ok control case is unaffected" = cellExpectation "uvarint-ok"
+
+-- # Non-vacuity
+
+test "trust_boundary_guards ran at least CELL_FLOOR=8 cells" =
+  let n = length results
+  if n >= cellFloor then
+    Pass ">= \{intToString cellFloor} cells" "\{intToString n} cells"
+  else
+    Fail
+      "only \{intToString n} cells ran, expected >= \{intToString cellFloor} (vacuous-green guard)"
+      ">= \{intToString cellFloor} cells"
+      "\{intToString n} cells"

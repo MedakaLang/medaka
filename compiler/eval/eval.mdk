@@ -46,7 +46,9 @@ import frontend.ast.{
 -- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
-import types.route_key.{implRouteKeyWord, funHeadTag, evDictRoutes}
+import types.route_key.{
+  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes
+}
 import support.util.{
   contains,
   listLen,
@@ -1725,8 +1727,9 @@ eval env (EVarId x _) = if startsWithAt x then VUnit else lookupEnv env x
 -- annotateProgram in evalProgram/evalModules.
 eval env (EVarAt x addr) =
   if startsWithAt x then VUnit else lookupAtAddr env x addr
-eval env (EMethodAt name routeRef implRef methodRef) =
-  evalMethodAt env name !routeRef !implRef !methodRef
+-- #2705: the occurrence's answer comes from the published evidence table, not
+-- from cells on the node — the same seam `EDictAt` crosses below.
+eval env (EMethodAt name _ ev) = evalMethodAtEv env name (evMethodRoutes ev)
 
 eval env (EDictAt name ev) =
   applyDicts env (lookupEnv env name) (evDictRoutes ev)
@@ -1798,6 +1801,13 @@ evalMethodAt : EvalEnv (Value e) ->
 -- constraint and the first real argument lands in the dict slot.  This is literally
 -- the EDictAt arm's body (`applyDicts env (lookupEnv env name) routes`) — the same
 -- machinery, now reachable from the shadow arm that the marking prePass consumes.
+evalMethodAtEv : EvalEnv (Value e) ->
+  String ->
+  (Route, List Route, List Route) ->
+  <e> Value e
+evalMethodAtEv env name (route, implRoutes, methodRoutes) =
+  evalMethodAt env name route implRoutes methodRoutes
+
 evalMethodAt env name (RLocal sym dicts) _ _ =
   applyDicts env (lookupEnv env (if sym == "" then name else sym)) dicts
 evalMethodAt env name route implRoutes methodRoutes =

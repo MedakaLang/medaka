@@ -121,7 +121,7 @@ annotateExpr _ (ELit l) = ELit l
 annotateExpr _ (ENumLit n r d lx) = ENumLit n r d lx  -- PLAN.md #11: leaf, passthrough
 annotateExpr _ (EMethodRef m) = EMethodRef m
 annotateExpr _ (EDictApp d) = EDictApp d
-annotateExpr _ (EMethodAt name r ir mr) = EMethodAt name r ir mr
+annotateExpr _ (EMethodAt name seed ev) = EMethodAt name seed ev
 annotateExpr _ (EDictAt name r) = EDictAt name r
 annotateExpr _ (EVarAt n a) = EVarAt n a
 annotateExpr fr (EVar n)

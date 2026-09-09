@@ -290,9 +290,9 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- This is deliberately a note, not a failure — exit codes are unchanged, because
 -- test/ported/*.mdk must keep exiting 0.
 -- ⚠️ It goes to STDERR, not stdout: the doctest/prop/test reports on stdout are
--- parsed for counts by `sqlite/test/inlang_test_oracle.sh` (`grep -c '^  ok   '`)
--- and by `test/diff_compiler_ported.sh`, and a line injected into that stream
--- would be graded as report text.  `diff_compiler_ported.sh` classifies stderr by
+-- parsed for counts by `test/diff_compiler_ported.sh`, and a line injected into
+-- that stream would be graded as report text.  (The in-language floor gates read
+-- `--json`'s `summary.passed`, not this stream.)  `ported` classifies stderr by
 -- `^runtime error \[E-PANIC\]`, which this note cannot match.
 -- The exemption PREDICATE alone, with no side effect — shared by `doctestGate`
 -- (the printing CLI arm) and `typecheckGateResult` (the silent, data-returning

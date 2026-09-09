@@ -205,7 +205,7 @@ choice; (a) in particular is what the registry dispatch does under the hood.
   loud-not-silent for unit siblings; if ever wanted it is one probe run per test, which
   the one-build-per-file scheme makes cheap. `*_test.mdk` discovery is derived from the
   tree (`collectMdkFiles`), with the roster-completeness check
-  `pds/test/inlang_test_oracle.sh:37-50` already implements as the model.
+  `pds/test/inlang_test_oracle_test.mdk` already implements as the model.
 - **Typecheck scoping.** `hasVehicleSegment` (`test_cmd.mdk:322-327`) restricts the
   `_test.mdk` typecheck guarantee to paths containing `compiler`/`stdlib`; it widens to
   every project's `test/` directory. Expect a batch of newly surfaced type errors in
