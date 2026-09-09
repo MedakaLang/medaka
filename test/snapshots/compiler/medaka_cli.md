@@ -3500,7 +3500,7 @@ runTestManyTargets engines cases filterOpt targets =
 -- What it CAN miss is a file that is git-TRACKED but absent from the walked
 -- `files` set for some other reason (a stray symlink, a target typo, a path
 -- the walk's dot-entry skip swallowed). Ported from
--- `pds/test/inlang_test_oracle.sh`'s pattern — enumerate, require each
+-- `pds/test/inlang_test_oracle_test.mdk`'s pattern — enumerate, require each
 -- accounted for, fail named on a gap — WITHOUT that gate's hand-maintained
 -- roster: the "expected" side here is `git ls-files` itself, so a new
 -- `foo_test.mdk` needs no roster edit to be covered (#2589 item 2's
