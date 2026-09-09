@@ -96,7 +96,12 @@ import lib.repo.{
   repoApplyWrites,
   validateCollection,
 }
-import lib.credential.{CredentialRecord, credentialVerify}
+import lib.credential.{
+  CredentialRecord,
+  credentialUpgrade,
+  credentialVerify,
+  defaultIterations,
+}
 import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
@@ -126,6 +131,7 @@ import lib.store.{
   storeSessionOpen,
   storeSessionRotate,
   storeSessionsPrune,
+  storeWithCredential,
   storeWithRepo,
 }
 import lib.tid.{Tid, tidClockId, tidMicros, tidNext, tidToString}
@@ -1418,9 +1424,31 @@ applyCreateSession account context store body = do
       (sessionFingerprint access)
       (sessionFingerprint refresh)
       (sessionExpiry context)
-      (storeSessionsPrune context.nowSeconds store),
+      (storeSessionsPrune
+        context.nowSeconds
+        (rehashed context password credential store)),
     sessionOutput account access refresh,
   )
+
+{- | The store this login leaves the account credential in: re-derived at
+   today's `defaultIterations` when the stored record predates it, and
+   untouched otherwise.
+
+   It runs only past `checkLogin`, and `credentialUpgrade` grades the password
+   itself besides, so a refused login cannot reach it and could not rewrite the
+   record if it did. A wrong `defaultIterations`-vs-record comparison is the
+   only cost here: an up-to-date record answers before any derivation.
+
+   The request nonce is the new salt. A salt is not a secret — it is stored in
+   the clear in `<data>/credential` and its whole job is to be unique per
+   record — and the nonce is exactly `lib.credential`'s `saltBytes` of fresh
+   OS entropy, drawn once per request (`pds/shell/server.mdk`, where that
+   length is pinned to this use). -}
+rehashed : RequestContext -> String -> CredentialRecord -> Store -> Store
+rehashed context password credential store =
+  match credentialUpgrade password context.nonce defaultIterations credential
+    None => store
+    Some upgraded => storeWithCredential upgraded store
 
 {- | `com.atproto.server.refreshSession`: rotate the presented refresh token.
 

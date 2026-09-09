@@ -177,6 +177,58 @@ RPAREN
 NEWLINE
 EXPORT
 NEWLINE
+IDENT "ownerOnlyMode"
+COLON
+UPPER "Int"
+NEWLINE
+IDENT "ownerOnlyMode"
+EQUAL
+INT 384
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "isPrivateMode"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isPrivateMode"
+IDENT "mode"
+EQUAL
+IDENT "bitAnd"
+IDENT "mode"
+INT 63
+EQ_EQ
+INT 0
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "writeFilePrivate"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+LT
+UPPER "FileWrite"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "writeFilePrivate"
+IDENT "path"
+IDENT "content"
+EQUAL
+IDENT "writeFileMode"
+IDENT "path"
+IDENT "ownerOnlyMode"
+IDENT "content"
+NEWLINE
+EXPORT
+NEWLINE
 IDENT "runCommandOk"
 COLON
 UPPER "String"

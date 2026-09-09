@@ -332,7 +332,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Inferred-constraint registration | `registerInferredConstraints`, `setDictEligible` | ~204 lines | DICT §4 `gen` |
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
 | Multi-module check drivers | `checkModules`, `checkModuleFullImpl`, `checkProgramSeededSplit` + the `check*` tails | ~590 lines | — |
-| Typed elaboration | `elaborateModules` → `elabHarvestWorker` → `elabWorker` → `elabModuleStamp`; `elaborateDict` | 53 / 892 / 30 | DICT §4, §8 |
+| Typed elaboration | `elaborateModules` (a projection of `driveGraphK GOutTrees DrainKeep`) → `graphPreamble` → `graphModuleWorker` per module → `graphCollect` → `graphDrainFinish`; `elaborateDict` | 53 / 892 / 30 | DICT §4, §8 |
 | Cross-module universe marshalling | `loadDataUniverse`, `storeDataUniverse`, `appendUniverseAccums` — ⚠️ **derive the cell counts from the three bodies, never from this table**: it said `14`/`14`/`11`, and #1512 slices 1–3 plus #1557 A-3.5c retired cells out of the first two inside four days | 3 fns | DICT §6 C4, §8 I2 |
 | Import seeding / aliasing / ctor overlay | `importFormSchemes`, `aliasSchemes`, `aliasConstraintEntries` | ~370 lines | DICT §8 I2 |
 
@@ -391,34 +391,50 @@ safest extraction candidate in the file (§7.4).
 
 ### 5.1 The driver stack above `checkBodyImpl`
 
-**It is a bare sweep with a conditional fallback, not a fixpoint wrapped around a sweep.**
+**It is ONE sweep. There is no fixpoint, and there is only one graph driver.**
 
 ```
-elaborateModules
+elaborateModules  =  driveGraphK GOutTrees DrainKeep None …   (a projection)
   │
-  └─ ONE SWEEP (ARCH §E, marking on the schedule)
-       foldModules elabHarvestWorker → elabWorker → elabModuleStamp
+  └─ driveGraphK
+       renameAliasedMethods                                   ← GOutTrees only
+       graphPreamble  (the ONE Module-mode driver entry: the whole-graph writer/seed
+                       set — test/registry_keying_ratchet.sh check 6 pins it)
+       foldModules graphModuleWorker
          → checkModuleFullImpl → checkBodyImpl (Module …)   ← resetState at module START
               beginModuleMarking: dict set = bare ∪ promotionHarvestRef ∪ this module's aliases
               processSCC: markGroupClauses (mark) → stampGroupClauses (ids) → infer
                           → registerInferredConstraints → markRecursiveOccurrences
               tail bodies (impl/default/prop/test) marked with the module's final set
-         elabHarvestWorker unions promotedRef into promotionHarvestRef, returns the marked tree
-       drainStampQueue → dictPassModulesIfEnabled (markDictNames (bare ∪ harvest))
+         graphModuleWorker unions promotedRef into promotionHarvestRef (GOutTrees) and
+         returns the marked tree; graphCollect accumulates it on that selection only
+       graphDrainFinish  (DrainKeep here; the check selections take DrainRollback)
+       dictPassModulesIfEnabled (markDictNames (bare ∪ harvest))
+         → resolveAliasMethodSpellings → residual publish     ← GOutTrees only
 ```
 
-Three things this shape makes true that a linear reading does not:
+The `GOutDiags` selection is the same drive with the tree-only steps switched off; it is
+what `check`, the LSP, `analyzeProject` and `medaka test`'s gate reach. Two things this
+shape makes true that a linear reading does not:
 
-- **The fixpoint is conditional.** It runs only when at least one function was *directly*
-  promoted. On the common path it never runs at all.
-- **It re-enters `checkBodyImpl` in `Flat` mode**, over a flattened joint program — not in
-  the `Module` mode the sweep above it uses. The two modes are both live within one
-  `elaborateModules` call.
-- **The bare sweep's results are thrown away** when the harvest is non-empty, because call
-  sites unmarked under `bareDict` are unsound to keep once a callee is promoted.
+- **Promotion is decided per binding group, on the inference schedule** — not by a
+  re-sweep. `markGroupClauses` marks a group as `processSCC` reaches it, after its callees
+  have generalized; the members `registerInferredConstraints` promotes join the set at
+  group close and the group's own occurrences are rewritten (`markRecursiveOccurrences`).
+  So a promoted callee's call sites are marked in the sweep that promoted it, and there is
+  nothing to re-run. `elabPromotionFixpoint` is gone (#2705, ARCH §E clause (1)).
+- **The `Flat` mode is not on this path at all.** `elaborateDict` — the single-file arm —
+  still discovers promotion by re-running `discoverPromoted` until the set stabilizes, and
+  it is the only remaining caller of `checkBodyImpl`'s `Flat` mode.
 
-`foldModules` calls the worker **head-first**, so `elabHarvestWorker` reads a module's
-promotion set before the recursion into `rest` resets it (grep `Timing: elabModuleStamp`).
+`foldModules` calls the worker **head-first**, so `graphModuleWorker` reads a module's
+promotion set before the recursion into `rest` resets it.
+
+The keyed chain memo (`checkModulesDiagsChain (Some …)`, the LSP/`analyzeProject` arm) does
+NOT go through `driveGraphK`: `chainGo` shares `graphPreamble` (via
+`checkModulesPreambleK`) and `graphModuleWorker`, but mirrors `driveGraphK GOutDiags`'
+`foldModules` by hand. That mirror is a `[T-EVAL-LOCKSTEP]` obligation — a change to
+either fold is owed to both.
 
 ### 5.2 `checkBodyImpl` itself
 
@@ -459,7 +475,7 @@ one function** — the #992 fork shape, one level up and unfiled.
 
 The two elaboration paths run **different stampers in different orders**:
 
-| # | `elaborateDict` (Flat) | `elabModuleStamp` (Module) |
+| # | `flatStampOrder` (Flat, `elaborateDict`) | `moduleStampOrder` (Module, replayed by `drainStampQueue`) |
 |---|---|---|
 | 1 | `resolveSites` | `resolveSites` |
 | 2 | `resolveOpSites` (binop) | `resolveOpSites` (binop) |

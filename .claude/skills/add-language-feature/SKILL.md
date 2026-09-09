@@ -52,14 +52,16 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    `harden-typechecker` — it's keyed to the `ws:typecheck` label, not to a skill, precisely
    because a fix routed here (cross-cutting) would otherwise miss a skill-scoped gate. Infer/check
    types (HM + interfaces + effects). If the construct introduces match arms, update
-   exhaustiveness — `checkMatchExhaustive` / `checkMatchRedundant`
-   (`compiler/types/typecheck.mdk:5841` / `:5862`) call *into*
+   exhaustiveness — `checkMatchExhaustive` / `checkMatchRedundant`, whose call sites
+   (`grep -n 'checkMatchExhaustive\|checkMatchRedundant' compiler/types/typecheck.mdk`
+   — derive them, line numbers here rot) call *into*
    `compiler/frontend/exhaust.mdk` (`buildOracle` / `useful` / `usefulWitness`);
    exhaust is not a standalone stage. Per-node `infer`/`check` arms are shared, but
-   **whole-program orchestration lives in two near-identical entry points** —
-   `checkProgramDiags` (`:11565`, single-file) and `checkModuleFullDiags` (`:12417`,
-   multi-module, driven by `checkModulesDiagsK` `:12480`). A change to registration,
-   coherence, or a post-HM pass usually must be mirrored in both.
+   **whole-program orchestration lives in two entry points** — `checkProgramDiags`
+   (the FLAT arm, single-file, no module graph) and `checkModuleFullDiags` (the
+   MODULE arm, driven by the one graph driver `driveGraphK`, whose output selection
+   serves check and run/build alike). A change to registration, coherence, or a
+   post-HM pass usually must be mirrored in both arms.
 6. **Desugar** — `compiler/frontend/desugar.mdk`. If the feature is sugar, lower
    it to existing core nodes here rather than handling it in eval. Desugar runs
    **first** (before resolve/marker/typecheck), so a node lowered here can emit

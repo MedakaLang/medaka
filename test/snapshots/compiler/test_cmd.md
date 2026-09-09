@@ -613,9 +613,9 @@ data Prepared =
 --
 -- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
 -- takes decides whether it type-checks — and adding a doctest would move it
--- between them.  `elabWorker` and `cmModuleWorker` both pass `accAll ++ prog`
--- (types/typecheck.mdk); if that ever diverges again, this split is unsound and
--- both arms must move to one driver.  `hasDoctests` is the module's UNFILTERED
+-- between them.  `graphModuleWorker` passes `accAll ++ prog`
+-- on both output selections (types/typecheck.mdk), so the two arms cannot diverge
+-- on it.  `hasDoctests` is the module's UNFILTERED
 -- doctest presence: the arm is chosen by what the module contains, so `--filter`
 -- cannot move it.
 prepareMulti : String ->
