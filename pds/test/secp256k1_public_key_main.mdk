@@ -1,14 +1,36 @@
-{- | Native assertion driver for the fixed-ladder public-key boundary. It
-   deliberately mirrors the focused test source without putting four complete
-   256-round ladders through the tree-walking `medaka test` interpreter. -}
+{- | Native assertion driver for the fixed-ladder public-key boundary, and for
+   `pds keygen`'s derivation on top of it. It deliberately mirrors the focused
+   test source without putting complete 256-round ladders through the
+   tree-walking `medaka test` interpreter.
+
+   The keygen assertions are graded against two externally sourced corpora and
+   never against this program's own output: `point_public_key_corpus.txt`
+   carries `secret -> compressed public key` and `pds_did_key_corpus.txt`
+   carries `compressed public key -> did:key` from the official
+   `Secp256k1Keypair.did()`, and their first sixteen rows are the same sixteen
+   keys in the same order, so together they grade a secret's whole derivation.
+   Provenance: `pds/test/VECTOR-PROVENANCE.txt`. -}
 
 import array as A
+import hex.{decode}
+import list.{zipWith}
 import lib.sign.{
   secretKeyFromBytes,
   publicKeyFromCompressed,
   publicKeyCompressed,
   publicKeyForSecret,
 }
+import shell.keygen.{keygenSecretBytes, keygenSummary}
+import string.{lines, split, trim}
+
+-- Both corpora, named on the command line so this driver reads no path it
+-- invented and its gate decides which tree they come from.
+corpusPaths : Unit -> <Env> (String, String)
+corpusPaths u = match args ()
+  [pointCorpus, didCorpus] => (pointCorpus, didCorpus)
+  _ =>
+    panic
+      "usage: secp256k1_public_key_main POINT_PUBLIC_KEY_CORPUS PDS_DID_KEY_CORPUS"
 
 isErr : Result String a -> Bool
 isErr (Ok _) = False
@@ -88,6 +110,69 @@ roundTrip bytes = match publicKeyFromCompressed bytes
   Ok key => publicKeyCompressed key == bytes
   Err _ => False
 
+-- The whitespace-separated fields of one corpus row, empty for a blank line.
+fields : String -> List String
+fields line = filter (/= "") (split " " (trim line))
+
+corpusRows : String -> <FileRead "_"> List (List String)
+corpusRows path = match readFile path
+  Err message =>
+    panic "public-key driver: unreadable corpus \{path}: \{message}"
+  Ok text => filter (/= []) (map fields (lines text))
+
+-- The `mul` rows of the point corpus whose product is a point rather than
+-- INF, as (secret hex, compressed public hex) — the sixteen the did:key
+-- corpus names in the same order.
+mulRows : List (List String) -> List (String, String)
+mulRows rows =
+  filterMap
+    (row => match row
+      ["mul", secret, product] =>
+        if product == "INF" then None else Some (secret, product)
+      _ => None)
+    rows
+
+-- The `did-key` rows, as (compressed public hex, did:key).
+didRows : List (List String) -> List (String, String)
+didRows rows =
+  filterMap
+    (row => match row
+      ["did-key", _, publicHex, did] => Some (publicHex, did)
+      _ => None)
+    rows
+
+hexBytes : String -> Array Int
+hexBytes text = match decode text
+  Err message => panic "public-key driver: corpus field is not hex: \{message}"
+  Ok bytes => bytes
+
+{- | Every official row, graded through the exact composition `pds keygen`
+   prints: the secret's compressed public key and the `did:key` naming it. -}
+keygenGradesRow : (String, String) -> (String, String) -> Bool
+keygenGradesRow (secretHex, publicHex) (didPublicHex, did) =
+  didPublicHex == publicHex
+    && (match keygenSummary (hexBytes secretHex)
+      Err _ => False
+      Ok (derivedPublic, derivedDid) =>
+        derivedPublic == publicHex && derivedDid == did)
+
+keygenGradesCorpora : List (String, String) -> List (String, String) -> Bool
+keygenGradesCorpora muls dids =
+  length muls == 16
+    && length dids == 16
+    && all identity (zipWith keygenGradesRow muls dids)
+
+-- A generated key is one this program would also accept back as `--key`, and
+-- its printed public key is the one the ladder derives from the scalar it
+-- wrote. Nothing here renders the scalar.
+freshKeyRoundTrips : Array Int -> Bool
+freshKeyRoundTrips bytes = match secretKeyFromBytes bytes
+  Err _ => False
+  Ok secret => match keygenSummary bytes
+    Err _ => False
+    Ok (publicHex, _) =>
+      publicKeyCompressed (publicKeyForSecret secret) == hexBytes publicHex
+
 assertion : String -> Bool -> <IO> Int
 assertion label passed =
   if passed then
@@ -97,7 +182,20 @@ assertion label passed =
     let () = println "FAIL\t\{label}"
     0
 
-main : <IO, Env> Unit
+-- The scalar `n` itself, read from the one point-corpus row whose product is
+-- INF, so the group order this driver rejects is the corpus's rather than a
+-- constant retyped here.
+groupOrderHex : List (List String) -> String
+groupOrderHex rows =
+  let atInfinity =
+    row => match row
+      ["mul", secret, "INF"] => Some secret
+      _ => None
+  match filterMap atInfinity rows
+    [order] => order
+    _ => panic "public-key driver: the point corpus names no single INF row"
+
+main : <IO, Env, FileRead "_", Rand> Unit
 main =
   let oddGenerator = arrayCopy generatorCompressed
   let () = A.setInPlace 0 3 oddGenerator
@@ -139,6 +237,21 @@ main =
     assertion
       "reject-known-nonsquare-rhs"
       (isErr (publicKeyFromCompressed nonsquareXZero))
-  let passed = a1 + a2 + a3 + a4 + a5 + a6 + a7
-  let () = println "ASSERTIONS: \{intToString passed}/7"
-  if passed == 7 then exit 0 else exit 1
+  let (pointCorpus, didCorpus) = corpusPaths ()
+  let pointRows = corpusRows pointCorpus
+  let a8 =
+    assertion
+      "keygen-derivation-vs-official-corpora"
+      (keygenGradesCorpora (mulRows pointRows) (didRows (corpusRows didCorpus)))
+  let a9 =
+    assertion
+      "keygen-admits-d-only-in-1-to-n-minus-1"
+      (isErr (keygenSummary (arrayMake 32 0))
+        && isErr (keygenSummary (hexBytes (groupOrderHex pointRows))))
+  let a10 = match keygenSecretBytes 8
+    Err _ => assertion "keygen-fresh-key-round-trips" False
+    Ok fresh =>
+      assertion "keygen-fresh-key-round-trips" (freshKeyRoundTrips fresh)
+  let passed = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10
+  let () = println "ASSERTIONS: \{intToString passed}/10"
+  if passed == 10 then exit 0 else exit 1

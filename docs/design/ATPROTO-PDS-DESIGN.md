@@ -275,16 +275,104 @@ The salt is always caller-supplied — `pbkdf2HmacSha256` draws no entropy and d
 I/O itself; salt generation is the shell layer's job, in the slice that wires up
 account bootstrap.
 
-**Iteration count: 1,500.** Measured on this box (`medaka build -O2`, 32-byte `dkLen`):
-600,000 iterations — the current OWASP-recommended floor for PBKDF2-HMAC-SHA256 —
-takes **~70 s** here, because this is a pure-Medaka implementation with no hardware
-SHA extensions or vectorization, not a count anyone should read as a security
-recommendation for a tuned native implementation elsewhere. 20,000 iterations took
-~1.9 s (≈8,600–10,400 iterations/s, roughly linear); 1,500 iterations took
-~200–240 ms across three runs, the largest sample under the ~250 ms budget with
-headroom (S-kdf acceptance check 4). This number is revisited once the emitter's
-numeric/allocation performance on this workload (§4.1) is itself improved, or if a
-future slice moves the hot loop to a native `extern`.
+**Iteration count: 3,000, against a 500 ms login-latency budget. The OWASP floor is
+not reached, and the residual gap is 200x.**
+
+*Measurement (2026-09-09, this box: Debian 13, 12-core/32GB; `medaka build`, 32-byte
+`dkLen`, one process per sample, three samples per count).* Wall time for a single
+`pbkdf2HmacSha256` over a 28-character password and a 16-byte salt:
+
+| iterations | samples (ms) | median ms/iteration |
+|---|---|---|
+| 1,000 | 246.3 / 222.8 / 209.4 | 0.223 |
+| 2,000 | 469.4 / 514.9 / 317.4 | 0.235 |
+| 4,000 | 560.5 / 601.6 / 859.1 | 0.150 |
+| 8,000 | 1556.8 / 1371.5 / 1352.8 | 0.171 |
+| 16,000 | 2809.6 / 2360.7 / 2166.3 | 0.148 |
+
+Subtracting the 4,000 median from the 16,000 median removes the fixed per-process
+cost and gives the marginal figure this count is chosen from: **0.147 ms per
+iteration**, ≈6,800 iterations/s. (The small counts read *higher* per iteration
+because process start and heap growth are amortized over fewer iterations, not
+because the loop is superlinear.)
+
+*The budget.* 500 ms per derivation, chosen as a **login-latency** budget rather than
+the bootstrap budget the previous count was set against. The derivation now runs
+inside `applyRequest`'s single indivisible sequence (`pds/shell/server.mdk`), so it is
+also the time one `com.atproto.server.createSession` attempt — including a WRONG one —
+blocks every other connection for. `maxCreateSessionPerWindow` is 30 per 60 s per
+identity (`pds/lib/resource_limits.mdk`), so at 500 ms one identity can hold the
+server for at most 7.5 s of each minute; the budget is set where that stays a
+fraction rather than a majority of the window.
+
+*The chosen count.* 0.147 ms × 3,000 = **~440 ms**, the largest round count inside the
+budget. `defaultIterations = 3000` (`pds/lib/credential.mdk`), pinned by a cell in
+`pds/test/credential_test.mdk`.
+
+*The residual gap.* OWASP's floor for PBKDF2-HMAC-SHA-256 is 600,000 iterations, which
+at 0.147 ms/iteration is **~88 s per login** here — 200x the chosen count, and about
+176x the whole login budget. **The floor is unreachable by tuning and the gap is not
+closed by this change.** What closes it is a native SHA-256 (an `extern`, or an
+emitter that vectorizes the compression function): the gap is entirely the cost of a
+pure-Medaka block function, not of PBKDF2's structure. Until then this count is what
+the implementation can afford, and is not a security recommendation. Anyone deploying
+this behind a public origin should read it as: an attacker who steals
+`<data>/credential` recovers a weak password 200x faster than against a
+floor-compliant server.
+
+*Migration.* A record carries the count it was derived at, so raising the constant
+locks nobody out. A stored record derived at any other count is re-derived onto the
+current one by **one successful login** (`credentialUpgrade`, `pds/lib/credential.mdk`;
+called from `applyCreateSession` and persisted by `persistCredentialHalf`). A FAILED
+login never rewrites the record: `credentialUpgrade` grades the password itself and
+returns nothing without it, so the property holds at the function rather than at its
+call site.
+
+### 4.2.1 Secrets at rest, through 0.1.0
+
+**Ruling (Q6): the signing key and the session-token secret are stored in PLAINTEXT,
+protected by filesystem permissions alone.** Every secret file this server writes is
+mode `0600`, and every secret file it reads at any wider mode is refused before the
+listener binds.
+
+Passphrase encryption at rest is **deferred past 0.1.0**, deliberately. It needs a KDF
+and a symmetric cipher written in pure Medaka with no protocol-level answer key to
+grade either against — the opposite of the corpus discipline every other primitive
+here rests on (G5) — and it defends a threat model a single-operator server behind
+Caddy does not face: an attacker who can read `<data>/key.hex` as its owner is already
+the operator, and one who cannot read it gains nothing from its being encrypted at
+rest by a passphrase that would have to live on the same box to start unattended.
+
+*Rotating the signing key.* Rotating it changes the account's `did:key`, so it is an
+identity change, not a maintenance operation — the DID document must be updated and
+every other implementation on the network re-resolves it. The procedure:
+
+1. `pds keygen --key <data>/key.hex.new` — writes a new scalar at `0600` and prints
+   the compressed public key and the `did:key` it will be known by.
+2. Update the account's DID document to name that `did:key`, and wait for it to
+   propagate.
+3. Stop the server, `mv <data>/key.hex.new <data>/key.hex`, restart.
+
+`keygen` refuses to write over an existing file, so step 1 cannot destroy the running
+key by a typo.
+
+*Rotating the session-token secret.* This is a maintenance operation and costs only
+the open sessions: every token this server has issued is verified against it, so
+replacing it logs everybody out and nothing else.
+
+1. `pds keygen --token-secret <data>/session-secret.new`.
+2. Stop the server, `mv <data>/session-secret.new <data>/session-secret`, restart.
+
+*Rotating the account password.* `serve` refuses `--password-file` against a data
+directory that already holds a credential rather than rotating in place: remove
+`<data>/credential` and start once with `--password-file`.
+
+*What is graded, and what is not.* A supplied `--token-secret` is refused when it
+carries fewer than 8 distinct byte values across its 32 (`admitSessionSecret`,
+`pds/serve.mdk`) — 32 random bytes carry ~28, and fewer than 8 with probability far
+below 1 in 2^60, so this refuses a placeholder without ever refusing a real secret. It
+is a non-entropy detector, not an entropy estimator: it cannot tell a low-entropy
+passphrase hex-encoded to 32 bytes from a generated one.
 
 ### 4.3 Session tokens (JWT, HS256)
 
@@ -750,14 +838,15 @@ and raw/blob bodies at 5 MiB; the outer request ceiling additionally bounds
 framing overhead. `uploadBlob` is raw MIME input, not multipart. Revisit
 streaming only from measured deployment pressure, at the Phase 3 socket boundary.
 
+**Q6 — Where does the signing key live at rest? RESOLVED → plaintext at `0600`,
+through 0.1.0.** Passphrase encryption needs a KDF and a symmetric cipher with no
+protocol-level answer key to grade either against, for a threat model a
+single-operator server behind Caddy does not face. The ruling, what it does and does
+not protect, and the rotation procedure for each of the three secrets: §4.2.1.
+
 ### Still open
 
-- **Q6 — Where does the signing key live at rest?** Encrypted with a passphrase
-  supplied at startup, or plaintext on a locked-down filesystem? The first needs a KDF
-  and a symmetric cipher — more pure-Medaka crypto, none of which has a protocol-level
-  answer key the way §5's gates do, which makes it a materially different risk from
-  everything in Phase 0. Deferred to Phase 4, flagged now because it is the one piece
-  of crypto in this document that G1 cannot grade.
+None. Q6 was the last, and §4.2.1 rules it.
 
 ---
 

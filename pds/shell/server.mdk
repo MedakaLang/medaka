@@ -22,6 +22,12 @@
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
+import lib.credential.{
+  credentialDigest,
+  credentialIterations,
+  ctEqBytes,
+  saltBytes,
+}
 import lib.http.{
   Header,
   HttpFrame(..),
@@ -62,6 +68,7 @@ import lib.store.{
   storeBlobEntries,
   storeBlobMimeIndex,
   storeBlobMimeType,
+  storeCredential,
   storeRepo,
   storeSize,
 }
@@ -74,7 +81,7 @@ import lib.xrpc.{
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileWrite}
-import shell.persist.{persistSave}
+import shell.persist.{persistCredential, persistSave}
 import string.{toUtf8}
 import time.{Duration, now, seconds}
 
@@ -101,9 +108,15 @@ readChunkBytes = 65536
    `lib.server_core`), so it is drawn from `osEntropyBytes` and never from
    `randomInt`, whose generator is a seeded SplitMix64 and predictable by
    construction. Sixteen bytes is the usual floor for a value an attacker must
-   not be able to guess ahead of time. -}
+   not be able to guess ahead of time.
+
+   It is ALSO the salt a login's credential rehash is derived under
+   (`applyCreateSession`, `pds/lib/handlers.mdk`), which is the only entropy a
+   pure handler has, so the length is `lib.credential`'s `saltBytes` rather
+   than its own sixteen: a nonce of some other length would make every rehash
+   fail its salt admission and leave the credential silently unupgraded. -}
 requestNonceBytes : Int
-requestNonceBytes = 16
+requestNonceBytes = saltBytes
 
 {- | How many connections may be in flight at once. An accepted connection past
    the ceiling is closed immediately, without a read: answering it would need
@@ -216,7 +229,33 @@ persistTransition : String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistTransition dir before after = do
   () <- persistRepoHalf dir before after
+  () <- persistCredentialHalf dir before after
   if blobsMoved before after then persistBlobHalf dir after else Ok ()
+
+{- | Persist the account credential when the transition moved it, which one
+   route does: a login whose stored record predates today's iteration count is
+   re-derived onto it (`applyCreateSession`, `pds/lib/handlers.mdk`). Every
+   other request leaves the credential where it was and writes nothing.
+
+   A rewrite that failed would not publish the successor store either, so the
+   next login re-derives against the record still on disk rather than against
+   one nothing can verify. -}
+persistCredentialHalf : String ->
+  Store ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistCredentialHalf dir before after = match (
+  storeCredential before,
+  storeCredential after,
+)
+  (_, None) => Ok ()
+  (None, Some next) => persistCredential dir next
+  (Some prior, Some next) =>
+    if credentialIterations prior == credentialIterations next
+      && ctEqBytes (credentialDigest prior) (credentialDigest next) then
+      Ok ()
+    else
+      persistCredential dir next
 
 persistRepoHalf : String ->
   Store ->

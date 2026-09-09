@@ -9,6 +9,14 @@
    that line and nothing else. -}
 
 import array.{concat, sliceClamped}
+import hex as Hex
+import lib.credential.{
+  credentialDigest,
+  credentialIterations,
+  credentialSalt,
+  makeCredential,
+  saltBytes,
+}
 import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
@@ -1172,6 +1180,8 @@ main = match args ()
       shape
       (mustCount count)
       (mustStatus want)
+  ["credential-at", count, password] =>
+    runCredentialAt (mustCount count) password
   ["rl-session", port, xff, count, want, identifier, password] =>
     runRateLimitSession
       (mustPort port)
@@ -1181,6 +1191,26 @@ main = match args ()
       identifier
       password
   _ => panic usage
+
+{- | Print an account credential derived at `count` iterations, in the three
+   lines `<data>/credential` holds: the count, the salt, and the derived key.
+
+   This exists so a gate can put a data directory into the state a server
+   bootstrapped BEFORE `defaultIterations` moved was in — a state no running
+   binary can produce any more, and one that cannot be forged by editing the
+   count alone, since the derived key is a function of the count. The salt is
+   drawn from `osEntropyBytes`, as a real one is.
+
+   It is the only cell here that touches no socket, and it prints no password:
+   what it emits is exactly what the server would have written to disk. -}
+runCredentialAt : Int -> String -> <IO, Rand> Unit
+runCredentialAt count password =
+  match makeCredential (osEntropyBytes saltBytes) count password
+    Err message => panic "serve_client: credential-at: \{message}"
+    Ok record =>
+      let () = println (intToString (credentialIterations record))
+      let () = println (Hex.encode (credentialSalt record))
+      println (Hex.encode (credentialDigest record))
 
 {- | Upload one blob and print the CID the server content-addressed it to.
 

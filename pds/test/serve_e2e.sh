@@ -585,6 +585,136 @@ run_until_exit "$WORK/serve26.out" "$WORK/serve26.err" \
 [ ! -e "$DATA26/credential" ] \
   || fail 'case 26: a failed configuration left a credential behind'
 
+# 27. a --token-secret with no entropy in it is refused before the bind.
+#    Thirty-two zero bytes is a well-formed 32-byte hex secret at mode 0600,
+#    so every check that came before this one passes it; what refuses it is
+#    that every session token the server issued would be forgeable from a
+#    public constant. The exit status alone is also what a malformed DID
+#    produces, so this asserts the refusal's own message.
+DATA27="$WORK/data27"
+mkdir -p "$DATA27"
+ZERO_SECRET_HEX='0000000000000000000000000000000000000000000000000000000000000000'
+printf '%s\n' "$ZERO_SECRET_HEX" > "$WORK/token27.hex"
+chmod 600 "$WORK/token27.hex"
+run_until_exit "$WORK/serve27.out" "$WORK/serve27.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token27.hex" \
+  --password-file "$WORK/password" --data "$DATA27" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 27: a 32-zero-byte session-token secret was accepted'
+grep -F "session-token secret $WORK/token27.hex is a constant or near-constant value" \
+  "$WORK/serve27.err" >/dev/null \
+  || fail 'case 27: the refusal did not name the constant session-token secret'
+if grep -F 'serve: listening on' "$WORK/serve27.out" >/dev/null 2>&1; then
+  fail 'case 27: the listener bound before the session-token secret was graded'
+fi
+[ ! -e "$DATA27/session-secret" ] \
+  || fail 'case 27: the refused run left a generated session secret behind'
+
+# 28. `pds keygen` writes the secrets `serve` will not generate, at a mode
+#    `serve` will read back. A key written any wider would be refused by case
+#    25's own check on the next start, so the mode is asserted here directly.
+KEYGEN_DIR="$WORK/keygen"
+mkdir -p "$KEYGEN_DIR"
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
+  --token-secret "$KEYGEN_DIR/token.hex" \
+  > "$WORK/keygen.out" 2> "$WORK/keygen.err" \
+  || {
+    cat "$WORK/keygen.err" >&2
+    fail 'case 28: keygen exited nonzero'
+  }
+require_empty "$WORK/keygen.err" 'case 28 keygen'
+require_owner_only "$KEYGEN_DIR/key.hex" 'case 28: generated signing key'
+require_owner_only "$KEYGEN_DIR/token.hex" 'case 28: generated session-token secret'
+grep -E -q '^keygen: did:key did:key:zQ3s[1-9A-HJ-NP-Za-km-z]+$' "$WORK/keygen.out" \
+  || fail 'case 28: keygen did not report a secp256k1 did:key'
+grep -E -q '^keygen: public key 0[23][0-9a-f]{64}$' "$WORK/keygen.out" \
+  || fail 'case 28: keygen did not report a compressed public key'
+# The scalar reaches its file and nothing else: what keygen printed must not
+# contain the bytes it wrote.
+KEYGEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/key.hex")
+if grep -F "$KEYGEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1; then
+  fail 'case 28: keygen printed the signing key it generated'
+fi
+# A second run over the same path must refuse rather than destroy the key.
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
+  > "$WORK/keygen2.out" 2> "$WORK/keygen2.err" \
+  && fail 'case 28: keygen overwrote an existing signing key'
+grep -F "keygen refuses $KEYGEN_DIR/key.hex" "$WORK/keygen2.err" >/dev/null \
+  || fail 'case 28: the overwrite refusal did not name the path'
+[ "$(tr -d '\n' < "$KEYGEN_DIR/key.hex")" = "$KEYGEN_SECRET" ] \
+  || fail 'case 28: the refused second keygen changed the key on disk'
+# 28b. and what keygen wrote is what serve accepts: a whole genesis server
+#    stands up on the generated key and the generated token secret, which is
+#    the only proof that keygen and serve agree on the file format and mode.
+DATA28="$WORK/data28"
+mkdir -p "$DATA28"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$KEYGEN_DIR/key.hex" --token-secret "$KEYGEN_DIR/token.hex" \
+  --password-file "$WORK/password" --data "$DATA28" --port 0 --init \
+  > "$WORK/serve28.out" 2> "$WORK/serve28.err" &
+SERVER_PID=$!
+PORT28=$(wait_for_port "$WORK/serve28.out") \
+  || fail 'case 28b: a server on the generated key did not report readiness'
+require_empty "$WORK/serve28.err" 'case 28b startup'
+client login "$PORT28" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 28b: login against a server on the generated key'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+
+# 29. the login rehash (#2659 item 2): a credential written at an older
+#    iteration count is re-derived onto today's on ONE SUCCESSFUL login, and a
+#    FAILED login leaves the record exactly as it was. The stored record's
+#    first line is its iteration count, so the file itself is the assertion.
+#
+#    The old-count record cannot be forged by editing that first line — the
+#    derived key is a function of the count — so the client derives a real one
+#    at a lower count (`credential-at`), which is the state a data directory
+#    bootstrapped before the count moved is in.
+DATA29="$WORK/data29"
+mkdir -p "$DATA29"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA29" --port 0 --init \
+  > "$WORK/serve29a.out" 2> "$WORK/serve29a.err" &
+SERVER_PID=$!
+wait_for_port "$WORK/serve29a.out" >/dev/null \
+  || fail 'case 29: the bootstrap server did not report readiness'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+SHIPPED_ITERATIONS=$(head -1 "$DATA29/credential")
+OLD_ITERATIONS=$((SHIPPED_ITERATIONS / 2))
+[ "$OLD_ITERATIONS" -ge 1 ] || fail 'case 29: the shipped iteration count is too low to halve'
+client credential-at "$OLD_ITERATIONS" "$PASSWORD" > "$WORK/credential29.old" \
+  || fail 'case 29: the client could not derive an old-count credential'
+[ "$(head -1 "$WORK/credential29.old")" = "$OLD_ITERATIONS" ] \
+  || fail 'case 29: the derived credential does not name the old count'
+cp "$WORK/credential29.old" "$DATA29/credential"
+chmod 600 "$DATA29/credential"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATA29" --port 0 \
+  > "$WORK/serve29b.out" 2> "$WORK/serve29b.err" &
+SERVER_PID=$!
+PORT29B=$(wait_for_port "$WORK/serve29b.out") \
+  || fail 'case 29: the resumed server did not report readiness'
+client login-refused "$PORT29B" "$HANDLE" 'not the account password' \
+  || fail 'case 29: a wrong password was not refused'
+cmp "$WORK/credential29.old" "$DATA29/credential" \
+  || fail 'case 29: a FAILED login rewrote the stored credential'
+client login "$PORT29B" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 29: the login that should migrate the credential failed'
+[ "$(head -1 "$DATA29/credential")" = "$SHIPPED_ITERATIONS" ] \
+  || fail 'case 29: one successful login did not re-derive at the shipped count'
+require_owner_only "$DATA29/credential" 'case 29: the re-derived credential'
+client login "$PORT29B" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 29: the migrated credential does not verify the same password'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve29b.err" 'case 29 resumed server'
+
 # ── fourth, independent --data dir: rate limiting (#2612) ──────────────────
 # `--trusted-proxy` is on here and nowhere else in this gate — every other
 # case above runs the untrusted, single-bucket identity path, and this is
@@ -706,4 +836,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, and a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one'
