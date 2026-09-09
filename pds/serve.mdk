@@ -72,6 +72,7 @@ import lib.credential.{
   saltBytes,
 }
 import lib.jwt.{serverSecretBytes}
+import lib.ratelimit.{TrustedProxy(..)}
 import lib.handlers.{pdsServer}
 import lib.repo.{
   Repo,
@@ -371,7 +372,7 @@ openRepo True dir did keyBytes secret =
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, and the port. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Result String (Server, Store, String, Int, Bool)
+  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Result String (Server, Store, String, Int, TrustedProxy)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -394,7 +395,7 @@ configure parsed = do
     storeWithCredential credential withSecret,
     dir,
     port,
-    flag "--trusted-proxy" parsed,
+    TrustedProxy (flag "--trusted-proxy" parsed),
   )
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
@@ -414,7 +415,7 @@ announce : Int ->
   Store ->
   String ->
   Server ->
-  Bool ->
+  TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 announce port lis store dir server trustedProxy = defer
   _ <- liftIO (u => ready port)
@@ -425,7 +426,7 @@ announce port lis store dir server trustedProxy = defer
 bound : Server ->
   Store ->
   String ->
-  Bool ->
+  TrustedProxy ->
   Result String Listener ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 bound _ _ _ _ (Err message) =
@@ -437,7 +438,7 @@ bound server store dir trustedProxy (Ok lis) = defer
       liftIO (u => abort "serve: listener port unavailable: \{message}")
     Ok given => announce given lis store dir server trustedProxy
 
-start : Result String (Server, Store, String, Int, Bool) ->
+start : Result String (Server, Store, String, Int, TrustedProxy) ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, trustedProxy)) = defer

@@ -519,13 +519,18 @@ RLACCESS=${RLLOGIN%% *}
 # (`now / rateLimitWindowSeconds`, `pds/lib/ratelimit.mdk`), not by when
 # this gate happened to start driving it — a flood begun near a window
 # boundary can cross it mid-flight and silently observe a fresh budget
-# instead of the ceiling. Wait for room in the current window (cases 19-22
-# together need well under 30s) before starting.
-i=0
-while [ "$(($(date +%s) % 60))" -gt 20 ] && [ "$i" -lt 600 ]; do
-  i=$((i + 1))
-  sleep 0.1
-done
+# instead of the ceiling, which reads as "the ceiling does not refuse".
+# Called before each group of cases below, not once for all of them: a group
+# that starts 50s into the window is the hazard, whichever group it is.
+wait_for_window_room() {
+  i=0
+  while [ "$(($(date +%s) % 60))" -gt 20 ] && [ "$i" -lt 600 ]; do
+    i=$((i + 1))
+    sleep 0.1
+  done
+}
+
+wait_for_window_room
 
 # 19. connections class: one identity opens one connection past its ceiling
 #    and is refused 429 carrying the RateLimit-* headers and RateLimitExceeded;
@@ -535,14 +540,14 @@ done
 client rl-conn "$PORTRL" 203.0.113.1 121 429 \
   || fail 'case 19: connections class did not refuse at its ceiling'
 client rl-conn "$PORTRL" 203.0.113.2 1 200 \
-  || fail 'case 19: a second identity was refused by the first one's ceiling'
+  || fail "case 19: a second identity was refused by the first one's ceiling"
 
 # 20. requests class, same shape, one connection per identity reused across
 #    every request sent on it.
 client rl-req "$PORTRL" 203.0.113.11 3001 429 \
   || fail 'case 20: requests class did not refuse at its ceiling'
 client rl-req "$PORTRL" 203.0.113.12 1 200 \
-  || fail 'case 20: a second identity was refused by the first one's ceiling'
+  || fail "case 20: a second identity was refused by the first one's ceiling"
 
 # 21. writes class: createRecord is rate-limited independently of the plain
 #    requests ceiling above it. The ceiling driven here is the shipped
@@ -555,18 +560,56 @@ client rl-req "$PORTRL" 203.0.113.12 1 200 \
 client rl-write "$PORTRL" 203.0.113.21 61 429 "$RLACCESS" "$DID" "$COLLECTION" rl-a \
   || fail 'case 21: writes class did not refuse at its ceiling'
 client rl-write "$PORTRL" 203.0.113.22 1 200 "$RLACCESS" "$DID" "$COLLECTION" rl-b \
-  || fail 'case 21: a second identity was refused by the first one's ceiling'
+  || fail "case 21: a second identity was refused by the first one's ceiling"
 
 # 22. createSession class: login itself is rate-limited, independent of
 #    every other class.
 client rl-session "$PORTRL" 203.0.113.31 31 429 "$HANDLE" "$PASSWORD" \
   || fail 'case 22: createSession class did not refuse at its ceiling'
 client rl-session "$PORTRL" 203.0.113.32 1 200 "$HANDLE" "$PASSWORD" \
-  || fail 'case 22: a second identity was refused by the first one's ceiling'
+  || fail "case 22: a second identity was refused by the first one's ceiling"
+
+# 23. repo-export class: `com.atproto.sync.getRepo` serializes the whole
+#    repository, so its cost is bounded by `maxCarBytes` per call and not by
+#    any count of requests — it therefore has a ceiling of its own. Driven
+#    over ONE connection (the connections class is charged once per
+#    connection, so a connection-per-request flood would observe THAT ceiling
+#    instead), and followed by a plain read from the SAME identity: the class
+#    has to be independent, not merely a lower global number.
+wait_for_window_room
+client rl-repo "$PORTRL" 203.0.113.41 101 429 "$DID" \
+  || fail 'case 23: repo-export class did not refuse at its ceiling'
+client rl-req "$PORTRL" 203.0.113.41 1 200 \
+  || fail 'case 23: a plain read was refused by the repo-export ceiling'
+client rl-repo "$PORTRL" 203.0.113.42 1 200 "$DID" \
+  || fail "case 23: a second identity was refused by the first one's ceiling"
+
+# 24. requests the server answers 400 are charged too, in both shapes: one
+#    that frames and fails to parse, and one no framer can complete. Neither
+#    can be attributed to a client, so both are charged to the shared `direct`
+#    identity — the same bucket every request without a trusted
+#    `X-Forwarded-For` already uses. Before this, either shape was an
+#    unmetered channel: 300 of them cost their sender nothing and left its
+#    budget whole.
+#
+#    These run LAST because they exhaust `direct` for the rest of the window,
+#    and the two shapes share that one bucket: the first flood proves the
+#    shape it drives is CHARGED (400 up to the ceiling, 429 past it), and the
+#    single request after it proves the other shape reads the SAME bucket
+#    rather than a second free one.
+wait_for_window_room
+client rl-malformed "$PORTRL" framed 150 429 \
+  || fail 'case 24: an unparseable request was not charged'
+client rl-malformed "$PORTRL" unframed 1 429 \
+  || fail 'case 24: an unframeable request was not charged against the same bucket'
+# ...and a well-formed request from an identified client is still served, so
+# metering garbage did not become a self-inflicted outage.
+client rl-req "$PORTRL" 203.0.113.51 1 200 \
+  || fail 'case 24: an identified client was refused by the malformed-traffic ceiling'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free'

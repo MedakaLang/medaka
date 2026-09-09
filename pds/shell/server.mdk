@@ -42,10 +42,13 @@ import lib.ratelimit.{
   RateLimitClass(..),
   RateLimitState,
   RateLimitVerdict(..),
+  TrustedProxy,
   classAllowance,
+  directIdentity,
   identifyClient,
   initRateLimitState,
   isCreateSessionNsid,
+  isRepoExportNsid,
   isWriteNsid,
   remainingInClass,
   step,
@@ -235,20 +238,58 @@ persistRepo dir repo = do
 -- One rate-limit decision, taken against every class this request must
 -- clear: `ConnectionsClass` only on a connection's first framed request (a
 -- kept-alive connection is "opened" once, not once per pipelined request),
--- `RequestsClass` always, and `WritesClass`/`CreateSessionClass` when the
--- routed NSID is one of the write procedures or `createSession`. A refusal
--- at an earlier class in the list short-circuits: a request already being
--- refused should not also spend a later class's budget it never reached.
+-- `RequestsClass` always, and `WritesClass`/`CreateSessionClass`/
+-- `RepoExportClass` when the routed NSID is one of the write procedures,
+-- `createSession`, or a whole-repository export. A refusal at an earlier
+-- class in the list short-circuits: a request already being refused should
+-- not also spend a later class's budget it never reached.
 data RateLimitAdmission =
   | RequestAdmitted RateLimitState
   | RequestRefused RateLimitState RateLimitClass
 
-requiredClasses : Bool -> Bool -> Bool -> List RateLimitClass
-requiredClasses firstRequest isWrite isCreateSession =
-  (if firstRequest then [ConnectionsClass] else [])
-    ++ [RequestsClass]
-    ++ (if isWrite then [WritesClass] else [])
-    ++ (if isCreateSession then [CreateSessionClass] else [])
+-- | What every request that reached the framer clears, whatever it routes to
+-- and whether or not it parsed.
+baseClasses : Bool -> List RateLimitClass
+baseClasses firstRequest =
+  (if firstRequest then [ConnectionsClass] else []) ++ [RequestsClass]
+
+-- | The extra classes the routed procedure adds. A request that did not parse
+-- has no routed procedure and so adds none.
+nsidClasses : Result HttpParseFailure Request -> List RateLimitClass
+nsidClasses (Err _) = []
+nsidClasses (Ok request) = match requestNsid request
+  None => []
+  Some name =>
+    (if isWriteNsid name then [WritesClass] else [])
+      ++ (if isCreateSessionNsid name then [CreateSessionClass] else [])
+      ++ (if isRepoExportNsid name then [RepoExportClass] else [])
+
+{- | The classes one framed request is charged against, and — below — the
+   identity it is charged to.
+
+   No two arguments on this path share a type: the trust assertion is a
+   `TrustedProxy`, the first-request flag a `Bool`, the parse outcome a
+   `Result`. That is a constraint on any future edit here, not an accident of
+   spelling. A charge decided from several same-typed positional flags is
+   wrong-but-plausible when two are crossed, and a crossed charge is a 429 for
+   the wrong client that no output distinguishes from a correct one — so the
+   only thing that can catch it is the type checker. -}
+admissionClasses : Bool ->
+  Result HttpParseFailure Request ->
+  List RateLimitClass
+admissionClasses firstRequest parsed =
+  baseClasses firstRequest ++ nsidClasses parsed
+
+-- | An unparseable request carries no headers this module may trust, so it is
+-- charged to the shared `direct` bucket rather than to a reconstructed
+-- identity. Garbage is not the shape a legitimate client sends, so a shared
+-- ceiling on it costs a well-behaved client nothing.
+admissionIdentity : TrustedProxy ->
+  Result HttpParseFailure Request ->
+  ClientIdentity
+admissionIdentity _ (Err _) = directIdentity
+admissionIdentity trustedProxy (Ok request) =
+  identifyClient trustedProxy (requestHeaders request)
 
 admitClasses : RateLimitState ->
   ClientIdentity ->
@@ -261,20 +302,6 @@ admitClasses state identity nowSeconds (cls :: rest) =
     (next, Refused) => RequestRefused next cls
     (next, Admitted) => admitClasses next identity nowSeconds rest
 
-admitRequest : RateLimitState ->
-  ClientIdentity ->
-  Bool ->
-  Bool ->
-  Bool ->
-  Int ->
-  RateLimitAdmission
-admitRequest state identity firstRequest isWrite isCreateSession nowSeconds =
-  admitClasses
-    state
-    identity
-    nowSeconds
-    (requiredClasses firstRequest isWrite isCreateSession)
-
 classMessage : RateLimitClass -> String
 classMessage ConnectionsClass =
   "too many connections for this identity in the current window"
@@ -284,6 +311,8 @@ classMessage WritesClass =
   "too many write requests for this identity in the current window"
 classMessage CreateSessionClass =
   "too many createSession attempts for this identity in the current window"
+classMessage RepoExportClass =
+  "too many repository exports for this identity in the current window"
 
 intHeader : String -> Int -> Header
 intHeader name value = match makeHeader name (toUtf8 "\{value}")
@@ -307,34 +336,17 @@ rateLimitHeaderList state identity cls nowSeconds = [
     (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
 ]
 
--- | `None` admits; `Some` is the 429 to send instead of doing any real work —
--- an unparseable request cannot be identified, so it is admitted here and
--- answered by the existing 400/413 path in `applyRequest` instead.
+-- | `None` admits; `Some` is the 429 to send instead of doing any real work.
+-- Every buffer that reached the framer is charged, a parse failure included:
+-- answering one costs a parse and a response, so an uncharged failure is a
+-- work channel with no ceiling on it at all.
 applyRateLimit : Ref RateLimitState ->
-  Bool ->
-  Bool ->
-  Result HttpParseFailure Request ->
+  ClientIdentity ->
+  List RateLimitClass ->
   Int ->
   Option Response
-applyRateLimit _ _ _ (Err _) _ = None
-applyRateLimit limiterRef trustedProxy firstRequest (Ok request) nowSeconds =
-  let identity = identifyClient trustedProxy (requestHeaders request)
-  let nsid = requestNsid request
-  let isWrite = match nsid
-    Some name => isWriteNsid name
-    None => False
-  let isCreateSession = match nsid
-    Some name => isCreateSessionNsid name
-    None => False
-  let admission =
-    admitRequest
-      !limiterRef
-      identity
-      firstRequest
-      isWrite
-      isCreateSession
-      nowSeconds
-  match admission
+applyRateLimit limiterRef identity classes nowSeconds =
+  match admitClasses !limiterRef identity nowSeconds classes
     RequestAdmitted next =>
       let () = limiterRef := next
       None
@@ -357,7 +369,7 @@ runServer : Server ->
   String ->
   Ref Store ->
   Listener ->
-  Bool ->
+  TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 runServer server dir storeRef lis trustedProxy = defer
   active <- liftIO (u => Ref 0)
@@ -370,7 +382,7 @@ acceptLoop : Server ->
   Listener ->
   Ref Int ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 acceptLoop server dir storeRef lis active limiterRef trustedProxy = defer
   accepted <- A.accept lis
@@ -382,7 +394,7 @@ acceptStep : Server ->
   Listener ->
   Ref Int ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Result String Connection ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 acceptStep _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
@@ -410,7 +422,7 @@ serveConnection : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Ref Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> Unit
@@ -429,7 +441,7 @@ connectionLoop : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Array Int ->
   Bool ->
@@ -459,7 +471,7 @@ frameLoop : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Wait ->
   Array Int ->
@@ -479,7 +491,8 @@ frameLoop server dir storeRef limiterRef trustedProxy conn deadline buf scan fir
         buf
         boundary
         firstRequest
-    (HttpFrameFailed _, _) => rejectBuffer server dir storeRef conn buf
+    (HttpFrameFailed _, _) =>
+      rejectBuffer server dir storeRef limiterRef conn buf firstRequest
     (HttpNeedMore, resumed) => defer
       late <- expired deadline
       if late then
@@ -501,7 +514,7 @@ readMore : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Wait ->
   Array Int ->
@@ -544,7 +557,7 @@ respond : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Array Int ->
   Int ->
@@ -569,7 +582,7 @@ respondAt : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Array Int ->
   Int ->
@@ -582,7 +595,13 @@ respondAt server dir storeRef limiterRef trustedProxy conn buf boundary firstReq
     Ok request => requestKeepAlive request
     Err _ => False
   let rest = sliceClamped boundary (arrayLength buf) buf
-  match applyRateLimit limiterRef trustedProxy firstRequest parsed nowSeconds
+  let charged =
+    applyRateLimit
+      limiterRef
+      (admissionIdentity trustedProxy parsed)
+      (admissionClasses firstRequest parsed)
+      nowSeconds
+  match charged
     Some refusal =>
       sendAndContinue
         server
@@ -612,7 +631,7 @@ sendAndContinue : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Bool ->
+  TrustedProxy ->
   Connection ->
   Array Int ->
   Bool ->
@@ -640,12 +659,42 @@ sendAndContinue server dir storeRef limiterRef trustedProxy conn rest keepAlive 
 -- An unframeable buffer is still answered, by the same pure core: `handleBytes`
 -- classifies it 400 or 413 exactly as it classifies a whole buffer handed to it
 -- by any other caller. The connection then closes.
+--
+-- It is charged first, against the shared `direct` identity: a buffer no framer
+-- can complete carries nothing this module may trust as an identity, and
+-- answering it is still work. `baseClasses` and not `admissionClasses` because
+-- there is no routed procedure to add a class for.
 rejectBuffer : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
   Connection ->
   Array Int ->
+  Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-rejectBuffer server dir storeRef conn buf = defer
-  response <- liftIO (u => applyRequest server dir storeRef buf)
-  A.sendAllWithin writeTimeout conn response
+rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
+  nowSeconds <- liftIO (u => floatToInt (now ()))
+  rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds
+
+rejectBufferAt : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  Connection ->
+  Array Int ->
+  Bool ->
+  Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds =
+  let charged =
+    applyRateLimit
+      limiterRef
+      directIdentity
+      (baseClasses firstRequest)
+      nowSeconds
+  match charged
+    Some refusal =>
+      A.sendAllWithin writeTimeout conn (serializeResponse refusal)
+    None => defer
+      response <- liftIO (u => applyRequest server dir storeRef buf)
+      A.sendAllWithin writeTimeout conn response

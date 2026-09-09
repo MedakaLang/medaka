@@ -6,17 +6,25 @@
 import string.{toUtf8}
 import test.{expectAll, expectEqual, expectTrue}
 import lib.http.{Header, makeHeader}
-import lib.resource_limits.{maxCreateSessionPerWindow, rateLimitWindowSeconds}
+import lib.resource_limits.{
+  maxCreateSessionPerWindow,
+  maxRepoExportsPerWindow,
+  rateLimitWindowSeconds,
+}
 import lib.ratelimit.{
   ClientIdentity,
   RateLimitClass(..),
   RateLimitState,
   RateLimitVerdict(..),
+  TrustedProxy(..),
   classAllowance,
   directIdentity,
   identifyClient,
   identityLabel,
   initRateLimitState,
+  isCreateSessionNsid,
+  isRepoExportNsid,
+  isWriteNsid,
   step,
 }
 import lib.xrpc.{
@@ -101,35 +109,49 @@ test "the rate-limit refusal is a 429 RateLimitExceeded" =
 -- the single "direct" bucket rather than becoming its own identity.
 test "an untrusted peer's X-Forwarded-For is ignored" =
   let headers = [xffHeader "203.0.113.7"]
-  expectEqual (identityLabel (identifyClient False headers)) "direct"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy False) headers))
+    "direct"
 
 test "a trusted peer's well-formed X-Forwarded-For is honored" =
   let headers = [xffHeader "203.0.113.7"]
-  expectEqual (identityLabel (identifyClient True headers)) "203.0.113.7"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "203.0.113.7"
 
 test "a trusted peer's forwarded chain picks the LAST hop" =
   let headers = [xffHeader "203.0.113.7, 198.51.100.9, 192.0.2.44"]
-  expectEqual (identityLabel (identifyClient True headers)) "192.0.2.44"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "192.0.2.44"
 
 -- (d) a malformed header never admits a second identity.
 test "malformed X-Forwarded-For (garbage) falls back to direct" =
   let headers = [xffHeader "garbage"]
-  expectEqual (identityLabel (identifyClient True headers)) "direct"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
 
 test "malformed X-Forwarded-For (empty) falls back to direct" =
   let headers = [xffHeader ""]
-  expectEqual (identityLabel (identifyClient True headers)) "direct"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
 
 test "malformed X-Forwarded-For (bare comma) falls back to direct" =
   let headers = [xffHeader ","]
-  expectEqual (identityLabel (identifyClient True headers)) "direct"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
 
 test "malformed X-Forwarded-For (last hop not an address) falls back to direct" =
   let headers = [xffHeader "203.0.113.7, not-an-address"]
-  expectEqual (identityLabel (identifyClient True headers)) "direct"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
 
 test "no X-Forwarded-For at all falls back to direct" =
-  expectEqual (identityLabel (identifyClient True [])) "direct"
+  expectEqual (identityLabel (identifyClient (TrustedProxy True) [])) "direct"
 
 -- (e) repeated X-Forwarded-For fields are ONE chain in field order: a proxy
 -- appends rather than replaces, so the nearest hop is the last hop of the
@@ -137,12 +159,16 @@ test "no X-Forwarded-For at all falls back to direct" =
 -- bucket, which is a different bucket — a fresh allowance, not a penalty.
 test "repeated X-Forwarded-For fields take the last field's last hop" =
   let headers = [xffHeader "203.0.113.7", xffHeader "198.51.100.9"]
-  expectEqual (identityLabel (identifyClient True headers)) "198.51.100.9"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "198.51.100.9"
 
 test "repeating X-Forwarded-For cannot escape an exhausted bucket" =
-  let single = identifyClient True [xffHeader "203.0.113.77"]
-  let doubled =
-    identifyClient True [xffHeader "203.0.113.77", xffHeader "203.0.113.77"]
+  let single = identifyClient (TrustedProxy True) [xffHeader "203.0.113.77"]
+  let doubled = identifyClient (TrustedProxy True) [
+    xffHeader "203.0.113.77",
+    xffHeader "203.0.113.77",
+  ]
   let saturated = saturatedFor single
   expectAll [
     expectTrue (isRefused (verdictFor saturated single)),
@@ -153,11 +179,15 @@ test "repeating X-Forwarded-For cannot escape an exhausted bucket" =
 -- garbage: rejecting it folds every such client into the one shared bucket.
 test "an IPv4-mapped last hop is its own identity" =
   let headers = [xffHeader "::ffff:203.0.113.5"]
-  expectEqual (identityLabel (identifyClient True headers)) "::ffff:203.0.113.5"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "::ffff:203.0.113.5"
 
 test "distinct IPv4-mapped last hops are distinct buckets" =
-  let first = identifyClient True [xffHeader "::ffff:198.51.100.1"]
-  let second = identifyClient True [xffHeader "::ffff:198.51.100.2"]
+  let first =
+    identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.1"]
+  let second =
+    identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.2"]
   let saturated = saturatedFor first
   expectAll [
     expectTrue (isRefused (verdictFor saturated first)),
@@ -166,4 +196,43 @@ test "distinct IPv4-mapped last hops are distinct buckets" =
 
 test "a truncated IPv4-mapped last hop is still rejected" =
   let headers = [xffHeader "::ffff:203.0.113"]
-  expectEqual (identityLabel (identifyClient True headers)) "direct"
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
+
+-- (g) the whole-repository export ceiling is a CLASS of its own, not a lower
+-- shared number: `maxRequestsPerWindow` bounds a count of requests, while one
+-- export's response is bounded only by `maxCarBytes`.
+test "the repo-export ceiling is its own, not the shared request ceiling" =
+  expectTrue (classAllowance RepoExportClass /= classAllowance RequestsClass)
+
+test "a spent repo-export allowance still admits a plain read" =
+  let saturated =
+    exhaust
+      initRateLimitState
+      directIdentity
+      RepoExportClass
+      0
+      maxRepoExportsPerWindow
+  let (_, exportVerdict) = step saturated directIdentity RepoExportClass 0
+  let (_, readVerdict) = step saturated directIdentity RequestsClass 0
+  expectAll [
+    expectTrue (isRefused exportVerdict),
+    expectTrue (isAdmitted readVerdict),
+  ]
+
+test "getRepo is the repo-export procedure and the other sync reads are not" = expectAll
+  [
+    expectTrue (isRepoExportNsid "com.atproto.sync.getRepo"),
+    expectTrue (not (isRepoExportNsid "com.atproto.sync.getLatestCommit")),
+    expectTrue (not (isRepoExportNsid "com.atproto.sync.getBlob")),
+    expectTrue (not (isRepoExportNsid "com.atproto.sync.listBlobs")),
+  ]
+
+-- A read charged as a write would spend the far scarcer write allowance, so
+-- the predicates must not overlap on this NSID.
+test "a repository export is charged as neither a write nor a login" = expectAll
+  [
+    expectTrue (not (isWriteNsid "com.atproto.sync.getRepo")),
+    expectTrue (not (isCreateSessionNsid "com.atproto.sync.getRepo")),
+  ]

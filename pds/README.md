@@ -561,11 +561,14 @@ by a server that starts and still serves every undamaged blob.
 ## Rate limiting and `--trusted-proxy` (#2612)
 
 `pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
-its caller's identity exceeds one of four independent per-window allowances
+its caller's identity exceeds one of five independent per-window allowances
 (`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
 `maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
-all placeholders pending real traffic data, refilled every
-`rateLimitWindowSeconds`). The refusal carries `error: "RateLimitExceeded"`
+`maxRepoExportsPerWindow`, all placeholders pending real traffic data,
+refilled every `rateLimitWindowSeconds`). `maxRepoExportsPerWindow` covers
+`com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
+bounded only by `maxCarBytes`, so the request count that bounds every other
+read says nothing about the bytes this one emits. The refusal carries `error: "RateLimitExceeded"`
 and the three IETF `RateLimit-*` response headers naming the exceeded
 class's own limit, remaining count, and seconds to reset — never a blended
 figure across classes. This is layered UNDER Caddy (see
@@ -588,7 +591,7 @@ spend it down on that identity's behalf. Without the flag (the default),
 every caller — proxied or not — shares one `"direct"` identity bucket. That
 is the right default for a loopback-bound process with nothing in front of
 it yet, but it is not a *safe* one to leave in place, and the difference
-matters: with a single bucket, all four ceilings stop being per-client and
+matters: with a single bucket, all five ceilings stop being per-client and
 become process-wide, so the first caller to reach one refuses **every other
 caller** until the window turns. Exposing this server past loopback without
 deciding this flag first hands the WHOLE deployment's allowance to a single

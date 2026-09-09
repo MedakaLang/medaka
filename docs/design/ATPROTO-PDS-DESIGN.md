@@ -578,31 +578,36 @@ opposite half — a limit that KNOWS the caller's identity and the request's
 class, which no reverse proxy in front of it can. `pds/shell/server.mdk`
 charges every request against a `RateLimitState` (`pds/lib/ratelimit.mdk`)
 kept in one fixed window (`rateLimitWindowSeconds`, `pds/lib/
-resource_limits.mdk`) per four independent classes: a `ConnectionsClass`
-charge on a connection's first framed and parsed request, a `RequestsClass`
-charge on every framed and parsed request, and two narrower classes layered
+resource_limits.mdk`) per five independent classes: a `ConnectionsClass`
+charge on a connection's first framed request, a `RequestsClass`
+charge on every framed request, and three narrower classes layered
 on top of `RequestsClass` rather
 than replacing it — `WritesClass` for the write NSIDs (`createRecord`,
-`putRecord`, `deleteRecord`, `applyWrites`, `uploadBlob`) and
+`putRecord`, `deleteRecord`, `applyWrites`, `uploadBlob`),
 `CreateSessionClass` for `createSession` alone, since login attempts are a
-credential-guessing surface every other route is not. A refusal answers 429
+credential-guessing surface every other route is not, and `RepoExportClass`
+for `sync.getRepo` alone, whose single response is a whole-repository CAR
+bounded only by `maxCarBytes` — a count of requests cannot bound what that
+route emits, so `maxRepoExportsPerWindow` names the egress ceiling
+separately. A refusal answers 429
 with `error: "RateLimitExceeded"` and the IETF `RateLimit-*` response
 headers (`ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`) naming
 the exceeded class's own ceiling, not a blended figure.
 
-"Framed and parsed" is the load-bearing qualifier in that paragraph, and it
-is where this half of the limiter stops: a charge needs an identity, an
-identity comes from a header, and a header only exists once a request has
-been framed out of the connection's bytes and parsed. Two things therefore
-fall outside every class. A connection that never completes a request is
+"Framed" is the load-bearing qualifier in that paragraph, and it is where
+this half of the limiter stops: a charge is taken the moment a request
+boundary is reached, whether or not the bytes inside it parse. What a charge
+cannot always have is a per-identity bucket to go in, since an identity comes
+from a header and a header only exists once a request parsed. So a request
+that fails to frame or parse is answered 400 and, having produced no identity
+to charge, is attributed to the shared `"direct"` bucket rather than to its
+sender; that bounds the channel globally without pretending to know who used
+it, which is defensible for malformed traffic precisely because malformed
+traffic is not the shape a legitimate client has. One shape falls outside
+every class entirely: a connection that never completes a request is
 accepted, occupies a slot against `maxConcurrentConnections`, and is charged
 nothing — enough of them deny service to every other caller (#2772), which
-is why a read deadline, not a counter, is what closes that shape. And a
-request that fails to frame or parse is answered 400 and, having produced no
-identity to charge, is attributed to the shared `"direct"` bucket rather
-than to its sender; that bounds the channel globally without pretending to
-know who used it, which is defensible for malformed traffic precisely
-because malformed traffic is not the shape a legitimate client has.
+is why a read deadline, not a counter, is what closes that shape.
 
 One fixed window per identity also bounds the AVERAGE rate over a window,
 not the instantaneous one: because the window index is derived from the
@@ -625,7 +630,7 @@ default is chosen because the alternative is worse, not because it is
 without cost: a forwarded-for header trusted by default would let any client
 claim any identity's budget for itself, or spend a stranger's. The cost it
 does carry should be stated plainly, because it inverts the property this
-half of the limiter exists for — with one bucket for every caller, all four
+half of the limiter exists for — with one bucket for every caller, all five
 ceilings are process-wide rather than per-client, so the first caller to
 reach one refuses every other caller until the window turns. A per-identity
 limiter that cannot distinguish identities is a global limiter. Nothing in

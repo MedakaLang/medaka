@@ -45,6 +45,7 @@ import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
+  maxRepoExportsPerWindow,
   maxRequestsPerWindow,
   maxWritesPerWindow,
   rateLimitWindowSeconds,
@@ -71,6 +72,7 @@ public export data RateLimitClass =
   | RequestsClass
   | WritesClass
   | CreateSessionClass
+  | RepoExportClass
 
 public export data RateLimitVerdict = Admitted | Refused
 
@@ -87,8 +89,9 @@ public export data RateLimitVerdict = Admitted | Refused
    seen this window into the cost of serving one request. -}
 export data RateLimitState = RateLimitState Int (Map String ClientCounters)
 
-data ClientCounters = ClientCounters Int Int Int Int
--- connections used, requests used, writes used, createSession used
+data ClientCounters = ClientCounters Int Int Int Int Int
+-- connections used, requests used, writes used, createSession used,
+-- repo exports used
 
 -- | No window has been entered yet, so any first decision starts fresh: the
 -- index cannot collide with a real `now / rateLimitWindowSeconds`, which is
@@ -103,6 +106,7 @@ classAllowance ConnectionsClass = maxConnectionsPerWindow
 classAllowance RequestsClass = maxRequestsPerWindow
 classAllowance WritesClass = maxWritesPerWindow
 classAllowance CreateSessionClass = maxCreateSessionPerWindow
+classAllowance RepoExportClass = maxRepoExportsPerWindow
 
 -- | The pure decision. Same identity, same class: refused while `used >=
 -- classAllowance class`, admitted again once `now` crosses into a fresh
@@ -128,22 +132,26 @@ step (RateLimitState stateWindow table) (ClientIdentity key) limitClass now =
     )
 
 emptyCounters : ClientCounters
-emptyCounters = ClientCounters 0 0 0 0
+emptyCounters = ClientCounters 0 0 0 0 0
 
 classUsed : RateLimitClass -> ClientCounters -> Int
-classUsed ConnectionsClass (ClientCounters c _ _ _) = c
-classUsed RequestsClass (ClientCounters _ r _ _) = r
-classUsed WritesClass (ClientCounters _ _ w _) = w
-classUsed CreateSessionClass (ClientCounters _ _ _ s) = s
+classUsed ConnectionsClass (ClientCounters c _ _ _ _) = c
+classUsed RequestsClass (ClientCounters _ r _ _ _) = r
+classUsed WritesClass (ClientCounters _ _ w _ _) = w
+classUsed CreateSessionClass (ClientCounters _ _ _ s _) = s
+classUsed RepoExportClass (ClientCounters _ _ _ _ x) = x
 
 bumpClass : RateLimitClass -> ClientCounters -> ClientCounters
-bumpClass ConnectionsClass (ClientCounters c r wr s) =
-  ClientCounters (c + 1) r wr s
-bumpClass RequestsClass (ClientCounters c r wr s) =
-  ClientCounters c (r + 1) wr s
-bumpClass WritesClass (ClientCounters c r wr s) = ClientCounters c r (wr + 1) s
-bumpClass CreateSessionClass (ClientCounters c r wr s) =
-  ClientCounters c r wr (s + 1)
+bumpClass ConnectionsClass (ClientCounters c r wr s x) =
+  ClientCounters (c + 1) r wr s x
+bumpClass RequestsClass (ClientCounters c r wr s x) =
+  ClientCounters c (r + 1) wr s x
+bumpClass WritesClass (ClientCounters c r wr s x) =
+  ClientCounters c r (wr + 1) s x
+bumpClass CreateSessionClass (ClientCounters c r wr s x) =
+  ClientCounters c r wr (s + 1) x
+bumpClass RepoExportClass (ClientCounters c r wr s x) =
+  ClientCounters c r wr s (x + 1)
 
 -- | `RateLimit-Remaining` for a class, without mutating state: for response
 -- headers, computed AFTER the `step` call it accompanies so it reflects the
@@ -185,12 +193,35 @@ isCreateSessionNsid : String -> Bool
 isCreateSessionNsid nsid =
   sameNsidIdentity nsid "com.atproto.server.createSession"
 
--- | Derive the caller's identity for this request. `isTrustedPeer` is
--- supplied by the caller (slice 4's `--trusted-proxy` configuration test
--- against the connection); this module never inspects a socket.
+{- | The procedures whose single response is a whole-repository CAR, and which
+   therefore need `maxRepoExportsPerWindow` on top of the shared request
+   allowance: one call's output is bounded by `maxCarBytes` alone, so a count
+   of requests cannot bound what the route emits.
+
+   `com.atproto.sync.getRepo` is the only such procedure today. A route that
+   serializes the whole block graph belongs here; one that serializes a single
+   record or blob does not, since each of those is already bounded per call by
+   its own body ceiling. -}
 export
-identifyClient : Bool -> List Header -> ClientIdentity
-identifyClient isTrustedPeer headers =
+isRepoExportNsid : String -> Bool
+isRepoExportNsid nsid = sameNsidIdentity nsid "com.atproto.sync.getRepo"
+
+{- | The operator's assertion that this process's peer is a configured trusted
+   proxy (`--trusted-proxy`), carried as its own type rather than as a `Bool`.
+
+   Every other per-request flag on the charging path is also a boolean, and one
+   of them crossed with this one charges the wrong identity while every gate
+   still passes. A distinct type is what makes that crossing a compile error
+   instead of a silent mischarge, so this must not be collapsed back to `Bool`
+   for brevity. -}
+public export data TrustedProxy = TrustedProxy Bool
+
+-- | Derive the caller's identity for this request. The trust assertion is
+-- supplied by the caller (`--trusted-proxy`'s value, tested once at
+-- configuration); this module never inspects a socket.
+export
+identifyClient : TrustedProxy -> List Header -> ClientIdentity
+identifyClient (TrustedProxy isTrustedPeer) headers =
   if not isTrustedPeer then
     directIdentity
   else match xffLastHop headers

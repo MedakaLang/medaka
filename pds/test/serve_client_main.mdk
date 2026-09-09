@@ -360,6 +360,9 @@ getSessionPath = xrpcPath "com.atproto.server.getSession"
 uploadBlobPath : String
 uploadBlobPath = xrpcPath "com.atproto.repo.uploadBlob"
 
+getRepoPath : String -> String
+getRepoPath did = "\{xrpcPath "com.atproto.sync.getRepo"}?did=\{did}"
+
 getBlobPath : String -> String -> String
 getBlobPath did cid =
   "\{xrpcPath "com.atproto.sync.getBlob"}?did=\{did}&cid=\{cid}"
@@ -914,6 +917,54 @@ runRateLimitReq port xff count want =
   let () = ignoreResult (close conn)
   reportRateLimit "RLREQ" want status headerText body
 
+-- | `com.atproto.sync.getRepo` has its own ceiling because one call's response
+-- is a whole-repository CAR, bounded by `maxCarBytes` and not by any count of
+-- requests. Driven over ONE connection so the flood observes that ceiling
+-- rather than the far lower per-connection one.
+runRateLimitRepo : Int -> String -> Int -> Int -> String -> <IO, Net "_"> Unit
+runRateLimitRepo port xff count want did =
+  let conn = mustConnect port
+  let (status, headerText, body) =
+    floodLoop conn count (_ => getRequestXff xff (getRepoPath did))
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLREPO" want status headerText body
+
+{- | A request that is answered 400 but never routed, in one of two shapes: it
+   frames and fails to PARSE (`framed`), or no framer can complete it at all
+   (`unframed`). Both are work the server performs for an unidentifiable
+   caller, so both are charged.
+
+   Each goes on a fresh connection because neither response is keep-alive:
+   the server closes after answering a request it could not parse. -}
+malformedRequest : String -> Array Int
+malformedRequest "framed" =
+  toUtf8 "GET /xrpc/x HTTP/1.1\r\n\{hostHeader}Content-Length: abc\r\n\r\n"
+malformedRequest "unframed" = toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n"
+malformedRequest shape = panic "serve_client: unknown malformed shape \{shape}"
+
+floodMalformed : Int -> String -> Int -> <Net "_"> (Int, String, Array Int)
+floodMalformed port shape count = floodMalformedGo port shape count 1
+
+floodMalformedGo : Int ->
+  String ->
+  Int ->
+  Int ->
+  <Net "_"> (Int, String, Array Int)
+floodMalformedGo port shape count i =
+  let conn = mustConnect port
+  let (status, headerText, body, _) =
+    floodStep conn [||] (malformedRequest shape)
+  let () = ignoreResult (close conn)
+  if i >= count then
+    (status, headerText, body)
+  else
+    floodMalformedGo port shape count (i + 1)
+
+runRateLimitMalformed : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitMalformed port shape count want =
+  let (status, headerText, body) = floodMalformed port shape count
+  reportRateLimit "RLMALFORMED" want status headerText body
+
 -- | `rkeyPrefix` keeps two identities' record keys from colliding when both
 -- run against the same collection in the same gate: the rate limiter charges
 -- a write's class before `applyRequest` ever sees it, but the record key
@@ -962,7 +1013,7 @@ runRateLimitSession port xff count want identifier password =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|rl-conn|rl-req|rl-write|rl-session> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1010,6 +1061,14 @@ main = match args ()
       did
       collection
       rkeyPrefix
+  ["rl-repo", port, xff, count, want, did] =>
+    runRateLimitRepo (mustPort port) xff (mustCount count) (mustStatus want) did
+  ["rl-malformed", port, shape, count, want] =>
+    runRateLimitMalformed
+      (mustPort port)
+      shape
+      (mustCount count)
+      (mustStatus want)
   ["rl-session", port, xff, count, want, identifier, password] =>
     runRateLimitSession
       (mustPort port)

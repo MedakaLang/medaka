@@ -96,7 +96,7 @@ suites = [
   ("session_routes_test", (29, NativeCapability)),
   ("auth_seam_test", (31, NativeCapability)),
   ("blob_routes_test", (15, NativeCapability)),
-  ("ratelimit_test", (17, Eval)),
+  ("ratelimit_test", (21, Eval)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -252,7 +252,7 @@ test "pds/test/auth_seam_test.mdk executed >= 31 assertions" =
 test "pds/test/blob_routes_test.mdk executed >= 15 assertions" =
   floorExpectation "blob_routes_test"
 
-test "pds/test/ratelimit_test.mdk executed >= 17 assertions" =
+test "pds/test/ratelimit_test.mdk executed >= 21 assertions" =
   floorExpectation "ratelimit_test"
 
 -- # Non-vacuity

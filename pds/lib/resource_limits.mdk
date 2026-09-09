@@ -246,7 +246,7 @@ checkMstTraversalDepth depth =
   else
     Ok ()
 
--- Rate limiting policy (#2612). One shared window across the four limit
+-- Rate limiting policy (#2612). One shared window across the five limit
 -- classes `pds/lib/ratelimit.mdk` defines; each class keeps its own
 -- allowance within that window.
 export
@@ -277,3 +277,19 @@ maxWritesPerWindow = 60
 export
 maxCreateSessionPerWindow : Int
 maxCreateSessionPerWindow = 30
+
+{- | The whole-repository export ceiling (`com.atproto.sync.getRepo`), which
+   `maxRequestsPerWindow` cannot express: one export's response is bounded
+   only by `maxCarBytes`, so the request count and the bytes it authorizes are
+   different quantities and the larger one has to be named separately.
+
+   The ceiling times `maxCarBytes` is the egress one identity may nominally
+   demand from this route in one window. At 100 that is 6.25 GiB per 60-second
+   window — about 900 Mbit/s sustained, one gigabit link — where the shared
+   `maxRequestsPerWindow` of 3000 would authorize 187 GiB, past any link this
+   process could be reached over. The ceiling is also low enough to be
+   reachable inside one window, without which no refusal is observable: the
+   count resets mid-flood and nothing witnesses it. -}
+export
+maxRepoExportsPerWindow : Int
+maxRepoExportsPerWindow = 100
