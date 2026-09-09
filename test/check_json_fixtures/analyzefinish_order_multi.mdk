@@ -1,0 +1,16 @@
+-- Exercises four analyzeFrom/analyzeFinish diagnostic kinds at once (a
+-- deriving diagnostic, a guard-exhaustiveness warning, a resolve-clean type
+-- error, and a differently-shaped type warning) to pin analyzeFinish's
+-- result ORDER.
+data Widget = Widget Int deriving (Bogus)
+
+sign n
+  | n > 0 = 1
+  | n < 0 = 0 - 1
+
+classify x = match x
+  True => 1
+
+bad = 1 + "x"
+
+main = println bad

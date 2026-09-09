@@ -1,5 +1,5 @@
 # META
-source_lines=592
+source_lines=632
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -56,6 +56,46 @@ listLenFrom n (_ :: xs) = listLenFrom (n + 1) xs
 export
 reverseL : List a -> List a
 reverseL xs = reverse xs
+
+-- The longest positional prefix of `steps` whose recorded keys match `keys`,
+-- never covering the last of `total` items, truncated at the first mismatch and
+-- at the first `None` key -- with the last matching step, which is what a memo
+-- restores from.  `keyOf` reads a step's recorded key.
+--
+-- ONE rule, shared by every prefix memo keyed this way rather than copied into
+-- each: two positional matchers that must agree forever, with nothing checking
+-- that they do, is the shape the two eval drivers drifted into.
+export
+matchingStepPrefix : (a -> String) ->
+  List a ->
+  List (Option String) ->
+  Int ->
+  (List a, Option a)
+matchingStepPrefix keyOf steps keys total =
+  let (acc, last) = matchingStepPrefixGo keyOf steps keys total 0 [] None
+  (reverseL acc, last)
+
+-- `n` is `listLen acc`, carried rather than recomputed per step.
+matchingStepPrefixGo : (a -> String) ->
+  List a ->
+  List (Option String) ->
+  Int ->
+  Int ->
+  List a ->
+  Option a ->
+  (List a, Option a)
+matchingStepPrefixGo _ [] _ _ _ acc last = (acc, last)
+matchingStepPrefixGo _ _ [] _ _ acc last = (acc, last)
+matchingStepPrefixGo keyOf (st :: sts) (k :: ks) total n acc last =
+  if n + 1 >= total then
+    (acc, last)
+  else match k
+    Some key =>
+      if key == keyOf st then
+        matchingStepPrefixGo keyOf sts ks total (n + 1) (st :: acc) (Some st)
+      else
+        (acc, last)
+    None => (acc, last)
 
 -- DECLINED (Foldable dispatch + no short-circuit, see `contains` above).
 -- Kept hand-rolled, unchanged.
@@ -610,6 +650,12 @@ rootsOrDefault _ roots = roots
 (DFunDef false "listLenFrom" ((PVar "n") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "listLenFrom") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "reverseL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "reverseL" ((PVar "xs")) (EApp (EVar "reverse") (EVar "xs")))
+(DTypeSig true "matchingStepPrefix" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))))))
+(DFunDef false "matchingStepPrefix" ((PVar "keyOf") (PVar "steps") (PVar "keys") (PVar "total")) (EBlock (DoLet false false (PTuple (PVar "acc") (PVar "last")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchingStepPrefixGo") (EVar "keyOf")) (EVar "steps")) (EVar "keys")) (EVar "total")) (ELit (LInt 0))) (EListLit)) (EVar "None"))) (DoExpr (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))))
+(DTypeSig false "matchingStepPrefixGo" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))))))))
+(DFunDef false "matchingStepPrefixGo" (PWild (PList) PWild PWild PWild (PVar "acc") (PVar "last")) (ETuple (EVar "acc") (EVar "last")))
+(DFunDef false "matchingStepPrefixGo" (PWild PWild (PList) PWild PWild (PVar "acc") (PVar "last")) (ETuple (EVar "acc") (EVar "last")))
+(DFunDef false "matchingStepPrefixGo" ((PVar "keyOf") (PCons (PVar "st") (PVar "sts")) (PCons (PVar "k") (PVar "ks")) (PVar "total") (PVar "n") (PVar "acc") (PVar "last")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "n") (ELit (LInt 1))) (EVar "total")) (ETuple (EVar "acc") (EVar "last")) (EMatch (EVar "k") (arm (PCon "Some" (PVar "key")) () (EIf (EBinOp "==" (EVar "key") (EApp (EVar "keyOf") (EVar "st"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchingStepPrefixGo") (EVar "keyOf")) (EVar "sts")) (EVar "ks")) (EVar "total")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "st") (EVar "acc"))) (EApp (EVar "Some") (EVar "st"))) (ETuple (EVar "acc") (EVar "last")))) (arm (PCon "None") () (ETuple (EVar "acc") (EVar "last"))))))
 (DTypeSig true "anyList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyList" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyList" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EApp (EVar "p") (EVar "x")) (EApp (EApp (EVar "anyList") (EVar "p")) (EVar "xs"))))
@@ -778,6 +824,12 @@ rootsOrDefault _ roots = roots
 (DFunDef false "listLenFrom" ((PVar "n") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "listLenFrom") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "xs")))
 (DTypeSig true "reverseL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "reverseL" ((PVar "xs")) (EApp (EVar "reverse") (EVar "xs")))
+(DTypeSig true "matchingStepPrefix" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))))))
+(DFunDef false "matchingStepPrefix" ((PVar "keyOf") (PVar "steps") (PVar "keys") (PVar "total")) (EBlock (DoLet false false (PTuple (PVar "acc") (PVar "last")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchingStepPrefixGo") (EVar "keyOf")) (EVar "steps")) (EVar "keys")) (EVar "total")) (ELit (LInt 0))) (EListLit)) (EVar "None"))) (DoExpr (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))))
+(DTypeSig false "matchingStepPrefixGo" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))))))))
+(DFunDef false "matchingStepPrefixGo" (PWild (PList) PWild PWild PWild (PVar "acc") (PVar "last")) (ETuple (EVar "acc") (EVar "last")))
+(DFunDef false "matchingStepPrefixGo" (PWild PWild (PList) PWild PWild (PVar "acc") (PVar "last")) (ETuple (EVar "acc") (EVar "last")))
+(DFunDef false "matchingStepPrefixGo" ((PVar "keyOf") (PCons (PVar "st") (PVar "sts")) (PCons (PVar "k") (PVar "ks")) (PVar "total") (PVar "n") (PVar "acc") (PVar "last")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "n") (ELit (LInt 1))) (EVar "total")) (ETuple (EVar "acc") (EVar "last")) (EMatch (EVar "k") (arm (PCon "Some" (PVar "key")) () (EIf (EBinOp "==" (EVar "key") (EApp (EVar "keyOf") (EVar "st"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchingStepPrefixGo") (EVar "keyOf")) (EVar "sts")) (EVar "ks")) (EVar "total")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "st") (EVar "acc"))) (EApp (EVar "Some") (EVar "st"))) (ETuple (EVar "acc") (EVar "last")))) (arm (PCon "None") () (ETuple (EVar "acc") (EVar "last"))))))
 (DTypeSig true "anyList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyList" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyList" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EApp (EVar "p") (EVar "x")) (EApp (EApp (EVar "anyList") (EVar "p")) (EVar "xs"))))
