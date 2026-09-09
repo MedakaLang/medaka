@@ -285,7 +285,6 @@ censusSuperCloseVecFix : List Decl -> List VecObl -> List VecObl -> List VecObl
 censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperSlotsVecOf : List Decl -> VecObl -> List VecObl
 chainGo : List (String, Scheme) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List ChainStep)
-chainPrefix : List ChainStep -> List (Option String) -> Int -> List ChainStep -> Option ChainStep -> (List ChainStep, Option ChainStep)
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
 checkAdmittedOccObls : Unit -> Unit
 checkAnnotTooGeneral : Ty -> List Mono -> Unit
@@ -731,7 +730,6 @@ dropGoalsSince : Int -> List GoalKind -> Unit
 dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
 dropMethodIdentCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))
 dropModSchemes : (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
-dropN : Int -> List a -> List a
 dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
 dropSchemesNamed : Map String Unit -> List (String, Scheme) -> List (String, Scheme)
 dsub : Param -> Param -> Bool
