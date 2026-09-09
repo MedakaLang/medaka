@@ -1,30 +1,30 @@
--- 🚨 KNOWN-BAD LEDGER ROW (#1182 / #1265 class, OPEN): this is a DIFFERENT,
--- PRE-EXISTING coverage gap from the #1276/#1386 rows in this file -- NOT
--- something S-alias-supply drained, and NOT something its fix touches. That
--- fix repairs the CHECKED half (impl-obligation existence); this pins the
--- DISPATCH half (which impl's body actually RUNS) still disagreeing with it.
+-- The DISPATCH half of an alias-qualified method occurrence: which impl's body
+-- actually RUNS, as opposed to whether an impl obligation exists for it at all
+-- (the CHECKED half, #1276/#1386, pinned by the sibling rows in this file).
+-- `Blob` implements BOTH `IA` and `IB`, and `A.mth Blob` / `B.mth Blob` are two
+-- alias-qualified calls naming TWO DIFFERENT interfaces.
 --
--- `Blob` implements BOTH `IA` and `IB`. `A.mth Blob` and `B.mth Blob` are
--- alias-qualified calls that name TWO DIFFERENT interfaces. Correct answer:
--- 1 then 2 (each call dispatches to the impl its own alias names). OBSERVED
--- (slice 2, `cdca5045`, changed which impl the last-write-wins floor picks
--- for the collided name `mth`): 2 then 2 -- NOT value-neutral. Both calls
--- still collapse onto ONE impl on check, run, AND build alike, because
--- `renameAliasedMethods` erases the alias to a bare `mth` before dispatch
--- is decided and ordinary dispatch has no per-alias-occurrence
--- discriminator -- but which impl they collapse onto changed: `admittedIfaceFor
--- "mth"` now answers from the last-write-wins `registerMethodIfaceParamsMethods`
--- table, which resolves to `IB` (declared second) for both calls. So the OLD
--- pinned behavior (1,1) had `A.mth Blob` correct and `B.mth Blob` wrong; the
--- NEW behavior (2,2) has `B.mth Blob` correct and `A.mth Blob` now wrong --
--- still one-of-two wrong, but a different one.
+-- Hand-derived answer: 1 then 2 — each call dispatches to the impl its own alias
+-- names.  That is what all three verbs now produce.  The row was a KNOWN-BAD
+-- ledger entry until #1386's supply fix stopped `renameAliasedMethods` erasing
+-- `A.mth` to a bare `mth` before dispatch was decided: with the spelling gone,
+-- both occurrences asked `admittedIfaceFor "mth"`, whose answer is one
+-- last-write-wins row, so both collapsed onto ONE impl on check, run and build
+-- alike.  It pinned (1,1) when the floor resolved to `IA` and (2,2) after
+-- `cdca5045` moved the floor to `IB` -- one of two wrong either way.  The
+-- occurrence now keeps its spelling through inference, `admittedIfaceFor`
+-- answers per spelling from the alias supply, and the row's method-set
+-- membership is looked up under the ORIGIN name, so the two calls no longer
+-- share a decision.
 --
--- Witness from F-fix-alias-collision's report (Note N1), confirmed
--- reproducing identically at both the pre-sprint merge-base `9824e65b` and
--- the sprint head -- neither this sprint's fix nor the alias-collision fix
--- caused the ORIGINAL (1,1) misbehavior. THIS ROW IS EXPECTED TO STAY GREEN
--- (i.e. keep reproducing A WRONG value) until #1182/#1265 land; a value
--- change here is the signal to re-pin it, not a regression in this gate.
+-- This is the acceptance case for that split.  It does not close #1182/#1265,
+-- whose subject is a BARE occurrence with two admitted declarations and no
+-- spelling to tell them apart; nothing here gives that shape a discriminator.
+-- A value change is a regression in the alias-spelling channel: the two
+-- projections `ieSelectRowByMethod` makes off one occurrence name -- the
+-- interface from the SPELLING, the row's method-set membership from the ORIGIN
+-- -- coming apart is the shape that would cause it, and it is silent, since
+-- this program is accepted on every verb whichever impl runs.
 import ifa.{IA}
 import ifb.{IB}
 import ifa as A
