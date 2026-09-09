@@ -1,5 +1,5 @@
 # META
-source_lines=1476
+source_lines=1483
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -151,6 +151,13 @@ exeDir = dirOf (executablePath ())
 
 export
 defaultMedakaRoot : <IO> String
+-- Shares a signature with `test_process.medakaRoot` and nothing else: that one
+-- reads the MEDAKA_ROOT env var, this one derives the root from the running
+-- binary's own location, which is the fallback used when no env var is set.
+-- `rule-stdlib-reimpl` matches on the declared signature alone, so it cannot
+-- tell the two apart; taking its suggestion would both change behavior and
+-- point the compiler driver at a test-support module.
+-- lint-disable-next-line rule-stdlib-reimpl
 defaultMedakaRoot = exeDir
 
 export
