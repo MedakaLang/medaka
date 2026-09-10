@@ -131,7 +131,9 @@ recompiling it each time. The cache lives in `$MEDAKA_CACHE_DIR` if set, else
 `$XDG_CACHE_HOME/medaka`, else `$HOME/.cache/medaka`, and holds one `rt-<hash>.o`
 per distinct runtime build. The hash covers the `.c` source, the C compiler and
 its version, and the exact compile flags, so a changed runtime or a new compiler
-never reuses a stale object. It is safe to delete at any time. Two escape
+never reuses a stale object. It is safe to delete at any time. A build ages out
+its own `rt-*.o` entries after 30 days; it never removes anything else from that
+directory, so a relocated cache may share a directory with unrelated files. Two escape
 hatches: `MEDAKA_NO_OBJ_CACHE=1` disables the cache entirely (the runtime is
 compiled inline on every build), and `MEDAKA_CACHE_DIR=<dir>` relocates it — e.g.
 to a per-job scratch directory in CI. An explicit `MEDAKA_RT_OBJ=<obj>` still

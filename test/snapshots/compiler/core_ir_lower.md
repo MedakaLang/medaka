@@ -1,5 +1,5 @@
 # META
-source_lines=2537
+source_lines=2539
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -156,10 +156,11 @@ lower (ERecordUpdate base fields r) =
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (map lowerStmt stmts)
--- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged arithmetic binop in
--- `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell route does not survive to here, a
--- node does).  Read the tag into CBinPrim's scalar field so the emitter picks the
--- Float primitive.  Must precede the transparent `EAnnot e _` strip below.
+-- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
+-- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell
+-- route does not survive to here, a node does).  Read the tag into CBinPrim's
+-- scalar field so the emitter picks that type's primitive.  Must precede the
+-- transparent `EAnnot e _` strip below.
 lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
   lowerBinop op l r tag
 lower (EAnnot e _) = lower e
@@ -182,9 +183,10 @@ lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
 
 -- surface binops that are really sugar are lowered to primitive control flow /
 -- application here; only the genuinely-primitive ops survive as CBinPrim.
--- the scalar-type tag carried on an EBinOp's route ("Float"/"Int" for a stamped
--- monomorphic concrete-primitive arithmetic operand; "" otherwise).  Only
--- RScalar carries it; every dispatch route (RKey/RDict/…) means "unstamped".
+-- the scalar-type tag carried on an EBinOp's route: "Float" for a stamped
+-- monomorphic arithmetic operand, "Int" for a stamped monomorphic comparison
+-- operand, "" otherwise.  Only RScalar carries it; every dispatch route
+-- (RKey/RDict/…) means "unstamped".
 scalarTagOfRoute : Route -> String
 scalarTagOfRoute (RScalar s) = s
 scalarTagOfRoute _ = ""

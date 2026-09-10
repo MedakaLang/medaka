@@ -181,16 +181,41 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # At -O2 the three public sign wrappers are intentionally inlined into main;
 # their emitted bodies remain closed above.  These non-inlined leaves prove the
 # final linked topology still contains ingress and the ladder's complete path.
+# secretNonzeroBorrow and reduceFixed are deliberately NOT in this list.  Both
+# are branch-free or public-index-bounded, so -O2 is free to unroll and inline
+# them, and whether it does is a cost-threshold artifact rather than anything
+# about secrets.  Their shapes are pinned structurally in the IR below, where
+# the definitions always exist.
 for symbol in \
   mdk_lib_scalar__scSecretCandidate mdk_lib_scalar__scanSecretBytes \
-  mdk_lib_scalar__secretBelowNBorrow mdk_lib_scalar__secretNonzeroBorrow \
-  mdk_lib_scalar__reduceFixed mdk_lib_field__carryFoldRound \
+  mdk_lib_scalar__secretBelowNBorrow mdk_lib_field__carryFoldRound \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__secretAffine \
   mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains ingress and complete-ladder helper topology'
 check_ir_closure
+
+# secretNonzeroBorrow walks the limbs to fold a nonzero test.  What must hold is
+# that every branch it takes is on the public limb index and every secret limb
+# flows through straight-line arithmetic; whether the linker keeps it as a call
+# is the optimizer's business.  Pin that shape in the emitted IR, where the
+# helper always exists.
+extract_ir_function secretNonzeroBorrow "$IR" "$WORK/secretNonzeroBorrow.ll"
+[ "$(grep -c 'br i1' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold branches exactly once'
+grep -q '^  %t0 = icmp sge i64 %arg1, ' "$WORK/secretNonzeroBorrow.ll" || fail 'secret nonzero fold branches on its public limb index'
+[ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 0 ] || fail 'secret nonzero fold makes no value comparisons'
+[ "$(grep -F -c 'call i64 @mdk_lib_scalar__secretNonzeroBorrow(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold recurses exactly once per limb'
+pass 'emitted secret nonzero fold branches only on its public limb index'
+
+# reduceFixed is an unconditional fixed schedule: the reduction must run the same
+# carry/fold rounds regardless of the value being reduced.  That is the property,
+# not its survival as a distinct linked symbol.
+extract_ir_function reduceFixed "$IR" "$WORK/reduceFixed.ll"
+[ "$(grep -c 'br i1' "$WORK/reduceFixed.ll" || true)" -eq 0 ] || fail 'fixed reduction is unconditional'
+[ "$(grep -F -c '@mdk_lib_scalar__carryAll(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
+[ "$(grep -F -c '@mdk_lib_scalar__foldOnce(' "$WORK/reduceFixed.ll" || true)" -eq 4 ] || fail 'fixed reduction runs four folds'
+pass 'emitted fixed reduction runs its schedule unconditionally'
 
 extract_ir_function scalarLadder "$IR" "$WORK/scalarLadder.ll"
 [ "$(grep -c 'br i1' "$WORK/scalarLadder.ll" || true)" -eq 3 ] || fail 'scalar ladder has exactly its fixed loop/control topology'

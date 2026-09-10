@@ -10139,7 +10139,7 @@ freeVarsRoute bound RNone = []
 -- is a global symbol, but its DICT slots can hold an RDict — the enclosing constrained
 -- fn's own dict param, a genuine captured local.  Recurse into them.  Empty dicts (every
 -- unconstrained standalone) ⇒ [] ⇒ byte-identical to the pre-S1 arm.  RScalar (a
--- scalar-tag route from CBinPrim arithmetic) still captures nothing.
+-- scalar-type tag on a CBinPrim binop) still captures nothing.
 freeVarsRoute bound (RLocal _ dicts) = flatMap (freeVarsRoute bound) dicts
 freeVarsRoute _ (RScalar _) = []
 

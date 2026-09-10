@@ -174,114 +174,170 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t0
+  %t0 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 7, ptr %t1
-  %t2 = getelementptr i8, ptr %t0, i64 16
-  store i64 562949953421315, ptr %t2
-  %t3 = ptrtoint ptr %t0 to i64
-  %t4 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t4
-  %t5 = getelementptr i8, ptr %t4, i64 8
-  store i64 5, ptr %t5
-  %t6 = getelementptr i8, ptr %t4, i64 16
-  store i64 %t3, ptr %t6
-  %t7 = ptrtoint ptr %t4 to i64
-  %t8 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t8
+  store double 1.5, ptr %t1
+  %t2 = ptrtoint ptr %t0 to i64
+  %t3 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t3
+  %t4 = getelementptr i8, ptr %t3, i64 8
+  store double 2.5, ptr %t4
+  %t5 = ptrtoint ptr %t3 to i64
+  %t6 = call i64 @mdk_impl_Float_ordered(i64 %t2, i64 %t5)
+  %t7 = call i64 @mdk_bit(i64 %t6)
+  %t8 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t8
   %t9 = getelementptr i8, ptr %t8, i64 8
-  store i64 3, ptr %t9
-  %t10 = getelementptr i8, ptr %t8, i64 16
-  store i64 %t7, ptr %t10
-  %t11 = ptrtoint ptr %t8 to i64
-  %t12 = call i64 @mdk_elem(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 5, i64 %t11)
-  %t13 = ashr i64 %t12, 1
-  %t14 = icmp ne i64 %t13, 0
-  %t16 = alloca i64
-  br i1 %t14, label %then15, label %else15
-then15:
-  store i64 3, ptr %t16
-  br label %end15
-else15:
-  store i64 1, ptr %t16
-  br label %end15
-end15:
-  %t17 = load i64, ptr %t16
-  %t18 = ashr i64 %t17, 1
-  call void @mdk_print_int(i64 %t18)
+  store double 2.5, ptr %t9
+  %t10 = ptrtoint ptr %t8 to i64
+  %t11 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t11
+  %t12 = getelementptr i8, ptr %t11, i64 8
+  store double 1.5, ptr %t12
+  %t13 = ptrtoint ptr %t11 to i64
+  %t14 = call i64 @mdk_impl_Float_ordered(i64 %t10, i64 %t13)
+  %t15 = call i64 @mdk_bit(i64 %t14)
+  %t16 = ashr i64 5, 1
+  %t17 = ashr i64 %t15, 1
+  %t18 = mul i64 %t16, %t17
+  %t19 = shl i64 %t18, 1
+  %t20 = or i64 %t19, 1
+  %t21 = ashr i64 %t7, 1
+  %t22 = ashr i64 %t20, 1
+  %t23 = add i64 %t21, %t22
+  %t24 = shl i64 %t23, 1
+  %t25 = or i64 %t24, 1
+  %t26 = call i64 @mdk_impl_String_ordered(i64 ptrtoint (ptr @.strc.program.0 to i64), i64 ptrtoint (ptr @.strc.program.1 to i64))
+  %t27 = call i64 @mdk_bit(i64 %t26)
+  %t28 = ashr i64 9, 1
+  %t29 = ashr i64 %t27, 1
+  %t30 = mul i64 %t28, %t29
+  %t31 = shl i64 %t30, 1
+  %t32 = or i64 %t31, 1
+  %t33 = ashr i64 %t25, 1
+  %t34 = ashr i64 %t32, 1
+  %t35 = add i64 %t33, %t34
+  %t36 = shl i64 %t35, 1
+  %t37 = or i64 %t36, 1
+  %t38 = call i64 @mdk_impl_String_ordered(i64 ptrtoint (ptr @.strc.program.2 to i64), i64 ptrtoint (ptr @.strc.program.3 to i64))
+  %t39 = call i64 @mdk_bit(i64 %t38)
+  %t40 = ashr i64 17, 1
+  %t41 = ashr i64 %t39, 1
+  %t42 = mul i64 %t40, %t41
+  %t43 = shl i64 %t42, 1
+  %t44 = or i64 %t43, 1
+  %t45 = ashr i64 %t37, 1
+  %t46 = ashr i64 %t44, 1
+  %t47 = add i64 %t45, %t46
+  %t48 = shl i64 %t47, 1
+  %t49 = or i64 %t48, 1
+  %t50 = call i64 @mdk_impl_Int_ordered(i64 3, i64 5)
+  %t51 = call i64 @mdk_bit(i64 %t50)
+  %t52 = ashr i64 33, 1
+  %t53 = ashr i64 %t51, 1
+  %t54 = mul i64 %t52, %t53
+  %t55 = shl i64 %t54, 1
+  %t56 = or i64 %t55, 1
+  %t57 = ashr i64 %t49, 1
+  %t58 = ashr i64 %t56, 1
+  %t59 = add i64 %t57, %t58
+  %t60 = shl i64 %t59, 1
+  %t61 = or i64 %t60, 1
+  %t62 = call i64 @mdk_impl_Int_ordered(i64 5, i64 3)
+  %t63 = call i64 @mdk_bit(i64 %t62)
+  %t64 = ashr i64 65, 1
+  %t65 = ashr i64 %t63, 1
+  %t66 = mul i64 %t64, %t65
+  %t67 = shl i64 %t66, 1
+  %t68 = or i64 %t67, 1
+  %t69 = ashr i64 %t61, 1
+  %t70 = ashr i64 %t68, 1
+  %t71 = add i64 %t69, %t70
+  %t72 = shl i64 %t71, 1
+  %t73 = or i64 %t72, 1
+  %t74 = ashr i64 %t73, 1
+  call void @mdk_print_int(i64 %t74)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_elem(i64 %arg0, i64 %arg1, i64 %arg2) {
+define i64 @mdk_bit(i64 %arg0) {
 entry:
-  %t0 = alloca i64
-  %t3 = and i64 %arg2, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg2, 1
-  br label %disccont2
-discbox2:
-  %t6 = inttoptr i64 %arg2 to ptr
-  %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 281474976710657
-  br i1 %t9, label %conyes10, label %connext10
-conyes10:
-  store i64 1, ptr %t0
-  br label %decend1
-connext10:
-  %t11 = icmp eq i64 %t8, 281474976710656
-  br i1 %t11, label %conyes12, label %connext12
-conyes12:
-  %t13 = inttoptr i64 %arg2 to ptr
-  %t14 = getelementptr i8, ptr %t13, i64 8
-  %t15 = load i64, ptr %t14
-  %t16 = inttoptr i64 %arg2 to ptr
-  %t17 = getelementptr i8, ptr %t16, i64 16
-  %t18 = load i64, ptr %t17
-  %t19 = inttoptr i64 %arg2 to ptr
-  %t20 = getelementptr i8, ptr %t19, i64 8
-  %t21 = load i64, ptr %t20
-  %t22 = inttoptr i64 %arg2 to ptr
-  %t23 = getelementptr i8, ptr %t22, i64 16
-  %t24 = load i64, ptr %t23
-  %t25 = call i64 @mdk_impl_Int_eq(i64 %arg1, i64 %t21)
-  %t26 = ashr i64 %t25, 1
-  %t27 = icmp ne i64 %t26, 0
-  %t29 = alloca i64
-  br i1 %t27, label %then28, label %else28
-then28:
-  store i64 3, ptr %t29
-  br label %end28
-else28:
-  %t30 = call i64 @mdk_elem(i64 %arg0, i64 %arg1, i64 %t24)
-  store i64 %t30, ptr %t29
-  br label %end28
-end28:
-  %t31 = load i64, ptr %t29
-  store i64 %t31, ptr %t0
-  br label %decend1
-connext12:
-  call void @mdk_nonexhaustive_match()
-  unreachable
-decend1:
-  %t32 = load i64, ptr %t0
-  ret i64 %t32
+  %t0 = ashr i64 %arg0, 1
+  %t1 = icmp ne i64 %t0, 0
+  br i1 %t1, label %then2, label %else2
+then2:
+  ret i64 3
+else2:
+  ret i64 1
 }
 
-; mdk-module impl:Int_eq
-define i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
+; mdk-module impl:Float_keyOf
+define i64 @mdk_impl_Float_keyOf(i64 %arg0) {
 entry:
-  %t0 = icmp eq i64 %arg0, %arg1
-  %t1 = zext i1 %t0 to i64
-  %t2 = shl i64 %t1, 1
-  %t3 = or i64 %t2, 1
-  ret i64 %t3
+  ret i64 %arg0
+}
+
+; mdk-module impl:Float_ordered
+define i64 @mdk_impl_Float_ordered(i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk_impl_Float_keyOf(i64 %arg0)
+  %t1 = call i64 @mdk_impl_Float_keyOf(i64 %arg1)
+  %t2 = inttoptr i64 %t0 to ptr
+  %t3 = getelementptr i8, ptr %t2, i64 8
+  %t4 = load double, ptr %t3
+  %t5 = inttoptr i64 %t1 to ptr
+  %t6 = getelementptr i8, ptr %t5, i64 8
+  %t7 = load double, ptr %t6
+  %t8 = fcmp olt double %t4, %t7
+  %t9 = zext i1 %t8 to i64
+  %t10 = shl i64 %t9, 1
+  %t11 = or i64 %t10, 1
+  ret i64 %t11
+}
+
+; mdk-module impl:String_keyOf
+define i64 @mdk_impl_String_keyOf(i64 %arg0) {
+entry:
+  ret i64 %arg0
+}
+
+; mdk-module impl:String_ordered
+define i64 @mdk_impl_String_ordered(i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk_impl_String_keyOf(i64 %arg0)
+  %t1 = call i64 @mdk_impl_String_keyOf(i64 %arg1)
+  %t2 = call i64 @mdk_string_compare_raw(i64 %t0, i64 %t1)
+  %t3 = icmp slt i64 %t2, 0
+  %t4 = zext i1 %t3 to i64
+  %t5 = shl i64 %t4, 1
+  %t6 = or i64 %t5, 1
+  ret i64 %t6
+}
+
+; mdk-module impl:Int_keyOf
+define i64 @mdk_impl_Int_keyOf(i64 %arg0) {
+entry:
+  ret i64 %arg0
+}
+
+; mdk-module impl:Int_ordered
+define i64 @mdk_impl_Int_ordered(i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk_impl_Int_keyOf(i64 %arg0)
+  %t1 = call i64 @mdk_impl_Int_keyOf(i64 %arg1)
+  %t2 = icmp slt i64 %t0, %t1
+  %t3 = zext i1 %t2 to i64
+  %t4 = shl i64 %t3, 1
+  %t5 = or i64 %t4, 1
+  ret i64 %t5
 }
 
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]
+@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
+; mdk-module program
+@.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+; mdk-module program
+@.strc.program.2 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+; mdk-module program
+@.strc.program.3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }

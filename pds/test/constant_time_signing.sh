@@ -483,7 +483,10 @@ pass 'native internal carrier retains the exact signature plus candidate-1/exhau
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
-[ "$closure_grade" = '3326442416 4931' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when the emitter stopped emitting an identity Int.fromInt call: the
+# measured delta against the previous grade is exactly one removed line,
+# mdk_impl_Int_fromInt, and no other symbol entered or left the secret closure.
+[ "$closure_grade" = '3150384095 4910' ] || fail "emitted transitive closure drifted ($closure_grade)"
 for prefix in field scalar sha256 hmac_sha256 secp256k1; do
   grep -F -q "mdk_lib_${prefix}__" "$WORK/full-closure.lst" || fail "emitted closure reaches $prefix"
 done
@@ -503,7 +506,12 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-[ "$control_grade" = '1923240905 7380' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived alongside the closure grade above. Measured column-wise against the
+# previous manifest over all 170 shared symbols: not one branch, index, write,
+# make or copy count moved. The comparison column fell to zero in 61 rows and
+# rose in none, and the call total fell in 141 rows and rose in none -- the two
+# columns that count opaque runtime calls, which the emitter now lowers inline.
+[ "$control_grade" = '3921028684 7306' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -616,7 +624,11 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-if [ "$public_closure_grade" != '4249195108 5050' ] || [ "$public_control_grade" != '1114424452 7555' ]; then
+# Re-derived with the two secret-side grades above, and measured the same way:
+# over the 170 symbols shared with the previous manifest, no branch, index,
+# write, make or copy count moved, and the sole symbol difference is the removed
+# identity mdk_impl_Int_fromInt.
+if [ "$public_closure_grade" != '1809078386 5029' ] || [ "$public_control_grade" != '1052493002 7481' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

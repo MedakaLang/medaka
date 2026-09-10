@@ -3978,7 +3978,7 @@ emitBin : Emit ->
   String ->
   (String, LTy)
 emitBin e env op l r tag
-  | isCmpOp op = emitCmp e env op l r
+  | isCmpOp op = emitCmp e env op l r tag
   | isArithOp op = emitArith e env op l r tag
   | op == "::" =
     let (lv, _) = emitExpr e env l
@@ -4266,6 +4266,24 @@ floatFromIntArg ex = match flattenApp ex []
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None
 
+-- #2729 item 3: `Num Int`'s own `fromInt` IS the identity — `stdlib/core.mdk` defines
+-- it `fromInt x = x`, on a word that is already a tagged Int — so a SATURATED
+-- occurrence routed to that impl emits its argument and nothing else.  The witness is
+-- the route's own `RKey "Int"` (the same tag emitMethod would turn into the
+-- `@mdk_impl_Int_fromInt` symbol), never the argument's shape: `fromInt` at any other
+-- head (`Float`'s intToFloat, a user `impl Num`) is a real conversion and keeps its
+-- call.  Empty impl/method dict routes are required rather than assumed — `Num` has no
+-- element `requires`, so a non-empty route vector here is some other shape and is left
+-- alone.
+intFromIntIdentityArg : String ->
+  Route ->
+  List Route ->
+  List Route ->
+  List CExpr ->
+  Option CExpr
+intFromIntIdentityArg "fromInt" (RKey "Int" []) [] [] (a :: []) = Some a
+intFromIntIdentityArg _ _ _ _ _ = None
+
 headNameIs : CExpr -> String -> Bool
 headNameIs (CVar n _) name = n == name
 headNameIs (CMethod n _ _ _) name = n == name
@@ -4290,6 +4308,15 @@ scalarTagIsFloat : String -> Bool
 scalarTagIsFloat tag = match fieldNameToLTy tag
   Some LTFloat => True
   _ => False
+
+-- #2356: the POSITIVE Int witness — typecheck stamped `RScalar "Int"` on this node
+-- because the operand mono ground to concrete `Int` (stampOpRouteVal).  It is a
+-- string equality on the stamp and NOT a test on the operands' LTy: `LTInt` is this
+-- emitter's default for an operand whose type it could not recover, so keying an
+-- inline `icmp` on LTy would order boxed String/Float heap addresses.  An empty or
+-- any other tag leaves the comparison on the runtime-discriminated path.
+scalarTagIsInt : String -> Bool
+scalarTagIsInt tag = tag == "Int"
 
 emitArith : Emit ->
   OrdMap (String, LTy) ->
@@ -4447,12 +4474,34 @@ emitCmp : Emit ->
   String ->
   CExpr ->
   CExpr ->
+  String ->
   (String, LTy)
-emitCmp e env op l r =
-  if staticIsFloat env l then
+emitCmp e env op l r tag =
+  if scalarTagIsInt tag then
+    emitIntCmp e env op l r
+  else if staticIsFloat env l then
     emitFloatCmp e env op l r
   else
     emitCmpW e env op l r
+
+-- #2356: a comparison typecheck GROUNDED to `Int`.  Both operands are tagged Int
+-- words (`w = 2n+1`, emitted by tagInt), and that tagging is strictly monotonic on
+-- the 63-bit payload, so the signed predicate on the tagged words answers exactly
+-- what the untagged payloads would — no untag, no @mdk_value_eq/@mdk_value_lt call,
+-- and no opaque callee for LLVM to re-establish the tag invariant around.  Reached
+-- ONLY through scalarTagIsInt, never through an LTy default.
+emitIntCmp : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  (String, LTy)
+emitIntCmp e env op l r =
+  let (lv, _) = emitExpr e env l
+  let (rv, _) = emitExpr e env r
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp \{intPred op} i64 \{lv}, \{rv}"
+  boolFromI1 e c
 
 -- fused statically-Float comparison: operands as unboxed doubles, fcmp, NO box.
 emitFloatCmp : Emit ->
@@ -5370,8 +5419,11 @@ emitApp e env app =
         else
           emitIndirect e env hd args
     CMethod name route implRoutes methRoutes =>
-      let argOps = emitArgs e env args
-      emitMethod e env name route implRoutes methRoutes argOps
+      match intFromIntIdentityArg name route implRoutes methRoutes args
+        Some a => emitExpr e env a
+        None =>
+          let argOps = emitArgs e env args
+          emitMethod e env name route implRoutes methRoutes argOps
     CDict name routes =>
       let argOps = emitArgs e env args
       emitDictApp e env name routes argOps

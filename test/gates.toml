@@ -4384,3 +4384,23 @@ oracles = []
 sources = ["compiler/frontend/ast.mdk", "compiler/types/repr.mdk", "compiler/types/typecheck.mdk", "test/catch_all_census.ledger", "test/catch_all_census.py", "test/diff_compiler_catch_all_census.sh"]
 corpus = []
 toolchain = []
+
+# #2780: pins the ThinLTO partitioning property PARALLEL CODEGEN rests on — a
+# one-module source edit changes only that module's own partition(s), so the
+# cache serves the rest. Reads no oracle, builds nothing: sources
+# test/lib/pcg_partition.sh (the same awk test/build_native_medaka.sh runs)
+# and drives it over synthetic fixtures built inline in the gate script.
+[[gate]]
+name = "diff_compiler_partition_stability"
+area = "infra"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:trust-anchor"
+run = "test/diff_compiler_partition_stability.sh"
+oracles = []
+sources = ["test/lib/pcg_partition.sh", "test/build_native_medaka.sh", "test/diff_compiler_partition_stability.sh"]
+corpus = []
+toolchain = []

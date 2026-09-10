@@ -47,6 +47,8 @@ fillImplDecl : List Decl -> Decl -> Decl
 fillImplDefaults : List Decl -> List Decl
 firstDoStmtLoc : List DoStmt -> Option Loc
 foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
+freshenExprCells : Expr -> Expr
+freshenNodeCells : Expr -> Expr
 genVars : String -> Int -> List String
 genVarsGo : String -> Int -> Int -> List String
 genericArm : Variant -> Arm

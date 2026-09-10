@@ -236,8 +236,11 @@ end27:
 ; mdk-module impl:Int_eq
 define i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call i64 @mdk_value_eq(i64 %arg0, i64 %arg1)
-  ret i64 %t0
+  %t0 = icmp eq i64 %arg0, %arg1
+  %t1 = zext i1 %t0 to i64
+  %t2 = shl i64 %t1, 1
+  %t3 = or i64 %t2, 1
+  ret i64 %t3
 }
 
 ; mdk-module impl:MyList_eq
