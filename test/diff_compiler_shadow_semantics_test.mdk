@@ -57,7 +57,7 @@ import compiler_cli_test_support.{
 import fs.{fixtureDirs}
 import list.{sort}
 import path.{basename}
-import string.{endsWith, padRight, replaceAll, stripSuffix, unlines}
+import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unlines}
 import test.{Expectation, fail, pass}
 import test_process.{medakaRoot, scratchDir, unrosteredUnits}
 
@@ -931,7 +931,128 @@ table = [
     mode = BuildExact,
     pinned = "7\n",
   },
+  Row {
+    entry = "i29_importer_selective_import_displaced/main.mdk",
+    label =
+      "I29 (#2738) an interface method nameable by its TYPE name displaces a SELECTIVELY IMPORTED standalone of a DIFFERENT scheme. The i3 topology with the standalone`s domain widened to cover the receiver, so both candidates typecheck and the displacement is observable only as a value plus a diagnostic. RESOLUTION IS UNCHANGED AND CONFORMANT -- S1 makes `peek` an importer shadow (S1-NS (a)(i), the TYPE arm: `import peekable.{Peekable}` names the interface), S2`s importer arm finds `impl Peekable Box` at the receiver`s head, so it dispatches: `peek=7`, not `peek=(\"box\", 7)`. What was S0 is the SILENCE: the user wrote the strongest statement the language offers about which `peek` is meant and got the other one at exit 0 on check, run and build alike. VALUES AND VERDICTS DERIVED FROM S1/S2 AND FROM THE RULING BEFORE THE BINARY WAS BUILT, per [W-QUIETER] in reverse. Also asserts `W-IMPORT-METHOD-SHADOW` fires on check/run/build stderr alike",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "peek=7\n",
+  },
+  Row {
+    entry = "i30_importer_selective_import_same_scheme/main.mdk",
+    label =
+      "I30 (#2738 CONTROL) THE SILENT HALF, and the row that makes I29 evidence about a PREDICATE rather than about a diagnostic existing. Identical topology to I29 -- selective import, interface nameable by type name, live impl at the receiver`s head -- differing in ONE respect: the standalone`s declared `a -> String` is ALPHA-EQUIVALENT to the method`s `t -> String`. Val`s ruling fires the warning only where the two schemes DIFFER, so this cell must be silent on all three verbs. A predicate that warned on every importer shadow in the tree would pass I29 and fail here. Resolution is the same as I29`s and is not the point: it dispatches, printing `iface`. Also asserts `W-IMPORT-METHOD-SHADOW` fires on NONE of check/run/build stderr",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "iface\n",
+  },
+  Row {
+    entry = "i31_importer_standalone_via_reexport_hop/main.mdk",
+    label =
+      "I31 (#2738, fix round) I29 with ONE variable changed: the displaced standalone reaches this module through an `export import` HOP rather than being declared in the module the import names. S2-IMPORT-DIFFER does not scope \"reaches `M` through a selective import\" to a direct declaration, and S1`s own right operand is folded over re-export chains of any depth (`graphIfaceMethods`, S1-CHAIN #1380, and S1-NS (a) rules the re-export arm SYMMETRIC with the import arm) -- so the warning is owed here exactly as in I29. Until this cell nothing in the corpus could see it: every other importer row imports from the DECLARING module, so a detector reading only the directly imported module`s own top-level functions passes all of them and is silent here, which is #2738`s original S0 with one extra file. MEASURED SILENT at sprint base 49ea4a542 (`run` printed `peek=7` at exit 0 with no diagnostic on any verb). Resolution is I29`s and unchanged -- `Peekable` is nameable by its type name, `Box` carries a live impl, so the occurrence dispatches: `peek=7`. VALUE AND WARN COLUMN DERIVED FROM THE CLAUSE BEFORE THE BINARY WAS CONSULTED",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "peek=7\n",
+  },
+  Row {
+    entry = "i32_importer_constraints_differ/main.mdk",
+    label =
+      "I32 (#2738, fix round) I29`s topology with the difference between the two schemes moved ENTIRELY INTO THE CONSTRAINT SET: the standalone is `Eq a => b -> a -> String`, the method `Debug a => t -> a -> String`. Every other cell in this corpus differs in the BODY of the type, so not one of them can see an alpha-equivalence that descends into the body and compares constraint lists by LENGTH alone -- which is what `tyAlphaGo`s `TyConstrained` arm did, reporting these two as the same scheme. Not alpha-equivalent by any reading, so S2-IMPORT-DIFFER requires the warning. MEASURED SILENT at sprint base 49ea4a542 on this cell`s shape (the review`s own repro, reports/review.md S0-2): accepted at exit 0 with no diagnostic on any verb. Resolution is I29`s and is not the point: `Taggable` is nameable by its type name, `Box` carries a live impl, so the method answers and prints `iface`, never `prov`. VALUE AND WARN COLUMN DERIVED FROM THE CLAUSE BEFORE THE BINARY WAS CONSULTED",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "iface\n",
+  },
+  Row {
+    entry = "i33_importer_constraints_reordered/main.mdk",
+    label =
+      "I33 (#2738, fix round) I32`s CONTROL and the row that keeps a constraint-aware comparison from warning on CORRECT code. The two declarations name the same two constraints in the opposite order over alpha-equivalent bodies -- `(Eq a, Debug b) => t -> a -> b -> String` against `(Debug q, Eq p) => r -> p -> q -> String` -- and a constraint set is a SET, so the schemes AGREE and S2-IMPORT-DIFFER`s \"not alpha-equivalent\" antecedent is false: silent on all three verbs. A comparison that pairs constraints POSITIONALLY passes I32 and turns every reordered-but-identical declaration in the tree into a warning; that false-positive direction is invisible to every other column here, because such a program still compiles and still prints the same value. Resolution is I32`s: the method dispatches at `Box`, printing `iface`. VALUE AND NOWARN COLUMN DERIVED FROM THE CLAUSE BEFORE THE BINARY WAS CONSULTED",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "iface\n",
+  },
 ]
+
+{- | Rows whose fixture must also carry (or must NOT carry) the
+   `W-IMPORT-METHOD-SHADOW` diagnostic, on `check`, `run` and `build`'s
+   stderr alike (S7: the three verbs must agree on whether the warning
+   fires, not only on the dispatched value). Kept as a separate roster
+   rather than a `Row` field so the ~90 pre-existing cells that assert
+   nothing about a diagnostic don't each need a vacuous entry.
+
+   `mustFire` is `True` when every verb owes `needle` on its stderr, `False`
+   when none may carry it. -}
+data WarnCheck = WarnCheck { entry : String, mustFire : Bool, needle : String }
+
+warnChecks : List WarnCheck
+warnChecks = [
+  WarnCheck {
+    entry = "i29_importer_selective_import_displaced/main.mdk",
+    mustFire = True,
+    needle = "is shadowed in module",
+  },
+  WarnCheck {
+    entry = "i30_importer_selective_import_same_scheme/main.mdk",
+    mustFire = False,
+    needle = "is shadowed in module",
+  },
+  WarnCheck {
+    entry = "i31_importer_standalone_via_reexport_hop/main.mdk",
+    mustFire = True,
+    needle = "is shadowed in module",
+  },
+  WarnCheck {
+    entry = "i32_importer_constraints_differ/main.mdk",
+    mustFire = True,
+    needle = "is shadowed in module",
+  },
+  WarnCheck {
+    entry = "i33_importer_constraints_reordered/main.mdk",
+    mustFire = False,
+    needle = "is shadowed in module",
+  },
+]
+
+-- | `True` when `w` is the `WarnCheck` for the row entry `e` — a `find`
+-- predicate, given a `WarnCheck`'s own `entry` field is ambiguous against
+-- `Row`'s and `Graded`'s without a type annotation on the lambda.
+warnCheckFor : String -> WarnCheck -> Bool
+warnCheckFor e w = w.entry == e
+
+-- | `Some` when a row's fixture disagrees with its `WarnCheck` — asserted
+-- against `check`+`run`+`build`'s stderr together, mirroring `gradeValue`'s
+-- treatment of the built binary as its own separate evidence.
+warnFailure : Agreement -> WarnCheck -> Option String
+warnFailure a w =
+  let needle = w.needle
+  let onAll =
+    contains needle a.checkErr
+      && contains needle a.runErr
+      && contains needle a.buildLog
+  let onAny =
+    contains needle a.checkErr
+      || contains needle a.runErr
+      || contains needle a.buildLog
+  if w.mustFire then
+    if onAll then
+      None
+    else
+      Some
+        "expected \{debug needle} on check+run+build stderr; not on all three"
+  else if onAny then
+    Some "expected NO \{debug needle} on any verb; it fired"
+  else
+    None
 
 {- | One cell's graded outcome. `note` carries a structural failure — a
    table row naming a fixture that is not there, a spawn that could not
@@ -1002,6 +1123,12 @@ gradeOne scratch r =
         let buildV =
           if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
         let grade = gradeValue r.mode r.pinned a
+        let warnNote = match find (warnCheckFor r.entry) warnChecks
+          None => None
+          Some check => warnFailure a check
+        let warnOk = match warnNote
+          None => True
+          Some _ => False
         Graded {
           entry = r.entry,
           checkV = checkV,
@@ -1012,8 +1139,11 @@ gradeOne scratch r =
             checkV == r.expCheck
               && runV == r.expRun
               && buildV == r.expBuild
-              && gradePasses grade,
-          note = "",
+              && gradePasses grade
+              && warnOk,
+          note = match warnNote
+            None => ""
+            Some msg => "\n\{msg}",
         }
 
 rowFailure : Graded -> Option String
@@ -1109,6 +1239,26 @@ test "binaryRanClean distinguishes a panicking binary from a clean one" =
                   "expected binaryRanClean True for a clean binary, got False (binCode=\{intToString cleanAgree.binCode} binErr=\{debug cleanAgree.binErr})"
               else
                 pass
+
+-- `warnChecks` is looked up by `find (warnCheckFor r.entry) warnChecks` while
+-- sweeping `table` (`gradeOne`), so an entry naming no row is never visited
+-- and its assertion never runs — silently, not as a red run. This is the
+-- coverage floor for THAT roster, the `warnChecks` peer of the test above.
+warnCheckEntry : WarnCheck -> String
+warnCheckEntry w = w.entry
+
+warnCheckEntries : List String
+warnCheckEntries = map warnCheckEntry warnChecks
+
+tableEntries : List String
+tableEntries = map rowEntry table
+
+test "every warnChecks entry names a row in the table" =
+  match filter (e => not (any (te => te == e) tableEntries)) warnCheckEntries
+    [] => pass
+    orphans =>
+      fail
+        "warnChecks names an entry with no row in `table`, so its assertion never runs: \{debug orphans}"
 
 test "check, run and build agree with every cell's pinned verdict and value" =
   sweep

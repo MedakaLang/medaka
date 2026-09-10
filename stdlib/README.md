@@ -198,8 +198,12 @@ reasoning and the counter-example each rule exists to protect: PR #2429
 9. **The `keys`/`values`/`toList`/`elems`/`entries`/`items` container-
    accessor family settled to one name per shape per module.**
    `hash_map.entries` was removed (kept `toList`); `map.elems` was renamed
-   to `map.values`. A module re-introducing two family names with an
-   identical signature is the synonym drift that ruling closed.
+   to `map.values`. `toList` was later renamed to `entries` on both `map`
+   and `hash_map`, freeing `toList` for `Foldable`'s elements-returning
+   method; `hash_map.entries` is that name's promotion from a private
+   collector, not a reintroduction of the removed export. A module
+   re-introducing two family names with an identical signature is the
+   synonym drift that ruling closed.
 10. **A `*InPlace` suffix is the mutation contract on a container that also
     has a persistent name.** `hash_map`/`hash_set`/`array`/`vector`'s
     mutating writers are `insertInPlace`/`setInPlace`/`deleteInPlace`;
