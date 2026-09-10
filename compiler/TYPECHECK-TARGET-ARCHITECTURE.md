@@ -963,6 +963,32 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    Found alongside, pre-existing and filed: a user file named `core.mdk` bypasses `run`'s static
    gate (#2811).
 
+19. **The record-head stamp carries its owner, 2026-09-09** (#2839). The `Ref String`
+   typecheck writes into `EFieldAccess`/`ERecordUpdate` is the head both emitters use to
+   pick a field's slot by `(record head, label)`. It carried the record's registry KEY —
+   the record's decl name, bare unless `backend/private_mangle.mdk` renamed it first — so
+   two modules declaring same-named records at opposite field orders were distinguishable
+   at the emitter only because `medaka build`'s child mangles before it elaborates. L2 was
+   being supplied by the mangler's ORDER, not by the stamp. It is now derived from the
+   selected record's own declaring module (the origin `registerRecordInfoKeyed` mints into
+   the record's result head, the same end `recordCandIsReceiverDecl` already compares) and
+   rendered in the mangler's spelling, reusing the mangler's own two rename decisions — a
+   reserved fixed-tag constructor is never renamed, a key already carrying its owner's
+   prefix has already been renamed — so the two cannot drift.
+   **Measured.** On the emit path every record key is already `<owner>__<name>`, so the
+   qualification is the identity function there: `selfcompile_fixpoint` C3a and C3b both
+   byte-identical to the seed, and a two-arm `medaka build --keep-ir` over all 268
+   multi-module entries under `test/` gives 201 IR-identical, 0 differing, 67 that emit no
+   IR on either arm, with no exit-code disagreement. What changes is the unmangled
+   elaboration. The premise was measured before the change, with a probe at the stamp on
+   all three `record_receiver_ident_*_field_order` cells: there the receiver's head already
+   carries `IdentModule "armod"` vs `IdentModule "zrmod"` and the selected `RecordInfo`'s
+   own result head agrees — only the stamped string lost it.
+   **What did NOT retire.** `lookupRecordByMangledHead` / `mangledHeadCandidates` answer a
+   different question — which `RecordInfo` a receiver SELECTS when the registry key is
+   mangled and the receiver's type reference is not — which this change does not touch;
+   they stay load-bearing on the emit path, as their own comment's stub measurement says.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
