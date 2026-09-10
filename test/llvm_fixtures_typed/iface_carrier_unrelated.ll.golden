@@ -225,7 +225,6 @@ conyes10:
   store i64 %t16, ptr %t0
   br label %decend1
 connext10:
-  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t17 = load i64, ptr %t0
@@ -276,7 +275,6 @@ conyes10:
   store i64 7, ptr %t0
   br label %decend1
 connext10:
-  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t11 = load i64, ptr %t0
@@ -305,7 +303,6 @@ conyes10:
   store i64 19, ptr %t0
   br label %decend1
 connext10:
-  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t11 = load i64, ptr %t0
@@ -341,7 +338,6 @@ conyes10:
   store i64 %t17, ptr %t0
   br label %decend1
 connext10:
-  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t18 = load i64, ptr %t0

@@ -211,7 +211,6 @@ conyes22:
   store i64 1, ptr %t4
   br label %decend5
 connext22:
-  call void @mdk_nonexhaustive_match()
   unreachable
 decend5:
   %t23 = load i64, ptr %t4

@@ -265,7 +265,6 @@ apend28:
   store i64 %t40, ptr %t0
   br label %decend1
 connext12:
-  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t41 = load i64, ptr %t0
