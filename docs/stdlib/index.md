@@ -306,7 +306,7 @@ A mutable hash table from keys to values.
 - [`findWithDefault`](hash_map.md#findwithdefault)
 - [`setInPlace`](hash_map.md#setinplace)
 - [`deleteInPlace`](hash_map.md#deleteinplace)
-- [`toList`](hash_map.md#tolist)
+- [`entries`](hash_map.md#entries)
 - [`keys`](hash_map.md#keys)
 - [`values`](hash_map.md#values)
 
@@ -470,7 +470,7 @@ An immutable map from keys to values, ordered by key.
 - [`deleteMax`](map.md#deletemax)
 - [`foldrWithKey`](map.md#foldrwithkey)
 - [`foldlWithKey`](map.md#foldlwithkey)
-- [`toList`](map.md#tolist)
+- [`entries`](map.md#entries)
 - [`keys`](map.md#keys)
 - [`values`](map.md#values)
 - [`mapWithKey`](map.md#mapwithkey)

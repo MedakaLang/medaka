@@ -1,0 +1,11 @@
+-- SHADOW-SEMANTICS cell I30 provider 1: the interface, the receiver type and its
+-- impl.  `tagOf`'s declared method type is `t -> String` -- one bare type variable
+-- to a concrete result, chosen so a STANDALONE of the same shape can actually be
+-- written (an `a`-returning method has no writable generic standalone twin).
+public export data Box a = Box a
+
+export interface Taggable t where
+  tagOf : t -> String
+
+export impl Taggable (Box a) where
+  tagOf _ = "iface"
