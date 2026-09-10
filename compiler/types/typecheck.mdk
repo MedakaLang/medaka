@@ -20640,7 +20640,7 @@ prePassDictArg rpNames dictNames argNames shadowMap prog =
         (omFromNames rpNames omEmpty)
         (omFromNames dictNames omEmpty)
         (omFromNames argNames omEmpty)
-        (shadowSymIndex shadowMap)
+        shadowMap
         noDictHook))
     prog
 
@@ -20673,17 +20673,22 @@ rewriteRPDictArg _ _ _ e = e
 -- ⚠️ #2189: rp/dn/an are OrdMap-backed SETS, not `List String` scanned by
 -- `contains` — the same treatment `bound` already gets below, and for the same
 -- reason: they grow with the program while the rewrite visits every EVar.
--- `sm` is an OrdMap for the SAME reason and it was measured: while the definer-shadow
--- map was empty off the emit path an assoc scan cost nothing, and #2809's bare row
--- (`name ↦ name`, one per interface method a unit defines) made it non-empty on every
--- path.  The `EVar` arm below then scanned it twice per occurrence — `lookupAssoc`
--- +99.1M Ir on `check compiler/driver/medaka_cli.mdk`, the single largest term in that
--- cell's regression.  Build it with `shadowSymIndex`, which preserves first-match.
+-- `sm` is the one that stays a LIST, and that is measured rather than assumed.  While
+-- the definer-shadow map was empty off the emit path an assoc probe cost nothing, and
+-- #2809's bare row (`name ↦ name`, one per interface method a unit defines) made it
+-- non-empty on every path: `lookupAssoc` +99.1M Ir on
+-- `check compiler/driver/medaka_cli.mdk`, the largest single term in that cell's
+-- regression.  An `OrdMap` is the wrong repair — the map holds a HANDFUL of rows on the
+-- compiler's own graph, so a tree probe (two dispatched three-way `compare`s) costs more
+-- than the scan it replaces, and swapping it in read +246M in `OrdMap` work against the
+-- -187M it removed.  What the `EVar` arm below does instead is probe ONCE: it used to
+-- ask `isSome (lookupAssoc n sm)` in a guard and then `lookupAssoc n sm` again in the
+-- body.
 -- The fifth field is called once per `EDictAt` the rewrite mints, with the callee
 -- name and the minted evidence id; `noDictHook` for every marker except the
 -- schedule's group-recursive one, which pushes the application's goal from it.
 data ArgRw =
-  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (OrdMap String) (String -> EvId -> Unit)
+  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit)
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
@@ -20771,13 +20776,16 @@ rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
   -- symbol (so a no-impl receiver still reaches the standalone `@mdk_<mid>__size`).
-  | not (omHasKey n bound) && omHasKey n sm = match omLookup n sm
+  | omHasKey n bound = EVar n
+  | otherwise = match lookupAssoc n sm
     Some bare => EMethodAt bare n (mintMethodCell n)
-    None => EVar n
-  | omHasKey n rp && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n an && not (omHasKey n bound) = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n dn && not (omHasKey n bound) = mintDictAt onDict n
-  | otherwise = EVar n
+    None =>
+      if omHasKey n rp || omHasKey n an then
+        EMethodAt n "" (mintMethodCell "")
+      else if omHasKey n dn then
+        mintDictAt onDict n
+      else
+        EVar n
 -- No `EVarId` arm: every marker runs BEFORE resolve's binding-id stamp (the Flat
 -- arm's whole-program pre-pass, and the schedule's per-group `markGroupClauses` →
 -- `stampGroupClauses`), so a stamped occurrence never reaches this rewrite.
@@ -37768,10 +37776,10 @@ buildDefinerShadows implDecls prog =
   -- shadow.  For each mangled funDef that the mangle map flags as an iface-method
   -- shadow, register the BARE method name — that is the name the mark pass stamped
   -- on the `EMethodAt`, which `definerShadowArgHead`/`resolveRLocalSite` key off.
-  let smIdx = markSetsShadowIndex ()
+  let sm = driverState.value.mangledShadowMapRef.value
   let bares =
     flatMap
-      (n => match omLookup n smIdx
+      (n => match lookupAssoc n sm
         Some bare => [bare]
         None => [])
       localNames
@@ -38030,10 +38038,10 @@ definerShadowsFromSet : OrdMap Unit -> List Decl -> List String
 definerShadowsFromSet ifaceSet prog =
   let localNames = dedup (map fst (funDefs prog))
   let direct = filter (n => omHasKey n ifaceSet) localNames
-  let smIdx = markSetsShadowIndex ()
+  let sm = driverState.value.mangledShadowMapRef.value
   let bares =
     flatMap
-      (n => match omLookup n smIdx
+      (n => match lookupAssoc n sm
         Some bare => [bare]
         None => [])
       localNames
@@ -38079,10 +38087,10 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
     filter
       (n => omHasKey n ifaceSet && not (omHasKey n localNames))
       (omKeys fnSet)
-  let smIdx = markSetsShadowIndex ()
+  let sm = driverState.value.mangledShadowMapRef.value
   let mangled =
     flatMap
-      (n => match omLookup n smIdx
+      (n => match lookupAssoc n sm
         Some bare => if omHasKey n localNames then [] else [bare]
         None => [])
       (omKeys fnSet)
@@ -38310,13 +38318,11 @@ unitCarriesMangledFunDefs mid [] = False
 unitCarriesMangledFunDefs mid ((n, _) :: rest) =
   if isMangledFor mid n then True else unitCarriesMangledFunDefs mid rest
 
--- [smIdx] is the graph's definer-shadow index, passed in because the only caller runs
--- this before `markSetsRef` carries it.
-buildStandaloneShadowsGraph : OrdMap String ->
+buildStandaloneShadowsGraph : List (String, String) ->
   List Decl ->
   List Decl ->
   List String
-buildStandaloneShadowsGraph smIdx allDecls userDecls =
+buildStandaloneShadowsGraph sm allDecls userDecls =
   -- INDEX, not a list: this probes once per user funDef, so a `contains` over the
   -- interface-method names is O(funDefs x methods) — quadratic on a program whose
   -- interface count and top-level binding count grow together.
@@ -38333,7 +38339,7 @@ buildStandaloneShadowsGraph smIdx allDecls userDecls =
   -- off the emit path.  Kept rather than deleted because it is what would recover a
   -- genuinely mangled row if one appeared (a hand-written `<mid>__toList` mints one), and
   -- because `dedup` makes the redundancy free.
-  let mangled = filter (n => omHasKey n smIdx) fns
+  let mangled = filter (n => isSome (lookupAssoc n sm)) fns
   dedup (direct ++ mangled)
 
 -- `public export data` / `public export record` decls — re-registered in every
@@ -43103,7 +43109,7 @@ prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
 data MarkCtx = MarkCtx {
   mcRp : OrdMap Unit,
   mcAn : OrdMap Unit,
-  mcSm : OrdMap String,
+  mcSm : List (String, String),
 }
 
 argRwOf : MarkCtx -> OrdMap Unit -> (String -> EvId -> Unit) -> ArgRw
@@ -43150,7 +43156,7 @@ moduleMarkCtx ms "" coreProg
   | omSize driverState.value.graphIfaceMethodsRef.value == 0 = MarkCtx {
     mcRp = omFromNames ms.msMarkRpNames omEmpty,
     mcAn = omFromNames ms.msArgNames omEmpty,
-    mcSm = shadowSymIndex ms.msCoreShadowMap,
+    mcSm = ms.msCoreShadowMap,
   }
   | otherwise =
     let nameable = nameableIfaceMethodSet coreProg
@@ -43158,7 +43164,7 @@ moduleMarkCtx ms "" coreProg
     MarkCtx {
       mcRp = omFromNames (filterList keep ms.msMarkRpNames) omEmpty,
       mcAn = omFromNames (filterList keep ms.msArgNames) omEmpty,
-      mcSm = shadowSymIndex ms.msCoreShadowMap,
+      mcSm = ms.msCoreShadowMap,
     }
 moduleMarkCtx ms _ prog
   -- fail OPEN when the graph index is absent, for the reason stated on
@@ -43180,7 +43186,7 @@ moduleMarkCtx ms _ prog
             (dedup (ms.msMarkSharedNames ++ ms.msGraphShadowNames))
             omEmpty),
       mcAn = withAliasMethodNames aliasRows (omFromNames ms.msArgNames omEmpty),
-      mcSm = ms.msShadowIndex,
+      mcSm = driverState.value.mangledShadowMapRef.value,
     }
   | otherwise =
     -- 🔒 S1-NS (b), THE CLOSURE INVARIANT.  The spec requires the predicate deciding
@@ -43215,11 +43221,9 @@ moduleMarkCtx ms _ prog
     let nameable = nameableIfaceMethodSet prog
     let keep = n => omHasKey n nameable
     let shadowMap = driverState.value.mangledShadowMapRef.value
-    -- Both module-level derivations the S1 filters below ask for, taken ONCE for this
-    -- module rather than once per row: the graph's symbol index (`msShadowIndex`) and the
-    -- occurrence-spelling context (`spellCtxOf`).  Per-row they were the whole of this
-    -- cell's measured regression — see those two functions' headers.
-    let smIdx = ms.msShadowIndex
+    -- The occurrence-spelling context, taken ONCE for this module rather than rebuilt
+    -- inside each filter below — per row it was most of this cell's measured
+    -- regression; see `SpellCtx`.
     let sc = spellCtxOf prog
     let aliasRows = aliasMethodSpellings prog
     MarkCtx {
@@ -43231,8 +43235,8 @@ moduleMarkCtx ms _ prog
               (filterList keep ms.msMarkSharedNames
                 ++ filterList
                   (n =>
-                    omHasKey (shadowBareName smIdx n) nameable
-                      && shadowSymSpelledBare sc smIdx n)
+                    omHasKey (shadowBareName shadowMap n) nameable
+                      && shadowSymSpelledBare sc shadowMap n)
                   ms.msGraphShadowNames))
             omEmpty),
       mcAn =
@@ -43240,12 +43244,11 @@ moduleMarkCtx ms _ prog
           aliasRows
           (omFromNames (filterList keep ms.msArgNames) omEmpty),
       mcSm =
-        shadowSymIndex
-          (filterList
-            (e =>
-              omHasKey (snd e) nameable
-                && moduleSpellsShadowBare sc (fst e) (snd e))
-            shadowMap),
+        filterList
+          (e =>
+            omHasKey (snd e) nameable
+              && moduleSpellsShadowBare sc (fst e) (snd e))
+          shadowMap,
     }
 
 -- #1386: the alias-qualified spellings of the methods ALREADY in [set], added to it.
@@ -43337,9 +43340,9 @@ coreShadowMapFor coreProg shadowMap
 --     a wildcard.  A module alias (`Some []`) and a member alias (`{size as sz}`, whose
 --     local is `sz`) bind it under a different spelling, so neither admits it — and
 --     both then agree with what the un-mangled path already does with that spelling.
--- Empty shadowMap ⇒ the index misses ⇒ True ⇒ the check/run path is untouched.
-shadowSymSpelledBare : SpellCtx -> OrdMap String -> String -> Bool
-shadowSymSpelledBare sc sm n = match omLookup n sm
+-- Empty shadowMap ⇒ `lookupAssoc` misses ⇒ True ⇒ the check/run path is untouched.
+shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
+shadowSymSpelledBare sc sm n = match lookupAssoc n sm
   None => True
   Some bare => moduleSpellsShadowBare sc n bare
 
@@ -43470,25 +43473,10 @@ depExportsUnknown depId =
 
 -- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
 -- Identity on the un-mangled run/check path, where the map is empty.
-shadowBareName : OrdMap String -> String -> String
-shadowBareName sm n = match omLookup n sm
+shadowBareName : List (String, String) -> String -> String
+shadowBareName sm n = match lookupAssoc n sm
   Some bare => bare
   None => n
-
--- The definer-shadow map as an INDEX, for the readers that probe it once per name
--- rather than walking it once.  `lookupAssoc` is first-match and `omFromPairs` is
--- last-write-wins, so the rows go in REVERSED: same winner on a duplicated symbol.
-shadowSymIndex : List (String, String) -> OrdMap String
-shadowSymIndex rows = omFromPairs (reverseL rows) omEmpty
-
--- The graph's index, derived ONCE in `markSetsOf`.  Deriving it per reader is what a
--- first cut of this did, and it cost more in `OrdMap` inserts than the assoc scans it
--- removed -- see `msShadowIndex`.  A driver that ran no preamble (the Flat / loader-less
--- arms) has no mark sets and derives it from the map, which is `[]` there.
-markSetsShadowIndex : Unit -> OrdMap String
-markSetsShadowIndex _ = match driverState.value.markSetsRef.value
-  Some ms => ms.msShadowIndex
-  None => shadowSymIndex driverState.value.mangledShadowMapRef.value
 
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers
@@ -43810,13 +43798,6 @@ data MarkSets = MarkSets {
   msGraphShadowNames : List String,
   msArgNames : List String,
   msCoreShadowMap : List (String, String),
-  -- `mangledShadowMapRef`'s value as an index, derived in the same statement that
-  -- writes the ref.  Every per-module reader probes the map by name rather than
-  -- walking it, and deriving the index per reader cost more in `OrdMap` inserts than
-  -- the assoc scans it replaced (MEASURED: five derivations per module put +261M Ir
-  -- back on `check compiler/driver/medaka_cli.mdk` against the -183M the indexing won).
-  -- One derivation per graph, read through `markSetsShadowIndex`.
-  msShadowIndex : OrdMap String,
   msBareDictNames : List String,
   msUnits : List (String, List Decl),  -- `("core", coreDecls) :: modules`, for import-alias expansion
 }
@@ -43868,9 +43849,6 @@ markSetsOf pmf coreDecls modules allDecls =
   let units = ("core", coreDecls) :: modules
   let userDecls = flatMap snd modules
   let shadowMap = computeMangledShadowMap allDecls units
-  -- Derived HERE, from the value the line below writes, so the index and the map are
-  -- one derivation rather than two facts a later reader has to keep in step.
-  let shadowIndex = shadowSymIndex shadowMap
   driverState.value.mangledShadowMapRef := shadowMap
   driverState.value.argDispatchIdxByIdRef :=
     pmf.pmfArgDispatchById ++ argDispatchIndicesById userDecls
@@ -43878,17 +43856,14 @@ markSetsOf pmf coreDecls modules allDecls =
   let markSharedNames =
     dedup
       (rpNames ++ pmf.pmfMethodConstraints ++ methodConstraintNames userDecls)
-  -- The index is PASSED rather than read back through `markSetsShadowIndex`: this runs
-  -- before the ref below is written, so that ref still holds the PREVIOUS graph's sets.
   let graphShadowNames =
-    buildStandaloneShadowsGraph shadowIndex allDecls userDecls
+    buildStandaloneShadowsGraph shadowMap allDecls userDecls
   let ms = MarkSets {
     msMarkRpNames = dedup (markSharedNames ++ graphShadowNames),
     msMarkSharedNames = markSharedNames,
     msGraphShadowNames = graphShadowNames,
     msArgNames = map fst (pmf.pmfArgDispatch ++ argDispatchIndices userDecls),
     msCoreShadowMap = coreShadowMapFor coreDecls shadowMap,
-    msShadowIndex = shadowIndex,
     msBareDictNames =
       dedup (moduleDictNames pmf.pmfConstrainedBodyVars rpNames modules),
     msUnits = units,
@@ -44041,7 +44016,7 @@ recMarkMembers dn placeholders (m :: rest) grouped =
           m
           (placeholderMonoOf callee placeholders)
           ev)
-  let rw = ArgRw omEmpty dn omEmpty omEmpty onDict
+  let rw = ArgRw omEmpty dn omEmpty [] onDict
   recMarkMembers
     dn
     placeholders

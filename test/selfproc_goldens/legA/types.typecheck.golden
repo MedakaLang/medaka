@@ -213,7 +213,7 @@ buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
 buildImplUniverse : List Decl -> ImplUniverse
-buildStandaloneShadowsGraph : Map String String -> List Decl -> List Decl -> List String
+buildStandaloneShadowsGraph : List (String, String) -> List Decl -> List Decl -> List String
 buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
 builtinClassName : BuiltinClass -> String
 builtinClassOrigin : BuiltinClass -> TyConOrigin
@@ -1460,7 +1460,6 @@ markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String,
 markNumlitOpTaint : Mono -> Unit
 markRecursiveOccurrences : ModuleMarking -> List (String, Mono) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 markSetsOf : PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
-markSetsShadowIndex : Unit -> Map String String
 markTailDecl : ArgRw -> Decl -> Decl
 markTailDecls : MarkCtx -> Map String Unit -> List Decl -> List Decl
 matchCol0Type : Mono -> Option TabKey
@@ -2096,7 +2095,7 @@ setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setStdlibOwnership : Bool -> List String -> Unit
-shadowBareName : Map String String -> String -> String
+shadowBareName : List (String, String) -> String -> String
 shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
 shadowIfaceLabel : IfaceRef -> String
 shadowSpineNodesAt : String -> Expr -> Option (List Expr)
@@ -2109,8 +2108,7 @@ shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowD
 shadowStandaloneDictsWithSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
 shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref Route), Expr, List Expr)
-shadowSymIndex : List (String, String) -> Map String String
-shadowSymSpelledBare : SpellCtx -> Map String String -> String -> Bool
+shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
 sigCollapsedWith : Int -> List (String, Int) -> Option String
