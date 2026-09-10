@@ -507,15 +507,23 @@ retireConnection active slot =
 
    The live count is exactly what `scanRequestBoundaryWithin` calls `avail`:
    the backing array's own length is spare capacity, never received bytes,
-   so nothing may read past it. -}
-data ReadBuffer = ReadBuffer (Ref (Array Int)) (Ref Int)
+   so nothing may read past it.
+
+   Exported abstractly, with the six operations below, for
+   `pds/test/read_buffer_test.mdk`: the growth arithmetic is the one part of
+   this module that is pure arithmetic over a mutable cell and so can be
+   asserted without a socket. The representation stays private — a caller
+   outside this module cannot reach either `Ref`. -}
+export data ReadBuffer = ReadBuffer (Ref (Array Int)) (Ref Int)
 
 -- | An empty buffer; the backing store is allocated on the first append.
+export
 readBufferNew : Unit -> ReadBuffer
 readBufferNew _ = ReadBuffer (Ref [||]) (Ref 0)
 
 -- | How many bytes are live, in O(1): a `Ref Int` deref, never a traversal of
 -- the backing store.
+export
 readBufferLen : ReadBuffer -> Int
 readBufferLen (ReadBuffer _ len) = !len
 
@@ -525,11 +533,13 @@ readBufferIsEmpty buf = readBufferLen buf == 0
 -- | The backing array, for a caller (`scanRequestBoundaryWithin`,
 -- `parseRequestAt`) that is handed the live count separately and must never
 -- read past it on its own.
+export
 readBufferBacking : ReadBuffer -> Array Int
 readBufferBacking (ReadBuffer backing _) = !backing
 
 -- | The smallest doubling of `cap` that is at least `needed`; an empty
 -- backing store starts doubling from 1 rather than from 0.
+export
 growCapacity : Int -> Int -> Int
 growCapacity cap needed =
   if cap >= needed then
@@ -542,6 +552,7 @@ growCapacity cap needed =
    the append itself is one more `blit`, of exactly `arrayLength bytes`
    elements. Neither copy is proportional to bytes already buffered from
    earlier reads. -}
+export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
 readBufferAppend bytes (ReadBuffer backing len) =
   let n = arrayLength bytes
@@ -566,6 +577,7 @@ readBufferFrom from buf =
 -- | The live bytes as an ordinary array, for the one caller
 -- (`rejectBufferAt`) that hands the whole buffer to `applyRequest` rather
 -- than a scanned `[0, boundary)` prefix.
+export
 readBufferLive : ReadBuffer -> Array Int
 readBufferLive buf = sliceClamped 0 (readBufferLen buf) (readBufferBacking buf)
 

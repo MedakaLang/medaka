@@ -261,12 +261,9 @@ test "a truncated IPv4-mapped last hop is still rejected" =
     (identityLabel (identifyClient (TrustedProxy True) headers))
     "direct"
 
--- (h) #2774 second half: a decision's cost must not scale with how many
--- OTHER identities are active. Before `cec2d3b37` (`step` swept the whole
--- counter table on every call via `pruneStale`), that scaling was measured
--- in-process at 0.00048 -> 0.00073 ms/decision over 8 -> 14,000 identities;
--- `RateLimitState` is opaque, so nothing could observe the fix from outside
--- until now.
+-- (g) #2774 second half: a decision's cost must not scale with how many
+-- OTHER identities are active. `RateLimitState` is opaque, so this is the
+-- only place that scaling is observable from outside the module.
 --
 -- `allocBytes` (already used the same way by `test/closure_alloc_fixtures/`
 -- and `compiler/support/timer.mdk`'s `allocSnap`) is the counted-work
@@ -308,7 +305,7 @@ test "a decision's allocation cost does not scale 100x with other active identit
   let manyCost = marginalAllocForStep manyOthers
   expectTrue (manyCost <= fewCost * 15.0)
 
--- (g) the whole-repository export ceiling is a CLASS of its own, not a lower
+-- (h) the whole-repository export ceiling is a CLASS of its own, not a lower
 -- shared number: `maxRequestsPerWindow` bounds a count of requests, while one
 -- export's response is bounded only by `maxCarBytes`.
 test "the repo-export ceiling is its own, not the shared request ceiling" =

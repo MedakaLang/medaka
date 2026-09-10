@@ -748,25 +748,38 @@ is why a read deadline, not a counter, is what closes that shape.
 
 **The availability target the connection ceilings answer to (#2816).** Under a
 flood from one unidentifiable source, **64 concurrent legitimate callers must
-still be answered within 15 seconds**. Both ceilings follow from that sentence
-and from nothing else. `maxUnframedConnections` (64) is the share of the total
-an attacker can hold in the one state that costs it nothing — headers begun and
-never terminated — so `maxConcurrentConnections` (256) minus that share leaves
-192 slots, three times the target's 64, available at every instant of the
-flood; and a slot the attacker does hold is released within `headerTimeout`
-(5 s) if its headers never terminate or within `bodyProgressTimeout` (5 s) if
-they terminate over a body that never arrives, both comfortably inside the
-target's 15 s even when a legitimate caller has to wait out one turnover. The
-target is what to re-derive these two numbers from: raising the caller count or
-lowering the time bound is a change to them and to no other constant here.
+still be answered within 15 seconds**. That sentence is the design intent both
+ceilings are derived from, and it is what to re-derive them from: raising the
+caller count or lowering the time bound is a change to these two numbers and to
+no other constant here. `headerTimeout` (5 s) and `bodyProgressTimeout` (5 s)
+are the turnover half of it — a slot an attacker holds is released within one
+of them, whichever phase it is stalling in, both inside the target's 15 s even
+when a legitimate caller has to wait out one turnover.
 
-What the target bounds rather than eliminates: an attacker who reconnects as
-each of its connections is released keeps its 64-slot share occupied
-continuously, because a connection that never frames a request produces no
-identity and so reaches no rate-limit class (the paragraph above). The target
-is deliberately stated as "answered within T", not "never delayed" — there is
-no ceiling here under which a sustained flood costs an attacker nothing at all,
-only one under which it cannot take the slots a legitimate caller needs.
+**The target is NOT currently met, and `maxUnframedConnections` is why.**
+`maxUnframedConnections` (64) is not a carved-out share of
+`maxConcurrentConnections` (256): it is an independent ADMISSION GATE ahead of
+it. `acceptStep` (`pds/shell/server.mdk`) charges every accepted connection to
+the un-framed census before it has been read from, and refuses admission when
+EITHER ceiling is full — the two are disjoined, not summed. So once 64
+connections sit in the un-framed state, the 65th connection is closed without a
+read no matter how much of the 256 is free, and it makes no difference whether
+that 65th caller is legitimate. An un-framed connection carries no identity, so
+it reaches no rate-limit class and the attacker pays nothing to hold the gate;
+because the released slot is immediately re-takeable, a single source that
+reconnects as its connections time out can hold the gate shut indefinitely.
+Measured: ~70 header-stalled sockets from one source (just over the 64 cap) cut
+a legitimate prober to 1 answered request against 229 connection resets; at 280
+stalled sockets, none succeeded. The cheaper cap is therefore the denial, which
+is #2816's own open scope — the remaining work there is a ceiling that
+distinguishes sources (e.g. a per-source cap on un-framed connections) so that
+one source cannot spend the whole census.
+
+The body-phase half of this IS fixed: a connection that terminates its headers
+and then stalls over a body that never arrives is closed by
+`bodyProgressTimeout`, so a mixed or pure body-stall flood does not hold
+capacity. That fix does not close #2816, because the admission gate is reached
+before any of it runs.
 
 One fixed window per identity also bounds the AVERAGE rate over a window,
 not the instantaneous one: because the window index is derived from the
