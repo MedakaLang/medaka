@@ -204,71 +204,60 @@ entry:
 define i64 @mdk_impl_Bag_fold(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg2, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg2, 1
-  br label %disccont2
-discbox2:
-  %t6 = inttoptr i64 %arg2 to ptr
-  %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 0
-  br i1 %t9, label %conyes10, label %connext10
-conyes10:
+  %t2 = and i64 %arg2, 1
+  %t3 = icmp eq i64 %t2, 1
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 %arg1, ptr %t0
   br label %decend1
-connext10:
-  %t11 = icmp eq i64 %t8, 1
-  br i1 %t11, label %conyes12, label %connext12
-conyes12:
+connext4:
+  %t5 = icmp eq i64 %t2, 0
+  br i1 %t5, label %conyes6, label %connext6
+conyes6:
+  %t7 = inttoptr i64 %arg2 to ptr
+  %t8 = getelementptr i8, ptr %t7, i64 8
+  %t9 = load i64, ptr %t8
+  %t10 = inttoptr i64 %arg2 to ptr
+  %t11 = getelementptr i8, ptr %t10, i64 16
+  %t12 = load i64, ptr %t11
   %t13 = inttoptr i64 %arg2 to ptr
   %t14 = getelementptr i8, ptr %t13, i64 8
   %t15 = load i64, ptr %t14
   %t16 = inttoptr i64 %arg2 to ptr
   %t17 = getelementptr i8, ptr %t16, i64 16
   %t18 = load i64, ptr %t17
-  %t19 = inttoptr i64 %arg2 to ptr
-  %t20 = getelementptr i8, ptr %t19, i64 8
-  %t21 = load i64, ptr %t20
-  %t22 = inttoptr i64 %arg2 to ptr
-  %t23 = getelementptr i8, ptr %t22, i64 16
-  %t24 = load i64, ptr %t23
-  %t25 = inttoptr i64 %arg0 to ptr
+  %t19 = inttoptr i64 %arg0 to ptr
+  %t20 = load i64, ptr %t19
+  %t21 = icmp eq i64 %t20, 2
+  %t23 = alloca i64
+  br i1 %t21, label %apfast22, label %apslow22
+apfast22:
+  %t24 = inttoptr i64 %arg0 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 8
   %t26 = load i64, ptr %t25
-  %t27 = icmp eq i64 %t26, 2
-  %t29 = alloca i64
-  br i1 %t27, label %apfast28, label %apslow28
-apfast28:
-  %t30 = inttoptr i64 %arg0 to ptr
-  %t31 = getelementptr i8, ptr %t30, i64 8
-  %t32 = load i64, ptr %t31
-  %t33 = inttoptr i64 %t32 to ptr
-  %t34 = call i64 %t33(i64 %arg0, i64 %arg1, i64 %t21)
-  store i64 %t34, ptr %t29
-  br label %apend28
-apslow28:
-  %t35 = alloca i64, i64 2
-  %t36 = getelementptr i64, ptr %t35, i64 0
-  store i64 %arg1, ptr %t36
-  %t37 = getelementptr i64, ptr %t35, i64 1
-  store i64 %t21, ptr %t37
-  %t38 = call i64 @__mdk_apply(i64 %arg0, i64 2, ptr %t35)
-  store i64 %t38, ptr %t29
-  br label %apend28
-apend28:
-  %t39 = load i64, ptr %t29
-  %t40 = call i64 @mdk_impl_Bag_fold(i64 %arg0, i64 %t39, i64 %t24)
-  store i64 %t40, ptr %t0
+  %t27 = inttoptr i64 %t26 to ptr
+  %t28 = call i64 %t27(i64 %arg0, i64 %arg1, i64 %t15)
+  store i64 %t28, ptr %t23
+  br label %apend22
+apslow22:
+  %t29 = alloca i64, i64 2
+  %t30 = getelementptr i64, ptr %t29, i64 0
+  store i64 %arg1, ptr %t30
+  %t31 = getelementptr i64, ptr %t29, i64 1
+  store i64 %t15, ptr %t31
+  %t32 = call i64 @__mdk_apply(i64 %arg0, i64 2, ptr %t29)
+  store i64 %t32, ptr %t23
+  br label %apend22
+apend22:
+  %t33 = load i64, ptr %t23
+  %t34 = call i64 @mdk_impl_Bag_fold(i64 %arg0, i64 %t33, i64 %t18)
+  store i64 %t34, ptr %t0
   br label %decend1
-connext12:
+connext6:
   unreachable
 decend1:
-  %t41 = load i64, ptr %t0
-  ret i64 %t41
+  %t35 = load i64, ptr %t0
+  ret i64 %t35
 }
 
 ; mdk-module program

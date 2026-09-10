@@ -1,0 +1,27 @@
+-- #2848: a type whose every constructor is NULLARY, so every value of it is an
+-- immediate tagged word and the constructor switch needs no immediate/boxed
+-- branch at all -- `ashr 1` recovers the tag directly (DiscRep RepAllImm).
+-- Two rosters ride this case: a user enum, and one of the reserved built-in
+-- all-nullary ADTs whose ctor names sit outside the ctor table (Lt/Eq/Gt), where
+-- the arity has to come from the reserved table rather than from `ctorArity`.
+data Color = Red | Green | Blue
+
+shade : Color -> Int
+shade Red = 1
+shade Green = 2
+shade Blue = 3
+
+data Ordering = Lt | Eq | Gt
+
+rank : Ordering -> Int
+rank Lt = 1
+rank Eq = 2
+rank Gt = 3
+
+main =
+  shade Red
+    + shade Green * 10
+    + shade Blue * 100
+    + rank Lt * 1000
+    + rank Eq * 10000
+    + rank Gt * 100000

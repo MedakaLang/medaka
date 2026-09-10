@@ -174,213 +174,134 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_impl_List_ap(i64 ptrtoint (ptr @mdk_dc.program.5 to i64), i64 ptrtoint (ptr @mdk_dc.program.7 to i64))
-  %t1 = call i64 @mdk_sumList(i64 %t0)
+  %t0 = call i64 @mdk_shade(i64 1)
+  %t1 = call i64 @mdk_shade(i64 3)
   %t2 = ashr i64 %t1, 1
-  call void @mdk_print_int(i64 %t2)
+  %t3 = ashr i64 21, 1
+  %t4 = mul i64 %t2, %t3
+  %t5 = shl i64 %t4, 1
+  %t6 = or i64 %t5, 1
+  %t7 = ashr i64 %t0, 1
+  %t8 = ashr i64 %t6, 1
+  %t9 = add i64 %t7, %t8
+  %t10 = shl i64 %t9, 1
+  %t11 = or i64 %t10, 1
+  %t12 = call i64 @mdk_shade(i64 5)
+  %t13 = ashr i64 %t12, 1
+  %t14 = ashr i64 201, 1
+  %t15 = mul i64 %t13, %t14
+  %t16 = shl i64 %t15, 1
+  %t17 = or i64 %t16, 1
+  %t18 = ashr i64 %t11, 1
+  %t19 = ashr i64 %t17, 1
+  %t20 = add i64 %t18, %t19
+  %t21 = shl i64 %t20, 1
+  %t22 = or i64 %t21, 1
+  %t23 = call i64 @mdk_rank(i64 562975723225089)
+  %t24 = ashr i64 %t23, 1
+  %t25 = ashr i64 2001, 1
+  %t26 = mul i64 %t24, %t25
+  %t27 = shl i64 %t26, 1
+  %t28 = or i64 %t27, 1
+  %t29 = ashr i64 %t22, 1
+  %t30 = ashr i64 %t28, 1
+  %t31 = add i64 %t29, %t30
+  %t32 = shl i64 %t31, 1
+  %t33 = or i64 %t32, 1
+  %t34 = call i64 @mdk_rank(i64 562975723225091)
+  %t35 = ashr i64 %t34, 1
+  %t36 = ashr i64 20001, 1
+  %t37 = mul i64 %t35, %t36
+  %t38 = shl i64 %t37, 1
+  %t39 = or i64 %t38, 1
+  %t40 = ashr i64 %t33, 1
+  %t41 = ashr i64 %t39, 1
+  %t42 = add i64 %t40, %t41
+  %t43 = shl i64 %t42, 1
+  %t44 = or i64 %t43, 1
+  %t45 = call i64 @mdk_rank(i64 562975723225093)
+  %t46 = ashr i64 %t45, 1
+  %t47 = ashr i64 200001, 1
+  %t48 = mul i64 %t46, %t47
+  %t49 = shl i64 %t48, 1
+  %t50 = or i64 %t49, 1
+  %t51 = ashr i64 %t44, 1
+  %t52 = ashr i64 %t50, 1
+  %t53 = add i64 %t51, %t52
+  %t54 = shl i64 %t53, 1
+  %t55 = or i64 %t54, 1
+  %t56 = ashr i64 %t55, 1
+  call void @mdk_print_int(i64 %t56)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_sumList(i64 %arg0) {
+define i64 @mdk_shade(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
+  %t3 = ashr i64 %arg0, 1
+  %t4 = icmp eq i64 %t3, 0
   br i1 %t4, label %conyes5, label %connext5
 conyes5:
-  store i64 1, ptr %t0
+  store i64 3, ptr %t0
   br label %decend1
 connext5:
   br label %clause2
 clause2:
-  %t6 = and i64 %arg0, 1
-  %t7 = icmp eq i64 %t6, 0
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
-  %t9 = inttoptr i64 %arg0 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = inttoptr i64 %arg0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 16
-  %t14 = load i64, ptr %t13
-  %t15 = inttoptr i64 %arg0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 8
-  %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %arg0 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 16
-  %t20 = load i64, ptr %t19
-  %t21 = call i64 @mdk_sumList(i64 %t20)
-  %t22 = call i64 @mdk_num_add(i64 %t17, i64 %t21)
-  store i64 %t22, ptr %t0
+  %t7 = ashr i64 %arg0, 1
+  %t8 = icmp eq i64 %t7, 1
+  br i1 %t8, label %conyes9, label %connext9
+conyes9:
+  store i64 5, ptr %t0
   br label %decend1
-connext8:
+connext9:
+  br label %clause6
+clause6:
+  %t10 = ashr i64 %arg0, 1
+  %t11 = icmp eq i64 %t10, 2
+  br i1 %t11, label %conyes12, label %connext12
+conyes12:
+  store i64 7, ptr %t0
+  br label %decend1
+connext12:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t23 = load i64, ptr %t0
-  ret i64 %t23
+  %t13 = load i64, ptr %t0
+  ret i64 %t13
 }
 
-; tmc: impl_List_fmap trmc
-; mdk-module impl:List_fmap
-define i64 @mdk_impl_List_fmap(i64 %arg0, i64 %arg1) {
+; mdk-module program
+define i64 @mdk_rank(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t1 = alloca ptr
-  store ptr %t0, ptr %t1
-  %t2 = alloca i64
-  store i64 %arg0, ptr %t2
-  %t3 = alloca i64
-  store i64 %arg1, ptr %t3
-  br label %trmcloop4
-trmcloop4:
-  %t6 = load i64, ptr %t2
-  %t7 = load i64, ptr %t3
-  %t8 = alloca i64
-  %t11 = and i64 %t7, 1
-  %t12 = icmp eq i64 %t11, 1
-  br i1 %t12, label %conyes13, label %connext13
-conyes13:
-  %t14 = load ptr, ptr %t1
-  store i64 562949953421315, ptr %t14
-  br label %trmcexit5
-connext13:
-  br label %clause10
-clause10:
-  %t15 = and i64 %t7, 1
-  %t16 = icmp eq i64 %t15, 0
-  br i1 %t16, label %conyes17, label %connext17
-conyes17:
-  %t18 = inttoptr i64 %t7 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 8
-  %t20 = load i64, ptr %t19
-  %t21 = inttoptr i64 %t7 to ptr
-  %t22 = getelementptr i8, ptr %t21, i64 16
-  %t23 = load i64, ptr %t22
-  %t24 = inttoptr i64 %t7 to ptr
-  %t25 = getelementptr i8, ptr %t24, i64 8
-  %t26 = load i64, ptr %t25
-  %t27 = inttoptr i64 %t7 to ptr
-  %t28 = getelementptr i8, ptr %t27, i64 16
-  %t29 = load i64, ptr %t28
-  %t30 = inttoptr i64 %t6 to ptr
-  %t31 = load i64, ptr %t30
-  %t32 = icmp eq i64 %t31, 1
-  %t34 = alloca i64
-  br i1 %t32, label %apfast33, label %apslow33
-apfast33:
-  %t35 = inttoptr i64 %t6 to ptr
-  %t36 = getelementptr i8, ptr %t35, i64 8
-  %t37 = load i64, ptr %t36
-  %t38 = inttoptr i64 %t37 to ptr
-  %t39 = call i64 %t38(i64 %t6, i64 %t26)
-  store i64 %t39, ptr %t34
-  br label %apend33
-apslow33:
-  %t40 = alloca i64, i64 1
-  %t41 = getelementptr i64, ptr %t40, i64 0
-  store i64 %t26, ptr %t41
-  %t42 = call i64 @__mdk_apply(i64 %t6, i64 1, ptr %t40)
-  store i64 %t42, ptr %t34
-  br label %apend33
-apend33:
-  %t43 = load i64, ptr %t34
-  %t44 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t44
-  %t45 = getelementptr i8, ptr %t44, i64 8
-  store i64 %t43, ptr %t45
-  %t46 = ptrtoint ptr %t44 to i64
-  %t47 = load ptr, ptr %t1
-  store i64 %t46, ptr %t47
-  %t48 = getelementptr i8, ptr %t44, i64 16
-  store ptr %t48, ptr %t1
-  store i64 %t6, ptr %t2
-  store i64 %t29, ptr %t3
-  br label %trmcloop4
-connext17:
-  call void @mdk_nonexhaustive_match()
-  unreachable
-decend9:
-  %t49 = load i64, ptr %t8
-  ret i64 %t49
-trmcexit5:
-  %t50 = load i64, ptr %t0
-  ret i64 %t50
-}
-
-; mdk-module impl:List_ap
-define i64 @mdk_impl_List_ap(i64 %arg0, i64 %arg1) {
-entry:
-  %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
+  %t3 = ashr i64 %arg0, 1
+  %t4 = icmp eq i64 %t3, 281487861612544
   br i1 %t4, label %conyes5, label %connext5
 conyes5:
-  store i64 562949953421315, ptr %t0
+  store i64 3, ptr %t0
   br label %decend1
 connext5:
   br label %clause2
 clause2:
-  %t6 = and i64 %arg0, 1
-  %t7 = icmp eq i64 %t6, 0
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
-  %t9 = inttoptr i64 %arg0 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = inttoptr i64 %arg0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 16
-  %t14 = load i64, ptr %t13
-  %t15 = inttoptr i64 %arg0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 8
-  %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %arg0 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 16
-  %t20 = load i64, ptr %t19
-  %t21 = call i64 @mdk_impl_List_fmap(i64 %t17, i64 %arg1)
-  %t22 = call i64 @mdk_impl_List_ap(i64 %t20, i64 %arg1)
-  %t23 = call i64 @mdk_list_append(i64 %t21, i64 %t22)
-  store i64 %t23, ptr %t0
+  %t7 = ashr i64 %arg0, 1
+  %t8 = icmp eq i64 %t7, 281487861612545
+  br i1 %t8, label %conyes9, label %connext9
+conyes9:
+  store i64 5, ptr %t0
   br label %decend1
-connext8:
+connext9:
+  br label %clause6
+clause6:
+  %t10 = ashr i64 %arg0, 1
+  %t11 = icmp eq i64 %t10, 281487861612546
+  br i1 %t11, label %conyes12, label %connext12
+conyes12:
+  store i64 7, ptr %t0
+  br label %decend1
+connext12:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t24 = load i64, ptr %t0
-  ret i64 %t24
+  %t13 = load i64, ptr %t0
+  ret i64 %t13
 }
-
-; mdk-module program
-define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
-entry:
-  %t0 = ashr i64 %arg0, 1
-  %t1 = ashr i64 21, 1
-  %t2 = add i64 %t0, %t1
-  %t3 = shl i64 %t2, 1
-  %t4 = or i64 %t3, 1
-  ret i64 %t4
-}
-
-; mdk-module program
-@mdk_cc.program.1 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam.program.0 to i64)]
-; mdk-module program
-define i64 @mdk_lam.program.2(i64 %clos, i64 %arg0) {
-entry:
-  %t0 = ashr i64 %arg0, 1
-  %t1 = ashr i64 41, 1
-  %t2 = add i64 %t0, %t1
-  %t3 = shl i64 %t2, 1
-  %t4 = or i64 %t3, 1
-  ret i64 %t4
-}
-
-; mdk-module program
-@mdk_cc.program.3 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam.program.2 to i64)]
-; mdk-module program
-@mdk_dc.program.4 = internal constant [3 x i64] [i64 281474976710656, i64 ptrtoint (ptr @mdk_cc.program.3 to i64), i64 562949953421315]
-; mdk-module program
-@mdk_dc.program.5 = internal constant [3 x i64] [i64 281474976710656, i64 ptrtoint (ptr @mdk_cc.program.1 to i64), i64 ptrtoint (ptr @mdk_dc.program.4 to i64)]
-; mdk-module program
-@mdk_dc.program.6 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 562949953421315]
-; mdk-module program
-@mdk_dc.program.7 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc.program.6 to i64)]

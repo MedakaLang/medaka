@@ -204,68 +204,46 @@ entry:
 define i64 @mdk_debugListItems(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
-  %t4 = and i64 %arg1, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %arg1, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %arg1 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 281474976710657
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
+  %t3 = and i64 %arg1, 1
+  %t4 = icmp eq i64 %t3, 1
+  br i1 %t4, label %conyes5, label %connext5
+conyes5:
   store i64 1, ptr %t0
   br label %decend1
-connext11:
+connext5:
   br label %clause2
 clause2:
-  %t13 = and i64 %arg1, 1
-  %t14 = icmp eq i64 %t13, 1
-  br i1 %t14, label %discimm12, label %discbox12
-discimm12:
-  %t15 = ashr i64 %arg1, 1
-  br label %disccont12
-discbox12:
-  %t16 = inttoptr i64 %arg1 to ptr
+  %t6 = and i64 %arg1, 1
+  %t7 = icmp eq i64 %t6, 0
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
+  %t9 = inttoptr i64 %arg1 to ptr
+  %t10 = getelementptr i8, ptr %t9, i64 8
+  %t11 = load i64, ptr %t10
+  %t12 = inttoptr i64 %arg1 to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 16
+  %t14 = load i64, ptr %t13
+  %t15 = inttoptr i64 %arg1 to ptr
+  %t16 = getelementptr i8, ptr %t15, i64 8
   %t17 = load i64, ptr %t16
-  br label %disccont12
-disccont12:
-  %t18 = phi i64 [ %t15, %discimm12 ], [ %t17, %discbox12 ]
-  %t19 = icmp eq i64 %t18, 281474976710656
-  br i1 %t19, label %conyes20, label %connext20
-conyes20:
-  %t21 = inttoptr i64 %arg1 to ptr
-  %t22 = getelementptr i8, ptr %t21, i64 8
-  %t23 = load i64, ptr %t22
-  %t24 = inttoptr i64 %arg1 to ptr
-  %t25 = getelementptr i8, ptr %t24, i64 16
-  %t26 = load i64, ptr %t25
-  %t27 = inttoptr i64 %arg1 to ptr
-  %t28 = getelementptr i8, ptr %t27, i64 8
-  %t29 = load i64, ptr %t28
-  %t30 = inttoptr i64 %arg1 to ptr
-  %t31 = getelementptr i8, ptr %t30, i64 16
-  %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk_disp_debug_0_1(i64 %arg0, i64 %t29)
-  %t34 = call i64 @mdk_debugListItems(i64 %arg0, i64 %t32)
-  %t35 = ashr i64 %t33, 1
-  %t36 = ashr i64 %t34, 1
-  %t37 = add i64 %t35, %t36
-  %t38 = shl i64 %t37, 1
-  %t39 = or i64 %t38, 1
-  store i64 %t39, ptr %t0
+  %t18 = inttoptr i64 %arg1 to ptr
+  %t19 = getelementptr i8, ptr %t18, i64 16
+  %t20 = load i64, ptr %t19
+  %t21 = call i64 @mdk_disp_debug_0_1(i64 %arg0, i64 %t17)
+  %t22 = call i64 @mdk_debugListItems(i64 %arg0, i64 %t20)
+  %t23 = ashr i64 %t21, 1
+  %t24 = ashr i64 %t22, 1
+  %t25 = add i64 %t23, %t24
+  %t26 = shl i64 %t25, 1
+  %t27 = or i64 %t26, 1
+  store i64 %t27, ptr %t0
   br label %decend1
-connext20:
+connext8:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t40 = load i64, ptr %t0
-  ret i64 %t40
+  %t28 = load i64, ptr %t0
+  ret i64 %t28
 }
 
 ; mdk-module impl:Int_debug

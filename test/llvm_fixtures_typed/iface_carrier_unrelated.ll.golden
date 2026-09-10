@@ -201,34 +201,24 @@ entry:
 define i64 @mdk_unbox(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg0, 1
-  br label %disccont2
-discbox2:
+  %t2 = inttoptr i64 %arg0 to ptr
+  %t3 = load i64, ptr %t2
+  %t4 = icmp eq i64 %t3, 12884901888
+  br i1 %t4, label %conyes5, label %connext5
+conyes5:
   %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 12884901888
-  br i1 %t9, label %conyes10, label %connext10
-conyes10:
-  %t11 = inttoptr i64 %arg0 to ptr
-  %t12 = getelementptr i8, ptr %t11, i64 8
-  %t13 = load i64, ptr %t12
-  %t14 = inttoptr i64 %arg0 to ptr
-  %t15 = getelementptr i8, ptr %t14, i64 8
-  %t16 = load i64, ptr %t15
-  store i64 %t16, ptr %t0
+  %t7 = getelementptr i8, ptr %t6, i64 8
+  %t8 = load i64, ptr %t7
+  %t9 = inttoptr i64 %arg0 to ptr
+  %t10 = getelementptr i8, ptr %t9, i64 8
+  %t11 = load i64, ptr %t10
+  store i64 %t11, ptr %t0
   br label %decend1
-connext10:
+connext5:
   unreachable
 decend1:
-  %t17 = load i64, ptr %t0
-  ret i64 %t17
+  %t12 = load i64, ptr %t0
+  ret i64 %t12
 }
 
 ; mdk-module program
@@ -257,91 +247,59 @@ entry:
 define i64 @mdk_impl_Tri_sides(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg0, 1
-  br label %disccont2
-discbox2:
-  %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 0
-  br i1 %t9, label %conyes10, label %connext10
-conyes10:
+  %t2 = ashr i64 %arg0, 1
+  %t3 = icmp eq i64 %t2, 0
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 7, ptr %t0
   br label %decend1
-connext10:
+connext4:
   unreachable
 decend1:
-  %t11 = load i64, ptr %t0
-  ret i64 %t11
+  %t5 = load i64, ptr %t0
+  ret i64 %t5
 }
 
 ; mdk-module impl:Tri_tag
 define i64 @mdk_impl_Tri_tag(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg0, 1
-  br label %disccont2
-discbox2:
-  %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 0
-  br i1 %t9, label %conyes10, label %connext10
-conyes10:
+  %t2 = ashr i64 %arg0, 1
+  %t3 = icmp eq i64 %t2, 0
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 19, ptr %t0
   br label %decend1
-connext10:
+connext4:
   unreachable
 decend1:
-  %t11 = load i64, ptr %t0
-  ret i64 %t11
+  %t5 = load i64, ptr %t0
+  ret i64 %t5
 }
 
 ; mdk-module impl:Wrap_sides
 define i64 @mdk_impl_Wrap_sides(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg1, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg1, 1
-  br label %disccont2
-discbox2:
+  %t2 = inttoptr i64 %arg1 to ptr
+  %t3 = load i64, ptr %t2
+  %t4 = icmp eq i64 %t3, 4294967296
+  br i1 %t4, label %conyes5, label %connext5
+conyes5:
   %t6 = inttoptr i64 %arg1 to ptr
-  %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 4294967296
-  br i1 %t9, label %conyes10, label %connext10
-conyes10:
-  %t11 = inttoptr i64 %arg1 to ptr
-  %t12 = getelementptr i8, ptr %t11, i64 8
-  %t13 = load i64, ptr %t12
-  %t14 = inttoptr i64 %arg1 to ptr
-  %t15 = getelementptr i8, ptr %t14, i64 8
-  %t16 = load i64, ptr %t15
-  %t17 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %t16)
-  store i64 %t17, ptr %t0
+  %t7 = getelementptr i8, ptr %t6, i64 8
+  %t8 = load i64, ptr %t7
+  %t9 = inttoptr i64 %arg1 to ptr
+  %t10 = getelementptr i8, ptr %t9, i64 8
+  %t11 = load i64, ptr %t10
+  %t12 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %t11)
+  store i64 %t12, ptr %t0
   br label %decend1
-connext10:
+connext5:
   unreachable
 decend1:
-  %t18 = load i64, ptr %t0
-  ret i64 %t18
+  %t13 = load i64, ptr %t0
+  ret i64 %t13
 }
 
 ; mdk-module program

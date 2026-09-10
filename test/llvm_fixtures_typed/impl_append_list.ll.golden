@@ -176,135 +176,91 @@ entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_impl_List_append(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 ptrtoint (ptr @mdk_dc.program.3 to i64))
   %t1 = alloca i64
-  %t4 = and i64 %t0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %t0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %t0 to ptr
+  %t3 = and i64 %t0, 1
+  %t4 = icmp eq i64 %t3, 0
+  br i1 %t4, label %conyes5, label %connext5
+conyes5:
+  %t6 = inttoptr i64 %t0 to ptr
+  %t7 = getelementptr i8, ptr %t6, i64 8
   %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 281474976710656
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
-  %t12 = inttoptr i64 %t0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 8
-  %t14 = load i64, ptr %t13
-  %t15 = inttoptr i64 %t0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 16
+  %t9 = inttoptr i64 %t0 to ptr
+  %t10 = getelementptr i8, ptr %t9, i64 16
+  %t11 = load i64, ptr %t10
+  %t12 = and i64 %t11, 1
+  %t13 = icmp eq i64 %t12, 0
+  br i1 %t13, label %conyes14, label %connext14
+conyes14:
+  %t15 = inttoptr i64 %t11 to ptr
+  %t16 = getelementptr i8, ptr %t15, i64 8
   %t17 = load i64, ptr %t16
-  %t19 = and i64 %t17, 1
-  %t20 = icmp eq i64 %t19, 1
-  br i1 %t20, label %discimm18, label %discbox18
-discimm18:
-  %t21 = ashr i64 %t17, 1
-  br label %disccont18
-discbox18:
-  %t22 = inttoptr i64 %t17 to ptr
-  %t23 = load i64, ptr %t22
-  br label %disccont18
-disccont18:
-  %t24 = phi i64 [ %t21, %discimm18 ], [ %t23, %discbox18 ]
-  %t25 = icmp eq i64 %t24, 281474976710656
-  br i1 %t25, label %conyes26, label %connext26
-conyes26:
-  %t27 = inttoptr i64 %t17 to ptr
-  %t28 = getelementptr i8, ptr %t27, i64 8
+  %t18 = inttoptr i64 %t11 to ptr
+  %t19 = getelementptr i8, ptr %t18, i64 16
+  %t20 = load i64, ptr %t19
+  %t21 = and i64 %t20, 1
+  %t22 = icmp eq i64 %t21, 0
+  br i1 %t22, label %conyes23, label %connext23
+conyes23:
+  %t24 = inttoptr i64 %t20 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 8
+  %t26 = load i64, ptr %t25
+  %t27 = inttoptr i64 %t20 to ptr
+  %t28 = getelementptr i8, ptr %t27, i64 16
   %t29 = load i64, ptr %t28
-  %t30 = inttoptr i64 %t17 to ptr
-  %t31 = getelementptr i8, ptr %t30, i64 16
-  %t32 = load i64, ptr %t31
-  %t34 = and i64 %t32, 1
-  %t35 = icmp eq i64 %t34, 1
-  br i1 %t35, label %discimm33, label %discbox33
-discimm33:
-  %t36 = ashr i64 %t32, 1
-  br label %disccont33
-discbox33:
-  %t37 = inttoptr i64 %t32 to ptr
+  %t30 = and i64 %t29, 1
+  %t31 = icmp eq i64 %t30, 0
+  br i1 %t31, label %conyes32, label %connext32
+conyes32:
+  %t33 = inttoptr i64 %t29 to ptr
+  %t34 = getelementptr i8, ptr %t33, i64 8
+  %t35 = load i64, ptr %t34
+  %t36 = inttoptr i64 %t29 to ptr
+  %t37 = getelementptr i8, ptr %t36, i64 16
   %t38 = load i64, ptr %t37
-  br label %disccont33
-disccont33:
-  %t39 = phi i64 [ %t36, %discimm33 ], [ %t38, %discbox33 ]
-  %t40 = icmp eq i64 %t39, 281474976710656
-  br i1 %t40, label %conyes41, label %connext41
-conyes41:
-  %t42 = inttoptr i64 %t32 to ptr
-  %t43 = getelementptr i8, ptr %t42, i64 8
+  %t39 = inttoptr i64 %t0 to ptr
+  %t40 = getelementptr i8, ptr %t39, i64 8
+  %t41 = load i64, ptr %t40
+  %t42 = inttoptr i64 %t0 to ptr
+  %t43 = getelementptr i8, ptr %t42, i64 16
   %t44 = load i64, ptr %t43
-  %t45 = inttoptr i64 %t32 to ptr
-  %t46 = getelementptr i8, ptr %t45, i64 16
+  %t45 = inttoptr i64 %t44 to ptr
+  %t46 = getelementptr i8, ptr %t45, i64 8
   %t47 = load i64, ptr %t46
-  %t49 = and i64 %t47, 1
-  %t50 = icmp eq i64 %t49, 1
-  br i1 %t50, label %discimm48, label %discbox48
-discimm48:
-  %t51 = ashr i64 %t47, 1
-  br label %disccont48
-discbox48:
-  %t52 = inttoptr i64 %t47 to ptr
+  %t48 = inttoptr i64 %t44 to ptr
+  %t49 = getelementptr i8, ptr %t48, i64 16
+  %t50 = load i64, ptr %t49
+  %t51 = inttoptr i64 %t50 to ptr
+  %t52 = getelementptr i8, ptr %t51, i64 8
   %t53 = load i64, ptr %t52
-  br label %disccont48
-disccont48:
-  %t54 = phi i64 [ %t51, %discimm48 ], [ %t53, %discbox48 ]
-  %t55 = icmp eq i64 %t54, 281474976710656
-  br i1 %t55, label %conyes56, label %connext56
-conyes56:
-  %t57 = inttoptr i64 %t47 to ptr
+  %t54 = inttoptr i64 %t50 to ptr
+  %t55 = getelementptr i8, ptr %t54, i64 16
+  %t56 = load i64, ptr %t55
+  %t57 = inttoptr i64 %t56 to ptr
   %t58 = getelementptr i8, ptr %t57, i64 8
   %t59 = load i64, ptr %t58
-  %t60 = inttoptr i64 %t47 to ptr
+  %t60 = inttoptr i64 %t56 to ptr
   %t61 = getelementptr i8, ptr %t60, i64 16
   %t62 = load i64, ptr %t61
-  %t63 = inttoptr i64 %t0 to ptr
-  %t64 = getelementptr i8, ptr %t63, i64 8
-  %t65 = load i64, ptr %t64
-  %t66 = inttoptr i64 %t0 to ptr
-  %t67 = getelementptr i8, ptr %t66, i64 16
-  %t68 = load i64, ptr %t67
-  %t69 = inttoptr i64 %t68 to ptr
-  %t70 = getelementptr i8, ptr %t69, i64 8
-  %t71 = load i64, ptr %t70
-  %t72 = inttoptr i64 %t68 to ptr
-  %t73 = getelementptr i8, ptr %t72, i64 16
-  %t74 = load i64, ptr %t73
-  %t75 = inttoptr i64 %t74 to ptr
-  %t76 = getelementptr i8, ptr %t75, i64 8
-  %t77 = load i64, ptr %t76
-  %t78 = inttoptr i64 %t74 to ptr
-  %t79 = getelementptr i8, ptr %t78, i64 16
-  %t80 = load i64, ptr %t79
-  %t81 = inttoptr i64 %t80 to ptr
-  %t82 = getelementptr i8, ptr %t81, i64 8
-  %t83 = load i64, ptr %t82
-  %t84 = inttoptr i64 %t80 to ptr
-  %t85 = getelementptr i8, ptr %t84, i64 16
-  %t86 = load i64, ptr %t85
-  %t87 = call i64 @mdk_num_add(i64 %t65, i64 %t71)
-  %t88 = call i64 @mdk_num_add(i64 %t87, i64 %t77)
-  %t89 = call i64 @mdk_num_add(i64 %t88, i64 %t83)
-  store i64 %t89, ptr %t1
+  %t63 = call i64 @mdk_num_add(i64 %t41, i64 %t47)
+  %t64 = call i64 @mdk_num_add(i64 %t63, i64 %t53)
+  %t65 = call i64 @mdk_num_add(i64 %t64, i64 %t59)
+  store i64 %t65, ptr %t1
   br label %decend2
-connext56:
+connext32:
   store i64 1, ptr %t1
   br label %decend2
-connext41:
+connext23:
   store i64 1, ptr %t1
   br label %decend2
-connext26:
+connext14:
   store i64 1, ptr %t1
   br label %decend2
-connext11:
+connext5:
   store i64 1, ptr %t1
   br label %decend2
 decend2:
-  %t90 = load i64, ptr %t1
-  %t91 = ashr i64 %t90, 1
-  call void @mdk_print_int(i64 %t91)
+  %t66 = load i64, ptr %t1
+  %t67 = ashr i64 %t66, 1
+  call void @mdk_print_int(i64 %t67)
   ret i32 0
 }
 ; mdk-module impl:List_append

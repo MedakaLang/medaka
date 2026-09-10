@@ -1,0 +1,40 @@
+-- #2848 REGRESSION PIN: the reserved constructor spellings (Cons/Nil/Some/None/
+-- Ok/Err/Lt/Eq/Gt/True/False) are exempt from module mangling
+-- (compiler/backend/private_mangle.mdk), so a USER type that declares one reaches
+-- the emitter under the bare name and shares that name's reserved tag.
+-- compiler/tools/printer.mdk's own `Doc` type does exactly this with `Nil`.
+-- A representation classifier that resolved `Nil` through the RESERVED roster
+-- would read this type as the two-constructor list (Cons boxed | Nil immediate)
+-- and lower `render Nil` to a bare low-bit test -- which every immediate `Doc`
+-- (Line, Softline) then answers, silently taking the `Nil` arm.  The first
+-- attempt at this slice did exactly that and broke `medaka fmt`'s spacing.
+data Doc = Nil | Line | Softline | Text String | Cat Doc Doc
+
+-- a switch that covers ONLY the reserved spelling, plus a default: the shape
+-- where a covered-set subset check alone cannot save the classifier.
+isNil : Doc -> Int
+isNil Nil = 1
+isNil _ = 2
+
+render : Doc -> Int
+render Nil = 0
+render Line = 1
+render Softline = 2
+render (Text _) = 3
+render (Cat _ _) = 4
+
+-- a genuine list in the same program, so the built-in Cons/Nil are live too.
+sumL : List Int -> Int
+sumL [] = 0
+sumL (x :: rest) = x + sumL rest
+
+main =
+  isNil Nil
+    + isNil Line * 10
+    + isNil (Text "x") * 100
+    + render Nil * 1000
+    + render Line * 10000
+    + render Softline * 100000
+    + render (Text "y") * 1000000
+    + render (Cat Nil Line) * 10000000
+    + sumL [1, 2, 4] * 100000000

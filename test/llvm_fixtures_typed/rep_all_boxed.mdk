@@ -1,0 +1,17 @@
+-- #2848: a type whose every constructor CARRIES FIELDS, so every value of it is a
+-- boxed cell and the constructor switch loads the header word directly, with no
+-- immediate/boxed branch (DiscRep RepAllBox).  A tuple scrutinee is the same case
+-- reached by a different route ("$tuple", allocated as a cell for every non-empty
+-- tuple) and is exercised here too.
+data Shape = Circle Int | Rect Int Int
+
+area : Shape -> Int
+area (Circle r) = r * r * 3
+area (Rect w h) = w * h
+
+-- tuple head: "$tuple" is boxed by construction, arity >= 1.
+sumPair : (Int, Int) -> Int
+sumPair t = match t
+  (a, b) => a + b
+
+main = area (Circle 2) + area (Rect 3 4) * 10 + sumPair (7, 9) * 1000

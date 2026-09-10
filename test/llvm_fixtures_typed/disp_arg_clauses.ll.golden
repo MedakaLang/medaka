@@ -195,83 +195,39 @@ end3:
 define i64 @mdk_impl_Flag_eq(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
-  %t4 = and i64 %arg0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %arg0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %arg0 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 0
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
-  %t13 = and i64 %arg1, 1
-  %t14 = icmp eq i64 %t13, 1
-  br i1 %t14, label %discimm12, label %discbox12
-discimm12:
-  %t15 = ashr i64 %arg1, 1
-  br label %disccont12
-discbox12:
-  %t16 = inttoptr i64 %arg1 to ptr
-  %t17 = load i64, ptr %t16
-  br label %disccont12
-disccont12:
-  %t18 = phi i64 [ %t15, %discimm12 ], [ %t17, %discbox12 ]
-  %t19 = icmp eq i64 %t18, 0
-  br i1 %t19, label %conyes20, label %connext20
-conyes20:
+  %t3 = ashr i64 %arg0, 1
+  %t4 = icmp eq i64 %t3, 0
+  br i1 %t4, label %conyes5, label %connext5
+conyes5:
+  %t6 = ashr i64 %arg1, 1
+  %t7 = icmp eq i64 %t6, 0
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
   store i64 3, ptr %t0
   br label %decend1
-connext20:
+connext8:
   br label %clause2
-connext11:
+connext5:
   br label %clause2
 clause2:
-  %t23 = and i64 %arg0, 1
-  %t24 = icmp eq i64 %t23, 1
-  br i1 %t24, label %discimm22, label %discbox22
-discimm22:
-  %t25 = ashr i64 %arg0, 1
-  br label %disccont22
-discbox22:
-  %t26 = inttoptr i64 %arg0 to ptr
-  %t27 = load i64, ptr %t26
-  br label %disccont22
-disccont22:
-  %t28 = phi i64 [ %t25, %discimm22 ], [ %t27, %discbox22 ]
-  %t29 = icmp eq i64 %t28, 1
-  br i1 %t29, label %conyes30, label %connext30
-conyes30:
-  %t32 = and i64 %arg1, 1
-  %t33 = icmp eq i64 %t32, 1
-  br i1 %t33, label %discimm31, label %discbox31
-discimm31:
-  %t34 = ashr i64 %arg1, 1
-  br label %disccont31
-discbox31:
-  %t35 = inttoptr i64 %arg1 to ptr
-  %t36 = load i64, ptr %t35
-  br label %disccont31
-disccont31:
-  %t37 = phi i64 [ %t34, %discimm31 ], [ %t36, %discbox31 ]
-  %t38 = icmp eq i64 %t37, 1
-  br i1 %t38, label %conyes39, label %connext39
-conyes39:
+  %t10 = ashr i64 %arg0, 1
+  %t11 = icmp eq i64 %t10, 1
+  br i1 %t11, label %conyes12, label %connext12
+conyes12:
+  %t13 = ashr i64 %arg1, 1
+  %t14 = icmp eq i64 %t13, 1
+  br i1 %t14, label %conyes15, label %connext15
+conyes15:
   store i64 3, ptr %t0
   br label %decend1
-connext39:
-  br label %clause21
-connext30:
-  br label %clause21
-clause21:
+connext15:
+  br label %clause9
+connext12:
+  br label %clause9
+clause9:
   store i64 1, ptr %t0
   br label %decend1
 decend1:
-  %t40 = load i64, ptr %t0
-  ret i64 %t40
+  %t16 = load i64, ptr %t0
+  ret i64 %t16
 }

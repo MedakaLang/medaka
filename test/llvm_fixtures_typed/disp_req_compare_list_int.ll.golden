@@ -204,41 +204,30 @@ entry:
   %t15 = ptrtoint ptr %t12 to i64
   %t16 = call i64 @mdk_impl_MyList_compare(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t7, i64 %t15)
   %t17 = alloca i64
-  %t20 = and i64 %t16, 1
-  %t21 = icmp eq i64 %t20, 1
-  br i1 %t21, label %discimm19, label %discbox19
-discimm19:
-  %t22 = ashr i64 %t16, 1
-  br label %disccont19
-discbox19:
-  %t23 = inttoptr i64 %t16 to ptr
-  %t24 = load i64, ptr %t23
-  br label %disccont19
-disccont19:
-  %t25 = phi i64 [ %t22, %discimm19 ], [ %t24, %discbox19 ]
-  %t26 = icmp eq i64 %t25, 0
-  br i1 %t26, label %conyes27, label %connext27
-conyes27:
+  %t19 = ashr i64 %t16, 1
+  %t20 = icmp eq i64 %t19, 0
+  br i1 %t20, label %conyes21, label %connext21
+conyes21:
   store i64 3, ptr %t17
   br label %decend18
-connext27:
-  %t28 = icmp eq i64 %t25, 1
-  br i1 %t28, label %conyes29, label %connext29
-conyes29:
+connext21:
+  %t22 = icmp eq i64 %t19, 1
+  br i1 %t22, label %conyes23, label %connext23
+conyes23:
   store i64 5, ptr %t17
   br label %decend18
-connext29:
-  %t30 = icmp eq i64 %t25, 2
-  br i1 %t30, label %conyes31, label %connext31
-conyes31:
+connext23:
+  %t24 = icmp eq i64 %t19, 2
+  br i1 %t24, label %conyes25, label %connext25
+conyes25:
   store i64 7, ptr %t17
   br label %decend18
-connext31:
+connext25:
   unreachable
 decend18:
-  %t32 = load i64, ptr %t17
-  %t33 = ashr i64 %t32, 1
-  call void @mdk_print_int(i64 %t33)
+  %t26 = load i64, ptr %t17
+  %t27 = ashr i64 %t26, 1
+  call void @mdk_print_int(i64 %t27)
   ret i32 0
 }
 ; mdk-module impl:Int_compare
@@ -271,173 +260,96 @@ else13:
 define i64 @mdk_impl_MyList_compare(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
-  %t4 = and i64 %arg1, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %arg1, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %arg1 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 281474976710657
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
-  %t13 = and i64 %arg2, 1
-  %t14 = icmp eq i64 %t13, 1
-  br i1 %t14, label %discimm12, label %discbox12
-discimm12:
-  %t15 = ashr i64 %arg2, 1
-  br label %disccont12
-discbox12:
-  %t16 = inttoptr i64 %arg2 to ptr
-  %t17 = load i64, ptr %t16
-  br label %disccont12
-disccont12:
-  %t18 = phi i64 [ %t15, %discimm12 ], [ %t17, %discbox12 ]
-  %t19 = icmp eq i64 %t18, 281474976710657
-  br i1 %t19, label %conyes20, label %connext20
-conyes20:
+  %t3 = and i64 %arg1, 1
+  %t4 = icmp eq i64 %t3, 1
+  br i1 %t4, label %conyes5, label %connext5
+conyes5:
+  %t6 = and i64 %arg2, 1
+  %t7 = icmp eq i64 %t6, 1
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
   store i64 3, ptr %t0
   br label %decend1
-connext20:
+connext8:
   br label %clause2
-connext11:
+connext5:
   br label %clause2
 clause2:
-  %t23 = and i64 %arg1, 1
-  %t24 = icmp eq i64 %t23, 1
-  br i1 %t24, label %discimm22, label %discbox22
-discimm22:
-  %t25 = ashr i64 %arg1, 1
-  br label %disccont22
-discbox22:
-  %t26 = inttoptr i64 %arg1 to ptr
-  %t27 = load i64, ptr %t26
-  br label %disccont22
-disccont22:
-  %t28 = phi i64 [ %t25, %discimm22 ], [ %t27, %discbox22 ]
-  %t29 = icmp eq i64 %t28, 281474976710657
-  br i1 %t29, label %conyes30, label %connext30
-conyes30:
+  %t10 = and i64 %arg1, 1
+  %t11 = icmp eq i64 %t10, 1
+  br i1 %t11, label %conyes12, label %connext12
+conyes12:
   store i64 1, ptr %t0
   br label %decend1
-connext30:
-  br label %clause21
-clause21:
-  %t33 = and i64 %arg2, 1
-  %t34 = icmp eq i64 %t33, 1
-  br i1 %t34, label %discimm32, label %discbox32
-discimm32:
-  %t35 = ashr i64 %arg2, 1
-  br label %disccont32
-discbox32:
-  %t36 = inttoptr i64 %arg2 to ptr
-  %t37 = load i64, ptr %t36
-  br label %disccont32
-disccont32:
-  %t38 = phi i64 [ %t35, %discimm32 ], [ %t37, %discbox32 ]
-  %t39 = icmp eq i64 %t38, 281474976710657
-  br i1 %t39, label %conyes40, label %connext40
-conyes40:
+connext12:
+  br label %clause9
+clause9:
+  %t14 = and i64 %arg2, 1
+  %t15 = icmp eq i64 %t14, 1
+  br i1 %t15, label %conyes16, label %connext16
+conyes16:
   store i64 5, ptr %t0
   br label %decend1
-connext40:
-  br label %clause31
-clause31:
-  %t42 = and i64 %arg1, 1
-  %t43 = icmp eq i64 %t42, 1
-  br i1 %t43, label %discimm41, label %discbox41
-discimm41:
-  %t44 = ashr i64 %arg1, 1
-  br label %disccont41
-discbox41:
-  %t45 = inttoptr i64 %arg1 to ptr
+connext16:
+  br label %clause13
+clause13:
+  %t17 = and i64 %arg1, 1
+  %t18 = icmp eq i64 %t17, 0
+  br i1 %t18, label %conyes19, label %connext19
+conyes19:
+  %t20 = inttoptr i64 %arg1 to ptr
+  %t21 = getelementptr i8, ptr %t20, i64 8
+  %t22 = load i64, ptr %t21
+  %t23 = inttoptr i64 %arg1 to ptr
+  %t24 = getelementptr i8, ptr %t23, i64 16
+  %t25 = load i64, ptr %t24
+  %t26 = and i64 %arg2, 1
+  %t27 = icmp eq i64 %t26, 0
+  br i1 %t27, label %conyes28, label %connext28
+conyes28:
+  %t29 = inttoptr i64 %arg2 to ptr
+  %t30 = getelementptr i8, ptr %t29, i64 8
+  %t31 = load i64, ptr %t30
+  %t32 = inttoptr i64 %arg2 to ptr
+  %t33 = getelementptr i8, ptr %t32, i64 16
+  %t34 = load i64, ptr %t33
+  %t35 = inttoptr i64 %arg1 to ptr
+  %t36 = getelementptr i8, ptr %t35, i64 8
+  %t37 = load i64, ptr %t36
+  %t38 = inttoptr i64 %arg1 to ptr
+  %t39 = getelementptr i8, ptr %t38, i64 16
+  %t40 = load i64, ptr %t39
+  %t41 = inttoptr i64 %arg2 to ptr
+  %t42 = getelementptr i8, ptr %t41, i64 8
+  %t43 = load i64, ptr %t42
+  %t44 = inttoptr i64 %arg2 to ptr
+  %t45 = getelementptr i8, ptr %t44, i64 16
   %t46 = load i64, ptr %t45
-  br label %disccont41
-disccont41:
-  %t47 = phi i64 [ %t44, %discimm41 ], [ %t46, %discbox41 ]
-  %t48 = icmp eq i64 %t47, 281474976710656
-  br i1 %t48, label %conyes49, label %connext49
-conyes49:
-  %t50 = inttoptr i64 %arg1 to ptr
-  %t51 = getelementptr i8, ptr %t50, i64 8
-  %t52 = load i64, ptr %t51
-  %t53 = inttoptr i64 %arg1 to ptr
-  %t54 = getelementptr i8, ptr %t53, i64 16
-  %t55 = load i64, ptr %t54
-  %t57 = and i64 %arg2, 1
-  %t58 = icmp eq i64 %t57, 1
-  br i1 %t58, label %discimm56, label %discbox56
-discimm56:
-  %t59 = ashr i64 %arg2, 1
-  br label %disccont56
-discbox56:
-  %t60 = inttoptr i64 %arg2 to ptr
-  %t61 = load i64, ptr %t60
-  br label %disccont56
-disccont56:
-  %t62 = phi i64 [ %t59, %discimm56 ], [ %t61, %discbox56 ]
-  %t63 = icmp eq i64 %t62, 281474976710656
-  br i1 %t63, label %conyes64, label %connext64
-conyes64:
-  %t65 = inttoptr i64 %arg2 to ptr
-  %t66 = getelementptr i8, ptr %t65, i64 8
-  %t67 = load i64, ptr %t66
-  %t68 = inttoptr i64 %arg2 to ptr
-  %t69 = getelementptr i8, ptr %t68, i64 16
-  %t70 = load i64, ptr %t69
-  %t71 = inttoptr i64 %arg1 to ptr
-  %t72 = getelementptr i8, ptr %t71, i64 8
-  %t73 = load i64, ptr %t72
-  %t74 = inttoptr i64 %arg1 to ptr
-  %t75 = getelementptr i8, ptr %t74, i64 16
-  %t76 = load i64, ptr %t75
-  %t77 = inttoptr i64 %arg2 to ptr
-  %t78 = getelementptr i8, ptr %t77, i64 8
-  %t79 = load i64, ptr %t78
-  %t80 = inttoptr i64 %arg2 to ptr
-  %t81 = getelementptr i8, ptr %t80, i64 16
-  %t82 = load i64, ptr %t81
-  %t83 = call i64 @mdk_disp_compare_0_2(i64 %arg0, i64 %t73, i64 %t79)
-  %t84 = alloca i64
-  %t87 = and i64 %t83, 1
-  %t88 = icmp eq i64 %t87, 1
-  br i1 %t88, label %discimm86, label %discbox86
-discimm86:
-  %t89 = ashr i64 %t83, 1
-  br label %disccont86
-discbox86:
-  %t90 = inttoptr i64 %t83 to ptr
-  %t91 = load i64, ptr %t90
-  br label %disccont86
-disccont86:
-  %t92 = phi i64 [ %t89, %discimm86 ], [ %t91, %discbox86 ]
-  %t93 = icmp eq i64 %t92, 1
-  br i1 %t93, label %conyes94, label %connext94
-conyes94:
-  %t95 = call i64 @mdk_impl_MyList_compare(i64 %arg0, i64 %t76, i64 %t82)
-  store i64 %t95, ptr %t84
-  br label %decend85
-connext94:
-  store i64 %t83, ptr %t84
-  br label %decend85
-decend85:
-  %t96 = load i64, ptr %t84
-  store i64 %t96, ptr %t0
+  %t47 = call i64 @mdk_disp_compare_0_2(i64 %arg0, i64 %t37, i64 %t43)
+  %t48 = alloca i64
+  %t50 = ashr i64 %t47, 1
+  %t51 = icmp eq i64 %t50, 1
+  br i1 %t51, label %conyes52, label %connext52
+conyes52:
+  %t53 = call i64 @mdk_impl_MyList_compare(i64 %arg0, i64 %t40, i64 %t46)
+  store i64 %t53, ptr %t48
+  br label %decend49
+connext52:
+  store i64 %t47, ptr %t48
+  br label %decend49
+decend49:
+  %t54 = load i64, ptr %t48
+  store i64 %t54, ptr %t0
   br label %decend1
-connext64:
+connext28:
   call void @mdk_nonexhaustive_match()
   unreachable
-connext49:
+connext19:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t97 = load i64, ptr %t0
-  ret i64 %t97
+  %t55 = load i64, ptr %t0
+  ret i64 %t55
 }
 
 ; mdk-module program

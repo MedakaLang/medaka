@@ -5332,9 +5332,10 @@ emitRefutableCsLet : Emit ->
   OrdMap (String, LTy)
 emitRefutableCsLet e env pat sv = match letElseHead pat
   Some (c, a, fieldPats) =>
-    let tag = loadDiscriminant e sv
+    let rep = discRepOfHead e c a [c]
+    let tag = discReg e rep sv
     let cmp = freshReg e
-    let _ = emit e "  \{cmp} = icmp eq i64 \{tag}, \{intToString (cellTag e c)}"
+    let _ = emit e "  \{cmp} = icmp eq i64 \{tag}, \{discExpected e rep c}"
     let n = intToString (freshLocal e)
     let ok = "letrefok" ++ n
     let no = "letrefno" ++ n
@@ -9931,6 +9932,25 @@ loadDiscriminant e word =
   let _ = emit e "  \{d} = phi i64 [ \{iv}, %\{imm} ], [ \{bv}, %\{box} ]"
   d
 
+-- the immediate half of `loadDiscriminant`, unguarded: untag a word KNOWN to be an
+-- immediate nullary ctor.  Sound only where every constructor of the scrutinee's
+-- type is nullary (DiscRep RepAllImm) — on a boxed word this reads a shifted
+-- pointer as a tag and silently takes a wrong arm.
+loadImmTag : Emit -> String -> String
+loadImmTag e word =
+  let t = freshReg e
+  let _ = emit e "  \{t} = ashr i64 \{word}, 1"
+  t
+
+-- the low tag bit of a value word: 1 = immediate nullary ctor, 0 = boxed cell
+-- pointer.  For a two-constructor type with exactly one of each (RepTwoSplit)
+-- this bit alone identifies the constructor, so it IS the discriminant.
+loadLowBit : Emit -> String -> String
+loadLowBit e word =
+  let t = freshReg e
+  let _ = emit e "  \{t} = and i64 \{word}, 1"
+  t
+
 -- load field `idx` (offset 8*(idx+1)) of a cell given its pointer word.
 loadField : Emit -> String -> Int -> String
 loadField e ptrWord idx =
@@ -10436,21 +10456,21 @@ emitRefutMatch e env (PCon "True" []) v body failL =
 emitRefutMatch e env (PCon "False" []) v body failL =
   emitRefutMatch e env (PLit (LBool False)) v body failL
 emitRefutMatch e env (PCon c args) v body failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e c)) failL
+  let rep = discRepOfHead e c (lengthS args) [c]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep c) failL
   emitRefutFields e env args v body failL 0
 -- list cons cell: test the discriminant is "Cons", then recurse on head/tail.
 emitRefutMatch e env (PCons h t) v body failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e "Cons")) failL
+  let rep = discRepOfHead e "Cons" 2 ["Cons"]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
   emitRefutFields e env [h, t] v body failL 0
 emitRefutMatch e env (PList []) v _ failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e "Nil")) failL
+  let rep = discRepOfHead e "Nil" 0 ["Nil"]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep "Nil") failL
   env
 emitRefutMatch e env (PList (p :: ps)) v body failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e "Cons")) failL
+  let rep = discRepOfHead e "Cons" 2 ["Cons"]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
   emitRefutFields e env [p, PList ps] v body failL 0
 emitRefutMatch e env p _ _ _ =
   gapEnv
@@ -10547,7 +10567,8 @@ emitSwitch e env roots arms (foc :: rest) ((CTBranch HUnit sub) :: _) dft slot e
 emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft slot endL ftL rty =
   match conHeadInfo h
     Some _ =>
-      let tagReg = loadDiscriminant e foc
+      let rep = switchDiscRep e branches
+      let tagReg = discReg e rep foc
       let exh = switchIsExhaustive e (coveredCtorNames branches)
       emitConChain
         e
@@ -10557,6 +10578,7 @@ emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft s
         foc
         rest
         tagReg
+        rep
         branches
         dft
         slot
@@ -10647,9 +10669,190 @@ coveredCtorNames ((CTBranch h _) :: rest) = match conHeadInfo h
   Some (c, _) => c :: coveredCtorNames rest
   None => coveredCtorNames rest
 
--- the constructor-switch test chain: compare the discriminant word (immediate or
--- boxed, via loadDiscriminant) against each branch's composite (type, ctor) tag
--- (`cellTag`); on a match, descend with the matched
+-- #2848: how a scrutinee's own constructor roster lets a discriminant test be
+-- cheaper than the generic immediate/boxed phi dance (`loadDiscriminant`).
+--   RepAllImm     every ctor of the type is nullary ⇒ every value is an immediate
+--                 ⇒ `ashr 1` alone recovers the tag, no branch, no blocks.
+--   RepAllBox     every ctor takes fields ⇒ every value is a boxed cell ⇒ the
+--                 header `load` alone is the tag.
+--   RepTwoSplit c exactly two ctors, `c` nullary and the other boxed ⇒ the low tag
+--                 bit ALONE names the constructor, so the test compares that bit
+--                 against 1 (for `c`) or 0 — no tag word is materialised at all.
+--   RepMixed      unproven (≥3 ctors of both shapes, or a roster that cannot be
+--                 determined) ⇒ today's generic `loadDiscriminant`, unchanged.
+-- Every case is derived POSITIVELY from the constructor table; anything not proved
+-- lands in RepMixed.  Getting one wrong is not a crash but silent wrongness (an
+-- `ashr` on a pointer word) or a segfault (a `load` through an immediate).
+data DiscRep = RepAllImm | RepAllBox | RepTwoSplit String | RepMixed
+
+-- the declared arity of a RESERVED built-in constructor — the ones `ctorMap` has
+-- no entry for (List/Option/Result/Ordering, mirroring `reservedTag`'s roster).
+-- `ctorArity` cannot answer for these: it returns 0 for any absent name, which is
+-- indistinguishable from a genuinely nullary ctor and would classify `Cons` as an
+-- immediate.  So membership is asked FIRST and this table answers second.
+reservedCtorArity : String -> Option Int
+reservedCtorArity name =
+  if name == "Cons" then
+    Some 2
+  else if contains name ["Some", "Ok", "Err"] then
+    Some 1
+  else if contains name ["Nil", "None", "Lt", "Eq", "Gt"] then
+    Some 0
+  else
+    None
+
+-- the field count of a constructor when it can be established, `None` when it
+-- cannot.  A name BOTH tables claim (a user type declaring one of the exempt
+-- reserved spellings) counts as unestablished unless they agree, since the two
+-- tables would then describe different values under one tag.
+ctorArityOf : Emit -> String -> Option Int
+ctorArityOf e name = match reservedCtorArity name
+  Some r =>
+    if isCtor e name then
+      if ctorArity e name == r then Some r else None
+    else
+      Some r
+  None => if isCtor e name then Some (ctorArity e name) else None
+
+-- the representation of ONE constructor: nullary ⇒ immediate word, otherwise a
+-- boxed cell.  An unestablished arity is claimed by NEITHER predicate, which
+-- lands its type in RepMixed.
+ctorIsImmediate : Emit -> String -> Bool
+ctorIsImmediate e name = match ctorArityOf e name
+  Some a => a == 0
+  None => False
+
+ctorIsBoxed : Emit -> String -> Bool
+ctorIsBoxed e name = match ctorArityOf e name
+  Some a => a > 0
+  None => False
+
+-- classify a type from its FULL constructor roster (never a covered subset — a
+-- branch list that omits a ctor still has to lower a value of that ctor safely).
+ctorRepOfRoster : Emit -> List String -> DiscRep
+ctorRepOfRoster e roster =
+  let n = listLen roster
+  let imms = filterList (ctorIsImmediate e) roster
+  let ni = listLen imms
+  let nb = listLen (filterList (ctorIsBoxed e) roster)
+  if n == 0 || ni + nb < n then
+    RepMixed
+  else if nb == 0 then
+    RepAllImm
+  else if ni == 0 then
+    RepAllBox
+  else if n == 2 then match imms
+    [c] => RepTwoSplit c
+    _ => RepMixed
+  else
+    RepMixed
+
+-- true when every name in `names` also appears in `roster`.
+coveredByRoster : List String -> List String -> Bool
+coveredByRoster roster names =
+  not (anyList (c => not (contains c roster)) names)
+
+-- two ctor-name lists denote the same roster (order is not significant).
+sameRoster : List String -> List String -> Bool
+sameRoster a b = listLen a == listLen b && coveredByRoster b a
+
+-- every constructor in `roster` resolves back to type `ty`.  False means some
+-- OTHER type also declares one of these names, and `ctorTypeOf` keeps only the
+-- first such type — so this roster is not provably the one a scrutinee has.
+rosterOwnedBy : Emit -> String -> List String -> Bool
+rosterOwnedBy e ty roster =
+  not
+    (anyList
+      (r => match ctorTypeOf e r
+        Some t => t /= ty
+        None => True)
+      roster)
+
+-- The roster a ctor NAME determines, or `None` when the name does not determine
+-- exactly one.  `rosterOwning` is the wrong lookup to reason about a value's
+-- REPRESENTATION with: it answers the reserved built-in roster FIRST, and the
+-- reserved constructor names are exempt from module mangling
+-- (private_mangle.mdk), so a user type that declares one of them reaches the
+-- emitter under the bare name too — compiler/tools/printer.mdk's `Doc` really
+-- does declare a `Nil`, and reading it as the list `Nil` would make every
+-- immediate `Doc` (Line/Softline/…) answer a low-bit test for `Nil`.  So: a name
+-- the ctor table knows is resolved through the table, and a name BOTH tables
+-- claim must have them agree.
+unambiguousRoster : Emit -> String -> Option (List String)
+unambiguousRoster e name =
+  if isCtor e name then match ctorTypeOf e name
+    None => None
+    Some ty =>
+      let t = ctorsOfType e ty
+      if isNonEmptyL t && rosterOwnedBy e ty t then match reservedRosterOf name
+        None => Some t
+        Some r => if sameRoster r t then Some t else None
+      else
+        None
+  else
+    reservedRosterOf name
+
+-- The roster of the type a constructor test is testing, taken from the first
+-- covered ctor name that determines one.  Trying every covered name (not just
+-- the head) is what keeps a `Nil`-first list switch on the fast path: `Nil` is
+-- ambiguous, `Cons` is not, and either one identifies the same type.
+resolveRoster : Emit -> List String -> Option (List String)
+resolveRoster _ [] = None
+resolveRoster e (c :: rest) = match unambiguousRoster e c
+  Some r => Some r
+  None => resolveRoster e rest
+
+-- classify the scrutinee of a constructor test from one head constructor `name`
+-- (arity `a`) plus the full set of ctor names the test's own branches cover.
+-- The covered set is a SOUNDNESS guard, not an optimisation: the roster is looked
+-- up from ONE name, so a branch naming a ctor outside that roster would mean the
+-- roster does not describe the scrutinee and no case may be claimed.
+discRepOfHead : Emit -> String -> Int -> List String -> DiscRep
+discRepOfHead e name a covered = match resolveRoster e covered
+  Some roster =>
+    if coveredByRoster roster covered then
+      ctorRepOfRoster e roster
+    else
+      RepMixed
+  -- No roster: two constructor sets live entirely outside the ctor table, and
+  -- both are decided by facts `cellTag`/`emitCtorAlloc` already hardcode.
+  -- `$tuple` allocates a cell for every non-empty tuple ⇒ boxed; an EMPTY tuple
+  -- would be an immediate, so guard it rather than assume `HUnit` caught it.
+  -- `True`/`False` are the hardcoded immediate words 3 and 1.
+  None =>
+    if name == "$tuple" && a >= 1 && coveredByRoster ["$tuple"] covered then
+      RepAllBox
+    else if contains name ["True", "False"]
+      && coveredByRoster ["True", "False"] covered then
+      RepAllImm
+    else
+      RepMixed
+
+-- classify the scrutinee of a whole CTSwitch from its branch list.
+switchDiscRep : Emit -> List CTBranch -> DiscRep
+switchDiscRep _ [] = RepMixed
+switchDiscRep e (branches@((CTBranch h _) :: _)) = match conHeadInfo h
+  Some (c, a) => discRepOfHead e c a (coveredCtorNames branches)
+  None => RepMixed
+
+-- emit the discriminant `rep` licenses for scrutinee word `word`, returning the
+-- register a test compares.  RepTwoSplit's register is the LOW BIT, not a tag —
+-- pair it only with `discExpected`, never with a bare `cellTag`.
+discReg : Emit -> DiscRep -> String -> String
+discReg e RepAllImm word = loadImmTag e word
+discReg e RepAllBox word = loadTag e word
+discReg e (RepTwoSplit _) word = loadLowBit e word
+discReg e RepMixed word = loadDiscriminant e word
+
+-- the constant a `discReg` register is compared against to test for ctor `c`.
+discExpected : Emit -> DiscRep -> String -> String
+discExpected _ (RepTwoSplit imm) c = if c == imm then "1" else "0"
+discExpected e _ c = intToString (cellTag e c)
+
+-- the constructor-switch test chain: compare the discriminant register `tagReg`
+-- (produced by `discReg` for `rep`) against the constant `rep` says identifies
+-- each branch's constructor — the composite `cellTag` in general, the low tag bit
+-- alone under RepTwoSplit; on a match, descend with the matched
 -- cell's fields as the new leading columns; on exhausting the branches, take the
 -- default (focus dropped) — unless `exh` proves the default is unreachable, in
 -- which case the base case below emits a bare `unreachable` instead of calling
@@ -10661,6 +10864,7 @@ emitConChain : Emit ->
   String ->
   List String ->
   String ->
+  DiscRep ->
   List CTBranch ->
   CTree ->
   String ->
@@ -10669,17 +10873,16 @@ emitConChain : Emit ->
   Ref LTy ->
   Bool ->
   Unit
-emitConChain e env roots arms _ rest _ [] dft slot endL ftL rty exh
+emitConChain e env roots arms _ rest _ _ [] dft slot endL ftL rty exh
   | exh && ftL == "" = match dft
     CTFail => emit e "  unreachable"
     _ => emitTree e env roots arms rest slot endL ftL rty dft
   | otherwise = emitTree e env roots arms rest slot endL ftL rty dft
-emitConChain e env roots arms foc rest tagReg ((CTBranch h sub) :: more) dft slot endL ftL rty exh =
+emitConChain e env roots arms foc rest tagReg rep ((CTBranch h sub) :: more) dft slot endL ftL rty exh =
   match conHeadInfo h
     Some (c, a) =>
       let cmp = freshReg e
-      let _ =
-        emit e "  \{cmp} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      let _ = emit e "  \{cmp} = icmp eq i64 \{tagReg}, \{discExpected e rep c}"
       let n = intToString (freshLocal e)
       let yes = "conyes" ++ n
       let next = "connext" ++ n
@@ -10696,6 +10899,7 @@ emitConChain e env roots arms foc rest tagReg ((CTBranch h sub) :: more) dft slo
         foc
         rest
         tagReg
+        rep
         more
         dft
         slot
