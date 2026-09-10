@@ -1655,6 +1655,7 @@ overrideScopedMethods : List Decl -> Map String (List (Ident, (IfaceRef, List St
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
 ownerCandidates : List String -> List (String, RecordInfo)
+ownerQualifiedHead : String -> String -> String
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
 pairIface : String -> Int -> List (IfaceRef, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
@@ -1857,6 +1858,7 @@ recordNumLitImplObligation : Mono -> Mono
 recordNumLitObligationGuarded : TcEnv -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordOwnerModule : RecordInfo -> Option String
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit
 recordParamRowAtoms : TyConOrigin -> String -> List (List Atom) -> Unit
@@ -2145,6 +2147,7 @@ stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
 stampTailDecl : Map String Int -> Decl -> Decl
 stampTailDecls : Map String Int -> List Decl -> List Decl
+stampedRecordHead : String -> RecordInfo -> String
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneShadowDomainAt : String -> Int -> Option Mono
 standaloneShadowScheme : String -> Option Mono

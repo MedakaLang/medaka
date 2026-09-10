@@ -54,6 +54,7 @@ import frontend.ast.{
   TyConOrigin(..),
   Ns(..),
   Ident(..),
+  identOriginFold,
   mkIdent,
   -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
   -- type?" test below is written against.  Its doc-comment derives why an
@@ -256,7 +257,7 @@ import frontend.exhaust.{
   oGetCtors,
 }
 import support.char.{isUpper}
-import backend.private_mangle.{mangledName}
+import backend.private_mangle.{isReservedCtor, mangledName}
 import support.scc.{tarjanSCCs}
 import support.ordmap.{
   OrdMap,
@@ -13170,13 +13171,61 @@ inferFieldAccess env e fname r
     match resolveFieldRecord te fname
       None => freshVar ()
       Some (rname, ri) =>
-        r := rname
+        r := stampedRecordHead rname ri
         let ft = inferFieldOfRecord te rname ri fname
         -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
         -- on purpose — that call is what unifies `te` with the record's result
         -- type, so only here does the receiver's head name the type whose
         -- constructor set has to be asked about.
         fieldSelectionWellTyped te rname ri fname ft
+
+-- ── #2839: the stamp names the record by IDENTITY, not by a spelling ─────────
+-- The head this node carries downstream is the selected record's
+-- OWNER-QUALIFIED name (`<owner module>__<record name>`), never the bare
+-- registry key.
+--
+-- Both emitters pick a field's offset by `(record head, label)`, so two modules
+-- declaring same-named records with their fields in opposite orders are
+-- distinguishable at the emitter only if this stamp distinguishes them.  The
+-- registry key alone does not: it is the record's DECL name, which is bare
+-- unless `backend/private_mangle.mdk` renamed it first.  Deriving the
+-- qualification from the record's OWN declaring module makes the stamp's
+-- cross-module identity a property of the declaration instead of a side effect
+-- of the mangler having run before elaboration
+-- (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §1 L2).
+--
+-- The spelling is the MANGLER'S, and it reuses the mangler's own two rename
+-- decisions rather than restating them, so the two cannot drift: a reserved
+-- fixed-tag constructor is never renamed, and a key already carrying its owner's
+-- prefix has already been renamed.  On the emit path (mangle, then elaborate)
+-- every record key is already `<owner>__<name>`, so this is the identity
+-- function and the emitted IR is byte-unchanged; on an unmangled elaboration it
+-- supplies the identity the bare key never had.
+stampedRecordHead : String -> RecordInfo -> String
+stampedRecordHead rname ri = match recordOwnerModule ri
+  None => rname
+  Some mid => ownerQualifiedHead mid rname
+
+-- The module that DECLARED the selected record, read off the result head
+-- `registerRecordInfoKeyed` minted from that declaration's own origin — the same
+-- end-to-end pairing `recordCandIsReceiverDecl` compares.  `None` is honest
+-- absence: the flat/single-file driver stamps no origins, and it mangles
+-- nothing either, so there the key already IS the emitted name.
+recordOwnerModule : RecordInfo -> Option String
+recordOwnerModule ri = match headTyconMono (recordResultMono ri)
+  None => None
+  Some hk => match headKeyIdent hk
+    None => None
+    Some (Ident _ io _) => identOriginFold None (mid => Some mid) io
+
+-- The name the mangler gives — or has already given — a record head owned by
+-- `mid`.  Idempotent, because the qualification it applies is the one whose
+-- presence it tests for.
+ownerQualifiedHead : String -> String -> String
+ownerQualifiedHead mid name
+  | isReservedCtor name = name
+  | isMangledFor mid name = name
+  | otherwise = mangledName mid name
 
 -- `cell.value` projects a Ref's contents.  Unify the receiver with `Ref a`
 -- (forcing it, like the reference's `(Ref a).value → a` special case) and return
@@ -14070,7 +14119,7 @@ inferRecordUpdateField env base fields fn r =
       -- read it to pick the record by name, instead of guessing from the first
       -- update label (which picks the wrong record — and so the wrong slot — when
       -- two records share a field name at different indices).
-      r := rname
+      r := stampedRecordHead rname ri
       inferRecordUpdatePicked rname bt env fields ri
 
 inferRecordUpdatePicked : String ->
