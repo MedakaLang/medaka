@@ -181,16 +181,16 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # At -O2 the three public sign wrappers are intentionally inlined into main;
 # their emitted bodies remain closed above.  These non-inlined leaves prove the
 # final linked topology still contains ingress and the ladder's complete path.
-# secretNonzeroBorrow and reduceFixed are deliberately NOT in this list.  Both
-# are branch-free or public-index-bounded, so -O2 is free to unroll and inline
-# them, and whether it does is a cost-threshold artifact rather than anything
-# about secrets.  Their shapes are pinned structurally in the IR below, where
-# the definitions always exist.
+# secretNonzeroBorrow, reduceFixed and secretAffine are deliberately NOT in this
+# list.  All three are branch-free or public-index-bounded, so -O2 is free to
+# unroll and inline them, and whether it does is a cost-threshold artifact
+# rather than anything about secrets.  Their shapes are pinned structurally in
+# the IR below, where the definitions always exist.
 for symbol in \
   mdk_lib_scalar__scSecretCandidate mdk_lib_scalar__scanSecretBytes \
   mdk_lib_scalar__secretBelowNBorrow mdk_lib_field__carryFoldRound \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
-  mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__secretAffine \
+  mdk_lib_secp256k1__pointDoubleComplete \
   mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains ingress and complete-ladder helper topology'
@@ -216,6 +216,29 @@ extract_ir_function reduceFixed "$IR" "$WORK/reduceFixed.ll"
 [ "$(grep -F -c '@mdk_lib_scalar__carryAll(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
 [ "$(grep -F -c '@mdk_lib_scalar__foldOnce(' "$WORK/reduceFixed.ll" || true)" -eq 4 ] || fail 'fixed reduction runs four folds'
 pass 'emitted fixed reduction runs its schedule unconditionally'
+
+# secretAffine converts the ladder's Jacobian result to affine.  Its caller has
+# already established the point is non-infinity, so the property is that it runs
+# exactly one inversion over a straight line with no Z==0 branch -- not that the
+# linker keeps it as a distinct symbol.  It moved out of the linked-survival list
+# above when its emitted body lost the generic immediate-vs-boxed discriminant
+# split (the JPoint roster is always boxed, so that arm was dead), which took the
+# body under -O2's inline threshold at its sole call site, publicPointForSecret --
+# still linked, as are scalarLadder and both complete point operations, so the
+# ladder topology the list exists to prove is unaffected.  Nothing emitter-side
+# steers that decision: the emitted IR carries no inline attributes at all.  Pin
+# the shape here instead, where the definition always exists.  The one surviving
+# branch must be a comparison against a compile-time constructor tag, never
+# against a value: an integer-literal right operand is what makes it so.
+extract_ir_function secretAffine "$IR" "$WORK/secretAffine.ll"
+[ "$(grep -c 'br i1' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion branches exactly once'
+[ "$(grep -E -c '= icmp ' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion makes exactly one comparison'
+[ "$(grep -E -c '= icmp eq i64 %t[0-9]+, [0-9]+$' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion branches on a constant constructor tag'
+[ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/secretAffine.ll" || true)" -eq 0 ] || fail 'secret affine conversion makes no value comparisons'
+[ "$(grep -F -c 'call i64 @mdk_lib_field__feInverse(' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion runs exactly one inversion'
+[ "$(grep -F -c 'call i64 @mdk_lib_field__feSquare(' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion runs exactly one squaring'
+[ "$(grep -F -c 'call i64 @mdk_lib_field__feMul(' "$WORK/secretAffine.ll" || true)" -eq 3 ] || fail 'secret affine conversion runs exactly three multiplications'
+pass 'emitted secret affine conversion is one unconditional inversion over a constant-tag branch'
 
 extract_ir_function scalarLadder "$IR" "$WORK/scalarLadder.ll"
 [ "$(grep -c 'br i1' "$WORK/scalarLadder.ll" || true)" -eq 3 ] || fail 'scalar ladder has exactly its fixed loop/control topology'

@@ -172,9 +172,28 @@ helper_ir_ok() {
     [ "$copies" -eq "$expected_copies" ] && [ "$total" -eq "$expected_total" ]
 }
 
+# The opaque-value accessors -- rawFe over `Fe (Array Int)` and rawSc over its
+# scalar counterpart -- unwrap a single-constructor box and return the limbs.
+# The only control they may hold is representation dispatch, never anything
+# derived from the limbs.
+#
+# The count fell from two branches to one when the emitter began loading a
+# constructor discriminant directly for a roster it knows is always boxed.  The
+# branch that went was the generic immediate-vs-boxed split: its two arms fetched
+# the same tag word two different ways into a phi, did no different work, and had
+# no failure arm, so nothing that could fail safe was removed with it.  Both
+# accessors moved together and both are at one; measured pre-sprint and post, the
+# blocks that disappear are exactly the discimm/discbox/disccont triple and the
+# surviving conyes/connext pair compares the same constructor tag against the same
+# compile-time constant.  A count alone would now be strictly weaker than the two
+# it replaces, so the surviving comparison is pinned as well: exactly one, against
+# an integer literal.  A comparison on a limb has a register right operand and
+# cannot satisfy that.
 raw_accessor_ir_ok() {
   body=$1
-  [ "$(grep -c 'br i1' "$body" || true)" -eq 2 ] &&
+  [ "$(grep -c 'br i1' "$body" || true)" -eq 1 ] &&
+    [ "$(grep -E -c '= icmp ' "$body" || true)" -eq 1 ] &&
+    [ "$(grep -E -c '= icmp eq i64 %t[0-9]+, [0-9]+$' "$body" || true)" -eq 1 ] &&
     [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)" -eq 0 ] &&
     [ "$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)" -eq 0 ] &&
     [ "$(grep -E -c 'call i64 @mdk_(impl_Array_index|array__set(InPlace)?|array_make|array_copy)\(' "$body" || true)" -eq 0 ]
