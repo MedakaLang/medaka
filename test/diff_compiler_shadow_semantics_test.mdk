@@ -1022,12 +1022,15 @@ warnChecks = [
   },
 ]
 
--- | `Some` when a row's fixture disagrees with its `WarnCheck` — asserted
--- against `check`+`run`+`build`'s stderr together, mirroring `gradeValue`'s
--- treatment of the built binary as its own separate evidence.
+-- | `True` when `w` is the `WarnCheck` for the row entry `e` — a `find`
+-- predicate, given a `WarnCheck`'s own `entry` field is ambiguous against
+-- `Row`'s and `Graded`'s without a type annotation on the lambda.
 warnCheckFor : String -> WarnCheck -> Bool
 warnCheckFor e w = w.entry == e
 
+-- | `Some` when a row's fixture disagrees with its `WarnCheck` — asserted
+-- against `check`+`run`+`build`'s stderr together, mirroring `gradeValue`'s
+-- treatment of the built binary as its own separate evidence.
 warnFailure : Agreement -> WarnCheck -> Option String
 warnFailure a w =
   let needle = w.needle
@@ -1201,6 +1204,26 @@ test "every fixture in the corpus is wired into the table" = match corpusUnits
     orphans =>
       fail
         "present in \{corpus} but not wired into this gate's table: \{debug orphans}"
+
+-- `warnChecks` is looked up by `find (warnCheckFor r.entry) warnChecks` while
+-- sweeping `table` (`gradeOne`), so an entry naming no row is never visited
+-- and its assertion never runs — silently, not as a red run. This is the
+-- coverage floor for THAT roster, the `warnChecks` peer of the test above.
+warnCheckEntry : WarnCheck -> String
+warnCheckEntry w = w.entry
+
+warnCheckEntries : List String
+warnCheckEntries = map warnCheckEntry warnChecks
+
+tableEntries : List String
+tableEntries = map rowEntry table
+
+test "every warnChecks entry names a row in the table" =
+  match filter (e => not (any (te => te == e) tableEntries)) warnCheckEntries
+    [] => pass
+    orphans =>
+      fail
+        "warnChecks names an entry with no row in `table`, so its assertion never runs: \{debug orphans}"
 
 test "check, run and build agree with every cell's pinned verdict and value" =
   sweep
