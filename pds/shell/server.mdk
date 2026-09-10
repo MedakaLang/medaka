@@ -156,8 +156,16 @@ maxConcurrentConnections = 256
    for the whole of that. So this ceiling is deliberately a small fraction of
    that one. The un-framed state is not where a healthy connection spends any
    measurable time — a client that has sent a request has sent its headers
-   with it — so a fraction bounds an attacker without bounding legitimate
-   concurrency.
+   with it.
+
+   This ceiling does NOT bound an attacker without bounding legitimate
+   concurrency (#2816): it is an admission gate ahead of
+   `maxConcurrentConnections`, not a carved-out share of it, so once 64
+   connections sit un-framed the 65th is refused regardless of how much of
+   the 256 is free — legitimate callers included. An un-framed connection
+   reaches no rate-limit class, so a single reconnecting source can hold the
+   gate shut indefinitely at no cost to itself. Closing that gap needs a
+   ceiling that distinguishes sources, which this one does not; see #2816.
 
    The charge is global rather than per-caller because no peer identity
    exists before headers: `accept` yields a `Connection` and the runtime has
