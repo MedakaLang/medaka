@@ -38218,7 +38218,7 @@ ifaceMethodTyOf name ((IfaceMethod n ty _ _) :: rest)
 -- that cannot be read cannot be shown harmless, which is what `schemesAgree` then does
 -- with it), and `None` when no such standalone exists at all.
 --
--- 🚨 THE HOP IS NOT OPTIONAL, it is what the spec asks for.  Reading only the DIRECTLY
+-- The hop is not optional; it is what the spec asks for.  Reading only the DIRECTLY
 -- imported module's own `DFunDef`s made the detector silent for a standalone that
 -- reaches the importer through a re-exporter, which is the same silent displacement
 -- #2738 names — `SHADOW-SEMANTICS.md`'s `nameable in M` row puts re-export chains in
