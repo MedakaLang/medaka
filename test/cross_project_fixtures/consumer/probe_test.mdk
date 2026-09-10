@@ -1,0 +1,22 @@
+-- A cross-project consumer carrying BOTH probe shapes the native `medaka test`
+-- engines compile: a doctest (`compiler/tools/native_doctest.mdk`) and a
+-- `test "…"` decl (`compiler/tools/native_test_decls.mdk`).  Both call through
+-- `minilib`, which the consumer reaches only via its own manifest's
+-- `[dependencies]` — so a scratch project synthesized without that section
+-- cannot compile either probe.
+--
+-- No top-level `main`: the test-decl engine skips a target that defines one.
+
+import test.{expectEqual}
+import minilib.lib.minilib.{revSorted, double}
+
+{- | Doubles every element, through the dependency project.
+
+   > doubledAll [1, 2]
+   [2, 4] -}
+export
+doubledAll : List Int -> List Int
+doubledAll xs = map double xs
+
+test "revSorted resolves across projects" =
+  expectEqual [5, 3, 1] (revSorted [3, 1, 5])
