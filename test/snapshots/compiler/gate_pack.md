@@ -1,5 +1,5 @@
 # META
-source_lines=2348
+source_lines=2341
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_pack.mdk — the gate SCHEDULER: `medaka gate balance`'s bin packing and
@@ -2044,17 +2044,10 @@ balCompute regPath gates shs base runs regSrc =
 -- touches no git state itself, so every clause stays testable on plain
 -- strings.
 --
--- This comment used to say the CHECKED-OUT commit's own message was that
--- text, read with `git log -1 --pretty=%B`, and that being "ordinary git
--- behaviour, not a GitHub-specific API" meant it "needs no separate
--- verification against GitHub policy". That was wrong and is the bug FR-2
--- fixed (review S1-2): it was never a policy question, it was a question
--- about the git state `actions/checkout@v4` produces, and with no `ref:` that
--- is a SYNTHETIC merge commit on both `pull_request` and `merge_group` —
--- GitHub boilerplate, never the author's text. Nothing in THIS module changed
--- (`--commit-message` parsing was always correct); the fix is entirely in how
--- `.github/workflows/ci.yml` and test/diff_compiler_gate_budget.sh obtain the
--- text. See docs/ops/GATE-REGISTRY-DESIGN.md §14 for the measured evidence.
+-- With no explicit `ref:` on `pull_request` or `merge_group`, `actions/checkout@v4`
+-- checks out a SYNTHETIC merge commit as HEAD — GitHub boilerplate, never the
+-- author's own text — so `git log -1 --pretty=%B` on HEAD cannot recover the
+-- trailer above. See docs/ops/GATE-REGISTRY-DESIGN.md §14 for the measured evidence.
 
 -- The exact trailer a reader pastes: `Gate-Budget-Override: <token>`, one per
 -- violation accepted, free text after the token (a human reason) never
