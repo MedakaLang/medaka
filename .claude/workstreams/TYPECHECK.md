@@ -82,6 +82,14 @@ removing it:
   didn't.** Loud → silent is a severity increase even though the old behavior (a spurious reject)
   was also wrong — see `AGENTS.md`'s "fix that makes a defect QUIETER" section, of which this is
   a typecheck-specific instance.
+  **Updated 2026-09-09 (#2839):** the stamp is no longer the receiver's unmangled head name.
+  `inferFieldAccess`/`inferRecordUpdateField` now write `stampedRecordHead`, which qualifies the
+  selected record's key with the module that DECLARED it (read off the record's own result-type
+  head), in the mangler's spelling. The back end's key is unchanged — on the emit path the
+  qualification is the identity function, so the emitted IR is byte-identical — but the stamp's
+  cross-module identity no longer comes from `mangleUnits` happening to run before
+  `elaborateModules`. What is still bare-keyed is `recordByNameRef` itself (#1319 unit 4 /
+  #1288), and `lookupRecordByMangledHead` still selects the `RecordInfo` on the emit path.
 
 **Application notes:**
 

@@ -548,6 +548,7 @@ variantCtorName (Variant n _) = n
 nonReservedCtor : String -> Bool
 nonReservedCtor n = not (isReservedCtor n)
 
+export
 isReservedCtor : String -> Bool
 isReservedCtor n =
   n == "Cons"

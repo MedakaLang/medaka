@@ -1059,11 +1059,15 @@ public export data Expr =
   -- `Ref RNone`; sexp/astdump ignore the ref.
   | EUnOp String Expr (Ref Route)
   | EInfix String Expr Expr
-  -- field access `r.f`.  The trailing `Ref String` is the resolved record name
+  -- field access `r.f`.  The trailing `Ref String` is the resolved record head
   -- (stamped by typecheck's inferFieldAccess; "" = unknown).  The emitter reads
-  -- it to pick the record by (recName, label) so two records sharing a field
-  -- name at different indices resolve to the correct offset.  Same Ref-stamp
-  -- idiom as EIndex/ESlice; sexp/printer ignore the ref.
+  -- it to pick the record by (recHead, label) so two records sharing a field
+  -- name at different indices resolve to the correct offset.  The head is the
+  -- record's OWNER-QUALIFIED name, derived at the stamp from the declaring
+  -- module the selected record carries in its own result type (#2839,
+  -- `stampedRecordHead` in `types/typecheck.mdk`), so its cross-module identity
+  -- does not depend on the mangler having run before elaboration.  Same
+  -- Ref-stamp idiom as EIndex/ESlice; sexp/printer ignore the ref.
   | EFieldAccess Expr String (Ref String)
   | ETuple (List Expr)
   | EListLit (List Expr)
@@ -1099,8 +1103,9 @@ public export data Expr =
   | EGuards (List GuardArm)
   | ERecordCreate String (List FieldAssign)
   -- functional record update `{ base | f = v … }`.  The trailing `Ref String` is
-  -- the resolved record name of the RECEIVER (stamped by typecheck's
-  -- inferRecordUpdate; "" = unknown), exactly as EFieldAccess carries it — and
+  -- the resolved record head of the RECEIVER (stamped by typecheck's
+  -- inferRecordUpdate; "" = unknown), owner-qualified and read exactly as
+  -- EFieldAccess carries it — and
   -- for the same reason: two records sharing a field name at DIFFERENT slot
   -- indices are indistinguishable from the field label alone, so an emitter that
   -- guesses the record from the first update label writes the wrong slot (bug

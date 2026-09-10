@@ -1,5 +1,5 @@
 # META
-source_lines=2089
+source_lines=2090
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -899,16 +899,12 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 --   EMPTY (`RLocal sym []`) for an UNCONSTRAINED standalone — the overwhelmingly
 --   common case, incl. all 5 of the compiler's own definer shadows — and every
 --   consumer keeps its pre-S1 byte-identical fast path on the empty list.
--- RScalar = NOT a typeclass dispatch route.  It is the SCALAR-TYPE TAG typecheck
--- stamps on an EBinOp whose operand GROUNDS to a concrete primitive, so lowering
--- can carry that type into CBinPrim's tag field and the native emitter picks the
--- scalar instruction without re-deriving the operand LTy structurally — the
--- emitter's LTInt is its default-for-unrecoverable, so an `icmp` keyed on LTy
--- alone would compare boxed String/Float POINTERS as integers.  Two stampers,
--- two tags: `RScalar "Float"` on an ARITHMETIC operand (resolveArithSite,
--- SHARED-FLOAT-RESIDUAL-DESIGN §3(C)) and `RScalar "Int"` on a COMPARISON
--- operand (stampOpRouteVal).  Every other head, and every operand that stays
--- polymorphic, keeps RNone → the structural/dict path.
+-- RScalar = NOT a typeclass dispatch route.  Stamped by typecheck's
+-- resolveBinopSites onto an ARITHMETIC EBinOp whose operand grounds to a concrete
+-- primitive ("Float"/"Int"), so lowering can carry the scalar type into CBinPrim's
+-- tag field and the native emitter picks the Float primitive without re-deriving
+-- the operand LTy structurally (SHARED-FLOAT-RESIDUAL-DESIGN §3(C), the type-lost
+-- monomorphic-Float residual).  Absent → RNone → today's structural/dict path.
 public export data Route =
   | RNone
   | RKey String (List Route)
@@ -1063,11 +1059,15 @@ public export data Expr =
   -- `Ref RNone`; sexp/astdump ignore the ref.
   | EUnOp String Expr (Ref Route)
   | EInfix String Expr Expr
-  -- field access `r.f`.  The trailing `Ref String` is the resolved record name
+  -- field access `r.f`.  The trailing `Ref String` is the resolved record head
   -- (stamped by typecheck's inferFieldAccess; "" = unknown).  The emitter reads
-  -- it to pick the record by (recName, label) so two records sharing a field
-  -- name at different indices resolve to the correct offset.  Same Ref-stamp
-  -- idiom as EIndex/ESlice; sexp/printer ignore the ref.
+  -- it to pick the record by (recHead, label) so two records sharing a field
+  -- name at different indices resolve to the correct offset.  The head is the
+  -- record's OWNER-QUALIFIED name, derived at the stamp from the declaring
+  -- module the selected record carries in its own result type (#2839,
+  -- `stampedRecordHead` in `types/typecheck.mdk`), so its cross-module identity
+  -- does not depend on the mangler having run before elaboration.  Same
+  -- Ref-stamp idiom as EIndex/ESlice; sexp/printer ignore the ref.
   | EFieldAccess Expr String (Ref String)
   | ETuple (List Expr)
   | EListLit (List Expr)
@@ -1103,8 +1103,9 @@ public export data Expr =
   | EGuards (List GuardArm)
   | ERecordCreate String (List FieldAssign)
   -- functional record update `{ base | f = v … }`.  The trailing `Ref String` is
-  -- the resolved record name of the RECEIVER (stamped by typecheck's
-  -- inferRecordUpdate; "" = unknown), exactly as EFieldAccess carries it — and
+  -- the resolved record head of the RECEIVER (stamped by typecheck's
+  -- inferRecordUpdate; "" = unknown), owner-qualified and read exactly as
+  -- EFieldAccess carries it — and
   -- for the same reason: two records sharing a field name at DIFFERENT slot
   -- indices are indistinguishable from the field label alone, so an emitter that
   -- guesses the record from the first update label writes the wrong slot (bug
