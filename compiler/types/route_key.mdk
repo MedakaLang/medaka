@@ -194,6 +194,30 @@ installEvidence entries =
   let _ = fillEvidence arr entries
   evidenceRef := Some arr
 
+-- Rewrite every installed entry in place (#2809).  The emit path renames its
+-- top-level symbols AFTER elaboration, and an `RLocal` route carries one -- but the
+-- table `elaborateModules` returns holds only the GOAL entries, not the per-method
+-- occurrence entries `publishEvidence` prepends, so a caller cannot re-derive what is
+-- installed.  Rewriting the installed array is the only complete view of it.
+export
+remapEvidence : (EvEntry -> EvEntry) -> Unit
+remapEvidence f = match !evidenceRef
+  None => ()
+  Some arr => remapEvidenceGo f arr 0 (arrayLength arr)
+
+remapEvidenceGo : (EvEntry -> EvEntry) ->
+  Array (Option EvEntry) ->
+  Int ->
+  Int ->
+  Unit
+remapEvidenceGo f arr i n
+  | i >= n = ()
+  | otherwise =
+    let _ = match arrayGetUnsafe i arr
+      None => ()
+      Some e => arraySetUnsafe i (Some (f e)) arr
+    remapEvidenceGo f arr (i + 1) n
+
 -- one past the largest ordinal in [entries]
 evSlotCount : EvTable -> Int -> Int
 evSlotCount [] acc = acc

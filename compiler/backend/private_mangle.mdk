@@ -115,8 +115,14 @@ import frontend.ast.{
   qualifiedLocal,
   Variant(..),
   DataVis(..),
+  Route(..),
+  EvVal(..),
+  EvEntry(..),
+  EvId(..),
 }
+import types.route_key.{remapEvidence}
 import support.util.{
+  lookupAssoc,
   contains,
   reverseL,
   isEmptyL,
@@ -163,6 +169,66 @@ mangleUnits coreDecls modules =
     mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
   let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
   (coreOut, modsOut)
+
+-- ── the ELABORATED-graph entry point (#2809) ──────────────────────────────────
+-- Same rename as `mangleUnits`, extended to the two places an ELABORATED tree
+-- carries a top-level symbol the expression spine does not: the evidence table's
+-- `RLocal` route (a standalone the emitter calls directly -- `wasm_reach.refsRoute`
+-- and the emitters' `emitMethodRef` RLocal arm) and, transitively, that route's
+-- nested `requires`/method dict routes.  An entry's `EvId` names the module it was
+-- minted in, which is the unit whose rename map resolves its symbols.
+export
+mangleUnitsEv : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+mangleUnitsEv coreDecls modules =
+  let allUnits = ("core", coreDecls) :: modules
+  let _ = symbolInjectivityGuard allUnits
+  let exportsPerUnit =
+    withPreludeDefs
+      (dedup (unitDefNames ("", coreDecls)))
+      (buildExportsPerUnit [] allUnits)
+  let ctorExportsPerUnit = map unitCtorExportEntry allUnits
+  let coreOut =
+    mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
+  let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
+  let maps = map (unitRenameMapEntry exportsPerUnit ctorExportsPerUnit) allUnits
+  let _ = remapEvidence (mangleEvEntry maps)
+  (coreOut, modsOut)
+
+unitRenameMapEntry : List (String, List (String, String)) ->
+  List (String, List (String, List String)) ->
+  (String, List Decl) ->
+  (String, OrdMap String)
+unitRenameMapEntry exportsPerUnit ctorExportsPerUnit (mid, decls) =
+  let rmList =
+    buildUnitRenameMap mid exportsPerUnit decls
+      ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
+  (mid, omFromPairs (reverseL rmList) omEmpty)
+
+mangleEvEntry : List (String, OrdMap String) -> EvEntry -> EvEntry
+mangleEvEntry maps (EvEntry (EvId m i) v) = match lookupAssoc m maps
+  None => EvEntry (EvId m i) v
+  Some rm => EvEntry (EvId m i) (mangleEvVal rm v)
+
+mangleEvVal : OrdMap String -> EvVal -> EvVal
+mangleEvVal rm (EvOne r) = EvOne (mangleRoute rm r)
+mangleEvVal rm (EvMany rs) = EvMany (map (mangleRoute rm) rs)
+mangleEvVal rm (EvMethod r reqs mds) =
+  EvMethod
+    (mangleRoute rm r)
+    (map (mangleRoute rm) reqs)
+    (map (mangleRoute rm) mds)
+
+-- Only `RLocal`'s symbol is a top-level function name.  `RKey` carries an impl head
+-- TYPE tag or a canonical impl key (types are not mangled), `RDict`/`RDictFwd` a dict
+-- PARAMETER name that `dictPass` minted locally, `RScalar` a scalar witness word.
+mangleRoute : OrdMap String -> Route -> Route
+mangleRoute rm (RLocal sym ds)
+  | sym == "" = RLocal sym (map (mangleRoute rm) ds)
+  | otherwise = RLocal (renameDefName rm sym) (map (mangleRoute rm) ds)
+mangleRoute rm (RKey k ds) = RKey k (map (mangleRoute rm) ds)
+mangleRoute _ r = r
 
 -- ── ctor-collision-only mangling for the UNTYPED eval drivers (#1292) ─────────
 -- `eval.runtimeTypeTag` tags a `VCon` by looking its BARE constructor name up in
@@ -1413,8 +1479,22 @@ renameScoped rm bound (EMapLit n kvs) = EMapLit n (map (renameKv rm bound) kvs)
 renameScoped rm bound (ESetLit n es) =
   ESetLit n (map (renameScoped rm bound) es)
 renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
--- leaves (ELit / EMethodRef / EDictApp / EMethodAt / EDictAt / SecBare) -- EVarAt
--- is handled above, not here: it carries a renameable NAME (see its arm).
+-- ELABORATED-TREE ARMS.  These three nodes exist only in a tree `elaborateModules`
+-- has already produced, so they are unreachable when the mangler runs FIRST -- and
+-- each carries a TOP-LEVEL FUNCTION name the rename map must move.
+--   * `EDictAt f ev` names the constrained function whose dict the caller supplies;
+--     leaving it bare emits a `CDict` head no `DFunDef` defines.
+--   * `EMethodAt m seed ev`'s SECOND field is the definer-shadow STANDALONE symbol
+--     (see ast.mdk's `EMethodAt`), which the `RLocal` route calls directly; the
+--     first field is an interface METHOD name, which this pass never renames.
+--   * `EDictApp` / `EMethodRef` carry method/dict-layer names, which have their own
+--     naming in the emitter and stay put.
+renameScoped rm _ (EDictAt n ev) = EDictAt (renameDefName rm n) ev
+renameScoped rm _ (EMethodAt m seed ev)
+  | seed == "" = EMethodAt m seed ev
+  | otherwise = EMethodAt m (renameDefName rm seed) ev
+-- leaves (ELit / EMethodRef / EDictApp / SecBare) -- EVarAt is handled above, not
+-- here: it carries a renameable NAME (see its arm).
 renameScoped _ _ e = e
 
 renameField : OrdMap String -> OrdMap Unit -> FieldAssign -> FieldAssign

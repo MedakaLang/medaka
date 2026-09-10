@@ -25,7 +25,7 @@ import types.typecheck.{
 import driver.diagnostics.{renderTcDiags}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{loadProgram, unknownModuleIdOf}
-import backend.private_mangle.{mangleUnits}
+import backend.private_mangle.{mangleUnitsEv}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
@@ -258,10 +258,10 @@ runEmitWith : String ->
   <IO> Unit
 runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
-  let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, residual, _) =
-    elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreE, modulesE, _, residual, _) =
+    elaborateModules runtimeDecls coreDecls modules
   let _ = emitElaborationGate residual
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
@@ -294,10 +294,10 @@ emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Un
   <IO> Unit
 emitModulesWith emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
-  let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, residual, _) =
-    elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreE, modulesE, _, residual, _) =
+    elaborateModules runtimeDecls coreDecls modules
   let _ = emitElaborationGate residual
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
   emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────
