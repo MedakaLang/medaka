@@ -20,9 +20,12 @@
 -- earlier "Pre-E4 no-op" note here was STALE — arg-position dict-passing IS active
 -- on this path (verified: a cross-module `Eq a => x == y` builds + runs native ==
 -- oracle; TYPECHECK-AUDIT.md §L1).  The joint keying it consumes is made SAFE by
--- universal per-module mangling (mangleUnits, run below before elaborateModules):
--- every top-level fn is `<mid>__<name>`, so two modules' same-named constrained/
--- unconstrained fns can never share a dict-arity key (the former L1 hazard).
+-- universal per-module mangling (`mangleUnitsEv`, which #2809 moved to run AFTER
+-- elaborateModules over its elaborated trees): every top-level fn is
+-- `<mid>__<name>`, so two modules' same-named constrained/unconstrained fns can
+-- never share a dict-arity key in the EMITTED program (the former L1 hazard).
+-- The keys ELABORATION itself uses are the author's spellings under that order, so
+-- this argument covers the emitted program and not elaboration's own tables.
 
 import frontend.ast.{Decl}
 import types.typecheck.{
@@ -164,8 +167,8 @@ emitTail runtimeDecls coreD modules2 =
   else
     putStr (emitProgram input (lowerProgramEmit TargetNative allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
--- across units, BEFORE elaborateModules flattens the boundaries away (same
--- flat-emit @mdk_<name> collision risk the bootstrap driver fixes).  The gate
+-- across units, AFTER elaborateModules and over its output (#2809) — same
+-- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate
 -- diffs OUTPUT, not symbols, so renaming uncollided privates is a no-op and the
 -- gate stays byte-identical; it only matters when two units share a private name.
 
