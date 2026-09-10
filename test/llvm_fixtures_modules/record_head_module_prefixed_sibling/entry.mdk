@@ -1,0 +1,23 @@
+-- #2839 / #2809: the record-head stamp must be owner-qualified EXACTLY ONCE.
+--
+-- Expected output, derived BY HAND from the declarations and independently of any
+-- engine: `mkA` is `Cfg { a = 11, b = 22 }` and `mkB` is `Mm__Cfg { b = 33, a = 44 }`,
+-- so `mkA.a, mkA.b, mkB.a, mkB.b` is `11,22,44,33`.
+--
+-- Measured with the qualification applied twice (the typechecker's stamp, then the
+-- mangler's rename on top): `11,22,33,44` at exit 0 — `mkB` read through `Cfg`'s slot
+-- order, no diagnostic on any channel — while `run` printed the correct `11,22,44,33`.
+-- The parent commit refused the program outright through the #2089 residual channel, so
+-- the direction of that regression was loud to silent.
+import Mm.{mkA, mkB}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkA.a
+      ++ ","
+      ++ intToString mkA.b
+      ++ ","
+      ++ intToString mkB.a
+      ++ ","
+      ++ intToString mkB.b)
