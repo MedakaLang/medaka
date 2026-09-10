@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS cell I33 provider 2: the standalone.  `(Debug q, Eq p) => r -> p
+-- -> q -> String` is the method's `(Eq a, Debug b) => t -> a -> b -> String` renamed
+-- and with the two constraints written in the other order.  A constraint set is a
+-- SET, so these are the same scheme.
+export tagOf : (Debug q, Eq p) => r -> p -> q -> String
+tagOf _ _ _ = "prov"

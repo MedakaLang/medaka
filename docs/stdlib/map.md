@@ -7,7 +7,7 @@ deletion cost `O(log n)`, and `size` is `O(1)`. Every operation returns a
 new map and leaves the original unchanged; the two share whatever
 structure they have in common, so keeping old versions is cheap.
 
-Keys are ordered by their `Ord` instance, and `toList`, `keys`, `values`,
+Keys are ordered by their `Ord` instance, and `keys`, `values`, `entries`,
 and the folds visit entries in ascending key order. The `Map { k => v }`
 literal builds a map; the empty map is `empty`. For keys that are
 `Hashable` but not `Ord`, or when order does not matter, see
@@ -28,7 +28,7 @@ subtree's size, a key, a value, and the left and right subtrees. The
 constructors are visible for pattern matching, but build maps with the
 functions in this module, which keep the tree balanced.
 
-Instances: [`Index`](#index-map-k-v-k-v), [`Mappable`](#mappable-map-k), [`Filterable`](#filterable-map-k), [`Eq`](#eq-map-k-v), [`Ord`](#ord-map-k-v), [`Debug`](#debug-map-k-v), [`Display`](#display-map-k-v), [`Semigroup`](#semigroup-map-k-v), [`FromEntries`](#fromentries-map-k-v-k-v), [`Monoid`](#monoid-map-k-v)
+Instances: [`Index`](#index-map-k-v-k-v), [`Mappable`](#mappable-map-k), [`Filterable`](#filterable-map-k), [`Foldable`](#foldable-map-k), [`Eq`](#eq-map-k-v), [`Ord`](#ord-map-k-v), [`Debug`](#debug-map-k-v), [`Display`](#display-map-k-v), [`Semigroup`](#semigroup-map-k-v), [`FromEntries`](#fromentries-map-k-v-k-v), [`Monoid`](#monoid-map-k-v)
 
 ## Construction
 
@@ -313,16 +313,16 @@ A left fold over the entries in ascending key order.
 30
 ```
 
-### `toList`
+### `entries`
 
 ```
-toList : Map k v -> List (k, v)
+entries : Map k v -> List (k, v)
 ```
 
 The entries as pairs, in ascending key order.
 
 ```medaka
-> toList (fromList [(2, 20), (1, 10), (3, 30)])
+> entries (fromList [(2, 20), (1, 10), (3, 30)])
 [(1, 10), (2, 20), (3, 30)]
 ```
 
@@ -437,7 +437,7 @@ intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
 The keys present in both maps, each with the value `f left right`.
 
 ```medaka
-> toList (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+> entries (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
 [(2, 22)]
 ```
 
@@ -450,7 +450,7 @@ intersection : Ord k => Map k v -> Map k w -> Map k v
 The keys present in both maps, each with the first map's value.
 
 ```medaka
-> toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+> entries (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
 [(2, 20)]
 ```
 
@@ -505,6 +505,29 @@ impl Filterable (Map k)
 `filter` and `filterMap` test each value, keeping the keys of the
 entries that survive. `filterWithKey` is the form that also sees the
 key.
+
+### `Foldable (Map k)`
+
+```
+impl Foldable (Map k)
+```
+
+The `Foldable` methods visit values in ascending order of their keys, so
+`toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
+over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+
+```medaka
+> toList (fromList [(2, 20), (1, 10)])
+[10, 20]
+> length (fromList [(1, 10), (2, 20)])
+2
+> isEmpty (fromList [(1, 10)] : Map Int Int)
+False
+> elem 20 (fromList [(1, 10), (2, 20)])
+True
+> sum (fromList [(1, 10), (2, 20)])
+30
+```
 
 ### `Eq (Map k v)`
 

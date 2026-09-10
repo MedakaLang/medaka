@@ -45,6 +45,7 @@ implHeadParametric	Decl	2/14
 implHeadTagForIface	Decl	2/14
 implTysIfMatch	Decl	1/14
 importOverlayDecls	Decl	2/14
+importShadowsOfDecl	Decl	2/14
 infer	Expr	29/41
 inferExpected	Expr	1/41
 inferOneIfaceDefaults	Decl	2/14
@@ -65,6 +66,7 @@ reexportedCtorIdentsOf	Decl	2/14
 reexportedIfaceMethodsOf	Decl	2/14
 reexportedMethodIdentsOf	Decl	2/14
 reexportedMethodsOf	Decl	2/14
+reexportedOriginsOf	Decl	2/14
 registerData	Decl	1/14
 registerMethodIfaceParamsDecl	Decl	2/14
 renderCallArg	Expr	9/41

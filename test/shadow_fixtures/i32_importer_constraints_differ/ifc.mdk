@@ -1,0 +1,19 @@
+-- SHADOW-SEMANTICS cell I32 provider 1: the interface, the receiver type and its
+-- impl.  The method carries a `Debug a =>` constraint; the standalone in `prov.mdk`
+-- carries `Eq a =>` over a body of the same SHAPE, so the constraint set is the only
+-- place the two schemes differ.
+--
+-- The impl body does NOT consume the method's own constraint dict, and that is a
+-- requirement of this cell rather than a stylistic choice: an impl body that calls
+-- `debug x` under this exact shadow makes `run` print the method's answer while the
+-- BUILT BINARY dies `E-DISPATCH-NO-IMPL` at exit 1 -- a live engine split on a
+-- separate axis (removing the collision, or the dict use, makes both agree).  A
+-- fixture that carried both would be a row about two things and would grade RED for
+-- the one it is not about.
+public export data Box a = Box a
+
+export interface Taggable t where
+  tagOf : Debug a => t -> a -> String
+
+export impl Taggable (Box b) where
+  tagOf _ _ = "iface"
