@@ -43,7 +43,9 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads the
    corpus, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{Agreement(..), checkRunBuild, verdictOf}
+import compiler_cli_test_support.{
+  Agreement(..), binaryRanClean, checkRunBuild, verdictOf
+}
 import fs.{expectUnitCount, fixtureFiles}
 import io.{runVerb}
 import list.{somes, sort}
@@ -75,7 +77,7 @@ data Row = Row {
 -- The value grades that are failures. A row also fails on any verdict
 -- disagreement; these are the ones the verdict columns cannot express.
 badValues : List String
-badValues = ["DIFF", "WRONG", "NOPIN", "RANPANIC", "EMITPANIC"]
+badValues = ["DIFF", "WRONG", "NOPIN", "RANPANIC", "EMITPANIC", "BINPANIC"]
 
 -- The third argument is the `<name>.out` file's contents, `Err` when it is
 -- absent.
@@ -95,6 +97,8 @@ valueColumn "ACCEPT" a (Ok want) =
     "DIFF"
   else if want /= a.runOut then
     "WRONG"
+  else if not (binaryRanClean a) then
+    "BINPANIC"
   else
     "ok"
 valueColumn _ _ _ = "-"

@@ -51,7 +51,9 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads the
    corpus, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{Agreement(..), checkRunBuild, verdictOf}
+import compiler_cli_test_support.{
+  Agreement(..), binaryRanClean, checkRunBuild, verdictOf
+}
 import fs.{fixtureDirs}
 import io.{runVerb}
 import list.{somes, sort}
@@ -951,14 +953,14 @@ gradeValue AllExact pinned a =
   if a.runCode /= 0 || a.buildCode /= 0 then
     "n/a"
   else if a.runOut == a.binOut && a.runOut == pinned then
-    "ok"
+    if binaryRanClean a then "ok" else "BINPANIC"
   else
     "DIFF"
 gradeValue BuildExact pinned a =
   if a.buildCode /= 0 then
     "n/a"
   else if a.binOut == pinned then
-    "ok"
+    if binaryRanClean a then "ok" else "BINPANIC"
   else
     "WRONG"
 
