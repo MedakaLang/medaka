@@ -43357,21 +43357,21 @@ shadowSymSpelledBare sc sm n = match lookupAssoc n sm
 -- `mangledName`'s own answer for the empty name, so the comparison below is the same
 -- one, guarded by a `startsWith` that spends no allocation on a symbol that cannot match.
 data SpellCtx = SpellCtx {
-  scTopFns : OrdMap Unit,
+  scTopFns : List String,
   scBare : BareLocals,
   scCorePfx : String,
 }
 
 spellCtxOf : List Decl -> SpellCtx
 spellCtxOf prog = SpellCtx {
-  scTopFns = namesToSet (declTopFnNames prog) omEmpty,
-  scBare = declBareLocals prog BareLocals { blAll = False, blSet = omEmpty },
+  scTopFns = declTopFnNames prog,
+  scBare = declBareLocals prog BareLocals { blAll = False, blSet = [] },
   scCorePfx = mangledName "core" "",
 }
 
 moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
 moduleSpellsShadowBare sc sym bare =
-  omHasKey sym sc.scTopFns
+  contains sym sc.scTopFns
     || startsWith sc.scCorePfx sym && sym == "\{sc.scCorePfx}\{bare}"
     || bareLocalBound sc.scBare bare
 
@@ -43393,10 +43393,14 @@ moduleSpellsShadowBare sc sym bare =
 -- cannot speak for answers True for every name, so it admits all of them.  A member list
 -- stays finite in that case (its locals are what it spells), which is why the fail-open
 -- test sits on the wildcard arm alone.
-data BareLocals = BareLocals { blAll : Bool, blSet : OrdMap Unit }
+-- A LIST, not a set, and that is measured: `moduleSpellsShadowBare` is asked a handful
+-- of times per module (once per row of a definer-shadow map that holds four rows on the
+-- compiler's own graph), so building an `OrdMap` here costs more in inserts than the
+-- scans it saves -- the same result the shadow-map index got, one level down.
+data BareLocals = BareLocals { blAll : Bool, blSet : List String }
 
 bareLocalBound : BareLocals -> String -> Bool
-bareLocalBound bl bare = bl.blAll || omHasKey bare bl.blSet
+bareLocalBound bl bare = bl.blAll || contains bare bl.blSet
 
 declBareLocals : List Decl -> BareLocals -> BareLocals
 declBareLocals [] acc = acc
@@ -43420,14 +43424,11 @@ formBareLocals path acc =
       if depExportsUnknown depId then
         { acc | blAll = True }
       else
-        { acc |
-          blSet = namesToSet (map fst (graphPubDefiners depId)) acc.blSet,
-        }
+        { acc | blSet = map fst (graphPubDefiners depId) ++ acc.blSet }
     Some bindings => { acc |
       blSet =
-        namesToSet
-          (filterList (l => depExportsStandalone depId l) (map snd bindings))
-          acc.blSet,
+        filterList (l => depExportsStandalone depId l) (map snd bindings)
+          ++ acc.blSet,
     }
 
 -- S1's standalone operand is TWO conjuncts, and the second one is not optional.

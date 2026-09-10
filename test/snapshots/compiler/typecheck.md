@@ -1,5 +1,5 @@
 # META
-source_lines=44123
+source_lines=44124
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -43361,21 +43361,21 @@ shadowSymSpelledBare sc sm n = match lookupAssoc n sm
 -- `mangledName`'s own answer for the empty name, so the comparison below is the same
 -- one, guarded by a `startsWith` that spends no allocation on a symbol that cannot match.
 data SpellCtx = SpellCtx {
-  scTopFns : OrdMap Unit,
+  scTopFns : List String,
   scBare : BareLocals,
   scCorePfx : String,
 }
 
 spellCtxOf : List Decl -> SpellCtx
 spellCtxOf prog = SpellCtx {
-  scTopFns = namesToSet (declTopFnNames prog) omEmpty,
-  scBare = declBareLocals prog BareLocals { blAll = False, blSet = omEmpty },
+  scTopFns = declTopFnNames prog,
+  scBare = declBareLocals prog BareLocals { blAll = False, blSet = [] },
   scCorePfx = mangledName "core" "",
 }
 
 moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
 moduleSpellsShadowBare sc sym bare =
-  omHasKey sym sc.scTopFns
+  contains sym sc.scTopFns
     || startsWith sc.scCorePfx sym && sym == "\{sc.scCorePfx}\{bare}"
     || bareLocalBound sc.scBare bare
 
@@ -43397,10 +43397,14 @@ moduleSpellsShadowBare sc sym bare =
 -- cannot speak for answers True for every name, so it admits all of them.  A member list
 -- stays finite in that case (its locals are what it spells), which is why the fail-open
 -- test sits on the wildcard arm alone.
-data BareLocals = BareLocals { blAll : Bool, blSet : OrdMap Unit }
+-- A LIST, not a set, and that is measured: `moduleSpellsShadowBare` is asked a handful
+-- of times per module (once per row of a definer-shadow map that holds four rows on the
+-- compiler's own graph), so building an `OrdMap` here costs more in inserts than the
+-- scans it saves -- the same result the shadow-map index got, one level down.
+data BareLocals = BareLocals { blAll : Bool, blSet : List String }
 
 bareLocalBound : BareLocals -> String -> Bool
-bareLocalBound bl bare = bl.blAll || omHasKey bare bl.blSet
+bareLocalBound bl bare = bl.blAll || contains bare bl.blSet
 
 declBareLocals : List Decl -> BareLocals -> BareLocals
 declBareLocals [] acc = acc
@@ -43424,14 +43428,11 @@ formBareLocals path acc =
       if depExportsUnknown depId then
         { acc | blAll = True }
       else
-        { acc |
-          blSet = namesToSet (map fst (graphPubDefiners depId)) acc.blSet,
-        }
+        { acc | blSet = map fst (graphPubDefiners depId) ++ acc.blSet }
     Some bindings => { acc |
       blSet =
-        namesToSet
-          (filterList (l => depExportsStandalone depId l) (map snd bindings))
-          acc.blSet,
+        filterList (l => depExportsStandalone depId l) (map snd bindings)
+          ++ acc.blSet,
     }
 
 -- S1's standalone operand is TWO conjuncts, and the second one is not optional.
@@ -50540,21 +50541,21 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "coreShadowMapFor" ((PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "coreProg"))) (DoLet false false (PVar "sc") (EApp (EVar "spellCtxOf") (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowSymSpelledBare" (TyFun (TyCon "SpellCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "shadowSymSpelledBare" ((PVar "sc") (PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EVar "n")) (EVar "bare")))))
-(DData Private "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
+(DData Private "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DTypeSig false "spellCtxOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SpellCtx")))
-(DFunDef false "spellCtxOf" ((PVar "prog")) (ERecordCreate "SpellCtx" ((fa "scTopFns" (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (fa "scBare" (EApp (EApp (EVar "declBareLocals") (EVar "prog")) (ERecordCreate "BareLocals" ((fa "blAll" (EVar "False")) (fa "blSet" (EVar "omEmpty")))))) (fa "scCorePfx" (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (ELit (LString "")))))))
+(DFunDef false "spellCtxOf" ((PVar "prog")) (ERecordCreate "SpellCtx" ((fa "scTopFns" (EApp (EVar "declTopFnNames") (EVar "prog"))) (fa "scBare" (EApp (EApp (EVar "declBareLocals") (EVar "prog")) (ERecordCreate "BareLocals" ((fa "blAll" (EVar "False")) (fa "blSet" (EListLit)))))) (fa "scCorePfx" (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (ELit (LString "")))))))
 (DTypeSig false "moduleSpellsShadowBare" (TyFun (TyCon "SpellCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "moduleSpellsShadowBare" ((PVar "sc") (PVar "sym") (PVar "bare")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EFieldAccess (EVar "sc") "scTopFns")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EFieldAccess (EVar "sc") "scCorePfx")) (EVar "sym")) (EBinOp "==" (EVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "sc") "scCorePfx"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "bare"))) (ELit (LString "")))))) (EApp (EApp (EVar "bareLocalBound") (EFieldAccess (EVar "sc") "scBare")) (EVar "bare"))))
-(DData Private "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DFunDef false "moduleSpellsShadowBare" ((PVar "sc") (PVar "sym") (PVar "bare")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "sym")) (EFieldAccess (EVar "sc") "scTopFns")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EFieldAccess (EVar "sc") "scCorePfx")) (EVar "sym")) (EBinOp "==" (EVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "sc") "scCorePfx"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "bare"))) (ELit (LString "")))))) (EApp (EApp (EVar "bareLocalBound") (EFieldAccess (EVar "sc") "scBare")) (EVar "bare"))))
+(DData Private "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "bareLocalBound" (TyFun (TyCon "BareLocals") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "bareLocalBound" ((PVar "bl") (PVar "bare")) (EBinOp "||" (EFieldAccess (EVar "bl") "blAll") (EApp (EApp (EVar "omHasKey") (EVar "bare")) (EFieldAccess (EVar "bl") "blSet"))))
+(DFunDef false "bareLocalBound" ((PVar "bl") (PVar "bare")) (EBinOp "||" (EFieldAccess (EVar "bl") "blAll") (EApp (EApp (EVar "contains") (EVar "bare")) (EFieldAccess (EVar "bl") "blSet"))))
 (DTypeSig false "declBareLocals" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "BareLocals") (TyCon "BareLocals"))))
 (DFunDef false "declBareLocals" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "declBareLocals" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "declBareLocals") (EVar "rest")) (EApp (EApp (EVar "declBareLocals") (EListLit (EVar "d"))) (EVar "acc"))))
 (DFunDef false "declBareLocals" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "declBareLocals") (EVar "rest")) (EApp (EApp (EVar "formBareLocals") (EVar "path")) (EVar "acc"))))
 (DFunDef false "declBareLocals" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "declBareLocals") (EVar "rest")) (EVar "acc")))
 (DTypeSig false "formBareLocals" (TyFun (TyCon "UsePath") (TyFun (TyCon "BareLocals") (TyCon "BareLocals"))))
-(DFunDef false "formBareLocals" ((PVar "path") (PVar "acc")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EIf (EApp (EVar "depExportsUnknown") (EVar "depId")) (ERecordUpdate (EVar "acc") ((fa "blAll" (EVar "True")))) (ERecordUpdate (EVar "acc") ((fa "blSet" (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "graphPubDefiners") (EVar "depId")))) (EFieldAccess (EVar "acc") "blSet"))))))) (arm (PCon "Some" (PVar "bindings")) () (ERecordUpdate (EVar "acc") ((fa "blSet" (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "l")) (EApp (EApp (EVar "depExportsStandalone") (EVar "depId")) (EVar "l")))) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bindings")))) (EFieldAccess (EVar "acc") "blSet"))))))))))
+(DFunDef false "formBareLocals" ((PVar "path") (PVar "acc")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EIf (EApp (EVar "depExportsUnknown") (EVar "depId")) (ERecordUpdate (EVar "acc") ((fa "blAll" (EVar "True")))) (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "graphPubDefiners") (EVar "depId"))) (EFieldAccess (EVar "acc") "blSet"))))))) (arm (PCon "Some" (PVar "bindings")) () (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "l")) (EApp (EApp (EVar "depExportsStandalone") (EVar "depId")) (EVar "l")))) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bindings"))) (EFieldAccess (EVar "acc") "blSet"))))))))))
 (DTypeSig false "depExportsStandalone" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "depExportsStandalone" ((PVar "depId") (PVar "bare")) (EIf (EApp (EVar "depExportsUnknown") (EVar "depId")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "fst") (EVar "r")) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "depId"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "depExportsUnknown" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -57071,21 +57072,21 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "coreShadowMapFor" ((PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "coreProg"))) (DoLet false false (PVar "sc") (EApp (EVar "spellCtxOf") (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowSymSpelledBare" (TyFun (TyCon "SpellCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "shadowSymSpelledBare" ((PVar "sc") (PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "sc")) (EVar "n")) (EVar "bare")))))
-(DData Private "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
+(DData Private "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DTypeSig false "spellCtxOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SpellCtx")))
-(DFunDef false "spellCtxOf" ((PVar "prog")) (ERecordCreate "SpellCtx" ((fa "scTopFns" (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (fa "scBare" (EApp (EApp (EVar "declBareLocals") (EVar "prog")) (ERecordCreate "BareLocals" ((fa "blAll" (EVar "False")) (fa "blSet" (EVar "omEmpty")))))) (fa "scCorePfx" (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (ELit (LString "")))))))
+(DFunDef false "spellCtxOf" ((PVar "prog")) (ERecordCreate "SpellCtx" ((fa "scTopFns" (EApp (EVar "declTopFnNames") (EVar "prog"))) (fa "scBare" (EApp (EApp (EVar "declBareLocals") (EVar "prog")) (ERecordCreate "BareLocals" ((fa "blAll" (EVar "False")) (fa "blSet" (EListLit)))))) (fa "scCorePfx" (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (ELit (LString "")))))))
 (DTypeSig false "moduleSpellsShadowBare" (TyFun (TyCon "SpellCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "moduleSpellsShadowBare" ((PVar "sc") (PVar "sym") (PVar "bare")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EFieldAccess (EVar "sc") "scTopFns")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EFieldAccess (EVar "sc") "scCorePfx")) (EVar "sym")) (EBinOp "==" (EVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sc") "scCorePfx"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "bare"))) (ELit (LString "")))))) (EApp (EApp (EVar "bareLocalBound") (EFieldAccess (EVar "sc") "scBare")) (EVar "bare"))))
-(DData Private "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DFunDef false "moduleSpellsShadowBare" ((PVar "sc") (PVar "sym") (PVar "bare")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "sym")) (EFieldAccess (EVar "sc") "scTopFns")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (EFieldAccess (EVar "sc") "scCorePfx")) (EVar "sym")) (EBinOp "==" (EVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sc") "scCorePfx"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "bare"))) (ELit (LString "")))))) (EApp (EApp (EVar "bareLocalBound") (EFieldAccess (EVar "sc") "scBare")) (EVar "bare"))))
+(DData Private "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "bareLocalBound" (TyFun (TyCon "BareLocals") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "bareLocalBound" ((PVar "bl") (PVar "bare")) (EBinOp "||" (EFieldAccess (EVar "bl") "blAll") (EApp (EApp (EVar "omHasKey") (EVar "bare")) (EFieldAccess (EVar "bl") "blSet"))))
+(DFunDef false "bareLocalBound" ((PVar "bl") (PVar "bare")) (EBinOp "||" (EFieldAccess (EVar "bl") "blAll") (EApp (EApp (EVar "contains") (EVar "bare")) (EFieldAccess (EVar "bl") "blSet"))))
 (DTypeSig false "declBareLocals" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "BareLocals") (TyCon "BareLocals"))))
 (DFunDef false "declBareLocals" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "declBareLocals" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "declBareLocals") (EVar "rest")) (EApp (EApp (EVar "declBareLocals") (EListLit (EVar "d"))) (EVar "acc"))))
 (DFunDef false "declBareLocals" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "declBareLocals") (EVar "rest")) (EApp (EApp (EVar "formBareLocals") (EVar "path")) (EVar "acc"))))
 (DFunDef false "declBareLocals" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "declBareLocals") (EVar "rest")) (EVar "acc")))
 (DTypeSig false "formBareLocals" (TyFun (TyCon "UsePath") (TyFun (TyCon "BareLocals") (TyCon "BareLocals"))))
-(DFunDef false "formBareLocals" ((PVar "path") (PVar "acc")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EIf (EApp (EVar "depExportsUnknown") (EVar "depId")) (ERecordUpdate (EVar "acc") ((fa "blAll" (EVar "True")))) (ERecordUpdate (EVar "acc") ((fa "blSet" (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "graphPubDefiners") (EVar "depId")))) (EFieldAccess (EVar "acc") "blSet"))))))) (arm (PCon "Some" (PVar "bindings")) () (ERecordUpdate (EVar "acc") ((fa "blSet" (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "l")) (EApp (EApp (EVar "depExportsStandalone") (EVar "depId")) (EVar "l")))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bindings")))) (EFieldAccess (EVar "acc") "blSet"))))))))))
+(DFunDef false "formBareLocals" ((PVar "path") (PVar "acc")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EIf (EApp (EVar "depExportsUnknown") (EVar "depId")) (ERecordUpdate (EVar "acc") ((fa "blAll" (EVar "True")))) (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "graphPubDefiners") (EVar "depId"))) (EFieldAccess (EVar "acc") "blSet"))))))) (arm (PCon "Some" (PVar "bindings")) () (ERecordUpdate (EVar "acc") ((fa "blSet" (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "l")) (EApp (EApp (EVar "depExportsStandalone") (EVar "depId")) (EVar "l")))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bindings"))) (EFieldAccess (EVar "acc") "blSet"))))))))))
 (DTypeSig false "depExportsStandalone" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "depExportsStandalone" ((PVar "depId") (PVar "bare")) (EIf (EApp (EVar "depExportsUnknown") (EVar "depId")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "fst") (EVar "r")) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "depId"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "depExportsUnknown" (TyFun (TyCon "String") (TyCon "Bool")))

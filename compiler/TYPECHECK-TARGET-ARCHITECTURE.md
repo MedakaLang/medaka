@@ -1125,26 +1125,47 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    nameable-in-`M` filter (`moduleMarkCtx`'s core arm), without which a user interface method
    spelled like a core standalone rewrites core's OWN occurrence — and the x16 autoprint
    `must_fail` pin drained per its own header.
-   **The check-path cost, re-measured on the merged head and then repaired.** Item 20's
-   +1.005% above was measured before the fix round; on `2683406bc` the same held-workload
-   cell reads **+0.31%** (75.200B → 75.430B), and per-function attribution — `cg_annotate`
-   joined on symbol, the lambda rows dropped as unpairable — accounts for essentially all of
-   it by name, which the earlier attempt could not: `lookupAssoc` +99.1M, the collector's
-   allocation entry point +63.4M, `funDefs` +21.7M, the runtime's string-slice +14.2M, the per-row import walk
-   +12.9M (a symbol the base arm does not execute at all), `contains` +6.5M. **The standing `stampedRecordHead`
-   hypothesis is REFUTED, not merely untested**: `recordOwnerModule` carries +177K Ir, four
-   orders of magnitude short of the delta. The mechanism is instead #2809's own bare row —
-   `computeMangledShadowMap` now mints `(name ↦ name)` per interface method per unit, so a
-   map that used to be EMPTY off the emit path is non-empty on every path, and three readers
-   of it were written for an empty list: `rewriteArgScoped`'s `sm` arm scanned it twice per
-   `EVar` in the program, and `moduleSpellsShadowBare` rebuilt the module's top-level name
-   list, re-walked its import decls and rebuilt `mangledName "core" bare` once per row. The
-   repair is the tree's usual one — the map is an `OrdMap` at every probing reader
-   (`shadowSymIndex`), and the per-module facts the S1 filters ask for are derived once per
-   module (`SpellCtx`, `BareLocals`) instead of once per row. No predicate changed: the
-   admission rule is the one stated above, with `depExportsUnknown` naming the fail-open
-   condition that the wildcard arm and `depExportsStandalone` now share instead of each
-   restating it.
+   **The check-path cost, re-measured on the merged head, and the method corrected.**
+   Item 20's +1.005% above compared two arms compiling DIFFERENT source: the branch adds
+   compiler source, and so does any slice that repairs it, so an arm measured before an
+   edit and an arm measured after are two workloads, not two binaries. Held properly —
+   all three arms compiling THIS tree's source at its final state, `GC_INITIAL_HEAP_SIZE`
+   at 4 GB so the collector's mark count is not a step in the middle of the range — the
+   cells read: `check compiler/driver/medaka_cli.mdk` main 71.612B, branch base 72.040B
+   (+0.60%), repaired **71.833B (+0.31%)**; `build` of the same 56.164B / 56.178B
+   (+0.02%) / **56.174B (+0.02%)**; the emitter child alone 62.628B / 62.428B (-0.32%) /
+   **62.164B (-0.74%)**. `check stdlib/json.mdk`, the two fixture verbs and the four
+   warm-LSP proxies are all NEGATIVE against main on the repaired arm (-0.006% to
+   -0.098%) where the branch base was slightly positive. The stdlib cell must be run from
+   each arm's OWN tree: a binary whose `defaultMedakaRoot` is elsewhere fails every
+   `stdlib/*` file on the internal-primitive policy and exits early, which reads as a 2.4x
+   speedup rather than as an error.
+   **What the check-path delta actually is.** Per-function attribution (`cg_annotate`
+   joined on symbol, lambda rows dropped as unpairable) names it: against main the
+   repaired arm carries `lookupAssoc` +99.1M Ir and `rewriteArgScoped` -50.5M with the
+   dispatched `compare` -60.8M. **The standing `stampedRecordHead` hypothesis is REFUTED,
+   not merely untested**: `recordOwnerModule` carries +177K Ir, four orders of magnitude
+   short. The mechanism is #2809's own bare row — `computeMangledShadowMap` mints one
+   `(name, name)` row per interface method per unit, so a map that used to be EMPTY off
+   the emit path is non-empty on every path, and `rewriteArgScoped` probes it once per
+   `EVar` in the program.
+   **The obvious repair is the wrong one, twice, and the measurement is what says so.**
+   Indexing the map by `OrdMap` — this tree's standing answer to a `List` used as a map —
+   read +246M Ir of `OrdMap` work against the -187M of assoc scans it removed, a NET
+   +206M: the map holds a HANDFUL of rows on the compiler's own graph, so a tree probe
+   (two dispatched three-way `compare`s, plus the inserts to build the tree) costs more
+   than the scan. Deriving the index once per graph rather than per reader moved 8M of
+   that, which is what identified the cost as the PROBES. The same result repeated one
+   level down: `moduleSpellsShadowBare`'s per-module facts are worth deriving once
+   (`SpellCtx`, `BareLocals` — `funDefs` -19.8M, the per-row import walk -12.9M,
+   `contains` -8.3M), but holding them as SETS cost +106M in inserts and collector work
+   against the ~35M it saved, so they are held as LISTS. Thirteen quadratics in this tree
+   were a `List` used as a set; this is the boundary condition on that rule, and it is a
+   ROW COUNT, not a shape. What carries the repair is neither: `rewriteArgScoped`'s `EVar`
+   clause tested `not (omHasKey n bound)` in each of four guards, and hoisting that to one
+   leading arm is the -50.5M above. No predicate changed: the admission rule is the one
+   stated above, with `depExportsUnknown` naming the fail-open condition that the wildcard
+   arm and `depExportsStandalone` now share instead of each restating it.
 
 ### SA-11. Artifacts
 
