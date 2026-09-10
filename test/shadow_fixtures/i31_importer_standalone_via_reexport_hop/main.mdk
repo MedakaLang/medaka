@@ -1,0 +1,17 @@
+-- SHADOW-SEMANTICS cell I31: I29 with ONE variable changed -- the standalone reaches
+-- this module through an `export import` hop instead of being declared in the module
+-- the import names.  Everything else is I29 byte for byte.
+--
+-- The clause does not scope "reaches `M` through a selective import" to a direct
+-- declaration, and S1's own right operand is folded over re-export chains of any
+-- depth (`graphIfaceMethods`), so the warning is owed here exactly as in I29.  This
+-- is the axis a single-hop corpus cannot see: a detector that reads only the
+-- DIRECTLY imported module's own top-level functions passes I29 and is silent here,
+-- which is #2738's original S0 with one extra file.
+import box.{Box(..)}
+import mid.{peek}
+import peekable.{Peekable}
+
+main =
+  let b = Box 7
+  println "peek=\{debug (peek b)}"

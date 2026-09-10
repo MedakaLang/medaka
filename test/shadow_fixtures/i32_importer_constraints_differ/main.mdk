@@ -1,0 +1,14 @@
+-- SHADOW-SEMANTICS cell I32: I29's topology with the difference between the two
+-- schemes moved ENTIRELY into the constraint set.  Every other importer cell in this
+-- corpus differs in the body of the type, so none of them can see a comparison that
+-- descends into the body and skips the constraints.
+--
+-- `Eq a => b -> a -> String` and `Debug a => t -> a -> String` are not
+-- alpha-equivalent by any reading, so S2-IMPORT-DIFFER requires the warning.  The
+-- resolution is I29's and is not what the cell is about: `Taggable` is nameable by
+-- its type name, `Box` carries a live impl, so the occurrence dispatches to the
+-- method and prints `iface`, never `prov`.
+import ifc.{Taggable, Box(..)}
+import prov.{tagOf}
+
+main = println (tagOf (Box 3) 9)

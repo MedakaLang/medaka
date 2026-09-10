@@ -1,0 +1,21 @@
+-- SHADOW-SEMANTICS cell I29 (#2738): the i3 topology with the STANDALONE'S DOMAIN
+-- WIDENED to include the receiver, so both candidates typecheck and the shadow is
+-- observable only as a value and a diagnostic.
+--
+-- Nothing here declares `peek`.  The file's only statement about the name is the
+-- SELECTIVE import of `box.peek : Box a -> (String, a)`; `import peekable.{Peekable}`
+-- names a type, never the method.  Per S1 the interface is nameable (S1-NS (a)(i),
+-- the TYPE arm), so `peek` is an importer shadow; per S2's importer arm `Box` has a
+-- live `impl Peekable Box`, so the occurrence dispatches.  That resolution is
+-- CONFORMANT and this cell pins it unchanged: `peek=7`, not `peek=("box", 7)`.
+--
+-- What the cell adds is that the displacement is no longer SILENT.  The two schemes
+-- differ, so `W-IMPORT-METHOD-SHADOW` must fire on check, run and build, at exit 0,
+-- naming both bindings and both types.  Every other column of this row is identical
+-- with and without the warning, which is why the 8th column exists.
+import box.{Box(..), peek}
+import peekable.{Peekable}
+
+main =
+  let b = Box 7
+  println "peek=\{debug (peek b)}"

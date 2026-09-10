@@ -1741,7 +1741,7 @@ IDENT "r"
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "toList"
+IDENT "entries"
 COLON
 UPPER "Map"
 IDENT "k"
@@ -1754,7 +1754,7 @@ COMMA
 IDENT "v"
 RPAREN
 NEWLINE
-IDENT "toList"
+IDENT "entries"
 IDENT "m"
 EQUAL
 IDENT "foldrWithKey"
@@ -3007,6 +3007,75 @@ DEDENT
 NEWLINE
 EXPORT
 IMPL
+UPPER "Foldable"
+LPAREN
+UPPER "Map"
+IDENT "k"
+RPAREN
+WHERE
+INDENT
+IDENT "fold"
+IDENT "f"
+IDENT "z"
+IDENT "m"
+EQUAL
+IDENT "foldlWithKey"
+LPAREN
+IDENT "acc"
+UNDERSCORE
+IDENT "v"
+FAT_ARROW
+IDENT "f"
+IDENT "acc"
+IDENT "v"
+RPAREN
+IDENT "z"
+IDENT "m"
+NEWLINE
+IDENT "foldRight"
+IDENT "f"
+IDENT "z"
+IDENT "m"
+EQUAL
+IDENT "foldrWithKey"
+LPAREN
+UNDERSCORE
+IDENT "v"
+IDENT "acc"
+FAT_ARROW
+IDENT "f"
+IDENT "v"
+IDENT "acc"
+RPAREN
+IDENT "z"
+IDENT "m"
+NEWLINE
+IDENT "toList"
+IDENT "m"
+EQUAL
+IDENT "values"
+IDENT "m"
+NEWLINE
+IDENT "isEmpty"
+UPPER "Tip"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isEmpty"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "length"
+IDENT "m"
+EQUAL
+IDENT "size"
+IDENT "m"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+IMPL
 UPPER "Eq"
 LPAREN
 UPPER "Map"
@@ -3036,11 +3105,11 @@ UPPER "False"
 ELSE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "a"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "b"
 RPAREN
 NEWLINE
@@ -3068,11 +3137,11 @@ IDENT "b"
 EQUAL
 IDENT "compare"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "a"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "b"
 RPAREN
 NEWLINE
@@ -3100,7 +3169,7 @@ EQUAL
 INTERP_OPEN "fromList "
 IDENT "debug"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "m"
 RPAREN
 INTERP_END ""
@@ -3187,7 +3256,7 @@ IDENT "display"
 IDENT "m"
 EQUAL
 MATCH
-IDENT "toList"
+IDENT "entries"
 IDENT "m"
 INDENT
 LBRACKET
@@ -4093,7 +4162,7 @@ IDENT "ys"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "union"
 IDENT "a"
@@ -4101,7 +4170,7 @@ IDENT "b"
 RPAREN
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "naiveUnion"
 IDENT "a"
@@ -4206,11 +4275,11 @@ IDENT "b"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "naiveUnionWith"
 LPAREN
@@ -4276,11 +4345,11 @@ IDENT "b"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "naiveDifference"
 IDENT "a"
@@ -4346,11 +4415,11 @@ IDENT "b"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "naiveIntersectionWith"
 LPAREN
@@ -4416,11 +4485,11 @@ IDENT "b"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "intersectionWith"
 LPAREN
@@ -4568,11 +4637,11 @@ IDENT "m"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "m"
 RPAREN
 AND
@@ -4616,11 +4685,11 @@ IDENT "m"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "filterWithKey"
 LPAREN
@@ -4676,11 +4745,11 @@ IDENT "m"
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "got"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "naiveFilterWithKey"
 LPAREN
@@ -4864,11 +4933,11 @@ IDENT "rebuilt"
 AND
 IDENT "eq"
 LPAREN
-IDENT "toList"
+IDENT "entries"
 IDENT "rebuilt"
 RPAREN
 LPAREN
-IDENT "toList"
+IDENT "entries"
 LPAREN
 IDENT "delete"
 IDENT "k"

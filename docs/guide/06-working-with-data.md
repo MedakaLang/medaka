@@ -233,7 +233,7 @@ Counting a category is a `filter` followed by `length`. Grouping is a `fold` int
 `Map`.
 
 ```medaka
-import map.{Map, get, toList, insertWith}
+import map.{Map, get, entries, insertWith}
 
 data Category = Food | Housing | Books deriving (Eq, Ord, Debug)
 
@@ -292,7 +292,7 @@ printAll (x :: xs) =
 main =
   println (total ledger)
   println (ledger |> filter (e => e.category == Food) |> length)
-  printAll (toList (byCategory ledger) |> map ((c, t) => "\{c}: \{t}"))
+  printAll (entries (byCategory ledger) |> map ((c, t) => "\{c}: \{t}"))
   println (get Books (byCategory ledger))
 ```
 
@@ -306,9 +306,11 @@ Some 18.0
 ```
 
 `insertWith (+)` is the grouping idiom: insert the amount under the category, and if
-there is already an amount there, add to it instead of replacing it. `toList` on a
+there is already an amount there, add to it instead of replacing it. `entries` on a
 `Map` gives a list of pairs in key order, which is why the output follows
-`Category`'s declaration order rather than the order of the ledger.
+`Category`'s declaration order rather than the order of the ledger. `keys` and
+`values` give either half on its own, and because `Map` is `Foldable`, the `toList`
+of the previous section gives you the values.
 
 `printAll` is how you print a list one element per line: a two-clause recursive
 function. `map println xs` would build a `List Unit` and discard it, and the

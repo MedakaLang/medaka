@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS cell I30 provider 2: the standalone `main.mdk` selectively
+-- imports.  Its declared signature `a -> String` is ALPHA-EQUIVALENT to the
+-- method's `t -> String` -- the same type up to renaming the variable -- which is
+-- the one thing that separates this cell from I29.
+export tagOf : a -> String
+tagOf _ = "prov"
