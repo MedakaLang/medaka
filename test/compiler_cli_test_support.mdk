@@ -142,6 +142,8 @@ expectVerbExitStartsWithAndContains verb args expectedCode prefix needles =
    and whole. -}
 public export data Agreement = Agreement {
   checkCode : Int,
+  checkOut : String,
+  checkErr : String,
   runCode : Int,
   runOut : String,
   runErr : String,
@@ -171,24 +173,27 @@ export
 checkRunBuild : String -> String -> <Exec "_", IO> Result String Agreement
 checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
   Err e => Err "\{entry}: could not run `medaka check`: \{e}"
-  Ok (checkCode, _, _) => match boundedVerb medakaBin ["run", entry]
-    Err e => Err "\{entry}: could not run `medaka run`: \{e}"
-    Ok (runCode, runOut, runErr) =>
-      match boundedVerb medakaBin ["build", entry, "-o", binPath]
-        Err e => Err "\{entry}: could not run `medaka build`: \{e}"
-        Ok (buildCode, buildOut, buildErr) =>
-          let built =
-            if buildCode == 0 then boundedVerb binPath [] else Ok (0, "", "")
-          match built
-            Err e => Err "\{entry}: could not run the built binary: \{e}"
-            Ok (binCode, binOut, binErr) => Ok Agreement {
-              checkCode = checkCode,
-              runCode = runCode,
-              runOut = runOut,
-              runErr = runErr,
-              buildCode = buildCode,
-              buildLog = buildOut ++ buildErr,
-              binCode = binCode,
-              binOut = binOut,
-              binErr = binErr,
-            }
+  Ok (checkCode, checkOut, checkErr) =>
+    match boundedVerb medakaBin ["run", entry]
+      Err e => Err "\{entry}: could not run `medaka run`: \{e}"
+      Ok (runCode, runOut, runErr) =>
+        match boundedVerb medakaBin ["build", entry, "-o", binPath]
+          Err e => Err "\{entry}: could not run `medaka build`: \{e}"
+          Ok (buildCode, buildOut, buildErr) =>
+            let built =
+              if buildCode == 0 then boundedVerb binPath [] else Ok (0, "", "")
+            match built
+              Err e => Err "\{entry}: could not run the built binary: \{e}"
+              Ok (binCode, binOut, binErr) => Ok Agreement {
+                checkCode = checkCode,
+                checkOut = checkOut,
+                checkErr = checkErr,
+                runCode = runCode,
+                runOut = runOut,
+                runErr = runErr,
+                buildCode = buildCode,
+                buildLog = buildOut ++ buildErr,
+                binCode = binCode,
+                binOut = binOut,
+                binErr = binErr,
+              }
