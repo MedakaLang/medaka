@@ -1,5 +1,5 @@
 # META
-source_lines=43918
+source_lines=43921
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -11867,9 +11867,12 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
     match maybeStandaloneValueMono name
       Some m => m
       -- #410/#669 (S4, EMIT path): maybeStandaloneValueMono is keyed on the BARE name via
-      -- `definerShadowNamesRef`, but the mangler (mangleUnits) has already renamed the
-      -- definer standalone's funDef + call sites to `<mid>__name` before marking, so the
-      -- bare name is no longer in that ref and the pin above misses — the occurrence then
+      -- `definerShadowNamesRef`.  Under the old mangle-first emit order the mangler had
+      -- already renamed the definer standalone's funDef + call sites to `<mid>__name`
+      -- before marking, so the bare name was no longer in that ref and the pin above
+      -- missed (#2809 reversed that order, and this is accommodation 6 of the census in
+      -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20, retiring with it on
+      -- its own measurement) — the occurrence then
       -- gets the permissive METHOD scheme (`a -> a -> Int`), so `map size` infers element
       -- type `Int -> Int` (a function) and `println`'s `Display (List (Int -> Int))`
       -- stamps a NULL element route (RNone → i64 0 dict word → the built binary SEGFAULTs,

@@ -1,5 +1,5 @@
 # META
-source_lines=185
+source_lines=192
 stages=DESUGAR,MARK
 # SOURCE
 -- DEAD-CODE ELIMINATION for the native LLVM emit path (Stage 3 #2a).
@@ -56,19 +56,26 @@ filterReachable reach ((DFunDef pub n ps body) :: rest)
   | otherwise = filterReachable reach rest
 filterReachable reach (d :: rest) = d :: filterReachable reach rest
 
--- ── prelude-reference canonicalization (post-mangle synthesized refs) ────────
--- The emit drivers run `mangleUnits` BEFORE `elaborateModules`, renaming every
--- prelude definition to `core__<name>`.  But `elaborateModules` SYNTHESIZES bare
--- references that never passed through mangling — notably the `/=` rewrite
--- (typecheck.mdk binopMethodApp builds `EApp (EVar "not") …`).  Such a bare name
--- (`not`) does NOT match its mangled definition (`core__not`) by string equality,
--- so a naive reachability walk treats the def as unreached and DCE DROPS it →
--- the emitter then aborts `unbound variable 'not'` (and `canonFnName` in the
--- emitter can't recover a def that was never emitted).  GENERAL FIX: when a
--- referenced bare name is NOT itself a defined fn but its `core__`-mangled form
--- IS, the reference resolves to the mangled def.  This mirrors the emitter's
--- `canonFnName` exactly, so reachability and emission agree, and it covers ANY
--- post-mangle-synthesized prelude reference, not just `not`.
+-- ── prelude-reference canonicalization (a mangle-first accommodation) ────────
+-- The emit drivers used to run `mangleUnits` BEFORE `elaborateModules`, renaming
+-- every prelude definition to `core__<name>`, while `elaborateModules` SYNTHESIZES
+-- bare references AFTERWARDS — notably the `/=` rewrite (typecheck.mdk
+-- binopMethodApp builds `EApp (EVar "not") …`).  Such a bare name (`not`) does not
+-- match its mangled definition (`core__not`) by string equality, so a naive
+-- reachability walk treated the def as unreached and DCE DROPPED it → the emitter
+-- aborted `unbound variable 'not'` (and `canonFnName` in the emitter cannot recover
+-- a def that was never emitted).  The bridge below is that repair: a referenced
+-- bare name that is not itself a defined fn but whose `core__`-mangled form IS
+-- resolves to the mangled def, mirroring the emitter's `canonFnName` so
+-- reachability and emission agree.
+-- Since #2809 the emit drivers elaborate FIRST and mangle the elaborated trees, so
+-- a synthesized bare reference is renamed with everything else and arrives here
+-- already spelled `core__not`: the defect this bridges cannot arise on the emit
+-- path any more.  It is accommodation 12 of the census in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20 — four mirrored copies
+-- of one canonicalization (here, `llvm_emit.canonFnName`, `wasm_emit.canonFn`,
+-- `wasm_reach`) — and retires with it; each copy owes its own measurement of which
+-- callers still reach it, so none is deleted here.
 canonRef : HashMap String Unit -> String -> String
 canonRef defined n
   | has n defined = n

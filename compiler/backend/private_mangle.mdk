@@ -140,7 +140,9 @@ import support.util.{
 -- The per-unit rename map is applied to EVERY reference in the unit (one lookup
 -- per EVar / def-name / pattern ctor). Backing it with the String-keyed
 -- weight-balanced tree (support.ordmap) makes each lookup O(log n) instead of an
--- O(map) linear `lookupAssoc` scan — the map is built once per unit in mangleUnitU.
+-- O(map) linear `lookupAssoc` scan — and it is built ONCE per unit, by `mangleUnitU`
+-- on the plain entry and by `unitRenameMapEntry` on the elaborated one, whose two
+-- readers (the decl rename and the evidence remap) share the one map.
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -196,25 +198,43 @@ mangleUnitsEv coreDecls modules =
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = map unitCtorExportEntry allUnits
-  let coreOut =
-    mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
-  let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
-  let maps = map (unitRenameMapEntry exportsPerUnit ctorExportsPerUnit) allUnits
-  let _ = remapEvidence (mangleEvEntry maps)
+  -- ONE map per unit, threaded to both readers: the decl rename and the evidence
+  -- remap name the same symbols, and building the map twice was measured at +0.99%
+  -- Ir on the emitter child over the compiler's own graph.
+  let units =
+    map (unitRenameMapEntry exportsPerUnit ctorExportsPerUnit) allUnits
+  let renamed = map renameUnitEntry units
+  let coreOut = match renamed
+    [] => coreDecls
+    (_, ds) :: _ => ds
+  let modsOut = match renamed
+    [] => modules
+    _ :: rest => rest
+  let _ = remapEvidence (mangleEvEntry (map dropUnitDecls units))
   (coreOut, modsOut)
 
--- one unit's rename map, keyed by its module id.  The SAME two builders and the same
--- first-entry-wins fold `mangleUnitU` applies to the unit's decls, so a route and the
--- definition it names cannot be renamed differently.
+-- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
+-- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a
+-- route and the definition it names cannot be renamed differently.
 unitRenameMapEntry : List (String, List (String, String)) ->
   List (String, List (String, List String)) ->
   (String, List Decl) ->
-  (String, OrdMap String)
+  (String, (OrdMap String, Bool, List Decl))
 unitRenameMapEntry exportsPerUnit ctorExportsPerUnit (mid, decls) =
   let rmList =
     buildUnitRenameMap mid exportsPerUnit decls
       ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
-  (mid, omFromPairs (reverseL rmList) omEmpty)
+  (mid, (omFromPairs (reverseL rmList) omEmpty, isEmptyL rmList, decls))
+
+-- apply an already-built map, exactly as `mangleUnitU`'s tail does.
+renameUnitEntry : (String, (OrdMap String, Bool, List Decl)) ->
+  (String, List Decl)
+renameUnitEntry (mid, (rm, noEntries, decls)) =
+  (mid, if noEntries then decls else map (renameDecl rm) decls)
+
+dropUnitDecls : (String, (OrdMap String, Bool, List Decl)) ->
+  (String, OrdMap String)
+dropUnitDecls (mid, (rm, _, _)) = (mid, rm)
 
 -- An entry stamped by a module this graph does not carry keeps its routes: there is no
 -- map that could resolve its symbols, and guessing one would rename against the wrong

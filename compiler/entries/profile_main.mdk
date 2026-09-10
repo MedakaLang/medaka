@@ -329,9 +329,12 @@ runStaged on targetPath rsrc csrc tsrc =
       declsOp
       (opSnap () - oDc0)
   -- mangle: universal per-module private-name de-collision (issue #882). The real emit
-  -- drivers (entry_support.runEmitWith) run mangleUnits BEFORE elaborateModules,
+  -- drivers (entry_support.runEmitWith) elaborate first and then run `mangleUnitsEv`
+  -- over the elaborated trees (#2809),
   -- renaming a unit's PRIVATE defs to `<mid>__name` so cross-module bare-name collisions
-  -- cannot alias at emit; #352 flags its `pubFnNames` list-as-set. profile_main never
+  -- cannot alias at emit; #352 flags its `pubFnNames` list-as-set. This stage stays on
+  -- the plain `mangleUnits` entry and on the RAW decls, so it prices the rename alone
+  -- and not the elaboration ahead of it. profile_main never
   -- called it — a whole production pass was off the CI map. ADDITIVE (mirrors #881's
   -- resolve stage): run it standalone over (cDecls, [("target", desugared)]) — the same
   -- core-plus-one-module shape the emit drivers feed it — and DISCARD the result; it

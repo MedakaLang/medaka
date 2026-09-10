@@ -1,5 +1,5 @@
 # META
-source_lines=2094
+source_lines=2096
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -878,14 +878,16 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 --   site the interface has no impl for the concrete receiver, but an explicitly-
 --   imported/local standalone function shadows the method name, so eval ignores
 --   VMulti dispatch and evaluates the bound name as the plain standalone (no
---   narrowing).  The carried String is the
---   MANGLED standalone symbol to call ("" = call the EMethodAt's own (bare) name).
---   On the EMIT path (P0-18) a definer-shadow occurrence is marked `EMethodAt` with
---   the BARE dispatch name (so `implFor` finds the impl when the receiver DOES have
---   one), but its RLocal fallback must reach the module-qualified standalone symbol
---   `<mid>__name` that `mangleUnits` renamed the def to — that symbol rides here.
---   On the un-mangled run/check path the symbol is "" and eval/emit uses the bare
---   name.
+--   narrowing).  The carried String is the standalone SYMBOL to call.
+--   A definer-shadow occurrence is marked `EMethodAt` with the BARE dispatch name
+--   (P0-18, so `implFor` finds the impl when the receiver DOES have one), and its
+--   RLocal fallback carries the symbol separately.  Since #2809 that symbol is
+--   populated on EVERY path: typecheck seeds it with the bare standalone name, and
+--   `private_mangle.mangleRoute` rewrites it to `<mid>__name` when the emit path
+--   renames the definition — so the route names the symbol it calls rather than
+--   asking its reader to reconstruct one.  ("" would mean call the EMethodAt's own
+--   bare name; typecheck mints no such route — `mintMethodCell ""` yields `RNone` —
+--   so only `core_ir_sexp_parse`'s untagged `RLocal` round-trip produces it.)
 --   ⚠️ S-1 / SHADOW-SEMANTICS clause S9: RLocal DOES carry dicts.  The `List Route`
 --   is the standalone's OWN `=>`-constraint dicts, slot-ordered, exactly as
 --   `RKey`'s `List Route` carries a parametric impl's element dicts.  It is

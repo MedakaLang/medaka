@@ -66,7 +66,7 @@ srcNameFromArgs _ = ""
 main : <IO> Unit
 main = driveModules (runEmitWith "runAsyncIOMain" emitTail)
 
--- COMPOSITE-MAIN AUTO-PRINT: the shared mangle+elaborate+auto-print-wrap glue
+-- COMPOSITE-MAIN AUTO-PRINT: the shared elaborate+auto-print-wrap+mangle glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this
 -- backend's emitTail; `main` above wires it as `runEmitWith emitTail`.  A bare
 -- non-Unit VALUE main is rewritten `main = <e>` → `main = println <e>`; a bare

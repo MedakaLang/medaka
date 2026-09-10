@@ -84,9 +84,10 @@ runEmit runtimeDecls coreDecls modules =
     emitProgramRecord input (lowerProgramEmit TargetNative allDecls)
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
--- across units, BEFORE elaborateModules flattens the boundaries away.  Without
--- this, two modules' same-named privates (e.g. lex_main.emit vs lexer.emit) both
--- mangle to @mdk_emit and only one survives → @main calls the wrong arity.
+-- across units, on the trees `elaborateModules` has already produced (#2809 put the
+-- rename after the elaboration, not before it).  Without this, two modules'
+-- same-named privates (e.g. lex_main.emit vs lexer.emit) both mangle to @mdk_emit
+-- and only one survives → @main calls the wrong arity.
 
 -- gap-TOLERANT: unreachable dead-code gaps in core.mdk become "0" placeholders
 -- instead of aborting.  The harness byte-diff is the safety net.

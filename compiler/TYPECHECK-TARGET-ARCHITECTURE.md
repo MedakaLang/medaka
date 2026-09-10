@@ -989,6 +989,108 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    mangled and the receiver's type reference is not — which this change does not touch;
    they stay load-bearing on the emit path, as their own comment's stub measurement says.
 
+20. **The emitter child elaborates the program the user wrote, 2026-09-10** (#2809, branch
+   `typecheck-rearch-4`). `entry_support.runEmitWith` / `emitModulesWith` — and the other
+   three emit entries (`playground_main`, `llvm_bootstrap_lex_main`, `wasm_emit_gaps_main`;
+   `profile_main`'s standalone call is discarded and stays on the plain entry) — now run
+   `elaborateModules` FIRST, then the #2089 residual gate, then `private_mangle.mangleUnitsEv`
+   over the elaborated, dict-passed trees. The child's verdict therefore equals `check`'s by
+   construction, not by a table-by-table audit.
+   **Mechanism, one line per fixture class.** `mangleUnits` never rewrites a `DUse` decl, so
+   in a mangled graph a definition and its references read `<mid>__f` while the import decl
+   still spells `f`. (a) The #845/#1114 class — `memberSchemeOblEntry` filters an obligation
+   entry by `useMemberOrigin` against a qual name the mangler renamed, so
+   `importedSchemeOblsRef` came back empty for the selective and both re-export spellings;
+   (b) the alias spelling — `moduleAliasEntry` keys `A.<qualName>`, and the mangler had
+   already ERASED the alias, so the call site was a bare mangled symbol; (c) the wildcard
+   sibling survived because `wildSchemeOblEntry` copies the DEFINER's own name; (d) the #1675
+   class — `ambiguousExportRows` groups by NAME, and two mangled denotations of one name are
+   two names, so the ambiguity was erased rather than unreported.
+   **The two prerequisites, each landed on its own slice before this one.** #2839 (item 19)
+   gave the record-head stamp its owner: under the reorder the stamp is read on an unmangled
+   elaboration, where the bare registry key made `pairRecordByName` decide a projection by
+   module-name sort order, and the three `record_receiver_ident_*_field_order` cells printed
+   the hand-derived WRONG pick. #2840 fixed `run`'s own defect on the alias spelling of a
+   re-exported constrained binding (`aliasDictNamesOfPath` asked the SPELLED module what it
+   defines, and a pure re-exporter defines nothing, so the alias local never joined the
+   dict-name set): `build` had been right only because it mangled first, and the reorder
+   converged it onto a heap pointer at exit 0 — loud panic to silent wrong answer,
+   [W-QUIETER]. The #1427 `must_fail` pin it drained is replaced by positive
+   `diff_compiler_dict_semantics` rows (`s8-xmod-reexport-alias-constrained`, `-depth3`,
+   `-depth3-float`, `-wildcard-twoimpl`), not deleted without a guard.
+   **Measured on the merged head**, base = main `e402f89d3`, each arm from its own tree.
+   The six fixtures through the child alone under `MEDAKA_STRICT=1`: all exit 1, with the
+   text `check` prints and no `__` anywhere in stderr (asserted, not eyeballed); on the base
+   arm five of the six emit IR at exit 0 with empty stderr. `selfcompile_fixpoint` C3a and
+   C3b both PASS byte-for-byte against the seed, with no `refresh_seed`. Two-arm
+   `medaka build --keep-ir` over every multi-module `test/**/main.mdk` and `test/**/entry.mdk`
+   (267 entries): 200 IR byte-identical, **0 differing**, 66 that emit no IR on either arm
+   and one that aborts 134 on both — no exit-code or stdout disagreement anywhere. The gate
+   set (`run_check_agreement`, `llvm*`, `engines`, `dict_semantics`, `eval_typed_modules`,
+   `eval_modules`, `core_ir*`, `shadow_semantics`, `selfproc`, `snapshot*`, `must_fail`,
+   `flat_vs_onemodule`, `test_native`, `lsp*`, `mcp`, `test/wasm/*`) is green, `must_fail`
+   at its healthy polarity with nothing drained.
+   **The one IR byte on the compiler's own graph, and it is explained.** Holding the source
+   fixed and swapping only the emitter binary, `medaka_cli`'s IR differs in exactly one
+   function: `backend_llvm_emit__mapConst` moves from a member of `inferParamTys`' TMC
+   dispatch group to its own standalone `trmc` define. The TMC census is otherwise
+   unchanged — 626 `; tmc:` markers and 73 group roots on both arms, group members 69 → 68,
+   standalone 484 → 485 — so no function loses TMC, and the arity is unchanged (no dict
+   parameter was injected). It is accommodation 14 below: `llvm_emit`'s private
+   `mapConst : a -> List b -> List a` collides bare with core's constrained
+   `mapConst : Mappable f => b -> f a -> f b`, and the collision is visible to elaboration
+   only now that elaboration sees the author's spellings.
+   **Cost.** Cachegrind Ir, `GC_INITIAL_HEAP_SIZE` pinned, against `e402f89d3`: the emitter
+   child on the compiler's own graph **−1.32%**, the child on a 3-module fixture +0.10%,
+   `build` of a 3-module fixture +0.003%, `run` of one +0.006%. The child figure is a NET
+   WIN because the reorder's first cut built each unit's rename map twice — once in
+   `mangleUnitU` for the decls and again for the evidence remap, +0.99% on that cell —
+   and `mangleUnitsEv` now threads ONE map to both readers.
+   **The check path costs +1.0% on the compiler's own graph, and the method by which that
+   is stated matters more than the number.** A whole-compiler `check` comparison across two
+   branch points is confounded: the branch ADDS code to `compiler/`, so the two arms are not
+   the same workload. Holding the workload fixed — the same source tree, only the binary
+   swapped — `check compiler/driver/medaka_cli.mdk` reads 75.07B Ir on the base binary and
+   **75.82B (+1.005%) on this one**, while the naive two-tree comparison reads +1.50%, of
+   which +0.49% is the compiler's own source having grown. Two controls say the checker is
+   not generally slower: `check stdlib/json.mdk`, a target neither arm changed, is
+   **+0.0026%**, and ruling 7's warm-LSP `import list` proxy is +0.045% warm / −0.003% cold.
+   **Per-slice attribution did NOT resolve and is not claimed**: the same held-workload cell
+   on the three landing binaries reads +0.591% (#2840), −0.303% (#2839), +0.717% (#2809 plus
+   the map threading) — non-monotone, i.e. inside the between-build variation of separately
+   linked ThinLTO binaries at this magnitude. `cg_annotate --diff` puts ~89% of the delta in
+   the unattributed bucket rather than naming a function. The standing hypothesis, untested,
+   is `stampedRecordHead` (item 19): it is the only new per-node work on the check path, it
+   runs at every `EFieldAccess`/`ERecordUpdate`, off the emit path the qualification is not
+   the identity function so `mangledName` builds a fresh String through `sanitizeId` per
+   stamp, and a record-dense 76-module graph is exactly where that would show while
+   `stdlib/json.mdk` would not. Owed as a measurement, not taken here.
+   **The owed follow-up census — fourteen accommodations that exist only because mangling
+   ran first.** Twelve from the design report (`design-2809/DESIGN.md` §2(b)):
+   (1) `resolveMemberRows`' `endsWithStr (memberSuffix origin)` fallback;
+   (2) `aliasSchemes`' loaded-module-id mangle test (#1337/#1427/#1472);
+   (3) `computeMangledShadowMap` + `mangledShadowMapRef` (P0-18);
+   (4) `buildStandaloneShadowsGraph`'s `mangled` arm;
+   (5) `standaloneShadowsFromSet`'s `mangled` arm (#411);
+   (6) `maybeStandaloneValueMonoEmit` (#410/#669);
+   (7) `mangledCtorShaped`;
+   (8) `lookupRecordByMangledHead` / `mangledHeadCandidates`;
+   (9) `graphCarriesMangledFunDefs` / `mangledFunDefsPresentRef` / `importerShadowOnEmitPath`;
+   (10) `isMangledFor` / `isMangledExportOfAny`;
+   (11) `private_mangle`'s `unclaimPreludeForLocalMethods`;
+   (12) the four mirrored bare→mangled canonicalizations (`ir/dce.canonRef`,
+   `llvm_emit.canonFnName`, `wasm_emit.canonFn`, `wasm_reach`'s own copy).
+   Two more the implementer found: (13) the record-head `Ref` cells `EFieldAccess` /
+   `ERecordUpdate` carry — DISCHARGED by #2839, item 19, which is why (8) does NOT retire
+   with it: (8) answers which `RecordInfo` a receiver SELECTS, a different question; and
+   (14) the prelude's constrained names colliding bare with a module's privates, whose only
+   measured observable is the TMC group edge above. Each item owes its own measurement, so
+   none is deleted here; the comment at each site now says which census row it is. What is
+   deliberately left: the #2089 gate stays warn-first (hard only under `MEDAKA_STRICT=1`),
+   `build`'s parent keeps its typecheck, and #2810 (`medaka test --native` under the hard
+   gate) is untouched. With this landed, ruling 3 shape (a) — item 16's refutation — has its
+   stated prerequisite and can be re-run on `rearch3-build-child`'s acceptance.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
