@@ -1110,6 +1110,41 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `build`'s parent keeps its typecheck, and #2810 (`medaka test --native` under the hard
    gate) is untouched. With this landed, ruling 3 shape (a) — item 16's refutation — has its
    stated prerequisite and can be re-run on `rearch3-build-child`'s acceptance.
+   **What the fix round settled, as rules rather than as a diff.** A shadow row is admitted
+   in module `M` only where S1's STANDALONE operand holds there: `M` defines the standalone,
+   or an import form binds its bare name AND the module that form imports from exports a
+   standalone so named (`graphPubDefiners`). A wildcard is not a licence for every name, and
+   a member list that binds an interface METHOD is not an import of a standalone. The record
+   head is owner-qualified exactly once, by `stampedRecordHead` from the record's own
+   declaring module; the mangler no longer renames the `EFieldAccess`/`ERecordUpdate` cells
+   and the stamp carries no idempotence guess. `private_mangle`'s three walked types are
+   closed by construction: `renameScoped`, `renameDecl` and `renamePat` each list their
+   leaves as an audited set, so a new name-carrying `Expr`/`Decl`/`Pat` constructor is a
+   compile error rather than a silent leaf. The prelude shadow census found a FOURTH
+   regression beyond the three the round opened with — core's own mark sets need the same
+   nameable-in-`M` filter (`moduleMarkCtx`'s core arm), without which a user interface method
+   spelled like a core standalone rewrites core's OWN occurrence — and the x16 autoprint
+   `must_fail` pin drained per its own header.
+   **The check-path cost, re-measured on the merged head and then repaired.** Item 20's
+   +1.005% above was measured before the fix round; on `2683406bc` the same held-workload
+   cell reads **+0.31%** (75.200B → 75.430B), and per-function attribution — `cg_annotate`
+   joined on symbol, the lambda rows dropped as unpairable — accounts for essentially all of
+   it by name, which the earlier attempt could not: `lookupAssoc` +99.1M, the collector's
+   allocation entry point +63.4M, `funDefs` +21.7M, the runtime's string-slice +14.2M, the per-row import walk
+   +12.9M (a symbol the base arm does not execute at all), `contains` +6.5M. **The standing `stampedRecordHead`
+   hypothesis is REFUTED, not merely untested**: `recordOwnerModule` carries +177K Ir, four
+   orders of magnitude short of the delta. The mechanism is instead #2809's own bare row —
+   `computeMangledShadowMap` now mints `(name ↦ name)` per interface method per unit, so a
+   map that used to be EMPTY off the emit path is non-empty on every path, and three readers
+   of it were written for an empty list: `rewriteArgScoped`'s `sm` arm scanned it twice per
+   `EVar` in the program, and `moduleSpellsShadowBare` rebuilt the module's top-level name
+   list, re-walked its import decls and rebuilt `mangledName "core" bare` once per row. The
+   repair is the tree's usual one — the map is an `OrdMap` at every probing reader
+   (`shadowSymIndex`), and the per-module facts the S1 filters ask for are derived once per
+   module (`SpellCtx`, `BareLocals`) instead of once per row. No predicate changed: the
+   admission rule is the one stated above, with `depExportsUnknown` naming the fail-open
+   condition that the wildcard arm and `depExportsStandalone` now share instead of each
+   restating it.
 
 ### SA-11. Artifacts
 

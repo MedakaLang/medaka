@@ -210,7 +210,9 @@ mangleUnitsEv coreDecls modules =
   let modsOut = match renamed
     [] => modules
     _ :: rest => rest
-  let _ = remapEvidence (mangleEvEntry (map dropUnitDecls units))
+  let _ =
+    remapEvidence
+      (mangleEvEntry (omFromPairs (reverseL (map dropUnitDecls units)) omEmpty))
   (coreOut, modsOut)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
@@ -238,9 +240,12 @@ dropUnitDecls (mid, (rm, _, _)) = (mid, rm)
 
 -- An entry stamped by a module this graph does not carry keeps its routes: there is no
 -- map that could resolve its symbols, and guessing one would rename against the wrong
--- unit's import scope.
-mangleEvEntry : List (String, OrdMap String) -> EvEntry -> EvEntry
-mangleEvEntry maps (EvEntry (EvId m i) v) = match lookupAssoc m maps
+-- unit's import scope.  Keyed by an `OrdMap`, not scanned: this runs once per evidence
+-- SLOT and the unit list is as long as the module graph.  `omFromPairs` is
+-- last-write-wins where the `lookupAssoc` it replaces was first-match, so the caller
+-- reverses; two units cannot share a mid anyway, so the winner is the same either way.
+mangleEvEntry : OrdMap (OrdMap String) -> EvEntry -> EvEntry
+mangleEvEntry maps (EvEntry (EvId m i) v) = match omLookup m maps
   None => EvEntry (EvId m i) v
   Some rm => EvEntry (EvId m i) (mangleEvVal rm v)
 
