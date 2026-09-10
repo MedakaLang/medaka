@@ -10638,27 +10638,20 @@ reservedRosterOf name =
   else
     None
 
--- The full constructor roster for whichever type owns `name`: a user ADT via
--- `ctorTypeOf`+`ctorsOfType`, or one of the four built-in ADTs via
--- `reservedRosterOf`.  `None` means the owning type can't be determined here
--- (e.g. Bool, whose True/False are hardcoded immediates entirely outside the
--- ctor table) — callers read that as "can't prove exhaustive".
-rosterOwning : Emit -> String -> Option (List String)
-rosterOwning e name = match reservedRosterOf name
-  Some r => Some r
-  None => map (ctorsOfType e) (ctorTypeOf e name)
-
 -- #2848 (S-dead-tails): true when `covered` (the constructor names a
 -- CTSwitch's own branches test) already accounts for every constructor of
 -- the type owning them, so that switch's own default arm — a CTFail lowering
--- to the `@mdk_nonexhaustive_match` abort — is provably unreachable.  Named
--- and exposed for the next slice tracked on the same issue to reuse as-is.
+-- to the `@mdk_nonexhaustive_match` abort — is provably unreachable.
+-- The roster MUST come from `resolveRoster`: a lookup that answers
+-- `reservedRosterOf` first would test a user type reusing a reserved spelling
+-- (`data Doc = Nil | Cons Int Int | Text Int`) against the LIST roster, read
+-- `["Cons","Nil"]` as fully covered, and elide the abort from a match that
+-- really can fail — a silent wrong value on `build` where `run` aborts.
+-- Trying every covered name also makes the answer order-independent.
 switchIsExhaustive : Emit -> List String -> Bool
 switchIsExhaustive _ [] = False
-switchIsExhaustive e (covered@(c :: _)) = match rosterOwning e c
-  Some roster =>
-    isNonEmptyL roster
-      && listLen (filterList (r => not (contains r covered)) roster) == 0
+switchIsExhaustive e covered = match resolveRoster e covered
+  Some roster => isNonEmptyL roster && coveredByRoster covered roster
   None => False
 
 -- The constructor names a CTSwitch's own branches test, in branch order — the
@@ -10769,8 +10762,8 @@ rosterOwnedBy e ty roster =
       roster)
 
 -- The roster a ctor NAME determines, or `None` when the name does not determine
--- exactly one.  `rosterOwning` is the wrong lookup to reason about a value's
--- REPRESENTATION with: it answers the reserved built-in roster FIRST, and the
+-- exactly one.  Asking `reservedRosterOf` FIRST is the wrong lookup for either
+-- the REPRESENTATION or the EXHAUSTIVENESS question, because the
 -- reserved constructor names are exempt from module mangling
 -- (private_mangle.mdk), so a user type that declares one of them reaches the
 -- emitter under the bare name too — compiler/tools/printer.mdk's `Doc` really

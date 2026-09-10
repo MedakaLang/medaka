@@ -1,5 +1,5 @@
 # META
-source_lines=14770
+source_lines=14763
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -10642,27 +10642,20 @@ reservedRosterOf name =
   else
     None
 
--- The full constructor roster for whichever type owns `name`: a user ADT via
--- `ctorTypeOf`+`ctorsOfType`, or one of the four built-in ADTs via
--- `reservedRosterOf`.  `None` means the owning type can't be determined here
--- (e.g. Bool, whose True/False are hardcoded immediates entirely outside the
--- ctor table) — callers read that as "can't prove exhaustive".
-rosterOwning : Emit -> String -> Option (List String)
-rosterOwning e name = match reservedRosterOf name
-  Some r => Some r
-  None => map (ctorsOfType e) (ctorTypeOf e name)
-
 -- #2848 (S-dead-tails): true when `covered` (the constructor names a
 -- CTSwitch's own branches test) already accounts for every constructor of
 -- the type owning them, so that switch's own default arm — a CTFail lowering
--- to the `@mdk_nonexhaustive_match` abort — is provably unreachable.  Named
--- and exposed for the next slice tracked on the same issue to reuse as-is.
+-- to the `@mdk_nonexhaustive_match` abort — is provably unreachable.
+-- The roster MUST come from `resolveRoster`: a lookup that answers
+-- `reservedRosterOf` first would test a user type reusing a reserved spelling
+-- (`data Doc = Nil | Cons Int Int | Text Int`) against the LIST roster, read
+-- `["Cons","Nil"]` as fully covered, and elide the abort from a match that
+-- really can fail — a silent wrong value on `build` where `run` aborts.
+-- Trying every covered name also makes the answer order-independent.
 switchIsExhaustive : Emit -> List String -> Bool
 switchIsExhaustive _ [] = False
-switchIsExhaustive e (covered@(c :: _)) = match rosterOwning e c
-  Some roster =>
-    isNonEmptyL roster
-      && listLen (filterList (r => not (contains r covered)) roster) == 0
+switchIsExhaustive e covered = match resolveRoster e covered
+  Some roster => isNonEmptyL roster && coveredByRoster covered roster
   None => False
 
 -- The constructor names a CTSwitch's own branches test, in branch order — the
@@ -10773,8 +10766,8 @@ rosterOwnedBy e ty roster =
       roster)
 
 -- The roster a ctor NAME determines, or `None` when the name does not determine
--- exactly one.  `rosterOwning` is the wrong lookup to reason about a value's
--- REPRESENTATION with: it answers the reserved built-in roster FIRST, and the
+-- exactly one.  Asking `reservedRosterOf` FIRST is the wrong lookup for either
+-- the REPRESENTATION or the EXHAUSTIVENESS question, because the
 -- reserved constructor names are exempt from module mangling
 -- (private_mangle.mdk), so a user type that declares one of them reaches the
 -- emitter under the bare name too — compiler/tools/printer.mdk's `Doc` really
@@ -16417,11 +16410,9 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "conHeadInfo" (PWild) (EVar "None"))
 (DTypeSig false "reservedRosterOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "reservedRosterOf" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (EApp (EVar "Some") (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (EApp (EVar "Some") (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Ok")) (ELit (LString "Err")))) (EApp (EVar "Some") (EListLit (ELit (LString "Ok")) (ELit (LString "Err")))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))) (EApp (EVar "Some") (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))) (EVar "None"))))))
-(DTypeSig false "rosterOwning" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "rosterOwning" ((PVar "e") (PVar "name")) (EMatch (EApp (EVar "reservedRosterOf") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EApp (EVar "ctorsOfType") (EVar "e"))) (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name"))))))
 (DTypeSig false "switchIsExhaustive" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "switchIsExhaustive" (PWild (PList)) (EVar "False"))
-(DFunDef false "switchIsExhaustive" ((PVar "e") (PAs "covered" (PCons (PVar "c") PWild))) (EMatch (EApp (EApp (EVar "rosterOwning") (EVar "e")) (EVar "c")) (arm (PCon "Some" (PVar "roster")) () (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "roster")) (EBinOp "==" (EApp (EVar "listLen") (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "r")) (EVar "covered"))))) (EVar "roster"))) (ELit (LInt 0))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "switchIsExhaustive" ((PVar "e") (PVar "covered")) (EMatch (EApp (EApp (EVar "resolveRoster") (EVar "e")) (EVar "covered")) (arm (PCon "Some" (PVar "roster")) () (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "roster")) (EApp (EApp (EVar "coveredByRoster") (EVar "covered")) (EVar "roster")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "coveredCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "coveredCtorNames" ((PList)) (EListLit))
 (DFunDef false "coveredCtorNames" ((PCons (PCon "CTBranch" (PVar "h") PWild) (PVar "rest"))) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") PWild)) () (EBinOp "::" (EVar "c") (EApp (EVar "coveredCtorNames") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "coveredCtorNames") (EVar "rest")))))
@@ -18902,11 +18893,9 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "conHeadInfo" (PWild) (EVar "None"))
 (DTypeSig false "reservedRosterOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "reservedRosterOf" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (EApp (EVar "Some") (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (EApp (EVar "Some") (EListLit (ELit (LString "Some")) (ELit (LString "None")))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Ok")) (ELit (LString "Err")))) (EApp (EVar "Some") (EListLit (ELit (LString "Ok")) (ELit (LString "Err")))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))) (EApp (EVar "Some") (EListLit (ELit (LString "Lt")) (ELit (LString "Eq")) (ELit (LString "Gt")))) (EVar "None"))))))
-(DTypeSig false "rosterOwning" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "rosterOwning" ((PVar "e") (PVar "name")) (EMatch (EApp (EVar "reservedRosterOf") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EApp (EVar "ctorsOfType") (EVar "e"))) (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name"))))))
 (DTypeSig false "switchIsExhaustive" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "switchIsExhaustive" (PWild (PList)) (EVar "False"))
-(DFunDef false "switchIsExhaustive" ((PVar "e") (PAs "covered" (PCons (PVar "c") PWild))) (EMatch (EApp (EApp (EVar "rosterOwning") (EVar "e")) (EVar "c")) (arm (PCon "Some" (PVar "roster")) () (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "roster")) (EBinOp "==" (EApp (EVar "listLen") (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "r")) (EVar "covered"))))) (EVar "roster"))) (ELit (LInt 0))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "switchIsExhaustive" ((PVar "e") (PVar "covered")) (EMatch (EApp (EApp (EVar "resolveRoster") (EVar "e")) (EVar "covered")) (arm (PCon "Some" (PVar "roster")) () (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "roster")) (EApp (EApp (EVar "coveredByRoster") (EVar "covered")) (EVar "roster")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "coveredCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "coveredCtorNames" ((PList)) (EListLit))
 (DFunDef false "coveredCtorNames" ((PCons (PCon "CTBranch" (PVar "h") PWild) (PVar "rest"))) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") PWild)) () (EBinOp "::" (EVar "c") (EApp (EVar "coveredCtorNames") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "coveredCtorNames") (EVar "rest")))))
