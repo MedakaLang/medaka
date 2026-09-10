@@ -18,6 +18,7 @@ import lib.credential.{
   makeCredential,
   saltBytes,
 }
+import lib.sha256.{sha256}
 import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
@@ -1225,6 +1226,7 @@ main = match args ()
     runUploadBlob (mustPort port) token mimeType text
   ["get-blob", port, did, cid, mimeType, text] =>
     runGetBlob (mustPort port) did cid mimeType text
+  ["repo-digest", port, did] => runRepoDigest (mustPort port) did
   ["get-blob-missing", port, did, cid] =>
     runGetBlobMissing (mustPort port) did cid
   ["rl-conn", port, xff, count, want] =>
@@ -1297,6 +1299,29 @@ runUploadBlob port token mimeType text =
     Ok (status, body, _) =>
       panic
         "serve_client: uploadBlob answered \{intToString status}: \{fromUtf8 body}"
+  let () = println out
+  ignoreResult (close conn)
+
+{- | Fetch `com.atproto.sync.getRepo` and print the CAR's byte length and its
+   SHA-256 digest, which together name its exact bytes.
+
+   The gate reads that one line from two different servers — one over the
+   original `--data` directory and one over a directory restored from a backup
+   of it — and requires the two to be equal, which is what "the restored
+   server's export byte-matches" means. Printing a digest rather than the CAR
+   keeps the comparison a string comparison, exactly as
+   `pds/test/store_persistence_main.mdk`'s `summary` does for the same bytes. -}
+runRepoDigest : Int -> String -> <IO, Net "_"> Unit
+runRepoDigest port did =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getRepoPath did))
+  let out = match readResponse conn [||]
+    Err message => panic "serve_client: getRepo failed: \{message}"
+    Ok (200, body, _) =>
+      "\{intToString (arrayLength body)} \{Hex.encode (sha256 body)}"
+    Ok (status, body, _) =>
+      panic
+        "serve_client: getRepo answered \{intToString status}: \{fromUtf8 body}"
   let () = println out
   ignoreResult (close conn)
 

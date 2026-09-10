@@ -11,10 +11,15 @@ non-loopback bind is refused unless `--trusted-proxy` is also set (`#2757`,
 accepted-risk plus this refusal — a peer-address extern was proposed and
 declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
 carry the deploy procedure — but no live deploy has happened: pointing a real
-domain at a real key is a manual, deliberate act still to be taken. Still
-open, tracked separately rather than blocking that act: `#2613` (backup/
-restore, Phase 6), `#2572` (a block operation can occupy the scheduler
-past its budget), `#2773`/`#2774` (perf), `#2608` (firehose, Phase 5), and
+domain at a real key is a manual, deliberate act still to be taken. Backup and
+restore are now rehearsed rather than merely described (`#2613`): §3.1 below
+states the procedure's consistency rule and `docs/ops/PDS-DEPLOY.md`
+§ "Backup and restore" carries the steps, with case 33 of
+`pds/test/serve_e2e.sh` restoring a backup into a separate `--data` directory
+and grading the server that starts on it. Still open, tracked separately rather
+than blocking that act: `#2572` (the block store never collects unreferenced
+blocks, and a stray non-directory file under the store directory hard-fails
+startup), `#2773`/`#2774` (perf), `#2608` (firehose, Phase 5), and
 `#1962` (the signing-parity oracle is nightly-only — confirm it green
 immediately before a deploy). Multi-repository support stays out of scope
 through 0.1.0 by design (§0, P14).
@@ -135,6 +140,29 @@ What it buys: the correctness-critical code is gradeable by golden diff with no 
 and no filesystem; it runs under `medaka run` and wasm, so doctests reach it; and Phase
 3 shrinks to wiring — an accept loop, a request lifecycle, and persistence of the
 explicit successor `Store`.
+
+### 3.1 Backup, restore, and the torn-copy hazard
+
+**A file-level backup of `--data` must be taken with the server stopped (or from
+an atomic filesystem or volume snapshot); the online alternative is to snapshot
+the repository through the server's own request path
+(`com.atproto.sync.getRepo`), which is serialized with writes and therefore
+cannot observe a torn state** — because `applyRequest`'s indivisibility
+(`pds/shell/server.mdk`) comes from routing every write through a single
+`liftIO` in a cooperatively scheduled process, which is not a lock an external
+`cp` can take.
+
+The repository's CAR export is portable and consistent, and it is also *not a
+complete backup*: blobs live beside the signed block graph rather than inside
+it, and the three secrets (`--key`, `--token-secret`, `<data>/credential`) are
+not in it either. So the procedure `docs/ops/PDS-DEPLOY.md` § "Backup and
+restore" documents is the stopped-server file copy, with the CAR export as the
+consistent online snapshot of the repository half and as the format a restore
+into a different implementation would use. Case 33 of `pds/test/serve_e2e.sh`
+rehearses the documented procedure end to end: a backup, a restore into a
+SEPARATE `--data` directory, and a server started on the restored copy whose
+`getRepo` export byte-matches the original's, serves both blobs under their
+declared media types, and accepts a new signed write.
 
 The dedicated `pds/test/protocol_all_engines.sh` gate grades fixed query routing,
 chunked state update, malformed framing, unknown routing, and resource rejection on
