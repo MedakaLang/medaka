@@ -59,7 +59,7 @@ import list.{sort}
 import path.{basename}
 import string.{endsWith, padRight, replaceAll, stripSuffix, unlines}
 import test.{Expectation, fail, pass}
-import test_process.{medakaRoot, unrosteredUnits}
+import test_process.{medakaRoot, scratchDir, unrosteredUnits}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -1069,6 +1069,46 @@ test "every fixture in the corpus is wired into the table" = match corpusUnits
     orphans =>
       fail
         "present in \{corpus} but not wired into this gate's table: \{debug orphans}"
+
+{- | `binaryRanClean`'s False branch has no vehicle anywhere in the tree:
+   every `table` row that reaches it would need to grade `"BINPANIC"`
+   forever, which `gradePasses`'s allowlist can never accept. This test runs
+   the two static fixtures in `test/binpanic_fixtures/` (a real binary that
+   panics after printing, and its clean counterpart) through the same
+   `checkRunBuild` the sweep uses, and asserts both of `binaryRanClean`'s
+   branches directly, outside the "every cell grades ok" sweep.
+
+   Declared BEFORE the heavy sweep below deliberately, not just
+   alphabetically, and deliberately leaves its `scratchDir` unremoved: an
+   `rm -rf` of one scratch directory followed later, in the same process, by
+   a *fresh* `scratchDir` and a real link can leave that later link unable
+   to see its own freshly-minted directory (`ld: cannot open output file …
+   No such file or directory`) — reproduced standalone with as few as two
+   prior builds, and specifically tied to the `rm -rf` step, not to spawn
+   volume. Both hazards (declaration order, no cleanup) keep this test and
+   the sweep after it clear of that artifact; it is a process-lifetime
+   spawn defect, not one in this test or in `binaryRanClean`. -}
+test "binaryRanClean distinguishes a panicking binary from a clean one" =
+  let binpanicCorpus = "\{medakaRoot}/test/binpanic_fixtures"
+  match scratchDir
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      match checkRunBuild "\{binpanicCorpus}/panics.mdk" "\{scratch}/panics.bin"
+        Err e => fail "checkRunBuild panics.mdk: \{e}"
+        Ok panicAgree =>
+          match (checkRunBuild
+            "\{binpanicCorpus}/clean.mdk"
+            "\{scratch}/clean.bin")
+            Err e => fail "checkRunBuild clean.mdk: \{e}"
+            Ok cleanAgree =>
+              if binaryRanClean panicAgree then
+                fail
+                  "expected binaryRanClean False for a panicking binary, got True (binCode=\{intToString panicAgree.binCode} binErr=\{debug panicAgree.binErr})"
+              else if not (binaryRanClean cleanAgree) then
+                fail
+                  "expected binaryRanClean True for a clean binary, got False (binCode=\{intToString cleanAgree.binCode} binErr=\{debug cleanAgree.binErr})"
+              else
+                pass
 
 test "check, run and build agree with every cell's pinned verdict and value" =
   sweep
