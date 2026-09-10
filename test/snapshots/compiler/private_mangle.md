@@ -1,5 +1,5 @@
 # META
-source_lines=1651
+source_lines=1652
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -634,6 +634,7 @@ variantCtorName (Variant n _) = n
 nonReservedCtor : String -> Bool
 nonReservedCtor n = not (isReservedCtor n)
 
+export
 isReservedCtor : String -> Bool
 isReservedCtor n =
   n == "Cons"
@@ -1748,7 +1749,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "variantCtorName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "nonReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonReservedCtor" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "isReservedCtor") (EVar "n"))))
-(DTypeSig false "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig true "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isReservedCtor" ((PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Cons"))) (EBinOp "==" (EVar "n") (ELit (LString "Nil")))) (EBinOp "==" (EVar "n") (ELit (LString "Some")))) (EBinOp "==" (EVar "n") (ELit (LString "None")))) (EBinOp "==" (EVar "n") (ELit (LString "Ok")))) (EBinOp "==" (EVar "n") (ELit (LString "Err")))) (EBinOp "==" (EVar "n") (ELit (LString "Lt")))) (EBinOp "==" (EVar "n") (ELit (LString "Eq")))) (EBinOp "==" (EVar "n") (ELit (LString "Gt")))) (EBinOp "==" (EVar "n") (ELit (LString "True")))) (EBinOp "==" (EVar "n") (ELit (LString "False")))))
 (DTypeSig false "buildUnitCtorRenameMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "buildUnitCtorRenameMap" ((PVar "mid") (PVar "ctorExportsPerUnit") (PVar "decls")) (EBlock (DoLet false false (PVar "localCtors") (EApp (EVar "dedup") (EApp (EVar "unitLocalCtorNames") (EVar "decls")))) (DoLet false false (PVar "localEntries") (EApp (EApp (EVar "flatMap") (EApp (EVar "localCtorRenameEntry") (EVar "mid"))) (EVar "localCtors"))) (DoLet false false (PVar "importEntries") (EApp (EApp (EApp (EVar "ctorImportEntries") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls"))) (DoExpr (EBinOp "++" (EVar "localEntries") (EVar "importEntries")))))
@@ -2129,7 +2130,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "variantCtorName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "nonReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonReservedCtor" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "isReservedCtor") (EVar "n"))))
-(DTypeSig false "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig true "isReservedCtor" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isReservedCtor" ((PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Cons"))) (EBinOp "==" (EVar "n") (ELit (LString "Nil")))) (EBinOp "==" (EVar "n") (ELit (LString "Some")))) (EBinOp "==" (EVar "n") (ELit (LString "None")))) (EBinOp "==" (EVar "n") (ELit (LString "Ok")))) (EBinOp "==" (EVar "n") (ELit (LString "Err")))) (EBinOp "==" (EVar "n") (ELit (LString "Lt")))) (EBinOp "==" (EVar "n") (ELit (LString "Eq")))) (EBinOp "==" (EVar "n") (ELit (LString "Gt")))) (EBinOp "==" (EVar "n") (ELit (LString "True")))) (EBinOp "==" (EVar "n") (ELit (LString "False")))))
 (DTypeSig false "buildUnitCtorRenameMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "buildUnitCtorRenameMap" ((PVar "mid") (PVar "ctorExportsPerUnit") (PVar "decls")) (EBlock (DoLet false false (PVar "localCtors") (EApp (EVar "dedup") (EApp (EVar "unitLocalCtorNames") (EVar "decls")))) (DoLet false false (PVar "localEntries") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "localCtorRenameEntry") (EVar "mid"))) (EVar "localCtors"))) (DoLet false false (PVar "importEntries") (EApp (EApp (EApp (EVar "ctorImportEntries") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls"))) (DoExpr (EBinOp "++" (EVar "localEntries") (EVar "importEntries")))))

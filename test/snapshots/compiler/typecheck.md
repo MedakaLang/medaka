@@ -1,5 +1,5 @@
 # META
-source_lines=43831
+source_lines=43918
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -58,6 +58,7 @@ import frontend.ast.{
   TyConOrigin(..),
   Ns(..),
   Ident(..),
+  identOriginFold,
   mkIdent,
   -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
   -- type?" test below is written against.  Its doc-comment derives why an
@@ -260,7 +261,7 @@ import frontend.exhaust.{
   oGetCtors,
 }
 import support.char.{isUpper}
-import backend.private_mangle.{mangledName}
+import backend.private_mangle.{isReservedCtor, mangledName}
 import support.scc.{tarjanSCCs}
 import support.ordmap.{
   OrdMap,
@@ -3139,8 +3140,10 @@ dropGoalsSince mark kinds =
 -- Float primitive without re-deriving the operand LTy structurally.  A still-
 -- polymorphic (Num a) operand never grounds → stays RNone → today's dict path
 -- (mirrors resolveBinopSite's grounded-only guard, so dict-routed arithmetic is
--- untouched).  Int operands are left unstamped (RNone ⇒ the Int primitive is the
--- default anyway) to avoid perturbing every integer binop's IR.
+-- untouched).  Int ARITHMETIC operands are left unstamped (RNone ⇒ the Int
+-- primitive is the default anyway) to avoid perturbing every integer binop's IR;
+-- `RScalar "Int"` exists, but only stampOpRouteVal mints it, on COMPARISON sites,
+-- where the emitter's LTInt default cannot be trusted (#2356).
 
 -- Error-path BLOCKER B4 (audit finding D3): missing-impl dispatch obligations.
 -- methodIfaceParamsRef maps each interface method NAME → (iface name, the iface's
@@ -13180,13 +13183,61 @@ inferFieldAccess env e fname r
     match resolveFieldRecord te fname
       None => freshVar ()
       Some (rname, ri) =>
-        r := rname
+        r := stampedRecordHead rname ri
         let ft = inferFieldOfRecord te rname ri fname
         -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
         -- on purpose — that call is what unifies `te` with the record's result
         -- type, so only here does the receiver's head name the type whose
         -- constructor set has to be asked about.
         fieldSelectionWellTyped te rname ri fname ft
+
+-- ── #2839: the stamp names the record by IDENTITY, not by a spelling ─────────
+-- The head this node carries downstream is the selected record's
+-- OWNER-QUALIFIED name (`<owner module>__<record name>`), never the bare
+-- registry key.
+--
+-- Both emitters pick a field's offset by `(record head, label)`, so two modules
+-- declaring same-named records with their fields in opposite orders are
+-- distinguishable at the emitter only if this stamp distinguishes them.  The
+-- registry key alone does not: it is the record's DECL name, which is bare
+-- unless `backend/private_mangle.mdk` renamed it first.  Deriving the
+-- qualification from the record's OWN declaring module makes the stamp's
+-- cross-module identity a property of the declaration instead of a side effect
+-- of the mangler having run before elaboration
+-- (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §1 L2).
+--
+-- The spelling is the MANGLER'S, and it reuses the mangler's own two rename
+-- decisions rather than restating them, so the two cannot drift: a reserved
+-- fixed-tag constructor is never renamed, and a key already carrying its owner's
+-- prefix has already been renamed.  On the emit path (mangle, then elaborate)
+-- every record key is already `<owner>__<name>`, so this is the identity
+-- function and the emitted IR is byte-unchanged; on an unmangled elaboration it
+-- supplies the identity the bare key never had.
+stampedRecordHead : String -> RecordInfo -> String
+stampedRecordHead rname ri = match recordOwnerModule ri
+  None => rname
+  Some mid => ownerQualifiedHead mid rname
+
+-- The module that DECLARED the selected record, read off the result head
+-- `registerRecordInfoKeyed` minted from that declaration's own origin — the same
+-- end-to-end pairing `recordCandIsReceiverDecl` compares.  `None` is honest
+-- absence: the flat/single-file driver stamps no origins, and it mangles
+-- nothing either, so there the key already IS the emitted name.
+recordOwnerModule : RecordInfo -> Option String
+recordOwnerModule ri = match headTyconMono (recordResultMono ri)
+  None => None
+  Some hk => match headKeyIdent hk
+    None => None
+    Some (Ident _ io _) => identOriginFold None (mid => Some mid) io
+
+-- The name the mangler gives — or has already given — a record head owned by
+-- `mid`.  Idempotent, because the qualification it applies is the one whose
+-- presence it tests for.
+ownerQualifiedHead : String -> String -> String
+ownerQualifiedHead mid name
+  | isReservedCtor name = name
+  | isMangledFor mid name = name
+  | otherwise = mangledName mid name
 
 -- `cell.value` projects a Ref's contents.  Unify the receiver with `Ref a`
 -- (forcing it, like the reference's `(Ref a).value → a` special case) and return
@@ -14080,7 +14131,7 @@ inferRecordUpdateField env base fields fn r =
       -- read it to pick the record by name, instead of guessing from the first
       -- update label (which picks the wrong record — and so the wrong slot — when
       -- two records share a field name at different indices).
-      r := rname
+      r := stampedRecordHead rname ri
       inferRecordUpdatePicked rname bt env fields ri
 
 inferRecordUpdatePicked : String ->
@@ -21723,9 +21774,10 @@ binopBuiltinHead _ tag = binopPrimitiveHead tag
 -- emitter picks the Float primitive (bypassing the type-lost structural
 -- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
--- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  Only
--- Float is stamped (Int is the primitive default already; leaving Int operands
--- RNone avoids perturbing every integer binop's emitted IR).  Never overwrites a
+-- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
+-- channel stamps only Float (Int is the arithmetic primitive default already;
+-- leaving Int operands RNone avoids perturbing every integer binop's emitted IR)
+-- — `RScalar "Int"` is stampOpRouteVal's, on comparison sites.  Never overwrites a
 -- route another pass already set (a comparison op has a different node/ref; an
 -- arithmetic route starts RNone) — the guard is: stamp only if the site is still
 -- RNone AND grounds to Float.
@@ -21886,8 +21938,21 @@ stampOpRouteVal : Bool -> String -> String -> Mono -> String -> Route
 stampOpRouteVal isBinop encl method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
+  -- #2356: a builtin head is not a dispatch, but it is not nothing either.  A
+  -- comparison whose operand GROUNDS to `Int` gets the positive scalar stamp
+  -- `RScalar "Int"`, the same carrier resolveArithSite uses for Float, so the
+  -- native emitter can compare the two tagged words inline instead of calling the
+  -- opaque @mdk_value_eq/@mdk_value_lt runtime discriminators.  The stamp is the
+  -- ONLY sound witness for that: the emitter's own `LTInt` is its default for an
+  -- operand whose type it could not recover, so an `icmp` keyed on LTy would
+  -- compare boxed String/Float POINTERS as integers.  Every other builtin head
+  -- (Float/String/Bool/Char) and every ungrounded operand stay RNone, i.e. on the
+  -- runtime-discriminated path they are on today.
   if isBuiltin then
-    RNone
+    if isBinop && tag == "Int" && isCompareMethod method then
+      RScalar "Int"
+    else
+      RNone
   else
     -- #609: no interface param vector is recoverable at an operator site (the
     -- node carries one operand mono, not a method occurrence), so the goal is the
@@ -21926,6 +21991,13 @@ stampOpRouteVal isBinop encl method operandMono tag =
 innerDefaultMethod : String -> String
 innerDefaultMethod m =
   if contains m ["lt", "gt", "lte", "gte", "min", "max"] then "compare" else m
+
+-- #2356: the five comparison OPERATOR methods (`==`/`/=` -> `eq`, `<`/`>`/`<=`/`>=`
+-- -> `lt`/`gt`/`lte`/`gte`).  `min`/`max` are deliberately absent: they are Ord
+-- methods but no operator records a site for them, so a name-only match on them
+-- would stamp nothing and claim a reach this predicate does not have.
+isCompareMethod : String -> Bool
+isCompareMethod m = contains m ["eq", "lt", "gt", "lte", "gte"]
 
 -- ── ARCH B-2.1-h (Stage B repair): THE METHOD-SET GUARD, GRAPH-GLOBAL ────────
 -- 🚨 THE PREDECESSOR (`implDefinesMethodAt`, over the cumulative-prefix
@@ -27881,14 +27953,15 @@ rewriteBinopExpr : Expr -> Expr
 rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   RNone => EBinOp op l r routeRef
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
-  -- is the scalar-type tag typecheck stamped on a monomorphic arithmetic binop
-  -- (resolveArithSite, "Float").  The EBinOp's own route ref does NOT survive the
+  -- is the scalar-type tag typecheck stamped on a monomorphic binop
+  -- (resolveArithSite's "Float" on arithmetic, stampOpRouteVal's "Int" on
+  -- comparison).  The EBinOp's own route ref does NOT survive the
   -- dict-pass→lower boundary (only NODE values do — verified: an op-string change in
   -- this arm reaches lower but a setRef on routeRef does not), so we carry the scalar
   -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
   -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
-  -- the native emitter picks the Float primitive (bypassing the type-lost
+  -- the native emitter picks that type's primitive (bypassing the type-lost
   -- staticIsFloat).  This is the dispatch route READ-OUT the design names, relocated
   -- from the (lost) ref cell to a (surviving) node.
   --
@@ -39434,11 +39507,25 @@ aliasDictNamesOfPath : List String ->
   String ->
   UsePath ->
   List String
+-- #2840: the alias arm answers off the GRAPH as well as off `mid`'s own decls.
+-- `declTopFnNames` alone asks what the SPELLED module DEFINES, and a pure
+-- re-exporter (`export import lib.decl.{f}`) defines nothing — so `R.f` never
+-- joined the set, the call site was never marked, and the aliased constrained
+-- callee ran with no dictionary (`run` read the dict where an `Int` belonged).
+-- `graphPubDefiners` chases the re-export to its true definer, the same
+-- identity-off-the-graph resolution `aliasEntriesFor` makes for the dict-ARITY
+-- table; a row counts when the DEFINER's own name is in [bare].  The
+-- decl-derived half stays because the graph is empty on the loader-less Flat
+-- drivers, where a directly-imported definer must still contribute.
 aliasDictNamesOfPath bare unitDecls mid (UseAlias _ a) =
-  match lookupAssoc mid unitDecls
-    Some ds =>
-      map (qualifiedLocal a) (filter (n => contains n bare) (declTopFnNames ds))
+  let own = match lookupAssoc mid unitDecls
+    Some ds => filter (n => contains n bare) (declTopFnNames ds)
     None => []
+  let reexported =
+    map
+      fst
+      (filterList (r => contains (snd (snd r)) bare) (graphPubDefiners mid))
+  map (qualifiedLocal a) (dedup (own ++ reexported))
 aliasDictNamesOfPath bare _ _ (UseGroup _ ms) = flatMap (memberDictName bare) ms
 aliasDictNamesOfPath _ _ _ _ = []
 
@@ -43834,7 +43921,7 @@ schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "KindAnn" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "KindAnn" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "atomLabel" false) (mem "atomParam" false) (mem "drender" false) (mem "effrowLabels" false) (mem "normalize" false) (mem "ppScheme" false) (mem "tupleSpine" false) (mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Param" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "assignName" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsNormGo" false) (mem "atomsUnion" false) (mem "axisUnion" false) (mem "commaStr" false) (mem "commonPrefixLen" false) (mem "dedupCells" false) (mem "djoin" false) (mem "djoinN" false) (mem "drenderN" false) (mem "effHoleSrc" false) (mem "effStr" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "insertAxis" false) (mem "isHoleStr" false) (mem "isJoinCell" false) (mem "isSubTop" false) (mem "joinAxis" false) (mem "letters" false) (mem "lookupAssocI" false) (mem "lookupAxis" false) (mem "nameOf" false) (mem "normHole" false) (mem "normalizeLink" false) (mem "ppApp" false) (mem "ppConName" false) (mem "ppConstraint" false) (mem "ppConstraints" false) (mem "ppEach" false) (mem "ppEachShared" false) (mem "ppEffArg" false) (mem "ppEffArgFmt" false) (mem "ppEffAtomTy" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppFun" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppSchemeCon" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "ppTyFunArg" false) (mem "ppVar" false) (mem "productNorm" false) (mem "quoteStr" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "renderConstraintCtx" false) (mem "renderProductLit" false) (mem "rowFlat" false) (mem "rowFlatMembers" false) (mem "setCardCap" false) (mem "sortAxes" false) (mem "spineParts" false) (mem "subTopOf" false) (mem "tupleHeadTagTc" false) (mem "tupleTagArity" false) (mem "tupleTagArityGo" false) (mem "wrapIf" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
@@ -43842,7 +43929,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false) (mem "oGetCtors" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangledName" false))))
+(DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false))))
@@ -45859,7 +45946,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "stampedRecordHead" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "String"))))
+(DFunDef false "stampedRecordHead" ((PVar "rname") (PVar "ri")) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "rname")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "ownerQualifiedHead") (EVar "mid")) (EVar "rname")))))
+(DTypeSig false "recordOwnerModule" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "recordOwnerModule" ((PVar "ri")) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PCon "Ident" PWild (PVar "io") PWild)) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "None")) (ELam ((PVar "mid")) (EApp (EVar "Some") (EVar "mid")))) (EVar "io")))))))
+(DTypeSig false "ownerQualifiedHead" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ownerQualifiedHead" ((PVar "mid") (PVar "name")) (EIf (EApp (EVar "isReservedCtor") (EVar "name")) (EVar "name") (EIf (EApp (EApp (EVar "isMangledFor") (EVar "mid")) (EVar "name")) (EVar "name") (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "inferValueField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "inferValueField" ((PVar "env") (PVar "e")) (EBlock (DoLet false false (PVar "et") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "et")) (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner"))))
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
@@ -45978,7 +46071,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstFieldName" ((PList)) (EVar "None"))
 (DFunDef false "firstFieldName" ((PCons (PCon "FieldAssign" (PVar "fn") PWild) PWild)) (EApp (EVar "Some") (EVar "fn")))
 (DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
+(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
@@ -47401,9 +47494,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveOpSite" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "Mono") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
 (DFunDef false "resolveOpSite" ((PVar "isBinop") (PVar "method") (PVar "tagRef") (PVar "operandMono") (PVar "inImpl") (PVar "encl")) (EMatch (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "entail") (EVar "method")) (EVar "operandMono")) (EVar "encl")) (EApp (EApp (EVar "EKOp") (EVar "isBinop")) (EVar "inImpl")))) (arm (PCon "RNone") () (ELit LUnit)) (arm (PVar "route") () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route")))))
 (DTypeSig false "stampOpRouteVal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Route")))))))
-(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EVar "RNone") (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
+(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "isBinop") (EBinOp "==" (EVar "tag") (ELit (LString "Int")))) (EApp (EVar "isCompareMethod") (EVar "method"))) (EApp (EVar "RScalar") (ELit (LString "Int"))) (EVar "RNone")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
 (DTypeSig false "innerDefaultMethod" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "innerDefaultMethod" ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")) (ELit (LString "min")) (ELit (LString "max")))) (ELit (LString "compare")) (EVar "m")))
+(DTypeSig false "isCompareMethod" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCompareMethod" ((PVar "m")) (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "eq")) (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")))))
 (DTypeSig false "ieDefinesReqMethodAt" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "Bool")))))
 (DFunDef false "ieDefinesReqMethodAt" ((PVar "env") (PVar "method") (PVar "hd")) (EApp (EApp (EApp (EVar "ieDefinesReqMethodAtGo") (EApp (EApp (EVar "ieHeadRows") (EVar "hd")) (EVar "env"))) (EVar "method")) (EApp (EVar "headTabOf") (EVar "hd"))))
 (DTypeSig false "ieDefinesReqMethodAtGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "Bool")))))
@@ -49868,7 +49963,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasDictNamesOfDecl" ((PVar "bare") (PVar "unitDecls") (PCon "DUse" PWild (PVar "path") PWild)) (EApp (EApp (EApp (EApp (EVar "aliasDictNamesOfPath") (EVar "bare")) (EVar "unitDecls")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")))
 (DFunDef false "aliasDictNamesOfDecl" (PWild PWild PWild) (EListLit))
 (DTypeSig false "aliasDictNamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EBlock (DoLet false false (PVar "own") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "reexported") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "r")))) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "own") (EVar "reexported")))))))
 (DFunDef false "aliasDictNamesOfPath" ((PVar "bare") PWild PWild (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "memberDictName") (EVar "bare"))) (EVar "ms")))
 (DFunDef false "aliasDictNamesOfPath" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "memberDictName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "String")))))
@@ -50345,7 +50440,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "schemeLines" ((PList)) (EListLit))
 (DFunDef false "schemeLines" ((PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))) (ELit (LString ""))) (EApp (EVar "schemeLines") (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "KindAnn" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "KindAnn" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "atomLabel" false) (mem "atomParam" false) (mem "drender" false) (mem "effrowLabels" false) (mem "normalize" false) (mem "ppScheme" false) (mem "tupleSpine" false) (mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Param" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "assignName" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsNormGo" false) (mem "atomsUnion" false) (mem "axisUnion" false) (mem "commaStr" false) (mem "commonPrefixLen" false) (mem "dedupCells" false) (mem "djoin" false) (mem "djoinN" false) (mem "drenderN" false) (mem "effHoleSrc" false) (mem "effStr" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "insertAxis" false) (mem "isHoleStr" false) (mem "isJoinCell" false) (mem "isSubTop" false) (mem "joinAxis" false) (mem "letters" false) (mem "lookupAssocI" false) (mem "lookupAxis" false) (mem "nameOf" false) (mem "normHole" false) (mem "normalizeLink" false) (mem "ppApp" false) (mem "ppConName" false) (mem "ppConstraint" false) (mem "ppConstraints" false) (mem "ppEach" false) (mem "ppEachShared" false) (mem "ppEffArg" false) (mem "ppEffArgFmt" false) (mem "ppEffAtomTy" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppFun" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppSchemeCon" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "ppTyFunArg" false) (mem "ppVar" false) (mem "productNorm" false) (mem "quoteStr" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "renderConstraintCtx" false) (mem "renderProductLit" false) (mem "rowFlat" false) (mem "rowFlatMembers" false) (mem "setCardCap" false) (mem "sortAxes" false) (mem "spineParts" false) (mem "subTopOf" false) (mem "tupleHeadTagTc" false) (mem "tupleTagArity" false) (mem "tupleTagArityGo" false) (mem "wrapIf" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
@@ -50353,7 +50448,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false) (mem "oGetCtors" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangledName" false))))
+(DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false))))
@@ -52370,7 +52465,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "stampedRecordHead" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "String"))))
+(DFunDef false "stampedRecordHead" ((PVar "rname") (PVar "ri")) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "rname")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "ownerQualifiedHead") (EVar "mid")) (EVar "rname")))))
+(DTypeSig false "recordOwnerModule" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "recordOwnerModule" ((PVar "ri")) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PCon "Ident" PWild (PVar "io") PWild)) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "None")) (ELam ((PVar "mid")) (EApp (EVar "Some") (EVar "mid")))) (EVar "io")))))))
+(DTypeSig false "ownerQualifiedHead" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ownerQualifiedHead" ((PVar "mid") (PVar "name")) (EIf (EApp (EVar "isReservedCtor") (EVar "name")) (EVar "name") (EIf (EApp (EApp (EVar "isMangledFor") (EVar "mid")) (EVar "name")) (EVar "name") (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "inferValueField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "inferValueField" ((PVar "env") (PVar "e")) (EBlock (DoLet false false (PVar "et") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "et")) (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner"))))
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
@@ -52489,7 +52590,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstFieldName" ((PList)) (EVar "None"))
 (DFunDef false "firstFieldName" ((PCons (PCon "FieldAssign" (PVar "fn") PWild) PWild)) (EApp (EVar "Some") (EVar "fn")))
 (DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
+(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
@@ -53912,9 +54013,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveOpSite" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "Mono") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
 (DFunDef false "resolveOpSite" ((PVar "isBinop") (PVar "method") (PVar "tagRef") (PVar "operandMono") (PVar "inImpl") (PVar "encl")) (EMatch (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "entail") (EVar "method")) (EVar "operandMono")) (EVar "encl")) (EApp (EApp (EVar "EKOp") (EVar "isBinop")) (EVar "inImpl")))) (arm (PCon "RNone") () (ELit LUnit)) (arm (PVar "route") () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route")))))
 (DTypeSig false "stampOpRouteVal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Route")))))))
-(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EVar "RNone") (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
+(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "isBinop") (EBinOp "==" (EVar "tag") (ELit (LString "Int")))) (EApp (EVar "isCompareMethod") (EVar "method"))) (EApp (EVar "RScalar") (ELit (LString "Int"))) (EVar "RNone")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
 (DTypeSig false "innerDefaultMethod" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "innerDefaultMethod" ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")) (ELit (LString "min")) (ELit (LString "max")))) (ELit (LString "compare")) (EVar "m")))
+(DTypeSig false "isCompareMethod" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCompareMethod" ((PVar "m")) (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "eq")) (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")))))
 (DTypeSig false "ieDefinesReqMethodAt" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "Bool")))))
 (DFunDef false "ieDefinesReqMethodAt" ((PVar "env") (PVar "method") (PVar "hd")) (EApp (EApp (EApp (EVar "ieDefinesReqMethodAtGo") (EApp (EApp (EVar "ieHeadRows") (EVar "hd")) (EVar "env"))) (EVar "method")) (EApp (EVar "headTabOf") (EVar "hd"))))
 (DTypeSig false "ieDefinesReqMethodAtGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "Bool")))))
@@ -56379,7 +56482,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasDictNamesOfDecl" ((PVar "bare") (PVar "unitDecls") (PCon "DUse" PWild (PVar "path") PWild)) (EApp (EApp (EApp (EApp (EVar "aliasDictNamesOfPath") (EVar "bare")) (EVar "unitDecls")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")))
 (DFunDef false "aliasDictNamesOfDecl" (PWild PWild PWild) (EListLit))
 (DTypeSig false "aliasDictNamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EBlock (DoLet false false (PVar "own") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "reexported") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "r")))) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "own") (EVar "reexported")))))))
 (DFunDef false "aliasDictNamesOfPath" ((PVar "bare") PWild PWild (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "memberDictName") (EVar "bare"))) (EVar "ms")))
 (DFunDef false "aliasDictNamesOfPath" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "memberDictName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "String")))))
