@@ -172,6 +172,10 @@ REF	test/_prefix_mf.sh	scratch copy the reproduce-it recipe in test/diff_compile
 REF	pds/test/vectors/foo.sh	fictional example filename in pds/test/VECTOR-PROVENANCE.txt's coverage-limits section, naming a corpus file shape that gate deliberately does not enumerate
 REF	pds/test/vectors/sha256_fips180_4.txt	filename inside a WORKED EXAMPLE stanza of pds/test/VECTOR-PROVENANCE.txt, marked "EXAMPLE ONLY … not real values" in the file itself
 REF	pds/test/vectors/field_mul_corpus.txt	filename inside a WORKED EXAMPLE stanza of pds/test/VECTOR-PROVENANCE.txt, marked "EXAMPLE ONLY … not real values" in the file itself
+REF	test/llvm_fixtures/a.mdk	fictional example filename in compiler/tools/gate_cmd.mdk's `underDir` doctest, illustrating a corpus-directory match
+REF	test/llvm_fixtures_typed/a.mdk	fictional example filename in compiler/tools/gate_cmd.mdk's `underDir` doctest, illustrating a near-miss on a sibling directory name
+REF	parsec/src/x.mdk	fictional example path in compiler/tools/gate_cmd.mdk's `reachProjects` doctest, illustrating a manifest-edge match
+REF	gzip/src/x.mdk	fictional example path in compiler/tools/gate_cmd.mdk's `reachProjects` doctest, illustrating an unmapped/corpus-only project match
 
 # ── REF: TODO(docs-cleanup) — real stale paths in living docs ───────────────
 REF	compiler/ast.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/ast.mdk
@@ -210,6 +214,7 @@ REF	test/diff_compiler_import_order.sh	migrated to a `kind = "native"` gate modu
 # ── REF: pds/ — #1722 widened the bare-path matcher to include pds/… ────────
 REF	pds/main.mdk	pds/README.md documents the intentional ABSENCE of pds/main.mdk — pds/medaka.toml has no `entry` key on purpose, so this citation is deliberately naming a file that must not exist
 REF	pds/test/inlang_test_oracle.sh	migrated to a `kind = "native"` gate module in #2592 (pds/test/inlang_test_oracle_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	pds/test/unit_suite.sh	the other script folded into the same #2592 migration (pds/test/inlang_test_oracle_test.mdk's own header names both predecessors); no survey snapshot needed — the citing module's header IS the record of the merge — legitimate history
 REF	pds/test/trust_boundary_guards.sh	migrated to a `kind = "native"` gate module in #2592 (pds/test/trust_boundary_guards_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
 
 REF	test/README.md	GATE-REGISTRY-DESIGN.md §9 (S-4, #2200) cites this as one of `diff_compiler_prose_classifier.sh`'s 26 probe paths, deliberately naming a file that does not exist to exercise the classifier's NONDOC-vs-PROSE boundary next to `testfile.md` — not a real doc citation

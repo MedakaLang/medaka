@@ -274,17 +274,53 @@ function handleBare(fname, lineno, target,    proj) {
 # routinely builds a SYNTHETIC tree mirroring the repo layout
 # ("$t1/pds/test/lonely.txt" in pds/test/vector_provenance.sh — 26 such
 # occurrences), and none of those paths is meant to exist here. So for a source
-# file this returns only the comment tail: after the first `#` for shell, after
-# the first `--` for Medaka. A .txt file is prose end to end and a .md file is
-# handled by its own rules, so both keep the whole line.
-function proseOf(mode, line,    at) {
+# file this returns only the comment tail: after the first `#` for shell. A
+# .txt file is prose end to end and a .md file is handled by its own rules, so
+# both keep the whole line.
+#
+# Medaka has TWO comment forms: the line comment `--` handled below, and the
+# block comment `{- ... -}` (the doc-comment register — every compiler module
+# header uses `{- | ... -}`). A block comment can span lines, so MDK_IN_BLOCK
+# is a global carried across calls, reset per citing file at the file-loop
+# start below. Nesting is not a concern (Medaka block comments do not nest),
+# and the doc-comment `|` marker needs no special handling — it is just text
+# to the tier-2 path scanner that consumes this functions return value.
+# (NOTE: this comment lives inside a single-quoted awk program; an apostrophe
+# here ENDS that quote and breaks the script.)
+function proseOf(mode, line,    at, rest, out, openAt, closeAt, dashAt) {
   if (mode == "sh") {
     at = index(line, "#")
     return (at == 0) ? "" : substr(line, at + 1)
   }
   if (mode == "mdk") {
-    at = index(line, "--")
-    return (at == 0) ? "" : substr(line, at + 2)
+    out = ""
+    rest = line
+    while (length(rest) > 0) {
+      if (MDK_IN_BLOCK) {
+        closeAt = index(rest, "-}")
+        if (closeAt == 0) {
+          out = out " " rest
+          rest = ""
+        } else {
+          out = out " " substr(rest, 1, closeAt - 1)
+          rest = substr(rest, closeAt + 2)
+          MDK_IN_BLOCK = 0
+        }
+        continue
+      }
+      openAt = index(rest, "{-")
+      dashAt = index(rest, "--")
+      if (openAt > 0 && (dashAt == 0 || openAt < dashAt)) {
+        rest = substr(rest, openAt + 2)
+        MDK_IN_BLOCK = 1
+        continue
+      }
+      if (dashAt > 0) {
+        out = out " " substr(rest, dashAt + 2)
+      }
+      rest = ""
+    }
+    return out
   }
   return line
 }
@@ -363,6 +399,7 @@ BEGIN {
     if (fname ~ /\.md$/)  mode = "md"
     if (fname ~ /\.sh$/)  mode = "sh"
     if (fname ~ /\.mdk$/) mode = "mdk"
+    MDK_IN_BLOCK = 0
     lineno = 0
     while ((getline line < fname) > 0) {
       lineno++
