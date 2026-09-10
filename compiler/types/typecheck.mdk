@@ -39428,11 +39428,25 @@ aliasDictNamesOfPath : List String ->
   String ->
   UsePath ->
   List String
+-- #2840: the alias arm answers off the GRAPH as well as off `mid`'s own decls.
+-- `declTopFnNames` alone asks what the SPELLED module DEFINES, and a pure
+-- re-exporter (`export import lib.decl.{f}`) defines nothing — so `R.f` never
+-- joined the set, the call site was never marked, and the aliased constrained
+-- callee ran with no dictionary (`run` read the dict where an `Int` belonged).
+-- `graphPubDefiners` chases the re-export to its true definer, the same
+-- identity-off-the-graph resolution `aliasEntriesFor` makes for the dict-ARITY
+-- table; a row counts when the DEFINER's own name is in [bare].  The
+-- decl-derived half stays because the graph is empty on the loader-less Flat
+-- drivers, where a directly-imported definer must still contribute.
 aliasDictNamesOfPath bare unitDecls mid (UseAlias _ a) =
-  match lookupAssoc mid unitDecls
-    Some ds =>
-      map (qualifiedLocal a) (filter (n => contains n bare) (declTopFnNames ds))
+  let own = match lookupAssoc mid unitDecls
+    Some ds => filter (n => contains n bare) (declTopFnNames ds)
     None => []
+  let reexported =
+    map
+      fst
+      (filterList (r => contains (snd (snd r)) bare) (graphPubDefiners mid))
+  map (qualifiedLocal a) (dedup (own ++ reexported))
 aliasDictNamesOfPath bare _ _ (UseGroup _ ms) = flatMap (memberDictName bare) ms
 aliasDictNamesOfPath _ _ _ _ = []
 

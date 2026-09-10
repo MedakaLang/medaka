@@ -1,5 +1,5 @@
 # META
-source_lines=43815
+source_lines=43829
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -39432,11 +39432,25 @@ aliasDictNamesOfPath : List String ->
   String ->
   UsePath ->
   List String
+-- #2840: the alias arm answers off the GRAPH as well as off `mid`'s own decls.
+-- `declTopFnNames` alone asks what the SPELLED module DEFINES, and a pure
+-- re-exporter (`export import lib.decl.{f}`) defines nothing — so `R.f` never
+-- joined the set, the call site was never marked, and the aliased constrained
+-- callee ran with no dictionary (`run` read the dict where an `Int` belonged).
+-- `graphPubDefiners` chases the re-export to its true definer, the same
+-- identity-off-the-graph resolution `aliasEntriesFor` makes for the dict-ARITY
+-- table; a row counts when the DEFINER's own name is in [bare].  The
+-- decl-derived half stays because the graph is empty on the loader-less Flat
+-- drivers, where a directly-imported definer must still contribute.
 aliasDictNamesOfPath bare unitDecls mid (UseAlias _ a) =
-  match lookupAssoc mid unitDecls
-    Some ds =>
-      map (qualifiedLocal a) (filter (n => contains n bare) (declTopFnNames ds))
+  let own = match lookupAssoc mid unitDecls
+    Some ds => filter (n => contains n bare) (declTopFnNames ds)
     None => []
+  let reexported =
+    map
+      fst
+      (filterList (r => contains (snd (snd r)) bare) (graphPubDefiners mid))
+  map (qualifiedLocal a) (dedup (own ++ reexported))
 aliasDictNamesOfPath bare _ _ (UseGroup _ ms) = flatMap (memberDictName bare) ms
 aliasDictNamesOfPath _ _ _ _ = []
 
@@ -49854,7 +49868,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasDictNamesOfDecl" ((PVar "bare") (PVar "unitDecls") (PCon "DUse" PWild (PVar "path") PWild)) (EApp (EApp (EApp (EApp (EVar "aliasDictNamesOfPath") (EVar "bare")) (EVar "unitDecls")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")))
 (DFunDef false "aliasDictNamesOfDecl" (PWild PWild PWild) (EListLit))
 (DTypeSig false "aliasDictNamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EBlock (DoLet false false (PVar "own") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "reexported") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "r")))) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "own") (EVar "reexported")))))))
 (DFunDef false "aliasDictNamesOfPath" ((PVar "bare") PWild PWild (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "memberDictName") (EVar "bare"))) (EVar "ms")))
 (DFunDef false "aliasDictNamesOfPath" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "memberDictName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "String")))))
@@ -56367,7 +56381,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasDictNamesOfDecl" ((PVar "bare") (PVar "unitDecls") (PCon "DUse" PWild (PVar "path") PWild)) (EApp (EApp (EApp (EApp (EVar "aliasDictNamesOfPath") (EVar "bare")) (EVar "unitDecls")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")))
 (DFunDef false "aliasDictNamesOfDecl" (PWild PWild PWild) (EListLit))
 (DTypeSig false "aliasDictNamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EBlock (DoLet false false (PVar "own") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "reexported") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "r")))) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "own") (EVar "reexported")))))))
 (DFunDef false "aliasDictNamesOfPath" ((PVar "bare") PWild PWild (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "memberDictName") (EVar "bare"))) (EVar "ms")))
 (DFunDef false "aliasDictNamesOfPath" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "memberDictName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "String")))))

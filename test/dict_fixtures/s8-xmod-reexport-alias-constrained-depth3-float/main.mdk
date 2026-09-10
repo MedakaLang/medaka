@@ -1,0 +1,13 @@
+-- #2840 WITNESS 2 of 2: the depth-3 alias chain instantiated at `Float`.
+--
+-- This is the cell that proves the dictionary is the RIGHT one rather than
+-- merely present.  At `Int` a wrongly-routed `Num` dict can still land on the
+-- defaulted answer; at `Float` it cannot -- `2.5 + 2.5` is `5.0` only if the
+-- `Num Float` dictionary reached the call, and the pre-fix failure at this
+-- shape was `floatToString: not a Float`, the dict read where the value went.
+--
+-- GROUND TRUTH, HAND-DERIVED: `f x = x + x` at `a := Float`, so
+-- `R.f 2.5` = `5.0`.
+import lib.hop3 as R
+
+main = println (R.f 2.5)

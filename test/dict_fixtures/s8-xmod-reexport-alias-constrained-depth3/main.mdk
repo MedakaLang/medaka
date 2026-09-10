@@ -1,0 +1,14 @@
+-- #2840 WITNESS 1 of 2: the alias spelling over a DEPTH-3 re-export chain.
+--
+-- Independent of `s8-xmod-reexport-alias-constrained/` in the one dimension
+-- that could have made that row a depth-1 accident: `R` names `lib.hop3`,
+-- which is three hops from the definer `lib.decl`, so the alias local `R.f`
+-- can only reach the dict-name set through a resolution that CHASES the
+-- chain (`graphPubDefiners`), not through one that looks one module back.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS: `f : Num a => a -> a`,
+-- `f x = x + 1`; `R.f 1` instantiates at `Int` (the literal defaults the
+-- `Num` goal), so the program prints `2` on every verb.
+import lib.hop3 as R
+
+main = println (R.f 1)
