@@ -347,12 +347,6 @@ source_helpers_ok() {
   return 0
 }
 
-find_native_symbol() {
-  binary=$1
-  suffix=$2
-  nm "$binary" | awk -v suffix="__$suffix" '$3 ~ (suffix "$") { sub(/^_/, "", $3); print $3; exit }'
-}
-
 find_exact_symbol() {
   binary=$1
   wanted=$2
@@ -908,88 +902,24 @@ conditional_jump_count() {
   esac
 }
 
-current_symbol=$(find_native_symbol "$WORK/field_emit" selectPCandidate)
-mutant_symbol=$(find_native_symbol "$WORK/field_branch_mutant" selectPCandidate)
-[ -n "$current_symbol" ] || fail 'current final native select symbol exists'
-[ -n "$mutant_symbol" ] || fail 'mutant final native select symbol exists'
-disassemble "$WORK/field_emit" "$current_symbol" "$WORK/select-current.asm"
-disassemble "$WORK/field_branch_mutant" "$mutant_symbol" "$WORK/select-mutant.asm"
-if grep -F -q 'mdk_value_eq' "$WORK/select-current.asm"; then
-  fail 'current final native disassembly has no secret equality selection'
-fi
-grep -F -q 'mdk_value_eq' "$WORK/select-mutant.asm" || fail 'conditional-select mutation is visible in final native disassembly'
-pass 'conditional-select mutation is rejected by final native disassembly'
-
-scalar_current_symbol=$(find_native_symbol "$WORK/scalar_emit" selectNCandidate)
-scalar_mutant_symbol=$(find_native_symbol "$WORK/scalar_branch_mutant" selectNCandidate)
-[ -n "$scalar_current_symbol" ] || fail 'current final native scalar select symbol exists'
-[ -n "$scalar_mutant_symbol" ] || fail 'mutant final native scalar select symbol exists'
-disassemble "$WORK/scalar_emit" "$scalar_current_symbol" "$WORK/scalar-select-current.asm"
-disassemble "$WORK/scalar_branch_mutant" "$scalar_mutant_symbol" "$WORK/scalar-select-mutant.asm"
-if grep -F -q 'mdk_value_eq' "$WORK/scalar-select-current.asm"; then
-  fail 'current final native scalar select has no secret equality selection'
-fi
-grep -F -q 'mdk_value_eq' "$WORK/scalar-select-mutant.asm" || fail 'scalar conditional-select mutation is visible in final native disassembly'
-pass 'scalar conditional-select mutation is rejected by final native disassembly'
-
-field_helper_select_symbol=$(find_native_symbol "$WORK/field_emit" feSelectGo)
-field_helper_select_mutant_symbol=$(find_native_symbol "$WORK/field_helper_select_emit" feSelectGo)
-[ -n "$field_helper_select_symbol" ] || fail 'current final native field helper select symbol exists'
-[ -n "$field_helper_select_mutant_symbol" ] || fail 'mutant final native field helper select symbol exists'
-disassemble "$WORK/field_emit" "$field_helper_select_symbol" "$WORK/field-helper-select-current.asm"
-disassemble "$WORK/field_helper_select_emit" "$field_helper_select_mutant_symbol" "$WORK/field-helper-select-mutant.asm"
-if grep -F -q 'mdk_value_eq' "$WORK/field-helper-select-current.asm"; then
-  fail 'current final field helper select has no secret equality selection'
-fi
-grep -F -q 'mdk_value_eq' "$WORK/field-helper-select-mutant.asm" || fail 'field helper conditional-select mutation is visible in final native helper'
-pass 'field helper conditional-select mutation is rejected by final native control'
-
-scalar_high_symbol=$(find_native_symbol "$WORK/scalar_emit" scHighBorrow)
-scalar_high_mutant_symbol=$(find_native_symbol "$WORK/scalar_high_branch_emit" scHighBorrow)
-[ -n "$scalar_high_symbol" ] || fail 'current final native scalar high-bit symbol exists'
-[ -n "$scalar_high_mutant_symbol" ] || fail 'mutant final native scalar high-bit symbol exists'
-disassemble "$WORK/scalar_emit" "$scalar_high_symbol" "$WORK/scalar-high-current.asm"
-disassemble "$WORK/scalar_high_branch_emit" "$scalar_high_mutant_symbol" "$WORK/scalar-high-mutant.asm"
-if grep -F -q 'mdk_value_eq' "$WORK/scalar-high-current.asm"; then
-  fail 'current final scalar high-bit borrow has no secret equality control'
-fi
-grep -F -q 'mdk_value_eq' "$WORK/scalar-high-mutant.asm" || fail 'scalar high-bit secret-branch mutation is visible in final native helper'
-pass 'scalar high-bit secret-branch mutation is rejected by final native control'
-
-wrapper_symbol=$(find_native_symbol "$WORK/scalar_wrapper_mutant" subNCandidate)
-[ -n "$wrapper_symbol" ] || fail 'scalar leaky-wrapper final native helper symbol exists'
-disassemble "$WORK/scalar_wrapper_mutant" "$wrapper_symbol" "$WORK/scalar-wrapper-subn.asm"
-grep -F -q 'mdk_value_eq' "$WORK/scalar-wrapper-subn.asm" || fail 'scalar leaky-wrapper branch reaches final native helper'
-pass 'scalar leaky-wrapper mutation is visible in final native helper'
-
-copy_symbol=$(find_native_symbol "$WORK/scalar_copy_mutant" copyLow)
-[ -n "$copy_symbol" ] || fail 'scalar transitive copy final native helper symbol exists'
-disassemble "$WORK/scalar_copy_mutant" "$copy_symbol" "$WORK/scalar-copy-mutant.asm"
-grep -F -q 'mdk_value_eq' "$WORK/scalar-copy-mutant.asm" || fail 'scalar transitive copy branch reaches final native helper'
-pass 'scalar transitive copy mutation is visible in final native helper'
-
-field_reducer_symbol=$(find_native_symbol "$WORK/field_emit" fieldSelectWitness)
-scalar_reducer_symbol=$(find_native_symbol "$WORK/scalar_emit" scalarSelectWitness)
-[ -n "$field_reducer_symbol" ] || fail 'final native field reducer witness symbol exists'
-[ -n "$scalar_reducer_symbol" ] || fail 'final native scalar reducer witness symbol exists'
-disassemble "$WORK/field_emit" "$field_reducer_symbol" "$WORK/field-reducer.asm"
-disassemble "$WORK/scalar_emit" "$scalar_reducer_symbol" "$WORK/scalar-reducer.asm"
-field_round_calls=$(grep -F -c '__carryFoldRound' "$WORK/field-reducer.asm" || true)
-[ "$field_round_calls" -eq 3 ] || fail "final field reducer has three fixed carry-round calls (got $field_round_calls)"
-grep -F -q '__subPCandidate' "$WORK/field-reducer.asm" || fail 'final field reducer calls arithmetic subtraction candidate'
-grep -F -q '__selectPCandidate' "$WORK/field-reducer.asm" || fail 'final field reducer calls arithmetic select'
-pass 'final linked field reducer calls the approved helpers'
-grep -F -q '__reduceFixed' "$WORK/scalar-reducer.asm" || fail 'final scalar reducer calls fixed fold schedule'
-scalar_schedule_symbol=$(find_native_symbol "$WORK/scalar_emit" reduceFixed)
-[ -n "$scalar_schedule_symbol" ] || fail 'final native scalar fixed schedule symbol exists'
-disassemble "$WORK/scalar_emit" "$scalar_schedule_symbol" "$WORK/scalar-schedule.asm"
-scalar_fold_calls=$(grep -F -c '__takeHigh' "$WORK/scalar-schedule.asm" || true)
-[ "$scalar_fold_calls" -eq 4 ] || fail "final scalar reducer has four fixed fold bodies (got $scalar_fold_calls)"
-scalar_carry_calls=$(grep -F -c '__carryGo' "$WORK/scalar-schedule.asm" || true)
-[ "$scalar_carry_calls" -eq 5 ] || fail "final scalar reducer has five fixed carry calls (got $scalar_carry_calls)"
-grep -F -q '__subNCandidate' "$WORK/scalar-reducer.asm" || fail 'final scalar reducer calls arithmetic subtraction candidate'
-grep -F -q '__selectNCandidate' "$WORK/scalar-reducer.asm" || fail 'final scalar reducer calls arithmetic select'
-pass 'final linked scalar reducer calls the approved helpers'
+# The per-helper disassembly assertions that stood here were retired when the
+# emitter began lowering a comparison on known-scalar operands to an inline
+# icmp. They addressed each audited helper by linked symbol and then grepped its
+# body for an @mdk_value_eq call. Measured at that change: no mdk_value_* call is
+# emitted in ANY of the twelve helper bodies, clean or mutant, so every one of
+# the six mutant greps had become undetectable and every clean-arm grep passed
+# only because it could no longer fail. The reducer call-graph assertions below
+# them went the same way -- clang -O2 inlines the calls they counted.
+#
+# Keeping them would have been a false green, which is worse than their absence:
+# the six mutations they covered are still caught, at source level and in the
+# emitted IR, by the assertions above. What is genuinely lost is the narrow
+# claim that a clang -O2 plus linker step has not reintroduced a secret-
+# dependent branch into this probe. Restoring that needs an emitter-level way to
+# mark a function non-inlinable AND a predicate that survives branchless
+# lowering -- clang compiles the scHighBorrow mutant with no extra jump at all,
+# so a jump-count pin cannot see it. Tracked in #2838; do not reinstate a
+# symbol-addressed check without a predicate that discriminates.
 
 # Native bit helpers are C calls below the generated Medaka helpers. Inspect
 # the linked implementations on the tested target; either helper growing a
@@ -1007,5 +937,7 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 54 ] || fail "anti-rot floor (expected at least 54, got $checked)"
+# Was 54. Lowered to 47 when the seven vacuous disassembly assertions above were
+# retired; raise it again if that layer is ever restored with a live predicate (#2838).
+[ "$checked" -ge 47 ] || fail "anti-rot floor (expected at least 47, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
