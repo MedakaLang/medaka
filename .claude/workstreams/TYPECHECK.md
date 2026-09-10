@@ -85,11 +85,21 @@ removing it:
   **Updated 2026-09-09 (#2839):** the stamp is no longer the receiver's unmangled head name.
   `inferFieldAccess`/`inferRecordUpdateField` now write `stampedRecordHead`, which qualifies the
   selected record's key with the module that DECLARED it (read off the record's own result-type
-  head), in the mangler's spelling. The back end's key is unchanged — on the emit path the
-  qualification is the identity function, so the emitted IR is byte-identical — but the stamp's
-  cross-module identity no longer comes from `mangleUnits` happening to run before
-  `elaborateModules`. What is still bare-keyed is `recordByNameRef` itself (#1319 unit 4 /
-  #1288), and `lookupRecordByMangledHead` still selects the `RecordInfo` on the emit path.
+  head), in the mangler's spelling — so the stamp's cross-module identity no longer comes from
+  `mangleUnits` happening to run before `elaborateModules`. What is still bare-keyed is
+  `recordByNameRef` itself (#1319 unit 4 / #1288).
+  **Amended 2026-09-10 (the #2809 reorder's fix round):** two sentences of the above were true
+  only while the mangler still ran first. "On the emit path the qualification is the identity
+  function, so the emitted IR is byte-identical" — the emit path now elaborates an UNMANGLED
+  tree, so the key is bare and this qualification is the whole of what distinguishes two
+  same-named records at the emitter. And "`lookupRecordByMangledHead` still selects the
+  `RecordInfo` on the emit path" — it no longer can, because no key reaching elaboration is
+  mangled there; the arm that fires is now the pre-elaboration ctor rename
+  (`mangleCtorCollisions`) on `eval` / `core_ir_eval` / `test`. The stamp is also now applied
+  EXACTLY ONCE: the mangler's `renameScoped` no longer renames the cell, and the stamp's
+  idempotence prefix-guard is gone with it — a record whose source name already carried its own
+  module's prefix read as "already qualified" and collided with its sibling, compiling a wrong
+  slot at exit 0 on a program the parent commit refused.
 
 **Application notes:**
 

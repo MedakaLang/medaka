@@ -972,22 +972,42 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    being supplied by the mangler's ORDER, not by the stamp. It is now derived from the
    selected record's own declaring module (the origin `registerRecordInfoKeyed` mints into
    the record's result head, the same end `recordCandIsReceiverDecl` already compares) and
-   rendered in the mangler's spelling, reusing the mangler's own two rename decisions — a
-   reserved fixed-tag constructor is never renamed, a key already carrying its owner's
-   prefix has already been renamed — so the two cannot drift.
-   **Measured.** On the emit path every record key is already `<owner>__<name>`, so the
-   qualification is the identity function there: `selfcompile_fixpoint` C3a and C3b both
+   rendered in the mangler's spelling, reusing the mangler's own rename decision — a
+   reserved fixed-tag constructor is never renamed, every other one is qualified with its
+   owner — so the two cannot drift.
+   **Measured, when this item landed alone on main's order.** With the mangler still
+   running first, every record key was already `<owner>__<name>` and the qualification was
+   the identity function on the emit path: `selfcompile_fixpoint` C3a and C3b both
    byte-identical to the seed, and a two-arm `medaka build --keep-ir` over all 268
-   multi-module entries under `test/` gives 201 IR-identical, 0 differing, 67 that emit no
-   IR on either arm, with no exit-code disagreement. What changes is the unmangled
-   elaboration. The premise was measured before the change, with a probe at the stamp on
-   all three `record_receiver_ident_*_field_order` cells: there the receiver's head already
-   carries `IdentModule "armod"` vs `IdentModule "zrmod"` and the selected `RecordInfo`'s
-   own result head agrees — only the stamped string lost it.
+   multi-module entries under `test/` gave 201 IR-identical, 0 differing, 67 that emit no
+   IR on either arm, with no exit-code disagreement. The premise was measured before the
+   change, with a probe at the stamp on all three `record_receiver_ident_*_field_order`
+   cells: there the receiver's head already carries `IdentModule "armod"` vs
+   `IdentModule "zrmod"` and the selected `RecordInfo`'s own result head agrees — only the
+   stamped string lost it.
+   **Amended after the reorder merged.** That identity-function reading is no longer the
+   emit path's: elaboration now runs on an unmangled tree, so the key is BARE and the
+   qualification here is the whole of what distinguishes two same-named records at the
+   emitter. Two consequences, both landed with the reorder's fix round. The mangler's
+   `renameScoped` no longer renames the `EFieldAccess`/`ERecordUpdate` cells — a second
+   application of the same qualification, and it collided with the first on a record whose
+   SOURCE name already carried its own module's prefix (`data Mm__Cfg` beside `data Cfg` in
+   module `Mm`), compiling a wrong slot at exit 0 where the parent commit had refused the
+   program. And the stamp's idempotence guard is gone with it: idempotence needs a test for
+   "has this already been qualified?", the only available test is a prefix guess, and the
+   guess is what collided. One writer, one application, no guard. The pass that still
+   renames a constructor before elaboration, `mangleCtorCollisions`, cannot be observed
+   through this cell — its drivers (`eval`, `core_ir_eval`, `test`) all discard the
+   record-name field.
    **What did NOT retire.** `lookupRecordByMangledHead` / `mangledHeadCandidates` answer a
    different question — which `RecordInfo` a receiver SELECTS when the registry key is
-   mangled and the receiver's type reference is not — which this change does not touch;
-   they stay load-bearing on the emit path, as their own comment's stub measurement says.
+   mangled and the receiver's type reference is not — which this change does not touch.
+   Its reach moved, though, and the reorder is what moved it: the emit path no longer
+   elaborates mangled keys, so the arm that fires is now the pre-elaboration ctor rename
+   (`mangleCtorCollisions`, which renames a colliding record's constructor and leaves its
+   type name alone) on `eval` / `core_ir_eval` / `test`. Its own comment's stub measurement
+   — self-compile typechecks clean and then miscompiles itself into a segfault — was taken
+   on the old order and has not been re-run on the new one.
 
 ### SA-11. Artifacts
 

@@ -674,6 +674,7 @@ definerShadowsFromSet : Map String Unit -> List Decl -> List String
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
 depExportsCtorIdent : String -> String -> Ident -> Bool
 depExportsMethodIdent : String -> String -> Ident -> Bool
+depExportsStandalone : String -> String -> Bool
 depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derefOp : Mono -> Mono
@@ -1170,6 +1171,7 @@ importDefinersOf : List Decl -> List (String, (String, String))
 importFormBindsBare : UsePath -> String -> Bool
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
+importFormSpellsBare : UsePath -> String -> Bool
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importedBindings : UsePath -> Option (List (String, String))
@@ -1627,7 +1629,7 @@ oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
-occurrenceCarriesMangledShadowSym : Ref Route -> Bool
+occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
@@ -1875,6 +1877,7 @@ recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordStandaloneSigObligationsSp : String -> String -> List Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
+recoveredShadowSym : String -> Ref Route -> String
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
 reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
