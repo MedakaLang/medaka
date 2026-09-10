@@ -1,5 +1,5 @@
 # META
-source_lines=1167
+source_lines=1166
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -155,7 +155,6 @@ mapDecl f (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (mapImplMethod f) methods }
 mapDecl f (DProp pub name params body) = DProp pub name params (mapExpr f body)
 mapDecl f (DTest pub name body) = DTest pub name (mapExpr f body)
-mapDecl f (DBench pub name body) = DBench pub name (mapExpr f body)
 mapDecl f (DAttrib attrs d) = DAttrib attrs (mapDecl f d)
 mapDecl _ d = d
 
@@ -1239,7 +1238,6 @@ desugar prog =
 (DFunDef false "mapDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "mapImplMethod") (EVar "f"))) (EVar "methods"))))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
-(DFunDef false "mapDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapDecl") (EVar "f")) (EVar "d"))))
 (DFunDef false "mapDecl" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "mapIfaceMethod" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
@@ -1680,7 +1678,6 @@ desugar prog =
 (DFunDef false "mapDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapImplMethod") (EVar "f"))) (EVar "methods"))))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
-(DFunDef false "mapDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapDecl") (EVar "f")) (EVar "d"))))
 (DFunDef false "mapDecl" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "mapIfaceMethod" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
