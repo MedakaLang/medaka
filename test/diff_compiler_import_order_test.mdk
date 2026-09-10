@@ -1,0 +1,818 @@
+{- | Gate for import-clause order invariance over
+   `test/import_order_fixtures`.
+
+   A golden cannot catch an over-widening. A golden pins the output the
+   compiler produced, so a rule that is too permissive has its permissive
+   answer recorded and then defended. The check for an order-dependence bug
+   is a permutation differential instead: permute the input along the
+   suspect axis and require the answer to be invariant. That needs no ground
+   truth, which is what lets it see a widening nobody has written down the
+   right answer for.
+
+   The axis is the entry module's import-clause order. Reordering imports is
+   cosmetic — every formatter and every reviewer treats it that way — so a
+   program whose meaning depends on it is wrong whatever the right answer
+   turns out to be.
+
+   The unit is a directory, not a file, because every import-order defect on
+   the tracker is multi-module by nature. Each case directory declares its
+   entry module in a `case.txt`.
+
+   # What must be equal across orderings
+
+   Each ordering is reduced to a one-line signature, and it is the signature
+   that must be invariant:
+
+   `check=<exit>;codes=<sorted,comma>;schemes=<dump>;run=<exit>:<stdout>;build=<exit>/<exec-exit>:<stdout>`
+
+   - `check=` is `medaka check --json`'s exit code, kept exactly, because a
+     change from 1 to 2 is also a change.
+   - `codes=` is every `"code"` in that JSON, sorted and as a multiset.
+     Sorted because diagnostics are emitted in source order and permutation
+     moves source lines. A multiset because one `T-TYPE-MISMATCH` and two
+     are genuinely different observations: an exit-code-only criterion is
+     blind to the cascading second code one ordering of
+     `733-ambiguous-ctor-reject-cascade-order-dependent` emits, and a
+     set-not-multiset one is blind to a pair.
+   - `schemes=` is plain `check`'s scheme dump for the user's own top-level
+     bindings, selected by FORMAT (`<name> : <type>` anchored at column 0)
+     and never by stream: resolve-stage diagnostics go to stderr and
+     type-stage ones to stdout, so the stream does not discriminate, and
+     stdout carries locations, message text and the harness's own temporary
+     directory, none of which may enter a signature. It is the only
+     observable that can see "exit 0, same printed value, but the binding was
+     inferred at a different type" — what a different declaration winning
+     looks like when the values happen to coincide.
+   - `run=` and `build=` are two observations of the backend, not two of the
+     front end, which `run` and `build` share. They can disagree: two engines
+     have picked opposite winners for the same source. Both are graded.
+
+   Deliberately excluded, each because comparing it manufactures a false red:
+   diagnostic message TEXT (`R-AMBIGUOUS-CTOR` names the colliding modules in
+   import-clause order, on purpose, and the corpus keeps that program as
+   `control-ambiguous-ctor-reject-invariant` so the exclusion is itself
+   graded — the row still fails if the verdict or the code becomes
+   order-dependent); diagnostic RANGES (permuting clauses of unequal line
+   count moves every line below them); `run`/`build` STDERR (runtime panics
+   are not uniformly location-free and the build log embeds the source path);
+   the ORDER of diagnostics, hence the sort; and the emitted IR.
+
+   # The emitter-verdict arm
+
+   A fourth driver, graded in its own space against its own sidecar ledger,
+   `test/EMITTER-VERDICT-LEDGER.txt`. The raw emitter binary can exit 0 and
+   emit a complete, linkable program for an entry `check`/`run`/`build` all
+   reject, because the one `failWith` on a typecheck diagnostic on that path
+   matches a singleton module list and every import-bearing entry — the whole
+   of this corpus — falls to a wildcard clause returning no diagnostics.
+
+   Only the emitter's exit code and whether it wrote non-empty IR are
+   observed: never the IR text, which moves on every compiler change, and
+   never its stderr, which embeds absolute temporary paths. The observed
+   AGREE/DISAGREE classification is computed, never transcribed.
+
+   Keeping it separate is load-bearing. Folding an `emit=` cell into the
+   signature above would re-cut every row already pinned in
+   `test/IMPORT-ORDER-LEDGER.txt`, and `test/MUST-FAIL-NOT-PINNABLE.txt`'s
+   `1667` row names this arm as the permanent guard for that issue.
+
+   # Scope limits
+
+   Only the ENTRY module's clauses are permuted; a defect decided by an
+   imported module's clause order is not covered here, and nothing else
+   covers it either. Clauses are permuted among their own original slots, so
+   a clause never moves across a declaration, and an order sensitivity that
+   needs an import to move past a `data` or an `impl` is out of scope by
+   construction. All `n!` orderings are tried when `n <= 4`; above that the
+   plan falls back to identity, reversal and every adjacent transposition and
+   the case is reported PARTIAL, so a shrunken permutation set can never look
+   like a full one.
+
+   # The ledgers
+
+   `test/IMPORT-ORDER-LEDGER.txt` carries the cases whose answer does depend
+   on import order today, each naming its open issue and pinning every
+   distinct signature it produces. All four directions are graded: an
+   unledgered case producing two signatures fails (a new bug); a ledgered
+   case collapsing to one fails, naming the issue to close (the drain); a
+   ledgered case whose signatures moved fails; and a ledger row naming a case
+   that does not exist fails (rot). Read that file's own header for what a
+   reviewer must demand before accepting a new row.
+
+   Both ledgers are read offline. Whether a ledgered issue is still OPEN is
+   the half a gate cannot check — it runs on every dev box and in a required
+   CI shard, where a rate limit or a fork's restricted token must never block
+   a merge — and lives in `test/must_fail_census.sh`, which has the API.
+
+   # Vehicle
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads and
+   writes files, none of which the interpreter binds.
+
+   The verdict census is rendered into the failure message rather than
+   printed, because `medaka test --native` parses a test body's stdout back
+   as a sentinel transcript and absorbs anything the body prints on its own
+   account. The three axes — structural, order and emitter-verdict — are
+   graded in one `test` declaration because each ordering is spawned once and
+   feeds all three; the failure message names which axis each row failed on,
+   so an emitter-verdict regression is legible on its own. -}
+
+import compiler_cli_test_support.{boundedInTree, emitterBin}
+import fs.{fixtureDirs, fixtureFiles, mkdirAll}
+import io.{runVerb}
+import list.{
+  drop, errs, indexed, lookup, mapWithIndex, nub, oks, permutations, range,
+  reverse, somes, sort, zip
+}
+import path.{basename}
+import string.{
+  contains, isAlpha, isAlphaNum, isDigit, join, lines, padRight, replaceAll,
+  split, startsWith, stripPrefix, stripSuffix, toChars, trim, trimLeft, unlines
+}
+import test.{Expectation, fail, pass}
+import test_process.{medakaBin, medakaRoot, missingUnits, scratchDir}
+
+-- Everything is located through MEDAKA_ROOT rather than the working
+-- directory: a gate runner exports it and inherits whatever cwd its caller
+-- happened to be in.
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/import_order_fixtures"
+
+orderLedgerPath : <IO> String
+orderLedgerPath = "\{medakaRoot}/test/IMPORT-ORDER-LEDGER.txt"
+
+emitLedgerPath : <IO> String
+emitLedgerPath = "\{medakaRoot}/test/EMITTER-VERDICT-LEDGER.txt"
+
+{- | The ceiling on one spawned invocation, in seconds, sized to cover a
+   `medaka build` and the `clang` it drives.
+
+   A regression that makes one ordering loop has to surface as a failing row
+   rather than as a hung CI job. -}
+perSpawnSeconds : Int
+perSpawnSeconds = 120
+
+-- # Chunking and permuting the entry module
+
+{- | One top-level chunk of an entry module: a line with a non-whitespace
+   character in column 0 together with every blank or indented line that
+   follows it.
+
+   The offside rule puts every top-level declaration in column 0, so this is
+   what makes a multi-line `import m.{ ... }` move as one unit. -}
+data Chunk = Chunk { isImport : Bool, text : String }
+
+{- | An entry module split into chunks, with the positions of its import
+   chunks and whatever trailing newline the file ended with.
+
+   The ending is carried separately so a rewritten file is byte-identical to
+   the original wherever the permutation is the identity. -}
+data Source = Source { chunks : List Chunk, slots : List Int, ending : String }
+
+startsChunk : String -> Bool
+startsChunk piece =
+  piece /= "" && not (startsWith " " piece) && not (startsWith "\t" piece)
+
+-- Matches `import m…` and `export import m…`, the two forms a top-level
+-- import clause takes.
+importHead : String -> Bool
+importHead line =
+  let bare = match stripPrefix "export" line
+    Some rest =>
+      if startsWith " " rest || startsWith "\t" rest then
+        trimLeft rest
+      else
+        line
+    None => line
+  startsWith "import " bare || startsWith "import\t" bare
+
+addPiece : List Chunk -> String -> List Chunk
+addPiece acc piece =
+  if startsChunk piece then
+    Chunk { isImport = importHead piece, text = piece } :: acc
+  else match acc
+    [] => [Chunk { isImport = False, text = piece }]
+    c :: rest => Chunk { c | text = "\{c.text}\n\{piece}" } :: rest
+
+sourceOf : String -> Source
+sourceOf src =
+  let (body, ending) = match stripSuffix "\n" src
+    Some b => (b, "\n")
+    None => (src, "")
+  let chunks = reverse (fold addPiece [] (split "\n" body))
+  Source {
+    chunks = chunks,
+    slots = map fst (filter (e => (snd e).isImport) (indexed chunks)),
+    ending = ending,
+  }
+
+{- | The orderings to try for `n` import clauses, and whether that set is
+   partial. -}
+data Plan = Plan { allOrders : List (List Int), shrunken : Bool }
+
+ordersFor : Int -> Plan
+ordersFor n =
+  if n <= 4 then
+    Plan { allOrders = permutations (range 0 n), shrunken = False }
+  else
+    Plan {
+      allOrders =
+        range 0 n
+          :: reverse (range 0 n)
+          :: map (i => swapAdjacent i n) (range 0 (n - 1)),
+      shrunken = True,
+    }
+
+swapAdjacent : Int -> Int -> List Int
+swapAdjacent i n =
+  map (j => if j == i then i + 1 else if j == i + 1 then i else j) (range 0 n)
+
+{- | The entry module rewritten so that its import clauses appear in `order`,
+   each moved into one of the slots the clauses already occupied. -}
+permutedText : Source -> List Int -> String
+permutedText src order =
+  let original = map (i => src.chunks[i].text) src.slots
+  let placed = zip src.slots (map (w => original[w]) order)
+  let render =
+    e => match lookup (fst e) placed
+      Some t => t
+      None => (snd e).text
+  "\{join "\n" (map render (indexed src.chunks))}\{src.ending}"
+
+-- # The signature
+
+escapeCell : String -> String
+escapeCell s =
+  replaceAll
+    "\n"
+    "\\n"
+    (replaceAll
+      "\t"
+      "\\t"
+      (replaceAll ";" "\\s" (replaceAll "|" "\\p" (replaceAll "\\" "\\\\" s))))
+
+-- Every `"code":"…"` in `check --json`'s output, sorted, as a multiset.
+codesIn : String -> String
+codesIn text =
+  join "," (sort (map upToQuote (drop 1 (split "\"code\":\"" text))))
+
+upToQuote : String -> String
+upToQuote piece = match split "\"" piece
+  h :: _ => h
+  [] => piece
+
+{- | The scheme lines of plain `check`'s stdout, selected by their format:
+   an identifier anchored at column 0 followed by ` : `.
+
+   A diagnostic line cannot match — it begins with a path, a digit or the
+   `  |` gutter. A scheme wrapped onto a continuation line loses its tail,
+   which is a known limit rather than a hazard: the tail is dropped
+   identically in every ordering. -}
+schemeDump : String -> String
+schemeDump out = unlines (filter schemeLine (lines out))
+
+schemeLine : String -> Bool
+schemeLine line = match split " : " line
+  ident :: _ :: _ => identifierText ident
+  _ => False
+
+identifierText : String -> Bool
+identifierText s = match toList (toChars s)
+  [] => False
+  c :: rest => (isAlpha c || c == '_') && all identifierChar rest
+
+identifierChar : Char -> Bool
+identifierChar c = isAlphaNum c || c == '_' || c == '\''
+
+{- | One ordering's graded observations: its signature, its emitter-verdict
+   signature, and whether its `build` produced a binary. -}
+data Trial = Trial { sigText : String, emitText : String, madeBinary : Bool }
+
+verb : List String -> <Exec "_", IO> Result String (Int, String, String)
+verb args = boundedInTree perSpawnSeconds medakaBin args
+
+executed : Int ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String (Option (Int, String))
+executed 0 binPath =
+  if fileExists binPath then
+    map
+      ((code, out, _) => Some (code, out))
+      (boundedInTree perSpawnSeconds binPath [])
+  else
+    Ok None
+executed _ _ = Ok None
+
+signatureFor : String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String (String, Bool)
+signatureFor work entry binPath =
+  let path = "\{work}/\{entry}"
+  match verb ["check", "--json", path]
+    Err e => Err "`medaka check --json` could not run: \{e}"
+    Ok (checkCode, jsonOut, jsonErr) => match verb ["check", path]
+      Err e => Err "`medaka check` could not run: \{e}"
+      Ok (_, checkOut, _) => match verb ["run", path]
+        Err e => Err "`medaka run` could not run: \{e}"
+        Ok (runCode, runOut, _) => match verb ["build", path, "-o", binPath]
+          Err e => Err "`medaka build` could not run: \{e}"
+          Ok (buildCode, _, _) => match executed buildCode binPath
+            Err e => Err "the built binary could not run: \{e}"
+            Ok ran =>
+              let execCode = match ran
+                Some (c, _) => intToString c
+                None => "-"
+              let execOut = match ran
+                Some (_, o) => escapeCell o
+                None => ""
+              let codes = codesIn (jsonOut ++ jsonErr)
+              let schemes = escapeCell (schemeDump checkOut)
+              let checkCells =
+                "check=\{intToString checkCode};codes=\{codes};schemes=\{schemes}"
+              let runCells = "run=\{intToString runCode}:\{escapeCell runOut}"
+              let buildCells =
+                "build=\{intToString buildCode}/\{execCode}:\{execOut}"
+              Ok ("\{checkCells};\{runCells};\{buildCells}", isSome ran)
+
+{- | The raw emitter's own verdict on one ordering.
+
+   The extra `stdlib` root gives it the same root set `check`/`run`/`build`
+   get through `MEDAKA_ROOT`: without it any case importing a non-`core`
+   stdlib module exits 1 "unknown module" for the emitter alone, which would
+   classify as DISAGREE for a root-set reason that has nothing to do with a
+   compiler defect. -}
+emitVerdictFor : String -> String -> <Exec "_", IO> Result String String
+emitVerdictFor work entry =
+  let roots = [
+    "\{medakaRoot}/stdlib/runtime.mdk",
+    "\{medakaRoot}/stdlib/core.mdk",
+    "\{work}/\{entry}",
+    work,
+    "\{medakaRoot}/stdlib",
+  ]
+  match boundedInTree perSpawnSeconds emitterBin roots
+    Err e => Err "the raw emitter could not run: \{e}"
+    Ok (code, out, _) =>
+      let ir = if out == "" then "noir" else "ir"
+      Ok "emit=\{intToString code}:\{ir}"
+
+-- The `check=` cell of a signature, which is what the emitter-verdict
+-- classification is computed against.
+checkCell : String -> String
+checkCell sig = match split ";" sig
+  h :: _ => h
+  [] => sig
+
+-- # Running one case
+
+{- | One case directory's graded result. `broken` is a structural failure —
+   no `case.txt`, an entry that is not a file, too few import clauses, a
+   spawn that could not start — which has no signatures of its own. -}
+data Case = Case {
+  unit : String,
+  clauseCount : Int,
+  orderingCount : Int,
+  partial : Bool,
+  sigs : List String,
+  emitSigs : List String,
+  anyBuilt : Bool,
+  anyEmitted : Bool,
+  broken : String,
+}
+
+brokenCase : String -> String -> Case
+brokenCase unit why = Case {
+  unit = unit,
+  clauseCount = 0,
+  orderingCount = 0,
+  partial = False,
+  sigs = [],
+  emitSigs = [],
+  anyBuilt = False,
+  anyEmitted = False,
+  broken = why,
+}
+
+specField : String -> String -> String
+specField key spec = match somes (map (stripPrefix "\{key}:") (lines spec))
+  v :: _ => trim v
+  [] => ""
+
+{- | Copies a case directory whole and asserts the copy landed everything.
+
+   `cp -a` rather than a per-file copy because a case directory may hold a
+   nested-module subdirectory, and a truncated copy would truncate every
+   ordering identically, which the invariance check cannot see. -}
+stageCase : String ->
+  String ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> Result String Unit
+stageCase dir work = match mkdirAll work
+  Err e => Err "could not create \{work}: \{e}"
+  Ok _ => match runVerb "cp" ["-a", "\{dir}/.", "\{work}/"]
+    Err e => Err "could not copy \{dir}: \{e}"
+    Ok (code, _, cpErr) =>
+      if code /= 0 then
+        Err "`cp -a \{dir}/. \{work}/` exited \{intToString code}: \{cpErr}"
+      else match (fixtureFiles dir, fixtureFiles work)
+        (Err e, _) => Err "could not enumerate \{dir}: \{e}"
+        (_, Err e) => Err "could not enumerate \{work}: \{e}"
+        (Ok srcFiles, Ok dstFiles) =>
+          if length srcFiles == length dstFiles then
+            Ok ()
+          else
+            Err
+              "case-directory copy truncated: \{intToString (length srcFiles)} file(s) in, \{intToString (length dstFiles)} out"
+
+trialFor : String ->
+  String ->
+  String ->
+  Source ->
+  Int ->
+  List Int ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> Result String Trial
+trialFor caseScratch dir entry src k order =
+  let work = "\{caseScratch}/p\{intToString k}"
+  match stageCase dir work
+    Err e => Err e
+    Ok _ => match writeFile "\{work}/\{entry}" (permutedText src order)
+      Err e => Err "could not write the permuted entry: \{e}"
+      Ok _ => match signatureFor work entry "\{work}/.bin"
+        Err e => Err e
+        Ok (sig, built) =>
+          map
+            (emitted => Trial {
+              sigText = sig,
+              emitText = "\{checkCell sig};\{emitted}",
+              madeBinary = built,
+            })
+            (emitVerdictFor work entry)
+
+runCase : String -> String -> <Exec "_", FileRead "_", FileWrite "_", IO> Case
+runCase scratch unit =
+  let dir = "\{corpus}/\{unit}"
+  match readFile "\{dir}/case.txt"
+    Err e => brokenCase unit "no readable case.txt: \{e}"
+    Ok spec =>
+      let entry = specField "entry" spec
+      if entry == "" then
+        brokenCase unit "case.txt declares no entry"
+      else match readFile "\{dir}/\{entry}"
+        Err e =>
+          brokenCase
+            unit
+            "case.txt names entry \{debug entry}, which is not a readable file here: \{e}"
+        Ok raw =>
+          let src = sourceOf raw
+          let n = length src.slots
+          if n < 2 then
+            brokenCase
+              unit
+              "needs at least 2 top-level import clauses, found \{intToString n}"
+          else
+            let plan = ordersFor n
+            let outcomes =
+              mapWithIndex
+                (trialFor "\{scratch}/\{unit}" dir entry src)
+                plan.allOrders
+            match errs outcomes
+              e :: _ => brokenCase unit e
+              [] =>
+                let trials = oks outcomes
+                Case {
+                  unit = unit,
+                  clauseCount = n,
+                  orderingCount = length trials,
+                  partial = plan.shrunken,
+                  sigs = sort (nub (map (t => t.sigText) trials)),
+                  emitSigs = sort (nub (map (t => t.emitText) trials)),
+                  anyBuilt = any (t => t.madeBinary) trials,
+                  anyEmitted =
+                    any (t => contains "emit=0:ir" t.emitText) trials,
+                  broken = "",
+                }
+
+-- # The ledgers
+
+{- | One ledger row: the case it names, its classification field (an issue
+   number in the order ledger, an AGREE/DISAGREE class in the emitter one),
+   its reason where the format carries one, and every signature it pins. -}
+data Row = Row {
+  rowCase : String,
+  tag : String,
+  reason : String,
+  pins : List String,
+}
+
+ledgerComment : String -> Bool
+ledgerComment line = trim line == "" || startsWith "#" (trimLeft line)
+
+{- | The rows of a `|`-separated ledger, with the pinned signatures starting
+   at field `pinAt` and everything before them read as metadata.
+
+   A non-comment, non-blank line with fewer than three fields is a FAILURE
+   naming the line, never a skip. Dropping it would hide a truncated row from
+   BOTH grading and the rot check — a ledger row that pins nothing and is
+   answerable to nothing, which is how a ledger becomes a skip-list. -}
+ledgerRows : Int -> String -> Result String (List Row)
+ledgerRows pinAt text =
+  let candidates = filter (l => not (ledgerComment l)) (lines text)
+  match filter (l => isNone (rowOf pinAt l)) candidates
+    [] => Ok (somes (map (rowOf pinAt) candidates))
+    bad :: _ =>
+      Err
+        "malformed row (a row needs at least 3 `|`-separated fields): \{debug bad}"
+
+rowOf : Int -> String -> Option Row
+rowOf pinAt line =
+  let fields = map trim (split "|" line)
+  if length fields < 3 then
+    None
+  else
+    Some Row {
+      rowCase = fields[0],
+      tag = fields[1],
+      reason = if pinAt >= 3 then fields[2] else "",
+      pins = sort (nub (filter (/= "") (drop pinAt fields))),
+    }
+
+rowFor : String -> List Row -> Option Row
+rowFor unit rows = match filter (r => r.rowCase == unit) rows
+  r :: _ => Some r
+  [] => None
+
+-- The digits of an issue field spelled `#<digits>…`, or `None`.
+issueDigits : String -> Option String
+issueDigits tag = match stripPrefix "#" tag
+  None => None
+  Some rest => match toList (toChars rest)
+    d :: _ => if isDigit d then Some rest else None
+    [] => None
+
+-- # Grading
+
+failLine : String -> String -> String
+failLine unit why = "  \{padRight 52 ' ' unit} \{why}"
+
+sigListing : List String -> String
+sigListing sigs = join "" (map (s => "\n         \{s}") sigs)
+
+{- | The order axis for one case: invariant unless a ledger row licenses the
+   divergence, and then only the exact divergence that row pins. -}
+gradeOrder : List Row -> Case -> Option String
+gradeOrder rows c =
+  if c.broken /= "" then
+    Some (failLine c.unit c.broken)
+  else match rowFor c.unit rows
+    None =>
+      if length c.sigs == 1 then
+        None
+      else
+        Some
+          (failLine
+            c.unit
+            "\{intToString c.orderingCount} ordering(s) produced \{intToString (length c.sigs)} DISTINCT signatures — the answer depends on import order. Either FIX it, or, if it is a known OPEN bug, add a row to test/IMPORT-ORDER-LEDGER.txt after reading that file's header:\{sigListing c.sigs}")
+    Some row => gradeLedgered c row
+
+gradeLedgered : Case -> Row -> Option String
+gradeLedgered c row = match issueDigits row.tag
+  None =>
+    Some
+      (failLine
+        c.unit
+        "ledger row's issue field is \{debug row.tag} — it must be #<number> of an OPEN issue")
+  Some num =>
+    if not (startsWith "\{num}-" c.unit) then
+      Some
+        (failLine
+          c.unit
+          "ledgered against \{row.tag} but the directory is not named \"\{num}-…\"")
+    else if length row.pins < 2 then
+      Some
+        (failLine
+          c.unit
+          "ledger row pins \{intToString (length row.pins)} signature(s); a row asserts a DIVERGENCE, so it needs at least 2")
+    else if length c.sigs == 1 then
+      Some
+        (failLine
+          c.unit
+          "DRAINED — \{row.tag} no longer diverges under import-clause permutation. Close it, delete the row, and KEEP the fixture as the regression guard. Observed:\{sigListing c.sigs}")
+    else if row.pins == c.sigs then
+      None
+    else
+      Some
+        (failLine
+          c.unit
+          "KNOWN-BAD \{row.tag}: the divergence MOVED. Re-derive the right answer before re-pinning; a ledger row is evidence, not a knob.\n       pinned:\{sigListing row.pins}\n       observed:\{sigListing c.sigs}")
+
+{- | Whether the raw emitter's accept/reject verdict differs from `check`'s
+   in any ordering — computed from the observed pairs, never transcribed. -}
+emitClass : List String -> String
+emitClass sigs = if any emitDisagrees sigs then "DISAGREE" else "AGREE"
+
+emitDisagrees : String -> Bool
+emitDisagrees sig = match split ";" sig
+  checkPart :: emitPart :: _ =>
+    let accepted = (== "0")
+    accepted (fieldAfter "check=" checkPart)
+      /= accepted (upToColon (fieldAfter "emit=" emitPart))
+  _ => False
+
+fieldAfter : String -> String -> String
+fieldAfter prefix s = match stripPrefix prefix s
+  Some rest => rest
+  None => s
+
+upToColon : String -> String
+upToColon s = match split ":" s
+  h :: _ => h
+  [] => s
+
+gradeEmit : List Row -> Case -> Option String
+gradeEmit rows c =
+  if c.broken /= "" || c.emitSigs == [] then
+    None
+  else
+    let observed = emitClass c.emitSigs
+    match rowFor c.unit rows
+      None =>
+        if observed == "AGREE" then
+          None
+        else
+          Some
+            (failLine
+              c.unit
+              "emitter-verdict: DISAGREE, UNLEDGERED — the raw emitter's accept/reject verdict diverges from check's and nobody has pinned it. Add a row to test/EMITTER-VERDICT-LEDGER.txt. Observed:\{sigListing c.emitSigs}")
+      Some row => gradeEmitRow c row observed
+
+gradeEmitRow : Case -> Row -> String -> Option String
+gradeEmitRow c row observed =
+  if observed == "AGREE" then
+    Some
+      (failLine
+        c.unit
+        "emitter-verdict: DRAINED — row present but the emitter now agrees. Delete it from test/EMITTER-VERDICT-LEDGER.txt. Observed:\{sigListing c.emitSigs}")
+  else if row.tag /= "DISAGREE" then
+    Some
+      (failLine
+        c.unit
+        "emitter-verdict: row classification says \{debug row.tag} but observed is DISAGREE")
+  else if row.reason == "" || row.reason == "-" then
+    Some
+      (failLine
+        c.unit
+        "emitter-verdict: row has no reason — a row must say why")
+  else if row.pins == c.emitSigs then
+    None
+  else
+    Some
+      (failLine
+        c.unit
+        "emitter-verdict: pinned set differs from observed.\n       pinned:\{sigListing row.pins}\n       observed:\{sigListing c.emitSigs}")
+
+{- | An arm that graded nothing must not report green.
+
+   If `medaka build` failed for every ordering of every case, every signature
+   would carry the same `build=1/-:` and every case would still compare
+   equal — a green gate whose third verb graded nothing. The same rule one
+   level down for the emitter arm: no `emit=0:ir` anywhere means the emitter
+   never once succeeded, which is indistinguishable from the arm never
+   running. -}
+witnessFailures : List Case -> List String
+witnessFailures cases =
+  let noBuild =
+    if any (c => c.anyBuilt) cases then
+      []
+    else
+      [
+        "  the BUILD arm produced no executable anywhere in the corpus — it graded nothing",
+      ]
+  let noEmit =
+    if any (c => c.anyEmitted) cases then
+      []
+    else
+      [
+        "  the EMITTER-VERDICT arm never observed emit=0:ir anywhere in the corpus — it graded nothing",
+      ]
+  noBuild ++ noEmit
+
+-- The permutation census, so a red run says how much was actually evaluated
+-- and which cases ran a shrunken ordering set.
+census : List Case -> String
+census cases =
+  let orderings = sum (map (c => c.orderingCount) cases)
+  let partials = map (c => c.unit) (filter (c => c.partial) cases)
+  let partialNote = if partials == [] then "none" else join ", " partials
+  "\{intToString orderings} ordering(s) over \{intToString (length cases)} case(s); PARTIAL: \{partialNote}"
+
+section : String -> List String -> List String
+section _ [] = []
+section what failures = "\{what}:" :: failures
+
+summarize : List Case -> List String -> Expectation
+summarize _ [] = pass
+summarize cases blocks = fail "\{census cases}\n\{unlines blocks}"
+
+-- # The units
+
+corpusUnits : <FileRead "_", IO> Result String (List String)
+corpusUnits = map (ds => sort (map basename ds)) (fixtureDirs corpus)
+
+readLedger : String -> Int -> <FileRead "_", IO> Result String (List Row)
+readLedger path pinAt = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok text => match ledgerRows pinAt text
+    Err e => Err "\{path}: \{e}"
+    Ok rows => Ok rows
+
+test "every case declares an entry with at least two import clauses" =
+  match corpusUnits
+    Err e => fail "\{corpus}: \{e}"
+    Ok units => match somes (map declarationFailure units)
+      [] => pass
+      failures =>
+        fail
+          "\{intToString (length failures)} of \{intToString (length units)} case(s) cannot be permuted:\n\{unlines failures}"
+
+declarationFailure : String -> <FileRead "_", IO> Option String
+declarationFailure unit =
+  let dir = "\{corpus}/\{unit}"
+  match readFile "\{dir}/case.txt"
+    Err e => Some (failLine unit "no readable case.txt: \{e}")
+    Ok spec =>
+      let entry = specField "entry" spec
+      if entry == "" then
+        Some (failLine unit "case.txt declares no entry")
+      else match readFile "\{dir}/\{entry}"
+        Err _ =>
+          Some
+            (failLine
+              unit
+              "case.txt names entry \{debug entry}, which is not a readable file here")
+        Ok raw =>
+          let n = length (sourceOf raw).slots
+          if n < 2 then
+            Some
+              (failLine
+                unit
+                "\{entry} has \{intToString n} top-level import clause(s); permuting needs at least 2")
+          else
+            None
+
+{- | A ledger entry that outlives its fixture is rot, and rot is how a ledger
+   becomes a skip-list. Graded as its own unit because it needs no
+   subprocess and its failure is legible on its own. -}
+test "neither ledger names a case that is not in the corpus" = match corpusUnits
+  Err e => fail "\{corpus}: \{e}"
+  Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
+    (Err e, _) => fail e
+    (_, Err e) => fail e
+    (Ok orderRows, Ok emitRows) =>
+      let stale =
+        name rows =>
+          map
+            (u =>
+              "  \{name} names case \{debug u}, which does not exist under test/import_order_fixtures/")
+            (missingUnits Some (map (r => r.rowCase) rows) units)
+      match (stale "test/IMPORT-ORDER-LEDGER.txt" orderRows
+        ++ stale "test/EMITTER-VERDICT-LEDGER.txt" emitRows)
+        [] => pass
+        failures => fail "stale ledger row(s):\n\{unlines failures}"
+
+{- | A missing `medaka_emitter` makes every `emitVerdictFor` answer
+   `emit=127:noir`, so every ledgered DISAGREE row observes AGREE and reads as
+   DRAINED — pointing a reader at deleting four live rows for four open bugs.
+   Named as a precondition instead, before any row is graded. -}
+emitterPrecondition : <FileRead "_", IO> Option String
+emitterPrecondition =
+  let bin = emitterBin
+  if fileExists bin then
+    None
+  else
+    Some "missing native emitter: \{bin} (make medaka)"
+
+test "the answer does not depend on import-clause order" =
+  match emitterPrecondition
+    Some why => fail why
+    None => gradedCorpus
+
+gradedCorpus : <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+gradedCorpus = match corpusUnits
+  Err e => fail "\{corpus}: \{e}"
+  Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
+    (Err e, _) => fail e
+    (_, Err e) => fail e
+    (Ok orderRows, Ok emitRows) => match scratchDir
+      Err e => fail "could not make a scratch directory: \{e}"
+      Ok scratch =>
+        let cases = map (runCase scratch) units
+        let _ = runVerb "rm" ["-rf", scratch]
+        summarize
+          cases
+          (section
+              "the answer depends on import-clause order"
+              (somes (map (gradeOrder orderRows) cases))
+            ++ section
+              "the emitter's verdict is not what the sidecar ledger pins"
+              (somes (map (gradeEmit emitRows) cases))
+            ++ section "an arm graded nothing" (witnessFailures cases))

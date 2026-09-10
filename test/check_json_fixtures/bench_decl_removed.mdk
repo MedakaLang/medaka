@@ -1,0 +1,6 @@
+-- #2291: `bench "name" = expr` parsed into a DBench declaration that no runner
+-- ever consumed, so it typechecked and silently did nothing. The construct is
+-- removed; this pins the located diagnostic that replaced it.
+bench "sum" = 1 + 2
+
+main = println 1

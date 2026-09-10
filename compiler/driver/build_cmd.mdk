@@ -538,7 +538,7 @@ runBuildNativeIn : String ->
   Bool ->
   <IO> Result BuildReport BuildReport
 runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
-  runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli []
+  runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli [] False
 
 -- Probe the C compiler up front — the native analogue of probeWasmTools
 -- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
@@ -573,6 +573,17 @@ clangMissingError cc = match runCommand "uname" ["-s"]
 -- (walking up from the entry's own dir) resolves nothing useful: a future
 -- native test-execution engine builds a synthesized doctest entry there and
 -- must still see the real project's import roots.
+--
+-- `strictEmit` arms `MEDAKA_STRICT=1` for the EMIT SUBPROCESS ONLY (#2679).
+-- The emitter's own elaboration is warn-first by ruling (#2089,
+-- `emitElaborationGate` in `compiler/entries/entry_support.mdk`): it prints the
+-- type errors it recorded and emits IR anyway.  For `medaka build` that is the
+-- ruling and stays.  For a SYNTHESIZED probe — the entry the native test and
+-- doctest runners write into a `mktemp -d` and immediately execute — warning is
+-- not an option: nobody reads the child's stderr, the probe links, runs, and
+-- reports `pass` for a module that does not typecheck.  Arming it here scopes
+-- the flip to those generated entries and leaves every user-facing build on the
+-- warn-first path.
 export
 runBuildNativeRoots : String ->
   String ->
@@ -582,8 +593,9 @@ runBuildNativeRoots : String ->
   String ->
   Bool ->
   List String ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit =
   match probeClang cc
     None => buildErr (clangMissingError cc)
     Some _ =>
@@ -596,6 +608,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
         tmpDir
         keepIrCli
         extraRoots
+        strictEmit
 
 -- The original body, unmoved — split out only so the up-front probe above
 -- doesn't force reindenting this whole function under a match arm.
@@ -607,8 +620,9 @@ runBuildNativeRootsGo : String ->
   String ->
   Bool ->
   List String ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -639,11 +653,16 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- prebuilt prelude.o is on offer, tell the emitter to emit THIS PROGRAM ONLY
   -- (declaring what prelude.o defines): 88% of a small program's IR is prelude, and
   -- clang -O2 re-optimises all of it on every build.  See preludeObjOf below.
-  let (emitProg, emitArgs) =
+  let (emitProg1, emitArgs1) =
     if preludeObjOf () == "" then
       (emitProg0, emitArgs0)
     else
       withEmitHalf "program" emitProg0 emitArgs0
+  let (emitProg, emitArgs) =
+    if strictEmit then
+      withStrictEmit emitProg1 emitArgs1
+    else
+      (emitProg1, emitArgs1)
   -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
   -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
   -- total; these sub-rows decompose it (emit-ir + rt-obj + clang) so a slow build
@@ -1391,6 +1410,12 @@ preludeObjOf _ =
 withEmitHalf : String -> String -> List String -> (String, List String)
 withEmitHalf half prog args =
   ("env", ["MEDAKA_EMIT_HALF=\{half}", prog] ++ args)
+
+-- Same `env` idiom, for the emit subprocess's #2089 gate (see runBuildNativeRoots's
+-- `strictEmit`).  Composes with withEmitHalf — nesting two `env` calls is a plain
+-- POSIX exec chain, and keeping them separate keeps each wrapper single-purpose.
+withStrictEmit : String -> List String -> (String, List String)
+withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with

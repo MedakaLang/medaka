@@ -1451,7 +1451,6 @@ public export data Decl =
   | DEffect Bool String (Option String)
   | DProp Bool String (List PropParam) Expr
   | DTest Bool String Expr
-  | DBench Bool String Expr
   | DInterface {
     pub : Bool,
     def : Bool,
@@ -1739,9 +1738,6 @@ mapTyInDecl f (DProp pub n params body) =
 mapTyInDecl f (DTest pub n body) =
   let (b2, c) = mapTyInExpr f body
   (DTest pub n b2, c)
-mapTyInDecl f (DBench pub n body) =
-  let (b2, c) = mapTyInExpr f body
-  (DBench pub n b2, c)
 -- ⚠️ PARTIAL record patterns, NO `...` rest marker.  This file's own `TyCon`
 -- comment prefers it that way, and #1217 is the history: the
 -- `desugarPat _ (PRec _ _ True) = PWild` arm USED TO collapse a `...` pattern to a

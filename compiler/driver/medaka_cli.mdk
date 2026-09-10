@@ -57,6 +57,7 @@ import support.util.{
   listLen,
   schemeLineName,
   stringTrim,
+  lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
@@ -104,7 +105,7 @@ import frontend.parser.{
 }
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugar}
-import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor}
+import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -134,6 +135,9 @@ import driver.diagnostics.{
   ppDiagCliLines,
   renderTcDiags,
   ppResolveErrorsByFile,
+  diagOfResError,
+  diagOfTypeError,
+  relDiagPath,
   srcLinesArr,
   Diag(..),
   Severity(..),
@@ -189,11 +193,11 @@ import types.typecheck.{
   hadTypeErrors,
   TcDiag,
   ElabResult,
+  ModDiags,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
 }
-import types.repr.{Scheme}
 import driver.main_autoprint.{
   shouldAsyncWrapMain,
   asyncWrapModules,
@@ -877,7 +881,7 @@ locatedProjectDiags : Bool ->
   List String ->
   String ->
   String ->
-  <IO> (Option String, List (String, String, List Diag), Int, List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
+  <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
 locatedProjectDiags allowInternal trusted target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
@@ -902,6 +906,17 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
 
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
 cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
+
+-- `run --json`'s multi-module arms' own copy of `diagnostics.relDiagTriple`
+-- (not exported there — only `relDiagPath`, its one-line body, is): strip the
+-- project-root prefix from a triple's `file` so an imported module resolved
+-- through the absolute `stdlibDir` root doesn't leak the worktree layout into
+-- the envelope, matching `check --json`'s own multi-module normalization
+-- (diagnostics.mdk's `checkJsonFileParts`, ~:2478-2482; #2798 review S2).
+relDiagTriple : String ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
+relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 
 -- the warn diagnostics on one (non-entry) module's triple that neither
 -- channel above already surfaces (see the doc comment on `locatedProjectDiags`).
@@ -977,6 +992,92 @@ residualOrGeneric pathMap target residual = match renderTcDiags pathMap residual
       ++ " program at all — see issue #1812"
   rendered => joinNl rendered
 
+-- ── run --json structured error exit (#2798) ────────────────────────────────
+-- `run`'s error arms used to call `runAbort` unconditionally on a non-empty
+-- diagnostic list, printing human caret text on stderr even under `--json` —
+-- the ONE compile-time gap `runHelpText` used to carry as a documented KNOWN
+-- GAP. `runAbortJson` is the JSON twin: it stages `triples` into the SAME
+-- `pendingRunDiags` envelope the clean-exit (`finishRunEval`) and
+-- runtime-panic (`eval.runtimePanic`) paths already flush, rather than
+-- inventing a second JSON printer, so the staleness/perf notices ride the
+-- envelope (`runEnvelopeFields`, read inside `flushRunEnvelope`) instead of
+-- being flushed as prose ahead of it the way `runAbort` does.
+runAbortJson : List (String, String, List Diag) -> <IO> Unit
+runAbortJson triples =
+  pendingRunDiags := nonEmptyTriples triples
+  let _ = flushPendingRunDiags True
+  exit 1
+
+-- `run --json`'s structured counterpart to `ppResolveErrorsByFile` — one triple
+-- per file with at least one resolve error, each converted via the SAME
+-- `diagOfResError` the human renderer already uses, left for `cjAllToJson` (via
+-- `runAbortJson`) to serialize instead of a second JSON printer.  `ResError`
+-- carries no warning variant (frontend.resolve.ResError, all-error), so unlike
+-- the typecheck triples below there is no filter to widen here.
+resolveErrorJsonTriples : List (String, List ResError) ->
+  <IO> List (String, String, List Diag)
+resolveErrorJsonTriples [] = []
+resolveErrorJsonTriples ((_, []) :: rest) = resolveErrorJsonTriples rest
+resolveErrorJsonTriples ((file, errs) :: rest) =
+  (file, readFileSafe file, map diagOfResError errs)
+    :: resolveErrorJsonTriples rest
+
+-- The generic #1812 deflection (`residualOrGeneric`'s own `[] =>` arm), as a
+-- `Diag` instead of prose, for the JSON residual arm's empty-residual case
+-- below.  Same code family as the rest of this file's minted diagnostics
+-- (`R-BUILD-FAILED` etc. in `cjBuildFailedJson`) — `T-RESIDUAL` names the one
+-- circumstance this fires: the graph-end drain saw a type error the per-module
+-- pass did not, so there is no located diagnostic to report instead.
+--
+-- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
+-- two reviewers failed to construct one, and the two files the drain's T4 census
+-- names as its whole population (see `DrainDiags` in `compiler/types/typecheck.mdk`)
+-- both take `run`'s ACCEPT path.  It exists so the empty-residual case cannot exit
+-- 1 with an empty envelope, which is a shape the code must handle whether or not an
+-- input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
+-- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.
+genericResidualDiag : String -> Diag
+genericResidualDiag target =
+  mkDiag
+    SevError
+    "T-RESIDUAL"
+    ("type error in "
+      ++ target
+      ++ ", detected during elaboration (the run/build type pass); no located"
+      ++ " diagnostic is available for it, and `medaka check` may not report"
+      ++ " this program at all — see issue #1812")
+    None
+
+-- `run --json`'s structured counterpart to `residualOrGeneric`/`renderTcDiags` —
+-- one `Diag` triple per graph-end residual entry, attributed to its own module
+-- id via `pathMap` exactly as the human renderer looks the file up, via the
+-- SAME `diagOfTypeError` conversion.  Left unmerged across entries that land in
+-- the same file — `pendingRunDiags` already carries repeated file entries on
+-- this same envelope (`eval.runtimePanic`'s own append), so a second grouping
+-- pass here would buy nothing.
+--
+-- Two guarantees `residualOrGeneric` states explicitly and this must match
+-- (#2798 review S1): an EMPTY residual still yields the generic #1812 triple,
+-- attributed to the ENTRY file — `runAbortJson` must never exit 1 with an
+-- empty envelope, the JSON twin of "never leaves the user with exit 1 and no
+-- text" — and a `pathMap` MISS (a module id the loader's map does not know)
+-- attributes to the entry file too, rather than the non-path
+-- `"(module <mid>)"` placeholder string a `file` field is not allowed to be.
+residualJsonTriples : String ->
+  List (String, String) ->
+  List (String, TcDiag) ->
+  <IO> List (String, String, List Diag)
+residualJsonTriples entryFile _ [] =
+  [(entryFile, readFileSafe entryFile, [genericResidualDiag entryFile])]
+residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
+  match lookupAssoc mid pathMap
+    Some file =>
+      (file, readFileSafe file, [diagOfTypeError d])
+        :: residualJsonTriples entryFile pathMap rest
+    None =>
+      (entryFile, readFileSafe entryFile, [diagOfTypeError d])
+        :: residualJsonTriples entryFile pathMap rest
+
 -- The rendering half of `locatedProjectDiags`, over per-module diagnostics an
 -- elaboration already produced: the same `foldModuleTc` tail `analyzeProject` runs
 -- (guard exhaustiveness, `deriving`, prelude-standalone shadows, bucketed per file)
@@ -1007,6 +1108,37 @@ elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
     map cohWarnsOfTriple triples,
     length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
   )
+
+-- `run --json`'s structured twin of `elaboratedProjectDiags`'s `Some errText`
+-- arm: the SAME `typecheckDiagsFold` fold over the SAME already-elaborated
+-- per-module diagnostics (`perMod`) — a second, cheap fold over data
+-- `elaborateRun` already produced, not a second typecheck (see
+-- `typecheckDiagsFold`'s own note) — kept as `Diag`s instead of rendered
+-- lines. A sibling of `elaboratedProjectDiags` rather than a widened return
+-- tuple on it, so `typecheckGateRoute`'s existing 3-tuple match is untouched.
+--
+-- Unlike `renderTripleErrors` (the prose path, errors-only by design — the
+-- human `run` has always dropped warnings once any error is present),
+-- `nonEmptyTriples` here is the ONLY filter: `check --json`'s per-file
+-- `diagnostics` array carries every diag, errors and warnings alike, and this
+-- is the JSON channel, so it matches that array element-wise rather than a
+-- narrower prose-derived one (#2798 review S2).
+elaboratedProjectJsonTriples : List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  <IO> List (String, String, List Diag)
+elaboratedProjectJsonTriples rtD coreD modsWithPath modsD perMod =
+  let results =
+    typecheckDiagsFold
+      rtD
+      coreD
+      modsWithPath
+      modsD
+      perMod
+      (seedAll (map midPath modsWithPath) [])
+  nonEmptyTriples (map readDiagSrc results)
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -1152,7 +1284,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         let _ = emitHiddenDiagNote hiddenCount
         -- 0.1.0 main-shape warning (see below).  `mainShapeWarnings` runs no
         -- elaboration of its own (pure since S-3/#2234); this route's producer of
-        -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `cmDiagsCollect`
+        -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `graphCollect`
         -- / `chainGo`'s terminal clause (types/typecheck.mdk), whose SET-OR-CLEAR
         -- write on the terminal module fills the ref.  A module-chain memo HIT
         -- cannot lose it: `matchingStepPrefix` never covers the terminal module, so the
@@ -2753,12 +2885,16 @@ runHelpText = stringConcat [
   "medaka run — Type-check and run a program (interpreter)\n", "\n", "Usage:\n",
   "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
   "\n",
-  "  --json            emit the Diag JSON envelope instead of human text, for\n",
-  "                    a runtime panic, a warning, or a clean run. KNOWN GAP:\n",
-  "                    a COMPILE-TIME failure (load, parse, type, usage) still\n",
-  "                    prints human text on stderr and exits 1 with no\n",
-  "                    envelope, so a consumer must handle both. `medaka check\n",
-  "                    --json` envelopes compile-time diagnostics correctly.\n",
+  "  --json            emit the Diag JSON envelope on stderr instead of human\n",
+  "                    text, for a runtime panic, a static (resolve/type) error\n",
+  "                    in the program, or a warning in a SINGLE-FILE program. A\n",
+  "                    clean run emits no envelope at all; a multi-module\n",
+  "                    program's warnings are not reported by `run` (issue\n",
+  "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n",
+  "                    a usage error (bad flag, missing file) or a load/parse\n",
+  "                    failure (bad import, malformed source) still prints human\n",
+  "                    text on stderr and exits 1 with no envelope, so a\n",
+  "                    consumer must handle both.\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
   "  --release         accepted, ignored — the interpreter has no release mode.\n",
   "                    There is no `build --release`; a native build is always\n",
@@ -2926,11 +3062,19 @@ runRunCmd argv =
             -- surface diagnostics are the whole report (as they were when the
             -- entry driver gated its own typecheck on the same predicate).
             False =>
-              runAbort
-                (joinNl
-                  (map
-                    (ppDiagCliLines (srcLinesArr tsrc) target)
-                    (filter isDiagError (analyzeFinish surface []))))
+              -- #2798 review S2: JSON carries the WHOLE surface list (errors
+              -- and warnings, matching `check --json`'s per-file diagnostics
+              -- array element-wise); the prose face stays errors-only, as it
+              -- always has been.
+              let surfaceDiags = analyzeFinish surface []
+              match jsonMode
+                True => runAbortJson [(target, tsrc, surfaceDiags)]
+                False =>
+                  runAbort
+                    (joinNl
+                      (map
+                        (ppDiagCliLines (srcLinesArr tsrc) target)
+                        (filter isDiagError surfaceDiags)))
             True =>
               let _ = resetTypeErrorsSticky ()
               let (coreE, modsE, perMod, residual, _) =
@@ -2944,7 +3088,11 @@ runRunCmd argv =
                 [] => match residualHit
                   -- Belt-and-braces, as on the multi-module arm: anything only
                   -- the graph-end drain can see still aborts before eval.
-                  True => runAbort (residualOrGeneric pathMap target residual)
+                  True => match jsonMode
+                    True =>
+                      runAbortJson (residualJsonTriples target pathMap residual)
+                    False =>
+                      runAbort (residualOrGeneric pathMap target residual)
                   False =>
                     let perfTCheck = now ()
                     let _ =
@@ -2964,10 +3112,15 @@ runRunCmd argv =
                       mods
                       (allWarnTriples tsrc target diags)
                       (runEvalPerf perfOn target perfT0 perfTCheck)
-                errs =>
-                  runAbort
-                    (joinNl
-                      (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+                errs => match jsonMode
+                  -- #2798 review S2: `diags` (the WHOLE list `analyzeFinish`
+                  -- returned, errors and warnings) for JSON — `errs` is the
+                  -- errors-only prose projection of it.
+                  True => runAbortJson [(target, tsrc, diags)]
+                  False =>
+                    runAbort
+                      (joinNl
+                        (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
         _ =>
           -- Multi-module: gate on `locatedProjectErrors` — the SAME
           -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
@@ -2981,16 +3134,16 @@ runRunCmd argv =
           -- typecheckGateRoute for why this is not an over-rejection.
           -- #186/#1360: per-module attribution via the loader's
           -- `pathMap`, the same seam `checkRoute` uses (#41).
-          let resDiags =
-            ppResolveErrorsByFile
-              (resolveModulesErrorsByFile
-                pathMap
-                allowInternal
-                trusted
-                (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-                rtD
-                coreD
-                modsD)
+          let resolvePairs =
+            resolveModulesErrorsByFile
+              pathMap
+              allowInternal
+              trusted
+              (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+              rtD
+              coreD
+              modsD
+          let resDiags = ppResolveErrorsByFile resolvePairs
           match resDiags
             -- ONE typecheck of the graph (ARCH §E): the elaboration `run` needs
             -- for eval is also the diagnostics producer, so the located
@@ -3001,12 +3154,36 @@ runRunCmd argv =
               let (coreE, modsE, perMod, residual, _) =
                 elaborateRun rtD coreD modsD
               match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
-                (Some errText, _, _) => runAbort errText
-                (None, projWarns, _) => match hadTypeErrors ()
+                (Some errText, _, _) => match jsonMode
                   True =>
-                    -- Belt-and-braces: anything only the graph-end drain can
-                    -- see still aborts before eval.
-                    runAbort (residualOrGeneric pathMap target residual)
+                    -- #2798 review S2: normalize each file the SAME way
+                    -- `check --json`'s own multi-module arm does
+                    -- (`relDiagTriple root`, diagnostics.mdk ~:2478-2482) — an
+                    -- imported stdlib module resolves through the absolute
+                    -- `stdlibDir` root and must not leak that worktree path
+                    -- into the envelope's `file` field.
+                    let jsonTriples =
+                      map
+                        (relDiagTriple root)
+                        (elaboratedProjectJsonTriples
+                          rtD
+                          coreD
+                          modsWithPath
+                          modsD
+                          perMod)
+                    runAbortJson jsonTriples
+                  False => runAbort errText
+                (None, projWarns, _) => match hadTypeErrors ()
+                  -- Belt-and-braces: anything only the graph-end drain can
+                  -- see still aborts before eval.
+                  True => match jsonMode
+                    True =>
+                      runAbortJson
+                        (map
+                          (relDiagTriple root)
+                          (residualJsonTriples target pathMap residual))
+                    False =>
+                      runAbort (residualOrGeneric pathMap target residual)
                   False =>
                     let perfTCheck = now ()
                     let _ =
@@ -3018,7 +3195,16 @@ runRunCmd argv =
                       mods
                       projWarns
                       (runEvalPerf perfOn target perfT0 perfTCheck)
-            _ => runAbort resDiags
+            _ => match jsonMode
+              True =>
+                -- #2798 review S2: same `relDiagTriple root` normalization as
+                -- the typecheck-error arm above.
+                let jsonTriples =
+                  map
+                    (relDiagTriple root)
+                    (resolveErrorJsonTriples resolvePairs)
+                runAbortJson jsonTriples
+              False => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the
 -- per-module typecheck (checkModuleFullImpl), which pushes into the
@@ -3458,13 +3644,11 @@ checkPolicyHelpText = stringConcat [
   "sample request. Exit 0 on accept, 1 on reject.\n"
 ]
 
--- `--allow`/`--fn` take values; `check_policy.mdk`'s own `parsePolicyGo` reads
--- only the space form, so `--allow=IO` used to fall through as the FIRST
--- POSITIONAL and become the filename (AS-FILENAME, C1's §1 opening
--- transcript).  Both spellings now reach the same key, and the `PolicyArgs`
--- triple is built HERE from the parse rather than by re-scanning raw argv —
--- `parsePolicyArgs` itself belongs to `tools.check_policy` and is left alone
--- (S-3's file, not this slice's).
+-- `--allow`/`--fn` take values; only the space form used to be read, so
+-- `--allow=IO` used to fall through as the FIRST POSITIONAL and become the
+-- filename (AS-FILENAME, C1's §1 opening transcript).  Both spellings now
+-- reach the same key, and the `PolicyArgs` triple is built HERE from the
+-- parse rather than by re-scanning raw argv.
 -- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
 -- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 policyArgSpec : ArgSpec
@@ -3478,16 +3662,16 @@ policyArgSpec =
 runCheckPolicyCmd : List String -> <IO> Unit
 runCheckPolicyCmd argv0 =
   let a = requireArgs policyArgSpec argv0
-  -- LAST-WINS on both values and FIRST positional as the file, exactly as
-  -- `parsePolicyGo` resolved them; defaults are its defaults.
+  -- LAST-WINS on both values and FIRST positional as the file; defaults
+  -- match `check-policy`'s documented defaults (Cache,Log / transform).
   runCheckPolicyArgs
     (PolicyArgs
       (firstPositional a)
       (optDefault (lastValue "--allow" a) "Cache,Log")
       (optDefault (lastValue "--fn" a) "transform"))
 
--- The first positional, or `None` — the shape `parsePolicyGo`/`parseManifestGo`
--- produced by keeping the first bare token and ignoring every later one.
+-- The first positional, or `None` — keeps the first bare token and ignores
+-- every later one.
 firstPositional : Args -> Option String
 firstPositional a = match a.positionals
   [] => None

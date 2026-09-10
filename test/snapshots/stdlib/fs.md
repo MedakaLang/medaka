@@ -1,5 +1,5 @@
 # META
-source_lines=169
+source_lines=223
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -125,8 +125,11 @@ filesOnly (p :: rest) = match isFile p
    > fixtureFiles "stdlib/no-such-fixture-doctest-dir"
    Err "No such file or directory"
 
-   > map length (fixtureFiles "test/effect_set_fixtures")
-   Ok 5 -}
+   Every result is a path under `root`. The shape is asserted rather than
+   the count, for the same reason as `fixtureDirs`' doctest below.
+
+   > map (all (contains "/effect_set_fixtures/")) (fixtureFiles "test/effect_set_fixtures")
+   Ok True -}
 export
 fixtureFiles : String -> <FileRead "_"> Result String (List String)
 fixtureFiles root = match walkDir root
@@ -135,6 +138,57 @@ fixtureFiles root = match walkDir root
     Err e => Err e
     Ok [] => Err "\{root}: no fixture files found"
     Ok fs => Ok fs
+
+dirsOnly : List String -> <FileRead "_"> Result String (List String)
+dirsOnly [] = Ok []
+dirsOnly (p :: rest) = match isDir p
+  Err e => Err e
+  Ok True => map (p :: _) (dirsOnly rest)
+  Ok False => dirsOnly rest
+
+{- | Every top-level subdirectory of `root`, non-recursive, with the same
+   anti-vacuity floor as `fixtureFiles`. For a corpus where each fixture unit
+   is a whole directory (several files under one name) rather than a single
+   file — `fixtureFiles` filters directories out, so a directory-shaped
+   corpus needs this instead.
+
+   > fixtureDirs "stdlib/no-such-fixture-doctest-dir"
+   Err "No such file or directory"
+
+   Every result is a path under `root`. The shape is asserted rather than
+   the count: a count of somebody else's corpus written down here breaks
+   this module every time that corpus grows.
+
+   > map (all (contains "/import_order_fixtures/")) (fixtureDirs "test/import_order_fixtures")
+   Ok True -}
+export
+fixtureDirs : String -> <FileRead "_"> Result String (List String)
+fixtureDirs root = match listDir root
+  Err e => Err e
+  Ok names => match dirsOnly (map (joinPath root) names)
+    Err e => Err e
+    Ok [] => Err "\{root}: no fixture directories found"
+    Ok ds => Ok ds
+
+{- | `Err` unless `units` has exactly `want` elements — the weaker floor for
+   a corpus with no wired roster to check against: it catches a corpus that
+   grew or shrank, but not which unit changed. Prefer `unrosteredUnits` /
+   `missingUnits` (`test_process.mdk`) whenever a roster exists to check
+   against instead.
+
+   > expectUnitCount 2 ["a", "b"]
+   Ok ()
+
+   > expectUnitCount 3 ["a", "b"]
+   Err "expected 3 units, found 2" -}
+export
+expectUnitCount : Int -> List a -> Result String Unit
+expectUnitCount want units =
+  let got = length units
+  if got == want then
+    Ok ()
+  else
+    Err "expected \{intToString want} units, found \{intToString got}"
 
 -- ── Instance laws ────────────────────────────────────────────────────────────
 -- `FileStat` is a plain record of four immutable fields, so derived `Eq` is
@@ -200,6 +254,13 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "filesOnly" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isFile") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "p") (EVar "_s")))) (EApp (EVar "filesOnly") (EVar "rest")))) (arm (PCon "Ok" (PCon "False")) () (EApp (EVar "filesOnly") (EVar "rest")))))
 (DTypeSig true "fixtureFiles" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "fixtureFiles" ((PVar "root")) (EMatch (EApp (EVar "walkDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "paths")) () (EMatch (EApp (EVar "filesOnly") (EVar "paths")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PList)) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString ": no fixture files found"))))) (arm (PCon "Ok" (PVar "fs")) () (EApp (EVar "Ok") (EVar "fs")))))))
+(DTypeSig false "dirsOnly" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "dirsOnly" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "dirsOnly" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isDir") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "p") (EVar "_s")))) (EApp (EVar "dirsOnly") (EVar "rest")))) (arm (PCon "Ok" (PCon "False")) () (EApp (EVar "dirsOnly") (EVar "rest")))))
+(DTypeSig true "fixtureDirs" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "fixtureDirs" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "names")) () (EMatch (EApp (EVar "dirsOnly") (EApp (EApp (EVar "map") (EApp (EVar "joinPath") (EVar "root"))) (EVar "names"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PList)) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString ": no fixture directories found"))))) (arm (PCon "Ok" (PVar "ds")) () (EApp (EVar "Ok") (EVar "ds")))))))
+(DTypeSig true "expectUnitCount" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "expectUnitCount" ((PVar "want") (PVar "units")) (EBlock (DoLet false false (PVar "got") (EApp (EVar "length") (EVar "units"))) (DoExpr (EIf (EBinOp "==" (EVar "got") (EVar "want")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "want")))) (ELit (LString " units, found "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "got")))) (ELit (LString ""))))))))
 (DProp false "Eq FileStat is reflexive and field-discriminating" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (EVar "base")) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isDir" (EApp (EVar "not") (EVar "b")))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isFile" (EVar "b"))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "mtime" (EBinOp "+" (EApp (EVar "intToFloat") (EVar "n")) (ELit (LFloat 1.0))))))) (EVar "False"))))))
 (DProp false "Debug FileStat separates records that Eq separates" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "x") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoLet false false (PVar "y") (EVariantUpdate "FileStat" (EVar "x") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n"))))))) (EBinOp "==" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (EVar "y"))) (EVar "False"))))))
 # MARK
@@ -231,5 +292,12 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "filesOnly" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isFile") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "p") (EVar "_s")))) (EApp (EVar "filesOnly") (EVar "rest")))) (arm (PCon "Ok" (PCon "False")) () (EApp (EVar "filesOnly") (EVar "rest")))))
 (DTypeSig true "fixtureFiles" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "fixtureFiles" ((PVar "root")) (EMatch (EApp (EVar "walkDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "paths")) () (EMatch (EApp (EVar "filesOnly") (EVar "paths")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PList)) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString ": no fixture files found"))))) (arm (PCon "Ok" (PVar "fs")) () (EApp (EVar "Ok") (EVar "fs")))))))
+(DTypeSig false "dirsOnly" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "dirsOnly" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "dirsOnly" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isDir") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "p") (EVar "_s")))) (EApp (EVar "dirsOnly") (EVar "rest")))) (arm (PCon "Ok" (PCon "False")) () (EApp (EVar "dirsOnly") (EVar "rest")))))
+(DTypeSig true "fixtureDirs" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "fixtureDirs" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "names")) () (EMatch (EApp (EVar "dirsOnly") (EApp (EApp (EMethodRef "map") (EApp (EVar "joinPath") (EVar "root"))) (EVar "names"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PList)) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString ": no fixture directories found"))))) (arm (PCon "Ok" (PVar "ds")) () (EApp (EVar "Ok") (EVar "ds")))))))
+(DTypeSig true "expectUnitCount" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "expectUnitCount" ((PVar "want") (PVar "units")) (EBlock (DoLet false false (PVar "got") (EApp (EMethodRef "length") (EVar "units"))) (DoExpr (EIf (EBinOp "==" (EVar "got") (EVar "want")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "want")))) (ELit (LString " units, found "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "got")))) (ELit (LString ""))))))))
 (DProp false "Eq FileStat is reflexive and field-discriminating" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (EVar "base")) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isDir" (EApp (EVar "not") (EVar "b")))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isFile" (EVar "b"))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "mtime" (EBinOp "+" (EApp (EVar "intToFloat") (EVar "n")) (ELit (LFloat 1.0))))))) (EVar "False"))))))
 (DProp false "Debug FileStat separates records that Eq separates" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "x") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoLet false false (PVar "y") (EVariantUpdate "FileStat" (EVar "x") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "debug") (EVar "x")) (EApp (EMethodRef "debug") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n"))))))) (EBinOp "==" (EBinOp "==" (EApp (EMethodRef "debug") (EVar "x")) (EApp (EMethodRef "debug") (EVar "y"))) (EVar "False"))))))

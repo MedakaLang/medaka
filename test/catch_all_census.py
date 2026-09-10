@@ -17,6 +17,16 @@ Output: one line per site, `<function>\t<sum>\t<named>/<total>`, sorted.  A
 site that is exhaustive with a belt-and-braces `_` clause is not reported.
 Exits 3 (MISSING) when it cannot find its subject — never reports an empty
 list for a broken query.
+
+A second, independent derivation lives in this file too: `--decl-runners`
+emits `<ctor>\t<runner>` for every `Decl` constructor in `ast.mdk`, against
+DECL_RUNNERS below.  The constructor SET is machine-derived (`ctor_set`); the
+RUNNER a constructor maps to is not derivable from source and is hand-authored
+in DECL_RUNNERS.  A constructor absent from DECL_RUNNERS emits the literal
+placeholder `TODO` instead of failing outright, so the ledger still lists
+every constructor — but `test/diff_compiler_catch_all_census.sh` refuses to
+pass while any row holds that placeholder, so `--update` can never launder a
+newly added constructor to green on its own.
 """
 import re
 import sys
@@ -25,6 +35,27 @@ ROOT = sys.argv[1] if len(sys.argv) > 1 else "."
 AST = f"{ROOT}/compiler/frontend/ast.mdk"
 SRCS = [f"{ROOT}/compiler/types/typecheck.mdk", f"{ROOT}/compiler/types/repr.mdk"]
 SUMS = ("Expr", "Decl")
+
+# Which verb/runner executes a `Decl` constructor's body, or why it has none
+# to execute.  Hand-authored — a machine cannot tell "runs at runtime" from
+# "compile-time only" by reading source shape alone.  A constructor missing
+# here gets the `TODO` placeholder (see module docstring).
+DECL_RUNNERS = {
+    "DTypeSig": "compile-time-only: signature consumed by typecheck, no body",
+    "DExtern": "medaka run / medaka build: binds a name to a primitive with no Medaka body of its own — the interpreter supplies it from eval.mdk's extern table, the native backend from runtime/medaka_rt.c",
+    "DFunDef": "medaka run / medaka build: eval.mdk installGroups evaluates the body; llvm_emit.mdk emits it",
+    "DData": "compile-time-only: registers a type + constructors for typecheck/eval, no body of its own",
+    "DUse": "compile-time-only: import resolved by driver/loader.mdk and frontend/resolve.mdk",
+    "DEffect": "compile-time-only: registers an effect domain for typecheck (typecheck.mdk populateGo)",
+    "DProp": "medaka test: compiler/tools/prop_runner.mdk",
+    "DTest": "medaka test: compiler/tools/test_runner.mdk via tools/test_cmd.mdk",
+    "DInterface": "medaka run / medaka build: a default method body IS code. eval.mdk declImplEntries installs it as a dispatch entry and core_ir_lower.mdk lowerDefault lowers it to CImplDefault. desugar.mdk fillImplDefaults specializes same-module impls only, so the cross-module fallback runs this body directly",
+    "DImpl": "medaka run / medaka build: eval.mdk installs impl methods into dispatch; llvm_emit.mdk emits them",
+    "DTypeAlias": "compile-time-only: type-level alias consumed by typecheck, erased before eval/backend",
+    "DNewtype": "compile-time-only: registers a wrapper type + constructor for typecheck/eval, no body of its own",
+    "DLetGroup": "medaka run / medaka build: eval.mdk installGroups evaluates each binding, same as DFunDef",
+    "DAttrib": "compile-time-only in itself: a wrapper carrying no body. Consumers that dispatch on it unwrap to the inner decl and use ITS runner; the sibling catch-all census is what keeps that unwrapping honest",
+}
 
 
 def ctor_set(text, sum_name):
@@ -105,9 +136,31 @@ def clause_positions(params):
     return positions
 
 
+def decl_runner_lines(ast_text):
+    """`<ctor>\t<runner>` for every `Decl` constructor, sorted.  A constructor
+    absent from DECL_RUNNERS emits the `TODO` placeholder rather than being
+    dropped, so the ledger still lists every constructor the sum declares."""
+    ctors = ctor_set(ast_text, "Decl")
+    return [f"{c}\t{DECL_RUNNERS.get(c, 'TODO')}" for c in sorted(ctors)]
+
+
 def main():
     try:
         ast = open(AST).read()
+    except OSError as e:
+        print(f"MISSING: {e}", file=sys.stderr)
+        return 3
+
+    if len(sys.argv) > 2 and sys.argv[2] == "--decl-runners":
+        lines = decl_runner_lines(ast)
+        if len(lines) < 2:
+            print(f"MISSING: could not derive the Decl constructor set from {AST}", file=sys.stderr)
+            return 3
+        for line in lines:
+            print(line)
+        return 0
+
+    try:
         src = "\n".join(open(p).read() for p in SRCS)
     except OSError as e:
         print(f"MISSING: {e}", file=sys.stderr)

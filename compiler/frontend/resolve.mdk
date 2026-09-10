@@ -1438,7 +1438,6 @@ checkDecl env (DExtern _ _ t) = checkType None env t
 checkDecl env (DData { dataCtors = vs }) = flatMap (checkVariant env) vs
 checkDecl env (DProp _ _ params body) = checkProp env params body
 checkDecl env (DTest _ _ body) = checkExpr None env emptyScope body
-checkDecl env (DBench _ _ body) = checkExpr None env emptyScope body
 checkDecl env (DInterface { supers, methods, ... }) =
   checkInterfaceDecl env supers methods
 checkDecl env (DImpl { iface, tys, reqs, methods, ... }) =
@@ -3638,8 +3637,8 @@ resolveModulesErrorsPairsG allowInternal trustedMods preludeKey rt pre known ((m
       (omInsert exp.modId exp known)
       rest
 
--- Flat union of every module's raw errors, in dependency-first order — the
--- renderer `resolveModulesToLinesG`/`resolveModulesErrors` want.
+-- Flat union of every module's raw errors, in dependency-first order — the shape
+-- `resolveModulesErrors` wants.
 resolveModulesErrorsG : Bool ->
   List String ->
   Option (Int, Int) ->
@@ -3673,34 +3672,18 @@ resolveModulesToLines runtimeDecls preludeDecls mods =
       resErrorSexp
       (resolveModulesErrors runtimeDecls preludeDecls omEmpty mods))
 
--- Guarded variant of resolveModulesToLines (S-expr output) for the `medaka check`
--- exit-code predicate: `allowInternal` / `trustedMods` decide per-module trust.
-export
-resolveModulesToLinesG : Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  String
-resolveModulesToLinesG allowInternal trustedMods runtimeDecls preludeDecls mods =
-  joinNl
-    (map
-      resErrorSexp
-      (resolveModulesErrorsG
-        allowInternal
-        trustedMods
-        None
-        runtimeDecls
-        preludeDecls
-        omEmpty
-        mods))
+-- (REMOVED, #2705) `resolveModulesToLinesG` was the S-expr renderer for the
+-- `medaka check` exit-code predicate `checkModulesHasErrors`.  That predicate is
+-- gone — the multi-module `check` route reaches its report through
+-- `entryReportFromDiags` over `checkModulesDiagsChain` (`compiler/tools/check.mdk`)
+-- — so the guarded renderer had zero callers.  `resolveModulesErrorsG`, which it
+-- wrapped, is still live under `resolveModulesErrors`.
 
 -- (REMOVED, #1440) `resolveModulesToHumane` had zero callers — it was
 -- imported by `compiler/tools/check.mdk` and `compiler/driver/medaka_cli.mdk`
 -- but never invoked from either.  `resolveModulesToHumaneG`'s own remaining
--- call (from `runCheckModules`) has also been removed — see the note at
--- the `resolveModulesErrorsByFile` block below for why that call could only ever
--- return `""`.
+-- call has also been removed — see the note at the `resolveModulesErrorsByFile`
+-- block below for why that call could only ever return `""`.
 
 -- (REMOVED, #186/#1360) `resolveModulesToHumaneGF` took a single fallback FILE
 -- and stamped it on EVERY module's located resolve errors whose own Loc carried
@@ -3978,7 +3961,6 @@ stampDecl top (DFunDef p n pats body) =
 stampDecl top (DProp p n params body) =
   DProp p n params (stampExpr (insertZero (map propParamName params) top) body)
 stampDecl top (DTest p n body) = DTest p n (stampExpr top body)
-stampDecl top (DBench p n body) = DBench p n (stampExpr top body)
 stampDecl top (DLetGroup p binds) = DLetGroup p (map (stampLetBind top) binds)
 stampDecl top (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (stampIfaceMethod top) methods }

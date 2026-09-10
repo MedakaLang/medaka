@@ -410,7 +410,7 @@ Worked the `qa-beta-2026-07-07/FINDINGS.md` queue. Merged (all fixpoint-clean, N
 module resolution), **P0-16** (tuple-call hint), **P0-1** run≠check core (`run`/`build` gate on
 `check`'s full diagnostic predicate + print real diagnostics), **P0-17** (impl-completeness
 `T-INCOMPLETE-IMPL`), **P0-18 map-function-key** reject, + SYNTAX.md doc fixes. Landed the
-FIXTURES.md §3 **run≡check agreement gate** (`test/diff_compiler_run_check_agreement.sh`) — now
+FIXTURES.md §3 **run≡check agreement gate** (`test/diff_compiler_run_check_agreement_test.mdk`) — now
 **12/13**. **⭐ ONE deferred, DO FIRST next session:** `p0_18_standalone_fn_shadows_iface_method`
 dispatch miscompile — user chose the principled per-receiver fix (Option A); full diagnosis +
 plan in `qa-beta-2026-07-07/P0-18-STANDALONE-DISPATCH-DESIGN.md`. The current 1-red in `run_gates`

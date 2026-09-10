@@ -207,6 +207,10 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
   -- The scratch entry sits in a `mktemp -d`, so its own search roots resolve
   -- nothing; the target's real roots are passed as extraRoots.
   let extraRoots = entrySearchRoots (dirOf target)
+  -- strictEmit = True (#2679): the probe is written, built and RUN in one
+  -- breath, so the emitter's warn-first #2089 note reaches no reader — without
+  -- the gate armed, a target the emitter records type errors for still links and
+  -- reports `pass`.
   match (runBuildNativeRoots
     root
     medaka
@@ -215,7 +219,8 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     outPath
     tmpDir
     False
-    extraRoots)
+    extraRoots
+    True)
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"

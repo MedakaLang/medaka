@@ -46,6 +46,17 @@
 #     prop used to hang forever shrinking (shrinkInt 0 had no base case).
 #     Pins the deterministic shrunk counterexample, proving shrinking
 #     terminates and converges.
+#   test/compiler_test_fixtures/user_arbitrary.mdk  GH #2292: a prop parameter
+#     at an argument-free user-defined type is drawn through that type's
+#     `Arbitrary` instance, not structurally. Passes only when the instance is
+#     honored; a structural draw fails it within a few tests.
+#   test/compiler_test_fixtures/arbitrary_name_collision/  two modules spelling
+#     one type name, an `Arbitrary` instance at only one of them. The runner
+#     must decide on the type's IDENTITY, not on its spelling: keyed on the
+#     spelling the filter yields exactly one candidate and it belongs to the
+#     other module's type, which reaches the prop body as a foreign value.
+#     Driven by its own block below (a multi-module project has no single
+#     `.test.golden`).
 #
 # DEFERRED (pre-existing compiler/native gaps, NOT gate-rerooting regressions):
 #   error-path doctests — compiler eval has no per-binding panic recovery.
@@ -120,6 +131,7 @@ else
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \
          $ROOT/test/compiler_test_fixtures/record_prop.mdk \
          $ROOT/test/compiler_test_fixtures/int_shrink.mdk \
+         $ROOT/test/compiler_test_fixtures/user_arbitrary.mdk \
          $ROOT/test/compiler_test_fixtures/mappable_not_foldable.mdk \
          $ROOT/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
          $ROOT/test/compiler_test_fixtures/blockquote_and_valid.mdk \
@@ -297,6 +309,27 @@ if [ "$cc_out" = "$cc_expected" ]; then
   pass=$((pass + 1)); printf 'ok   ctor_collision_test_seam/main.mdk (#1292: cross-module ctor collision through the test-phase driver)\n'
 else
   fail=$((fail + 1)); printf 'FAIL ctor_collision_test_seam/main.mdk report mismatch\n  --- expected ---\n%s\n  --- actual ---\n%s\n' "$cc_expected" "$cc_out"
+fi
+
+# A prop parameter whose type name is spelled by two modules, with an
+# `Arbitrary` instance at only one of them: the runner must report that it has
+# no generator rather than draw from the instance that belongs to the OTHER
+# `Color`. Asserted on CONTENT, not on an exit code: the wrong answer and the
+# right one both exit 1, and the wrong answer's shape varies (a non-exhaustive
+# match in the prop body for these two constructor arities, a dispatch panic for
+# others), so the only stable signal is which message is printed.
+anc="$ROOT/test/compiler_test_fixtures/arbitrary_name_collision/main.mdk"
+anc_dir="$ROOT/test/compiler_test_fixtures/arbitrary_name_collision"
+anc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$anc" "$anc_dir" "$ROOT/stdlib" 2>&1 | sed "s#$ROOT/##g")"
+anc_code=0
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$anc" "$anc_dir" "$ROOT/stdlib" >/dev/null 2>&1 || anc_code=$?
+if printf '%s' "$anc_out" | grep -qF "prop_runner: no generator for type 'Color'" \
+  && ! printf '%s' "$anc_out" | grep -qF "E-NONEXHAUSTIVE-MATCH" \
+  && ! printf '%s' "$anc_out" | grep -qF "no matching impl for dispatch" \
+  && [ "$anc_code" -ne 0 ]; then
+  pass=$((pass + 1)); printf 'ok   arbitrary_name_collision (an Arbitrary instance is chosen by type identity, not by spelling)\n'
+else
+  fail=$((fail + 1)); printf 'FAIL arbitrary_name_collision: expected the no-generator report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$anc_code" "$anc_out"
 fi
 
 # Issue #892 (S2): a FILE-LEVEL parse error in the TARGET must surface as the SAME

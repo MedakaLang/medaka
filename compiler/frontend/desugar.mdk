@@ -151,7 +151,6 @@ mapDecl f (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (mapImplMethod f) methods }
 mapDecl f (DProp pub name params body) = DProp pub name params (mapExpr f body)
 mapDecl f (DTest pub name body) = DTest pub name (mapExpr f body)
-mapDecl f (DBench pub name body) = DBench pub name (mapExpr f body)
 mapDecl f (DAttrib attrs d) = DAttrib attrs (mapDecl f d)
 mapDecl _ d = d
 

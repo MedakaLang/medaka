@@ -8,7 +8,7 @@ predictions, not the enforced truth. Both prerequisites landed first, as require
 user shadow cannot leak into the prelude).
 
 **Landed as designed, with two corrections found in implementation** (both were leaks that
-`test/diff_compiler_shadow_semantics.sh` caught, and both are worth knowing before you
+`test/diff_compiler_shadow_semantics_test.mdk` caught, and both are worth knowing before you
 touch this code again):
 
 1. **`inferDefinerShadowApp` also serves IMPORTER shadows** on the mangled emit path —
@@ -590,7 +590,7 @@ Hot-file contention is called out per stage. `typecheck.mdk`, `eval.mdk`,
 | **2** | **`W-SHADOWS-METHOD` warning** (§7), + suppression on the 5 in-tree shadows. Ship this **before** the inversion so users get the warning on the *old* semantics too, and so the compiler's own suppressions are already in place when Stage 3 lands. | `compiler/types/typecheck.mdk` (emit), `compiler/DIAGNOSTIC-CODES-DESIGN.md`, `compiler/frontend/parser.mdk` + `stdlib/{map,hash_map}.mdk` (5 suppressions) | **LOW** | `diff_compiler_check*`, `check_json`, `error_quality`, LSP | **PARALLEL with Stage 0** (different code region; expect a trivial merge in typecheck.mdk) |
 | **3** | **THE INVERSION.** In `resolveRLocalSite` (`typecheck.mdk:7265`) and `stampRLocalOrFallback` (`:7285`): drop the `implExistsForHead` query for **definer** shadows — unconditionally stamp `RLocal`. In `inferDefinerShadowVarApp` (`:5254`) and `inferDefinerShadowApp` (`:5029`): delete the dispatch arm (keep the Fork-2 dict-var arm). Importer paths (`inferShadowApp`, `shadowStandaloneHead`) **untouched** (Fork 1). Also lift the `singleParamIfaceMethod` gate (S8) so multi-typaram interfaces don't silently keep the old rule. | `compiler/types/typecheck.mdk` **only** — the routes (`RKey`/`RLocal`) and their consumers (`eval.mdk:1063`, `llvm_emit.mdk:3413/3435`, `wasm_emit.mdk:3076`, `core_ir_lower.mdk:144`) already handle both arms. **Neither emitter nor eval should need a line.** | **HIGH** — but *contained to one file*, and the change is a **deletion** (removing a query), which is the good kind. | `d2`/`d3`/`d6`/`d7`/`d8` re-blessed to REJECT; NEW `eq`-bug fixture; `run_check_agreement` (with `.out` value pins — §S7); `selfcompile_fixpoint` **C3a/C3b**; `typecheck_compiler_source`; `diff_compiler_engines` | **SERIAL** after Stage 0 |
 | **4** | **Re-open the method** — make `import core.{eq as eqM}` resolve (§5.3). Removes the sharp edge. | `compiler/frontend/resolve.mdk` (import/alias handling) | **LOW-MED** | `eval_modules_fixtures/import_alias`, `diff_compiler_resolve*` | **PARALLEL** with Stage 3 |
-| **5** | **Rewrite `SHADOW-SEMANTICS.md`** from §3/§4 of this doc; wire `test/shadow_fixtures/` into a real gate (it is *still* gated by nothing — §4 of the current spec). | `SHADOW-SEMANTICS.md`, `test/diff_compiler_run_check_agreement.sh` | **NIL** | — | after Stage 3 |
+| **5** | **Rewrite `SHADOW-SEMANTICS.md`** from §3/§4 of this doc; wire `test/shadow_fixtures/` into a real gate (it is *still* gated by nothing — §4 of the current spec). | `SHADOW-SEMANTICS.md`, `test/diff_compiler_run_check_agreement_test.mdk` | **NIL** | — | after Stage 3 |
 
 **Emitter/eval touch: expected ZERO.** Both `RKey` and `RLocal` arms already exist and are
 exercised on every path (`llvm_emit.mdk:3413`/`:3435`, `wasm_emit.mdk:3076`,

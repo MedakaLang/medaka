@@ -111,11 +111,11 @@ cannot reproduce.
 |------|----------------|
 | `selfcompile_fixpoint.sh` | Emitter self-compile fixpoint — **THE decisive gate for any compiler-source change** |
 | `typecheck_compiler_source.sh` | Strict-typechecks the WHOLE compiler source. **The bootstrap emit path does NOT gate on type errors** — an ill-typed compiler builds green without this |
-| `diff_compiler_run_check_agreement.sh` | `run` stdout == built-binary stdout, and a rejection must be a **diagnostic, not a panic** |
+| `diff_compiler_run_check_agreement_test.mdk` | `run` stdout == built-binary stdout, and a rejection must be a **diagnostic, not a panic** |
 | `diff_compiler_engines.sh` | The 3-engine differential: eval == native == wasm on the SAME programs |
 | `diff_compiler_perf_scaling.sh` | The O(n²) detector — grades **allocation** growth, not wall-clock |
 | `diff_compiler_capability_matrix.sh` | Every extern in `stdlib/runtime.mdk` vs what each engine implements. **Its absence let 37 externs drift for six weeks** |
-| `diff_compiler_shadow_semantics.sh` | Pins every shadow cell, **including the KNOWN-BAD ones** |
+| `diff_compiler_shadow_semantics_test.mdk` | Pins every shadow cell, **including the KNOWN-BAD ones** |
 | `diff_compiler_must_fail.sh` | **The TRACKER's self-drain** (#547). Each `test/must_fail_fixtures/*/` pins one OPEN issue's bug as still reproducing; a fix flips it RED and the message says to close the issue. A RED here is usually a GOOD failure. Runs as a named step in `soundness` — NOT a shard, because shards are narrowed on `pull_request` and the drain would only fire in the merge queue |
 | `must_fail_census.sh` (nightly) | **The other half of that ratchet** (#569) — the directions a gate structurally cannot see, because they need the GitHub API. Above all: **an issue is CLOSED but its fixture still REPRODUCES ⇒ the TRACKER is lying.** The fixture is a *measurement*; the issue state is an *assertion*. It **reports, never acts** (it cannot tell "closed in error" from "the fixture drifted"). Findings are FILED to one tracking issue; **infra failure fails the job.** Found #508 closed-but-live on its first run |
 

@@ -1076,7 +1076,6 @@ walkDeclBody w (DProp _ _ params body) loc =
   let frame = mkNamedFrame w (map ppNameLoc params)
   walkExpr w [frame] loc body
 walkDeclBody w (DTest _ _ body) loc = walkExpr w [] loc body
-walkDeclBody w (DBench _ _ body) loc = walkExpr w [] loc body
 walkDeclBody w (DLetGroup _ binds) loc =
   let frame = mkNamedFrame w (namesAtLoc loc (map letBindName binds))
   walkBinds w [frame] loc binds

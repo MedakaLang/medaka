@@ -12,6 +12,10 @@ The two jobs are deliberately separate: a grader that also resolved the
 binary would have to name a verb, and callers need `check`, `run` and
 `test`.
 
+A test that spawns many subjects in one sweep reaches for `boundedVerb`,
+so one hanging subject fails its own row instead of the job, and
+`scratchDir`, so concurrent gate runs do not write over each other.
+
 A test that grades a whole directory of `medaka test` suites reads their
 executed-assertion counts with `testAssertionCount`, and keeps its roster
 closed over the directory with `testFileStem`, `unrosteredTestFiles` and
@@ -60,6 +64,77 @@ The default is a path, never the bare name `medaka`, so an unset
 `MEDAKA` cannot resolve to some other build on `PATH`, or to nothing at
 all, which still spawns and exits 127 with no output, an outcome any
 assertion phrased over the output would accept.
+
+## Spawning
+
+### `spawnTimeoutSeconds`
+
+```
+spawnTimeoutSeconds : Int
+```
+
+The wall-clock ceiling `boundedVerb` puts on one spawn, in seconds.
+
+A sweep that spawns a compiler once per fixture has to distinguish "this
+fixture hangs" from "the whole job hung": without a per-spawn ceiling the
+first hanging fixture consumes the job's own timeout and the sweep names
+nothing.
+
+### `boundedVerb`
+
+```
+boundedVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+```
+
+`runVerb`, with `cmd` killed after `spawnTimeoutSeconds`.
+
+A killed spawn is an ordinary nonzero exit, not an `Err`, so a caller
+grading exit codes sees a failure on the row that hung rather than losing
+the whole run. `perl` carries the alarm because it is the one interval
+timer present on both Linux and macOS without a coreutils dependency.
+
+```medaka
+> boundedVerb "sh" ["-c", "printf hi; exit 3"]
+Ok (3, "hi", "")
+```
+
+### `boundedVerbSeconds`
+
+```
+boundedVerbSeconds : Int -> String -> List String -> <Exec _> Result String (Int, String, String)
+```
+
+`boundedVerb` with the ceiling named at the call site, for a sweep whose
+one spawn is genuinely slower than `spawnTimeoutSeconds` allows.
+
+A sweep that spawns a whole compile-and-link pipeline per row needs a
+ceiling sized to that pipeline, and one sized to it would be far too loose
+for the sweeps that spawn a single verb, so the ceiling is a parameter
+rather than one constant stretched to cover both.
+
+```medaka
+> boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
+Ok (3, "hi", "")
+```
+
+### `scratchDir`
+
+```
+scratchDir : <Exec _> Result String String
+```
+
+A fresh, empty directory of the host's choosing, for a test that has to
+write files.
+
+Gates run concurrently over one tree, so a scratch path spelled as a
+constant collides between two runs of the same test; only the host can
+hand out a name nothing else holds. The caller owns the directory and is
+responsible for removing it.
+
+```medaka
+> map (startsWith "/") scratchDir
+Ok True
+```
 
 ## Grading a spawn
 
@@ -158,6 +233,46 @@ from `--json` rather than the human transcript, so a change to the
 transcript's shape cannot silently zero it. A suite that exits nonzero is
 an `Err`, never a count, because a failed assertion is not a smaller
 number of passing ones.
+
+### `unrosteredUnits`
+
+```
+unrosteredUnits : (String -> Option String) -> List String -> List String -> List String
+```
+
+The units `namer` finds among `entries` that are absent from `known`.
+
+The general form behind `unrosteredTestFiles`: `namer` turns one
+directory entry into the unit name a roster spells, or `None` when the
+entry names no unit at all, so an entry that is not a unit (an unrelated
+file, a fixture directory's own helper file) is silently skipped rather
+than counted as a stray one.
+
+```medaka
+> unrosteredUnits testFileStem ["a_test"] ["a_test.mdk", "b_test.mdk", "readme.md"]
+["b_test"]
+```
+
+### `missingUnits`
+
+```
+missingUnits : (String -> Option String) -> List String -> List String -> List String
+```
+
+The names in `wanted` that `namer` finds in none of `entries`.
+
+The other half of `unrosteredUnits`: a roster or exemption row naming a
+unit that was renamed or deleted still reads as coverage, and only this
+reports it.
+
+The roster is argument 2 in both, matching `unrosteredUnits`. The two
+share a type, so an argument order that differed between them would make
+a swapped call a silent `[]` — "no orphans", green — rather than an error.
+
+```medaka
+> missingUnits testFileStem ["a_test", "b_test"] ["a_test.mdk"]
+["b_test"]
+```
 
 ### `unrosteredTestFiles`
 

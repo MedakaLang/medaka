@@ -14,10 +14,10 @@
 -- "the fix is one token: key the VALUE arm on `snd` while the TYPE arm keeps `fst`". That
 -- change cannot move this file's answer, and it is DERIVABLE without building anything:
 --
---     grep -n 'renameAliasedMethods \|graphIfaceMethods coreDecls' compiler/types/typecheck.mdk
+--     grep -n 'renameAliasedMethods \|graphIfaceMethodsRef :=' compiler/types/typecheck.mdk
 --
--- `renameAliasedMethods` has exactly one call site, in `elaborateModules`, and it runs
--- BEFORE that driver writes `graphIfaceMethodsRef` and before the mark pass. It applies
+-- `renameAliasedMethods` has exactly one call site: `driveGraphK`'s `GOutTrees` arm, and it
+-- runs BEFORE the `graphIfaceMethodsRef` write and before the mark pass. It applies
 -- `deAliasMethodImports`, which rewrites `import ifc.{size as sz}` into `import ifc.{size}`
 -- -- so by the time `selectIfaceRows` runs on the run/build path, `snd b == fst b` for every
 -- member and the two keyings are the same expression. A reviewer implemented the one-token
