@@ -83,8 +83,8 @@ stages=DESUGAR,MARK
 -- pull it in is the anti-pattern `AGENTS.md` measures at +34 KB / +4.8%
 -- self-compile (DCE keeps a `DImpl`/`DInterface` whole once it is
 -- reachable at all) — this module avoids that by riding the SAME `OrdMap`
--- everything else already rides. `map.{toList}` below is likewise
--- already-forced surface (`toList` operates on the already-forced `Map`
+-- everything else already rides. `map.{entries}` below is likewise
+-- already-forced surface (`entries` operates on the already-forced `Map`
 -- type), so it adds no new retained instance surface.
 --
 -- ── `identKey`: the ONE renderer, collision-free by construction ───────────
@@ -178,7 +178,7 @@ import support.ordmap.{
   omSize,
 }
 import support.util.{lenKey, listLen, joinWith, filterList}
-import map.{toList}
+import map.{entries}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
 
@@ -464,7 +464,7 @@ regDelete ident r = regDeleteK (regKeyOf ident) r
 -- still has to review" in the module doc-comment. It IS deterministic.
 export
 regEntries : Registry v -> List (RegKey, v)
-regEntries (Registry m) = map snd (toList m)
+regEntries (Registry m) = map snd (entries m)
 
 -- Symmetry with `mregKeys`/`sregKeys`. Derivable (`map fst (regEntries r)`),
 -- added anyway because an API where two of three registry types can enumerate
@@ -609,7 +609,7 @@ mregLookup ident mr = mregLookupK (regKeyOf ident) mr
 -- `regEntries`.
 export
 mregEntries : MultiRegistry v -> List (RegKey, List v)
-mregEntries (MultiRegistry m) = map snd (toList m)
+mregEntries (MultiRegistry m) = map snd (entries m)
 
 export
 mregKeys : MultiRegistry v -> List RegKey
@@ -669,7 +669,7 @@ sregSize (SetRegistry m) = omSize m
 
 export
 sregKeys : SetRegistry -> List RegKey
-sregKeys (SetRegistry m) = map snd (toList m)
+sregKeys (SetRegistry m) = map snd (entries m)
 
 export
 sregMerge : SetRegistry -> SetRegistry -> SetRegistry
@@ -1611,7 +1611,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false))))
-(DUse false (UseGroup ("map") ((mem "toList" false))))
+(DUse false (UseGroup ("map") ((mem "entries" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "type")))
 (DFunDef false "nsTag" ((PCon "NsIface")) (ELit (LString "iface")))
@@ -1680,7 +1680,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "regDelete" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
 (DFunDef false "regDelete" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regDeleteK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
 (DTypeSig true "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
-(DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "toList") (EVar "m"))))
+(DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "regKeys" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
 (DFunDef false "regKeys" ((PVar "r")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "regEntries") (EVar "r"))))
 (DTypeSig true "regSize" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Int")))
@@ -1708,7 +1708,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookup" ((PVar "ident") (PVar "mr")) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "mr")))
 (DTypeSig true "mregEntries" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v"))))))
-(DFunDef false "mregEntries" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "toList") (EVar "m"))))
+(DFunDef false "mregEntries" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "mregKeys" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
 (DFunDef false "mregKeys" ((PVar "mr")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "mregEntries") (EVar "mr"))))
 (DTypeSig true "mregSize" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyCon "Int")))
@@ -1735,7 +1735,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "sregSize" (TyFun (TyCon "SetRegistry") (TyCon "Int")))
 (DFunDef false "sregSize" ((PCon "SetRegistry" (PVar "m"))) (EApp (EVar "omSize") (EVar "m")))
 (DTypeSig true "sregKeys" (TyFun (TyCon "SetRegistry") (TyApp (TyCon "List") (TyCon "RegKey"))))
-(DFunDef false "sregKeys" ((PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "toList") (EVar "m"))))
+(DFunDef false "sregKeys" ((PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "sregMerge" (TyFun (TyCon "SetRegistry") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMerge" ((PVar "older") (PVar "newer")) (EApp (EApp (EVar "sregMergeGo") (EApp (EVar "sregKeys") (EVar "newer"))) (EVar "older")))
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
@@ -1867,7 +1867,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false))))
-(DUse false (UseGroup ("map") ((mem "toList" false))))
+(DUse false (UseGroup ("map") ((mem "entries" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "type")))
 (DFunDef false "nsTag" ((PCon "NsIface")) (ELit (LString "iface")))
@@ -1936,7 +1936,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "regDelete" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
 (DFunDef false "regDelete" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regDeleteK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
 (DTypeSig true "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
-(DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EMethodRef "toList") (EVar "m"))))
+(DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "regKeys" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
 (DFunDef false "regKeys" ((PVar "r")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "regEntries") (EVar "r"))))
 (DTypeSig true "regSize" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Int")))
@@ -1964,7 +1964,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookup" ((PVar "ident") (PVar "mr")) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "mr")))
 (DTypeSig true "mregEntries" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyVar "v"))))))
-(DFunDef false "mregEntries" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EMethodRef "toList") (EVar "m"))))
+(DFunDef false "mregEntries" ((PCon "MultiRegistry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "mregKeys" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
 (DFunDef false "mregKeys" ((PVar "mr")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "mregEntries") (EVar "mr"))))
 (DTypeSig true "mregSize" (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyCon "Int")))
@@ -1991,7 +1991,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "sregSize" (TyFun (TyCon "SetRegistry") (TyCon "Int")))
 (DFunDef false "sregSize" ((PCon "SetRegistry" (PVar "m"))) (EApp (EVar "omSize") (EVar "m")))
 (DTypeSig true "sregKeys" (TyFun (TyCon "SetRegistry") (TyApp (TyCon "List") (TyCon "RegKey"))))
-(DFunDef false "sregKeys" ((PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EMethodRef "toList") (EVar "m"))))
+(DFunDef false "sregKeys" ((PCon "SetRegistry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EVar "m"))))
 (DTypeSig true "sregMerge" (TyFun (TyCon "SetRegistry") (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMerge" ((PVar "older") (PVar "newer")) (EApp (EApp (EVar "sregMergeGo") (EApp (EVar "sregKeys") (EVar "newer"))) (EVar "older")))
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))

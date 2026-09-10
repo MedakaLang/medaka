@@ -142,6 +142,7 @@ expectVerbExitStartsWithAndContains verb args expectedCode prefix needles =
    and whole. -}
 public export data Agreement = Agreement {
   checkCode : Int,
+  checkErr : String,
   runCode : Int,
   runOut : String,
   runErr : String,
@@ -171,7 +172,7 @@ export
 checkRunBuild : String -> String -> <Exec "_", IO> Result String Agreement
 checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
   Err e => Err "\{entry}: could not run `medaka check`: \{e}"
-  Ok (checkCode, _, _) => match boundedVerb medakaBin ["run", entry]
+  Ok (checkCode, _, checkErr) => match boundedVerb medakaBin ["run", entry]
     Err e => Err "\{entry}: could not run `medaka run`: \{e}"
     Ok (runCode, runOut, runErr) =>
       match boundedVerb medakaBin ["build", entry, "-o", binPath]
@@ -183,6 +184,7 @@ checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
             Err e => Err "\{entry}: could not run the built binary: \{e}"
             Ok (binCode, binOut, binErr) => Ok Agreement {
               checkCode = checkCode,
+              checkErr = checkErr,
               runCode = runCode,
               runOut = runOut,
               runErr = runErr,

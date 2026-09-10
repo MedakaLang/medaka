@@ -8,7 +8,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import hex.{encode}
-import map.{Map(..), get, set, size, toList}
+import map.{Map(..), get, set, size, entries}
 import lib.cid.{Cid, cidCodec, cidEqual, cidForDagCbor, cidForRaw, cidToBytes}
 import lib.multiformats.{multicodecDagCbor}
 
@@ -103,8 +103,7 @@ entryValues ((_, entry) :: rest) = entry :: entryValues rest
 -- | Canonical CID-sorted defensive entry view.
 export
 blockStoreEntries : BlockStore -> List (Cid, Array Int)
-blockStoreEntries (BlockStore entries) =
-  copyEntries (entryValues (toList entries))
+blockStoreEntries (BlockStore m) = copyEntries (entryValues (entries m))
 
 {- | Canonical CID-sorted view of which CIDs are present, carrying no bytes.
 
@@ -112,8 +111,7 @@ blockStoreEntries (BlockStore entries) =
    to do it, so a caller that only needs the names pays the whole store. -}
 export
 blockStoreCids : BlockStore -> List Cid
-blockStoreCids (BlockStore entries) =
-  map ((_, (cid, _)) => cid) (toList entries)
+blockStoreCids (BlockStore entries) = map ((cid, _) => cid) (toList entries)
 
 -- | Verify and immutably merge every entry from the right-hand store.
 export

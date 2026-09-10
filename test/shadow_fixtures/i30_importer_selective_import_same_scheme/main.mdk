@@ -1,0 +1,17 @@
+-- SHADOW-SEMANTICS cell I30 (#2738's CONTROL): byte-for-byte the I29 shape --
+-- selective import of a standalone, an interface nameable by its TYPE name, a live
+-- impl at the receiver's head -- differing in ONE respect: the two declared
+-- signatures are alpha-equivalent (`a -> String` and `t -> String`).
+--
+-- Val's ruling is that the warning fires ONLY when the two schemes differ, so this
+-- cell must be SILENT.  Without it the corpus would grade "the diagnostic exists"
+-- and could not tell that apart from a predicate that fires on every importer
+-- shadow in the tree.
+--
+-- The RESOLUTION is the same as I29's and is not what this cell is about: S1 makes
+-- `tagOf` an importer shadow, S2's importer arm finds `impl Taggable (Box a)` at the
+-- receiver's head, so it dispatches and prints `iface`, not `prov`.
+import ifc.{Taggable, Box(..)}
+import prov.{tagOf}
+
+main = println (tagOf (Box 3))

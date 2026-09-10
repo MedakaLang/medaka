@@ -5,7 +5,7 @@
    new map and leaves the original unchanged; the two share whatever
    structure they have in common, so keeping old versions is cheap.
 
-   Keys are ordered by their `Ord` instance, and `toList`, `keys`, `values`,
+   Keys are ordered by their `Ord` instance, and `keys`, `values`, `entries`,
    and the folds visit entries in ascending key order. The `Map { k => v }`
    literal builds a map; the empty map is `empty`. For keys that are
    `Hashable` but not `Ord`, or when order does not matter, see
@@ -378,11 +378,11 @@ foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
 
 {- | The entries as pairs, in ascending key order.
 
-   > toList (fromList [(2, 20), (1, 10), (3, 30)])
+   > entries (fromList [(2, 20), (1, 10), (3, 30)])
    [(1, 10), (2, 20), (3, 30)] -}
 export
-toList : Map k v -> List (k, v)
-toList m = foldrWithKey (k v acc => (k, v) :: acc) [] m
+entries : Map k v -> List (k, v)
+entries m = foldrWithKey (k v acc => (k, v) :: acc) [] m
 
 {- | The keys, in ascending order.
 
@@ -559,7 +559,7 @@ difference a (Bin _ k _ l r) =
 
 {- | The keys present in both maps, each with the value `f left right`.
 
-   > toList (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+   > entries (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
    [(2, 22)] -}
 export
 intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
@@ -575,7 +575,7 @@ intersectionWith f (Bin _ k v l r) b =
 
 {- | The keys present in both maps, each with the first map's value.
 
-   > toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+   > entries (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
    [(2, 20)] -}
 export
 intersection : Ord k => Map k v -> Map k w -> Map k v
@@ -603,30 +603,52 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
+{- | The `Foldable` methods visit values in ascending order of their keys, so
+   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
+   over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+
+   > toList (fromList [(2, 20), (1, 10)])
+   [10, 20]
+   > length (fromList [(1, 10), (2, 20)])
+   2
+   > isEmpty (fromList [(1, 10)] : Map Int Int)
+   False
+   > elem 20 (fromList [(1, 10), (2, 20)])
+   True
+   > sum (fromList [(1, 10), (2, 20)])
+   30 -}
+export impl Foldable (Map k) where
+  fold f z m = foldlWithKey (acc _ v => f acc v) z m
+  foldRight f z m = foldrWithKey (_ v acc => f v acc) z m
+  toList m = values m
+  isEmpty Tip = True
+  isEmpty _ = False
+  length m = size m
+
 {- | Two maps are equal when they hold the same keys with equal values,
    regardless of how they were built.
 
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
 export impl Eq (Map k v) requires Eq k, Eq v where
-  eq a b = if size a /= size b then False else eq (toList a) (toList b)
+  eq a b = if size a /= size b then False else eq (entries a) (entries b)
 
 {- | Maps compare lexicographically by their ascending `(key, value)` pairs.
 
    > compare (fromList [(1, 10)]) (fromList [(1, 20)])
    Lt -}
 export impl Ord (Map k v) requires Ord k, Ord v where
-  compare a b = compare (toList a) (toList b)
+  compare a b = compare (entries a) (entries b)
 
 {- | `debug` renders a map as `fromList [(k, v), ...]`.
 
    > debug (fromList [(1, 10), (2, 20)])
    "fromList [(1, 10), (2, 20)]" -}
 export impl Debug (Map k v) requires Debug k, Debug v where
-  debug m = "fromList \{debug (toList m)}"
+  debug m = "fromList \{debug (entries m)}"
 
 -- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
--- `display` (unquoted), the Display convention.  `toList` gives ascending pairs.
+-- `display` (unquoted), the Display convention.  `entries` gives ascending pairs.
 displayMapEntries : (Display k, Display v) => List (k, v) -> String
 displayMapEntries [] = ""
 displayMapEntries [(k, v)] = "\{k} => \{v}"
@@ -639,7 +661,7 @@ displayMapEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayMapEntries rest}"
    > display (empty : Map Int Int)
    "Map {}" -}
 export impl Display (Map k v) requires Display k, Display v where
-  display m = match toList m
+  display m = match entries m
     [] => "Map {}"
     es => "Map { \{displayMapEntries es} }"
 
@@ -761,7 +783,7 @@ naiveFilterStep p k v acc = if p k v then set k v acc else acc
 prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
-  eq (toList (union a b)) (toList (naiveUnion a b))
+  eq (entries (union a b)) (entries (naiveUnion a b))
 
 prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   ascending (keys (union (fromList xs) (fromList ys)))
@@ -770,19 +792,20 @@ prop "unionWith agrees with naive and stays well-formed" (xs : List (Int, Int)) 
   let a = fromList xs
   let b = fromList ys
   let got = unionWith (x y => x + y) a b
-  eq (toList got) (toList (naiveUnionWith (x y => x + y) a b)) && wellFormed got
+  eq (entries got) (entries (naiveUnionWith (x y => x + y) a b))
+    && wellFormed got
 
 prop "difference agrees with naive and stays well-formed" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
   let got = difference a b
-  eq (toList got) (toList (naiveDifference a b)) && wellFormed got
+  eq (entries got) (entries (naiveDifference a b)) && wellFormed got
 
 prop "intersectionWith agrees with naive and stays well-formed" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
   let got = intersectionWith (x y => x + y) a b
-  eq (toList got) (toList (naiveIntersectionWith (x y => x + y) a b))
+  eq (entries got) (entries (naiveIntersectionWith (x y => x + y) a b))
     && wellFormed got
 
 -- LAW: `intersection` is exactly the left-biased `intersectionWith`, and its
@@ -792,7 +815,7 @@ prop "intersection is the left-biased intersectionWith" (xs : List (Int, Int)) (
   let a = fromList xs
   let b = fromList ys
   let got = intersection a b
-  eq (toList got) (toList (intersectionWith (x _ => x) a b)) && wellFormed got
+  eq (entries got) (entries (intersectionWith (x _ => x) a b)) && wellFormed got
 
 prop "intersection keeps exactly the shared keys, with the left value" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
@@ -809,17 +832,17 @@ prop "intersection keeps exactly the shared keys, with the left value" (xs : Lis
 prop "Filterable: filterMap Some is the identity" (xs : List (Int, Int)) =
   let m = fromList xs
   let got = filterMap (v => Some v) m
-  eq (toList got) (toList m) && wellFormed got
+  eq (entries got) (entries m) && wellFormed got
 
 prop "Filterable: filter agrees with filterWithKey ignoring the key" (xs : List (Int, Int)) =
   let m = fromList xs
   let got = filter (v => v > 0) m
-  eq (toList got) (toList (filterWithKey (_ v => v > 0) m)) && wellFormed got
+  eq (entries got) (entries (filterWithKey (_ v => v > 0) m)) && wellFormed got
 
 prop "filterWithKey agrees with naive and stays well-formed" (xs : List (Int, Int)) =
   let m = fromList xs
   let got = filterWithKey (k v => v > 0) m
-  eq (toList got) (toList (naiveFilterWithKey (k v => v > 0) m))
+  eq (entries got) (entries (naiveFilterWithKey (k v => v > 0) m))
     && wellFormed got
 
 prop "splitAt partitions around the key and both halves stay well-formed" (k : Int) (xs : List (Int, Int)) =
@@ -837,4 +860,4 @@ prop "link rebuilds a well-formed map from a split" (k : Int) (xs : List (Int, I
 prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
   let (below, above) = splitAt k (fromList xs)
   let rebuilt = link2 below above
-  wellFormed rebuilt && eq (toList rebuilt) (toList (delete k (fromList xs)))
+  wellFormed rebuilt && eq (entries rebuilt) (entries (delete k (fromList xs)))

@@ -1,0 +1,8 @@
+-- SHADOW-SEMANTICS cell I31 provider: the module that DECLARES the standalone.
+-- Byte-for-byte I29's provider; what differs is that `main.mdk` never imports this
+-- module's `peek` directly -- `mid.mdk` re-exports it.
+public export data Box a = Box a
+
+export
+peek : Box a -> (String, a)
+peek (Box a) = ("box", a)

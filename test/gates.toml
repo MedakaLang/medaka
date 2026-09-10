@@ -3187,7 +3187,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_shadow_semantics_test.mdk"
 oracles = []
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "playground", "playground/*", "test/compiler_cli_test_support.mdk"]
+sources = ["compiler/backend/*", "compiler/driver/diagnostics.mdk", "compiler/driver/medaka_cli.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "playground", "playground/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/import_order_fixtures", "test/must_fail_fixtures", "test/shadow_fixtures"]
 toolchain = []
 

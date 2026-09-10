@@ -1,0 +1,10 @@
+-- SHADOW-SEMANTICS cell I31 provider 2: the interface whose method name collides,
+-- and a live impl at the receiver's head so S2's importer arm dispatches.  Identical
+-- to I29's.
+import box.{Box(..)}
+
+export interface Peekable t where
+  peek : t a -> a
+
+export impl Peekable Box where
+  peek (Box a) = a

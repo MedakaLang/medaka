@@ -15,7 +15,7 @@
 --   "error: <message>"   or   "warning: <message>"
 -- one per line, sorted by the harness.
 
-import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat}
+import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, Ty}
 import frontend.parser.{
   parse,
   parseLocated,
@@ -52,8 +52,16 @@ import types.repr.{Scheme}
 import types.typecheck.{
   checkOneDiagsK, checkModulesDiagsChain, chainFullKey, checkModulesK,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
-  setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit, mainTypeIsAsync
+  setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit, mainTypeIsAsync,
+  -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
+  -- typechecker because S1's `nameable in M` operand does; see its own comment.
+  importedStandaloneShadows
 }
+-- #2738: the two colliding signatures are SURFACE types, and this is the one
+-- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
+-- doc generator).  Imported here, at the driver, rather than into
+-- `types/typecheck.mdk`, so the detector's home layer gains no edge to `tools/`.
+import tools.printer.{ppTy}
 import driver.loader.{
   LoadMsg,
   LoadParseFailed,
@@ -817,6 +825,12 @@ analyzeSurface modName runtimeSrc coreSrc raw internalGuard =
   -- (desugar.mdk) folds into one; reading `raw` here double-fires the warning (F2).
   -- This is the FLAT half; `foldModuleTc` carries the per-module half.
   let shadowWarns = preludeStandaloneShadows (runtimeP ++ coreP) desugared
+  -- #2738's importer peer.  The flat path analyses exactly ONE module, so it can
+  -- name no dependency's decls: every `DUse` misses the (empty) graph and the walk
+  -- yields `[]`.  Wired anyway, beside its sibling, so the two directions stay one
+  -- SET here as they are at their detection sites — and so the multi-module half
+  -- below is not the only place a reader can find this warning's wiring.
+  let importShadowWarns = importedStandaloneShadows [] desugared
   -- Derives live only on the RAW tree (`desugar` clears the field), so this reads
   -- `raw`, not `desugared`.
   let deriveDiags = map deriveErrToDiag (checkDerives raw)
@@ -825,11 +839,13 @@ analyzeSurface modName runtimeSrc coreSrc raw internalGuard =
   let _ = setCoherenceUserDecls desugared
   let guardDiags = map guardWarnToDiag guardWarns
   let shadowDiags = map (preludeShadowWarnToDiag modName) shadowWarns
+  let importShadowDiags = map (importShadowWarnToDiag modName) importShadowWarns
   let clean = match resErrs
     [] => True
     _ => False
   SurfaceAnalysis {
-    surfaceDiags = deriveDiags ++ guardDiags ++ shadowDiags ++ resDiags,
+    surfaceDiags =
+      deriveDiags ++ guardDiags ++ shadowDiags ++ importShadowDiags ++ resDiags,
     resolveClean = clean,
     surfaceDesugared = desugared,
     surfaceRuntimeP = runtimeP,
@@ -969,6 +985,58 @@ preludeShadowWarnToDiag modName (_, mname, loc) =
         " under another name"
       ]))
     None
+
+-- #2738 / `SHADOW-SEMANTICS.md` S1-PRELUDE (b)'s register, one direction over:
+-- a name the module explicitly and selectively IMPORTED is also an interface method
+-- nameable here, and the two carry DIFFERENT schemes, so at any receiver with an impl
+-- the occurrence means the method rather than the function the import names.  S1/S2
+-- make that resolution conformant (§2 row 17); silence about it is what is not.
+--
+-- Both bindings are named with their types, because the whole defect is that the two
+-- differ and only one of them is written in this file.
+--
+-- NO machine-applicable `fix`, for the same reason `W-PRELUDE-METHOD-SHADOW` ships
+-- none: a `Fix` is a single-span replacement and the repair (aliasing the import, or
+-- renaming one side) is multi-site — a one-span edit would rewrite the import line and
+-- leave every call site meaning the other binding, silently.
+importShadowWarnToDiag : String -> (String, String, Option Ty, Ty, Loc) -> Diag
+importShadowWarnToDiag modName (name, iface, sty, mty, loc) =
+  Diag
+    SevWarning
+    "W-IMPORT-METHOD-SHADOW"
+    (stringConcat [
+      "imported '",
+      name,
+      " : ",
+      importedSchemeText sty,
+      "' is shadowed in ",
+      moduleScopeText modName,
+      " by interface method '",
+      iface,
+      ".",
+      name,
+      " : ",
+      ppTy mty,
+      "'; the two types differ, so an occurrence at a receiver with an impl of '",
+      iface,
+      "' means the method, not the imported function",
+    ])
+    (Some loc)
+    (Some
+      (stringConcat [
+        "import it under another name (`import … {", name, " as ", name,
+        "'}`), or drop the import of '", iface,
+        "' if the method is not the one you meant"
+      ]))
+    None
+
+-- The displaced import's own signature, or the reason there is none to show: a
+-- module that declares the function WITHOUT a signature offers no scheme to compare,
+-- and an unreadable scheme cannot be shown harmless — so it counts as differing and
+-- says so here rather than printing a guess.
+importedSchemeText : Option Ty -> String
+importedSchemeText (Some t) = ppTy t
+importedSchemeText None = "no declared signature"
 
 -- "module 'main'" when the caller knows the module id; "this module" when it
 -- does not (an inline source, the LSP live buffer) — never "module ''".
@@ -1564,7 +1632,13 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   -- ONCE here rather than per module: the fold below is over many modules
   -- against one prelude.
   let shadowPool = preludeStandaloneSet (runtimeP ++ coreP)
-  foldModuleTc shadowPool oracleDecls modPairs mods tcByMid buckets
+  -- #2738's operand: every module whose decls this compile has, keyed the way a
+  -- `DUse`'s `usePathModuleId` spells it, with the prelude under the same `"core"`
+  -- key `graphIfaceMethodsRef` uses.  The detector reads a DEPENDENCY's decls (the
+  -- displaced function's own signature lives there, not here), which is exactly the
+  -- operand the flat path cannot have.
+  let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
+  foldModuleTc shadowPool shadowGraph oracleDecls modPairs mods tcByMid buckets
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
@@ -1778,14 +1852,15 @@ lookupDesugaredMod mid ((m, d) :: rest)
   | otherwise = lookupDesugaredMod mid rest
 
 foldModuleTc : OrdMap Unit ->
+  List (String, List Decl) ->
   List Decl ->
   List (String, List Decl) ->
   List (String, String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ [] _ buckets = buckets
-foldModuleTc shadowPool oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid buckets =
+foldModuleTc _ _ _ _ [] _ buckets = buckets
+foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let existing = match lookupBucket path buckets
     Some ds => ds
@@ -1810,12 +1885,24 @@ foldModuleTc shadowPool oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid
       (preludeStandaloneShadowsWith
         shadowPool
         (lookupDesugaredMod mid modPairs))
+  -- #2738, the importer direction: this module's own selective imports against the
+  -- interfaces it can name, bucketed by its own path and named by its own module id.
+  -- No collision ⇒ `[]` ⇒ byte-identical.
+  let importShadowDiags =
+    map
+      (importShadowWarnToDiag mid)
+      (importedStandaloneShadows shadowGraph (lookupDesugaredMod mid modPairs))
   let buckets2 =
     pushDiags
       path
-      (deriveDiags ++ guardDiags ++ shadowDiags ++ errDiags ++ warnDiags)
+      (deriveDiags
+        ++ guardDiags
+        ++ shadowDiags
+        ++ importShadowDiags
+        ++ errDiags
+        ++ warnDiags)
       buckets
-  foldModuleTc shadowPool oracleDecls modPairs rest tcByMid buckets2
+  foldModuleTc shadowPool shadowGraph oracleDecls modPairs rest tcByMid buckets2
 
 lookupTcDiags : String ->
   List (String, (List TcDiag, List TcDiag)) ->
