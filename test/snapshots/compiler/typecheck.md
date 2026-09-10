@@ -1,5 +1,5 @@
 # META
-source_lines=43791
+source_lines=43831
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3227,9 +3227,15 @@ dropGoalsSince mark kinds =
 -- `(mangledSymbol ↦ bareMethod)` entry recorded here.  The mark pass then (a) marks
 -- the mangled occurrence `EMethodAt` with the BARE dispatch name (so `implFor` finds
 -- the impl for a receiver that HAS one) and (b) carries the mangled symbol in the
--- route's `RLocal <symbol>` fallback for a receiver that does NOT.  EMPTY on the
--- un-mangled run/check path (forward-construction never matches a bare funDef), so
--- every non-emit path is byte-identical.  Set once at the top of elaborateModules;
+-- route's `RLocal <symbol>` fallback for a receiver that does NOT.
+-- #2809 RETIRED THE "EMPTY OFF THE EMIT PATH" INVARIANT.  Mangling now runs AFTER
+-- elaboration, so NO path reaches this map with mangled funDefs and the rows every path
+-- gets are the BARE ones `unitMangledShadows` adds: `(name ↦ name)` for a definer
+-- shadow, in every module of the graph.  Both spellings are still recorded there, so
+-- (a) and (b) above read the same way; what changed is that the SYMBOL half is now the
+-- bare standalone name and the rename that moves it runs later.  A consumer must no
+-- longer treat a non-empty map as "this is the emit path".
+-- Set once at the top of elaborateModules;
 -- deliberately NOT cleared by resetState (checkModuleFullImpl's per-module resetState
 -- must not wipe it mid-graph) — the forward-construction membership check makes a
 -- stale value inert (no funDef matches → no entry).
@@ -38087,13 +38093,33 @@ computeMangledShadowMap allDecls units =
 -- method, so a `contains` here is O(methods x funDefs) — a shape where both grow
 -- together (N interfaces beside N top-level bindings) makes it quadratic.  Same
 -- treatment as `prePassDictArg`'s name sets (#2189).
+-- #2809: THE BARE ROW.  Mangling now runs AFTER elaboration, so a definer shadow's
+-- funDef carries the name its author wrote and the forward-constructed `<mid>__m` matches
+-- nothing.  The row is what `rewriteArgScoped`'s `sm` arm reads to seed the occurrence
+-- with its standalone SYMBOL, and that symbol is what the later rename moves
+-- (`private_mangle`'s `EMethodAt` seed arm and `mangleRoute`) into the emitted direct
+-- call.  Without it the route names the bare METHOD, whose define the rename has already
+-- moved, and the emitter calls a symbol DCE pruned: `use of undefined value
+-- '@mdk_orElse'`, on the compiler's own `frontend.parser`.
+-- On the bare row `sym == bare`, so `moduleSpellsShadowBare`'s definer arm admits it in
+-- the module that defines the standalone and its import arm in a module that spells the
+-- bare name -- the same two admitting cases #1684 ruled for the mangled row.
+-- THE PRELUDE UNIT CONTRIBUTES NO ROW: SHADOW-SEMANTICS S1-PRELUDE (a) puts the implicit
+-- prelude in neither half of S1's standalone operand, so no `core.mdk` occurrence is a
+-- user interface method's shadow -- the asymmetry `appendUniverseAccums` states, and the
+-- direction #2153's `core__not ↦ not` incident was paid for.
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 unitMangledShadows methodNames (mid, decls) =
   let fns = omFromNames (map fst (funDefs decls)) omEmpty
   flatMap
     (m =>
       let sym = mangledName mid m
-      if omHasKey sym fns then [(sym, m)] else [])
+      if omHasKey sym fns then
+        [(sym, m)]
+      else if not (isPreludeMid mid) && omHasKey m fns then
+        [(m, m)]
+      else
+        [])
     methodNames
 
 -- L3 (xmod-identity #1351 spine, RUN-XMOD-022/026): the graph-level fact "this
@@ -43062,12 +43088,26 @@ withAliasMethodNames rows set =
 -- nameable in `core`, so no `core.mdk` occurrence can be its shadow.  Same predicate and
 -- same fail-OPEN guard as the per-module filter above — sited beside it so the two stay
 -- auditable as a SET rather than as two independent answers to one question.
+--
+-- #2809 ADDED THE SECOND CONJUNCT, and its absence was measured.  With mangling moved
+-- after elaboration a definer-shadow row is `(name ↦ name)`, so `map`'s standalone
+-- `toList` and the prelude's OWN `Foldable.toList` occurrence in a specialized default
+-- body (`impl Foldable Option`'s `isEmpty`) spell the same key: the nameable test alone
+-- admitted the row, `rewriteArgScoped`'s `sm` arm seeded core's method occurrence with
+-- `RLocal "toList"`, and the emitter turned a dispatch into a direct call to a symbol
+-- core does not define — `use of undefined value '@mdk_toList'`, i.e. #2153's incident
+-- with the bare spelling as the key.  `moduleSpellsShadowBare` is the SAME occurrence-
+-- spelling test the per-module filter applies, so core is scoped by one rule, not two.
 coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
 coreShadowMapFor coreProg shadowMap
   | omSize driverState.value.graphIfaceMethodsRef.value == 0 = shadowMap
   | otherwise =
     let nameable = nameableIfaceMethodSet coreProg
-    filterList (e => omHasKey (snd e) nameable) shadowMap
+    filterList
+      (e =>
+        omHasKey (snd e) nameable
+          && moduleSpellsShadowBare coreProg (fst e) (snd e))
+      shadowMap
 
 -- ── #1684: S1's STANDALONE operand, at the OCCURRENCE spelling ───────────────
 -- The two filters above answer S1's INTERFACE operand (`nameable in M`) and nothing
@@ -49608,7 +49648,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "computeMangledShadowMap" ((PVar "allDecls") (PVar "units")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "unitMangledShadows") (EVar "methodNames"))) (EVar "units")))))
 (DTypeSig false "unitMangledShadows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EVar "fns")) (EListLit (ETuple (EVar "sym") (EVar "m"))) (EListLit)))))) (EVar "methodNames")))))
+(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EVar "fns")) (EListLit (ETuple (EVar "sym") (EVar "m"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isPreludeMid") (EVar "mid"))) (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "fns"))) (EListLit (ETuple (EVar "m") (EVar "m"))) (EListLit))))))) (EVar "methodNames")))))
 (DTypeSig false "graphCarriesMangledFunDefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "graphCarriesMangledFunDefs" ((PList)) (EVar "False"))
 (DFunDef false "graphCarriesMangledFunDefs" ((PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EApp (EApp (EVar "unitCarriesMangledFunDefs") (EVar "mid")) (EApp (EVar "funDefs") (EVar "decls"))) (EVar "True") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "rest"))))
@@ -50195,7 +50235,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "withAliasMethodNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "withAliasMethodNames" ((PVar "rows") (PVar "set")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "r"))) (EVar "set")))) (EVar "rows")))) (EVar "set")))
 (DTypeSig false "coreShadowMapFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "coreShadowMapFor" ((PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "coreShadowMapFor" ((PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "coreProg")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowSymSpelledBare" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "shadowSymSpelledBare" ((PVar "prog") (PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "prog")) (EVar "n")) (EVar "bare")))))
 (DTypeSig false "moduleSpellsShadowBare" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -56119,7 +56159,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "computeMangledShadowMap" ((PVar "allDecls") (PVar "units")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "unitMangledShadows") (EVar "methodNames"))) (EVar "units")))))
 (DTypeSig false "unitMangledShadows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EVar "fns")) (EListLit (ETuple (EVar "sym") (EVar "m"))) (EListLit)))))) (EVar "methodNames")))))
+(DFunDef false "unitMangledShadows" ((PVar "methodNames") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls")))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EVar "fns")) (EListLit (ETuple (EVar "sym") (EVar "m"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isPreludeMid") (EVar "mid"))) (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "fns"))) (EListLit (ETuple (EVar "m") (EVar "m"))) (EListLit))))))) (EVar "methodNames")))))
 (DTypeSig false "graphCarriesMangledFunDefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "graphCarriesMangledFunDefs" ((PList)) (EVar "False"))
 (DFunDef false "graphCarriesMangledFunDefs" ((PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EApp (EApp (EVar "unitCarriesMangledFunDefs") (EVar "mid")) (EApp (EVar "funDefs") (EVar "decls"))) (EVar "True") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "rest"))))
@@ -56706,7 +56746,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "withAliasMethodNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "withAliasMethodNames" ((PVar "rows") (PVar "set")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "r"))) (EVar "set")))) (EVar "rows")))) (EVar "set")))
 (DTypeSig false "coreShadowMapFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "coreShadowMapFor" ((PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "coreShadowMapFor" ((PVar "coreProg") (PVar "shadowMap")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (EVar "shadowMap") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "coreProg"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")) (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "coreProg")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "shadowMap")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowSymSpelledBare" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "shadowSymSpelledBare" ((PVar "prog") (PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EVar "moduleSpellsShadowBare") (EVar "prog")) (EVar "n")) (EVar "bare")))))
 (DTypeSig false "moduleSpellsShadowBare" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))

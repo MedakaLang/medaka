@@ -1,5 +1,5 @@
 # META
-source_lines=1523
+source_lines=1651
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -83,11 +83,16 @@ stages=DESUGAR,MARK
 -- the per-site owning module comes from the importing unit's scope, so construct and
 -- match always agree.  The gates diff OUTPUT, so a consistent ctor rename is invisible.
 --
--- This runs PER UNIT, BEFORE elaborateModules flattens the boundaries away.  It
--- lives ONLY in the emit drivers (never the oracle/golden drivers), so every
--- golden/oracle dump is unchanged.  The gates diff program OUTPUT, so a consistent
--- rename is invisible to them — but a reference rewritten to the WRONG origin
--- module's symbol changes output and is caught.
+-- This runs PER UNIT, AFTER elaborateModules and over the trees it produced (#2809):
+-- elaboration reads the import structure the mangler does not rewrite (a `DUse` member
+-- keeps its bare spelling) and groups two denotations of one name by that name, so a
+-- mangled graph made every import-keyed table miss and erased ambiguities the checker
+-- exists to report.  `mangleUnitsEv` is the entry every emit driver takes; `mangleUnits`
+-- is the plain-tree entry that remains for a driver whose output is discarded.  It lives
+-- ONLY in the emit drivers (never the oracle/golden drivers), so every golden/oracle dump
+-- is unchanged.  The gates diff program OUTPUT, so a consistent rename is invisible to
+-- them — but a reference rewritten to the WRONG origin module's symbol changes output and
+-- is caught.
 --
 -- The reference rewrite is SCOPE-AWARE: a reference to top-level `f` is renamed
 -- only where `f` is the FREE top-level name, NOT where a local binder (parameter /
@@ -119,8 +124,14 @@ import frontend.ast.{
   qualifiedLocal,
   Variant(..),
   DataVis(..),
+  Route(..),
+  EvVal(..),
+  EvEntry(..),
+  EvId(..),
 }
+import types.route_key.{remapEvidence}
 import support.util.{
+  lookupAssoc,
   contains,
   reverseL,
   isEmptyL,
@@ -167,6 +178,77 @@ mangleUnits coreDecls modules =
     mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
   let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
   (coreOut, modsOut)
+
+-- ── the ELABORATED-graph entry point (#2809) ──────────────────────────────────
+-- What every EMIT driver calls.  The same rename as `mangleUnits`, extended to the one
+-- place an ELABORATED tree carries a top-level symbol its expression spine does not: the
+-- evidence table's `RLocal` route.  `core_ir_lower.lower (EMethodAt name _ ev)` reads the
+-- route, not the node's seed, so the emitters' direct call to a shadowing standalone
+-- (`llvm_emit.emitMethod`'s and `wasm_emit.emitMethodRef`'s `RLocal` arms, and
+-- `wasm_reach.refsRoute`'s reachability) is named THERE and nowhere else.  An entry's
+-- `EvId` names the module it was minted in, which is the unit whose rename map resolves
+-- its symbols.
+export
+mangleUnitsEv : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+mangleUnitsEv coreDecls modules =
+  let allUnits = ("core", coreDecls) :: modules
+  let _ = symbolInjectivityGuard allUnits
+  let exportsPerUnit =
+    withPreludeDefs
+      (dedup (unitDefNames ("", coreDecls)))
+      (buildExportsPerUnit [] allUnits)
+  let ctorExportsPerUnit = map unitCtorExportEntry allUnits
+  let coreOut =
+    mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
+  let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
+  let maps = map (unitRenameMapEntry exportsPerUnit ctorExportsPerUnit) allUnits
+  let _ = remapEvidence (mangleEvEntry maps)
+  (coreOut, modsOut)
+
+-- one unit's rename map, keyed by its module id.  The SAME two builders and the same
+-- first-entry-wins fold `mangleUnitU` applies to the unit's decls, so a route and the
+-- definition it names cannot be renamed differently.
+unitRenameMapEntry : List (String, List (String, String)) ->
+  List (String, List (String, List String)) ->
+  (String, List Decl) ->
+  (String, OrdMap String)
+unitRenameMapEntry exportsPerUnit ctorExportsPerUnit (mid, decls) =
+  let rmList =
+    buildUnitRenameMap mid exportsPerUnit decls
+      ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
+  (mid, omFromPairs (reverseL rmList) omEmpty)
+
+-- An entry stamped by a module this graph does not carry keeps its routes: there is no
+-- map that could resolve its symbols, and guessing one would rename against the wrong
+-- unit's import scope.
+mangleEvEntry : List (String, OrdMap String) -> EvEntry -> EvEntry
+mangleEvEntry maps (EvEntry (EvId m i) v) = match lookupAssoc m maps
+  None => EvEntry (EvId m i) v
+  Some rm => EvEntry (EvId m i) (mangleEvVal rm v)
+
+mangleEvVal : OrdMap String -> EvVal -> EvVal
+mangleEvVal rm (EvOne r) = EvOne (mangleRoute rm r)
+mangleEvVal rm (EvMany rs) = EvMany (map (mangleRoute rm) rs)
+mangleEvVal rm (EvMethod r reqs mds) =
+  EvMethod
+    (mangleRoute rm r)
+    (map (mangleRoute rm) reqs)
+    (map (mangleRoute rm) mds)
+
+-- Only `RLocal`'s symbol is a top-level function name.  `RKey` carries an impl head TYPE
+-- tag or a canonical impl key (types are not mangled), `RDict`/`RDictFwd` a dict PARAMETER
+-- name `dictPass` minted locally, `RScalar` a scalar witness word.  `RLocal`'s own `""`
+-- (the bare-name sentinel) is in no rename map, so it passes through unchanged.
+mangleRoute : OrdMap String -> Route -> Route
+mangleRoute rm (RLocal sym ds) =
+  RLocal (renameDefName rm sym) (map (mangleRoute rm) ds)
+mangleRoute rm (RKey k ds) = RKey k (map (mangleRoute rm) ds)
+mangleRoute _ (r@RNone) = r
+mangleRoute _ (r@(RDict _)) = r
+mangleRoute _ (r@(RDictFwd _)) = r
+mangleRoute _ (r@(RScalar _)) = r
 
 -- ── ctor-collision-only mangling for the UNTYPED eval drivers (#1292) ─────────
 -- `eval.runtimeTypeTag` tags a `VCon` by looking its BARE constructor name up in
@@ -1374,8 +1456,19 @@ renameScoped rm bound (EBinOp op l r dr) =
 renameScoped rm bound (EUnOp op x dr) = EUnOp op (renameScoped rm bound x) dr
 renameScoped rm bound (EInfix op l r) =
   EInfix op (renameScoped rm bound l) (renameScoped rm bound r)
+-- #2809: THE RECORD-NAME CELL IS A RENAMEABLE NAME.  `typecheck.inferFieldAccess`
+-- stamps this `Ref` with the resolved RECORD name, and the emitter picks the field's
+-- OFFSET by `(recName, label)` -- so once this pass runs on an elaborated tree the cell
+-- holds the name the author wrote while the `DData` beside it has been renamed, the
+-- lookup misses, and the emitter reads a DIFFERENT record's slot.  Measured on the
+-- compiler's own `Obligation`: `getelementptr … i64 8` became `i64 16` in
+-- `numObligIds`/`oblPredOf`/`checkCallObligationsU` and the built binary segfaulted in
+-- `processSCC` -- bug #38's silent miscompile, reintroduced from the other side.  A fresh
+-- cell rather than a write, so the input tree is not mutated under its other readers.
+-- `EIndex`/`ESlice` keep theirs untouched: both are desugared to `index`/`slice` calls
+-- before typecheck and nothing stamps or reads those cells (see `frontend/ast.mdk`).
 renameScoped rm bound (EFieldAccess e0 n r) =
-  EFieldAccess (renameScoped rm bound e0) n r
+  EFieldAccess (renameScoped rm bound e0) n (Ref (renameDefName rm !r))
 renameScoped rm bound (ETuple es) = ETuple (map (renameScoped rm bound) es)
 renameScoped rm bound (EListLit es) = EListLit (map (renameScoped rm bound) es)
 renameScoped rm bound (EArrayLit es) =
@@ -1398,8 +1491,13 @@ renameScoped rm bound (EHeadAnnot e0 t) =
   EHeadAnnot (renameScoped rm bound e0) t
 renameScoped rm bound (ERecordCreate n fs) =
   ERecordCreate (renameDefName rm n) (map (renameField rm bound) fs)
+-- the receiver's resolved RECORD name, stamped by `inferRecordUpdate` and read for the
+-- same slot decision -- see `EFieldAccess` above.
 renameScoped rm bound (ERecordUpdate e0 fs r) =
-  ERecordUpdate (renameScoped rm bound e0) (map (renameField rm bound) fs) r
+  ERecordUpdate
+    (renameScoped rm bound e0)
+    (map (renameField rm bound) fs)
+    (Ref (renameDefName rm !r))
 renameScoped rm bound (EVariantUpdate c e0 fs) =
   EVariantUpdate
     (renameDefName rm c)
@@ -1417,9 +1515,39 @@ renameScoped rm bound (EMapLit n kvs) = EMapLit n (map (renameKv rm bound) kvs)
 renameScoped rm bound (ESetLit n es) =
   ESetLit n (map (renameScoped rm bound) es)
 renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
--- leaves (ELit / EMethodRef / EDictApp / EMethodAt / EDictAt / SecBare) -- EVarAt
--- is handled above, not here: it carries a renameable NAME (see its arm).
-renameScoped _ _ e = e
+-- ── ELABORATED-TREE ARMS (#2809) ──────────────────────────────────────────────
+-- These two nodes exist only in a tree `elaborateModules` has already produced, so they
+-- were unreachable while the mangler ran FIRST -- and each carries a TOP-LEVEL FUNCTION
+-- name the rename map must move.
+--   * `EDictAt f ev` names the constrained function whose dict the caller supplies;
+--     leaving it bare emits a `CDict` head no `DFunDef` defines (measured: `E-PANIC:
+--     CDict head 'debugListItems' is not a known top-level function`).
+--   * `EMethodAt m seed ev`'s SECOND field is the shadowing standalone's symbol (see
+--     `EMethodAt` in `frontend/ast.mdk`), which `marker.collectVars` reports to
+--     `dce.declRefs` as a reference; the FIRST field is an interface METHOD name, which
+--     this pass never renames.  `""` is the sentinel for "no standalone", not a name.
+renameScoped rm _ (EDictAt n ev) = EDictAt (renameDefName rm n) ev
+renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
+-- ── LEAVES, AS AN EXPLICIT LIST ───────────────────────────────────────────────
+-- Not a `_ => e` catch-all: this pass now consumes elaborated trees, so a new `Expr`
+-- constructor carrying a name would be a SILENT leaf ([T-GLOBAL-TABLE]).  Listed, it is a
+-- compile error instead.  Derive the audit rather than trusting a count:
+--   `grep -c '^  | E' compiler/frontend/ast.mdk` minus its three `Ev*` evidence rows is
+--   the constructor total, and every one of them appears exactly once either above or
+--   here (`grep -o '(E[A-Za-z]*' on this function's arms).
+--   * `ELit` carries no name.  `ENumLit`'s fourth field is the source LEXEME, and
+--     `dictPass` rewrites every `ENumLit` away before emit sees one.
+--   * `EMethodRef` / `EDictApp` are minted by `frontend/marker.mdk` alone, which no
+--     production verb runs ([P-NO-MARK-PASS]); a driver that ever pre-marks an emit
+--     tree must rename `EDictApp`'s name the way `EDictAt` is renamed above.
+--   * `SecBare`'s operator is not a top-level binding, and `desugar` removes every
+--     `ESection` before elaboration.
+-- `EVarAt` is handled above, not here: it carries a renameable NAME (see its arm).
+renameScoped _ _ (e@(ELit _)) = e
+renameScoped _ _ (e@(ENumLit _ _ _ _)) = e
+renameScoped _ _ (e@(EMethodRef _)) = e
+renameScoped _ _ (e@(EDictApp _)) = e
+renameScoped _ _ (e@(ESection (SecBare _))) = e
 
 renameField : OrdMap String -> OrdMap Unit -> FieldAssign -> FieldAssign
 renameField rm bound (FieldAssign n e) = FieldAssign n (renameScoped rm bound e)
@@ -1526,11 +1654,29 @@ recPatFieldVarsPM : RecPatField -> List String
 recPatFieldVarsPM (RecPatField label _ None) = [label]
 recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig true "mangleUnitsEv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "mangleUnitsEv" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoLet false false (PVar "maps") (EApp (EApp (EVar "map") (EApp (EApp (EVar "unitRenameMapEntry") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "allUnits"))) (DoLet false false PWild (EApp (EVar "remapEvidence") (EApp (EVar "mangleEvEntry") (EVar "maps")))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig false "unitRenameMapEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "String")))))))
+(DFunDef false "unitRenameMapEntry" ((PVar "exportsPerUnit") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmList") (EBinOp "++" (EApp (EApp (EApp (EVar "buildUnitRenameMap") (EVar "mid")) (EVar "exportsPerUnit")) (EVar "decls")) (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls")))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty"))))))
+(DTypeSig false "mangleEvEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "String")))) (TyFun (TyCon "EvEntry") (TyCon "EvEntry"))))
+(DFunDef false "mangleEvEntry" ((PVar "maps") (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) (PVar "v"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "m")) (EVar "maps")) (arm (PCon "None") () (EApp (EApp (EVar "EvEntry") (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "i"))) (EVar "v"))) (arm (PCon "Some" (PVar "rm")) () (EApp (EApp (EVar "EvEntry") (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "i"))) (EApp (EApp (EVar "mangleEvVal") (EVar "rm")) (EVar "v"))))))
+(DTypeSig false "mangleEvVal" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "EvVal") (TyCon "EvVal"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvOne" (PVar "r"))) (EApp (EVar "EvOne") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMany" (PVar "rs"))) (EApp (EVar "EvMany") (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "rs"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMethod" (PVar "r") (PVar "reqs") (PVar "mds"))) (EApp (EApp (EApp (EVar "EvMethod") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "reqs"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "mds"))))
+(DTypeSig false "mangleRoute" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RLocal" (PVar "sym") (PVar "ds"))) (EApp (EApp (EVar "RLocal") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "sym"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds"))) (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RNone"))) (EVar "r"))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDict" PWild))) (EVar "r"))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDictFwd" PWild))) (EVar "r"))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RScalar" PWild))) (EVar "r"))
 (DTypeSig true "mangleCtorCollisions" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleCtorCollisions" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "collided") (EApp (EVar "collidingCtorNames") (EVar "allUnits"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "collided")) (ELit (LInt 0))) (ETuple (EVar "coreDecls") (EVar "modules")) (EBlock (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleCtorUnitU") (EVar "collided")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleCtorModule") (EVar "collided")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut"))))))))
 (DTypeSig true "mangleCtorCollisionsPair" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -1806,7 +1952,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "dr"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "dr"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "x"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EApp (EVar "Ref") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EUnOp "!" (EVar "r"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
@@ -1817,7 +1963,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EApp (EVar "Ref") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EUnOp "!" (EVar "r"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVariantUpdate" (PVar "c") (PVar "e0") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "c"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameInterp") (EVar "rm")) (EVar "bound"))) (EVar "parts"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameGuardArm") (EVar "rm")) (EVar "bound"))) (EVar "arms"))))
@@ -1826,7 +1972,13 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameKv") (EVar "rm")) (EVar "bound"))) (EVar "kvs"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "sub"))))
-(DFunDef false "renameScoped" (PWild PWild (PVar "e")) (EVar "e"))
+(DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EApp (EApp (EVar "EDictAt") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ev")))
+(DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ESection" (PCon "SecBare" PWild)))) (EVar "e"))
 (DTypeSig false "renameField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "renameField" ((PVar "rm") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "renameKv" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
@@ -1883,11 +2035,29 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" (PVar "label") PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patVarsPM") (EVar "p")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig true "mangleUnitsEv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "mangleUnitsEv" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "withPreludeDefs") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "coreDecls"))))) (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits")))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoLet false false (PVar "maps") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "unitRenameMapEntry") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "allUnits"))) (DoLet false false PWild (EApp (EVar "remapEvidence") (EApp (EVar "mangleEvEntry") (EVar "maps")))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig false "unitRenameMapEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "String")))))))
+(DFunDef false "unitRenameMapEntry" ((PVar "exportsPerUnit") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmList") (EBinOp "++" (EApp (EApp (EApp (EVar "buildUnitRenameMap") (EVar "mid")) (EVar "exportsPerUnit")) (EVar "decls")) (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls")))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty"))))))
+(DTypeSig false "mangleEvEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "String")))) (TyFun (TyCon "EvEntry") (TyCon "EvEntry"))))
+(DFunDef false "mangleEvEntry" ((PVar "maps") (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) (PVar "v"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "m")) (EVar "maps")) (arm (PCon "None") () (EApp (EApp (EVar "EvEntry") (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "i"))) (EVar "v"))) (arm (PCon "Some" (PVar "rm")) () (EApp (EApp (EVar "EvEntry") (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "i"))) (EApp (EApp (EVar "mangleEvVal") (EVar "rm")) (EVar "v"))))))
+(DTypeSig false "mangleEvVal" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "EvVal") (TyCon "EvVal"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvOne" (PVar "r"))) (EApp (EVar "EvOne") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMany" (PVar "rs"))) (EApp (EVar "EvMany") (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "rs"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMethod" (PVar "r") (PVar "reqs") (PVar "mds"))) (EApp (EApp (EApp (EVar "EvMethod") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "reqs"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "mds"))))
+(DTypeSig false "mangleRoute" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RLocal" (PVar "sym") (PVar "ds"))) (EApp (EApp (EVar "RLocal") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "sym"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds"))) (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RNone"))) (EVar "r"))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDict" PWild))) (EVar "r"))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDictFwd" PWild))) (EVar "r"))
+(DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RScalar" PWild))) (EVar "r"))
 (DTypeSig true "mangleCtorCollisions" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleCtorCollisions" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "collided") (EApp (EVar "collidingCtorNames") (EVar "allUnits"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "collided")) (ELit (LInt 0))) (ETuple (EVar "coreDecls") (EVar "modules")) (EBlock (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleCtorUnitU") (EVar "collided")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleCtorModule") (EVar "collided")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut"))))))))
 (DTypeSig true "mangleCtorCollisionsPair" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -2163,7 +2333,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "dr"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "dr"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "x"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EApp (EVar "Ref") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EUnOp "!" (EVar "r"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
@@ -2174,7 +2344,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EApp (EVar "Ref") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EUnOp "!" (EVar "r"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVariantUpdate" (PVar "c") (PVar "e0") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "c"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameInterp") (EVar "rm")) (EVar "bound"))) (EVar "parts"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameGuardArm") (EVar "rm")) (EVar "bound"))) (EVar "arms"))))
@@ -2183,7 +2353,13 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameKv") (EVar "rm")) (EVar "bound"))) (EVar "kvs"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EMethodRef "sub"))))
-(DFunDef false "renameScoped" (PWild PWild (PVar "e")) (EVar "e"))
+(DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EApp (EApp (EVar "EDictAt") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ev")))
+(DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ESection" (PCon "SecBare" PWild)))) (EVar "e"))
 (DTypeSig false "renameField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "renameField" ((PVar "rm") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "renameKv" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
