@@ -15,11 +15,14 @@
 #   6. named impls                         (`impl name of Iface`)
 #   7. `default impl` / `@Name` impl-hints (multi-instance selection, removed
 #      together with named impls — commit f2e1f859)
+#   8. the `bench` declaration (`bench "name" = expr`) — no runner ever
+#      consumed it, so it typechecked and did nothing (#2291); benchmark with
+#      test/bench.sh
 #
 # ── WHY THIS SHAPE (read before "simplifying") ──────────────────────────────
 #
 # `medaka lint` is NOT viable: it walks the post-parse AST, but every one of
-# the 7 constructs above no longer parses at all (verified empirically, one
+# the 8 constructs above no longer parses at all (verified empirically, one
 # fixture per construct). A lint Rule never gets a chance to see one — the
 # file dies at parse first. Worse, `medaka lint` does not degrade gracefully
 # on a parse error: it PANICS (`runtime error [E-PANIC]: parse error`)
@@ -27,19 +30,19 @@
 # rule to.
 #
 # `medaka check --json <file>` DOES handle a parse failure gracefully (the
-# diagnostics-accumulator design — AGENTS.md "Errors accumulate"), and for 6
-# of the 7 constructs the PARSER ITSELF already carries a dedicated, located
+# diagnostics-accumulator design — AGENTS.md "Errors accumulate"), and for 7
+# of the 8 constructs the PARSER ITSELF already carries a dedicated, located
 # "has been removed" / "is not a keyword" / "is not supported" diagnostic
 # (grep compiler/frontend/parser.mdk for letMutRemovedMsg / recordRemovedMsg
 # / functionRemovedMsg / backtickInfixMsg / defaultImplRemovedMsg /
-# namedImplRemovedMsg). These strings are precise BY CONSTRUCTION — the
-# parser only ever emits them when that exact removed construct is used, so
-# substring-matching the `--json` diagnostic message has ZERO false-positive
-# risk. This is TIER 1, and it is the sole mechanism for 6 of the 7
-# constructs.
+# namedImplRemovedMsg / benchRemovedMsg). These strings are precise BY
+# CONSTRUCTION — the parser only ever emits them when that exact removed
+# construct is used, so substring-matching the `--json` diagnostic message has
+# ZERO false-positive risk. This is TIER 1, and it is the sole mechanism for 7
+# of the 8 constructs.
 #
-# The 7th, `let-else`, has NO dedicated parser diagnostic — it fails with a
-# GENERIC message ("unexpected `else`; expected a dedent") that unrelated
+# The remaining one, `let-else`, has NO dedicated parser diagnostic — it
+# fails with a GENERIC message ("unexpected `else`; expected a dedent") that unrelated
 # broken code can also produce (verified: a bare stray `else` typo with no
 # `let` anywhere on the line produces the identical message). A raw
 # source-text regex is even LESS reliable on its own for the other
@@ -96,6 +99,7 @@ if [ "${1:-}" = "--check-one" ]; then
     *'backtick infix application'*) printf 'TIER1\t%s\tbacktick_infix\n' "$f"; exit 0 ;;
     *'`default impl` has been removed'*) printf 'TIER1\t%s\tdefault_impl\n' "$f"; exit 0 ;;
     *'named impls (`impl name of Iface`) have been removed'*) printf 'TIER1\t%s\tnamed_impl\n' "$f"; exit 0 ;;
+    *'`bench` has been removed'*) printf 'TIER1\t%s\tbench_keyword\n' "$f"; exit 0 ;;
   esac
 
   # Tier 2 only fires if this file already has an unclassified parse error —

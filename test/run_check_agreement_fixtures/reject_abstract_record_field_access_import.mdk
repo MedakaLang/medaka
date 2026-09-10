@@ -1,0 +1,10 @@
+-- run/check agreement: the same T-ABSTRACT-FIELD reject through an import-bearing graph
+-- (the multi-module arm of run/build elaborates once; its driver must seed the abstract
+-- set exactly as the check driver does).
+import lib.arf_helper.{bump}
+
+export data T =
+  | A { x : Int }
+  | B { x : Int }
+
+main = println (bump ((A { x = 41 }).x))

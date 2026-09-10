@@ -89,7 +89,7 @@ of Phase 4.
   1-module path expects). Gates: `diff_compiler_eval_dict(+_batch)`, `_eval_typed`,
   `_core_ir`, `_llvm_modules`, fixpoint.
 - **Phase 3 — eval flat → `evalModules` (medium; RISKIEST).** Switch
-  `runSingle`/`runPropsSingle` + remaining `evalProgram`/`evalOutput` callers to
+  the prelude-only `medaka test` arms + remaining `evalProgram`/`evalOutput` callers to
   `evalModules`/`evalModulesRootEnv` 1-module. The binding/install/thunk-force-order
   hazard class (phases 96/103/121/125/134). Verify, don't assume, with
   `dev/module_debug.exe` + a prelude-shadowing fixture. Gates:

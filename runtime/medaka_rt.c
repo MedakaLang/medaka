@@ -1629,6 +1629,45 @@ long long mdk_write_file_bytes(long long path, long long arr) {
   return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
 }
 
+/* writeFileMode : String -> Int -> String -> Result String Unit.
+ * Truncating write that leaves the file at exactly `mode`'s permission bits.
+ * open(2)'s mode argument applies only when the file is CREATED, and umask
+ * narrows it even then; an existing file keeps whatever mode it already had.
+ * fchmod on the open descriptor settles both cases, and it runs BEFORE the
+ * first byte is written, so the contents never exist at a wider mode. */
+long long mdk_write_file_mode(long long path, long long mode_tagged, long long content) {
+  const char *p = (const char *)path + 24;
+  const char *c = (const char *)content + 24;
+  long long cl = ((const long long *)content)[1];
+  mode_t mode = (mode_t)((mode_tagged >> 1) & 07777);
+  int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, mode);
+  if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  if (fchmod(fd, mode) != 0) {
+    int saved = errno; close(fd);
+    return mdk_err(mdk_str_cstr(strerror(saved)));
+  }
+  { long long off = 0;
+    while (off < cl) {
+      ssize_t w = write(fd, c + off, (size_t)(cl - off));
+      if (w < 0) {
+        int saved = errno; close(fd);
+        return mdk_err(mdk_str_cstr(strerror(saved)));
+      }
+      off += (long long)w;
+    } }
+  if (close(fd) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
+}
+
+/* fileMode : String -> Result String Int — st_mode's permission bits (& 07777),
+ * as a tagged Int inside Ok.  stat(2), so a symlink reports its target. */
+long long mdk_file_mode(long long path) {
+  const char *p = (const char *)path + 24;
+  struct stat st;
+  if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(((((long long)st.st_mode) & 07777) << 1) | 1);
+}
+
 /* fileExists : String -> Bool — raw 0/1, emitter tags via tagInt. */
 long long mdk_file_exists(long long path) {
   return access((const char *)path + 24, F_OK) == 0 ? 1 : 0;
@@ -1808,47 +1847,50 @@ long long mdk_executable_path(long long unit_ignored) {
   return mdk_str_cstr(buf);
 }
 
-/* buildFingerprint : Unit -> String — the compiler-source fingerprint THIS
- * binary was built from.  test/build_native_medaka.sh computes it (find
- * compiler -name '*.mdk' | sort | hash names+contents) and bakes it into the
- * ./medaka link with -DMEDAKA_SRC_FP=<hex>.  The `-D` reaches ONLY this C
- * compile of medaka_rt.c — never the emitter IR — so it is fixpoint/seed-safe.
- * Empty on every path that does not bake it (cold seed bootstrap, oracle
- * builds, a shipped/relocated binary); the driver reads "" as "skip the check"
- * (issue #89). */
-#define MDK_FP_STR2(x) #x
-#define MDK_FP_STR(x) MDK_FP_STR2(x)
+/* BUILD PROVENANCE: three stamps this file READS and never itself defines.
+ *
+ * buildFingerprint : Unit -> String is the compiler-source fingerprint THIS
+ * binary was built from (find compiler -name '*.mdk' | sort | hash
+ * names+contents); buildCommit / buildDate are its siblings (issue #74 W8).
+ * All three default to "" here, weakly, and test/build_native_medaka.sh
+ * overrides them for ./medaka by linking one generated object that defines them
+ * strongly. The driver reads "" as "skip the check" (issue #89), which is what
+ * every path that links no such object gets: the cold seed bootstrap, the
+ * emitter, oracle builds, `medaka build`, a shipped or relocated binary.
+ *
+ * WEAK GLOBALS AND A SEPARATE TRANSLATION UNIT, never a -D on this file, because
+ * the value changes on every compiler edit and this file is inside the ThinLTO
+ * unit: a value baked in here moves the runtime's summary hash, which sits in the
+ * cache key of every partition that imports from the runtime, i.e. all of them.
+ * Measured, same partitions and same one-module edit, varying only the
+ * fingerprint: unchanged 4s and 5 of 73 cache entries written; changed 23s and
+ * all 73. Compiling this file outside the LTO unit instead would also fix the
+ * cache and cost ~7.7% of interpreter runtime. Weak-vs-strong is resolved by the
+ * linker before LTO runs — the bitcode symbol is marked preempted, so LTO cannot
+ * fold the "" away. Measured with lld; taken on faith for Apple's ld, which
+ * documents the same precedence but was never run (no Darwin box), so a `medaka
+ * --version` with no commit on macOS is the symptom to look for.
+ *
+ * These are ARRAYS, not pointers, and the strong definitions may be longer: a
+ * string object takes its defining TU's size, which is the ordinary C spelling
+ * for this and keeps the read a single load with no indirection. */
+__attribute__((weak)) const char mdk_build_fingerprint_str[] = "";
+__attribute__((weak)) const char mdk_build_commit_str[] = "";
+__attribute__((weak)) const char mdk_build_date_str[] = "";
+
 long long mdk_build_fingerprint(long long unit_ignored) {
   (void)unit_ignored;
-#ifdef MEDAKA_SRC_FP
-  return mdk_str_cstr(MDK_FP_STR(MEDAKA_SRC_FP));
-#else
-  return mdk_str_cstr("");
-#endif
+  return mdk_str_cstr(mdk_build_fingerprint_str);
 }
 
-/* buildCommit / buildDate : Unit -> String — sibling stamps to
- * buildFingerprint (issue #74 W8), baked by the SAME test/build_native_medaka.sh
- * clang link (-DMEDAKA_SRC_COMMIT / -DMEDAKA_SRC_BUILD_DATE), each already a
- * quoted C string literal (unlike MEDAKA_SRC_FP, so no MDK_FP_STR wrapping
- * needed here). Empty on every path that does not bake them, same contract
- * as buildFingerprint. */
 long long mdk_build_commit(long long unit_ignored) {
   (void)unit_ignored;
-#ifdef MEDAKA_SRC_COMMIT
-  return mdk_str_cstr(MEDAKA_SRC_COMMIT);
-#else
-  return mdk_str_cstr("");
-#endif
+  return mdk_str_cstr(mdk_build_commit_str);
 }
 
 long long mdk_build_date(long long unit_ignored) {
   (void)unit_ignored;
-#ifdef MEDAKA_SRC_BUILD_DATE
-  return mdk_str_cstr(MEDAKA_SRC_BUILD_DATE);
-#else
-  return mdk_str_cstr("");
-#endif
+  return mdk_str_cstr(mdk_build_date_str);
 }
 
 /* statFile : String -> Result String (Int, Bool, Bool, Float).

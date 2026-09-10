@@ -251,7 +251,7 @@ resident) — do not set `MEDAKA_STRICT=1` on both arms.
 grep -rln 'MEDAKA="${MEDAKA:-' test/*.sh
 ```
 ⚠️ Run from a script file, not inline (this harness mangles a `${…}` in a quoted inline arg
-and returns zero matches). Hardcoded: `test/diff_compiler_shadow_semantics.sh` (**#1431**).
+and returns zero matches). Hardcoded: `test/diff_compiler_shadow_semantics_test.mdk` (**#1431**).
 🚨 This paragraph carried a wrong COUNT for months *while citing the command that refutes it* —
 a claim shipping its own derivation is only honest if someone ran it.
 

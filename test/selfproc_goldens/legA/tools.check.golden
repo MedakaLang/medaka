@@ -1,5 +1,4 @@
 checkHasErrors : String -> String -> String -> Bool
-checkModulesHasErrors : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> Bool
 cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
 declsOfMod : (String, List Decl) -> List Decl
 entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
@@ -9,4 +8,4 @@ reportFor : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
 routeImportCheck : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
 runCheck : String -> String -> String -> String
 runCheckFromDecls : String -> String -> List Decl -> String
-runCheckModules : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
+runCheckModulesFromDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> String

@@ -74,6 +74,40 @@ export
 readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
+{- | The permission bits of a file only its owner may read or write:
+   `rw-------`, `0600` as `chmod` spells it.
+
+   `writeFilePrivate` writes at this mode, and `isPrivateMode` accepts it. -}
+export
+ownerOnlyMode : Int
+ownerOnlyMode = 384
+
+{- | Whether permission bits keep a file to its owner: no group and no other
+   bit is set. `fileMode` reports the bits to grade.
+
+   A secret at any wider mode is readable by another account on the same
+   host, so a program that reads one should refuse it rather than warn.
+
+   > isPrivateMode ownerOnlyMode
+   True
+   > isPrivateMode 420
+   False
+   > isPrivateMode 448
+   True -}
+export
+isPrivateMode : Int -> Bool
+isPrivateMode mode = bitAnd mode 63 == 0
+
+{- | Writes a string to a file that only its owner may read or write, at
+   `ownerOnlyMode`.
+
+   The contents never exist at a wider mode, and an existing file at a wider
+   one is narrowed before they are written, so this is the way to write a
+   secret. -}
+export
+writeFilePrivate : String -> String -> <FileWrite "_"> Result String Unit
+writeFilePrivate path content = writeFileMode path ownerOnlyMode content
+
 -- # Commands
 
 {- | Runs a program with arguments and waits for it, folding a spawn

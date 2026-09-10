@@ -105,6 +105,7 @@ declare i64 @mdk_read_file(i64)
 declare i64 @mdk_read_file_bytes(i64)
 declare i64 @mdk_write_file(i64, i64)
 declare i64 @mdk_write_file_bytes(i64, i64)
+declare i64 @mdk_write_file_mode(i64, i64, i64)
 declare i64 @mdk_append_file(i64, i64)
 declare i64 @mdk_file_exists(i64)
 declare i64 @mdk_canonicalize_path(i64)
@@ -118,6 +119,7 @@ declare i64 @mdk_remove_file(i64)
 declare i64 @mdk_rename(i64, i64)
 declare i64 @mdk_remove_dir(i64)
 declare i64 @mdk_stat_file(i64)
+declare i64 @mdk_file_mode(i64)
 declare i64 @mdk_run_command(i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
@@ -168,6 +170,7 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
@@ -179,7 +182,7 @@ entry:
   %t3 = call ptr @mdk_alloc(i64 24)
   store i64 1, ptr %t3
   %t4 = getelementptr i8, ptr %t3, i64 8
-  store i64 ptrtoint (ptr @mdk_lam0 to i64), ptr %t4
+  store i64 ptrtoint (ptr @mdk_lam.program.0 to i64), ptr %t4
   %t5 = getelementptr i8, ptr %t3, i64 16
   store i64 %t2, ptr %t5
   %t6 = ptrtoint ptr %t3 to i64
@@ -222,7 +225,8 @@ entry:
   call void @mdk_print_float(double %t36)
   ret i32 0
 }
-define i64 @mdk_lam0(i64 %clos, i64 %arg0) {
+; mdk-module program
+define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16

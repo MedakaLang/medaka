@@ -538,7 +538,7 @@ runBuildNativeIn : String ->
   Bool ->
   <IO> Result BuildReport BuildReport
 runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
-  runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli []
+  runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli [] False
 
 -- Probe the C compiler up front — the native analogue of probeWasmTools
 -- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
@@ -573,6 +573,17 @@ clangMissingError cc = match runCommand "uname" ["-s"]
 -- (walking up from the entry's own dir) resolves nothing useful: a future
 -- native test-execution engine builds a synthesized doctest entry there and
 -- must still see the real project's import roots.
+--
+-- `strictEmit` arms `MEDAKA_STRICT=1` for the EMIT SUBPROCESS ONLY (#2679).
+-- The emitter's own elaboration is warn-first by ruling (#2089,
+-- `emitElaborationGate` in `compiler/entries/entry_support.mdk`): it prints the
+-- type errors it recorded and emits IR anyway.  For `medaka build` that is the
+-- ruling and stays.  For a SYNTHESIZED probe — the entry the native test and
+-- doctest runners write into a `mktemp -d` and immediately execute — warning is
+-- not an option: nobody reads the child's stderr, the probe links, runs, and
+-- reports `pass` for a module that does not typecheck.  Arming it here scopes
+-- the flip to those generated entries and leaves every user-facing build on the
+-- warn-first path.
 export
 runBuildNativeRoots : String ->
   String ->
@@ -582,8 +593,9 @@ runBuildNativeRoots : String ->
   String ->
   Bool ->
   List String ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit =
   match probeClang cc
     None => buildErr (clangMissingError cc)
     Some _ =>
@@ -596,6 +608,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
         tmpDir
         keepIrCli
         extraRoots
+        strictEmit
 
 -- The original body, unmoved — split out only so the up-front probe above
 -- doesn't force reindenting this whole function under a match arm.
@@ -607,8 +620,9 @@ runBuildNativeRootsGo : String ->
   String ->
   Bool ->
   List String ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -639,11 +653,16 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- prebuilt prelude.o is on offer, tell the emitter to emit THIS PROGRAM ONLY
   -- (declaring what prelude.o defines): 88% of a small program's IR is prelude, and
   -- clang -O2 re-optimises all of it on every build.  See preludeObjOf below.
-  let (emitProg, emitArgs) =
+  let (emitProg1, emitArgs1) =
     if preludeObjOf () == "" then
       (emitProg0, emitArgs0)
     else
       withEmitHalf "program" emitProg0 emitArgs0
+  let (emitProg, emitArgs) =
+    if strictEmit then
+      withStrictEmit emitProg1 emitArgs1
+    else
+      (emitProg1, emitArgs1)
   -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
   -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
   -- total; these sub-rows decompose it (emit-ir + rt-obj + clang) so a slow build
@@ -1107,7 +1126,15 @@ cachedRtObj cc rtC optFlag gcCflags tmpDir =
     else
       let objPath = joinPath dir "rt-\{key}.o"
       let hit = if fileExists objPath then rtObjUsable objPath else False
-      if hit then objPath else populateRtObj cc rtC optFlag gcCflags dir objPath
+      if hit then
+        -- Refresh the entry's mtime on every hit (best-effort; a failed touch
+        -- costs nothing) so `sweepStaleObjCacheEntries` below ages out only
+        -- entries that are genuinely unused, never one this box still hits on
+        -- every build.
+        let _ = runCommand "touch" [objPath]
+        objPath
+      else
+        populateRtObj cc rtC optFlag gcCflags dir objPath
 
 -- Sanity-check a cache HIT before trusting it (#2233 item 2).  The population
 -- path is already write-then-rename, so a truncated object needs a crash or
@@ -1175,7 +1202,13 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
             -- fail-open-by-design: compile failure -> "".
             Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
               -- fail-open-by-design: mv failure -> "".
-              Ok (0, _, _) => objPath
+              Ok (0, _, _) =>
+                -- Opportunistic eviction on write (#2233 item 1) — same shape
+                -- as the shell build cache's cache_put -> cache_evict, and
+                -- best-effort like sweepStaleTempDirs: a population that just
+                -- succeeded must never be failed by a sweep of OTHER entries.
+                let _ = sweepStaleObjCacheEntries dir
+                objPath
               _ =>
                 let _ = removeFile tmpObj
                 ""
@@ -1184,6 +1217,45 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
               ""
       _ => ""
     _ => ""
+
+-- ---- object-cache eviction (#2233 item 1) ----
+-- The cache never removed anything: every past revision of medaka_rt.c (or
+-- of any compiler/-driven build config) leaves its keyed `rt-*.o` behind
+-- forever, one dead file per historical revision on a long-lived box.
+--
+-- Age, not a count cap, is the eviction signal, because objCacheDir is not
+-- guaranteed to hold only one entry class of one fixed size: today it holds
+-- `rt-*.o` (~127 KB each), and a directory-scoped cache like this one is
+-- expected to gain further entry classes over time (larger, more numerous
+-- ones included). A count cap sized for "one object per machine" is the
+-- wrong shape the moment a second class with different size/cardinality
+-- shares the directory.
+--
+-- The sweep is nonetheless restricted to `rt-*.o`, this cache's own entry
+-- names, because MEDAKA_CACHE_DIR is a user-supplied path: a user may point
+-- it at a directory that holds things medaka did not create, and deleting
+-- those would be silent data loss no build has any business causing. A
+-- future entry class adds its own pattern here; that is a deliberately
+-- larger obligation than a shape-agnostic sweep, and the smaller one is not
+-- available to a cache that does not own its directory.
+-- `cachedRtObj` refreshes an entry's mtime on every HIT, so this can never
+-- sweep a file this box is still actually using.
+--
+-- Same concurrency reasoning as sweepStaleTempDirs (age is the guard: a
+-- write in progress has a fresh mtime and is never swept), and the same
+-- BEST-EFFORT contract as everything else in this file — `find` absent, an
+-- unwritable directory, a file another process just removed: every failure
+-- is swallowed, because a sweep must never fail a build that would otherwise
+-- succeed.
+sweepStaleObjCacheEntries : String -> <IO> Unit
+sweepStaleObjCacheEntries dir =
+  let findArgs = [
+    dir, "-maxdepth", "1", "-type", "f", "-name", "rt-*.o", "-mtime", "+30",
+    "-delete"
+  ]
+  match runCommand "find" findArgs
+    Ok _ => ()
+    Err _ => ()
 
 -- The `[perf] rt-obj` row's ops field: which of the three runtime-object paths
 -- this build actually took, so the row is self-explaining in a log.
@@ -1338,6 +1410,12 @@ preludeObjOf _ =
 withEmitHalf : String -> String -> List String -> (String, List String)
 withEmitHalf half prog args =
   ("env", ["MEDAKA_EMIT_HALF=\{half}", prog] ++ args)
+
+-- Same `env` idiom, for the emit subprocess's #2089 gate (see runBuildNativeRoots's
+-- `strictEmit`).  Composes with withEmitHalf — nesting two `env` calls is a plain
+-- POSIX exec chain, and keeping them separate keeps each wrapper single-purpose.
+withStrictEmit : String -> List String -> (String, List String)
+withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with

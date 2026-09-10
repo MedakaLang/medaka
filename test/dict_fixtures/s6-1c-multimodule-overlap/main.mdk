@@ -11,7 +11,7 @@
 --     this pair (each module declares a single `D` impl), so it is reported by
 --     `globalCoherenceConflict` ALONE, span-less, naming both owning modules.
 --     Before this fixture that whole code path -- the soft half of
---     `globalCoherenceConflict`, `attachEntryWarnOpt`, `prependDiagOpt` -- had zero
+--     `globalCoherenceConflict`, `cohSoftOnto`, `prependDiagOpt` -- had zero
 --     in-tree coverage; it was verified only by hand probes that left no trace.
 --
 -- SPEC ANSWER (hand-derived from §3 `match` and §3 ⊑, not captured). Both goals are

@@ -1235,8 +1235,6 @@ renameDecl rm (DProp pub name params body) =
     (renameScoped rm (boundOfListPM (propParamNamesPM params)) body)
 renameDecl rm (DTest pub name body) =
   DTest pub name (renameScoped rm omEmpty body)
-renameDecl rm (DBench pub name body) =
-  DBench pub name (renameScoped rm omEmpty body)
 renameDecl rm (DLetGroup pub binds) =
   DLetGroup pub (map (renameLetBindDef rm) binds)
 -- DATA / NEWTYPE definition sites: rename the constructor names (which the

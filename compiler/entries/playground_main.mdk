@@ -417,7 +417,7 @@ mainShapeError decls = match findMainFunDef decls
 -- producer on BOTH arms that reach here, after this call site was written:
 --   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
 --     (#2155's SET-OR-CLEAR write);
---   * multi module  — `analyzeProject` → `typecheckPass` → `cmDiagsCollect` →
+--   * multi module  — `analyzeProject` → `typecheckPassFull` → `graphCollect` →
 --     `setMainSchemeIfEntry` (#2246's).
 -- Both run BEFORE this point on every path that reaches it, and nothing between
 -- them and here writes the ref (`desugaredPrelude` and `desugarPair` are pure;
@@ -552,7 +552,7 @@ nonEmptyDiags _ = True
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, _) =
+  let (coreD, modules2, _, _, _) =
     elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0

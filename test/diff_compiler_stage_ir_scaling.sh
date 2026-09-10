@@ -480,7 +480,7 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # table) puts the residual quadratic in `declEnvReachIndex`, `buildDataEnv`'s
 # `addFieldOwnerIdents`, the `importedCtorTypeDeclsLastWins` -> `overlayScanRows`
 # chain, and `ieAddRows` — three of which are whole-graph PREAMBLE work
-# (`checkModulesPreamble` -> `buildDeclEnvs`, reading 8.87x/9.89x against a linear
+# (`checkModulesPreambleK` -> `buildDeclEnvs`, reading 8.87x/9.89x against a linear
 # 4.00x) that did not exist when #153/#154 were written. `checkModuleFullImpl` itself
 # reads 5.02x, i.e. it CONTAINS the overlay term but is not itself the rescan the old
 # parenthetical describes, and `elabModuleStamp`/`buildKeyTable` do not appear on this

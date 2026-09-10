@@ -105,6 +105,7 @@ declare i64 @mdk_read_file(i64)
 declare i64 @mdk_read_file_bytes(i64)
 declare i64 @mdk_write_file(i64, i64)
 declare i64 @mdk_write_file_bytes(i64, i64)
+declare i64 @mdk_write_file_mode(i64, i64, i64)
 declare i64 @mdk_append_file(i64, i64)
 declare i64 @mdk_file_exists(i64)
 declare i64 @mdk_canonicalize_path(i64)
@@ -118,6 +119,7 @@ declare i64 @mdk_remove_file(i64)
 declare i64 @mdk_rename(i64, i64)
 declare i64 @mdk_remove_dir(i64)
 declare i64 @mdk_stat_file(i64)
+declare i64 @mdk_file_mode(i64)
 declare i64 @mdk_run_command(i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
@@ -168,6 +170,7 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
@@ -206,6 +209,7 @@ decend2:
   call void @mdk_print_int(i64 %t16)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_force_$memo_Int_zero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_Int_zero
@@ -223,6 +227,7 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_Int_zero
   ret i64 %t2
 }
+; mdk-module program
 define i64 @mdk_force_$memo_Flag_zero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_Flag_zero
@@ -240,6 +245,7 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_Flag_zero
   ret i64 %t2
 }
+; mdk-module program
 define i64 @mdk_force_intZero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_intZero
@@ -257,6 +263,7 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_intZero
   ret i64 %t2
 }
+; mdk-module program
 define i64 @mdk_force_flagZero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_flagZero
@@ -274,25 +281,39 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_flagZero
   ret i64 %t2
 }
+; mdk-module impl:Int_zero
 define i64 @mdk_impl_Int_zero() {
 entry:
   ret i64 1
 }
 
+; mdk-module impl:Flag_zero
 define i64 @mdk_impl_Flag_zero() {
 entry:
   ret i64 1
 }
 
+; mdk-module program
 @mdk_g_$memo_Int_zero = global i64 0
+; mdk-module program
 @mdk_gs_$memo_Int_zero = global i8 0
+; mdk-module program
 @mdk_g_$memo_Flag_zero = global i64 0
+; mdk-module program
 @mdk_gs_$memo_Flag_zero = global i8 0
+; mdk-module program
 @mdk_g_intZero = global i64 0
+; mdk-module program
 @mdk_gs_intZero = global i8 0
+; mdk-module program
 @mdk_g_flagZero = global i64 0
+; mdk-module program
 @mdk_gs_flagZero = global i8 0
+; mdk-module program
 @.gname.$memo_Int_zero = private unnamed_addr constant [15 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\7A\65\72\6F\00"
+; mdk-module program
 @.gname.$memo_Flag_zero = private unnamed_addr constant [16 x i8] c"\24\6D\65\6D\6F\5F\46\6C\61\67\5F\7A\65\72\6F\00"
+; mdk-module program
 @.gname.intZero = private unnamed_addr constant [8 x i8] c"\69\6E\74\5A\65\72\6F\00"
+; mdk-module program
 @.gname.flagZero = private unnamed_addr constant [9 x i8] c"\66\6C\61\67\5A\65\72\6F\00"

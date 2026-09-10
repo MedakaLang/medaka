@@ -6,11 +6,11 @@
 # `medaka check` rejects at exit 1. A green that tested nothing, and worse, a green
 # from the verb a user reaches for to ask "is this file OK?".
 #
-# Issue #260 had already fixed the DOCTEST-BEARING half (`compiler/tools/test_cmd.mdk`,
-# `doctestGate` → `typecheckErrors`), but keyed the gate on doctest presence alone,
-# so the zero-doctest case fell through the `[] => None` arm.
+# Issue #260 had already fixed the DOCTEST-BEARING half (`compiler/tools/test_cmd.mdk`),
+# but keyed the gate on doctest presence alone, so the zero-doctest case fell through
+# the `[] => None` arm.
 #
-# THE FIX (test_cmd.mdk, doctestGate): type-check unless the module carries
+# THE FIX (test_cmd.mdk, `typecheckExempt`): type-check unless the module carries
 # `test "…"` / `prop "…"` decls. That exemption is deliberate and is NOT collateral
 # damage to be cleaned up later — the ported eval-regression corpus (test/ported/*.mdk,
 # run by diff_compiler_ported.sh) has 0 doctests and 200+ `test "…"` assertions whose
@@ -28,6 +28,7 @@
 #   f  directory with a zero-doctest ill-typed member      exit 1
 #   g  IMPORT-BEARING, zero doctests, ill-typed            exit 1 + located diagnostic
 #   h  `prop "…"` decls, ill-typed   exit 0 + the prop actually RUNS    <- the exemption
+#   t  IMPORT-BEARING, zero doctests, module-own impl   `test` AGREES with `check`
 #
 # ...and five more (issue #1680) pinning that the exemption is no longer SILENT:
 #
@@ -45,14 +46,28 @@
 # disjuncts of the exemption predicate SEPARATELY (`hasTests` and `hasProps`), because
 # one cell can only ever exercise one of them.
 #
-# Cell g exists because `typecheckErrors` ROUTES on `hasUseDecls` (test_cmd.mdk): an
-# import-bearing target goes to projectTypeErrors -> `analyzeProject`, a prelude-only
-# one to singleFileTypeErrors -> `analyzeLocated`. Cells a and f are both import-free,
-# so without g every assertion about the newly-opened path would land on ONE of the two
-# arms. It is also the arm worth watching: `analyzeProject` is the function carrying
-# #1362's silent-accept hole, and a zero-doctest ill-typed file WITH imports is newly
-# routed through it by this change. Its fixture uses a genuine `Type mismatch` (not an
-# unbound name) so the assertion reaches the type checker, not just the resolver.
+# Cell g exists because `medaka test` ROUTES on `hasUseDecls` (test_cmd.mdk): an
+# import-bearing target is gated over the loaded module graph (`prepareMulti`), a
+# prelude-only one by `singleFileTypeErrors` -> `analyzeLocated`. Cells a and f are both
+# import-free, so without g every assertion about the newly-opened path would land on ONE
+# of the two arms. It is also the arm worth watching: the multi-module gate is where
+# #1362's silent-accept hole lived, and a zero-doctest ill-typed file WITH imports is
+# routed through it. Its fixture uses a genuine `Type mismatch` (not an unbound name) so
+# the assertion reaches the type checker, not just the resolver.
+#
+# CELL t IS AN AGREEMENT CELL, NOT A VERDICT CELL. `medaka test`'s import-bearing gate
+# picks its driver by doctest presence: with no doctests the gate is the phases' own
+# `elaborateModules` result, with doctests it is the check driver over the same loaded
+# graph. Those two drivers must accept the same programs, or adding a doctest
+# changes whether an unrelated binding type-checks (the arm is keyed on the UNFILTERED
+# doctest presence, so `--filter` cannot move it). The
+# discriminating shape is a module that owns the impl grounding a return-only type
+# parameter in a 2+-module graph: the two workers differed on whether a module's OWN
+# impls join the universe (`accAll` vs `accAll ++ prog`, types/typecheck.mdk). So this
+# cell pins neither accept nor reject — it runs BOTH verbs on one tree and requires the
+# same verdict, and when they reject, that `test` names the diagnostic `check` named.
+# It stays correct whichever way the universe question is settled; it fails only if the
+# two verbs disagree, which is the defect itself.
 #
 # Cell b is why the exit code stays 0 for a clean file with no tests: a source file
 # with no tests is a legitimate steady state for `medaka test <dir>`, not a phantom
@@ -215,6 +230,30 @@ f x = x + 1
 test "t" = f "x" == 3
 EOF
 
+# u/v: issue #2679 (this repository's OWN `test/` directory). The medaka repo root
+# carries no `medaka.toml` of its own, so `underProjectTestDir`'s manifest walk goes
+# past it and the four `test/*_test.mdk` gate-tests were the last `*_test.mdk` files
+# still inheriting the exemption. What identifies that directory instead is its
+# SIBLING: a `test/` whose parent also holds `compiler/medaka.toml`.
+#   u  the repo shape  -> narrowed, must fail like cell n (a real type error)
+#   v  the discriminator: the same `test/` directory with no `compiler/` sibling is
+#      an ordinary manifest-less scratch tree and STAYS exempt (cell p's shape).
+#      Without v, a predicate keyed on the directory NAME alone would pass u.
+mkdir -p "$TMP/repo/compiler" "$TMP/repo/test" "$TMP/norepo/test"
+: > "$TMP/repo/compiler/medaka.toml"
+cat > "$TMP/repo/test/u_repo_test_dir_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+cat > "$TMP/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+
 # j: a module carrying BOTH a doctest and a `test "…"` decl. Doctest presence WINS
 # (the first guard), so this module IS type-checked — and therefore must NOT announce
 # a skip. It is the negative control for the announcement: a version that printed the
@@ -248,6 +287,35 @@ cat > "$TMP/proj/main.mdk" <<'EOF'
 import sib.{helper}
 
 main = println (helper "not an int")
+EOF
+
+# n: a 2-FILE PROJECT whose ROOT module owns the impl that grounds a return-only type
+# parameter. `debug (get1 (Box 42))` is groundable only if the root's own `impl Get (Box
+# a) a` is in the universe the gate's worker uses, so this file discriminates between
+# the two drivers `medaka test` picks between. NO doctest, so it takes the no-doctest
+# arm; cell j already covers doctest presence not moving an ordinary verdict.
+mkdir -p "$TMP/agree"
+cat > "$TMP/agree/dep.mdk" <<'EOF'
+export
+inc : Int -> Int
+inc x = x + 1
+EOF
+cat > "$TMP/agree/main.mdk" <<'EOF'
+import dep.{inc}
+
+interface Get c v where
+  get1 : c -> v
+
+data Box a = Box a
+
+impl Get (Box a) a where
+  get1 (Box x) = x
+
+shown : String
+shown = debug (get1 (Box 42))
+
+useDep : Int -> Int
+useDep x = inc x
 EOF
 
 # ── driver ───────────────────────────────────────────────────────────────────
@@ -304,6 +372,49 @@ refute_case() {
   done
 
   printf 'ok   %s (exit %d)\n' "$name" "$got_code"
+  pass=$((pass+1))
+}
+
+# `medaka test` and `medaka check` must reach the SAME verdict on one tree, and when
+# they reject, `test` must name what `check` named. Neither verdict is pinned: the point
+# is that the two verbs cannot disagree, whatever the right answer turns out to be.
+agree_case() {
+  name="$1"; target="$2"
+  cout="$TMP/$name.check.out"; tout="$TMP/$name.test.out"
+  ( cd "$CASE_DIR" || exit 99; "$MEDAKA" check "$target" ) > "$cout" 2>&1
+  ccode=$?
+  ( cd "$CASE_DIR" || exit 99; "$MEDAKA" test "$target" ) > "$tout" 2>&1
+  tcode=$?
+
+  crej=0; [ "$ccode" -ne 0 ] && crej=1
+  trej=0; [ "$tcode" -ne 0 ] && trej=1
+  if [ "$crej" -ne "$trej" ]; then
+    printf 'FAIL %s: `medaka check` exit %d but `medaka test` exit %d — the two verbs disagree\n' \
+      "$name" "$ccode" "$tcode"
+    printf '  check:\n'; sed 's/^/  | /' "$cout"; printf '\n'
+    printf '  test:\n'; sed 's/^/  | /' "$tout"; printf '\n'
+    fail=$((fail+1)); return
+  fi
+
+  # On a shared rejection, every `error:` line `check` printed must appear in `test`'s
+  # output too — agreeing on the exit code while naming a different defect is not
+  # agreement.
+  if [ "$crej" -eq 1 ]; then
+    missing=0
+    while IFS= read -r line; do
+      grep -qF -- "$line" "$tout" || missing=1
+    done <<EOF
+$(grep '^error: ' "$cout")
+EOF
+    if [ "$missing" -ne 0 ]; then
+      printf 'FAIL %s: both verbs reject, but `medaka test` does not name what `medaka check` named\n' "$name"
+      printf '  check:\n'; sed 's/^/  | /' "$cout"; printf '\n'
+      printf '  test:\n'; sed 's/^/  | /' "$tout"; printf '\n'
+      fail=$((fail+1)); return
+    fi
+  fi
+
+  printf 'ok   %s (check exit %d, test exit %d — agree)\n' "$name" "$ccode" "$tcode"
   pass=$((pass+1))
 }
 
@@ -385,6 +496,12 @@ run_case 'q narrowing survives a relative invocation form' 'n_narrow_compiler_ve
   'requires it to `medaka check` first' 'Type mismatch: Int vs String'
 CASE_DIR="."
 
+run_case 'u narrowing: this repo own test dir no longer exempt' "$TMP/repo/test/u_repo_test_dir_test.mdk" 1 \
+  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+
+run_case 'v test dir without a compiler sibling: stays exempt' "$TMP/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk" 1 \
+  'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+
 run_case 'r substring is not a component (mycompiler): stays exempt' "$TMP/mycompiler/sqlite/test/r_substring_not_component_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
 
@@ -402,6 +519,8 @@ run_case 'f directory with ill-typed member' "$TMP/dir" 1 \
 
 run_case 'g import-bearing, zero doctests, ill-typed' "$TMP/proj/main.mdk" 1 \
   'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+
+agree_case 't import-bearing, module-own impl: test agrees with check' "$TMP/agree/main.mdk"
 
 # Cell a's counterpart: `medaka check` must reject the same file, or the gate is
 # comparing `test` against nothing. This is the positive control for the whole matrix

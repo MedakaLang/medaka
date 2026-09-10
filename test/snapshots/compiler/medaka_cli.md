@@ -1,5 +1,5 @@
 # META
-source_lines=4226
+source_lines=4447
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -23,7 +23,7 @@ import tools.check.{
   runCheck,
   runCheckFromDecls,
   checkHasErrors,
-  runCheckModules,
+  runCheckModulesFromDiags,
 }
 import tools.snapshot.{
   runSnapshotWorker,
@@ -61,6 +61,7 @@ import support.util.{
   listLen,
   schemeLineName,
   stringTrim,
+  lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
@@ -106,9 +107,9 @@ import frontend.parser.{
   parseErrorMessage,
   Positions,
 }
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugar}
-import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor}
+import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -125,15 +126,22 @@ import driver.loader.{
   availableModulesText,
 }
 import driver.diagnostics.{
-  analyzeProject,
+  analyzeProjectFull,
   analyzeLocated,
   analyzeLocatedG,
   analyzeFrom,
+  analyzeSurface,
+  analyzeFinish,
+  tcHalfOfPerModule,
+  SurfaceAnalysis(..),
   ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
   renderTcDiags,
   ppResolveErrorsByFile,
+  diagOfResError,
+  diagOfTypeError,
+  relDiagPath,
   srcLinesArr,
   Diag(..),
   Severity(..),
@@ -147,6 +155,9 @@ import driver.diagnostics.{
   flushRunEnvelope,
   pendingStaleNotice,
   readDiagSrc,
+  typecheckDiagsFold,
+  seedAll,
+  midPath,
   parseErrCode,
   parseErrHelpFix,
   codeKind,
@@ -185,6 +196,8 @@ import types.typecheck.{
   resetTypeErrorsSticky,
   hadTypeErrors,
   TcDiag,
+  ElabResult,
+  ModDiags,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
@@ -316,10 +329,9 @@ medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
 -- Full version string: version + commit + build date, from the ONE stamping
--- seam (issue #74 W8) — test/build_native_medaka.sh bakes commit/build-date
--- alongside the existing MEDAKA_SRC_FP stamp, surfaced via the `buildCommit`/
--- `buildDate` externs (same #ifdef/empty-on-absent contract as
--- `buildFingerprint`). Degrades to just the bare version when neither is
+-- seam (issue #74 W8) — test/build_native_medaka.sh stamps commit/build-date
+-- alongside the fingerprint, surfaced via the `buildCommit`/`buildDate`
+-- externs (same empty-on-absent contract as `buildFingerprint`). Degrades to just the bare version when neither is
 -- baked (a dev/interpreted run, or a shipped binary with no provenance).
 -- Used by `printVersion` (CLI `--version`) only. MCP's `initialize` handshake
 -- reports the bare `medakaVersion` instead, not this — a per-build string
@@ -345,11 +357,11 @@ printVersion _ = putStrLn (medakaVersionString ())
 -- A ./medaka built in tree Y but run against tree X's NEWER compiler sources
 -- silently applies OLD compiler semantics (an old binary misreads `1.5e3` as
 -- `Unbound variable: e3`), and the version string ("0.1.0-preview") never moves,
--- so it is useless as a staleness signal.  test/build_native_medaka.sh bakes the
--- compiler-source fingerprint into the binary (-DMEDAKA_SRC_FP, surfaced by the
--- `buildFingerprint` extern); here we recompute the SAME fingerprint over the
--- LIVE <root>/compiler and <root>/stdlib and warn on a mismatch.  MEDAKA_STRICT=1 promotes the
--- warning to a hard error.  Runs on every invocation, so it is gated TIGHTLY:
+-- so it is useless as a staleness signal.  test/build_native_medaka.sh stamps the
+-- compiler-source fingerprint into the binary (surfaced by the `buildFingerprint`
+-- extern); here we recompute the SAME fingerprint over the LIVE <root>/compiler
+-- and <root>/stdlib and warn on a mismatch.  MEDAKA_STRICT=1 promotes the warning
+-- to a hard error.  Runs on every invocation, so it is gated TIGHTLY:
 -- only when a stamp was baked AND <root>/compiler is present (a shipped binary
 -- has neither).
 --
@@ -654,7 +666,7 @@ ppParseError src file e =
 -- and route by module count: a 1-module load (no non-core imports) goes through the
 -- single-file runCheck (full prelude+user scheme dump, byte-identical to the old
 -- behaviour — keeps the no-import goldens green); a multi-module load goes through
--- runCheckModules (multi-module resolve + per-module-frame typecheck), so a valid
+-- the multi-module report (resolve + per-module-frame typecheck), so a valid
 -- cross-module reference reports import-aware diagnostics instead of `UnknownModule`.
 checkHelpText : String
 checkHelpText = stringConcat [
@@ -816,27 +828,6 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
             target
             (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
 
--- Render every ERROR diagnostic across a loaded multi-module project as located
--- human text (`file:L:C: msg` + caret), reusing the SAME `analyzeProject` the
--- `--json` path uses (line ~549).  This is what lets `check`/`run`/`build`
--- surface an IMPORTED-module type error WITH its location — not just the entry
--- module, and not the loc-free `TYPE ERROR: …`/boolean-deflection they used to
--- collapse to.  `None` when the project has no error diagnostics (clean).
--- Dependency-first file order (helper before entry), same as the loader/JSON.
-locatedProjectErrors : Bool ->
-  List String ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option String
-locatedProjectErrors allowInternal trusted target roots rsrc csrc =
-  errTextOf (locatedProjectDiags allowInternal trusted target roots rsrc csrc)
-
-errTextOf : (Option String, List (String, String, List Diag), Int) ->
-  Option String
-errTextOf (errText, _, _) = errText
-
 -- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
 -- errors (exactly what `locatedProjectErrors` returns) AND the COHERENCE warnings.
 --
@@ -883,18 +874,23 @@ errTextOf (errText, _, _) = errText
 -- gate every caller here already runs BEFORE this one — this call is
 -- redundant-but-consistent (a resolve error this pass could newly find would
 -- already have been caught upstream), not a second independent gate.
+-- The fourth component is the per-module `(schemes, errs, warns)` this ONE pass
+-- produced.  `check`'s multi-module arm renders its ENTRY REPORT from it
+-- (`runCheckModulesFromDiags`) rather than typechecking the graph a second time
+-- through the entry-only driver, which differed from this one in its collector
+-- alone.
 locatedProjectDiags : Bool ->
   List String ->
   String ->
   List String ->
   String ->
   String ->
-  <IO> (Option String, List (String, String, List Diag), Int)
+  <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
 locatedProjectDiags allowInternal trusted target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
-  let results =
-    analyzeProject
+  let (perMod, results) =
+    analyzeProjectFull
       allowInternal
       trusted
       cacheRef
@@ -909,10 +905,22 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
     joinedOrNone (flatMap renderTripleErrors triples),
     map cohWarnsOfTriple triples,
     length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
+    perMod,
   )
 
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
 cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
+
+-- `run --json`'s multi-module arms' own copy of `diagnostics.relDiagTriple`
+-- (not exported there — only `relDiagPath`, its one-line body, is): strip the
+-- project-root prefix from a triple's `file` so an imported module resolved
+-- through the absolute `stdlibDir` root doesn't leak the worktree layout into
+-- the envelope, matching `check --json`'s own multi-module normalization
+-- (diagnostics.mdk's `checkJsonFileParts`, ~:2478-2482; #2798 review S2).
+relDiagTriple : String ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
+relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 
 -- the warn diagnostics on one (non-entry) module's triple that neither
 -- channel above already surfaces (see the doc comment on `locatedProjectDiags`).
@@ -958,44 +966,183 @@ renderTripleWarnings (path, src, diags) =
     _ => map (ppDiagCliLines (srcLinesArr src) path) ws
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
--- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
--- typecheckGateRoute's note): once that gate has already fired, render the located
--- per-module diagnostics for the human message, falling back to the generic
--- deflection only if analyzeProject surfaces none (never leaves the user with
--- exit 1 and no text).
+-- looser `hadTypeErrors`: once that gate has already fired, render the residual —
+-- the graph-end drain's own diagnostics, which the per-module lists do not carry
+-- (they close before the drain runs) — falling back to the generic deflection only
+-- if the residual carries nothing (never leaves the user with exit 1 and no text).
 --
--- 🚨 #1813: the None arm must NOT send the user to `medaka check`.  This arm fires
--- EXACTLY when `analyzeProject` (check's own predicate) surfaced nothing while the
--- elaborate pass armed `hadTypeErrors` — i.e. precisely the #1812 divergence, where
--- `medaka check` on this program exits 0 and reports success.  The old text read
--- "Run `medaka check` for details" and so named the one command guaranteed to
--- confirm the wrong thing.  #2544 (M4): the elaborate pass's residual IS reachable
--- now — `elaborateModules` returns every diagnostic the elaboration left standing,
--- each with its own `Loc`, and the caller hands that list here — so the arm renders
--- it located, through the same face `check` uses.  The generic text survives only
--- for a residual that carries nothing (a `hadTypeErrors` armed by a push this
--- channel does not see), and it still says WHERE the error was detected and that
--- `check` may not show it.
-locatedOrGeneric : Bool ->
-  List String ->
-  List (String, String) ->
-  String ->
-  List String ->
-  String ->
+-- #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
+-- when the per-module diagnostics this elaboration produced were empty while the
+-- same elaboration armed `hadTypeErrors` — i.e. precisely the #1812 divergence,
+-- where `medaka check` on this program exits 0 and reports success.  The old text
+-- read "Run `medaka check` for details" and so named the one command guaranteed to
+-- confirm the wrong thing.  #2544 (M4): the residual IS reachable — `elaborateModules`
+-- returns every diagnostic the elaboration left standing, each with its own `Loc` —
+-- so this renders it located, through the same face `check` uses.
+--
+-- The `analyzeProject` re-run this used to prefer over the residual is gone with the
+-- second typecheck it belonged to: the per-module errors the caller already rendered
+-- ARE that pass's output, and they were empty on every path that reaches here.
+residualOrGeneric : List (String, String) ->
   String ->
   List (String, TcDiag) ->
   <IO> String
-locatedOrGeneric allowInternal trusted pathMap target roots rsrc csrc residual =
-  match locatedProjectErrors allowInternal trusted target roots rsrc csrc
-    Some t => t
-    None => match renderTcDiags pathMap residual
-      [] =>
-        "error: type error in "
-          ++ target
-          ++ ", detected during elaboration (the run/build type pass); no located"
-          ++ " diagnostic is available for it, and `medaka check` may not report this"
-          ++ " program at all — see issue #1812"
-      rendered => joinNl rendered
+residualOrGeneric pathMap target residual = match renderTcDiags pathMap residual
+  [] =>
+    "error: type error in "
+      ++ target
+      ++ ", detected during elaboration (the run/build type pass); no located"
+      ++ " diagnostic is available for it, and `medaka check` may not report this"
+      ++ " program at all — see issue #1812"
+  rendered => joinNl rendered
+
+-- ── run --json structured error exit (#2798) ────────────────────────────────
+-- `run`'s error arms used to call `runAbort` unconditionally on a non-empty
+-- diagnostic list, printing human caret text on stderr even under `--json` —
+-- the ONE compile-time gap `runHelpText` used to carry as a documented KNOWN
+-- GAP. `runAbortJson` is the JSON twin: it stages `triples` into the SAME
+-- `pendingRunDiags` envelope the clean-exit (`finishRunEval`) and
+-- runtime-panic (`eval.runtimePanic`) paths already flush, rather than
+-- inventing a second JSON printer, so the staleness/perf notices ride the
+-- envelope (`runEnvelopeFields`, read inside `flushRunEnvelope`) instead of
+-- being flushed as prose ahead of it the way `runAbort` does.
+runAbortJson : List (String, String, List Diag) -> <IO> Unit
+runAbortJson triples =
+  pendingRunDiags := nonEmptyTriples triples
+  let _ = flushPendingRunDiags True
+  exit 1
+
+-- `run --json`'s structured counterpart to `ppResolveErrorsByFile` — one triple
+-- per file with at least one resolve error, each converted via the SAME
+-- `diagOfResError` the human renderer already uses, left for `cjAllToJson` (via
+-- `runAbortJson`) to serialize instead of a second JSON printer.  `ResError`
+-- carries no warning variant (frontend.resolve.ResError, all-error), so unlike
+-- the typecheck triples below there is no filter to widen here.
+resolveErrorJsonTriples : List (String, List ResError) ->
+  <IO> List (String, String, List Diag)
+resolveErrorJsonTriples [] = []
+resolveErrorJsonTriples ((_, []) :: rest) = resolveErrorJsonTriples rest
+resolveErrorJsonTriples ((file, errs) :: rest) =
+  (file, readFileSafe file, map diagOfResError errs)
+    :: resolveErrorJsonTriples rest
+
+-- The generic #1812 deflection (`residualOrGeneric`'s own `[] =>` arm), as a
+-- `Diag` instead of prose, for the JSON residual arm's empty-residual case
+-- below.  Same code family as the rest of this file's minted diagnostics
+-- (`R-BUILD-FAILED` etc. in `cjBuildFailedJson`) — `T-RESIDUAL` names the one
+-- circumstance this fires: the graph-end drain saw a type error the per-module
+-- pass did not, so there is no located diagnostic to report instead.
+--
+-- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
+-- two reviewers failed to construct one, and the two files the drain's T4 census
+-- names as its whole population (see `DrainDiags` in `compiler/types/typecheck.mdk`)
+-- both take `run`'s ACCEPT path.  It exists so the empty-residual case cannot exit
+-- 1 with an empty envelope, which is a shape the code must handle whether or not an
+-- input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
+-- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.
+genericResidualDiag : String -> Diag
+genericResidualDiag target =
+  mkDiag
+    SevError
+    "T-RESIDUAL"
+    ("type error in "
+      ++ target
+      ++ ", detected during elaboration (the run/build type pass); no located"
+      ++ " diagnostic is available for it, and `medaka check` may not report"
+      ++ " this program at all — see issue #1812")
+    None
+
+-- `run --json`'s structured counterpart to `residualOrGeneric`/`renderTcDiags` —
+-- one `Diag` triple per graph-end residual entry, attributed to its own module
+-- id via `pathMap` exactly as the human renderer looks the file up, via the
+-- SAME `diagOfTypeError` conversion.  Left unmerged across entries that land in
+-- the same file — `pendingRunDiags` already carries repeated file entries on
+-- this same envelope (`eval.runtimePanic`'s own append), so a second grouping
+-- pass here would buy nothing.
+--
+-- Two guarantees `residualOrGeneric` states explicitly and this must match
+-- (#2798 review S1): an EMPTY residual still yields the generic #1812 triple,
+-- attributed to the ENTRY file — `runAbortJson` must never exit 1 with an
+-- empty envelope, the JSON twin of "never leaves the user with exit 1 and no
+-- text" — and a `pathMap` MISS (a module id the loader's map does not know)
+-- attributes to the entry file too, rather than the non-path
+-- `"(module <mid>)"` placeholder string a `file` field is not allowed to be.
+residualJsonTriples : String ->
+  List (String, String) ->
+  List (String, TcDiag) ->
+  <IO> List (String, String, List Diag)
+residualJsonTriples entryFile _ [] =
+  [(entryFile, readFileSafe entryFile, [genericResidualDiag entryFile])]
+residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
+  match lookupAssoc mid pathMap
+    Some file =>
+      (file, readFileSafe file, [diagOfTypeError d])
+        :: residualJsonTriples entryFile pathMap rest
+    None =>
+      (entryFile, readFileSafe entryFile, [diagOfTypeError d])
+        :: residualJsonTriples entryFile pathMap rest
+
+-- The rendering half of `locatedProjectDiags`, over per-module diagnostics an
+-- elaboration already produced: the same `foldModuleTc` tail `analyzeProject` runs
+-- (guard exhaustiveness, `deriving`, prelude-standalone shadows, bucketed per file)
+-- and the same three channels the triple carries.  `run`/`build` reach the triple
+-- through here instead of through a second, check-only typecheck of the graph.
+--
+-- The buckets start empty rather than from `resolvePass`: both callers run
+-- `resolveModulesErrorsByFile` first and abort on any resolve error, so
+-- `isRedundantUnbound` has nothing to filter against.
+elaboratedProjectDiags : List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  <IO> (Option String, List (String, String, List Diag), Int)
+elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
+  let results =
+    typecheckDiagsFold
+      rtD
+      coreD
+      modsWithPath
+      modsD
+      perMod
+      (seedAll (map midPath modsWithPath) [])
+  let triples = map readDiagSrc results
+  (
+    joinedOrNone (flatMap renderTripleErrors triples),
+    map cohWarnsOfTriple triples,
+    length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
+  )
+
+-- `run --json`'s structured twin of `elaboratedProjectDiags`'s `Some errText`
+-- arm: the SAME `typecheckDiagsFold` fold over the SAME already-elaborated
+-- per-module diagnostics (`perMod`) — a second, cheap fold over data
+-- `elaborateRun` already produced, not a second typecheck (see
+-- `typecheckDiagsFold`'s own note) — kept as `Diag`s instead of rendered
+-- lines. A sibling of `elaboratedProjectDiags` rather than a widened return
+-- tuple on it, so `typecheckGateRoute`'s existing 3-tuple match is untouched.
+--
+-- Unlike `renderTripleErrors` (the prose path, errors-only by design — the
+-- human `run` has always dropped warnings once any error is present),
+-- `nonEmptyTriples` here is the ONLY filter: `check --json`'s per-file
+-- `diagnostics` array carries every diag, errors and warnings alike, and this
+-- is the JSON channel, so it matches that array element-wise rather than a
+-- narrower prose-derived one (#2798 review S2).
+elaboratedProjectJsonTriples : List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  <IO> List (String, String, List Diag)
+elaboratedProjectJsonTriples rtD coreD modsWithPath modsD perMod =
+  let results =
+    typecheckDiagsFold
+      rtD
+      coreD
+      modsWithPath
+      modsD
+      perMod
+      (seedAll (map midPath modsWithPath) [])
+  nonEmptyTriples (map readDiagSrc results)
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -1010,7 +1157,7 @@ locatedOrGeneric allowInternal trusted pathMap target roots rsrc csrc residual =
 -- `--types`). Bare `check` instead keeps only the lines naming one of the
 -- user's OWN top-level bindings (`userSchemeLines`) — filtering happens HERE,
 -- CLI-only, so the probe-driven goldens (check_main.mdk et al., which call
--- `runCheck`/`runCheckModules` directly) keep dumping unconditionally.
+-- `runCheck`/`checkModulesEntryLines` directly) keep dumping unconditionally.
 checkRoute : Bool ->
   Bool ->
   List String ->
@@ -1101,23 +1248,30 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
   -- the entry file.
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
+      (resolveModulesErrorsByFile
+        pathMap
+        allowInternal
+        trusted
+        (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+        rtD
+        coreD
+        modsD)
   match resDiags
     "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
       -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
       -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
       -- across ALL modules — reusing the exact analyzeProject surface `--json`
-      -- mirrors — instead of runCheckModules's loc-free `TYPE ERROR: …` (which
+      -- mirrors — instead of the entry report's loc-free `TYPE ERROR: …` (which
       -- also dropped every imported-module error's location).  Clean ⇒ the schemes
       -- dump + main-shape warnings, unchanged.
       -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
       -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
 
-      (Some errText, _, _) =>
+      (Some errText, _, _, _) =>
         let _ = putStr errText
         exit 1
-      (None, projWarns, hiddenCount) =>
-        let _ = putStrLn (runCheckModules allowInternal trusted rtD coreD modsD)
+      (None, projWarns, hiddenCount, perMod) =>
+        let _ = putStrLn (runCheckModulesFromDiags rtD coreD modsD perMod)
         -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
         -- module's own file.  The line above reaches the ENTRY's diagnostics only,
         -- which is why the entry triple is special-cased here (not the whole list)
@@ -1134,9 +1288,13 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         let _ = emitHiddenDiagNote hiddenCount
         -- 0.1.0 main-shape warning (see below).  `mainShapeWarnings` runs no
         -- elaboration of its own (pure since S-3/#2234); this route's producer of
-        -- `mainSchemeRef` is `runCheckModules` above → `checkModulesEntryReport`
-        -- (tools/check.mdk) = `checkModulesEntryFullSplit` (types/typecheck.mdk),
-        -- whose SET-OR-CLEAR write on the terminal module fills the ref.
+        -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `graphCollect`
+        -- / `chainGo`'s terminal clause (types/typecheck.mdk), whose SET-OR-CLEAR
+        -- write on the terminal module fills the ref.  A module-chain memo HIT
+        -- cannot lose it: `matchingStepPrefix` never covers the terminal module, so the
+        -- write runs on every call, and `restoreCoreDriverFields` — the only thing
+        -- a hit restores out of the snapshotted `DriverState` — does not name
+        -- `mainSchemeRef`.
         let mainWarns = match lastModPair mods
           Some (emid, edecls) => mainShapeWarnings rtD coreD modsD edecls
           None => []
@@ -1450,29 +1608,8 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 -- on a graph the #1185 phantom is still ~99% of the channel.  So the multi-module
 -- side stays here, BLOCKED ON #1185, and collapsing the two arms back together is a
 -- decision that waits on #1185's constructor oracle becoming scrutinee-typed.
--- #2738 / D2.  The third member owes the same three measurements, and they answer the
--- same way as the second's.  (1) It is not a demotion of anything loud: the path it
--- covers returned NOTHING on any verb, so `run`/`build` going silent about it is what
--- is being repaired, not preserved.  (2) No oracle, so no false positive is
--- representable: it is a name-set intersection filtered by a comparison of two DECLARED
--- signatures, and it fires at most once per import MEMBER, not per occurrence —
--- measured TWICE over this file's whole module closure (`eval/eval.mdk`'s `add` and
--- `sub`, each importing a `U64` standalone that `Num`'s method of the same name
--- displaces), against the #1185 phantom's 1249 lines on the same command.  (3) The
--- render cost is therefore bounded by the collision count, not by the module graph,
--- exactly as for `W-PRELUDE-METHOD-SHADOW`.
---
--- The count is not zero: unlike `W-PRELUDE-METHOD-SHADOW`, this code DOES fire on the
--- compiler's own source today.  Those sites are live members of the class, not false
--- positives, and they are the derived worklist the drain half of #2769 consumes.  Do
--- not re-copy the number out of this comment — re-derive it, since the set moves with
--- the tree (it was three until `map.toList` was deleted and `types/registry.mdk`
--- switched to `map.{entries}`):
---
---     ./medaka check compiler/driver/medaka_cli.mdk 2>&1 | grep -c 'is shadowed in module'
 runBuildWarnCodes : List String
-runBuildWarnCodes =
-  [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW", "W-IMPORT-METHOD-SHADOW"]
+runBuildWarnCodes = [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW"]
 
 isCoherenceWarn : Diag -> Bool
 isCoherenceWarn (Diag SevWarning c _ _ _ _) = contains c runBuildWarnCodes
@@ -1627,11 +1764,11 @@ nonEmptyTriples ts = filter tripleHasDiags ts
 -- Every module's coherence warnings EXCEPT the entry module's.
 --
 -- 🚨 WHY `check` NEEDS THIS AND `run`/`build` DO NOT.  `checkRoute`'s multi-module arm
--- already surfaces the ENTRY's coherence warning — `runCheckModules` bundles it
+-- already surfaces the ENTRY's coherence warning — the entry report bundles it
 -- loc-free into the scheme dump it prints to stdout, and `globalCoherenceConflict`'s
 -- cross-module finding is attached to the entry module too — so re-emitting the whole
 -- list here would double-print exactly the shapes that already work.  What that stdout
--- path CANNOT reach is an IMPORTED module's own ⊑-incomparable pair: `runCheckModules`
+-- path CANNOT reach is an IMPORTED module's own ⊑-incomparable pair: the entry report
 -- reports the entry's diagnostics, not every module's.  Result, measured across the
 -- seven positions a pair can occupy in a module graph: `check` reported the pair for
 -- the entry (1) and the split-across-two-modules case (1) and **NOTHING AT ALL** when
@@ -1652,7 +1789,7 @@ dropEntryTriple (t :: rest) = t :: dropEntryTriple rest
 
 -- #1499: the human multi-module `check` EMIT site trims the entry triple instead
 -- of dropping it, and the difference is one measured cell.  `dropEntryTriple`
--- exists because `runCheckModules` — printed immediately above that emit — already
+-- exists because the entry report — printed immediately above that emit — already
 -- carries the ENTRY module's `W-INCOMPARABLE-IMPLS` on the typecheck warning
 -- channel, so re-rendering the entry triple would print it TWICE.
 -- `W-PRELUDE-METHOD-SHADOW` is NOT on that channel (it is an `analyzeProject`-side
@@ -1662,7 +1799,7 @@ dropEntryTriple (t :: rest) = t :: dropEntryTriple rest
 -- position all reported it (all five measured on this diff).  Trimming BY CODE
 -- keeps the de-duplication that motivated `dropEntryTriple` and gives every other
 -- allowlisted code exactly one channel.  A code added to `runBuildWarnCodes` that
--- `runCheckModules` DOES print must be added to `onTypecheckWarnChannel` too, or
+-- the entry report DOES print must be added to `onTypecheckWarnChannel` too, or
 -- human `check` will double-report it on the entry.
 trimEntryTriple : List (String, String, List Diag) ->
   List (String, String, List Diag)
@@ -2438,7 +2575,7 @@ typecheckGate allowInternal root input =
             csrc
             tsrc
             input
-            mods
+            modsWithPath
 
 -- Route by module count.  A single loaded module (no non-core imports) runs the
 -- ACCURATE located check `medaka check` uses for single files — analyzeLocatedG
@@ -2464,9 +2601,8 @@ typecheckGate allowInternal root input =
 -- multi-module obligation check flags the compiler's own source with a spurious
 -- `No impl of Alternative for Parser`") named a predicate that no longer exists, and
 -- the false positive it described was fixed by checkModuleFullDiags's `accAll` seed
--- (typecheck.mdk "Bug C": without the imported-standalone-shadow universe an imported
--- standalone that shadows a `Foldable` method routed to method dispatch instead of to
--- the standalone the importer named).  The proof that
+-- (typecheck.mdk "Bug C": without the imported-standalone-shadow universe, `toList m`
+-- routed to method dispatch → spurious `No impl of Foldable for Map`).  The proof that
 -- analyzeProject is clean on compiler source is a REQUIRED CI check:
 -- test/typecheck_compiler_source.sh runs exactly this driver over
 -- compiler/driver/medaka_cli.mdk's whole import closure and fails on ANY
@@ -2483,9 +2619,9 @@ typecheckGateRoute : Bool ->
   String ->
   String ->
   String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
   <IO> Result String (List String)
-typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
+typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _path, decls)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
   -- S-3/#164 (F-converge): the SAME conversion `checkRoute`'s single-module arm
@@ -2525,12 +2661,13 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
           ++ nonEmptyTriples [(target, tsrc, mainWarns)]
       Ok (flatMap renderTripleWarnings allWarns)
     _ => Err (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
-typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
+typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target modsWithPath =
   -- S-1/#2234 (F-converge): live use (they feed `resolveModulesErrorsByFile`
   -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
   -- content-keyed memo of exactly `desugar (parsePrelude src)`.
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
+  let mods = map dropModPath modsWithPath
   let modsD = map desugarPair mods
   -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
   -- loader's modId → path map — the SAME `resolveModulesErrorsByFile` seam
@@ -2538,35 +2675,36 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
   -- stamped EVERY imported module's error with the entry file's path.
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
+      (resolveModulesErrorsByFile
+        pathMap
+        allowInternal
+        trusted
+        (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+        rtD
+        coreD
+        modsD)
   match resDiags
-    "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
-      -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
-      -- what `medaka check` prints and to what `--json` reports.
-      -- ⚠️ "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
-      -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
-      -- module's warnings; this gate's `Ok` payload carries EVERY module's
-      -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
-      -- incomparable overlap warns where `check` of the entry does not.  That is the
-      -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
-      -- not identity, and reading it as identity is how the next reader "restores"
-      -- the entry-only scoping and re-silences the imported case.
-      (Some errText, _, _) => Err errText
-      (None, projWarns, _) =>
-        let _ = resetTypeErrorsSticky ()
-        let (_, _, residual, _) = elaborateModules rtD coreD modsD
-        match hadTypeErrors ()
-          True =>
-            Err
-              (locatedOrGeneric
-                allowInternal
-                trusted
-                pathMap
-                target
-                roots
-                rsrc
-                csrc
-                residual)
+    "" =>
+      -- ONE typecheck of the graph (ARCH §E): the elaboration `build` needs anyway
+      -- is also the diagnostics producer, so the CHECK-STRENGTH gate below reads
+      -- ITS per-module output instead of a second, check-only pass over the same
+      -- graph.
+      let _ = resetTypeErrorsSticky ()
+      let (_, _, perMod, residual, _) = elaborateModules rtD coreD modsD
+      match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
+        -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
+        -- what `medaka check` prints and to what `--json` reports.
+        -- "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
+        -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
+        -- module's warnings; this gate's `Ok` payload carries EVERY module's
+        -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
+        -- incomparable overlap warns where `check` of the entry does not.  That is the
+        -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
+        -- not identity, and reading it as identity is how the next reader "restores"
+        -- the entry-only scoping and re-silences the imported case.
+        (Some errText, _, _) => Err errText
+        (None, projWarns, _) => match hadTypeErrors ()
+          True => Err (residualOrGeneric pathMap target residual)
           -- #1236: same main-shape fold as the single-module arm above.
           -- `elaborateModules` just ran over the WHOLE graph (line above), so
           -- mainSchemeRef is already populated — no second typecheck pass.
@@ -2751,12 +2889,16 @@ runHelpText = stringConcat [
   "medaka run — Type-check and run a program (interpreter)\n", "\n", "Usage:\n",
   "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
   "\n",
-  "  --json            emit the Diag JSON envelope instead of human text, for\n",
-  "                    a runtime panic, a warning, or a clean run. KNOWN GAP:\n",
-  "                    a COMPILE-TIME failure (load, parse, type, usage) still\n",
-  "                    prints human text on stderr and exits 1 with no\n",
-  "                    envelope, so a consumer must handle both. `medaka check\n",
-  "                    --json` envelopes compile-time diagnostics correctly.\n",
+  "  --json            emit the Diag JSON envelope on stderr instead of human\n",
+  "                    text, for a runtime panic, a static (resolve/type) error\n",
+  "                    in the program, or a warning in a SINGLE-FILE program. A\n",
+  "                    clean run emits no envelope at all; a multi-module\n",
+  "                    program's warnings are not reported by `run` (issue\n",
+  "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n",
+  "                    a usage error (bad flag, missing file) or a load/parse\n",
+  "                    failure (bad import, malformed source) still prints human\n",
+  "                    text on stderr and exits 1 with no envelope, so a\n",
+  "                    consumer must handle both.\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
   "  --release         accepted, ignored — the interpreter has no release mode.\n",
   "                    There is no `build --release`; a native build is always\n",
@@ -2900,43 +3042,89 @@ runRunCmd argv =
           -- render byte-identical caret diagnostics via ppDiagCliSrc,
           -- instead of the opaque "type error in <file>" message (P1-8).
           let tsrc = readFileSafe target
-          -- S-3/#164 (F-converge): `analyzeFrom` with the loader's decls,
-          -- skipping `analyzeLocatedG`'s redundant `parseLocated tsrc`.
+          -- ONE typecheck of the program (ARCH §E), the single-file twin of the
+          -- multi-module arm below: `analyzeSurface` runs the AST-level half of
+          -- `analyzeFrom` (derives, guard exhaustiveness, prelude-standalone
+          -- shadows, resolve) over the loader's own raw, real-span decls, and
+          -- the typecheck half comes from the elaboration `run` performs for
+          -- eval rather than from a second, check-only pass over the same
+          -- program.  `analyzeFinish` re-assembles them in `analyzeFrom`'s
+          -- result order, so `check` and `run` still render the same set.
           -- ⚠️ Predicate preserved EXACTLY: unlike `typecheckGateRoute`'s
           -- single-module arm, `run`'s never consulted the `trusted` set —
           -- only the bare `--allow-internal` flag.  That asymmetry is
           -- pre-existing; this parity slice does not change it.
-          let diags =
-            analyzeFrom
+          let surface =
+            analyzeSurface
               runMid
               rsrc
               csrc
               runDecls
               (internalGuardFor allowInternal)
-          let errs = filter isDiagError diags
-          match errs
-            [] =>
+          match surface.resolveClean
+            -- Resolve rejected: no typecheck may run on this program, so the
+            -- surface diagnostics are the whole report (as they were when the
+            -- entry driver gated its own typecheck on the same predicate).
+            False =>
+              -- #2798 review S2: JSON carries the WHOLE surface list (errors
+              -- and warnings, matching `check --json`'s per-file diagnostics
+              -- array element-wise); the prose face stays errors-only, as it
+              -- always has been.
+              let surfaceDiags = analyzeFinish surface []
+              match jsonMode
+                True => runAbortJson [(target, tsrc, surfaceDiags)]
+                False =>
+                  runAbort
+                    (joinNl
+                      (map
+                        (ppDiagCliLines (srcLinesArr tsrc) target)
+                        (filter isDiagError surfaceDiags)))
+            True =>
               let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, _, _) = elaborateRun rtD coreD modsD
-              let perfTCheck = now ()
-              let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-              -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
-              -- the FULL warning set here (it filters `isDiagWarn`, not
-              -- `runBuildWarnCodes`; see its note).
-              -- `finishRunEval` carries this triple down BOTH channels
-              -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
-              -- so widening here widens both in lockstep.  The multi-module
-              -- arm below keeps `projWarns` on the coherence allowlist.
-              finishRunEval
-                target
-                jsonMode
-                (coreE, modsE)
-                mods
-                (allWarnTriples tsrc target diags)
-                (runEvalPerf perfOn target perfT0 perfTCheck)
-            _ =>
-              runAbort
-                (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+              let (coreE, modsE, perMod, residual, _) =
+                elaborateRun rtD coreD modsD
+              -- Read the sticky flag before `analyzeFinish`: the auto-print
+              -- obligation re-check it runs typechecks a synthetic wrapped
+              -- program, whose errors would otherwise land in this read.
+              let residualHit = hadTypeErrors ()
+              let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
+              match filter isDiagError diags
+                [] => match residualHit
+                  -- Belt-and-braces, as on the multi-module arm: anything only
+                  -- the graph-end drain can see still aborts before eval.
+                  True => match jsonMode
+                    True =>
+                      runAbortJson (residualJsonTriples target pathMap residual)
+                    False =>
+                      runAbort (residualOrGeneric pathMap target residual)
+                  False =>
+                    let perfTCheck = now ()
+                    let _ =
+                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                    -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
+                    -- the FULL warning set here (it filters `isDiagWarn`, not
+                    -- `runBuildWarnCodes`; see its note).
+                    -- `finishRunEval` carries this triple down BOTH channels
+                    -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
+                    -- so widening here widens both in lockstep.  The
+                    -- multi-module arm below keeps `projWarns` on the
+                    -- coherence allowlist.
+                    finishRunEval
+                      target
+                      jsonMode
+                      (coreE, modsE)
+                      mods
+                      (allWarnTriples tsrc target diags)
+                      (runEvalPerf perfOn target perfT0 perfTCheck)
+                errs => match jsonMode
+                  -- #2798 review S2: `diags` (the WHOLE list `analyzeFinish`
+                  -- returned, errors and warnings) for JSON — `errs` is the
+                  -- errors-only prose projection of it.
+                  True => runAbortJson [(target, tsrc, diags)]
+                  False =>
+                    runAbort
+                      (joinNl
+                        (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
         _ =>
           -- Multi-module: gate on `locatedProjectErrors` — the SAME
           -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
@@ -2950,57 +3138,77 @@ runRunCmd argv =
           -- typecheckGateRoute for why this is not an over-rejection.
           -- #186/#1360: per-module attribution via the loader's
           -- `pathMap`, the same seam `checkRoute` uses (#41).
-          let resDiags =
-            ppResolveErrorsByFile
-              (resolveModulesErrorsByFile
-                pathMap
-                allowInternal
-                trusted
-                rtD
-                coreD
-                modsD)
+          let resolvePairs =
+            resolveModulesErrorsByFile
+              pathMap
+              allowInternal
+              trusted
+              (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+              rtD
+              coreD
+              modsD
+          let resDiags = ppResolveErrorsByFile resolvePairs
           match resDiags
-            -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
-            -- single `analyzeProject` pass, but keeping the WARNINGS the
-            -- errors-only accessor discarded (see its own note).
+            -- ONE typecheck of the graph (ARCH §E): the elaboration `run` needs
+            -- for eval is also the diagnostics producer, so the located
+            -- per-module report below is rendered from ITS output rather than
+            -- from a second, check-only pass over the same graph.
             "" =>
-              match (locatedProjectDiags
-                allowInternal
-                trusted
-                target
-                roots
-                rsrc
-                csrc)
-                (Some errText, _, _) => runAbort errText
-                (None, projWarns, _) =>
-                  let _ = resetTypeErrorsSticky ()
-                  let (coreE, modsE, residual, _) = elaborateRun rtD coreD modsD
-                  match hadTypeErrors ()
+              let _ = resetTypeErrorsSticky ()
+              let (coreE, modsE, perMod, residual, _) =
+                elaborateRun rtD coreD modsD
+              match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
+                (Some errText, _, _) => match jsonMode
+                  True =>
+                    -- #2798 review S2: normalize each file the SAME way
+                    -- `check --json`'s own multi-module arm does
+                    -- (`relDiagTriple root`, diagnostics.mdk ~:2478-2482) — an
+                    -- imported stdlib module resolves through the absolute
+                    -- `stdlibDir` root and must not leak that worktree path
+                    -- into the envelope's `file` field.
+                    let jsonTriples =
+                      map
+                        (relDiagTriple root)
+                        (elaboratedProjectJsonTriples
+                          rtD
+                          coreD
+                          modsWithPath
+                          modsD
+                          perMod)
+                    runAbortJson jsonTriples
+                  False => runAbort errText
+                (None, projWarns, _) => match hadTypeErrors ()
+                  -- Belt-and-braces: anything only the graph-end drain can
+                  -- see still aborts before eval.
+                  True => match jsonMode
                     True =>
-                      -- Belt-and-braces: anything only the emit/eval
-                      -- elaboration can see still aborts before eval.
-                      runAbort
-                        (locatedOrGeneric
-                          allowInternal
-                          trusted
-                          pathMap
-                          target
-                          roots
-                          rsrc
-                          csrc
-                          residual)
+                      runAbortJson
+                        (map
+                          (relDiagTriple root)
+                          (residualJsonTriples target pathMap residual))
                     False =>
-                      let perfTCheck = now ()
-                      let _ =
-                        emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                      finishRunEval
-                        target
-                        jsonMode
-                        (coreE, modsE)
-                        mods
-                        projWarns
-                        (runEvalPerf perfOn target perfT0 perfTCheck)
-            _ => runAbort resDiags
+                      runAbort (residualOrGeneric pathMap target residual)
+                  False =>
+                    let perfTCheck = now ()
+                    let _ =
+                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                    finishRunEval
+                      target
+                      jsonMode
+                      (coreE, modsE)
+                      mods
+                      projWarns
+                      (runEvalPerf perfOn target perfT0 perfTCheck)
+            _ => match jsonMode
+              True =>
+                -- #2798 review S2: same `relDiagTriple root` normalization as
+                -- the typecheck-error arm above.
+                let jsonTriples =
+                  map
+                    (relDiagTriple root)
+                    (resolveErrorJsonTriples resolvePairs)
+                runAbortJson jsonTriples
+              False => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the
 -- per-module typecheck (checkModuleFullImpl), which pushes into the
@@ -3035,7 +3243,7 @@ modIdToPath (mid, path, _) = (mid, path)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (List Decl, List (String, List Decl), List (String, TcDiag), EvTable)
+  <IO> ElabResult
 elaborateRun rtD coreD modsD =
   let plain = elaborateModules rtD coreD modsD
   match asyncMainShapeError modsD
@@ -3044,9 +3252,24 @@ elaborateRun rtD coreD modsD =
       plain
     None =>
       if shouldAsyncWrapMain "runAsyncIOMain" modsD then
-        elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
+        plainPerModuleOf
+          plain
+          (elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD))
       else
         plain
+
+-- The wrapped elaboration's trees, residual and evidence, carrying the PLAIN
+-- program's per-module diagnostics.  The wrapped graph is synthetic — the
+-- `async` scheduler driver applied to the user's `main` — so a diagnostic
+-- attributed to it names code the user did not write.  The residual and the
+-- sticky accumulator `hadTypeErrors` reads are the wrapped pass's, so a
+-- diagnostic only the wrapped pass produces would still abort the run; none has
+-- been constructed (the wrap strips `main`'s signature and applies a row-open
+-- driver), so what the residual gate carries in practice is the graph-end
+-- drain's diagnostics and the core pass's, which no per-module list holds.
+plainPerModuleOf : ElabResult -> ElabResult -> ElabResult
+plainPerModuleOf (_, _, perMod, _, _) (coreW, modsW, _, residualW, evW) =
+  (coreW, modsW, perMod, residualW, evW)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
@@ -3425,13 +3648,11 @@ checkPolicyHelpText = stringConcat [
   "sample request. Exit 0 on accept, 1 on reject.\n"
 ]
 
--- `--allow`/`--fn` take values; `check_policy.mdk`'s own `parsePolicyGo` reads
--- only the space form, so `--allow=IO` used to fall through as the FIRST
--- POSITIONAL and become the filename (AS-FILENAME, C1's §1 opening
--- transcript).  Both spellings now reach the same key, and the `PolicyArgs`
--- triple is built HERE from the parse rather than by re-scanning raw argv —
--- `parsePolicyArgs` itself belongs to `tools.check_policy` and is left alone
--- (S-3's file, not this slice's).
+-- `--allow`/`--fn` take values; only the space form used to be read, so
+-- `--allow=IO` used to fall through as the FIRST POSITIONAL and become the
+-- filename (AS-FILENAME, C1's §1 opening transcript).  Both spellings now
+-- reach the same key, and the `PolicyArgs` triple is built HERE from the
+-- parse rather than by re-scanning raw argv.
 -- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
 -- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 policyArgSpec : ArgSpec
@@ -3445,16 +3666,16 @@ policyArgSpec =
 runCheckPolicyCmd : List String -> <IO> Unit
 runCheckPolicyCmd argv0 =
   let a = requireArgs policyArgSpec argv0
-  -- LAST-WINS on both values and FIRST positional as the file, exactly as
-  -- `parsePolicyGo` resolved them; defaults are its defaults.
+  -- LAST-WINS on both values and FIRST positional as the file; defaults
+  -- match `check-policy`'s documented defaults (Cache,Log / transform).
   runCheckPolicyArgs
     (PolicyArgs
       (firstPositional a)
       (optDefault (lastValue "--allow" a) "Cache,Log")
       (optDefault (lastValue "--fn" a) "transform"))
 
--- The first positional, or `None` — the shape `parsePolicyGo`/`parseManifestGo`
--- produced by keeping the first bare token and ignoring every later one.
+-- The first positional, or `None` — keeps the first bare token and ignores
+-- every later one.
 firstPositional : Args -> Option String
 firstPositional a = match a.positionals
   [] => None
@@ -4229,13 +4450,13 @@ runMcpServerFromEnv _ =
       Ok csrc =>
         runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion
 # DESUGAR
-(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModules" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModulesFromDiags" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false) (mem "FmtMode" true))))
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" false) (mem "ppBuildReport" false) (mem "TNative" false) (mem "TWasm" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeFile" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
@@ -4243,13 +4464,13 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "flagValues" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false) (mem "ResError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" false) (mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedE" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "JArray" false) (mem "JObject" false) (mem "JNull" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "setLocalPinDisabled" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "setLocalPinDisabled" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAsyncWrapMain" false) (mem "asyncWrapModules" false) (mem "asyncMainShapeError" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliTestReportOk" false) (mem "cliTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false))))
@@ -4315,14 +4536,12 @@ runMcpServerFromEnv _ =
 (DTypeSig false "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
 (DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
-(DTypeSig false "locatedProjectErrors" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
-(DFunDef false "locatedProjectErrors" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EApp (EVar "errTextOf") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))))
-(DTypeSig false "errTextOf" (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "errTextOf" ((PTuple (PVar "errText") PWild PWild)) (EVar "errText"))
-(DTypeSig false "locatedProjectDiags" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int"))))))))))
-(DFunDef false "locatedProjectDiags" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples")) (EApp (EVar "length") (EApp (EApp (EVar "flatMap") (EVar "hiddenWarnsOfTriple")) (EApp (EVar "dropEntryTriple") (EVar "triples"))))))))
+(DTypeSig false "locatedProjectDiags" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int") (TyApp (TyCon "List") (TyCon "ModDiags")))))))))))
+(DFunDef false "locatedProjectDiags" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PTuple (PVar "perMod") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectFull") (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples")) (EApp (EVar "length") (EApp (EApp (EVar "flatMap") (EVar "hiddenWarnsOfTriple")) (EApp (EVar "dropEntryTriple") (EVar "triples")))) (EVar "perMod")))))
 (DTypeSig false "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
+(DTypeSig false "relDiagTriple" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
+(DFunDef false "relDiagTriple" ((PVar "root") (PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "path")) (EVar "src") (EVar "diags")))
 (DTypeSig false "hiddenWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "Diag"))))
 (DFunDef false "hiddenWarnsOfTriple" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "filter") (EVar "isHiddenNonEntryWarn")) (EVar "diags")))
 (DTypeSig false "isHiddenNonEntryWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
@@ -4334,11 +4553,26 @@ runMcpServerFromEnv _ =
 (DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "errs")))))))
 (DTypeSig false "renderTripleWarnings" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "ws") (EApp (EApp (EVar "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoExpr (EMatch (EVar "ws") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "ws")))))))
-(DTypeSig false "locatedOrGeneric" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyCon "String")))))))))))
-(DFunDef false "locatedOrGeneric" ((PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "residual")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "renderTcDiags") (EVar "pathMap")) (EVar "residual")) (arm (PList) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812")))) (arm (PVar "rendered") () (EApp (EVar "joinNl") (EVar "rendered")))))))
+(DTypeSig false "residualOrGeneric" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyCon "String"))))))
+(DFunDef false "residualOrGeneric" ((PVar "pathMap") (PVar "target") (PVar "residual")) (EMatch (EApp (EApp (EVar "renderTcDiags") (EVar "pathMap")) (EVar "residual")) (arm (PList) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812")))) (arm (PVar "rendered") () (EApp (EVar "joinNl") (EVar "rendered")))))
+(DTypeSig false "runAbortJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "runAbortJson" ((PVar "triples")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingRunDiags")) (EApp (EVar "nonEmptyTriples") (EVar "triples")))) (DoLet false false PWild (EApp (EVar "flushPendingRunDiags") (EVar "True"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DTypeSig false "resolveErrorJsonTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "resolveErrorJsonTriples" ((PList)) (EListLit))
+(DFunDef false "resolveErrorJsonTriples" ((PCons (PTuple PWild (PList)) (PVar "rest"))) (EApp (EVar "resolveErrorJsonTriples") (EVar "rest")))
+(DFunDef false "resolveErrorJsonTriples" ((PCons (PTuple (PVar "file") (PVar "errs")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "file") (EApp (EVar "readFileSafe") (EVar "file")) (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "errs"))) (EApp (EVar "resolveErrorJsonTriples") (EVar "rest"))))
+(DTypeSig false "genericResidualDiag" (TyFun (TyCon "String") (TyCon "Diag")))
+(DFunDef false "genericResidualDiag" ((PVar "target")) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "T-RESIDUAL"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report"))) (ELit (LString " this program at all — see issue #1812")))) (EVar "None")))
+(DTypeSig false "residualJsonTriples" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "residualJsonTriples" ((PVar "entryFile") PWild (PList)) (EListLit (ETuple (EVar "entryFile") (EApp (EVar "readFileSafe") (EVar "entryFile")) (EListLit (EApp (EVar "genericResidualDiag") (EVar "entryFile"))))))
+(DFunDef false "residualJsonTriples" ((PVar "entryFile") (PVar "pathMap") (PCons (PTuple (PVar "mid") (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "pathMap")) (arm (PCon "Some" (PVar "file")) () (EBinOp "::" (ETuple (EVar "file") (EApp (EVar "readFileSafe") (EVar "file")) (EListLit (EApp (EVar "diagOfTypeError") (EVar "d")))) (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "entryFile")) (EVar "pathMap")) (EVar "rest")))) (arm (PCon "None") () (EBinOp "::" (ETuple (EVar "entryFile") (EApp (EVar "readFileSafe") (EVar "entryFile")) (EListLit (EApp (EVar "diagOfTypeError") (EVar "d")))) (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "entryFile")) (EVar "pathMap")) (EVar "rest"))))))
+(DTypeSig false "elaboratedProjectDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int")))))))))
+(DFunDef false "elaboratedProjectDiags" ((PVar "rtD") (PVar "coreD") (PVar "modsWithPath") (PVar "modsD") (PVar "perMod")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit)))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples")) (EApp (EVar "length") (EApp (EApp (EVar "flatMap") (EVar "hiddenWarnsOfTriple")) (EApp (EVar "dropEntryTriple") (EVar "triples"))))))))
+(DTypeSig false "elaboratedProjectJsonTriples" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "elaboratedProjectJsonTriples" ((PVar "rtD") (PVar "coreD") (PVar "modsWithPath") (PVar "modsD") (PVar "perMod")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit)))) (DoExpr (EApp (EVar "nonEmptyTriples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))))))
 (DTypeSig false "checkRoute" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
 (DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "warns") (EApp (EApp (EVar "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoLet false false (PVar "dump") (EApp (EVar "stripWarningLines") (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EVar "decls")))) (DoLet false false (PVar "filtered") (EApp (EApp (EVar "userSchemeLines") (EVar "decls")) (EVar "dump"))) (DoLet false false (PVar "report") (EIf (EVar "typesMode") (EVar "dump") (EVar "filtered"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "report"))) (DoLet false false PWild (EIf (EVar "typesMode") (ELit LUnit) (EApp (EVar "putStrLn") (EApp (EApp (EVar "checkOkLine") (EVar "target")) (EVar "filtered"))))) (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EBinOp "++" (EVar "warns") (EVar "mainWarns")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
-(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PTuple (PCon "None") (PVar "projWarns") (PVar "hiddenCount")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EApp (EVar "runCheckModules") (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoLet false false PWild (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EApp (EVar "trimEntryTriple") (EVar "projWarns"))))) (DoLet false false PWild (EApp (EVar "emitHiddenDiagNote") (EVar "hiddenCount"))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EApp (EVar "dieMsg") (EVar "resDiags")))))))
+(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PTuple (PCon "None") (PVar "projWarns") (PVar "hiddenCount") (PVar "perMod")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EVar "runCheckModulesFromDiags") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "perMod")))) (DoLet false false PWild (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EApp (EVar "trimEntryTriple") (EVar "projWarns"))))) (DoLet false false PWild (EApp (EVar "emitHiddenDiagNote") (EVar "hiddenCount"))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EApp (EVar "dieMsg") (EVar "resDiags")))))))
 (DTypeSig false "lastModPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "lastModPair" ((PList)) (EVar "None"))
 (DFunDef false "lastModPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -4371,7 +4605,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "coherenceWarnCode" (TyCon "String"))
 (DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
 (DTypeSig false "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW"))))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW"))))
 (DTypeSig false "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
@@ -4504,10 +4738,10 @@ runMcpServerFromEnv _ =
 (DFunDef false "defaultOutPath" ((PCon "TNative") (PVar "input")) (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "input"))))
 (DFunDef false "defaultOutPath" ((PCon "TWasm") (PVar "input")) (EBinOp "++" (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "input"))) (ELit (LString ".wasm"))))
 (DTypeSig false "typecheckGate" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "typecheckGate" ((PVar "allowInternal") (PVar "root") (PVar "input")) (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "input"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "input"))) (ELam ((PVar "tsrc")) (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "input")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "input")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "input")) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckGateRoute") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "input")) (EVar "mods")))))))))))))))))
-(DTypeSig false "typecheckGateRoute" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls"))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags")) (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))) (arm PWild () (EApp (EVar "Err") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs")))))))))
-(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EApp (EVar "Err") (EVar "errText"))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple PWild PWild (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedOrGeneric") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "residual")))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple PWild (PVar "edecls"))) () (EMatch (EApp (EVar "mainArityWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit)))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EVar "projWarns") (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))))))))) (arm PWild () (EApp (EVar "Err") (EVar "resDiags")))))))
+(DFunDef false "typecheckGate" ((PVar "allowInternal") (PVar "root") (PVar "input")) (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "input"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "input"))) (ELam ((PVar "tsrc")) (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "input")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "input")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "input")) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckGateRoute") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "input")) (EVar "modsWithPath")))))))))))))))))
+(DTypeSig false "typecheckGateRoute" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))))))
+(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "_path") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls"))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags")) (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))) (arm PWild () (EApp (EVar "Err") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs")))))))))
+(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "_roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "modsWithPath")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple PWild PWild (PVar "perMod") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "elaboratedProjectDiags") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EApp (EVar "Err") (EVar "errText"))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "residualOrGeneric") (EVar "pathMap")) (EVar "target")) (EVar "residual")))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple PWild (PVar "edecls"))) () (EMatch (EApp (EVar "mainArityWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit)))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EVar "projWarns") (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))))))))) (arm PWild () (EApp (EVar "Err") (EVar "resDiags")))))))
 (DTypeSig false "parseBuildArgs" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "BuildTarget")))))
 (DFunDef false "parseBuildArgs" ((PVar "a")) (EMatch (EApp (EApp (EVar "buildTargetOf") (EApp (EApp (EVar "flagValues") (ELit (LString "--target"))) (EVar "a"))) (EVar "TNative")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PVar "target")) () (EApp (EApp (EApp (EVar "finishBuildArgs") (EFieldAccess (EVar "a") "positionals")) (EApp (EApp (EVar "lastValue") (ELit (LString "-o"))) (EVar "a"))) (EVar "target")))))
 (DTypeSig false "buildTargetOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BuildTarget")))))
@@ -4527,21 +4761,23 @@ runMcpServerFromEnv _ =
 (DFunDef false "flushPendingRunDiags" ((PCon "False")) (ELit LUnit))
 (DFunDef false "flushPendingRunDiags" ((PCon "True")) (EApp (EVar "flushRunEnvelope") (EUnOp "!" (EVar "pendingRunDiags"))))
 (DTypeSig false "runHelpText" (TyCon "String"))
-(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope instead of human text, for\n")) (ELit (LString "                    a runtime panic, a warning, or a clean run. KNOWN GAP:\n")) (ELit (LString "                    a COMPILE-TIME failure (load, parse, type, usage) still\n")) (ELit (LString "                    prints human text on stderr and exits 1 with no\n")) (ELit (LString "                    envelope, so a consumer must handle both. `medaka check\n")) (ELit (LString "                    --json` envelopes compile-time diagnostics correctly.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
+(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope on stderr instead of human\n")) (ELit (LString "                    text, for a runtime panic, a static (resolve/type) error\n")) (ELit (LString "                    in the program, or a warning in a SINGLE-FILE program. A\n")) (ELit (LString "                    clean run emits no envelope at all; a multi-module\n")) (ELit (LString "                    program's warnings are not reported by `run` (issue\n")) (ELit (LString "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n")) (ELit (LString "                    a usage error (bad flag, missing file) or a load/parse\n")) (ELit (LString "                    failure (bad import, malformed source) still prints human\n")) (ELit (LString "                    text on stderr and exits 1 with no envelope, so a\n")) (ELit (LString "                    consumer must handle both.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
 (DTypeSig false "runArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "runArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope on stderr"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--allow-internal")))) (ELit (LString "permit internal-only externs outside stdlib/"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--release")))) (ELit (LString "accepted and ignored (eval is never optimized)"))))))
 (DTypeSig false "runEvalPerf" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runEvalPerf" ((PVar "perfOn") (PVar "target") (PVar "perfT0") (PVar "perfTCheck") PWild) (EBlock (DoLet false false (PVar "perfTEval") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "eval"))) (EBinOp "-" (EVar "perfTEval") (EVar "perfTCheck"))) (EVar "target"))) (DoExpr (EApp (EApp (EVar "emitTotal") (EVar "perfOn")) (EBinOp "-" (EVar "perfTEval") (EVar "perfT0"))))))
 (DTypeSig false "runRunCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runRunCmd" ((PVar "argv")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfSinkOn")) (EBinOp "&&" (EVar "jsonMode") (EVar "perfOn")))) (DoExpr (EMatch (EApp (EVar "runArgvFilter") (EVar "argv")) (arm (PList) () (EApp (EVar "runAbort") (ELit (LString "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]")))) (arm (PCons (PVar "target") PWild) ((GBool (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "target")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "target")) (ELit (LString "-")))))) (EApp (EVar "runAbort") (EApp (EApp (EVar "unknownFlagMessage") (EVar "runArgSpec")) (EVar "target")))) (arm (PCons (PVar "target") (PVar "progArgs")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--allow-internal"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "progArgsRef")) (EVar "progArgs"))) (DoLet false false (PVar "rsrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "rtPath")))) (DoLet false false (PVar "csrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "corePath")))) (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false PWild (EApp (EVar "orExit") (EApp (EApp (EVar "mapErr") (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "target"))) (EApp (EVar "parseResult") (EVar "tsrc"))))) (DoLet false false (PVar "modsWithPath") (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EApp (EVar "readFileSafe") (EVar "target"))) (EVar "target")) (EVar "stdlibDir")) (EVar "lerr")))) (DoExpr (EApp (EVar "panic") (ELit (LString "unreachable")))))) (arm (PCon "Ok" (PVar "mp")) () (EVar "mp")))) (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EVar "pathMap"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "perfTLoad") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "load"))) (EBinOp "-" (EVar "perfTLoad") (EVar "perfT0"))) (EVar "target"))) (DoExpr (EMatch (EVar "mods") (arm (PList (PTuple (PVar "runMid") (PVar "runDecls"))) () (EBlock (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "runMid")) (EVar "rsrc")) (EVar "csrc")) (EVar "runDecls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") PWild PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags"))) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))) (arm PWild () (EApp (EVar "runAbort") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs"))))))))) (arm PWild () (EBlock (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EApp (EVar "runAbort") (EVar "errText"))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedOrGeneric") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "residual")))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EVar "projWarns")) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))))))))) (arm PWild () (EApp (EVar "runAbort") (EVar "resDiags")))))))))))))))
+(DFunDef false "runRunCmd" ((PVar "argv")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfSinkOn")) (EBinOp "&&" (EVar "jsonMode") (EVar "perfOn")))) (DoExpr (EMatch (EApp (EVar "runArgvFilter") (EVar "argv")) (arm (PList) () (EApp (EVar "runAbort") (ELit (LString "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]")))) (arm (PCons (PVar "target") PWild) ((GBool (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "target")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "target")) (ELit (LString "-")))))) (EApp (EVar "runAbort") (EApp (EApp (EVar "unknownFlagMessage") (EVar "runArgSpec")) (EVar "target")))) (arm (PCons (PVar "target") (PVar "progArgs")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--allow-internal"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "progArgsRef")) (EVar "progArgs"))) (DoLet false false (PVar "rsrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "rtPath")))) (DoLet false false (PVar "csrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "corePath")))) (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false PWild (EApp (EVar "orExit") (EApp (EApp (EVar "mapErr") (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "target"))) (EApp (EVar "parseResult") (EVar "tsrc"))))) (DoLet false false (PVar "modsWithPath") (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EApp (EVar "readFileSafe") (EVar "target"))) (EVar "target")) (EVar "stdlibDir")) (EVar "lerr")))) (DoExpr (EApp (EVar "panic") (ELit (LString "unreachable")))))) (arm (PCon "Ok" (PVar "mp")) () (EVar "mp")))) (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EVar "pathMap"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "perfTLoad") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "load"))) (EBinOp "-" (EVar "perfTLoad") (EVar "perfT0"))) (EVar "target"))) (DoExpr (EMatch (EVar "mods") (arm (PList (PTuple (PVar "runMid") (PVar "runDecls"))) () (EBlock (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "surface") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "runMid")) (EVar "rsrc")) (EVar "csrc")) (EVar "runDecls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoExpr (EMatch (EFieldAccess (EVar "surface") "resolveClean") (arm (PCon "False") () (EBlock (DoLet false false (PVar "surfaceDiags") (EApp (EApp (EVar "analyzeFinish") (EVar "surface")) (EListLit))) (DoExpr (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "surfaceDiags"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "surfaceDiags")))))))))) (arm (PCon "True") () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") (PVar "perMod") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "residualHit") (EApp (EVar "hadTypeErrors") (ELit LUnit))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "analyzeFinish") (EVar "surface")) (EApp (EVar "tcHalfOfPerModule") (EVar "perMod")))) (DoExpr (EMatch (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags")) (arm (PList) () (EMatch (EVar "residualHit") (arm (PCon "True") () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "target")) (EVar "pathMap")) (EVar "residual")))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EVar "residualOrGeneric") (EVar "pathMap")) (EVar "target")) (EVar "residual")))))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags"))) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))))) (arm (PVar "errs") () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "diags"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs"))))))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "resolvePairs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EVar "resolvePairs"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") (PVar "perMod") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "elaboratedProjectDiags") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EBlock (DoLet false false (PVar "jsonTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EApp (EApp (EApp (EApp (EVar "elaboratedProjectJsonTriples") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")))) (DoExpr (EApp (EVar "runAbortJson") (EVar "jsonTriples"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EVar "errText"))))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "target")) (EVar "pathMap")) (EVar "residual"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EVar "residualOrGeneric") (EVar "pathMap")) (EVar "target")) (EVar "residual")))))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EVar "projWarns")) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))))))))) (arm PWild () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EBlock (DoLet false false (PVar "jsonTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EVar "resolveErrorJsonTriples") (EVar "resolvePairs")))) (DoExpr (EApp (EVar "runAbortJson") (EVar "jsonTriples"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EVar "resDiags")))))))))))))))))
 (DTypeSig false "desugarPair" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugarPair" ((PTuple (PVar "mid") (PVar "p"))) (ETuple (EVar "mid") (EApp (EVar "desugar") (EVar "p"))))
 (DTypeSig false "dropModPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "dropModPath" ((PTuple (PVar "mid") PWild (PVar "prog"))) (ETuple (EVar "mid") (EVar "prog")))
 (DTypeSig false "modIdToPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "modIdToPath" ((PTuple (PVar "mid") (PVar "path") PWild)) (ETuple (EVar "mid") (EVar "path")))
-(DTypeSig false "elaborateRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable")))))))
-(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncIOMain"))) (EVar "modsD"))) (EVar "plain")))))))
+(DTypeSig false "elaborateRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "ElabResult"))))))
+(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")) (EApp (EApp (EVar "plainPerModuleOf") (EVar "plain")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")))) (EVar "plain")))))))
+(DTypeSig false "plainPerModuleOf" (TyFun (TyCon "ElabResult") (TyFun (TyCon "ElabResult") (TyCon "ElabResult"))))
+(DFunDef false "plainPerModuleOf" ((PTuple PWild PWild (PVar "perMod") PWild PWild) (PTuple (PVar "coreW") (PVar "modsW") PWild (PVar "residualW") (PVar "evW"))) (ETuple (EVar "coreW") (EVar "modsW") (EVar "perMod") (EVar "residualW") (EVar "evW")))
 (DTypeSig false "runProgramOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "runProgramOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "evalModulesOutputRun") (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -4678,13 +4914,13 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))))
 # MARK
-(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModules" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModulesFromDiags" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false) (mem "FmtMode" true))))
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" false) (mem "ppBuildReport" false) (mem "TNative" false) (mem "TWasm" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeFile" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
@@ -4692,13 +4928,13 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "flagValues" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false) (mem "ResError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" false) (mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedE" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "JArray" false) (mem "JObject" false) (mem "JNull" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "setLocalPinDisabled" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "setLocalPinDisabled" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAsyncWrapMain" false) (mem "asyncWrapModules" false) (mem "asyncMainShapeError" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliTestReportOk" false) (mem "cliTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false))))
@@ -4764,14 +5000,12 @@ runMcpServerFromEnv _ =
 (DTypeSig false "moduleLoadErrText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String")))))))
 (DFunDef false "moduleLoadErrText" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "e"))) (EApp (EApp (EApp (EVar "ppParseError") (EVar "msrc")) (EVar "mpath")) (EVar "e")))
 (DFunDef false "moduleLoadErrText" ((PVar "tsrc") (PVar "target") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "lmsg")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EVar "lmsg") (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "tsrc"))) (arm (PCon "None") () (EVar "msg")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "msg")) (EApp (EVar "Some") (EVar "loc"))) (EVar "None")) (EVar "None"))))))))))
-(DTypeSig false "locatedProjectErrors" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
-(DFunDef false "locatedProjectErrors" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EApp (EVar "errTextOf") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))))
-(DTypeSig false "errTextOf" (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "errTextOf" ((PTuple (PVar "errText") PWild PWild)) (EVar "errText"))
-(DTypeSig false "locatedProjectDiags" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int"))))))))))
-(DFunDef false "locatedProjectDiags" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples")) (EApp (EMethodRef "length") (EApp (EApp (EDictApp "flatMap") (EVar "hiddenWarnsOfTriple")) (EApp (EVar "dropEntryTriple") (EVar "triples"))))))))
+(DTypeSig false "locatedProjectDiags" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int") (TyApp (TyCon "List") (TyCon "ModDiags")))))))))))
+(DFunDef false "locatedProjectDiags" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PTuple (PVar "perMod") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectFull") (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples")) (EApp (EMethodRef "length") (EApp (EApp (EDictApp "flatMap") (EVar "hiddenWarnsOfTriple")) (EApp (EVar "dropEntryTriple") (EVar "triples")))) (EVar "perMod")))))
 (DTypeSig false "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
+(DTypeSig false "relDiagTriple" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
+(DFunDef false "relDiagTriple" ((PVar "root") (PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "path")) (EVar "src") (EVar "diags")))
 (DTypeSig false "hiddenWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "Diag"))))
 (DFunDef false "hiddenWarnsOfTriple" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EMethodRef "filter") (EVar "isHiddenNonEntryWarn")) (EVar "diags")))
 (DTypeSig false "isHiddenNonEntryWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
@@ -4783,11 +5017,26 @@ runMcpServerFromEnv _ =
 (DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "errs")))))))
 (DTypeSig false "renderTripleWarnings" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "ws") (EApp (EApp (EMethodRef "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoExpr (EMatch (EVar "ws") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "ws")))))))
-(DTypeSig false "locatedOrGeneric" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyCon "String")))))))))))
-(DFunDef false "locatedOrGeneric" ((PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "residual")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "renderTcDiags") (EVar "pathMap")) (EVar "residual")) (arm (PList) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812")))) (arm (PVar "rendered") () (EApp (EVar "joinNl") (EVar "rendered")))))))
+(DTypeSig false "residualOrGeneric" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyCon "String"))))))
+(DFunDef false "residualOrGeneric" ((PVar "pathMap") (PVar "target") (PVar "residual")) (EMatch (EApp (EApp (EVar "renderTcDiags") (EVar "pathMap")) (EVar "residual")) (arm (PList) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812")))) (arm (PVar "rendered") () (EApp (EVar "joinNl") (EVar "rendered")))))
+(DTypeSig false "runAbortJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "runAbortJson" ((PVar "triples")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingRunDiags")) (EApp (EVar "nonEmptyTriples") (EVar "triples")))) (DoLet false false PWild (EApp (EVar "flushPendingRunDiags") (EVar "True"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DTypeSig false "resolveErrorJsonTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "resolveErrorJsonTriples" ((PList)) (EListLit))
+(DFunDef false "resolveErrorJsonTriples" ((PCons (PTuple PWild (PList)) (PVar "rest"))) (EApp (EVar "resolveErrorJsonTriples") (EVar "rest")))
+(DFunDef false "resolveErrorJsonTriples" ((PCons (PTuple (PVar "file") (PVar "errs")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "file") (EApp (EVar "readFileSafe") (EVar "file")) (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "errs"))) (EApp (EVar "resolveErrorJsonTriples") (EVar "rest"))))
+(DTypeSig false "genericResidualDiag" (TyFun (TyCon "String") (TyCon "Diag")))
+(DFunDef false "genericResidualDiag" ((PVar "target")) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "T-RESIDUAL"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report"))) (ELit (LString " this program at all — see issue #1812")))) (EVar "None")))
+(DTypeSig false "residualJsonTriples" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "residualJsonTriples" ((PVar "entryFile") PWild (PList)) (EListLit (ETuple (EVar "entryFile") (EApp (EVar "readFileSafe") (EVar "entryFile")) (EListLit (EApp (EVar "genericResidualDiag") (EVar "entryFile"))))))
+(DFunDef false "residualJsonTriples" ((PVar "entryFile") (PVar "pathMap") (PCons (PTuple (PVar "mid") (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "pathMap")) (arm (PCon "Some" (PVar "file")) () (EBinOp "::" (ETuple (EVar "file") (EApp (EVar "readFileSafe") (EVar "file")) (EListLit (EApp (EVar "diagOfTypeError") (EVar "d")))) (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "entryFile")) (EVar "pathMap")) (EVar "rest")))) (arm (PCon "None") () (EBinOp "::" (ETuple (EVar "entryFile") (EApp (EVar "readFileSafe") (EVar "entryFile")) (EListLit (EApp (EVar "diagOfTypeError") (EVar "d")))) (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "entryFile")) (EVar "pathMap")) (EVar "rest"))))))
+(DTypeSig false "elaboratedProjectDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Int")))))))))
+(DFunDef false "elaboratedProjectDiags" ((PVar "rtD") (PVar "coreD") (PVar "modsWithPath") (PVar "modsD") (PVar "perMod")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit)))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples")) (EApp (EMethodRef "length") (EApp (EApp (EDictApp "flatMap") (EVar "hiddenWarnsOfTriple")) (EApp (EVar "dropEntryTriple") (EVar "triples"))))))))
+(DTypeSig false "elaboratedProjectJsonTriples" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "elaboratedProjectJsonTriples" ((PVar "rtD") (PVar "coreD") (PVar "modsWithPath") (PVar "modsD") (PVar "perMod")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit)))) (DoExpr (EApp (EVar "nonEmptyTriples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))))))
 (DTypeSig false "checkRoute" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
 (DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "warns") (EApp (EApp (EMethodRef "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoLet false false (PVar "dump") (EApp (EVar "stripWarningLines") (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EVar "decls")))) (DoLet false false (PVar "filtered") (EApp (EApp (EVar "userSchemeLines") (EVar "decls")) (EVar "dump"))) (DoLet false false (PVar "report") (EIf (EVar "typesMode") (EVar "dump") (EVar "filtered"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "report"))) (DoLet false false PWild (EIf (EVar "typesMode") (ELit LUnit) (EApp (EVar "putStrLn") (EApp (EApp (EVar "checkOkLine") (EVar "target")) (EVar "filtered"))))) (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EBinOp "++" (EVar "warns") (EVar "mainWarns")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
-(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PTuple (PCon "None") (PVar "projWarns") (PVar "hiddenCount")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EApp (EVar "runCheckModules") (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoLet false false PWild (EApp (EVar "emitWarningLines") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EApp (EVar "trimEntryTriple") (EVar "projWarns"))))) (DoLet false false PWild (EApp (EVar "emitHiddenDiagNote") (EVar "hiddenCount"))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EApp (EVar "dieMsg") (EVar "resDiags")))))))
+(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PTuple (PCon "None") (PVar "projWarns") (PVar "hiddenCount") (PVar "perMod")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EVar "runCheckModulesFromDiags") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "perMod")))) (DoLet false false PWild (EApp (EVar "emitWarningLines") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EApp (EVar "trimEntryTriple") (EVar "projWarns"))))) (DoLet false false PWild (EApp (EVar "emitHiddenDiagNote") (EVar "hiddenCount"))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EApp (EVar "dieMsg") (EVar "resDiags")))))))
 (DTypeSig false "lastModPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "lastModPair" ((PList)) (EVar "None"))
 (DFunDef false "lastModPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -4820,7 +5069,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "coherenceWarnCode" (TyCon "String"))
 (DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
 (DTypeSig false "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW"))))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW"))))
 (DTypeSig false "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
@@ -4953,10 +5202,10 @@ runMcpServerFromEnv _ =
 (DFunDef false "defaultOutPath" ((PCon "TNative") (PVar "input")) (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "input"))))
 (DFunDef false "defaultOutPath" ((PCon "TWasm") (PVar "input")) (EBinOp "++" (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "input"))) (ELit (LString ".wasm"))))
 (DTypeSig false "typecheckGate" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "typecheckGate" ((PVar "allowInternal") (PVar "root") (PVar "input")) (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "input"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "input"))) (ELam ((PVar "tsrc")) (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "input")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "input")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "input")) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckGateRoute") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "input")) (EVar "mods")))))))))))))))))
-(DTypeSig false "typecheckGateRoute" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls"))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags")) (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))) (arm PWild () (EApp (EVar "Err") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs")))))))))
-(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EApp (EVar "Err") (EVar "errText"))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple PWild PWild (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedOrGeneric") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "residual")))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple PWild (PVar "edecls"))) () (EMatch (EApp (EVar "mainArityWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit)))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EVar "projWarns") (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))))))))) (arm PWild () (EApp (EVar "Err") (EVar "resDiags")))))))
+(DFunDef false "typecheckGate" ((PVar "allowInternal") (PVar "root") (PVar "input")) (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "input"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "input"))) (ELam ((PVar "tsrc")) (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "input")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "input")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "input")) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "input")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckGateRoute") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "input")) (EVar "modsWithPath")))))))))))))))))
+(DTypeSig false "typecheckGateRoute" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))))))
+(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "_path") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls"))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags")) (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))) (arm PWild () (EApp (EVar "Err") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs")))))))))
+(DFunDef false "typecheckGateRoute" ((PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "_roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "modsWithPath")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple PWild PWild (PVar "perMod") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "elaboratedProjectDiags") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EApp (EVar "Err") (EVar "errText"))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "residualOrGeneric") (EVar "pathMap")) (EVar "target")) (EVar "residual")))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple PWild (PVar "edecls"))) () (EMatch (EApp (EVar "mainArityWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "edecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit)))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "allWarns") (EBinOp "++" (EVar "projWarns") (EApp (EVar "nonEmptyTriples") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "mainWarns")))))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EVar "allWarns")))))))))))) (arm PWild () (EApp (EVar "Err") (EVar "resDiags")))))))
 (DTypeSig false "parseBuildArgs" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "BuildTarget")))))
 (DFunDef false "parseBuildArgs" ((PVar "a")) (EMatch (EApp (EApp (EVar "buildTargetOf") (EApp (EApp (EVar "flagValues") (ELit (LString "--target"))) (EVar "a"))) (EVar "TNative")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PVar "target")) () (EApp (EApp (EApp (EVar "finishBuildArgs") (EFieldAccess (EVar "a") "positionals")) (EApp (EApp (EVar "lastValue") (ELit (LString "-o"))) (EVar "a"))) (EVar "target")))))
 (DTypeSig false "buildTargetOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BuildTarget")))))
@@ -4976,21 +5225,23 @@ runMcpServerFromEnv _ =
 (DFunDef false "flushPendingRunDiags" ((PCon "False")) (ELit LUnit))
 (DFunDef false "flushPendingRunDiags" ((PCon "True")) (EApp (EVar "flushRunEnvelope") (EUnOp "!" (EVar "pendingRunDiags"))))
 (DTypeSig false "runHelpText" (TyCon "String"))
-(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope instead of human text, for\n")) (ELit (LString "                    a runtime panic, a warning, or a clean run. KNOWN GAP:\n")) (ELit (LString "                    a COMPILE-TIME failure (load, parse, type, usage) still\n")) (ELit (LString "                    prints human text on stderr and exits 1 with no\n")) (ELit (LString "                    envelope, so a consumer must handle both. `medaka check\n")) (ELit (LString "                    --json` envelopes compile-time diagnostics correctly.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
+(DFunDef false "runHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka run — Type-check and run a program (interpreter)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n")) (ELit (LString "\n")) (ELit (LString "  --json            emit the Diag JSON envelope on stderr instead of human\n")) (ELit (LString "                    text, for a runtime panic, a static (resolve/type) error\n")) (ELit (LString "                    in the program, or a warning in a SINGLE-FILE program. A\n")) (ELit (LString "                    clean run emits no envelope at all; a multi-module\n")) (ELit (LString "                    program's warnings are not reported by `run` (issue\n")) (ELit (LString "                    #2818) — use `medaka check --json` for those. KNOWN GAP:\n")) (ELit (LString "                    a usage error (bad flag, missing file) or a load/parse\n")) (ELit (LString "                    failure (bad import, malformed source) still prints human\n")) (ELit (LString "                    text on stderr and exits 1 with no envelope, so a\n")) (ELit (LString "                    consumer must handle both.\n")) (ELit (LString "  --allow-internal  permit internal-only externs outside stdlib/\n")) (ELit (LString "  --release         accepted, ignored — the interpreter has no release mode.\n")) (ELit (LString "                    There is no `build --release`; a native build is always\n")) (ELit (LString "                    optimized. Kept so a `--release` in a shared script does\n")) (ELit (LString "                    not make `medaka run` fail.\n")) (ELit (LString "\n")) (ELit (LString "Args after <file.mdk> are passed through to the program's own `args`.\n")) (ELit (LString "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n")))))
 (DTypeSig false "runArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "runArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope on stderr"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--allow-internal")))) (ELit (LString "permit internal-only externs outside stdlib/"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--release")))) (ELit (LString "accepted and ignored (eval is never optimized)"))))))
 (DTypeSig false "runEvalPerf" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runEvalPerf" ((PVar "perfOn") (PVar "target") (PVar "perfT0") (PVar "perfTCheck") PWild) (EBlock (DoLet false false (PVar "perfTEval") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "eval"))) (EBinOp "-" (EVar "perfTEval") (EVar "perfTCheck"))) (EVar "target"))) (DoExpr (EApp (EApp (EVar "emitTotal") (EVar "perfOn")) (EBinOp "-" (EVar "perfTEval") (EVar "perfT0"))))))
 (DTypeSig false "runRunCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runRunCmd" ((PVar "argv")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfSinkOn")) (EBinOp "&&" (EVar "jsonMode") (EVar "perfOn")))) (DoExpr (EMatch (EApp (EVar "runArgvFilter") (EVar "argv")) (arm (PList) () (EApp (EVar "runAbort") (ELit (LString "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]")))) (arm (PCons (PVar "target") PWild) ((GBool (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "target")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "target")) (ELit (LString "-")))))) (EApp (EVar "runAbort") (EApp (EApp (EVar "unknownFlagMessage") (EVar "runArgSpec")) (EVar "target")))) (arm (PCons (PVar "target") (PVar "progArgs")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--allow-internal"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "progArgsRef")) (EVar "progArgs"))) (DoLet false false (PVar "rsrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "rtPath")))) (DoLet false false (PVar "csrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "corePath")))) (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false PWild (EApp (EVar "orExit") (EApp (EApp (EVar "mapErr") (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "target"))) (EApp (EVar "parseResult") (EVar "tsrc"))))) (DoLet false false (PVar "modsWithPath") (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EApp (EVar "readFileSafe") (EVar "target"))) (EVar "target")) (EVar "stdlibDir")) (EVar "lerr")))) (DoExpr (EApp (EVar "panic") (ELit (LString "unreachable")))))) (arm (PCon "Ok" (PVar "mp")) () (EVar "mp")))) (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EVar "pathMap"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "perfTLoad") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "load"))) (EBinOp "-" (EVar "perfTLoad") (EVar "perfT0"))) (EVar "target"))) (DoExpr (EMatch (EVar "mods") (arm (PList (PTuple (PVar "runMid") (PVar "runDecls"))) () (EBlock (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "runMid")) (EVar "rsrc")) (EVar "csrc")) (EVar "runDecls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") PWild PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags"))) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))) (arm PWild () (EApp (EVar "runAbort") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs"))))))))) (arm PWild () (EBlock (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EApp (EVar "runAbort") (EVar "errText"))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedOrGeneric") (EVar "allowInternal")) (EVar "trusted")) (EVar "pathMap")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "residual")))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EVar "projWarns")) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))))))))) (arm PWild () (EApp (EVar "runAbort") (EVar "resDiags")))))))))))))))
+(DFunDef false "runRunCmd" ((PVar "argv")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfSinkOn")) (EBinOp "&&" (EVar "jsonMode") (EVar "perfOn")))) (DoExpr (EMatch (EApp (EVar "runArgvFilter") (EVar "argv")) (arm (PList) () (EApp (EVar "runAbort") (ELit (LString "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]")))) (arm (PCons (PVar "target") PWild) ((GBool (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "target")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "target")) (ELit (LString "-")))))) (EApp (EVar "runAbort") (EApp (EApp (EVar "unknownFlagMessage") (EVar "runArgSpec")) (EVar "target")))) (arm (PCons (PVar "target") (PVar "progArgs")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--allow-internal"))) (EVar "argv"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "progArgsRef")) (EVar "progArgs"))) (DoLet false false (PVar "rsrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "rtPath")))) (DoLet false false (PVar "csrc") (EApp (EVar "orExit") (EApp (EVar "readPreludeFile") (EVar "corePath")))) (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false PWild (EApp (EVar "orExit") (EApp (EApp (EVar "mapErr") (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "target"))) (EApp (EVar "parseResult") (EVar "tsrc"))))) (DoLet false false (PVar "modsWithPath") (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EApp (EVar "readFileSafe") (EVar "target"))) (EVar "target")) (EVar "stdlibDir")) (EVar "lerr")))) (DoExpr (EApp (EVar "panic") (ELit (LString "unreachable")))))) (arm (PCon "Ok" (PVar "mp")) () (EVar "mp")))) (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropModPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EVar "pathMap"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "perfTLoad") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "load"))) (EBinOp "-" (EVar "perfTLoad") (EVar "perfT0"))) (EVar "target"))) (DoExpr (EMatch (EVar "mods") (arm (PList (PTuple (PVar "runMid") (PVar "runDecls"))) () (EBlock (DoLet false false (PVar "tsrc") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "surface") (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "runMid")) (EVar "rsrc")) (EVar "csrc")) (EVar "runDecls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoExpr (EMatch (EFieldAccess (EVar "surface") "resolveClean") (arm (PCon "False") () (EBlock (DoLet false false (PVar "surfaceDiags") (EApp (EApp (EVar "analyzeFinish") (EVar "surface")) (EListLit))) (DoExpr (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "surfaceDiags"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "surfaceDiags")))))))))) (arm (PCon "True") () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") (PVar "perMod") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "residualHit") (EApp (EVar "hadTypeErrors") (ELit LUnit))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "analyzeFinish") (EVar "surface")) (EApp (EVar "tcHalfOfPerModule") (EVar "perMod")))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags")) (arm (PList) () (EMatch (EVar "residualHit") (arm (PCon "True") () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "target")) (EVar "pathMap")) (EVar "residual")))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EVar "residualOrGeneric") (EVar "pathMap")) (EVar "target")) (EVar "residual")))))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EApp (EApp (EApp (EVar "allWarnTriples") (EVar "tsrc")) (EVar "target")) (EVar "diags"))) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))))) (arm (PVar "errs") () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "diags"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs"))))))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "resolvePairs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EVar "resolvePairs"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") (PVar "perMod") (PVar "residual") PWild) (EApp (EApp (EApp (EVar "elaborateRun") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "elaboratedProjectDiags") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild PWild) () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EBlock (DoLet false false (PVar "jsonTriples") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EApp (EApp (EApp (EApp (EVar "elaboratedProjectJsonTriples") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")))) (DoExpr (EApp (EVar "runAbortJson") (EVar "jsonTriples"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EVar "errText"))))) (arm (PTuple (PCon "None") (PVar "projWarns") PWild) () (EMatch (EApp (EVar "hadTypeErrors") (ELit LUnit)) (arm (PCon "True") () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EApp (EApp (EVar "residualJsonTriples") (EVar "target")) (EVar "pathMap")) (EVar "residual"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EVar "residualOrGeneric") (EVar "pathMap")) (EVar "target")) (EVar "residual")))))) (arm (PCon "False") () (EBlock (DoLet false false (PVar "perfTCheck") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "check"))) (EBinOp "-" (EVar "perfTCheck") (EVar "perfTLoad"))) (EVar "target"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "finishRunEval") (EVar "target")) (EVar "jsonMode")) (ETuple (EVar "coreE") (EVar "modsE"))) (EVar "mods")) (EVar "projWarns")) (EApp (EApp (EApp (EApp (EVar "runEvalPerf") (EVar "perfOn")) (EVar "target")) (EVar "perfT0")) (EVar "perfTCheck")))))))))))) (arm PWild () (EMatch (EVar "jsonMode") (arm (PCon "True") () (EBlock (DoLet false false (PVar "jsonTriples") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EVar "resolveErrorJsonTriples") (EVar "resolvePairs")))) (DoExpr (EApp (EVar "runAbortJson") (EVar "jsonTriples"))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EVar "resDiags")))))))))))))))))
 (DTypeSig false "desugarPair" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugarPair" ((PTuple (PVar "mid") (PVar "p"))) (ETuple (EVar "mid") (EApp (EVar "desugar") (EVar "p"))))
 (DTypeSig false "dropModPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "dropModPath" ((PTuple (PVar "mid") PWild (PVar "prog"))) (ETuple (EVar "mid") (EVar "prog")))
 (DTypeSig false "modIdToPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "modIdToPath" ((PTuple (PVar "mid") (PVar "path") PWild)) (ETuple (EVar "mid") (EVar "path")))
-(DTypeSig false "elaborateRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable")))))))
-(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncIOMain"))) (EVar "modsD"))) (EVar "plain")))))))
+(DTypeSig false "elaborateRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "ElabResult"))))))
+(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")) (EApp (EApp (EVar "plainPerModuleOf") (EVar "plain")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")))) (EVar "plain")))))))
+(DTypeSig false "plainPerModuleOf" (TyFun (TyCon "ElabResult") (TyFun (TyCon "ElabResult") (TyCon "ElabResult"))))
+(DFunDef false "plainPerModuleOf" ((PTuple PWild PWild (PVar "perMod") PWild PWild) (PTuple (PVar "coreW") (PVar "modsW") PWild (PVar "residualW") (PVar "evW"))) (ETuple (EVar "coreW") (EVar "modsW") (EVar "perMod") (EVar "residualW") (EVar "evW")))
 (DTypeSig false "runProgramOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "runProgramOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "evalModulesOutputRun") (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))

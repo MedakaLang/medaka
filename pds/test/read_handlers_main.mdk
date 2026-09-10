@@ -420,6 +420,59 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
       "listRecords-cursor-page-two"
       (page2Uris == uriA && page2Cursor == "<missing:cursor>")
       "uris=\{page2Uris} cursor=\{page2Cursor}"
+  -- ── the paging edges of the bounded listing path ──────────────────────────
+  --
+  -- `listRecords` selects on paths and decodes only the page, so the tail it
+  -- used to materialize is no longer there to be counted. These five edges are
+  -- where that could show: each expected answer is atproto's, decided from the
+  -- corpus's own two rkeys before anything ran.
+  let listEmpty =
+    readJson
+      server
+      mid
+      "com.atproto.repo.listRecords?repo=\{did}&collection=app.bsky.feed.like"
+  let cellEmptyCollection =
+    check
+      "listRecords-empty-collection"
+      (rkeysOf listEmpty == ""
+        && fieldText "cursor" listEmpty == "<missing:cursor>")
+      "uris=\{rkeysOf listEmpty} cursor=\{fieldText "cursor" listEmpty}"
+  -- Exactly the limit and nothing past it: a cursor here would promise a page
+  -- that does not exist.
+  let atLimit = readJson server mid (listRoute did "&limit=2")
+  let cellAtLimit =
+    check
+      "listRecords-page-exactly-at-limit"
+      (rkeysOf atLimit == "\{uriB},\{uriA}"
+        && fieldText "cursor" atLimit == "<missing:cursor>")
+      "uris=\{rkeysOf atLimit} cursor=\{fieldText "cursor" atLimit}"
+  -- The cursor names the last entry of the descending order, so the remainder
+  -- is empty and carries no further cursor.
+  let afterLast = readJson server mid (listRoute did "&cursor=medaka-a")
+  let cellAfterLast =
+    check
+      "listRecords-cursor-at-last-entry"
+      (rkeysOf afterLast == ""
+        && fieldText "cursor" afterLast == "<missing:cursor>")
+      "uris=\{rkeysOf afterLast} cursor=\{fieldText "cursor" afterLast}"
+  -- A cursor is a position in the order, not a stored key: `medaka-aa` sorts
+  -- between the two rkeys and need not exist for the page after it to.
+  let ghostCursor =
+    readJson server mid (listRoute did "&reverse=true&cursor=medaka-aa")
+  let cellGhostCursor =
+    check
+      "listRecords-cursor-nonexistent-rkey"
+      (rkeysOf ghostCursor == uriB
+        && fieldText "cursor" ghostCursor == "<missing:cursor>")
+      "uris=\{rkeysOf ghostCursor} cursor=\{fieldText "cursor" ghostCursor}"
+  -- The same limit-and-cursor step as `listRecords-limit-cursor`, ascending:
+  -- the emitted cursor must be the ASCENDING page's last rkey.
+  let ascPage1 = readJson server mid (listRoute did "&reverse=true&limit=1")
+  let cellAscendingPage =
+    check
+      "listRecords-reverse-limit-cursor"
+      (rkeysOf ascPage1 == uriA && fieldText "cursor" ascPage1 == "medaka-a")
+      "uris=\{rkeysOf ascPage1} cursor=\{fieldText "cursor" ascPage1}"
   let cells =
     cellGetRecord
       + cellDeleted
@@ -433,8 +486,13 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
       + cellAscending
       + cellPage1
       + cellPage2
-  let () = println "reads: \{intToString cells}/12 corpus-graded read routes"
-  if cells == 12 then
+      + cellEmptyCollection
+      + cellAtLimit
+      + cellAfterLast
+      + cellGhostCursor
+      + cellAscendingPage
+  let () = println "reads: \{intToString cells}/17 corpus-graded read routes"
+  if cells == 17 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

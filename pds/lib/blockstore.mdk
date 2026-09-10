@@ -105,6 +105,15 @@ export
 blockStoreEntries : BlockStore -> List (Cid, Array Int)
 blockStoreEntries (BlockStore m) = copyEntries (entryValues (entries m))
 
+{- | Canonical CID-sorted view of which CIDs are present, carrying no bytes.
+
+   `blockStoreEntries` answers the same question but copies every block's bytes
+   to do it, so a caller that only needs the names pays the whole store. -}
+export
+blockStoreCids : BlockStore -> List Cid
+blockStoreCids (BlockStore entries) =
+  map ((_, (cid, _)) => cid) (toList entries)
+
 -- | Verify and immutably merge every entry from the right-hand store.
 export
 blockStoreMerge : BlockStore -> BlockStore -> Result String BlockStore

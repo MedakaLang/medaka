@@ -79,7 +79,7 @@ Support files:
 | `compiler/tools/lsp.mdk` | LSP/stdio: diagnostics/fmt/symbols/hover/definition/highlight/completion/inlay |
 | `compiler/tools/mcp.mdk` | `medaka mcp` — MCP stdio, 8 tools (check/type_at/symbols/definition/references/fmt/lint/test). **Prefer over grep/Bash.** `docs/ops/MCP.md` |
 | `compiler/tools/lint.mdk` | `medaka lint` — AST linter, RAW pre-desugar AST; `Rule`/`CrossFileRule`; `--fix`/`--deny`/`--disable`/`--only` |
-| `compiler/tools/doctest.mdk` | Doctest extraction. **[P-DOCTEST-RESIDUAL]** #1223 OPEN: no-import FIXED, `runMulti` (import-bearing) not — pinned `diff_compiler_origin_agreement.sh`. Derive: `grep -n 'SAME multi-module path' compiler/tools/test_cmd.mdk` |
+| `compiler/tools/doctest.mdk` | Doctest extraction. **[P-DOCTEST-RESIDUAL]** #1223 OPEN: no-import FIXED (`singleRootId` → `canonicalPathId`, last-root), import-bearing NOT — `prepareMulti` loads through `loadProgramFilesLocatedE`, which stamps the entry first-root. Pinned `diff_compiler_origin_agreement.sh`. Derive: `grep -n 'FIRST containing root' compiler/driver/loader.mdk` |
 | `compiler/tools/check.mdk` / `check_policy.mdk` | `medaka check` entry + policy checker |
 | `compiler/tools/test_cmd.mdk` / `prop_runner.mdk` | `medaka test` — doctests + property tests |
 | `compiler/tools/doc.mdk` / `new_cmd.mdk` / `repl.mdk` | `medaka doc` / `new` / `repl` |
@@ -349,20 +349,34 @@ their final path, promoted via same-filesystem `mv`.
 🚨 **[B-NO-BORROW-ISOLATED] In a worktree, never `cp` an emitter from another tree — just
 `make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
 and that is FINE. Three cases, measured on this box (Debian 13, 12-core/32GB) on
-2026-09-08, after both links moved to ThinLTO (#2725; see "PARALLEL CODEGEN" in
-`test/build_native_medaka.sh`), each with `time sh test/build_native_medaka.sh`:
+2026-09-08, with both links on module-partitioned ThinLTO (#2725, #2752; see "PARALLEL
+CODEGEN" in `test/build_native_medaka.sh`), each with `time sh test/build_native_medaka.sh`:
   - **cache-served fresh worktree** (no `./medaka`/`./medaka_emitter` present, cache live) —
-    **~1s**, the usual case: the build cache serves a binary another tree already built from
+    **1s**, the usual case: the build cache serves a binary another tree already built from
     this exact source, and only the FIRST worktree at a given source state pays a real build.
-    Unaffected by the codegen path.
+    Unaffected by the codegen path. ⚠️ That cache holds **32 entries** (`MEDAKA_BUILD_CACHE_MAX`,
+    a deliberate policy sized for concurrent multi-session use, not the accidental 8 an earlier
+    revision of this file described, #2781) — a session doing enough forced rebuilds can still
+    evict its own emitter entry and pay a full seed bootstrap on the next "fresh worktree"
+    (measured against the old cap, same session: **68s**), but a miss caused by eviction now
+    reports distinguishably from a first-ever miss, so that cost is legible instead of a
+    mystery 1s→90s jump.
   - **warm forced full rebuild**, `FORCE_EMITTER_REBUILD=1 MEDAKA_BUILD_CACHE_DIR=` with the
-    emitter already present — **104s** ThinLTO (stage B link 27s); the plain-`clang -O2`
-    fallback measured **157s** (stage B link 65s) in the same hour. Box load moves these
+    emitter already present — **96s / 89s** on a cold `$MEDAKA_SCRATCH` ThinLTO cache, **43s**
+    once that cache holds this exact source. Interleaved against the 8-partition default it
+    replaced, same hour: 99s / 90s, which could not reach a warm figure at all before its
+    cache keys stopped carrying the per-build `mktemp` path. Box load moves all of these
     30–40% run to run; compare arms interleaved, never across sessions.
   - **cold, cache forced off** (no `./medaka`/`./medaka_emitter` present, forcing the seed
-    bootstrap) — not re-measured since ThinLTO. `test/bootstrap_from_seed.sh` still links the
-    seed and `emitter2` with plain `clang -O2`, so expect roughly the warm figure plus two
-    ~35s serial links and one extra emit.
+    bootstrap) — **89s** with a warm ThinLTO cache. `test/bootstrap_from_seed.sh` still links
+    the seed and `emitter2` with plain `clang -O2`, which is where that time goes.
+  ⚠️ A one-module edit costs the floor (partitioning + the partition compiles) plus the edited
+  partition and its importers. Measured, warm cache, one-line edits: `compiler/tools/lint.mdk`
+  — **19s of stage-B link against a 14s no-edit floor, 7 of 117 ThinLTO cache entries
+  rewritten**; `compiler/frontend/desugar.mdk` — 18 entries, and stage A legitimately rebuilds
+  because it is in the emitter's closure. Anything per-build that reaches the LTO unit destroys
+  this: the build-provenance stamps did until they moved to their own non-LTO translation unit,
+  and cost every entry while they did. Keep them out.
 So the worst case is a few minutes, not the stale "~31s" figure, which is off by an order of
 magnitude. Cold exceeds warm-forced by the seed bootstrap, the only ordering physically
 possible; a cold figure BELOW the warm-forced one means the cache or an existing emitter was

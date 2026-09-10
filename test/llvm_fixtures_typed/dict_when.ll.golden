@@ -105,6 +105,7 @@ declare i64 @mdk_read_file(i64)
 declare i64 @mdk_read_file_bytes(i64)
 declare i64 @mdk_write_file(i64, i64)
 declare i64 @mdk_write_file_bytes(i64, i64)
+declare i64 @mdk_write_file_mode(i64, i64, i64)
 declare i64 @mdk_append_file(i64, i64)
 declare i64 @mdk_file_exists(i64)
 declare i64 @mdk_canonicalize_path(i64)
@@ -118,6 +119,7 @@ declare i64 @mdk_remove_file(i64)
 declare i64 @mdk_rename(i64, i64)
 declare i64 @mdk_remove_dir(i64)
 declare i64 @mdk_stat_file(i64)
+declare i64 @mdk_file_mode(i64)
 declare i64 @mdk_run_command(i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
@@ -168,6 +170,7 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
@@ -176,7 +179,7 @@ entry:
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 1, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_when(i64 ptrtoint (ptr @mdk_dc_0 to i64), i64 3, i64 %t2)
+  %t3 = call i64 @mdk_when(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 3, i64 %t2)
   %t4 = alloca i64
   %t7 = and i64 %t3, 1
   %t8 = icmp eq i64 %t7, 1
@@ -216,6 +219,7 @@ decend5:
   call void @mdk_print_int(i64 %t24)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_when(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = ashr i64 %arg1, 1
@@ -228,6 +232,7 @@ else2:
   ret i64 %t3
 }
 
+; mdk-module impl:Option_pure
 define i64 @mdk_impl_Option_pure(i64 %arg0) {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
@@ -238,6 +243,7 @@ entry:
   ret i64 %t2
 }
 
+; mdk-module impl:Option_andThen
 define i64 @mdk_impl_Option_andThen(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
@@ -314,4 +320,5 @@ decend1:
   ret i64 %t41
 }
 
-@mdk_dc_0 = internal constant [1 x i64] [i64 6952617947198]
+; mdk-module program
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 6952617947198]

@@ -53,6 +53,46 @@ export
 reverseL : List a -> List a
 reverseL xs = reverse xs
 
+-- The longest positional prefix of `steps` whose recorded keys match `keys`,
+-- never covering the last of `total` items, truncated at the first mismatch and
+-- at the first `None` key -- with the last matching step, which is what a memo
+-- restores from.  `keyOf` reads a step's recorded key.
+--
+-- ONE rule, shared by every prefix memo keyed this way rather than copied into
+-- each: two positional matchers that must agree forever, with nothing checking
+-- that they do, is the shape the two eval drivers drifted into.
+export
+matchingStepPrefix : (a -> String) ->
+  List a ->
+  List (Option String) ->
+  Int ->
+  (List a, Option a)
+matchingStepPrefix keyOf steps keys total =
+  let (acc, last) = matchingStepPrefixGo keyOf steps keys total 0 [] None
+  (reverseL acc, last)
+
+-- `n` is `listLen acc`, carried rather than recomputed per step.
+matchingStepPrefixGo : (a -> String) ->
+  List a ->
+  List (Option String) ->
+  Int ->
+  Int ->
+  List a ->
+  Option a ->
+  (List a, Option a)
+matchingStepPrefixGo _ [] _ _ _ acc last = (acc, last)
+matchingStepPrefixGo _ _ [] _ _ acc last = (acc, last)
+matchingStepPrefixGo keyOf (st :: sts) (k :: ks) total n acc last =
+  if n + 1 >= total then
+    (acc, last)
+  else match k
+    Some key =>
+      if key == keyOf st then
+        matchingStepPrefixGo keyOf sts ks total (n + 1) (st :: acc) (Some st)
+      else
+        (acc, last)
+    None => (acc, last)
+
 -- DECLINED (Foldable dispatch + no short-circuit, see `contains` above).
 -- Kept hand-rolled, unchanged.
 export

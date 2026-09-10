@@ -1,0 +1,7 @@
+-- Two modules spell a type `Color`; only `a` declares `Arbitrary` for its own.
+-- The runner must not hand `a`'s nullary `Mk` to a prop declared over `b`'s
+-- `Mk Int`, so it declines and reports that it has no generator.
+import a
+import b.{Color(..), payload}
+
+prop "payload is an Int, always" (c : Color) = payload c >= 0 || payload c < 0

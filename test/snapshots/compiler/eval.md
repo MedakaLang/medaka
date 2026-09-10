@@ -1,5 +1,5 @@
 # META
-source_lines=4862
+source_lines=4877
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1524,10 +1524,11 @@ routeTag env (RDictFwd d) = match lookupEnv env d
   VDict key _ => key
   _ => ""
 routeTag _ (RLocal _ _) = ""
--- RScalar tags an arithmetic EBinOp for the backend's Float path; it is never a
--- typeclass dispatch route, so eval never routes a method through it.
+-- RScalar tags an EBinOp with its grounded scalar type (Float arithmetic / Int
+-- comparison) for the backend; it is never a typeclass dispatch route, so eval
+-- never routes a method through it.
 routeTag _ (RScalar _) =
-  panic "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"
+  panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
 
 -- a constrained-function occurrence: apply one runtime dictionary per resolved
 -- route as a leading argument (matching the dict params dict_pass prepended).
@@ -1561,9 +1562,10 @@ dictOfRoute _ RNone = VDict "" []
 -- no-op dict.  (Pre-S1 this arm's comment claimed "RLocal never carries a dict"; that
 -- invariant was the S-1 bug and is now false — see ast.mdk's Route doc + S9.)
 dictOfRoute _ (RLocal _ _) = VDict "" []
--- RScalar is an arithmetic binop tag (backend Float path), never a dict route.
+-- RScalar is a scalar-type binop tag (Float arithmetic / Int comparison),
+-- never a dict route.
 dictOfRoute _ (RScalar _) =
-  panic "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"
+  panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
 
 -- narrow a method VMulti by a route, returning the narrowed value and any
 -- forwarded requires (non-empty only for RDictFwd return-position sites where the
@@ -1601,9 +1603,10 @@ methodAtNarrow env method v (RDictFwd d) = match lookupEnv env d
 -- directly (lookupEnv) and never calls methodAtNarrow with RLocal.  This arm
 -- exists only to keep the match exhaustive; it returns the value unnarrowed.
 methodAtNarrow _ _ v (RLocal _ _) = (v, [])
--- RScalar is an arithmetic binop tag (backend Float path), never a dispatch route.
+-- RScalar is a scalar-type binop tag (Float arithmetic / Int comparison),
+-- never a dispatch route.
 methodAtNarrow _ _ _ (RScalar _) =
-  panic "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"
+  panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
 
 oneOrMultiV : List (Value e) -> List (Value e) -> Value e
 oneOrMultiV [v] _ = v
@@ -1617,6 +1620,7 @@ oneOrMultiV many _ = VMulti many
 -- while a canonical key always does — so this can't cross-match.  This is what
 -- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
 -- narrow to the one the checker picked instead of first-impl-wins.
+export
 hasTag : String -> Value e -> Bool
 hasTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
 hasTag _ _ = False
@@ -2988,7 +2992,7 @@ updateEvalLoc (Loc f sl sc el ec)
 -- left in the compiler — every OTHER compile-time channel now renders through
 -- `driver.diagnostics.ppDiagCliLines` (severity prefix + `file:L:C:` + caret).
 -- The other two are filed, not fixed, and are NOT this site's residual:
---   • `runCheckModules`'s multi-module warning dump (`compiler/tools/check.mdk`
+--   • `runCheckModulesFromDiags`'s multi-module warning dump (`compiler/tools/check.mdk`
 --     `entryExhaust` → `frontend.exhaust.exhaustToLinesWith`), printed bare on
 --     STDOUT by `checkRoute`'s multi-module arm — capital `Warning:`, no loc, no
 --     caret, where the single-file arm strips and re-emits the same warnings
@@ -4641,6 +4645,10 @@ pFileExists : Value e -> <FileRead "_" | e> Value e
 pFileExists (VString path) = VBool (fileExists path)
 pFileExists _ = panic "fileExists: not a String"
 
+pFileMode : Value e -> <FileRead "_" | e> Value e
+pFileMode (VString path) = resultToValue (mapResultOk VInt (fileMode path))
+pFileMode _ = panic "fileMode: not a String"
+
 pCanonicalizePath : Value e -> <FileRead "_" | e> Value e
 pCanonicalizePath (VString path) = VString (canonicalizePath path)
 pCanonicalizePath _ = panic "canonicalizePath: not a String"
@@ -4666,6 +4674,11 @@ pWriteFileBytes : Value e -> Value e -> <FileWrite "_" | e> Value e
 pWriteFileBytes (VString path) bs =
   unitResultToValue (writeFileBytes path (unIntArray bs))
 pWriteFileBytes _ _ = panic "writeFileBytes: expected String (Array Int)"
+
+pWriteFileMode : Value e -> Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFileMode (VString path) (VInt mode) (VString s) =
+  unitResultToValue (writeFileMode path mode s)
+pWriteFileMode _ _ _ = panic "writeFileMode: expected String Int String"
 
 pAppendFile : Value e -> Value e -> <FileWrite "_" | e> Value e
 pAppendFile (VString path) (VString s) = unitResultToValue (appendFile path s)
@@ -4752,11 +4765,13 @@ ioExternBindings _ = [
   ("readFile", prim1 pReadFile),
   ("readFileBytes", prim1 pReadFileBytes),
   ("fileExists", prim1 pFileExists),
+  ("fileMode", prim1 pFileMode),
   ("canonicalizePath", prim1 pCanonicalizePath),
   ("listDir", prim1 pListDir),
   ("statFile", prim1 pStatFile),
   ("writeFile", prim2M pWriteFile),
   ("writeFileBytes", prim2M pWriteFileBytes),
+  ("writeFileMode", prim3M pWriteFileMode),
   ("appendFile", prim2M pAppendFile),
   ("makeDir", prim1 pMakeDir),
   ("removeFile", prim1 pRemoveFile),
@@ -5352,7 +5367,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "routeTag" ((PVar "env") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") PWild) () (EVar "key")) (arm PWild () (ELit (LString "")))))
 (DFunDef false "routeTag" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") PWild) () (EVar "key")) (arm PWild () (ELit (LString "")))))
 (DFunDef false "routeTag" (PWild (PCon "RLocal" PWild PWild)) (ELit (LString "")))
-(DFunDef false "routeTag" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
+(DFunDef false "routeTag" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig true "applyDicts" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "applyDicts" (PWild (PVar "v") (PList)) (EVar "v"))
 (DFunDef false "applyDicts" ((PVar "env") (PVar "v") (PCons (PVar "r") (PVar "rest"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "apply") (EVar "v")) (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "r")))) (EVar "rest")))
@@ -5365,19 +5380,19 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs"))) (arm PWild () (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))))
 (DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))
-(DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
+(DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig true "methodAtNarrow" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Route") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "methodAtNarrow" ((PVar "env") PWild (PVar "v") (PCon "RNone")) (ETuple (EApp (EApp (EVar "narrowUnrouted") (EVar "env")) (EVar "v")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RKey" (PVar "key") PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RLocal" PWild PWild)) (ETuple (EVar "v") (EListLit)))
-(DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
+(DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "oneOrMultiV" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
 (DFunDef false "oneOrMultiV" ((PList) (PVar "original")) (EApp (EVar "VMulti") (EVar "original")))
 (DFunDef false "oneOrMultiV" ((PVar "many") PWild) (EApp (EVar "VMulti") (EVar "many")))
-(DTypeSig false "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DTypeSig true "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
 (DFunDef false "hasTag" ((PVar "tag") (PCon "VTypedImpl" (PVar "t") (PVar "k") PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))))
 (DFunDef false "hasTag" (PWild PWild) (EVar "False"))
 (DTypeSig false "matchesTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
@@ -6311,6 +6326,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pFileExists" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFileExists" ((PCon "VString" (PVar "path"))) (EApp (EVar "VBool") (EApp (EVar "fileExists") (EVar "path"))))
 (DFunDef false "pFileExists" (PWild) (EApp (EVar "panic") (ELit (LString "fileExists: not a String"))))
+(DTypeSig false "pFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DFunDef false "pFileMode" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "VInt")) (EApp (EVar "fileMode") (EVar "path")))))
+(DFunDef false "pFileMode" (PWild) (EApp (EVar "panic") (ELit (LString "fileMode: not a String"))))
 (DTypeSig false "pCanonicalizePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pCanonicalizePath" ((PCon "VString" (PVar "path"))) (EApp (EVar "VString") (EApp (EVar "canonicalizePath") (EVar "path"))))
 (DFunDef false "pCanonicalizePath" (PWild) (EApp (EVar "panic") (ELit (LString "canonicalizePath: not a String"))))
@@ -6328,6 +6346,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pWriteFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pWriteFileBytes" ((PCon "VString" (PVar "path")) (PVar "bs")) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "writeFileBytes") (EVar "path")) (EApp (EVar "unIntArray") (EVar "bs")))))
 (DFunDef false "pWriteFileBytes" (PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileBytes: expected String (Array Int)"))))
+(DTypeSig false "pWriteFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "pWriteFileMode" ((PCon "VString" (PVar "path")) (PCon "VInt" (PVar "mode")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "mode")) (EVar "s"))))
+(DFunDef false "pWriteFileMode" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileMode: expected String Int String"))))
 (DTypeSig false "pAppendFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pAppendFile" ((PCon "VString" (PVar "path")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "appendFile") (EVar "path")) (EVar "s"))))
 (DFunDef false "pAppendFile" (PWild PWild) (EApp (EVar "panic") (ELit (LString "appendFile: expected String String"))))
@@ -6371,7 +6392,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
 (DFunDef false "pOsEntropyBytes" (PWild) (EApp (EVar "panic") (ELit (LString "osEntropyBytes: expected Int"))))
 (DTypeSig true "ioExternBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "prim1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "prim1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "prim1") (EVar "pFileExists"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "prim1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "prim1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "prim1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "prim2M") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "prim2M") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "prim2M") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "prim1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "prim1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "prim1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "prim2M") (EVar "pRename"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
+(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "prim1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "prim1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "prim1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "prim1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "prim1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "prim1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "prim1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "prim2M") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "prim2M") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "prim3M") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "prim2M") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "prim1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "prim1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "prim1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "prim2M") (EVar "pRename"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
@@ -6874,7 +6895,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "routeTag" ((PVar "env") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") PWild) () (EVar "key")) (arm PWild () (ELit (LString "")))))
 (DFunDef false "routeTag" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") PWild) () (EVar "key")) (arm PWild () (ELit (LString "")))))
 (DFunDef false "routeTag" (PWild (PCon "RLocal" PWild PWild)) (ELit (LString "")))
-(DFunDef false "routeTag" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
+(DFunDef false "routeTag" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig true "applyDicts" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "applyDicts" (PWild (PVar "v") (PList)) (EVar "v"))
 (DFunDef false "applyDicts" ((PVar "env") (PVar "v") (PCons (PVar "r") (PVar "rest"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "apply") (EVar "v")) (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "r")))) (EVar "rest")))
@@ -6887,19 +6908,19 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs"))) (arm PWild () (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))))
 (DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))
-(DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
+(DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig true "methodAtNarrow" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Route") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "methodAtNarrow" ((PVar "env") PWild (PVar "v") (PCon "RNone")) (ETuple (EApp (EApp (EVar "narrowUnrouted") (EVar "env")) (EVar "v")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RKey" (PVar "key") PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RLocal" PWild PWild)) (ETuple (EVar "v") (EListLit)))
-(DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
+(DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "oneOrMultiV" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
 (DFunDef false "oneOrMultiV" ((PList) (PVar "original")) (EApp (EVar "VMulti") (EVar "original")))
 (DFunDef false "oneOrMultiV" ((PVar "many") PWild) (EApp (EVar "VMulti") (EVar "many")))
-(DTypeSig false "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DTypeSig true "hasTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
 (DFunDef false "hasTag" ((PVar "tag") (PCon "VTypedImpl" (PVar "t") (PVar "k") PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))))
 (DFunDef false "hasTag" (PWild PWild) (EVar "False"))
 (DTypeSig false "matchesTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
@@ -7833,6 +7854,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pFileExists" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFileExists" ((PCon "VString" (PVar "path"))) (EApp (EVar "VBool") (EApp (EVar "fileExists") (EVar "path"))))
 (DFunDef false "pFileExists" (PWild) (EApp (EVar "panic") (ELit (LString "fileExists: not a String"))))
+(DTypeSig false "pFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DFunDef false "pFileMode" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "VInt")) (EApp (EVar "fileMode") (EVar "path")))))
+(DFunDef false "pFileMode" (PWild) (EApp (EVar "panic") (ELit (LString "fileMode: not a String"))))
 (DTypeSig false "pCanonicalizePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pCanonicalizePath" ((PCon "VString" (PVar "path"))) (EApp (EVar "VString") (EApp (EVar "canonicalizePath") (EVar "path"))))
 (DFunDef false "pCanonicalizePath" (PWild) (EApp (EVar "panic") (ELit (LString "canonicalizePath: not a String"))))
@@ -7850,6 +7874,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pWriteFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pWriteFileBytes" ((PCon "VString" (PVar "path")) (PVar "bs")) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "writeFileBytes") (EVar "path")) (EApp (EVar "unIntArray") (EVar "bs")))))
 (DFunDef false "pWriteFileBytes" (PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileBytes: expected String (Array Int)"))))
+(DTypeSig false "pWriteFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "pWriteFileMode" ((PCon "VString" (PVar "path")) (PCon "VInt" (PVar "mode")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "mode")) (EVar "s"))))
+(DFunDef false "pWriteFileMode" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileMode: expected String Int String"))))
 (DTypeSig false "pAppendFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pAppendFile" ((PCon "VString" (PVar "path")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "appendFile") (EVar "path")) (EVar "s"))))
 (DFunDef false "pAppendFile" (PWild PWild) (EApp (EVar "panic") (ELit (LString "appendFile: expected String String"))))
@@ -7893,7 +7920,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
 (DFunDef false "pOsEntropyBytes" (PWild) (EApp (EVar "panic") (ELit (LString "osEntropyBytes: expected Int"))))
 (DTypeSig true "ioExternBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "prim1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "prim1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "prim1") (EVar "pFileExists"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "prim1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "prim1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "prim1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "prim2M") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "prim2M") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "prim2M") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "prim1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "prim1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "prim1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "prim2M") (EVar "pRename"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
+(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "prim1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "prim1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "prim1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "prim1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "prim1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "prim1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "prim1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "prim2M") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "prim2M") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "prim3M") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "prim2M") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "prim1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "prim1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "prim1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "prim2M") (EVar "pRename"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))

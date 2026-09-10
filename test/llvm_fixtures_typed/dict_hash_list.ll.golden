@@ -105,6 +105,7 @@ declare i64 @mdk_read_file(i64)
 declare i64 @mdk_read_file_bytes(i64)
 declare i64 @mdk_write_file(i64, i64)
 declare i64 @mdk_write_file_bytes(i64, i64)
+declare i64 @mdk_write_file_mode(i64, i64, i64)
 declare i64 @mdk_append_file(i64, i64)
 declare i64 @mdk_file_exists(i64)
 declare i64 @mdk_canonicalize_path(i64)
@@ -118,6 +119,7 @@ declare i64 @mdk_remove_file(i64)
 declare i64 @mdk_rename(i64, i64)
 declare i64 @mdk_remove_dir(i64)
 declare i64 @mdk_stat_file(i64)
+declare i64 @mdk_file_mode(i64)
 declare i64 @mdk_run_command(i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
@@ -168,6 +170,7 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
@@ -192,11 +195,12 @@ entry:
   %t10 = getelementptr i8, ptr %t8, i64 16
   store i64 %t7, ptr %t10
   %t11 = ptrtoint ptr %t8 to i64
-  %t12 = call i64 @mdk_impl_MyList_hash(i64 ptrtoint (ptr @mdk_dc_0 to i64), i64 %t11)
+  %t12 = call i64 @mdk_impl_MyList_hash(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11)
   %t13 = ashr i64 %t12, 1
   call void @mdk_print_int(i64 %t13)
   ret i32 0
 }
+; mdk-module program
 define i64 @mdk_hashListItems(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
@@ -269,18 +273,22 @@ decend1:
   ret i64 %t45
 }
 
+; mdk-module impl:Int_hash
 define i64 @mdk_impl_Int_hash(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
+; mdk-module impl:MyList_hash
 define i64 @mdk_impl_MyList_hash(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_hashListItems(i64 %arg0, i64 1, i64 %arg1)
   ret i64 %t0
 }
 
-@mdk_dc_0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
 define i64 @mdk_disp_hash_0_1(i64 %dict, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %dict to ptr

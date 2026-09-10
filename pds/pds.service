@@ -1,0 +1,43 @@
+# pds/pds.service — a systemd unit template for the built `pds serve` binary.
+#
+# This deployment binds LOOPBACK (the default `--bind`, no `--bind` flag
+# here) with Caddy reverse-proxying to it — see pds/Caddyfile and
+# docs/ops/PDS-DEPLOY.md. `--trusted-proxy` is still passed: Caddy forwards
+# `X-Forwarded-For`, and this process's peer really is Caddy on the same
+# box, so per-identity rate limiting can use that header
+# (docs/design/ATPROTO-PDS-DESIGN.md § "Rate limiting"). It is the operator
+# who is asserting that fact by passing the flag — this process has no way
+# to verify it.
+#
+# Replace the placeholders (WorkingDirectory, ExecStart's --did/--handle/
+# --hostname/paths, User/Group) before installing. Copy to
+# /etc/systemd/system/pds.service, then:
+#   systemctl daemon-reload && systemctl enable --now pds
+
+[Unit]
+Description=Medaka atproto PDS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pds
+Group=pds
+WorkingDirectory=/opt/pds
+ExecStart=/opt/pds/pdsd \
+	--did did:web:pds.example.com \
+	--handle alice.pds.example.com \
+	--hostname pds.example.com \
+	--key /opt/pds/secrets/key.hex \
+	--data /opt/pds/data \
+	--port 8080 \
+	--trusted-proxy
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pds/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

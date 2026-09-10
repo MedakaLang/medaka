@@ -663,6 +663,306 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    fallback every non-promoted recursive occurrence already takes; no fixture in the
    corpus exhibits it.
 
+13. **The double typecheck per `run`/`build` is gone, 2026-09-09** (#2705's last named unit,
+   PRs #2782 and the batch after it; the `build` child's own elaboration is the one
+   typecheck that remains by construction — see the ruling-3 question below).  Three moves:
+   (a) `elaborateModules` became the diagnostics-producing driver: its per-module worker is
+   `checkModuleFullDiags` (the constructor/match oracle seeded from the module's own decls —
+   the #2049 empty mint survives only ahead of the core pass — and `runFinalChecks`), and it
+   returns `(mid, (errs, warns))` per module in load order with the coherence verdict
+   attached, beside the residual and the evidence table; the two lists OVERLAP (every
+   per-module error is in the residual, which adds the drain's diagnostics; the list adds the
+   coherence verdict, which is pushed to neither channel), so a consumer renders one of them,
+   never both.  (b) The alias-qualified method spelling `A.mth` now survives inference
+   (#1386): the `UseAlias` occurrence rewrite in `renameAliasedMethods` is gone, the
+   spelling is supplied to the four spelling-keyed readers (the mark sets through
+   `withAliasMethodNames`; the dispatch index and the impl-row queries through
+   `originMethodName`), and `resolveAliasMethodSpellings` restores the origin name at the
+   end of the driver so eval and emit see the tree they always saw.  This was the
+   precondition: without it, dropping the check pass turned the correct reject of
+   `dict_fixtures/1386-alias-reproB` into an unrelated standalone's `42`, because the check
+   pass had been the only rejector.  It re-pins `dict_fixtures/1182-alias-dispatch-half-known-bad`
+   from its KNOWN-BAD `2 2` to the spec answer `1 2` — a value change, made on the
+   fixture's own instruction, that does not close #1182/#1265 (a bare occurrence with two
+   admitted declarations has no spelling to tell apart).  (c) `run`'s and `build`'s
+   multi-module arms render the per-module list through `typecheckDiagsFold` (the pass's factored tail) and
+   keep the `hadTypeErrors` residual gate (rendering the residual directly rather than
+   re-running `analyzeProject`).  Measured: `run` of a multi-module program −34.4% Ir; the
+   1,082-comparison `check`+`run` corpus moves at exactly the 1182 cell plus one located
+   error `run` now prints beside a definer-site reject (`b1-p4`, same verdict); self-compile
+   fixpoint C3a and C3b PASS after each move.  Also landed on the way: the LSP hover driver
+   now consults the prelude memo (`checkModulesK`; −68% Ir per hover), and #2719's premise
+   re-measured — the warm `import list` analyze is +5.6% over ruling 7's baseline after unit
+   1, the residue being the preamble's whole-graph derivations (51%) and the per-keystroke
+   resolve/desugar (23%), not the solver (0.4%).
+   **Open, for the owner:** ruling 3 (does the emitter run resolve) is now due — the `build`
+   child can become the single typecheck (it already receives the per-module diagnostics;
+   the mangled tree keeps its `Loc`s; the parent would run resolve only), at the cost of
+   flipping the #2089 gate hard and giving the child a warning channel; the question is
+   posted on #2705.
+14. **One impl universe, one preamble per prelude, and the last two check-then-elaborate
+   verbs, 2026-09-09** (the batch after #2790).  Four moves, each measured alone before
+   the merge.  (a) `checkModulesPreambleK`'s derivations (`buildDeclEnvs`, `markSetsOf`,
+   the three graph identity indexes) split at the prelude/user-modules seam; the prelude
+   half is computed once per process under the `desugaredPreludeKey` pair
+   `checkCoreMemoized` already keys on (#2719 slice 2).  `buildDeclEnvs` is a resumable
+   per-row fold (`DeclEnvAcc`, one accumulator per table, each table's own fold), and
+   `markSetsOf` splits on distributivity of every derived list.  The invariant the memo
+   states is stronger than "holds no `Decl` or `Ref`": every cached field is a pure
+   function of the prelude's decls, because the review found the atom-guarantee seed
+   reading the process-global effect-domain table, which the preamble populated only
+   AFTER the memo — so the domains are now populated before the envelope at BOTH driver
+   entries and the atom seed is derived per call.  That ordering also fixes #2789: a
+   one-shot `check`/`run` rejected an abstractly-exported wrapper re-supplying a
+   prefix-domain effect atom because the first analyze of any process saw an empty domain
+   table (`check_module_fixtures/xmod_abstract_wrapper_prefix_atom` pins the accept).
+   Warm LSP analyze −62%/−42% Ir, cold −1%.  (b) `cmDiagsWorker` and `cmEntryWorker`
+   collapse into `cmModuleWorker` with the `accAll ++ prog` impl universe every other
+   driver already used (the design's §S3 precondition; #2792): `check` rejected a
+   2+-module program whose entry module owns the grounding impl of a return-only
+   dispatch while `run`/`build` executed it.  3,387-entry `check` corpus, 0 verdict flips;
+   34 must-fail pins, 0 drained.  (c) `medaka test`'s import-bearing arm loads once (the
+   located loader) and elaborates once for its three phases; the gate cannot read the
+   doctest-injected tree (a `<Clock>` doctest's synthesized binding is an effectful value),
+   so with doctests the gate is the check driver over the loaded graph and without them
+   the elaboration's own per-module diagnostics — which is why (b) had to land first, and
+   `diff_compiler_test_typecheck`'s cell n holds the two verbs to the same verdict.
+   Compile-side −27% Ir; a prop-heavy target pays ~5% more per prop case for the located
+   bodies, which is what buys the three runtime diagnostics that used to print `:0:0:`.
+   (d) `run`'s single-file arm composes `analyzeSurface` (the raw-tree passes) with the
+   elaboration's own diagnostics through `analyzeFinish`, keeping `analyzeFrom`'s result
+   order; `elaborateRun` hands back the PLAIN pass's per-module diagnostics beside the
+   Async-wrapped trees, so a wrap-only failure still rejects through the residual while a
+   plain diagnostic renders located instead of as "detected during elaboration".  The
+   residual gate is landed on this arm (2,675 single-module files, 0 flips) but has no
+   witness yet.  `run` of a single-file program −33% Ir.  The auto-print re-check stays
+   (it needs `mainSchemeRef`; retiring it needs the `Display` obligation discoverable from
+   the unwrapped elaboration).  The review of (d) found #2791: `elaborateModules` never
+   seeded `abstractRecordTypesRef`, so under the elaborate driver `T-ABSTRACT-FIELD` was
+   never raised and `run` executed a dot-access on an abstractly exported record that
+   `check`/`build` reject — live on main for the import-bearing arm since (13c).  Seeded
+   at both driver entries now; three `run_check_agreement` fixtures pin it.  The lesson
+   for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
+   `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
+   `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
+   carry, and `registry_keying_ratchet`'s check 6 (#2796) is that place.
+15. **`check` typechecks once, and the analyze path stops re-resolving its unchanged prefix,
+   2026-09-09** (the batch after #2793).  (a) `check`'s multi-module arm no longer runs the
+   entry driver after the diagnostics chain: the chain's per-module payload carries
+   `(schemes, errs, warns)` through `ChainStep`, the terminal report is a projection over it
+   (`checkModulesEntryFromDiags`, `runCheckModulesFromDiags`), `entryExhaust` stays, and
+   `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`.  `check` of a multi-module
+   graph −25% Ir (`stdlib/json.mdk`, `compiler/driver/medaka_cli.mdk`); `stdlib/map.mdk`
+   imports only `core` and is single-file-routed, so it cannot show the drop.  The
+   mint-after-restore law holds here for a stronger reason than `mainSchemeRef`'s: schemes
+   from a replayed step are never read — the report takes the terminal module's, which the
+   memo never covers.  Still on the single-file arm and hover: `checkModulesEntryReport`,
+   `checkModulesEntryHasErrors`, `checkModulesEntryFull`; genuinely caller-less now:
+   `runCheckModules`, `checkModulesHasErrors` (S5 deletes exactly those two).  (b) #2719 (a3):
+   after item 14, `resolvePass` was 41% of a warm LSP analyze (66% at 20 modules), and the cost
+   was not desugar but `buildEnvMM` rebuilding the PRELUDE's scope — three prelude-sized maps
+   from empty — once per module per analyze (~4.3M Ir each).  The prelude half is a
+   `PreludeScope` under the same prelude key as item 14's memo and the same invariant (every
+   field a pure function of the prelude's decls), derived once per module by `resolveModuleG`
+   and handed to `buildEnvMM` (4.34M → 1.12M per module; the `programIsCore` arm still builds
+   its three from empty).  `resolvePass` itself is memoized per module under the chain's
+   module-step prefix plus the trust settings (the #1362 class; `matchingStepPrefix` in
+   `support/util.mdk` is the one prefix rule for both memos), and its second whole-graph
+   desugar, built and discarded, is gone.  Warm analyze −36% to −65% across the six measured
+   workloads; the one-shot verbs drop 0–1.2%.  `diff_compiler_lsp` case 6 drives a 3-module
+   project through seven `didChange` states, including an imported module rewritten on disk,
+   against a cold `check --json` of each state — the first gate in the tree that exercises
+   either memo family's multi-module warm path; it fails on a key mutated to the module id.
+   (c) The review of (b) found the exposure the shared desugar tree created: `desugarModule`'s
+   memo was keyed on the module's SOURCE alone, but the loader rewrites each `import` target
+   for the package that owns the path, so two byte-identical modules in two packages are two
+   different trees, and the second resolved against the first one's imports — a genuine
+   `R-PRIVATE-NAME` went silent on `check --json`, the LSP, MCP and `medaka test` (the
+   typecheck half had carried the same exposure since the memo existed).  The key is path +
+   source; `cross_project_fixtures/samesrc` pins the reject.  Still open: the 24-entry MRU
+   cliff in the parse and desugar caches (#2797: 2.4M → 46.9M per analyze past 24 modules)
+   and, behind it, the loader's 64-entry source table (`loadedSourcesLimit`): both prefix memos
+   key on the loaded source, so past 64 modules the earliest entries are evicted first and the
+   replayable prefix collapses to empty — the marginal warm cost per module steps from ~6.5M
+   to ~15.7M between 65 and 67 modules, and the compiler's own graph is 76 (the two limits
+   have to move together),
+   `sugValues`/`sugTypes` built unconditionally on the clean path, `medaka test`'s no-doctest
+   arm passing no prelude key (so no hoist there), and `run --json` printing prose for a
+   static error (#2798).  Also in this batch: the writer-set contract of item 14 is enforced
+   by `registry_keying_ratchet`'s check 6 (#2796), `ElabResult` names the elaboration's
+   5-tuple, and `analyzeFinish`'s diagnostic order is pinned in three gates.
+
+16. **`build`'s second typecheck is NOT redundant — ruling 3's shape (a) is refuted by
+   measurement, 2026-09-09** (branch `rearch3-build-child`, off `20869bcc7`; not merged).
+   Shape (a) — the `medaka_emitter` child owns the whole verdict, the parent runs resolve
+   only — was implemented in full: the child loads with `loadProgramFilesLocatedE`, renders
+   its per-module diagnostics through `emitGateDiags` (the same `typecheckDiagsFold` +
+   `renderTriple*` face `check` uses), the #2089 gate is hard by default, the child signals a
+   located diagnostic with `emitDiagExitCode` and `build_cmd` forwards its stderr verbatim in
+   both exit cases.  Two of the eight acceptance items pass: the build is clean and
+   `selfcompile_fixpoint` reports **C3a PASS and C3b PASS** with the gate hard, and emitted IR
+   is **byte-identical** across the loader swap on three graphs measured with one source tree
+   and two emitter binaries (compiler `medaka_cli` 36,719,781 B; emitter entry 17,947,581 B;
+   an `llvm_fixtures` single file 424,794 B) — so `ELoc` transparency is measured, not assumed.
+   What refutes the shape is the diagnostic verdict, not the bytes:
+   **the child elaborates the MANGLED graph, and the mangled graph is not the program the
+   user's diagnostics are about.**
+   - **Rejections are lost (S0).**  `diff_compiler_run_check_agreement` goes 143 passed /
+     5 failed with `check REJECT, run REJECT, build ACCEPT` on
+     `reject_845_xmod_inferred_{alias,reexport,reexport_2hop,selective}` and
+     `reject_ambiguous_reexport_inside_map_literal`; the first builds a binary that dies
+     `E-FATAL-SIGNAL: fatal memory fault`, the second runs and prints `[(1, 2)]`.  This is
+     PRE-EXISTING in the child and independent of this branch: `MEDAKA_STRICT=1
+     ./medaka_emitter … <fixture>` on the **base** `20869bcc7` emitter emits IR at exit 0 for
+     all five, with empty stderr.  `elaborateModules` over the same graph unmangled — what
+     the parent runs today — rejects them.  So the parent's pass is the only thing catching
+     this class, and dropping it is a `[W-QUIETER]` severity increase.
+   - **Mangling artifacts are reported as user errors (S2).**  `must_fail`'s
+     `1359-reexport-ctor-mangle-miss` flips to DRAINED, and the drain is a **phantom**: the
+     #1359 mangler gap is not fixed, its `E-PANIC` is merely replaced by three located errors
+     against correct source (`Unknown constructor: Wid`, `Unbound variable: Wid`, `Ambiguous
+     instance for Display`), so `build` now rejects what `check` and `run` accept, blaming the
+     user's file for a rename the mangler failed to make.
+   - **Mangled names leak into diagnostic text (S2).**  `amod__bad`,
+     `s4_gen_sig_body_needs_more_rejected__noCtx`, `reject_toplevel_letrec_nonfunction__loop`,
+     and a `non-exhaustive match` naming `s6_1c_unrelated_warning_not_surfaced__Blue`.
+   - **The two drivers still differ on a single file.**  Same fixture, different column or a
+     different message: `p0_18/p0_19/p0_21` move the caret from the application to the
+     argument, `s1_constrained_shadow_dispatch` reports `Type mismatch: Int literal vs Box`
+     where the check driver reports `No impl of Num for Box`, and three `s6-*` fixtures gain
+     an `Overlapping impls` warning the check driver does not raise.  The premise that after
+     #2705 "the remaining difference is the rendering" does not hold for the mangled arm.
+   **Ruling 2's flip is separately blocked, and by the same disagreement.**
+   `diff_compiler_test_native` fails on `native_test_abort.mdk`: the child rejects the
+   synthesized `test` shim with `Ambiguous instance for Debug`/`Eq` on `expectEqual 3 3`, so
+   `1/4 passed` becomes `0/4`.  That is the hard gate alone, not the parent's removal — the
+   **base** `20869bcc7` binary reproduces it exactly under `MEDAKA_STRICT=1` (same eight
+   `Ambiguous instance` lines, same `0/4`) and gives `1/4` without it.  The flip's recorded
+   precondition (a fixpoint measured with the gate on) is met and is not sufficient: the
+   emit-path elaboration is clean on the compiler's own graph and not on `medaka test`'s.
+
+   Measured over `test/{run_check_agreement,dict,eval_modules,llvm}_fixtures*`,
+   `error_quality_fixtures/build` and `engine_fixtures`: **1022 fixtures, 28 divergent**
+   (stdout+stderr+exit+the built binary's own output, two arms, temp paths normalised);
+   `diff_compiler_dict_semantics` passes unchanged.  `build --json` was NOT converged and
+   still runs `checkJsonFileParts` plus the child: the child has no machine channel, and
+   `runCommand` takes no environment, so signalling one needs an argv flag or a `setEnv`
+   primitive — a separate slice, and not worth cutting while (a) itself is refuted.
+   **Answer to the owner question in `DESIGN-remaining-double-typechecks.md` §S4: neither
+   (a) nor (b).  `build` has two elaborations of two DIFFERENT trees, and neither can be
+   dropped — the mangled one because the backend consumes it, the unmangled one because it
+   is the only one whose verdict is about the user's program.**  The prerequisite for
+   re-opening (a) is making the mangled graph's elaboration agree with the unmangled one;
+   until then §E's "one elaboration" is a claim about `run`/`check`/`test`, not about `build`.
+   Filed: #2809 (S0, the child's elaboration accepts what the front end rejects) and #2810
+   (S1, the hard gate breaks `medaka test --native`).  Owner disposition (2026-09-09): the
+   ruling stands as the target; #2809 is its prerequisite; `build` keeps both typechecks.
+
+17. **ONE graph driver, 2026-09-09** (#2705, branch `rearch3-one-driver`, off item 15's
+   `20869bcc7`).  §E's "one driver, one mode" is now the code, not the plan.
+   `driveGraphK` drives the whole module graph once — stamp, one `graphPreamble`, one
+   `graphModuleWorker` through `foldModules`, one graph-end drain, one coherence attach —
+   under two parameters:
+   * `GraphOut` — `GOutDiags` (per-module diagnostics and schemes) or `GOutTrees` (those
+     plus the dict-passed trees, the residual and the evidence table).  The selection gates
+     more than writes; DERIVE the sites rather than trusting a count here
+     (`grep -n 'match sel' compiler/types/typecheck.mdk`, minus the one unrelated
+     `selectReqImpl` hit).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
+     oracle, `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the
+     core pass is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked
+     decls, and a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef`
+     writes.  Three are not writes and are real behavioural differences: `renameAliasedMethods`
+     runs on the tree arm only (`modulesAliased`); `graphCollect` accumulates the marked tree
+     on the tree arm only (the diags arm returns `gdModules = []`, so keeping it would hold
+     every module's marked forms live for the whole drive); and the tree arm's finish runs
+     `dictPassModulesIfEnabled`, `resolveAliasMethodSpellings` and publishes the residual.
+     The file header names the first of those three as one of the two remaining
+     by-construction divergences between the selections, so "and nothing else" would
+     contradict it.
+   * `DrainDiags` — `DrainRollback` or `DrainKeep`, with its deletion condition in the code.
+   `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK`
+   are projections.  The memo layer stays OUTSIDE and wraps `GOutDiags` only: `ChainStep`
+   captures no marked tree, so a memo over the tree arm is a different data structure, and
+   re-deriving only the suffix's trees from the prefix restore is NOT done here.
+   Deleted: `checkModulesDiagsK`, `cmModuleWorker`, `cmDiagsCollect`, `cmEntryCollect`,
+   `elabWorker`, `elabHarvestWorker`, `elabCollect`, `elabModuleStampDiags`,
+   `attachCoherenceConflictPair`, `cohOntoPair`, the five eager `graph*`/`buildDeclEnvs`/
+   `markSetsOf` wrappers whose only caller was `elaborateModules`' inline preamble (the
+   resumable `*From` variants take their names), and item 14's two genuinely caller-less
+   `tools/check.mdk` entries `runCheckModules` / `checkModulesHasErrors`.  DERIVED, not
+   asserted: whole-graph `foldModules` call sites in `types/typecheck.mdk` fall **4 → 2**
+   (`grep -n 'foldModules$' compiler/types/typecheck.mdk` minus its own definition —
+   `checkModulesK`, `checkModulesDiagsK`, `checkModulesEntryFullSplitK`, `elaborateModules`
+   become `checkModulesK`, `driveGraphK`; the memo's own `chainGo` fold is unchanged in
+   both).  `types.typecheck`'s LEG A golden loses 20 rows and gains 10 (5 genuinely new
+   bindings — `driveGraphK`, `graphPreamble`, `graphModuleWorker`, `graphCollect`,
+   `graphDrainFinish` — and 5 renames, each a lost pair and a gained row);
+   `tools.check` loses 2.  `ModDiags` names the per-module payload the widening had spelled
+   out.  DERIVE the size of that widening rather than reading a number here, and say WHICH
+   count you mean: `git grep -c` for the exact spelling
+   `List (String, (List (String, Scheme), List TcDiag, List TcDiag))` over `compiler/*.mdk`
+   gives 16 lines at `026c44160` and `ModDiags` gives 20 at head, while the DIFF touches
+   more than either, because the widening also rewrote the narrower `(errs, warns)`
+   spellings around it.  "16 sites" named the first of those and read as if it named all of
+   them.  `ModDiags` is also a NEW export of
+   `types/typecheck.mdk` (`export type ModDiags`), which an `^export$` count cannot see;
+   `compiler/tools/check.mdk` loses two exports over the same commit.
+   **The one behavior change** is the entry report's HARD coherence conflict: it now sits at
+   the front of the ENTRY module's errors rather than the accumulated list.  That differs only
+   on a graph with both a conflict and an imported-module type error, and **the differing
+   branch is currently unreachable**: every caller of `checkModulesEntryFullSplitK` /
+   `…FullK` / `…Full` / `…Report` / `…HasErrors` passes a SINGLETON module list, and the
+   multi-module `check` route reaches the entry report through `entryReportFromDiags` instead.
+   Witnessed rather than argued: the shape it names (`t9` — a cross-module hard `impl`
+   conflict plus a type error in the imported module) is byte-identical on both arms under
+   `check`, `check --json`, `run`, `run --json`, `build` and `medaka test`.  So a future
+   multi-module caller of the entry-report driver lights up code no fixture covers.
+   **`registry_keying_ratchet` check 6 was strengthened, not weakened**: with one entry, the
+   per-row half proves each writer of the whole-graph set has exactly ONE site in
+   `types/typecheck.mdk` and that the site is inside `graphPreamble` (file-wide, so a copy in
+   `elaborateModules`, in `driveGraphK`, in `chainGo` or in a new top-level body all fire it),
+   and the single-entry row proves `graphPreamble` has exactly two call sites.  The mutations
+   it has been seen to fail on are listed in the check's own header.
+   **Measured.**  Two-arm four-verb differential (`check`, `check --json`, `run`,
+   `medaka test`) over every multi-module fixture corpus plus `stdlib` — 317 entries, 1,268
+   cells, **0 divergences**.  Two-arm cachegrind against `20869bcc7`: ruling 7's two warm LSP
+   workloads −0.20% / +0.08% Ir (ceiling ~25%); `check stdlib/map.mdk` −0.05%,
+   `check compiler/driver/medaka_cli.mdk` −0.23%, `run` multi-module −0.31%,
+   `medaka test stdlib/list.mdk --cases 1` −0.11% (bound +0.5%).
+   **Ruling 1's T4 census, re-derived rather than quoted.**  Item 11 measured the drain's
+   diagnostics wrong on 33 of 3,386 accepted files.  On this tree, a two-arm corpus (one arm
+   with the rollback removed and the residual rendered as entry warnings) over every `.mdk`
+   under `test/` and `stdlib/` the compiler accepts gives **2 of 2,548**:
+   `test/engine_fixtures/where_dict_forward.mdk` (`Ambiguous instance for `Ord``) and
+   `test/parse_fixtures/blocks.mdk` (`Ambiguous instance for `Display``) — both the
+   D1-undefaulted-literal class #2646 owes, neither `panic "…"` (#2315) nor a route
+   re-unification duplicate.  The population the ruling has to adjudicate is now two files
+   of one kind, not three kinds.
+
+18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms
+   — SIX of them; derive rather than trust this number, `grep -n 'runAbortJson'
+   compiler/driver/medaka_cli.mdk` minus the definition's two lines and the three comment
+   mentions — stage their diagnostics into the same `pendingRunDiags` envelope `check --json`
+   and the runtime-error path already use (stderr, `run`'s machine channel), so the `[perf]` and
+   staleness notices ride inside the document instead of corrupting it; the residual-only arm
+   emits a `T-RESIDUAL` diagnostic for the entry rather than an empty envelope; multi-module
+   paths are relativized as `check --json`'s are; warnings ride beside errors so the
+   per-file `diagnostics` arrays match `check --json` element-wise. Two pre-existing
+   `.json.out` goldens had pinned the prose.
+   **Three qualifications on "the arrays match", all measured.** (a) It holds PER FILE THAT
+   HAS DIAGNOSTICS. (b) The `files` array itself differs: `check --json` emits
+   `{"file":…,"diagnostics":[]}` rows for clean modules and `run --json` drops them
+   (`nonEmptyTriples`), so a consumer keying on `files[0].file` sees a different document.
+   (c) On the ACCEPT path there is nothing to match — a clean `run --json` emits no envelope
+   at all (`flushRunEnvelope`'s `([], []) => ()`), and a multi-module program's warnings are
+   not reported by `run` at all (#2818). Both are pre-existing and reproduce on the base arm;
+   `run --help` describes them as they are.
+   **`T-RESIDUAL` is a new diagnostic code** and is now a row in
+   `compiler/DIAGNOSTIC-CODES-DESIGN.md`. Nothing known reaches it: `test/diag_census.sh`
+   only sees codes that FIRE, so its "0 undocumented" was structurally blind to this one.
+   Found alongside, pre-existing and filed: a user file named `core.mdk` bypasses `run`'s static
+   gate (#2811).
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under

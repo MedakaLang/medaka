@@ -308,6 +308,7 @@ pExecutablePath : Value a -> <Env> Value a
 pExit : Value a -> <Stderr> Value a
 pExp : Value a -> Value a
 pFileExists : Value a -> <FileRead> Value a
+pFileMode : Value a -> <FileRead> Value a
 pFloatRem : Value a -> Value a -> Value a
 pFloatToBytes64 : Value a -> Value a
 pFloatToInt : Value a -> Value a
@@ -383,6 +384,7 @@ pWallTimeSec : Value a -> Value a
 pWallTimeSecIO : Value a -> <Clock> Value a
 pWriteFile : Value a -> Value a -> <FileWrite> Value a
 pWriteFileBytes : Value a -> Value a -> <FileWrite> Value a
+pWriteFileMode : Value a -> Value a -> Value a -> <FileWrite> Value a
 payloadArity : ConPayload -> Int
 pendingRunDiags : Ref (List (String, String, List Diag))
 pickByTag : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a

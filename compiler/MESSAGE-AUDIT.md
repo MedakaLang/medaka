@@ -227,7 +227,7 @@ the third).
 | Context | Message (verbatim) | file:line | Flag | Rewrite |
 |---|---|---|---|---|
 | tagline | `medaka — language for thinking out loud` | medaka_cli.mdk:164 | tone (marketing persona) | `medaka — a functional language compiler` (or drop) |
-| usage body | each command line ends with `.` | medaka_cli.mdk:165–179 | inconsistent (periods here; flat status lines have none) + `medaka bench` advertised but unimplemented (falls to `notYet`) | drop trailing periods; remove or implement `bench` |
+| usage body | each command line ends with `.` | medaka_cli.mdk:165–179 | inconsistent (periods here; flat status lines have none) | drop trailing periods |
 | check/build/run/test/doc/check-policy/manifest usage | `usage: …` | :264,803,829,932,952,983,1032 | inconsistent (lowercase `usage:` vs `Usage:` in fmt/new/top-level) | standardize on one casing |
 | wasm-tools missing | `error: wasm-tools not found on PATH — install wasm-tools (…) for --target wasm.` | build_cmd.mdk:225 | inconsistent (trailing period; peer `error:` lines have none) | drop period |
 | libgc missing | `error: libgc (bdw-gc) not found — install bdw-gc (…) or set GC_PREFIX/pkg-config.` | build_cmd.mdk:272 | inconsistent (trailing period) | drop period |

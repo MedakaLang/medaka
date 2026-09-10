@@ -11,7 +11,7 @@ commit, the blob routes (`uploadBlob`/`getBlob`/`listBlobs`) with on-disk
 persistence, the four session endpoints
 (`com.atproto.server.{createSession, refreshSession, deleteSession,
 getSession}`), plus the two well-known paths.
-Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
+Phase 3's socket shell (#2481, #2525) serves that core over a TCP listener:
 `pds/serve.mdk` admits a configuration, rehydrates or initializes the account
 repository, and hands `pds/shell/server.mdk`'s accept loop a listener and the
 shared `Ref Store`. `pds/test/serve_e2e.sh` grades it end to end (queries,
@@ -22,16 +22,18 @@ process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
 `pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, every
 `pds/lib` export explicitly signed, and no such signature effect-bearing —
 the signature check is what stops an unannotated export from carrying an
-inferred effect row past the effect check). The bind address is loopback-only.
+inferred effect row past the effect check). The bind address is `--bind`,
+defaulting to `127.0.0.1`; a non-loopback value is refused unless
+`--trusted-proxy` also asserts that a reverse proxy terminates TLS in front of
+this process (`requireTrustedBind`, #2757), because nothing here terminates
+TLS itself.
 Authentication now gates the writes and the three session routes that need
 it — the five record/blob writes and `getSession` require a valid access
 token, `refreshSession`/`deleteSession` require a valid refresh token, and
 `createSession` is the public login that issues both — while the eight
-reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only
-remains
-the separate gate on exposing this server past localhost at all; hardening
-that path (TLS, a non-loopback bind) is tracked separately, not covered by
-this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
+reads, `resolveHandle`, and the two well-knowns stay public. See
+`docs/ops/PDS-DEPLOY.md` for what exposing this server past localhost requires
+and `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
 
@@ -60,7 +62,7 @@ this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
   `pds/shell/persist.mdk` persists and reloads the account repository's head
   commit, `pds/shell/blobfile.mdk` does the same for the blob half under a
   `blobs/` directory SIBLING to `blocks/` (a blob is not part of the signed
-  block graph), and `pds/shell/server.mdk` is the loopback accept loop and the
+  block graph), and `pds/shell/server.mdk` is the accept loop and the
   per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
   module may import `pds/lib/`, and no `pds/lib/` module may ever import
   `pds/shell/` — the pure core performs no I/O (P14), so reconstruction logic
@@ -75,8 +77,10 @@ this phase. See `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
   signing key, and hands `pds/shell/server.mdk` a listener and the one
   `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
   `medaka build pds/serve.mdk` produces a program the async scheduler drives.
-  The bind address is not configurable: `bindLoopback` takes a port and the
-  address is a literal.
+  The bind address comes from `--bind` (`bindAddressOf`, default `127.0.0.1`)
+  and is handed to `shell.server`'s `bindAddress`; `requireTrustedBind` refuses
+  a non-loopback value that `--trusted-proxy` has not vouched for, before any
+  secret is read or generated.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
@@ -557,6 +561,49 @@ upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
 tampered blob file is rejected at load; an oversize blob is refused with zero
 files written to disk; and each of the four kinds of residue above is skipped
 by a server that starts and still serves every undamaged blob.
+
+## Rate limiting and `--trusted-proxy` (#2612)
+
+`pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
+its caller's identity exceeds one of five independent per-window allowances
+(`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
+`maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
+`maxRepoExportsPerWindow`, all placeholders pending real traffic data,
+refilled every `rateLimitWindowSeconds`). `maxRepoExportsPerWindow` covers
+`com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
+bounded only by `maxCarBytes`, so the request count that bounds every other
+read says nothing about the bytes this one emits. The refusal carries `error: "RateLimitExceeded"`
+and the three IETF `RateLimit-*` response headers naming the exceeded
+class's own limit, remaining count, and seconds to reset — never a blended
+figure across classes. This is layered UNDER Caddy (see
+`docs/design/ATPROTO-PDS-DESIGN.md` § "Rate limiting: what Caddy does and
+what this process does"), which owns the blunt, identity-blind ceiling in
+front of it; this process is the only layer that knows which caller is
+asking and what kind of request it made.
+
+**Pass `--trusted-proxy` only when this process's peer genuinely is your
+reverse proxy** — Caddy, in the deployment this design targets — configured
+to set `X-Forwarded-For` itself and to strip any such header an inbound
+client tried to supply. With the flag, each caller is identified by the
+last hop of that header, so two different visitors get two different
+budgets. **This is an operator assertion, not something the flag causes to
+be checked**: this runtime has no way to confirm a TCP peer's identity
+(no `getpeername`-equivalent), so passing the flag without a proxy in front
+that actually sanitizes the header lets any direct client forge
+`X-Forwarded-For` and either claim another identity's remaining budget or
+spend it down on that identity's behalf. Without the flag (the default),
+every caller — proxied or not — shares one `"direct"` identity bucket. That
+is the right default for a loopback-bound process with nothing in front of
+it yet, but it is not a *safe* one to leave in place, and the difference
+matters: with a single bucket, all five ceilings stop being per-client and
+become process-wide, so the first caller to reach one refuses **every other
+caller** until the window turns. Exposing this server past loopback without
+deciding this flag first hands the WHOLE deployment's allowance to a single
+requester's mistake or abuse, not just one visitor's — and there is no way
+to fix that from inside this process, since identifying an unproxied caller
+requires its peer address, which this runtime cannot obtain (#2757). Treat
+`--trusted-proxy` as part of exposing the server, not as a later tuning
+step.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

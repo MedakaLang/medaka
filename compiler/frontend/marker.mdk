@@ -106,7 +106,7 @@ markInfix methods constrained op l r
 markProgram : OrdMap Unit -> OrdMap Unit -> List Decl -> List Decl
 markProgram methods constrained prog = map (markDecl methods constrained) prog
 
--- desugar.mapDecl's catch-all SKIPS DLetGroup (and DBench) bodies, so a
+-- desugar.mapDecl's catch-all SKIPS DLetGroup bodies, so a
 -- constrained-fn reference or interface-method occurrence inside a top-level
 -- `let rec … with …` body would never be marked → its call site never gets a
 -- dict route → the dict-passed callee is under-applied.  This dedicated
@@ -292,7 +292,6 @@ declBodies (DImpl { methods, ... }) = map implMethodBody methods
 declBodies (DInterface { methods, ... }) = flatMap ifaceMethodBodies methods
 declBodies (DProp _ _ _ body) = [body]
 declBodies (DTest _ _ body) = [body]
-declBodies (DBench _ _ body) = [body]
 -- OBS5: a `@attr…`-wrapped decl carries its body in the INNER decl; without this
 -- arm declRefs of e.g. `@inline f = … helper …` is [] → a helper referenced ONLY
 -- through an attributed function would be DCE'd (unbound-variable miscompile).

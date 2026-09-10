@@ -916,8 +916,10 @@ while IFS= read -r f; do
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
       add 'diff_compiler_test'; add 'diff_compiler_ported'
       # #1229: diff_compiler_test_typecheck.sh pins the typecheck-first gate in
-      # test_cmd.mdk's doctestGate — including the zero-doctest cell, whose whole
-      # failure mode is exit 0 with no output, i.e. invisible to every golden gate.
+      # test_cmd.mdk (`typecheckExempt` + the two `prepareMulti` arms) — including
+      # the zero-doctest cell, whose whole failure mode is exit 0 with no output,
+      # i.e. invisible to every golden gate, and cell n, which pins that `medaka
+      # test` and `medaka check` cannot reach different verdicts on one tree.
       add 'diff_compiler_test_typecheck'
       add 'diff_compiler_origin_agreement'
       add 'diff_compiler_dict_semantics'

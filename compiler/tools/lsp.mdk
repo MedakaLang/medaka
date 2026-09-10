@@ -91,7 +91,6 @@ import frontend.ast.{
   DEffect,
   DProp,
   DTest,
-  DBench,
   DInterface,
   DImpl,
   DTypeAlias,
@@ -464,7 +463,7 @@ letBindName (LetBind n _) = n
 -- clauses.  `clauseLike` is True ONLY for a signature or a value-binding clause
 -- (DTypeSig/DFunDef/DLetGroup) — the decls that legitimately repeat under one name
 -- (a sig + its clauses) and so may coalesce.  Everything else is False: crucially
--- DTest/DProp/DBench take a FREE string label (`test "double"`) that resolve.mdk
+-- DTest/DProp take a FREE string label (`test "double"`) that resolve.mdk
 -- never enters into any namespace or duplicate check, so a test named after the
 -- function it tests must NOT be swallowed into that function's outline entry.
 -- `childLocs` (#331, increment 2) is the parser's ordered list of this decl's
@@ -501,7 +500,6 @@ symbolPartsOfDecl d range childLocs = match innerDecl d
   DUse _ _ _ => None
   DProp _ name _ _ => Some (name, 12, False, [])
   DTest _ name _ => Some (name, 12, False, [])
-  DBench _ name _ => Some (name, 12, False, [])
   DEffect _ name _ => Some (name, 24, False, [])
   DAttrib _ _ => None  -- unreachable post innerDecl
 -- Variable
@@ -565,7 +563,7 @@ symbolParts _ _ = []
 -- shared name, the LAST row's kind (so a `sig`(Variable)+`def`(Function) pair
 -- reads as the Function, not the sig), the range spanning first-start..last-end,
 -- and the concatenated children.  The clause-like gate is what stops a
--- `test "double"`/`prop`/`bench` (free string label, never a duplicate) from being
+-- `test "double"`/`prop` (free string label, never a duplicate) from being
 -- fused into an adjacent same-named function; only sig/clause runs coalesce, and
 -- only adjacent ones, so decls that merely share a prefix are never merged either.
 -- The collapsed row keeps the FIRST clause's name `Loc` (`nl0`) — it pairs with
@@ -620,7 +618,6 @@ declOwnNameMatches d name = match innerDecl d
   DUse _ _ _ => False
   DProp _ n _ _ => n == name
   DTest _ n _ => n == name
-  DBench _ n _ => n == name
   DEffect _ n _ => n == name
   DAttrib _ _ => False
 

@@ -558,12 +558,20 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 --     (`bucketArgsMatch`/`bucketRecvMatch`, `||`-folded), for which bucket
 --     order is immaterial.
 --
--- ⚠️ A-3.4 PR2 ADDED A THIRD WRITER OF THE SAME ORDER PROPERTY, so it is now a
--- SET of three and not a pair: `ieBuildSnapsGo` folds `insertUnivImpl` over the
--- ordinal-ordered `ieRows` to build each prefix snapshot. It reaches this same
--- append through `insertUnivImplAt`, so the order is preserved by construction
--- rather than by a second spelling — but a future edit that gives `IE` its own
--- insert path owes this paragraph a re-read.
+-- A-3.4 PR2 ADDED A THIRD WRITER OF THE SAME ORDER PROPERTY, so it is a SET of
+-- three and not a pair. That writer is now `ieSnapStep`
+-- (`compiler/types/typecheck.mdk`), which folds `growImplUniverse` -- i.e.
+-- `insertUnivImpl`, i.e. this same append through `insertUnivImplAt` -- over one
+-- ordinal-ordered RUN of rows to extend a prefix snapshot.
+--
+-- It has TWO callers, and the pair is the re-read this paragraph asked for: the
+-- whole-list `ieBuildSnapsGo`, which splits `ieRows` into same-ordinal runs, and
+-- `buildImplEnvGo`, which hands it one module's rows as the envelope fold reaches
+-- them. The order property survives both because a module's rows all carry that
+-- module's ordinal and the envelope walks ordinals ascending, so the two spellings
+-- present the SAME rows in the SAME order to the same writer. A further edit that
+-- gives `IE` an insert path not routed through `ieSnapStep` owes this paragraph
+-- another re-read.
 --
 -- Both writers have always spelled `bucketOf k ++ [x]`; this is that spelling,
 -- once, inside the abstraction, at the same O(bucket) cost per add. Keeping the

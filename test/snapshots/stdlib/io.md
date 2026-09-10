@@ -1,5 +1,5 @@
 # META
-source_lines=140
+source_lines=174
 stages=DESUGAR,MARK
 # SOURCE
 {- | Output to standard error, debug printing, and helpers for files and
@@ -78,6 +78,40 @@ export
 readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
+{- | The permission bits of a file only its owner may read or write:
+   `rw-------`, `0600` as `chmod` spells it.
+
+   `writeFilePrivate` writes at this mode, and `isPrivateMode` accepts it. -}
+export
+ownerOnlyMode : Int
+ownerOnlyMode = 384
+
+{- | Whether permission bits keep a file to its owner: no group and no other
+   bit is set. `fileMode` reports the bits to grade.
+
+   A secret at any wider mode is readable by another account on the same
+   host, so a program that reads one should refuse it rather than warn.
+
+   > isPrivateMode ownerOnlyMode
+   True
+   > isPrivateMode 420
+   False
+   > isPrivateMode 448
+   True -}
+export
+isPrivateMode : Int -> Bool
+isPrivateMode mode = bitAnd mode 63 == 0
+
+{- | Writes a string to a file that only its owner may read or write, at
+   `ownerOnlyMode`.
+
+   The contents never exist at a wider mode, and an existing file at a wider
+   one is narrowed before they are written, so this is the way to write a
+   secret. -}
+export
+writeFilePrivate : String -> String -> <FileWrite "_"> Result String Unit
+writeFilePrivate path content = writeFileMode path ownerOnlyMode content
+
 -- # Commands
 
 {- | Runs a program with arguments and waits for it, folding a spawn
@@ -155,6 +189,12 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EVar "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
+(DTypeSig true "ownerOnlyMode" (TyCon "Int"))
+(DFunDef false "ownerOnlyMode" () (ELit (LInt 384)))
+(DTypeSig true "isPrivateMode" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isPrivateMode" ((PVar "mode")) (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EVar "mode")) (ELit (LInt 63))) (ELit (LInt 0))))
+(DTypeSig true "writeFilePrivate" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "writeFilePrivate" ((PVar "path") (PVar "content")) (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "ownerOnlyMode")) (EVar "content")))
 (DTypeSig true "runCommandOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "runCommandOk" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "out") (EVar "err")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString ""))))))))
 (DTypeSig true "runVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
@@ -174,6 +214,12 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EMethodRef "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
+(DTypeSig true "ownerOnlyMode" (TyCon "Int"))
+(DFunDef false "ownerOnlyMode" () (ELit (LInt 384)))
+(DTypeSig true "isPrivateMode" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isPrivateMode" ((PVar "mode")) (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EVar "mode")) (ELit (LInt 63))) (ELit (LInt 0))))
+(DTypeSig true "writeFilePrivate" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "writeFilePrivate" ((PVar "path") (PVar "content")) (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "ownerOnlyMode")) (EVar "content")))
 (DTypeSig true "runCommandOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "runCommandOk" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "out") (EVar "err")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString ""))))))))
 (DTypeSig true "runVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))

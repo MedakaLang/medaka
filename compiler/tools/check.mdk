@@ -29,8 +29,6 @@ import frontend.desugar.{desugar}
 import support.util.{joinNl}
 import frontend.resolve.{
   resolveToLines,
-  resolveModulesToLines,
-  resolveModulesToLinesG,
   singleFileImportErrors,
   ppResError,
 }
@@ -39,8 +37,8 @@ import types.typecheck.{
   checkOneToLinesWithRuntime,
   setCoherenceUserDecls,
   checkOneErrorsWithRuntime,
-  checkModulesEntryReport,
-  checkModulesEntryHasErrors,
+  entryReportFromDiags,
+  ModDiags,
 }
 
 -- exported so the batch typecheck harness's synthetic entry can pull this
@@ -133,46 +131,23 @@ checkHasErrors rsrc csrc tsrc =
 -- ── multi-module `check` (DRIVER-COLLAPSE Phase 4, OPTION A) ───────────────
 -- The unified `medaka check` path for IMPORT-BEARING files.  The CLI loads the
 -- entry + its transitive imports (loadProgram, entry LAST in dependency-first
--- order) and DESUGARS each, then calls these.  This RESOLVES imports (vs the
--- single-file path's `UnknownModule`), mirroring how `build`/`run` route through
--- loadProgram → the multi-module typecheck.  Output mirrors runCheck's shape over
--- the entry module: the entry module's schemes/type-errors/match-warnings via
--- checkModulesEntryReport.
+-- order), DESUGARS each and typechecks the graph ONCE; this renders that pass's
+-- per-module diagnostics.  Imports are RESOLVED (vs the single-file path's
+-- `UnknownModule`), mirroring how `build`/`run` route through loadProgram → the
+-- multi-module typecheck.  Output mirrors runCheck's shape over the entry module.
 -- `rtD`/`coreD` are the DESUGARED runtime/core decls; `mods` are the DESUGARED
--- loaded modules (entry last).  Kept separate from runCheck so the no-import path
--- stays byte-identical (the CLI routes 1-module loads through runCheck).
--- (#1440) No longer re-checks multi-module resolve diagnostics here: the ONE
--- caller, `checkRoute` (`compiler/driver/medaka_cli.mdk`), already resolved
--- via `resolveModulesErrorsByFile` and only reaches this function in its
--- `""` (no-resolve-errors) branch, so a second resolve pass here could only
--- ever repeat that same `""` — `allowInternal`/`trustedMods` are unused now
--- for the same reason (kept for signature stability with that call site).
+-- loaded modules (entry last).  The guard-exhaustiveness pass is AST-only (no
+-- typecheck) over the same entry module; the entry report is a projection of
+-- `perMod`, never a second graph pass.
 export
-runCheckModules : Bool ->
-  List String ->
-  List Decl ->
+runCheckModulesFromDiags : List Decl ->
   List Decl ->
   List (String, List Decl) ->
+  List ModDiags ->
   String
-runCheckModules allowInternal trustedMods rtD coreD mods =
+runCheckModulesFromDiags rtD coreD mods perMod =
   let exWarns = entryExhaust rtD coreD mods
-  let report = checkModulesEntryReport rtD coreD mods
-  joinNonEmpty exWarns report
-
--- exit-code predicate analog of checkHasErrors for the multi-module path: a
--- resolve error OR any type error in the entry module.
-export
-checkModulesHasErrors : Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  Bool
-checkModulesHasErrors allowInternal trustedMods rtD coreD mods =
-  let resDiags = resolveModulesToLinesG allowInternal trustedMods rtD coreD mods
-  match resDiags
-    "" => checkModulesEntryHasErrors rtD coreD mods
-    _ => True
+  joinNonEmpty exWarns (entryReportFromDiags perMod)
 
 -- guard-exhaustiveness warnings on the ENTRY module (last) — the multi-module
 -- analog of runCheck's `exhaustToLines raw`.  exhaustToLines runs on the desugared

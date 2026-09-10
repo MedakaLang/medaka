@@ -1,0 +1,29 @@
+-- The ORDERING control for the atom-guarantee seed: the envelope that carries it
+-- must be built AFTER the effect-domain registry is populated.
+--
+-- `UserSlot` is exported ABSTRACTLY, so its constructor never reaches this module's
+-- `registerVariants` and the only way `stash` can be accepted is the cross-module
+-- seed (`deAtomsBefore`) -- exactly as in `xmod_abstract_wrapper_row_atoms`.  What
+-- this row adds is a PARAMETERIZED label: `FileRead "x/*"` has a `Prefix` domain, so
+-- the seeded atom's ⊤ parameter is read out of `driverState.effectDomains`.  Build
+-- the envelope before that table is filled and every label reads back `PUnit`, the
+-- guarantee stops matching the written row, and this `stash` is REJECTED with the
+-- effect-variable laundering diagnostic -- an over-rejection, loud, on a program the
+-- defining module accepts verbatim.
+--
+-- The direction matters both ways, which is why `plain` is here: the seed must
+-- publish `UserSlot`'s ACTUAL guarantee, not "everything is guaranteed", so a relay
+-- that supplies no `FileRead` at all still types as row-polymorphic rather than
+-- silently acquiring the wrapper's row.
+import w.{UserSlot, mkUserSlot}
+
+stash : (Unit -> <FileRead "x/*" | e> Unit) -> UserSlot e
+stash f = mkUserSlot f
+
+reader : Unit -> <FileRead "x/*"> Unit
+reader _ = ()
+
+pureStash : UserSlot <>
+pureStash = stash reader
+
+main = println 1

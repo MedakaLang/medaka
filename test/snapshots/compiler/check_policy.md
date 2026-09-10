@@ -1,5 +1,5 @@
 # META
-source_lines=756
+source_lines=731
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
@@ -69,23 +69,8 @@ import support.util.{
   sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains
 }
 
--- ── policy-arg parsing ──────────────────────────────────────────────────────
--- Mirror bin/main.ml's parse_args: --allow / --fn carry a value; the first bare
--- positional is the file.  Defaults: allow "Cache,Log", fn "transform".
+-- ── policy args ──────────────────────────────────────────────────────────
 public export data PolicyArgs = PolicyArgs (Option String) String String
-
-export
-parsePolicyArgs : List String -> PolicyArgs
-parsePolicyArgs argv = parsePolicyGo argv None "Cache,Log" "transform"
-
-parsePolicyGo : List String -> Option String -> String -> String -> PolicyArgs
-parsePolicyGo [] file allow fn = PolicyArgs file allow fn
-parsePolicyGo ("--allow" :: v :: rest) file _ fn = parsePolicyGo rest file v fn
-parsePolicyGo ("--fn" :: v :: rest) file allow _ =
-  parsePolicyGo rest file allow v
-parsePolicyGo (f :: rest) None allow fn = parsePolicyGo rest (Some f) allow fn
-parsePolicyGo (f :: rest) (file@(Some _)) allow fn =
-  parsePolicyGo rest file allow fn
 
 -- Split the --allow value on ',', dropping empties (mirror String.split_on_char
 -- ',' then filter (<> "")).
@@ -662,16 +647,6 @@ joinTomlLines (x :: xs) = "\{x}\n\{joinTomlLines xs}"
 -- differs from check-policy's "transform" which is the plugin convention).
 public export data ManifestArgs = ManifestArgs (Option String) String
 
-export
-parseManifestArgs : List String -> ManifestArgs
-parseManifestArgs argv = parseManifestGo argv None "main"
-
-parseManifestGo : List String -> Option String -> String -> ManifestArgs
-parseManifestGo [] file fn = ManifestArgs file fn
-parseManifestGo ("--fn" :: v :: rest) file _ = parseManifestGo rest file v
-parseManifestGo (f :: rest) None fn = parseManifestGo rest (Some f) fn
-parseManifestGo (f :: rest) (file@(Some _)) fn = parseManifestGo rest file fn
-
 -- Run manifest extraction: typecheck the file, read the named fn's inferred
 -- effect row, return TOML.
 -- Returns (toml, fnEffects) so the caller can also drive round-trip validation.
@@ -768,14 +743,6 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
-(DTypeSig true "parsePolicyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "PolicyArgs")))
-(DFunDef false "parsePolicyArgs" ((PVar "argv")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "argv")) (EVar "None")) (ELit (LString "Cache,Log"))) (ELit (LString "transform"))))
-(DTypeSig false "parsePolicyGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyArgs"))))))
-(DFunDef false "parsePolicyGo" ((PList) (PVar "file") (PVar "allow") (PVar "fn")) (EApp (EApp (EApp (EVar "PolicyArgs") (EVar "file")) (EVar "allow")) (EVar "fn")))
-(DFunDef false "parsePolicyGo" ((PCons (PLit (LString "--allow")) (PCons (PVar "v") (PVar "rest"))) (PVar "file") PWild (PVar "fn")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EVar "file")) (EVar "v")) (EVar "fn")))
-(DFunDef false "parsePolicyGo" ((PCons (PLit (LString "--fn")) (PCons (PVar "v") (PVar "rest"))) (PVar "file") (PVar "allow") PWild) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EVar "file")) (EVar "allow")) (EVar "v")))
-(DFunDef false "parsePolicyGo" ((PCons (PVar "f") (PVar "rest")) (PCon "None") (PVar "allow") (PVar "fn")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EApp (EVar "Some") (EVar "f"))) (EVar "allow")) (EVar "fn")))
-(DFunDef false "parsePolicyGo" ((PCons (PVar "f") (PVar "rest")) (PAs "file" (PCon "Some" PWild)) (PVar "allow") (PVar "fn")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EVar "file")) (EVar "allow")) (EVar "fn")))
 (DTypeSig false "splitComma" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitComma" ((PVar "s")) (EApp (EVar "filterNonEmpty") (EApp (EApp (EApp (EApp (EApp (EVar "splitCommaGo") (EApp (EVar "stringToChars") (EVar "s"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "s")))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "splitCommaGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -956,13 +923,6 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "joinTomlLines" ((PList)) (ELit (LString "")))
 (DFunDef false "joinTomlLines" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "joinTomlLines") (EVar "xs")))) (ELit (LString ""))))
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
-(DTypeSig true "parseManifestArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "ManifestArgs")))
-(DFunDef false "parseManifestArgs" ((PVar "argv")) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "argv")) (EVar "None")) (ELit (LString "main"))))
-(DTypeSig false "parseManifestGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "ManifestArgs")))))
-(DFunDef false "parseManifestGo" ((PList) (PVar "file") (PVar "fn")) (EApp (EApp (EVar "ManifestArgs") (EVar "file")) (EVar "fn")))
-(DFunDef false "parseManifestGo" ((PCons (PLit (LString "--fn")) (PCons (PVar "v") (PVar "rest"))) (PVar "file") PWild) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "rest")) (EVar "file")) (EVar "v")))
-(DFunDef false "parseManifestGo" ((PCons (PVar "f") (PVar "rest")) (PCon "None") (PVar "fn")) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "rest")) (EApp (EVar "Some") (EVar "f"))) (EVar "fn")))
-(DFunDef false "parseManifestGo" ((PCons (PVar "f") (PVar "rest")) (PAs "file" (PCon "Some" PWild)) (PVar "fn")) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "rest")) (EVar "file")) (EVar "fn")))
 (DTypeSig true "runManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "runManifest" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rtSrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EApp (EVar "manifestToml") (EVar "fnEffects")))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
@@ -989,14 +949,6 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
-(DTypeSig true "parsePolicyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "PolicyArgs")))
-(DFunDef false "parsePolicyArgs" ((PVar "argv")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "argv")) (EVar "None")) (ELit (LString "Cache,Log"))) (ELit (LString "transform"))))
-(DTypeSig false "parsePolicyGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyArgs"))))))
-(DFunDef false "parsePolicyGo" ((PList) (PVar "file") (PVar "allow") (PVar "fn")) (EApp (EApp (EApp (EVar "PolicyArgs") (EVar "file")) (EVar "allow")) (EVar "fn")))
-(DFunDef false "parsePolicyGo" ((PCons (PLit (LString "--allow")) (PCons (PVar "v") (PVar "rest"))) (PVar "file") PWild (PVar "fn")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EVar "file")) (EVar "v")) (EVar "fn")))
-(DFunDef false "parsePolicyGo" ((PCons (PLit (LString "--fn")) (PCons (PVar "v") (PVar "rest"))) (PVar "file") (PVar "allow") PWild) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EVar "file")) (EVar "allow")) (EVar "v")))
-(DFunDef false "parsePolicyGo" ((PCons (PVar "f") (PVar "rest")) (PCon "None") (PVar "allow") (PVar "fn")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EApp (EVar "Some") (EVar "f"))) (EVar "allow")) (EVar "fn")))
-(DFunDef false "parsePolicyGo" ((PCons (PVar "f") (PVar "rest")) (PAs "file" (PCon "Some" PWild)) (PVar "allow") (PVar "fn")) (EApp (EApp (EApp (EApp (EVar "parsePolicyGo") (EVar "rest")) (EVar "file")) (EVar "allow")) (EVar "fn")))
 (DTypeSig false "splitComma" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitComma" ((PVar "s")) (EApp (EVar "filterNonEmpty") (EApp (EApp (EApp (EApp (EApp (EVar "splitCommaGo") (EApp (EVar "stringToChars") (EVar "s"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "s")))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "splitCommaGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -1177,13 +1129,6 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "joinTomlLines" ((PList)) (ELit (LString "")))
 (DFunDef false "joinTomlLines" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "joinTomlLines") (EVar "xs")))) (ELit (LString ""))))
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
-(DTypeSig true "parseManifestArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "ManifestArgs")))
-(DFunDef false "parseManifestArgs" ((PVar "argv")) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "argv")) (EVar "None")) (ELit (LString "main"))))
-(DTypeSig false "parseManifestGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "ManifestArgs")))))
-(DFunDef false "parseManifestGo" ((PList) (PVar "file") (PVar "fn")) (EApp (EApp (EVar "ManifestArgs") (EVar "file")) (EVar "fn")))
-(DFunDef false "parseManifestGo" ((PCons (PLit (LString "--fn")) (PCons (PVar "v") (PVar "rest"))) (PVar "file") PWild) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "rest")) (EVar "file")) (EVar "v")))
-(DFunDef false "parseManifestGo" ((PCons (PVar "f") (PVar "rest")) (PCon "None") (PVar "fn")) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "rest")) (EApp (EVar "Some") (EVar "f"))) (EVar "fn")))
-(DFunDef false "parseManifestGo" ((PCons (PVar "f") (PVar "rest")) (PAs "file" (PCon "Some" PWild)) (PVar "fn")) (EApp (EApp (EApp (EVar "parseManifestGo") (EVar "rest")) (EVar "file")) (EVar "fn")))
 (DTypeSig true "runManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "runManifest" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rtSrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EApp (EVar "manifestToml") (EVar "fnEffects")))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))

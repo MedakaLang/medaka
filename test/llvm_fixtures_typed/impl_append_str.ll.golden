@@ -105,6 +105,7 @@ declare i64 @mdk_read_file(i64)
 declare i64 @mdk_read_file_bytes(i64)
 declare i64 @mdk_write_file(i64, i64)
 declare i64 @mdk_write_file_bytes(i64, i64)
+declare i64 @mdk_write_file_mode(i64, i64, i64)
 declare i64 @mdk_append_file(i64, i64)
 declare i64 @mdk_file_exists(i64)
 declare i64 @mdk_canonicalize_path(i64)
@@ -118,6 +119,7 @@ declare i64 @mdk_remove_file(i64)
 declare i64 @mdk_rename(i64, i64)
 declare i64 @mdk_remove_dir(i64)
 declare i64 @mdk_stat_file(i64)
+declare i64 @mdk_file_mode(i64)
 declare i64 @mdk_run_command(i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
@@ -168,10 +170,11 @@ declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
+; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_impl_String_append(i64 ptrtoint (ptr @.strc.0 to i64), i64 ptrtoint (ptr @.strc.1 to i64))
+  %t0 = call i64 @mdk_impl_String_append(i64 ptrtoint (ptr @.strc.program.0 to i64), i64 ptrtoint (ptr @.strc.program.1 to i64))
   %t1 = inttoptr i64 %t0 to ptr
   %t2 = getelementptr i8, ptr %t1, i64 16
   %t3 = load i64, ptr %t2
@@ -181,11 +184,14 @@ entry:
   call void @mdk_print_int(i64 %t6)
   ret i32 0
 }
+; mdk-module impl:String_append
 define i64 @mdk_impl_String_append(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_string_append(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-@.strc.0 = private unnamed_addr constant { i64, i64, i64, [4 x i8] } { i64 1, i64 3, i64 3, [4 x i8] c"\66\6F\6F\00" }
-@.strc.1 = private unnamed_addr constant { i64, i64, i64, [4 x i8] } { i64 1, i64 3, i64 3, [4 x i8] c"\62\61\72\00" }
+; mdk-module program
+@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [4 x i8] } { i64 1, i64 3, i64 3, [4 x i8] c"\66\6F\6F\00" }
+; mdk-module program
+@.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [4 x i8] } { i64 1, i64 3, i64 3, [4 x i8] c"\62\61\72\00" }

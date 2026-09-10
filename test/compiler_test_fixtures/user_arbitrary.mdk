@@ -1,0 +1,24 @@
+-- Regression for #2292: `medaka test` used to generate a prop parameter
+-- structurally from its declared type for every type, so a user's `Arbitrary`
+-- instance never reached the draw.  This prop fails within a handful of
+-- structural draws (`Green` is generated roughly half the time) and passes
+-- only when the instance is honored.
+--
+-- The doctest is load-bearing beyond what it asserts: `medaka test` skips
+-- typechecking for a prop-only, doctest-free module (#1229), so without one
+-- nothing here would prove the instance is well-typed.
+
+data Color = Red | Green deriving (Eq, Debug)
+
+-- > isRed Red
+-- True
+-- > isRed Green
+-- False
+isRed : Color -> Bool
+isRed Red = True
+isRed Green = False
+
+impl Arbitrary Color where
+  arbitrary () = Red
+
+prop "user generator is honored" (c : Color) = isRed c

@@ -1,13 +1,23 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** ACTIVE (2026-09-04) — Phases 0–3 are complete in the current tree.
+**Status:** ACTIVE (2026-09-09) — Phases 0–3 are complete in the current tree.
 Phase 4 (#1697) has landed record CRUD, `applyWrites` as one signed commit,
 session authentication, and the blob half (`uploadBlob`/`getBlob`/`listBlobs`
 with on-disk persistence across restarts) — the Async v2 runtime arc (#500)
 and the graded-interface work (#823/#824) that Phase 3 depended on are both
-landed, so nothing in Phase 4 remains gated on them either. What is left of
-Phase 4 is deployment behind Caddy under systemd; multi-repository support
-stays out of scope through 0.1.0 by design (§0, P14).
+landed, so nothing in Phase 4 remains gated on them either. The bind is now
+configuration (`--bind`, default `127.0.0.1`) rather than a literal, a
+non-loopback bind is refused unless `--trusted-proxy` is also set (`#2757`,
+accepted-risk plus this refusal — a peer-address extern was proposed and
+declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
+carry the deploy procedure — but no live deploy has happened: pointing a real
+domain at a real key is a manual, deliberate act still to be taken. Still
+open, tracked separately rather than blocking that act: `#2613` (backup/
+restore, Phase 6), `#2572` (a block operation can occupy the scheduler
+past its budget), `#2773`/`#2774` (perf), `#2608` (firehose, Phase 5), and
+`#1962` (the signing-parity oracle is nightly-only — confirm it green
+immediately before a deploy). Multi-repository support stays out of scope
+through 0.1.0 by design (§0, P14).
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
 dev box behind Caddy. This is simultaneously the most demanding Medaka program
@@ -275,16 +285,111 @@ The salt is always caller-supplied — `pbkdf2HmacSha256` draws no entropy and d
 I/O itself; salt generation is the shell layer's job, in the slice that wires up
 account bootstrap.
 
-**Iteration count: 1,500.** Measured on this box (`medaka build -O2`, 32-byte `dkLen`):
-600,000 iterations — the current OWASP-recommended floor for PBKDF2-HMAC-SHA256 —
-takes **~70 s** here, because this is a pure-Medaka implementation with no hardware
-SHA extensions or vectorization, not a count anyone should read as a security
-recommendation for a tuned native implementation elsewhere. 20,000 iterations took
-~1.9 s (≈8,600–10,400 iterations/s, roughly linear); 1,500 iterations took
-~200–240 ms across three runs, the largest sample under the ~250 ms budget with
-headroom (S-kdf acceptance check 4). This number is revisited once the emitter's
-numeric/allocation performance on this workload (§4.1) is itself improved, or if a
-future slice moves the hot loop to a native `extern`.
+**Iteration count: 3,000, against a 500 ms login-latency budget. The OWASP floor is
+not reached, and the residual gap is 200x.**
+
+*Measurement (2026-09-09, this box: Debian 13, 12-core/32GB; `medaka build`, 32-byte
+`dkLen`, one process per sample, three samples per count).* Wall time for a single
+`pbkdf2HmacSha256` over a 28-character password and a 16-byte salt:
+
+| iterations | samples (ms) | median ms/iteration |
+|---|---|---|
+| 1,000 | 246.3 / 222.8 / 209.4 | 0.223 |
+| 2,000 | 469.4 / 514.9 / 317.4 | 0.235 |
+| 4,000 | 560.5 / 601.6 / 859.1 | 0.150 |
+| 8,000 | 1556.8 / 1371.5 / 1352.8 | 0.171 |
+| 16,000 | 2809.6 / 2360.7 / 2166.3 | 0.148 |
+
+Subtracting the 4,000 median from the 16,000 median removes the fixed per-process
+cost and gives the marginal figure this count is chosen from: **0.147 ms per
+iteration**, ≈6,800 iterations/s. (The small counts read *higher* per iteration
+because process start and heap growth are amortized over fewer iterations, not
+because the loop is superlinear.)
+
+*The budget.* 500 ms per derivation, chosen as a **login-latency** budget rather than
+the bootstrap budget the previous count was set against. The derivation now runs
+inside `applyRequest`'s single indivisible sequence (`pds/shell/server.mdk`), so it is
+also the time one `com.atproto.server.createSession` attempt — including a WRONG one —
+blocks every other connection for. `maxCreateSessionPerWindow` is 30 per 60 s per
+identity (`pds/lib/resource_limits.mdk`), so at the 500 ms budget one identity can
+hold the server for **15 s of each minute**, and at the chosen count's measured
+~440 ms for **~13 s**. Two things sharpen that further, and both are load-bearing:
+the derivation is inside an indivisible sequence, so those seconds are the whole
+single-threaded server, not one connection's share of it; and **without
+`--trusted-proxy` every caller shares the one `"direct"` identity bucket** (see
+"The identity a request is charged against", below), so the 30 are 30 logins *in
+total* — wrong passwords
+included — and any client can spend them. The budget is set where that stays a
+fraction rather than a majority of the window; it does not make it a small one.
+
+*The chosen count.* 0.147 ms × 3,000 = **~440 ms**, the largest round count inside the
+budget. `defaultIterations = 3000` (`pds/lib/credential.mdk`), pinned by a cell in
+`pds/test/credential_test.mdk`.
+
+*The residual gap.* OWASP's floor for PBKDF2-HMAC-SHA-256 is 600,000 iterations, which
+at 0.147 ms/iteration is **~88 s per login** here — 200x the chosen count, and about
+176x the whole login budget. **The floor is unreachable by tuning and the gap is not
+closed by this change.** What closes it is a native SHA-256 (an `extern`, or an
+emitter that vectorizes the compression function): the gap is entirely the cost of a
+pure-Medaka block function, not of PBKDF2's structure. Until then this count is what
+the implementation can afford, and is not a security recommendation. Anyone deploying
+this behind a public origin should read it as: an attacker who steals
+`<data>/credential` recovers a weak password 200x faster than against a
+floor-compliant server.
+
+*Migration.* A record carries the count it was derived at, so raising the constant
+locks nobody out. A stored record derived at any other count is re-derived onto the
+current one by **one successful login** (`credentialUpgrade`, `pds/lib/credential.mdk`;
+called from `applyCreateSession` and persisted by `persistCredentialHalf`). A FAILED
+login never rewrites the record: `credentialUpgrade` grades the password itself and
+returns nothing without it, so the property holds at the function rather than at its
+call site.
+
+### 4.2.1 Secrets at rest, through 0.1.0
+
+**Ruling (Q6): the signing key and the session-token secret are stored in PLAINTEXT,
+protected by filesystem permissions alone.** Every secret file this server writes is
+mode `0600`, and every secret file it reads at any wider mode is refused before the
+listener binds.
+
+Passphrase encryption at rest is **deferred past 0.1.0**, deliberately. It needs a KDF
+and a symmetric cipher written in pure Medaka with no protocol-level answer key to
+grade either against — the opposite of the corpus discipline every other primitive
+here rests on (G5) — and it defends a threat model a single-operator server behind
+Caddy does not face: an attacker who can read `<data>/key.hex` as its owner is already
+the operator, and one who cannot read it gains nothing from its being encrypted at
+rest by a passphrase that would have to live on the same box to start unattended.
+
+*Rotating the signing key.* Rotating it changes the account's `did:key`, so it is an
+identity change, not a maintenance operation — the DID document must be updated and
+every other implementation on the network re-resolves it. The procedure:
+
+1. `pds keygen --key <data>/key.hex.new` — writes a new scalar at `0600` and prints
+   the compressed public key and the `did:key` it will be known by.
+2. Update the account's DID document to name that `did:key`, and wait for it to
+   propagate.
+3. Stop the server, `mv <data>/key.hex.new <data>/key.hex`, restart.
+
+`keygen` refuses to write over an existing file, so step 1 cannot destroy the running
+key by a typo.
+
+*Rotating the session-token secret.* This is a maintenance operation and costs only
+the open sessions: every token this server has issued is verified against it, so
+replacing it logs everybody out and nothing else.
+
+1. `pds keygen --token-secret <data>/session-secret.new`.
+2. Stop the server, `mv <data>/session-secret.new <data>/session-secret`, restart.
+
+*Rotating the account password.* `serve` refuses `--password-file` against a data
+directory that already holds a credential rather than rotating in place: remove
+`<data>/credential` and start once with `--password-file`.
+
+*What is graded, and what is not.* A supplied `--token-secret` is refused when it
+carries fewer than 8 distinct byte values across its 32 (`admitSessionSecret`,
+`pds/serve.mdk`) — 32 random bytes carry ~28, and fewer than 8 with probability far
+below 1 in 2^60, so this refuses a placeholder without ever refusing a real secret. It
+is a non-entropy detector, not an entropy estimator: it cannot tell a low-entropy
+passphrase hex-encoded to 32 bytes from a generated one.
 
 ### 4.3 Session tokens (JWT, HS256)
 
@@ -357,18 +462,17 @@ its own staleness and mode problems, for the benefit of not asking a client to l
 after a server restart. The credential record IS persisted, because a server that
 forgot the account password on restart could not accept a login at all.
 
-**File modes are a real gap, stated plainly.** Medaka has no primitive that sets a
-file mode: `writeFile` is `fopen(path, "wb")`, and there is no `chmod`, no `umask`,
-and no mode argument anywhere in the runtime or the stdlib. So the generated session
-secret and the stored credential record land at 0644 — world-readable — and
-`pds/serve.mdk` says so loudly on stderr, naming the path and the mode, whenever it
-creates one. It never names the contents: a warning that quoted the secret would be a
-far larger disclosure than the mode it warns about. On a shared machine an operator
-should pre-create the file under their own umask and hand it in with `--token-secret`.
-This is a gap to close with a mode-taking write primitive, not a residual risk that
-has been accepted; the two available workarounds are both worse than saying so
-(shelling out to `chmod` leaves a real world-readable window between the create and
-the chmod and grants the server an `<Exec>` capability to protect one file).
+**Secrets at rest are owner-only, and a wider one is refused rather than warned
+about.** The generated session secret and the stored credential record are written
+through `io.writeFilePrivate` over the `writeFileMode` primitive, which sets the mode
+on the open descriptor before the first byte is written — so the contents never exist
+at a wider mode, and neither the process umask nor a pre-existing file's own mode can
+widen them. In the other direction, `pds/serve.mdk` grades every hex secret file it
+READS (`--key` and `--token-secret`) with `fileMode` and refuses to start when any
+account but the owner can read one: a signing key the rest of the box can read has
+already been exposed, and serving anyway would hide that. The refusal names the path
+and the mode and never the contents. Encryption at rest is a separate question and is
+deferred past 0.1.0: these are plaintext files under restrictive permissions.
 
 **The password never appears in an argument.** `--password-file PATH` is the only way
 one reaches the server: an argument value is visible in `ps` output to every user on
@@ -505,19 +609,23 @@ pure core stays reachable from every engine Phase 3 does not run on. The signatu
 half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
-**Loopback-only is deliberate, not an oversight.** `bindLoopback` takes a port and
-nothing else — no configuration path can move this server off `127.0.0.1`. §4.2-4.4
-below describe the auth seam this server now has: the three record writes and
-`getSession` require a valid access token, `refreshSession`/`deleteSession` require a
-valid refresh token, `createSession` is the public login that issues both, and the
-six reads, `resolveHandle`, and the two well-knowns stay public. Loopback-only is the
-separate gate that remains: authentication makes the endpoints safe to answer, but
-nothing here hardens the socket for exposure past loopback (TLS, a non-loopback
-bind), which is not a Phase 3 or Phase 4 gap to work around but out of scope until a
-later phase takes it up.
+**Loopback by default, and a non-loopback bind is a deliberate act.** `--bind`
+(`pds/serve.mdk`) defaults to `127.0.0.1`; a bind to anything else is refused
+before any secret is read or generated and before the listener binds, unless
+`--trusted-proxy` is also given (`requireTrustedBind`, `#2757`) — see the
+paragraph below for why that flag is the enforcement rather than a peer-address
+check this process could make instead. §4.2-4.4 below describe the auth seam
+this server now has: the three record writes and `getSession` require a valid
+access token, `refreshSession`/`deleteSession` require a valid refresh token,
+`createSession` is the public login that issues both, and the six reads,
+`resolveHandle`, and the two well-knowns stay public. TLS is never
+implemented here (P5) — Caddy terminates it and reverse-proxies to the
+loopback port, which is the deployment `docs/ops/PDS-DEPLOY.md` describes.
 
-**Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), except
-deployment.*
+**Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), including
+the configurable bind, the refusal, and the deployment artifacts
+(`pds/Caddyfile`, `pds/pds.service`, `docs/ops/PDS-DEPLOY.md`) — except the
+live deploy itself, which is a manual act still to be taken.*
 
 Shipped, all in `pds/lib/handlers.mdk` as pure functions over the Phase-2 seam,
 composed under the Phase-3 shell's auth seam (§ above): record CRUD
@@ -540,6 +648,113 @@ Deliberately NOT shipped, and each refused rather than faked: lexicon record
 validation (`validate: true` is refused), `describeRepo`'s `didDoc` (no DID
 resolver, so any document would be invented), `sync.getRepo`'s `since` (no
 incremental sync), and `validationStatus`.
+
+**Read-path cost bounds (#2478).** Every read route above is a `PublicRoute` —
+unauthenticated by the atproto spec, not by omission — so the cost of serving
+one is a cost a stranger chooses. Three of them once did work proportional to
+the whole account per response. `listRecords` selects on the MST's paths and
+reads a record's block only for the entries it actually returns; `describeRepo`
+answers `collections` from paths alone; and `listBlobs` lists CIDs through a
+byte-free blob-half view instead of copying every blob. The paths themselves are
+still walked, because `lib.mst` holds its entries as a flat sorted list with no
+range query, so a page still costs one cheap pass over the account's keys — a
+smaller residual, tracked separately, not the byte-proportional cost #2478 named.
+
+`com.atproto.sync.getRepo` is the exception, and deliberately so: **a full CAR
+export is inherently proportional to the repository, and the only bound
+available is how often it may be called.** The endpoint's contract is the whole
+repository as one CAR, so no per-request bound short of refusing the route can
+make it sublinear; and the P14 seam is
+`handle : Server -> Store -> Request -> (Store, Response)`, which returns a
+`Response` **value**, so streaming the CAR is not expressible in the pure core
+at all — it would require the response to become a stream the shell pulls from,
+i.e. abandoning the seam that makes the core all-engine and doctestable. What
+bounds `getRepo` is therefore rate limiting alone: the per-identity request
+allowance #2612 installs, with `maxCarBytes` (64 MiB,
+`pds/lib/resource_limits.mdk`) capping any single export. A deployment that
+exposes this server past loopback must have that limiter in place; `getRepo`
+without it is an unauthenticated request for the entire account, repeatable.
+
+**Rate limiting: what Caddy does and what this process does (#2612).** Caddy
+(P5) terminates TLS and reverse-proxies plaintext HTTP to the Medaka process
+on localhost; it never sees an atproto identity, an NSID, or a session — only
+connections and bytes. That is exactly the layer a blunt, protocol-blind
+ceiling belongs at (a global connection/rate cap, independent of who is
+asking or what they are asking for), and it is Caddy's job, not this
+process's: nothing in `pds/` reimplements it. What this process owns is the
+opposite half — a limit that KNOWS the caller's identity and the request's
+class, which no reverse proxy in front of it can. `pds/shell/server.mdk`
+charges every request against a `RateLimitState` (`pds/lib/ratelimit.mdk`)
+kept in one fixed window (`rateLimitWindowSeconds`, `pds/lib/
+resource_limits.mdk`) per five independent classes: a `ConnectionsClass`
+charge on a connection's first framed request, a `RequestsClass`
+charge on every framed request, and three narrower classes layered
+on top of `RequestsClass` rather
+than replacing it — `WritesClass` for the write NSIDs (`createRecord`,
+`putRecord`, `deleteRecord`, `applyWrites`, `uploadBlob`),
+`CreateSessionClass` for `createSession` alone, since login attempts are a
+credential-guessing surface every other route is not, and `RepoExportClass`
+for `sync.getRepo` alone, whose single response is a whole-repository CAR
+bounded only by `maxCarBytes` — a count of requests cannot bound what that
+route emits, so `maxRepoExportsPerWindow` names the egress ceiling
+separately. A refusal answers 429
+with `error: "RateLimitExceeded"` and the IETF `RateLimit-*` response
+headers (`ratelimit-limit`, `ratelimit-remaining`, `ratelimit-reset`) naming
+the exceeded class's own ceiling, not a blended figure.
+
+"Framed" is the load-bearing qualifier in that paragraph, and it is where
+this half of the limiter stops: a charge is taken the moment a request
+boundary is reached, whether or not the bytes inside it parse. What a charge
+cannot always have is a per-identity bucket to go in, since an identity comes
+from a header and a header only exists once a request parsed. So a request
+that fails to frame or parse is answered 400 and, having produced no identity
+to charge, is attributed to the shared `"direct"` bucket rather than to its
+sender; that bounds the channel globally without pretending to know who used
+it, which is defensible for malformed traffic precisely because malformed
+traffic is not the shape a legitimate client has. One shape falls outside
+every class entirely: a connection that never completes a request is
+accepted, occupies a slot against `maxConcurrentConnections`, and is charged
+nothing — enough of them deny service to every other caller (#2772), which
+is why a read deadline, not a counter, is what closes that shape.
+
+One fixed window per identity also bounds the AVERAGE rate over a window,
+not the instantaneous one: because the window index is derived from the
+absolute epoch, an identity can spend a full allowance just before a
+boundary and a second full allowance just after it, so the worst-case burst
+is twice the nominal ceiling in an arbitrarily short interval (#2775).
+Capacity planning should read the ceilings here as "per window, and up to
+twice that across a boundary." A token bucket removes the boundary; the
+fixed window is kept for now because its per-identity state is a counter and
+a window index, which is what makes it cheap to reason about and to test.
+
+The identity a request is charged against comes from the last hop of
+`X-Forwarded-For` — but ONLY when the operator passes `--trusted-proxy`,
+asserting that this process's peer IS the configured reverse proxy (Caddy,
+in the deployment this document describes). There is no way for this
+process to verify that assertion itself (no `getpeername`-equivalent in
+this runtime); without the flag, every request is charged against one
+shared `"direct"` identity bucket regardless of its source address. That
+default is chosen because the alternative is worse, not because it is
+without cost: a forwarded-for header trusted by default would let any client
+claim any identity's budget for itself, or spend a stranger's. The cost it
+does carry should be stated plainly, because it inverts the property this
+half of the limiter exists for — with one bucket for every caller, all five
+ceilings are process-wide rather than per-client, so the first caller to
+reach one refuses every other caller until the window turns. A per-identity
+limiter that cannot distinguish identities is a global limiter. Nothing in
+this runtime can close that gap from here: identifying an unproxied caller
+needs its peer address, which this runtime cannot obtain — there is no
+`getpeername`-equivalent extern, and adding one is not the fix, since under
+Caddy on the same box a socket peer address reads `127.0.0.1` regardless of
+who is really asking, so the last `X-Forwarded-For` hop is already the
+better identity available. `#2757` closes as accepted-risk on that basis,
+plus the refusal `requireTrustedBind` (`pds/serve.mdk`) now enforces: **a
+direct, unproxied non-loopback bind is unsupported** — `configure` refuses to
+start one at all, so the "whole world sharing one bucket" state described
+above can only be reached by a deployment that has itself already asserted
+`--trusted-proxy` while lacking a real proxy, which the flag's own name
+argues against. `pds/README.md` documents the operator-facing half of this:
+when to pass the flag and what happens without it.
 
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
 sibling of (never inside) the repository's `<data>/blocks`, sharded on the
@@ -651,14 +866,15 @@ and raw/blob bodies at 5 MiB; the outer request ceiling additionally bounds
 framing overhead. `uploadBlob` is raw MIME input, not multipart. Revisit
 streaming only from measured deployment pressure, at the Phase 3 socket boundary.
 
+**Q6 — Where does the signing key live at rest? RESOLVED → plaintext at `0600`,
+through 0.1.0.** Passphrase encryption needs a KDF and a symmetric cipher with no
+protocol-level answer key to grade either against, for a threat model a
+single-operator server behind Caddy does not face. The ruling, what it does and does
+not protect, and the rotation procedure for each of the three secrets: §4.2.1.
+
 ### Still open
 
-- **Q6 — Where does the signing key live at rest?** Encrypted with a passphrase
-  supplied at startup, or plaintext on a locked-down filesystem? The first needs a KDF
-  and a symmetric cipher — more pure-Medaka crypto, none of which has a protocol-level
-  answer key the way §5's gates do, which makes it a materially different risk from
-  everything in Phase 0. Deferred to Phase 4, flagged now because it is the one piece
-  of crypto in this document that G1 cannot grade.
+None. Q6 was the last, and §4.2.1 rules it.
 
 ---
 

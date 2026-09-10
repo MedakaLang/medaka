@@ -26,19 +26,28 @@ fail() {
   exit 1
 }
 
-# The server's stderr must hold nothing but the file-mode warnings it is
-# REQUIRED to emit (`pds/serve.mdk`): a file this program creates is 0644,
-# because Medaka has no file-mode primitive, and saying so loudly is the whole
-# mitigation. Filtering them here rather than dropping the check keeps every
-# other stderr line a failure — an exception for one known line, not an
-# amnesty.
+# The server's stderr must be EMPTY. It carried an exception while a file this
+# program created was necessarily 0644; now that every secret it writes lands
+# 0600 there is nothing left to warn about, so any stderr line at all is a
+# failure again.
 require_empty() {
-  grep -v '^serve: WARNING: created .* world-readable (mode 0644)' "$1" \
-    > "$WORK/stderr.rest" 2>/dev/null || true
-  [ ! -s "$WORK/stderr.rest" ] || {
-    cat "$WORK/stderr.rest" >&2
+  [ ! -s "$1" ] || {
+    cat "$1" >&2
     fail "$2 emitted stderr"
   }
+}
+
+# A path's permission bits as three octal digits. Both arms are live: CI is
+# Linux, and this gate must still run on macOS.
+file_mode() {
+  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
+}
+
+# Every file the server creates holding a secret is owner-only. A gate that
+# asserted only that the file EXISTS would pass on a world-readable one.
+require_owner_only() {
+  got=$(file_mode "$1")
+  [ "$got" = "600" ] || fail "$2: $1 is mode $got, expected 600"
 }
 
 [ -x "$MEDAKA" ] || fail "build medaka first (missing $MEDAKA)"
@@ -100,6 +109,11 @@ mkdir -p "$DATA"
 printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
 printf '%s\n' "$TOKEN_SECRET_HEX" > "$WORK/token.hex"
 printf '%s\n' "$PASSWORD" > "$WORK/password"
+# The server refuses a group- or world-readable signing key or session-token
+# secret before it binds (case 25 below proves the refusal), so every hex
+# secret this gate hands it is owner-only. `mktemp -d` already made $WORK 0700;
+# these are the files inside it the server actually grades.
+chmod 600 "$WORK/key.hex" "$WORK/token.hex"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -260,8 +274,40 @@ client malformed "$PORT1" || fail 'case 6: malformed request'
 # 7. over-cap body -> rejected (413), not truncated or hung
 client overcap "$PORT1" || fail 'case 7: over-cap body'
 
-# 8. idle connection closed after ~30s (idleTimeout) — costs real wall time.
+# 8. a connection that says nothing at all is closed by the server rather
+#    than held. It is closed on the HEADER budget, not on idleTimeout: a peer
+#    that has sent no bytes has not terminated a header section, and that is
+#    the shorter of the two budgets it is under. Costs real wall time.
 client idle "$PORT1" || fail 'case 8: idle timeout'
+
+# 8b. #2772: 300 connections, one identity, headers never terminated and
+#    never a byte more — and an unrelated caller is still ANSWERED. The
+#    budget below is what makes this a test rather than a tautology: it sits
+#    above the header budget an un-framed connection now gets and well below
+#    the read and request budgets it used to get, so a server that charges
+#    the un-framed state to nobody cannot pass it. The un-framed sockets are
+#    held open for the whole of the attempt, and released only when the
+#    client exits.
+client unframed-flood "$PORT1" 300 15 \
+  || fail 'case 8b: an unrelated caller went unanswered under an un-framed flood'
+
+# 8c. THIS CELL PINS A LIVE DEFECT AND ASSERTS THE WRONG BEHAVIOR ON PURPOSE.
+#    #2772 is OPEN. Case 8b proves its HEADER half is fixed; its BODY half is
+#    not. A connection that TERMINATES its headers and declares a large
+#    Content-Length leaves the un-framed census entirely, and then holds one
+#    of maxConcurrentConnections (256) for the whole of requestTimeout (60 s)
+#    while sending nothing. So this reports PASS when the unrelated caller is
+#    DENIED, and goes RED when it starts being answered — which is exactly
+#    what a fix to #2772's body half will do, forcing whoever lands it to
+#    rewrite this into the positive assertion 8b already makes. Do not
+#    "repair" a red here by loosening it.
+#    The 12 s budget is the discriminator: far below the 60 s the denial
+#    lasts today, and above any body-phase budget a fix would plausibly
+#    impose (it must be under idleTimeout, 30 s). Note that the stall needs
+#    no dribbled byte — past the header section the silence budget is
+#    idleTimeout, so 12 s of pure silence holds the slot outright.
+client body-stall-flood "$PORT1" 300 12 \
+  || fail 'case 8c: #2772 body-phase pin — see the comment above, this cell asserts the CURRENT BAD behavior; a failure here most likely means the hole is FIXED and the pin must be rewritten as a positive assertion'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
@@ -407,6 +453,7 @@ KEY10A_HEX='c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
 KEY10B_HEX='29988895eae3bb77b1ec1be453a7168eba4422c3897bc846a168a1495a67fa99'
 printf '%s\n' "$KEY10A_HEX" > "$WORK/key10a.hex"
 printf '%s\n' "$KEY10B_HEX" > "$WORK/key10b.hex"
+chmod 600 "$WORK/key10a.hex" "$WORK/key10b.hex"
 
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
@@ -424,24 +471,20 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 
 # 13. first-run bootstrap, observed on the one server this gate starts with
-#    no --token-secret: it generates its own session secret, keeps it in the
-#    data directory, and says on stderr that the file it just created is
-#    world-readable. The warning names the PATH and the mode; it must not name
-#    the secret, which would make the warning a larger leak than the mode it
-#    warns about.
+#    no --token-secret: it generates its own session secret and keeps it in
+#    the data directory, alongside the credential it derived from the password
+#    file. BOTH are owner-only, 0600 — that is the property, not the mere
+#    existence of the files, and the umask this gate happens to run under must
+#    not be able to widen either of them.
 [ -f "$DATA10/session-secret" ] \
   || fail 'case 13: first run did not generate a session secret'
 [ -f "$DATA10/credential" ] \
   || fail 'case 13: first run did not store an account credential'
-grep -F "created $DATA10/session-secret world-readable (mode 0644)" \
-  "$WORK/serve10a.err" >/dev/null \
-  || fail 'case 13: no world-readable warning for the generated session secret'
-grep -F "created $DATA10/credential world-readable (mode 0644)" \
-  "$WORK/serve10a.err" >/dev/null \
-  || fail 'case 13: no world-readable warning for the stored credential'
+require_owner_only "$DATA10/session-secret" 'case 13: generated session secret'
+require_owner_only "$DATA10/credential" 'case 13: stored credential'
 GENERATED_SECRET=$(cat "$DATA10/session-secret")
 if grep -F "$GENERATED_SECRET" "$WORK/serve10a.err" >/dev/null 2>&1; then
-  fail 'case 13: the warning printed the generated secret itself'
+  fail 'case 13: the generated secret reached the server output'
 fi
 if grep -F "$PASSWORD" "$WORK/serve10a.err" "$WORK/serve10a.out" >/dev/null 2>&1
 then
@@ -491,4 +534,425 @@ HEAD_AFTER=$(cksum "$DATA10/head")
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || fail 'case 10: second --init with a different key modified the existing head file'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap'
+# ── fifth and sixth --data dirs: secrets at rest (#2611, #2659 item 4) ─────
+
+# Runs pdsd to completion (it must NOT bind) with the flags given, and stores
+# the exit code in RC. A refusal that instead started serving would hang a
+# plain synchronous run, so this bounds the wait the way case 10 does.
+run_until_exit() {
+  outfile=$1
+  errfile=$2
+  shift 2
+  "$WORK/pdsd" "$@" >"$outfile" 2>"$errfile" &
+  SERVER_PID=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+    fail 'a run that had to refuse is still running — it bound and is serving'
+  fi
+  RC=0
+  wait "$SERVER_PID" 2>/dev/null || RC=$?
+  SERVER_PID=""
+}
+
+# 25. a --key file any other account on the box can read is refused BEFORE the
+#    listener binds. The exit status alone would also be produced by a
+#    malformed DID or an unreadable file, so this asserts the refusal's own
+#    identity — its message — and that the readiness line never appeared.
+DATA25="$WORK/data25"
+mkdir -p "$DATA25"
+cp "$WORK/key.hex" "$WORK/key25.hex"
+chmod 644 "$WORK/key25.hex"
+run_until_exit "$WORK/serve25.out" "$WORK/serve25.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key25.hex" --password-file "$WORK/password" \
+  --data "$DATA25" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 25: a 0644 signing key was accepted'
+grep -F "signing key $WORK/key25.hex is mode 0644, readable by accounts other than its owner" \
+  "$WORK/serve25.err" >/dev/null \
+  || fail 'case 25: the refusal did not name the mode and the path'
+if grep -F 'serve: listening on' "$WORK/serve25.out" >/dev/null 2>&1; then
+  fail 'case 25: the listener bound before the key was graded'
+fi
+if grep -F "$SECRET_HEX" "$WORK/serve25.err" >/dev/null 2>&1; then
+  fail 'case 25: the refusal printed the signing key itself'
+fi
+
+# 26. a configuration rejected for a bad SUPPLIED secret leaves no GENERATED
+#    one on disk (#2659 item 4). The password file is empty, so the run is
+#    refused; before the fix the session secret had already been generated and
+#    written by then, and the next run would have adopted a secret nobody
+#    asked for from a directory the operator believes is unconfigured.
+DATA26="$WORK/data26"
+mkdir -p "$DATA26"
+: > "$WORK/password26"
+run_until_exit "$WORK/serve26.out" "$WORK/serve26.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password26" \
+  --data "$DATA26" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 26: an empty password file was accepted'
+[ ! -e "$DATA26/session-secret" ] \
+  || fail 'case 26: a failed configuration left a generated session secret behind'
+[ ! -e "$DATA26/credential" ] \
+  || fail 'case 26: a failed configuration left a credential behind'
+
+# 27. a --token-secret with no entropy in it is refused before the bind.
+#    Thirty-two zero bytes is a well-formed 32-byte hex secret at mode 0600,
+#    so every check that came before this one passes it; what refuses it is
+#    that every session token the server issued would be forgeable from a
+#    public constant. The exit status alone is also what a malformed DID
+#    produces, so this asserts the refusal's own message.
+DATA27="$WORK/data27"
+mkdir -p "$DATA27"
+ZERO_SECRET_HEX='0000000000000000000000000000000000000000000000000000000000000000'
+printf '%s\n' "$ZERO_SECRET_HEX" > "$WORK/token27.hex"
+chmod 600 "$WORK/token27.hex"
+run_until_exit "$WORK/serve27.out" "$WORK/serve27.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token27.hex" \
+  --password-file "$WORK/password" --data "$DATA27" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 27: a 32-zero-byte session-token secret was accepted'
+grep -F "session-token secret $WORK/token27.hex is a constant or near-constant value" \
+  "$WORK/serve27.err" >/dev/null \
+  || fail 'case 27: the refusal did not name the constant session-token secret'
+if grep -F 'serve: listening on' "$WORK/serve27.out" >/dev/null 2>&1; then
+  fail 'case 27: the listener bound before the session-token secret was graded'
+fi
+[ ! -e "$DATA27/session-secret" ] \
+  || fail 'case 27: the refused run left a generated session secret behind'
+
+# 28. `pds keygen` writes the secrets `serve` will not generate, at a mode
+#    `serve` will read back. A key written any wider would be refused by case
+#    25's own check on the next start, so the mode is asserted here directly.
+KEYGEN_DIR="$WORK/keygen"
+mkdir -p "$KEYGEN_DIR"
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
+  --token-secret "$KEYGEN_DIR/token.hex" \
+  > "$WORK/keygen.out" 2> "$WORK/keygen.err" \
+  || {
+    cat "$WORK/keygen.err" >&2
+    fail 'case 28: keygen exited nonzero'
+  }
+require_empty "$WORK/keygen.err" 'case 28 keygen'
+require_owner_only "$KEYGEN_DIR/key.hex" 'case 28: generated signing key'
+require_owner_only "$KEYGEN_DIR/token.hex" 'case 28: generated session-token secret'
+grep -E -q '^keygen: did:key did:key:zQ3s[1-9A-HJ-NP-Za-km-z]+$' "$WORK/keygen.out" \
+  || fail 'case 28: keygen did not report a secp256k1 did:key'
+grep -E -q '^keygen: public key 0[23][0-9a-f]{64}$' "$WORK/keygen.out" \
+  || fail 'case 28: keygen did not report a compressed public key'
+# The scalar reaches its file and nothing else: what keygen printed must not
+# contain the bytes it wrote.
+KEYGEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/key.hex")
+if grep -F "$KEYGEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1; then
+  fail 'case 28: keygen printed the signing key it generated'
+fi
+# A second run over the same path must refuse rather than destroy the key.
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
+  > "$WORK/keygen2.out" 2> "$WORK/keygen2.err" \
+  && fail 'case 28: keygen overwrote an existing signing key'
+# Exactly one `keygen:` prefix: the wrapper in `pds/serve.mdk` adds it, so a
+# message that also carries its own reads `keygen: keygen refuses ...`.
+grep -F "keygen: refusing $KEYGEN_DIR/key.hex" "$WORK/keygen2.err" >/dev/null \
+  || fail 'case 28: the overwrite refusal did not name the path'
+grep -E -q '^keygen: keygen' "$WORK/keygen2.err" \
+  && fail 'case 28: the refusal carries a doubled keygen: prefix'
+[ "$(tr -d '\n' < "$KEYGEN_DIR/key.hex")" = "$KEYGEN_SECRET" ] \
+  || fail 'case 28: the refused second keygen changed the key on disk'
+# A run that names one new destination and one that already exists must write
+# NEITHER. Refusing after the first write would leave a valid 0600 signing key
+# on disk under a failure exit code, and the operator has no way to tell that
+# half-finished state from a run that wrote nothing.
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/fresh.hex" \
+  --token-secret "$KEYGEN_DIR/token.hex" \
+  > "$WORK/keygen3.out" 2> "$WORK/keygen3.err" \
+  && fail 'case 28: keygen accepted an existing --token-secret destination'
+[ ! -e "$KEYGEN_DIR/fresh.hex" ] \
+  || fail 'case 28: keygen left a signing key behind after refusing the run'
+# 28b. and what keygen wrote is what serve accepts: a whole genesis server
+#    stands up on the generated key and the generated token secret, which is
+#    the only proof that keygen and serve agree on the file format and mode.
+DATA28="$WORK/data28"
+mkdir -p "$DATA28"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$KEYGEN_DIR/key.hex" --token-secret "$KEYGEN_DIR/token.hex" \
+  --password-file "$WORK/password" --data "$DATA28" --port 0 --init \
+  > "$WORK/serve28.out" 2> "$WORK/serve28.err" &
+SERVER_PID=$!
+PORT28=$(wait_for_port "$WORK/serve28.out") \
+  || fail 'case 28b: a server on the generated key did not report readiness'
+require_empty "$WORK/serve28.err" 'case 28b startup'
+client login "$PORT28" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 28b: login against a server on the generated key'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+
+# 29. the login rehash (#2659 item 2): a credential written at an older
+#    iteration count is re-derived onto today's on ONE SUCCESSFUL login, and a
+#    FAILED login leaves the record exactly as it was. The stored record's
+#    first line is its iteration count, so the file itself is the assertion.
+#
+#    The old-count record cannot be forged by editing that first line — the
+#    derived key is a function of the count — so the client derives a real one
+#    at a lower count (`credential-at`), which is the state a data directory
+#    bootstrapped before the count moved is in.
+DATA29="$WORK/data29"
+mkdir -p "$DATA29"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA29" --port 0 --init \
+  > "$WORK/serve29a.out" 2> "$WORK/serve29a.err" &
+SERVER_PID=$!
+wait_for_port "$WORK/serve29a.out" >/dev/null \
+  || fail 'case 29: the bootstrap server did not report readiness'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+SHIPPED_ITERATIONS=$(head -1 "$DATA29/credential")
+OLD_ITERATIONS=$((SHIPPED_ITERATIONS / 2))
+[ "$OLD_ITERATIONS" -ge 1 ] || fail 'case 29: the shipped iteration count is too low to halve'
+client credential-at "$OLD_ITERATIONS" "$PASSWORD" > "$WORK/credential29.old" \
+  || fail 'case 29: the client could not derive an old-count credential'
+[ "$(head -1 "$WORK/credential29.old")" = "$OLD_ITERATIONS" ] \
+  || fail 'case 29: the derived credential does not name the old count'
+cp "$WORK/credential29.old" "$DATA29/credential"
+chmod 600 "$DATA29/credential"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATA29" --port 0 \
+  > "$WORK/serve29b.out" 2> "$WORK/serve29b.err" &
+SERVER_PID=$!
+PORT29B=$(wait_for_port "$WORK/serve29b.out") \
+  || fail 'case 29: the resumed server did not report readiness'
+client login-refused "$PORT29B" "$HANDLE" 'not the account password' \
+  || fail 'case 29: a wrong password was not refused'
+cmp "$WORK/credential29.old" "$DATA29/credential" \
+  || fail 'case 29: a FAILED login rewrote the stored credential'
+client login "$PORT29B" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 29: the login that should migrate the credential failed'
+[ "$(head -1 "$DATA29/credential")" = "$SHIPPED_ITERATIONS" ] \
+  || fail 'case 29: one successful login did not re-derive at the shipped count'
+require_owner_only "$DATA29/credential" 'case 29: the re-derived credential'
+client login "$PORT29B" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 29: the migrated credential does not verify the same password'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve29b.err" 'case 29 resumed server'
+
+# ── fourth, independent --data dirs: the bind refusal (#2606, #2757) ───────
+# `--bind` other than the loopback default is refused unless
+# `--trusted-proxy` is also given: this process cannot verify a peer's
+# identity on its own (no getpeername-equivalent extern), so the flag is an
+# operator assertion the refusal makes mandatory rather than optional.
+
+# 30. non-loopback with NO auth: --trusted-proxy IS set, so the bind check
+#    passes, and what actually refuses the run is the ALREADY-unconditional
+#    credential requirement (A1: no --password-file and no existing
+#    credential in a fresh --data dir) — this asserts THAT diagnostic, not
+#    an invented bind-specific one, and that the bind-specific message did
+#    NOT fire instead.
+DATA30="$WORK/data30"
+mkdir -p "$DATA30"
+run_until_exit "$WORK/serve30.out" "$WORK/serve30.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATA30" --port 0 --bind 0.0.0.0 --trusted-proxy --init
+[ "$RC" -ne 0 ] \
+  || fail 'case 30: a non-loopback bind with no account credential was accepted'
+grep -F 'no account credential' "$WORK/serve30.err" >/dev/null \
+  || fail 'case 30: the refusal was not the existing missing-credential diagnostic'
+if grep -F 'trusted-proxy' "$WORK/serve30.err" >/dev/null 2>&1; then
+  fail 'case 30: the bind-specific refusal fired instead of the credential one'
+fi
+if grep -F 'serve: listening on' "$WORK/serve30.out" >/dev/null 2>&1; then
+  fail 'case 30: the listener bound before the credential was graded'
+fi
+
+# 31. non-loopback WITH auth (a --password-file is given, bootstrapping a
+#    credential) but no --trusted-proxy: refused by the NEW bind-specific
+#    diagnostic, before the credential or session secret reach disk.
+DATA31="$WORK/data31"
+mkdir -p "$DATA31"
+run_until_exit "$WORK/serve31.out" "$WORK/serve31.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA31" --port 0 \
+  --bind 0.0.0.0 --init
+[ "$RC" -ne 0 ] \
+  || fail 'case 31: a non-loopback bind with no --trusted-proxy was accepted'
+grep -F 'refusing to bind 0.0.0.0: a non-loopback bind requires --trusted-proxy' \
+  "$WORK/serve31.err" >/dev/null \
+  || fail 'case 31: the refusal did not name the bind address and the remedy'
+if grep -F 'serve: listening on' "$WORK/serve31.out" >/dev/null 2>&1; then
+  fail 'case 31: the listener bound before the bind was graded'
+fi
+[ ! -e "$DATA31/session-secret" ] \
+  || fail 'case 31: a refused non-loopback bind left a generated session secret behind'
+[ ! -e "$DATA31/credential" ] \
+  || fail 'case 31: a refused non-loopback bind left a generated credential behind'
+
+# 32. the accepted combination: non-loopback bind + --trusted-proxy + a real
+#    credential actually binds and serves. The client still connects over
+#    127.0.0.1 (its only address), which 0.0.0.0 accepts along with every
+#    other interface, so this proves the bind took rather than merely that
+#    the refusal didn't fire.
+DATA32="$WORK/data32"
+mkdir -p "$DATA32"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA32" --port 0 \
+  --bind 0.0.0.0 --trusted-proxy --init \
+  >"$WORK/serve32.out" 2>"$WORK/serve32.err" &
+SERVER_PID=$!
+i=0
+while [ "$i" -lt 100 ]; do
+  if grep -F 'serve: listening on 0.0.0.0:' "$WORK/serve32.out" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    cat "$WORK/serve32.err" >&2
+    fail 'case 32: the accepted combination did not report readiness'
+  fi
+  i=$((i + 1))
+  sleep 0.1
+done
+require_empty "$WORK/serve32.err" 'case 32 startup'
+PORT32=$(sed -n 's/.*listening on 0\.0\.0\.0:\([0-9]*\).*/\1/p' "$WORK/serve32.out" | head -1)
+[ -n "$PORT32" ] || fail 'case 32: could not read the bound port'
+client login "$PORT32" "$HANDLE" "$PASSWORD" >/dev/null \
+  || fail 'case 32: login against the non-loopback bind failed'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve32.err" 'case 32 (post-run)'
+
+# ── fifth, independent --data dir: rate limiting (#2612) ───────────────────
+# `--trusted-proxy` is also on here — every case in that block above the
+# rate-limit one runs the untrusted, single-bucket identity path, and this
+# is the one place that needs two DISTINCT identities to prove a limit
+# refuses one without refusing the other.
+
+DATARL="$WORK/data-ratelimit"
+mkdir -p "$DATARL"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATARL" --port 0 --init --trusted-proxy \
+  >"$WORK/serverl.out" 2>"$WORK/serverl.err" &
+SERVER_PID=$!
+PORTRL=$(wait_for_port "$WORK/serverl.out") || {
+  cat "$WORK/serverl.err" >&2
+  fail 'rate-limit server did not report readiness'
+}
+require_empty "$WORK/serverl.err" 'rate-limit server startup'
+
+RLLOGIN=$(client login "$PORTRL" "$HANDLE" "$PASSWORD") || fail 'case 19: rate-limit login'
+RLACCESS=${RLLOGIN%% *}
+
+# Every class below is windowed by the ABSOLUTE Unix-epoch minute
+# (`now / rateLimitWindowSeconds`, `pds/lib/ratelimit.mdk`), not by when
+# this gate happened to start driving it — a flood begun near a window
+# boundary can cross it mid-flight and silently observe a fresh budget
+# instead of the ceiling, which reads as "the ceiling does not refuse".
+# Called before each group of cases below, not once for all of them: a group
+# that starts 50s into the window is the hazard, whichever group it is.
+wait_for_window_room() {
+  i=0
+  while [ "$(($(date +%s) % 60))" -gt 20 ] && [ "$i" -lt 600 ]; do
+    i=$((i + 1))
+    sleep 0.1
+  done
+}
+
+wait_for_window_room
+
+# 19. connections class: one identity opens one connection past its ceiling
+#    and is refused 429 carrying the RateLimit-* headers and RateLimitExceeded;
+#    a SECOND identity, still under budget in the same window, is served
+#    normally right afterward — proving the ceiling is per-identity, not a
+#    blanket refusal (the check that actually matters here).
+client rl-conn "$PORTRL" 203.0.113.1 121 429 \
+  || fail 'case 19: connections class did not refuse at its ceiling'
+client rl-conn "$PORTRL" 203.0.113.2 1 200 \
+  || fail "case 19: a second identity was refused by the first one's ceiling"
+
+# 20. requests class, same shape, one connection per identity reused across
+#    every request sent on it.
+client rl-req "$PORTRL" 203.0.113.11 3001 429 \
+  || fail 'case 20: requests class did not refuse at its ceiling'
+client rl-req "$PORTRL" 203.0.113.12 1 200 \
+  || fail "case 20: a second identity was refused by the first one's ceiling"
+
+# 21. writes class: createRecord is rate-limited independently of the plain
+#    requests ceiling above it. The ceiling driven here is the shipped
+#    `maxWritesPerWindow`, not a gate-scoped override — there is none. It is
+#    low enough that a real signed write's cost (MST update, commit signing,
+#    disk persistence) fits many multiples of the ceiling inside one window,
+#    which is also what makes this case drivable: a ceiling whose flood
+#    outlasts the window can never be reached, since the count resets
+#    mid-flood (measured: 301 writes take ~72s against a 60s window).
+client rl-write "$PORTRL" 203.0.113.21 61 429 "$RLACCESS" "$DID" "$COLLECTION" rl-a \
+  || fail 'case 21: writes class did not refuse at its ceiling'
+client rl-write "$PORTRL" 203.0.113.22 1 200 "$RLACCESS" "$DID" "$COLLECTION" rl-b \
+  || fail "case 21: a second identity was refused by the first one's ceiling"
+
+# 22. createSession class: login itself is rate-limited, independent of
+#    every other class.
+client rl-session "$PORTRL" 203.0.113.31 31 429 "$HANDLE" "$PASSWORD" \
+  || fail 'case 22: createSession class did not refuse at its ceiling'
+client rl-session "$PORTRL" 203.0.113.32 1 200 "$HANDLE" "$PASSWORD" \
+  || fail "case 22: a second identity was refused by the first one's ceiling"
+
+# 23. repo-export class: `com.atproto.sync.getRepo` serializes the whole
+#    repository, so its cost is bounded by `maxCarBytes` per call and not by
+#    any count of requests — it therefore has a ceiling of its own. Driven
+#    over ONE connection (the connections class is charged once per
+#    connection, so a connection-per-request flood would observe THAT ceiling
+#    instead), and followed by a plain read from the SAME identity: the class
+#    has to be independent, not merely a lower global number.
+wait_for_window_room
+client rl-repo "$PORTRL" 203.0.113.41 101 429 "$DID" \
+  || fail 'case 23: repo-export class did not refuse at its ceiling'
+client rl-req "$PORTRL" 203.0.113.41 1 200 \
+  || fail 'case 23: a plain read was refused by the repo-export ceiling'
+client rl-repo "$PORTRL" 203.0.113.42 1 200 "$DID" \
+  || fail "case 23: a second identity was refused by the first one's ceiling"
+
+# 24. requests the server answers 400 are charged too, in both shapes: one
+#    that frames and fails to parse, and one no framer can complete. Neither
+#    can be attributed to a client, so both are charged to the shared `direct`
+#    identity — the same bucket every request without a trusted
+#    `X-Forwarded-For` already uses. Before this, either shape was an
+#    unmetered channel: 300 of them cost their sender nothing and left its
+#    budget whole.
+#
+#    These run LAST because they exhaust `direct` for the rest of the window,
+#    and the two shapes share that one bucket: the first flood proves the
+#    shape it drives is CHARGED (400 up to the ceiling, 429 past it), and the
+#    single request after it proves the other shape reads the SAME bucket
+#    rather than a second free one.
+wait_for_window_room
+client rl-malformed "$PORTRL" framed 150 429 \
+  || fail 'case 24: an unparseable request was not charged'
+client rl-malformed "$PORTRL" unframed 1 429 \
+  || fail 'case 24: an unframeable request was not charged against the same bucket'
+# ...and a well-formed request from an identified client is still served, so
+# metering garbage did not become a self-inflicted outage.
+client rl-req "$PORTRL" 203.0.113.51 1 200 \
+  || fail 'case 24: an identified client was refused by the malformed-traffic ceiling'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
+
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'
