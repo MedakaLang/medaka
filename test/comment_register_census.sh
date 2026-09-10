@@ -23,7 +23,7 @@
 # single comment line can match more than one class (e.g. an emoji-shout line
 # that is also reviewer-addressed ruling prose). Do not sum the per-class
 # counts and expect the total distinct flagged-line count; the summary
-# reports both the per-class counts (nine of them) and the distinct-line
+# reports both the per-class counts (ten of them) and the distinct-line
 # total separately.
 #
 # SCOPE: every git-tracked `*.mdk` file under compiler/ and stdlib/. This
@@ -62,8 +62,11 @@ if [ -z "$files" ]; then
 fi
 
 # Regex per class, numbered per #2281's original seven-class list plus the
-# two classes (8, 9: dead-path and comment-blocks) F-census-merge added —
-# nine classes below. Applied per-line with grep -E, over the whole tracked
+# two classes (8, 9: dead-path and comment-blocks) F-census-merge added,
+# plus class 10 (shout register, sigil-free, #2766) — ten classes below.
+# Class 10 is numbered out of sequence, after 4, because it reads paired
+# with class 4 in the summary rather than standing alone. Applied per-line
+# with grep -E, over the whole tracked
 # file (not restricted to text after '#' — acceptable at census precision,
 # see header).
 #
@@ -83,12 +86,24 @@ re_ruling='refuted|ratified|withdrawn|"ruling"'
 re_tombstone='was HERE and is RETIRED|do not re-add|now lives in|moved to|now comes from'
 #  4 emoji shouts.
 re_emoji='🚨|⚠️|🔒'
+#  10 shout register, sigil-free — a line carrying the SAME ALL-CAPS shout
+#     prose as class 4 but with no 🚨/⚠️/🔒 marker (#2766: a sigil strip that
+#     keeps the shout sentence intact must not read as a drain). Matches a
+#     run of 3+ consecutive space-separated ALL-CAPS words (each 2+ letters,
+#     optional single trailing punctuation), which is how every surviving
+#     sigil-stripped shout line in the tree reads. Deliberately excludes
+#     mixed-case identifiers (`EMethodAt`, `LTFloat`) and underscore-joined
+#     single tokens (`MEDAKA_STRICT`), so it does not fire on constructor
+#     names or env-var names; it can still land inside a string literal or
+#     CLI help/error text, same scope tradeoff as every other class here.
+#     Read together with class 4 in the summary below, never independently.
+re_shout='([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+'
 #  5 draft narration — self-correction phrasing. Also the candidate list for
 #     class 7 (see below): not independently greppable.
 re_draft='earlier cut|first cut|earlier revision'
 #  6 dead deictic citations.
 re_deictic='this PR'
-#  MEASURED — provenance marker, own metric, NOT one of the nine classes
+#  MEASURED — provenance marker, own metric, NOT one of the ten classes
 #     and not folded into class 2 (ruling vocabulary).
 re_measured='MEASURED'
 #  8 dead-path — a comment citing a repo-relative lib/*.ml* path (the OCaml
@@ -101,6 +116,8 @@ sum_history=0
 sum_ruling=0
 sum_tombstone=0
 sum_emoji=0
+sum_shout=0
+sum_emoji_or_shout=0
 sum_draft=0
 sum_deictic=0
 sum_measured=0
@@ -121,6 +138,8 @@ for f in $files; do
   c_ruling=$(grep -Ec "$re_ruling" "$f" 2>/dev/null)
   c_tombstone=$(grep -Ec "$re_tombstone" "$f" 2>/dev/null)
   c_emoji=$(grep -Ec "$re_emoji" "$f" 2>/dev/null)
+  c_shout=$(grep -Ec "$re_shout" "$f" 2>/dev/null)
+  c_emoji_or_shout=$(grep -Ec "$re_emoji|$re_shout" "$f" 2>/dev/null)
   c_draft=$(grep -Ec "$re_draft" "$f" 2>/dev/null)
   c_deictic=$(grep -Ec "$re_deictic" "$f" 2>/dev/null)
   c_measured=$(grep -Ec "$re_measured" "$f" 2>/dev/null)
@@ -140,18 +159,18 @@ for f in $files; do
     stdlib/*) sum_deadpath_stdlib=$((sum_deadpath_stdlib + c_deadpath)) ;;
   esac
 
-  # Distinct lines matching >=1 of the nine classes (excluding the history
+  # Distinct lines matching >=1 of the ten classes (excluding the history
   # false-positive shape). MEASURED is excluded from this total — it is not
-  # one of the nine classes. Seven of the nine (history/ruling/tombstone/
-  # emoji/draft/deictic/dead-path) are single-line regex matches, unioned
-  # directly with grep -E. comment-blocks is a DIFFERENT counting mechanism
-  # (a run of 12+ consecutive lines, not a single-line regex), so it can't
-  # join that alternation — instead, every line belonging to a run that
-  # reached the 12-line threshold is emitted by line number and unioned in
-  # via `sort -u`, so a comment-blocks-only line still counts once toward
+  # one of the ten classes. Eight of the ten (history/ruling/tombstone/
+  # emoji/shout/draft/deictic/dead-path) are single-line regex matches,
+  # unioned directly with grep -E. comment-blocks is a DIFFERENT counting
+  # mechanism (a run of 12+ consecutive lines, not a single-line regex), so
+  # it can't join that alternation — instead, every line belonging to a run
+  # that reached the 12-line threshold is emitted by line number and unioned
+  # in via `sort -u`, so a comment-blocks-only line still counts once toward
   # the distinct total without being double-counted against a line that also
-  # matched one of the other eight classes.
-  c_class_lines=$(grep -nE "$re_history|$re_ruling|$re_tombstone|$re_emoji|$re_draft|$re_deictic|$re_deadpath" "$f" 2>/dev/null | grep -Ev "$re_history_exclude" | cut -d: -f1)
+  # matched one of the other nine classes.
+  c_class_lines=$(grep -nE "$re_history|$re_ruling|$re_tombstone|$re_emoji|$re_shout|$re_draft|$re_deictic|$re_deadpath" "$f" 2>/dev/null | grep -Ev "$re_history_exclude" | cut -d: -f1)
   c_block_lines=$(awk '
     /^[ \t]*--/ { run++; buf[run] = NR; next }
     {
@@ -168,6 +187,8 @@ for f in $files; do
   sum_ruling=$((sum_ruling + c_ruling))
   sum_tombstone=$((sum_tombstone + c_tombstone))
   sum_emoji=$((sum_emoji + c_emoji))
+  sum_shout=$((sum_shout + c_shout))
+  sum_emoji_or_shout=$((sum_emoji_or_shout + c_emoji_or_shout))
   sum_draft=$((sum_draft + c_draft))
   sum_deictic=$((sum_deictic + c_deictic))
   sum_measured=$((sum_measured + c_measured))
@@ -175,9 +196,9 @@ for f in $files; do
   sum_commentblocks=$((sum_commentblocks + c_commentblocks))
   sum_distinct=$((sum_distinct + c_distinct))
 
-  f_total=$((c_history + c_ruling + c_tombstone + c_emoji + c_draft + c_deictic + c_measured + c_deadpath + c_commentblocks))
+  f_total=$((c_history + c_ruling + c_tombstone + c_emoji + c_shout + c_draft + c_deictic + c_measured + c_deadpath + c_commentblocks))
   if [ "$f_total" -gt 0 ]; then
-    per_file_report="$per_file_report$f: history=$c_history ruling=$c_ruling tombstone=$c_tombstone emoji=$c_emoji draft=$c_draft deictic=$c_deictic measured=$c_measured dead-path=$c_deadpath comment-blocks=$c_commentblocks
+    per_file_report="$per_file_report$f: history=$c_history ruling=$c_ruling tombstone=$c_tombstone emoji=$c_emoji shout=$c_shout draft=$c_draft deictic=$c_deictic measured=$c_measured dead-path=$c_deadpath comment-blocks=$c_commentblocks
 "
   fi
 done
@@ -198,11 +219,13 @@ else
   echo "  (none)"
 fi
 echo
-echo "-- per-class summary (the nine classes) --"
+echo "-- per-class summary (ten classes) --"
 echo "  1. history narration:               $sum_history"
 echo "  2. reviewer-addressed ruling vocab:  $sum_ruling"
 echo "  3. tombstones (incl. relocation):    $sum_tombstone"
 echo "  4. emoji shouts (🚨/⚠️/🔒):           $sum_emoji"
+echo " 10. shout register, sigil-free:       $sum_shout"
+echo "     4+10 combined (a sigil strip alone must not move this):  $sum_emoji_or_shout"
 echo "  5. draft narration:                  $sum_draft"
 echo "  6. dead deictic citations:           $sum_deictic"
 echo "  7. falsified-by-refactor candidates: see class 5 above (not"
@@ -211,9 +234,9 @@ echo "     requiring human judgment; not a definitive falsified-count)"
 echo "  8. dead-path lib/*.ml citations:     $sum_deadpath (compiler/: $sum_deadpath_compiler, stdlib/: $sum_deadpath_stdlib)"
 echo "  9. comment-block essays (12+ lines): $sum_commentblocks"
 echo
-echo "  distinct lines matching >=1 of the nine classes: $sum_distinct"
+echo "  distinct lines matching >=1 of the ten classes: $sum_distinct"
 echo
-echo "-- tracked separately, NOT one of the nine classes --"
+echo "-- tracked separately, NOT one of the ten classes --"
 echo "  MEASURED provenance markers:        $sum_measured"
 echo "  (provenance this repo wants, not litigation — see class 2's note)"
 

@@ -1,5 +1,5 @@
 # META
-source_lines=2816
+source_lines=2808
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -99,6 +99,10 @@ import support.util.{
   startsWith,
   stringTrim,
 }
+
+-- `withStrictDash` (`args`): every `ArgSpec` in this file wraps its spec with
+-- it so an undeclared `-x`-shaped token is rejected as an unknown flag rather
+-- than silently accepted as a positional argument.
 
 -- ── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -237,9 +241,7 @@ missingValueOverride sp ((flg, custom) :: rest) msg =
   else
     missingValueOverride sp rest msg
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 listArgSpec : ArgSpec
 listArgSpec =
   withStrictDash
@@ -928,9 +930,7 @@ data RunArgs = RunArgs {
   noStaleCheck : Bool,
 }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 runArgSpec : ArgSpec
 runArgSpec =
   withStrictDash
@@ -1680,9 +1680,7 @@ verifyOutput root gates shs = match verifyClasses root gates shs
 -- "print to stderr and exit 1" path is exactly what we want here too.
 data VerifyArgs = VerifyArgs { registry : Option String }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 verifyArgSpec : ArgSpec
 verifyArgSpec =
   withStrictDash
@@ -1963,9 +1961,7 @@ data ExplainArgs = ExplainArgs {
   prose : Bool,
 }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 explainArgSpec : ArgSpec
 explainArgSpec =
   withStrictDash
@@ -2269,9 +2265,7 @@ data ReachArgs = ReachArgs {
 -- promise would be worth nothing if a leading `-` could turn it into exit 1.
 -- `args.mdk`'s `TrailingAfterSeparator` is exactly this policy: it consumes
 -- the first bare `--` and hands everything after it back verbatim in `rest`.
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob. Composes with
+-- withStrictDash: see the note near the imports above. Composes with
 -- `withTrailing` below — the `--` escape hatch still hands anything after it
 -- to `rest` verbatim, dash-shaped or not; strictDash only governs tokens
 -- BEFORE the separator.
@@ -2763,9 +2757,7 @@ data BudgetArgs = BudgetArgs {
   commitMessage : String,
 }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 budgetArgSpec : ArgSpec
 budgetArgSpec =
   withStrictDash
