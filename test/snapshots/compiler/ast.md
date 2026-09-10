@@ -1,5 +1,5 @@
 # META
-source_lines=2090
+source_lines=2094
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -899,12 +899,16 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 --   EMPTY (`RLocal sym []`) for an UNCONSTRAINED standalone — the overwhelmingly
 --   common case, incl. all 5 of the compiler's own definer shadows — and every
 --   consumer keeps its pre-S1 byte-identical fast path on the empty list.
--- RScalar = NOT a typeclass dispatch route.  Stamped by typecheck's
--- resolveBinopSites onto an ARITHMETIC EBinOp whose operand grounds to a concrete
--- primitive ("Float"/"Int"), so lowering can carry the scalar type into CBinPrim's
--- tag field and the native emitter picks the Float primitive without re-deriving
--- the operand LTy structurally (SHARED-FLOAT-RESIDUAL-DESIGN §3(C), the type-lost
--- monomorphic-Float residual).  Absent → RNone → today's structural/dict path.
+-- RScalar = NOT a typeclass dispatch route.  It is the SCALAR-TYPE TAG typecheck
+-- stamps on an EBinOp whose operand GROUNDS to a concrete primitive, so lowering
+-- can carry that type into CBinPrim's tag field and the native emitter picks the
+-- scalar instruction without re-deriving the operand LTy structurally — the
+-- emitter's LTInt is its default-for-unrecoverable, so an `icmp` keyed on LTy
+-- alone would compare boxed String/Float POINTERS as integers.  Two stampers,
+-- two tags: `RScalar "Float"` on an ARITHMETIC operand (resolveArithSite,
+-- SHARED-FLOAT-RESIDUAL-DESIGN §3(C)) and `RScalar "Int"` on a COMPARISON
+-- operand (stampOpRouteVal).  Every other head, and every operand that stays
+-- polymorphic, keeps RNone → the structural/dict path.
 public export data Route =
   | RNone
   | RKey String (List Route)

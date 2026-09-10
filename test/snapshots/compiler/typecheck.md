@@ -1,5 +1,5 @@
 # META
-source_lines=43840
+source_lines=43878
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3140,8 +3140,10 @@ dropGoalsSince mark kinds =
 -- Float primitive without re-deriving the operand LTy structurally.  A still-
 -- polymorphic (Num a) operand never grounds → stays RNone → today's dict path
 -- (mirrors resolveBinopSite's grounded-only guard, so dict-routed arithmetic is
--- untouched).  Int operands are left unstamped (RNone ⇒ the Int primitive is the
--- default anyway) to avoid perturbing every integer binop's IR.
+-- untouched).  Int ARITHMETIC operands are left unstamped (RNone ⇒ the Int
+-- primitive is the default anyway) to avoid perturbing every integer binop's IR;
+-- `RScalar "Int"` exists, but only stampOpRouteVal mints it, on COMPARISON sites,
+-- where the emitter's LTInt default cannot be trusted (#2356).
 
 -- Error-path BLOCKER B4 (audit finding D3): missing-impl dispatch obligations.
 -- methodIfaceParamsRef maps each interface method NAME → (iface name, the iface's
@@ -21766,9 +21768,10 @@ binopBuiltinHead _ tag = binopPrimitiveHead tag
 -- emitter picks the Float primitive (bypassing the type-lost structural
 -- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
--- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  Only
--- Float is stamped (Int is the primitive default already; leaving Int operands
--- RNone avoids perturbing every integer binop's emitted IR).  Never overwrites a
+-- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
+-- channel stamps only Float (Int is the arithmetic primitive default already;
+-- leaving Int operands RNone avoids perturbing every integer binop's emitted IR)
+-- — `RScalar "Int"` is stampOpRouteVal's, on comparison sites.  Never overwrites a
 -- route another pass already set (a comparison op has a different node/ref; an
 -- arithmetic route starts RNone) — the guard is: stamp only if the site is still
 -- RNone AND grounds to Float.
@@ -21929,8 +21932,21 @@ stampOpRouteVal : Bool -> String -> String -> Mono -> String -> Route
 stampOpRouteVal isBinop encl method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
+  -- #2356: a builtin head is not a dispatch, but it is not nothing either.  A
+  -- comparison whose operand GROUNDS to `Int` gets the positive scalar stamp
+  -- `RScalar "Int"`, the same carrier resolveArithSite uses for Float, so the
+  -- native emitter can compare the two tagged words inline instead of calling the
+  -- opaque @mdk_value_eq/@mdk_value_lt runtime discriminators.  The stamp is the
+  -- ONLY sound witness for that: the emitter's own `LTInt` is its default for an
+  -- operand whose type it could not recover, so an `icmp` keyed on LTy would
+  -- compare boxed String/Float POINTERS as integers.  Every other builtin head
+  -- (Float/String/Bool/Char) and every ungrounded operand stay RNone, i.e. on the
+  -- runtime-discriminated path they are on today.
   if isBuiltin then
-    RNone
+    if isBinop && tag == "Int" && isCompareMethod method then
+      RScalar "Int"
+    else
+      RNone
   else
     -- #609: no interface param vector is recoverable at an operator site (the
     -- node carries one operand mono, not a method occurrence), so the goal is the
@@ -21969,6 +21985,13 @@ stampOpRouteVal isBinop encl method operandMono tag =
 innerDefaultMethod : String -> String
 innerDefaultMethod m =
   if contains m ["lt", "gt", "lte", "gte", "min", "max"] then "compare" else m
+
+-- #2356: the five comparison OPERATOR methods (`==`/`/=` -> `eq`, `<`/`>`/`<=`/`>=`
+-- -> `lt`/`gt`/`lte`/`gte`).  `min`/`max` are deliberately absent: they are Ord
+-- methods but no operator records a site for them, so a name-only match on them
+-- would stamp nothing and claim a reach this predicate does not have.
+isCompareMethod : String -> Bool
+isCompareMethod m = contains m ["eq", "lt", "gt", "lte", "gte"]
 
 -- ── ARCH B-2.1-h (Stage B repair): THE METHOD-SET GUARD, GRAPH-GLOBAL ────────
 -- 🚨 THE PREDECESSOR (`implDefinesMethodAt`, over the cumulative-prefix
@@ -27924,14 +27947,15 @@ rewriteBinopExpr : Expr -> Expr
 rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   RNone => EBinOp op l r routeRef
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
-  -- is the scalar-type tag typecheck stamped on a monomorphic arithmetic binop
-  -- (resolveArithSite, "Float").  The EBinOp's own route ref does NOT survive the
+  -- is the scalar-type tag typecheck stamped on a monomorphic binop
+  -- (resolveArithSite's "Float" on arithmetic, stampOpRouteVal's "Int" on
+  -- comparison).  The EBinOp's own route ref does NOT survive the
   -- dict-pass→lower boundary (only NODE values do — verified: an op-string change in
   -- this arm reaches lower but a setRef on routeRef does not), so we carry the scalar
   -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
   -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
-  -- the native emitter picks the Float primitive (bypassing the type-lost
+  -- the native emitter picks that type's primitive (bypassing the type-lost
   -- staticIsFloat).  This is the dispatch route READ-OUT the design names, relocated
   -- from the (lost) ref cell to a (surviving) node.
   --
@@ -39457,11 +39481,25 @@ aliasDictNamesOfPath : List String ->
   String ->
   UsePath ->
   List String
+-- #2840: the alias arm answers off the GRAPH as well as off `mid`'s own decls.
+-- `declTopFnNames` alone asks what the SPELLED module DEFINES, and a pure
+-- re-exporter (`export import lib.decl.{f}`) defines nothing — so `R.f` never
+-- joined the set, the call site was never marked, and the aliased constrained
+-- callee ran with no dictionary (`run` read the dict where an `Int` belonged).
+-- `graphPubDefiners` chases the re-export to its true definer, the same
+-- identity-off-the-graph resolution `aliasEntriesFor` makes for the dict-ARITY
+-- table; a row counts when the DEFINER's own name is in [bare].  The
+-- decl-derived half stays because the graph is empty on the loader-less Flat
+-- drivers, where a directly-imported definer must still contribute.
 aliasDictNamesOfPath bare unitDecls mid (UseAlias _ a) =
-  match lookupAssoc mid unitDecls
-    Some ds =>
-      map (qualifiedLocal a) (filter (n => contains n bare) (declTopFnNames ds))
+  let own = match lookupAssoc mid unitDecls
+    Some ds => filter (n => contains n bare) (declTopFnNames ds)
     None => []
+  let reexported =
+    map
+      fst
+      (filterList (r => contains (snd (snd r)) bare) (graphPubDefiners mid))
+  map (qualifiedLocal a) (dedup (own ++ reexported))
 aliasDictNamesOfPath bare _ _ (UseGroup _ ms) = flatMap (memberDictName bare) ms
 aliasDictNamesOfPath _ _ _ _ = []
 
@@ -47416,9 +47454,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveOpSite" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "Mono") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
 (DFunDef false "resolveOpSite" ((PVar "isBinop") (PVar "method") (PVar "tagRef") (PVar "operandMono") (PVar "inImpl") (PVar "encl")) (EMatch (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "entail") (EVar "method")) (EVar "operandMono")) (EVar "encl")) (EApp (EApp (EVar "EKOp") (EVar "isBinop")) (EVar "inImpl")))) (arm (PCon "RNone") () (ELit LUnit)) (arm (PVar "route") () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route")))))
 (DTypeSig false "stampOpRouteVal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Route")))))))
-(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EVar "RNone") (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
+(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "isBinop") (EBinOp "==" (EVar "tag") (ELit (LString "Int")))) (EApp (EVar "isCompareMethod") (EVar "method"))) (EApp (EVar "RScalar") (ELit (LString "Int"))) (EVar "RNone")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
 (DTypeSig false "innerDefaultMethod" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "innerDefaultMethod" ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")) (ELit (LString "min")) (ELit (LString "max")))) (ELit (LString "compare")) (EVar "m")))
+(DTypeSig false "isCompareMethod" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCompareMethod" ((PVar "m")) (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "eq")) (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")))))
 (DTypeSig false "ieDefinesReqMethodAt" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "Bool")))))
 (DFunDef false "ieDefinesReqMethodAt" ((PVar "env") (PVar "method") (PVar "hd")) (EApp (EApp (EApp (EVar "ieDefinesReqMethodAtGo") (EApp (EApp (EVar "ieHeadRows") (EVar "hd")) (EVar "env"))) (EVar "method")) (EApp (EVar "headTabOf") (EVar "hd"))))
 (DTypeSig false "ieDefinesReqMethodAtGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "Bool")))))
@@ -49883,7 +49923,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasDictNamesOfDecl" ((PVar "bare") (PVar "unitDecls") (PCon "DUse" PWild (PVar "path") PWild)) (EApp (EApp (EApp (EApp (EVar "aliasDictNamesOfPath") (EVar "bare")) (EVar "unitDecls")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")))
 (DFunDef false "aliasDictNamesOfDecl" (PWild PWild PWild) (EListLit))
 (DTypeSig false "aliasDictNamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EBlock (DoLet false false (PVar "own") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "reexported") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "r")))) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "own") (EVar "reexported")))))))
 (DFunDef false "aliasDictNamesOfPath" ((PVar "bare") PWild PWild (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "memberDictName") (EVar "bare"))) (EVar "ms")))
 (DFunDef false "aliasDictNamesOfPath" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "memberDictName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "String")))))
@@ -53933,9 +53973,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveOpSite" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "Mono") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
 (DFunDef false "resolveOpSite" ((PVar "isBinop") (PVar "method") (PVar "tagRef") (PVar "operandMono") (PVar "inImpl") (PVar "encl")) (EMatch (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "entail") (EVar "method")) (EVar "operandMono")) (EVar "encl")) (EApp (EApp (EVar "EKOp") (EVar "isBinop")) (EVar "inImpl")))) (arm (PCon "RNone") () (ELit LUnit)) (arm (PVar "route") () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route")))))
 (DTypeSig false "stampOpRouteVal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Route")))))))
-(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EVar "RNone") (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
+(DFunDef false "stampOpRouteVal" ((PVar "isBinop") (PVar "encl") (PVar "method") (PVar "operandMono") (PVar "tag")) (EBlock (DoLet false false (PVar "isBuiltin") (EIf (EVar "isBinop") (EApp (EApp (EVar "binopBuiltinHead") (EVar "method")) (EVar "tag")) (EApp (EVar "binopPrimitiveHead") (EVar "tag")))) (DoExpr (EIf (EVar "isBuiltin") (EIf (EBinOp "&&" (EBinOp "&&" (EVar "isBinop") (EBinOp "==" (EVar "tag") (ELit (LString "Int")))) (EApp (EVar "isCompareMethod") (EVar "method"))) (EApp (EVar "RScalar") (ELit (LString "Int"))) (EVar "RNone")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "optionOr") (EVar "tag")) (EApp (EApp (EVar "keyForSite") (EVar "method")) (EListLit (EVar "operandMono"))))) (DoLet false false (PVar "dictMethod") (EIf (EVar "isBinop") (EIf (EApp (EApp (EApp (EVar "ieDefinesReqMethodAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "method")) (EApp (EVar "headTyconMono") (EVar "operandMono"))) (EVar "method") (EApp (EVar "innerDefaultMethod") (EVar "method"))) (EVar "method"))) (DoLet false false (PVar "reqs") (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "encl")) (EVar "dictMethod")) (EVar "tag")) (EVar "operandMono")) (EListLit (EVar "operandMono")))) (DoExpr (EApp (EApp (EVar "RKey") (EVar "key")) (EVar "reqs"))))))))
 (DTypeSig false "innerDefaultMethod" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "innerDefaultMethod" ((PVar "m")) (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")) (ELit (LString "min")) (ELit (LString "max")))) (ELit (LString "compare")) (EVar "m")))
+(DTypeSig false "isCompareMethod" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCompareMethod" ((PVar "m")) (EApp (EApp (EVar "contains") (EVar "m")) (EListLit (ELit (LString "eq")) (ELit (LString "lt")) (ELit (LString "gt")) (ELit (LString "lte")) (ELit (LString "gte")))))
 (DTypeSig false "ieDefinesReqMethodAt" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "Bool")))))
 (DFunDef false "ieDefinesReqMethodAt" ((PVar "env") (PVar "method") (PVar "hd")) (EApp (EApp (EApp (EVar "ieDefinesReqMethodAtGo") (EApp (EApp (EVar "ieHeadRows") (EVar "hd")) (EVar "env"))) (EVar "method")) (EApp (EVar "headTabOf") (EVar "hd"))))
 (DTypeSig false "ieDefinesReqMethodAtGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "Bool")))))
@@ -56400,7 +56442,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasDictNamesOfDecl" ((PVar "bare") (PVar "unitDecls") (PCon "DUse" PWild (PVar "path") PWild)) (EApp (EApp (EApp (EApp (EVar "aliasDictNamesOfPath") (EVar "bare")) (EVar "unitDecls")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")))
 (DFunDef false "aliasDictNamesOfDecl" (PWild PWild PWild) (EListLit))
 (DTypeSig false "aliasDictNamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "aliasDictNamesOfPath" ((PVar "bare") (PVar "unitDecls") (PVar "mid") (PCon "UseAlias" PWild (PVar "a"))) (EBlock (DoLet false false (PVar "own") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "unitDecls")) (arm (PCon "Some" (PVar "ds")) () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bare")))) (EApp (EVar "declTopFnNames") (EVar "ds")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "reexported") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EApp (EVar "snd") (EVar "r")))) (EVar "bare")))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "own") (EVar "reexported")))))))
 (DFunDef false "aliasDictNamesOfPath" ((PVar "bare") PWild PWild (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "memberDictName") (EVar "bare"))) (EVar "ms")))
 (DFunDef false "aliasDictNamesOfPath" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "memberDictName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "String")))))
