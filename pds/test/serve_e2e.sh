@@ -91,6 +91,11 @@ BLOB_MIME='text/plain'
 # of the first be found on disk by content rather than by CID-hex file name.
 BLOB2_TEXT='pds serve_e2e gate fixture blob bytes, the second'
 BLOB2_MIME='application/x-e2e-second'
+# A THIRD declared type, for case 4d's dribbled blob. It must differ from the
+# first two for the same reason they differ from each other: `blob1_sidecar`
+# finds a sidecar on disk by its declared type, and two blobs sharing one type
+# would make that lookup pick either of them.
+SLOW_MIME='application/x-e2e-slow'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
@@ -216,6 +221,19 @@ BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
 [ "$BLOB2_CID" != "$BLOB_CID" ] \
   || fail 'case 4c: the two blob fixtures content-addressed to one CID'
 
+# 4d. a legitimately SLOW but progressing 5 MB upload still completes (#2815).
+#    Case 7 (over-cap body) proves an over-cap body is REJECTED, which is a
+#    different claim: this body is under every size cap, and it arrives over
+#    several times the body phase's no-progress budget in pieces whose gaps each
+#    stay inside it. So it fails against a body-phase bound that is a fixed
+#    deadline rather than a progress budget, and it is what stops case 8c's
+#    defense from being bought by narrowing what an upload is allowed to do.
+#    The client grades the CID itself, against the bytes it meant to send, so a
+#    body truncated at one of the gaps cannot pass by answering 200 to a shorter
+#    blob. Costs real wall time: the gaps are the point.
+client slow-upload "$PORT1" "$TOKEN" "$SLOW_MIME" \
+  || fail 'case 4d: a slow but progressing upload did not complete'
+
 # 5. every remaining route: the six XRPC NSIDs no other case drives, plus
 #    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
 #    both well-knowns proven by this gate rather than by reading the registry.
@@ -291,23 +309,18 @@ client idle "$PORT1" || fail 'case 8: idle timeout'
 client unframed-flood "$PORT1" 300 15 \
   || fail 'case 8b: an unrelated caller went unanswered under an un-framed flood'
 
-# 8c. THIS CELL PINS A LIVE DEFECT AND ASSERTS THE WRONG BEHAVIOR ON PURPOSE.
-#    #2772 is OPEN. Case 8b proves its HEADER half is fixed; its BODY half is
-#    not. A connection that TERMINATES its headers and declares a large
-#    Content-Length leaves the un-framed census entirely, and then holds one
-#    of maxConcurrentConnections (256) for the whole of requestTimeout (60 s)
-#    while sending nothing. So this reports PASS when the unrelated caller is
-#    DENIED, and goes RED when it starts being answered — which is exactly
-#    what a fix to #2772's body half will do, forcing whoever lands it to
-#    rewrite this into the positive assertion 8b already makes. Do not
-#    "repair" a red here by loosening it.
-#    The 12 s budget is the discriminator: far below the 60 s the denial
-#    lasts today, and above any body-phase budget a fix would plausibly
-#    impose (it must be under idleTimeout, 30 s). Note that the stall needs
-#    no dribbled byte — past the header section the silence budget is
-#    idleTimeout, so 12 s of pure silence holds the slot outright.
+# 8c. #2815: the same claim as 8b one phase further on. 300 connections that
+#    TERMINATE their headers and declare a large Content-Length leave the
+#    un-framed census entirely, so the census 8b exercises defends nothing
+#    here; what frees their slots is bodyProgressTimeout (5 s), the body
+#    phase's no-progress budget. An unrelated caller must still be ANSWERED.
+#    The 12 s budget is the discriminator: above the body progress budget and
+#    far below the requestTimeout (60 s) a declared-but-unsent body used to be
+#    granted, so a server that bounds the body phase only by the whole
+#    request's budget cannot pass it. Case 4d is the other half — the same
+#    budget must not close a body that keeps arriving.
 client body-stall-flood "$PORT1" 300 12 \
-  || fail 'case 8c: #2772 body-phase pin — see the comment above, this cell asserts the CURRENT BAD behavior; a failure here most likely means the hole is FIXED and the pin must be rewritten as a positive assertion'
+  || fail 'case 8c: an unrelated caller went unanswered under a stalled-body flood'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true

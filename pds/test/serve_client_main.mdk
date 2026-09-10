@@ -10,6 +10,7 @@
 
 import array.{concat, sliceClamped}
 import hex as Hex
+import lib.cid.{cidForRaw, cidToString}
 import lib.credential.{
   credentialDigest,
   credentialIterations,
@@ -1120,7 +1121,7 @@ runUnframedFlood port sockets budgetSeconds =
         "\{intToString sockets} un-framed sockets held open; no unrelated caller was answered within \{intToString budgetSeconds}s"
   closeAll held
 
--- # The body-phase stall: a LIVE defect, pinned (#2772)
+-- # The body-phase stall (#2815)
 
 {- | A request whose header section IS terminated and which declares a body
    that never arrives. `Content-Length` is 1 MiB — comfortably under
@@ -1129,10 +1130,10 @@ runUnframedFlood port sockets budgetSeconds =
 
    Terminating the headers is the whole point: it leaves the un-framed
    census (`maxUnframedConnections`) that `unframed-flood` above exercises,
-   and moves the connection to the body phase, where its silence budget is
-   `idleTimeout` (30 s) and its whole-request budget is `requestTimeout`
-   (60 s). No dribbling is needed to hold it for a probe measured in
-   seconds. -}
+   and moves the connection to the body phase, whose budget is
+   `bodyProgressTimeout` (5 s) and whose whole-request budget is
+   `requestTimeout` (60 s). No dribbling is needed: this shape makes no
+   progress at all, which is exactly what the body budget grades. -}
 declaredBodyNeverSent : Array Int
 declaredBodyNeverSent =
   toUtf8
@@ -1150,29 +1151,22 @@ holdBodyStallGo port count held =
     let _ = sendAll conn declaredBodyNeverSent
     holdBodyStallGo port (count - 1) (conn :: held)
 
-{- | THIS CELL PINS A LIVE DEFECT. IT ASSERTS THE WRONG BEHAVIOR ON PURPOSE.
-   It is NOT a property this server has, and a reader who takes its PASS as
-   reassurance has read it backwards.
+{- | #2815: a stranger holds `sockets` connections open, each having terminated
+   its headers and declared a body it never sends, and an unrelated caller must
+   still be ANSWERED.
 
-   `#2772` is OPEN. `unframed-flood` above proves the fix that landed for the
-   HEADER phase: a stranger who never terminates a header no longer shuts
-   other callers out. It did not reach the BODY phase. A connection that
-   terminates its headers and declares a large `Content-Length` leaves the
-   un-framed census entirely and then occupies one of
-   `maxConcurrentConnections` (256) for the whole of `requestTimeout`,
-   sending nothing. Enough of them and every slot is taken, and an unrelated
-   caller is closed at accept without a response.
+   This is `unframed-flood`'s claim one phase further on, and it is a separate
+   claim because the defenses are different: the header phase is bounded by a
+   census (`maxUnframedConnections`) and the body phase by a progress budget
+   (`bodyProgressTimeout`), so a fix to either leaves the other exactly as it
+   was. A stalled body is charged to nothing — it left the un-framed census
+   when its headers terminated — so the only thing that can free its slot is
+   the body budget running out.
 
-   So this reports PASS when the unrelated caller is DENIED. When someone
-   closes `#2772`'s body half, that caller starts being answered and this
-   cell goes RED — which is the point: the hole is not allowed to be fixed
-   invisibly, and whoever fixes it must come here and turn this into the
-   positive assertion `unframed-flood` already makes.
-
-   The narrowing is deliberate and has a live tradeoff, which is why this is
-   a pin and not a bug to patch in passing: the un-framed budget is
-   deliberately not charged for a body, so that a legitimate 5 MiB upload is
-   not spent against the scarce one. -}
+   The budget the gate passes is what discriminates: it sits above the body
+   progress budget and well below the `requestTimeout` a declared-but-unsent
+   body would otherwise be granted, so a server that bounds the body phase
+   only by the whole request's budget cannot pass it. -}
 runBodyStallFlood : Int -> Int -> Int -> <IO, Net "_", Clock> Unit
 runBodyStallFlood port sockets budgetSeconds =
   let held = holdBodyStall port sockets
@@ -1182,18 +1176,18 @@ runBodyStallFlood port sockets budgetSeconds =
     Some (status, elapsed) =>
       report
         "BODYSTALL"
-        False
-        "#2772 body phase: \{intToString sockets} stalled-body sockets held open, and an unrelated caller was ANSWERED \{intToString status} after \{floatToString elapsed}s — the body-phase hole appears CLOSED; #2772 is fixed and this pin must be rewritten as a positive assertion"
+        (status == 200)
+        "\{intToString sockets} stalled-body sockets held open; an unrelated caller answered \{intToString status} after \{floatToString elapsed}s"
     None =>
       report
         "BODYSTALL"
-        True
-        "#2772 body phase STILL OPEN (pinned): \{intToString sockets} stalled-body sockets held open and no unrelated caller was answered within \{intToString budgetSeconds}s"
+        False
+        "\{intToString sockets} stalled-body sockets held open; no unrelated caller was answered within \{intToString budgetSeconds}s"
   closeAll held
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1223,6 +1217,8 @@ main = match args ()
     runUnframedFlood (mustPort port) (mustCount sockets) (mustCount budget)
   ["body-stall-flood", port, sockets, budget] =>
     runBodyStallFlood (mustPort port) (mustCount sockets) (mustCount budget)
+  ["slow-upload", port, token, mimeType] =>
+    runSlowUpload (mustPort port) token mimeType
   ["resume", port, did, collection, rkey, text] =>
     runResume (mustPort port) did collection rkey text
   ["upload-blob", port, token, mimeType, text] =>
@@ -1303,6 +1299,68 @@ runUploadBlob port token mimeType text =
         "serve_client: uploadBlob answered \{intToString status}: \{fromUtf8 body}"
   let () = println out
   ignoreResult (close conn)
+
+-- | A blob body big enough to be a real upload, one fifth of it per piece,
+-- and a gap between pieces that is long but well inside the body phase's
+-- progress budget. The product of the gap and the piece count is what makes
+-- the case discriminating: the upload outlives any fixed body-phase deadline
+-- of the budget's own length, while no single gap in it reaches that budget.
+slowUploadBytes : Int
+slowUploadBytes = 5000000
+
+slowUploadPieces : Int
+slowUploadPieces = 5
+
+slowUploadGap : Duration
+slowUploadGap = seconds 3
+
+{- | A legitimately slow but PROGRESSING upload, which must still be answered
+   200 with the CID its bytes content-address to.
+
+   This is the other half of `body-stall-flood`'s claim and the half a body
+   budget can get wrong: the whole upload takes many times the progress budget
+   to arrive, so a server that bounded the body phase by a fixed deadline
+   instead of by progress would close the connection part way through. The CID
+   is computed here, from the bytes this client meant to send, so a body the
+   server truncated at one of the gaps cannot pass by answering 200 to a
+   shorter blob. -}
+runSlowUpload : Int -> String -> String -> <IO, Net "_", Clock> Unit
+runSlowUpload port token mimeType =
+  let body = arrayMakeWith slowUploadBytes (i => 65 + i % 26)
+  let wanted = cidToString (cidForRaw body)
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (toUtf8
+        "POST \{uploadBlobPath} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString slowUploadBytes}\r\n\r\n")
+  let t0 = monotonic ()
+  let () = sendInPieces conn body 0 (slowUploadBytes / slowUploadPieces)
+  let elapsed = elapsedSince t0
+  let () = match readResponse conn [||]
+    Err message =>
+      report
+        "SLOWUPLOAD"
+        False
+        "no response after \{floatToString elapsed}s of dribbling: \{message}"
+    Ok (status, respBody, _) =>
+      let got = if status == 200 then blobRefCidText respBody else "-"
+      report
+        "SLOWUPLOAD"
+        (status == 200 && got == wanted)
+        "status \{intToString status}, \{intToString slowUploadBytes} bytes in \{intToString slowUploadPieces} pieces over \{floatToString elapsed}s, CID \{got} (wanted \{wanted})"
+  ignoreResult (close conn)
+
+-- | Sends `body` from `offset` onward in `piece`-byte pieces, pausing
+-- `slowUploadGap` before every piece after the first.
+sendInPieces : Connection -> Array Int -> Int -> Int -> <Net "_", Clock> Unit
+sendInPieces conn body offset piece =
+  if offset >= arrayLength body then
+    ()
+  else
+    let () = if offset == 0 then () else sleep slowUploadGap
+    let () = mustSend conn (sliceClamped offset (offset + piece) body)
+    sendInPieces conn body (offset + piece) piece
 
 -- | The `ref.$link` CID of an `uploadBlob` response's `blob` value.
 blobRefCidText : Array Int -> String

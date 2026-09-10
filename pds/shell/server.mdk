@@ -86,9 +86,29 @@ import shell.persist.{persistCredential, persistSave}
 import string.{toUtf8}
 import time.{Duration, now, seconds}
 
--- | How long one connection may stay silent between reads before it is closed.
-idleTimeout : Duration
-idleTimeout = seconds 30
+{- | How long a connection in the BODY phase may go without delivering a new
+   byte before it is closed (#2815).
+
+   A PROGRESS budget, not a phase deadline: every read that delivers bytes
+   starts it again, so an upload that keeps arriving is never closed on it
+   however long it takes in total — `requestTimeout` is what bounds that. What
+   it does close is the one shape nothing else bounded: a peer that terminates
+   its headers, declares a `Content-Length`, and then sends nothing. That peer
+   has left the un-framed census (`maxUnframedConnections`) behind, so the only
+   budget left over it was the whole request's, and it held one of
+   `maxConcurrentConnections` for the whole of that while delivering nothing.
+
+   It is the body phase's per-read silence bound as well as its progress bound,
+   and those are one question asked once rather than two: `recvWithin` parks
+   until either bytes arrive or the budget passes, so a read that returns bytes
+   restarts the budget and a read that returns nothing has consumed all of it.
+
+   Deliberately its own constant rather than `headerTimeout`, whose value it
+   coincides with: a header section is capped at `maxHttpHeaderBytes` while a
+   body may carry megabytes, so the two answer different questions and diverge
+   the moment either is tuned. -}
+bodyProgressTimeout : Duration
+bodyProgressTimeout = seconds 5
 
 -- | How long one request may take to arrive in full, however many reads it
 -- takes. Reset for each request on a kept-alive connection.
@@ -158,8 +178,8 @@ maxUnframedConnections = 64
    as the deadline `frameLoop` tests, so that a caller trickling one byte at a
    time is closed on total elapsed time; and as the per-read timeout
    `readMore` uses while the headers are unterminated, so that a caller
-   sending nothing at all is closed on it rather than sitting out the whole of
-   `idleTimeout` before any deadline is looked at. -}
+   sending nothing at all is closed on it rather than sitting out a whole body
+   budget before any deadline is looked at. -}
 headerTimeout : Duration
 headerTimeout = seconds 5
 
@@ -465,7 +485,8 @@ releaseUnframed (UnframedSlot unframed held) =
 
 -- | Retire it as soon as the scan leaves the header section, whether or not a
 -- whole request has framed yet: the body that may follow is bounded by
--- `requestTimeout` and by `maxHttpRequestBytes`, not by this census.
+-- `bodyProgressTimeout`, `requestTimeout` and `maxHttpRequestBytes`, not by
+-- this census.
 releaseWhenHeadersDone : UnframedSlot -> HttpScan -> Unit
 releaseWhenHeadersDone slot scan =
   if httpScanInHeaders scan then () else releaseUnframed slot
@@ -493,8 +514,8 @@ data ReadBuffer = ReadBuffer (Ref (Array Int)) (Ref Int)
 readBufferNew : Unit -> ReadBuffer
 readBufferNew _ = ReadBuffer (Ref [||]) (Ref 0)
 
--- | How many bytes are live, in O(1) — this is `S-body-phase-budget`'s
--- direct input for a progress-based body deadline.
+-- | How many bytes are live, in O(1): a `Ref Int` deref, never a traversal of
+-- the backing store.
 readBufferLen : ReadBuffer -> Int
 readBufferLen (ReadBuffer _ len) = !len
 
@@ -821,14 +842,13 @@ readMore server dir storeRef limiterRef trustedProxy conn slot deadlines buf sca
             scan
             firstRequest
 
--- | How long this read may find nothing. A peer that has not terminated its
--- headers gets the header budget rather than the idle one: the deadline in
--- `framePending` is only consulted between reads, so a peer that sends
--- nothing at all would otherwise sit out the whole of `idleTimeout` before
--- anything looked at its header budget.
+-- | How long this read may find nothing: whichever phase's budget the scan is
+-- in. The deadline in `framePending` is only consulted between reads, so a peer
+-- that sends nothing at all would otherwise sit out a read budget belonging to
+-- some other phase before anything looked at the one it is actually in.
 silenceBudget : HttpScan -> Duration
 silenceBudget scan =
-  if httpScanInHeaders scan then headerTimeout else idleTimeout
+  if httpScanInHeaders scan then headerTimeout else bodyProgressTimeout
 
 -- A peer that closes between requests has finished; one that closes part way
 -- through a request has not.

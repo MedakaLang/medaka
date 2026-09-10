@@ -589,7 +589,8 @@ current tree. All-engine and doctestable with no sockets or files.*
 
 **Phase 3 — the socket shell.** *Complete in the current tree.* `pds/shell/server.mdk`
 is an accept loop over the async net surface (`stdlib/net_async`) around the pure
-Phase 2 core: request framing via `scanRequestBoundary`, `idleTimeout`/`requestTimeout`/
+Phase 2 core: request framing via `scanRequestBoundary`, `headerTimeout`/
+`bodyProgressTimeout`/`requestTimeout`/
 `writeTimeout`, keep-alive and pipelined-request reuse, a `maxConcurrentConnections`
 ceiling, and the shared `Ref Store` publish/persist sequence
 (`pds/shell/server.mdk`'s `applyRequest`) that keeps two concurrent connections from
@@ -716,6 +717,28 @@ every class entirely: a connection that never completes a request is
 accepted, occupies a slot against `maxConcurrentConnections`, and is charged
 nothing — enough of them deny service to every other caller (#2772), which
 is why a read deadline, not a counter, is what closes that shape.
+
+**The availability target the connection ceilings answer to (#2816).** Under a
+flood from one unidentifiable source, **64 concurrent legitimate callers must
+still be answered within 15 seconds**. Both ceilings follow from that sentence
+and from nothing else. `maxUnframedConnections` (64) is the share of the total
+an attacker can hold in the one state that costs it nothing — headers begun and
+never terminated — so `maxConcurrentConnections` (256) minus that share leaves
+192 slots, three times the target's 64, available at every instant of the
+flood; and a slot the attacker does hold is released within `headerTimeout`
+(5 s) if its headers never terminate or within `bodyProgressTimeout` (5 s) if
+they terminate over a body that never arrives, both comfortably inside the
+target's 15 s even when a legitimate caller has to wait out one turnover. The
+target is what to re-derive these two numbers from: raising the caller count or
+lowering the time bound is a change to them and to no other constant here.
+
+What the target bounds rather than eliminates: an attacker who reconnects as
+each of its connections is released keeps its 64-slot share occupied
+continuously, because a connection that never frames a request produces no
+identity and so reaches no rate-limit class (the paragraph above). The target
+is deliberately stated as "answered within T", not "never delayed" — there is
+no ceiling here under which a sustained flood costs an attacker nothing at all,
+only one under which it cannot take the slots a legitimate caller needs.
 
 One fixed window per identity also bounds the AVERAGE rate over a window,
 not the instantaneous one: because the window index is derived from the
