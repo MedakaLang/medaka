@@ -1844,9 +1844,12 @@ corpusMatches path (c :: cs)
 
 -- A gate's own `run` module is an implicit source: editing it is editing what
 -- the gate most directly asserts, whether or not any `sources` glob happens
--- to also cover it (#2822) — a `sources` coincidence is not a design.
+-- to also cover it (#2822) — a `sources` coincidence is not a design. Scoped
+-- to `kind = "native"`: for a `kind = "exec"` gate, `run` names a shell
+-- script, not the `*_test.mdk` module the gate's own assertions live in.
 runMatches : String -> Gate -> List String
-runMatches path g = if path == g.run then ["run:\{g.run}"] else []
+runMatches path g =
+  if g.kind == "native" && path == g.run then ["run:\{g.run}"] else []
 
 targetedReasons : String -> Gate -> List String
 targetedReasons path g =

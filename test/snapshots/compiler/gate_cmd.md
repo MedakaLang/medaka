@@ -1,5 +1,5 @@
 # META
-source_lines=2824
+source_lines=2827
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1848,9 +1848,12 @@ corpusMatches path (c :: cs)
 
 -- A gate's own `run` module is an implicit source: editing it is editing what
 -- the gate most directly asserts, whether or not any `sources` glob happens
--- to also cover it (#2822) — a `sources` coincidence is not a design.
+-- to also cover it (#2822) — a `sources` coincidence is not a design. Scoped
+-- to `kind = "native"`: for a `kind = "exec"` gate, `run` names a shell
+-- script, not the `*_test.mdk` module the gate's own assertions live in.
 runMatches : String -> Gate -> List String
-runMatches path g = if path == g.run then ["run:\{g.run}"] else []
+runMatches path g =
+  if g.kind == "native" && path == g.run then ["run:\{g.run}"] else []
 
 targetedReasons : String -> Gate -> List String
 targetedReasons path g =
@@ -3187,7 +3190,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "corpusMatches" (PWild (PList)) (EListLit))
 (DFunDef false "corpusMatches" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "underDir") (EVar "c")) (EVar "path")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "corpus:")) (EApp (EVar "display") (EVar "c"))) (ELit (LString ""))) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "runMatches" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "runMatches" ((PVar "path") (PVar "g")) (EIf (EBinOp "==" (EVar "path") (EFieldAccess (EVar "g") "run")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "run:")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EListLit)))
+(DFunDef false "runMatches" ((PVar "path") (PVar "g")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EBinOp "==" (EVar "path") (EFieldAccess (EVar "g") "run"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "run:")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EListLit)))
 (DTypeSig false "targetedReasons" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "targetedReasons" ((PVar "path") (PVar "g")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "sourceMatches") (EVar "path")) (EFieldAccess (EVar "g") "sources")) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EFieldAccess (EVar "g") "corpus"))) (EApp (EApp (EVar "runMatches") (EVar "path")) (EVar "g"))))
 (DTypeSig false "explainPathHits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -3769,7 +3772,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "corpusMatches" (PWild (PList)) (EListLit))
 (DFunDef false "corpusMatches" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "underDir") (EVar "c")) (EVar "path")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "corpus:")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ""))) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "runMatches" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "runMatches" ((PVar "path") (PVar "g")) (EIf (EBinOp "==" (EVar "path") (EFieldAccess (EVar "g") "run")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "run:")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EListLit)))
+(DFunDef false "runMatches" ((PVar "path") (PVar "g")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EBinOp "==" (EVar "path") (EFieldAccess (EVar "g") "run"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "run:")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EListLit)))
 (DTypeSig false "targetedReasons" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "targetedReasons" ((PVar "path") (PVar "g")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "sourceMatches") (EVar "path")) (EFieldAccess (EVar "g") "sources")) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EFieldAccess (EVar "g") "corpus"))) (EApp (EApp (EVar "runMatches") (EVar "path")) (EVar "g"))))
 (DTypeSig false "explainPathHits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))))
