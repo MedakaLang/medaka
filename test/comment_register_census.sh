@@ -117,6 +117,7 @@ sum_ruling=0
 sum_tombstone=0
 sum_emoji=0
 sum_shout=0
+sum_emoji_or_shout=0
 sum_draft=0
 sum_deictic=0
 sum_measured=0
@@ -138,6 +139,7 @@ for f in $files; do
   c_tombstone=$(grep -Ec "$re_tombstone" "$f" 2>/dev/null)
   c_emoji=$(grep -Ec "$re_emoji" "$f" 2>/dev/null)
   c_shout=$(grep -Ec "$re_shout" "$f" 2>/dev/null)
+  c_emoji_or_shout=$(grep -Ec "$re_emoji|$re_shout" "$f" 2>/dev/null)
   c_draft=$(grep -Ec "$re_draft" "$f" 2>/dev/null)
   c_deictic=$(grep -Ec "$re_deictic" "$f" 2>/dev/null)
   c_measured=$(grep -Ec "$re_measured" "$f" 2>/dev/null)
@@ -186,6 +188,7 @@ for f in $files; do
   sum_tombstone=$((sum_tombstone + c_tombstone))
   sum_emoji=$((sum_emoji + c_emoji))
   sum_shout=$((sum_shout + c_shout))
+  sum_emoji_or_shout=$((sum_emoji_or_shout + c_emoji_or_shout))
   sum_draft=$((sum_draft + c_draft))
   sum_deictic=$((sum_deictic + c_deictic))
   sum_measured=$((sum_measured + c_measured))
@@ -222,8 +225,7 @@ echo "  2. reviewer-addressed ruling vocab:  $sum_ruling"
 echo "  3. tombstones (incl. relocation):    $sum_tombstone"
 echo "  4. emoji shouts (🚨/⚠️/🔒):           $sum_emoji"
 echo " 10. shout register, sigil-free:       $sum_shout"
-sum_emoji_and_shout=$((sum_emoji + sum_shout))
-echo "     4+10 combined (a sigil strip alone must not move this):  $sum_emoji_and_shout"
+echo "     4+10 combined (a sigil strip alone must not move this):  $sum_emoji_or_shout"
 echo "  5. draft narration:                  $sum_draft"
 echo "  6. dead deictic citations:           $sum_deictic"
 echo "  7. falsified-by-refactor candidates: see class 5 above (not"

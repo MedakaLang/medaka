@@ -34,7 +34,7 @@
 -- `compiler/types/typecheck.mdk`, but its DOCTESTS are not — `medaka test`
 -- visits only the files it is given — which is why `Makefile`'s `test:`
 -- target names this file and its sibling explicitly. Full incident:
--- `[W-MODULE-BLIND]`, `.claude/dossier/workflow.md` and `AGENTS.md:99`.
+-- `[W-MODULE-BLIND]`, `.claude/dossier/workflow.md` and `AGENTS.md`.
 --
 -- ── Why one `Ident` type generalizes a pattern already in the tree ─────────
 -- `crossModuleFunConstraintsQualRef` (`types/typecheck.mdk`) is already keyed

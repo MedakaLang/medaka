@@ -3036,7 +3036,7 @@ runtimePanic code msg = match !currentEvalLoc
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
 -- `\u{01}` (SOH), written as an ESCAPE, not as a raw 0x01 byte.
--- History: `.claude/dossier/tooling.md`.
+-- History: `.claude/dossier/tooling.md` § `fmtSentinel`'s `\u{01}` escape.
 fmtSentinel : String
 fmtSentinel = "\u{01}"
 
