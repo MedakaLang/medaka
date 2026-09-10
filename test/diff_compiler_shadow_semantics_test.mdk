@@ -943,12 +943,12 @@ table = [
   Row {
     entry = "x16_autoprint_wrap_putstrln_pin.mdk",
     label =
-      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exits 1, `E-PANIC: no impl of method putStrLn for type Unit`, byte-identical to this row. Graded ACCEPT REJECT REJECT NONE to pin the CURRENT state incl. the check-ACCEPTs/build-panics split; SELF-DRAINING -- when the prelude body stops being capturable this row goes RED and must be re-graded to BUILD_EXACT against the value 7. S1 (loud panic at exit 1), not S0",
+      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exited 1, `E-PANIC: no impl of method putStrLn for type Unit`. DRAINED 2026-09-10 and RE-GRADED to BUILD_EXACT against 7, exactly as the row above it instructed: the prelude body stopped being capturable when `moduleMarkCtx`s CORE arm began applying S1`s nameable-in-M filter to its rp/arg sets. It could not before -- core`s own references were mangled `core__putStrLn` by the time the mark pass saw them, so no bare method name could match one, and that premise died when #2809 moved mangling after elaboration. Same rule, same commit, that returns four `prelude_shadow_census` ledger rows (identity, otherwise, arbitraryList, arbitraryString) from FAIL_BUILD to PASS. `run` still REJECTs: a non-Unit `main` is refused by `run` on its own account, which is a different rule and is not what drained",
     expCheck = "ACCEPT",
     expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
+    expBuild = "ACCEPT",
+    mode = BuildExact,
+    pinned = "7\n",
   },
   Row {
     entry = "x17_autoprint_wrap_display_pin_xmod/main.mdk",

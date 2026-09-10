@@ -43101,15 +43101,40 @@ markClauseWith rw (ps, e) =
   (ps, rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 -- `moduleMarkCtx ms mid prog`: core (`mid == ""`) is marked with the unsplit set and
--- the core-scoped shadow map (#2153) and no S1 filter — every interface it declares
--- is nameable in it, and S1 makes a `core.mdk` occurrence no user standalone's
--- shadow (P0-21).  A user module gets the split set, scoped by the filter below.
+-- the core-scoped shadow map (#2153).  A user module gets the split set, scoped by the
+-- filter below.
+--
+-- CORE'S rp/arg SETS ARE S1-FILTERED TOO, and the argument that they need not be is
+-- retired.  It read: "core's references to its own standalones are all mangled
+-- `core__<n>` by the time this runs, so neither set can match one."  #2809 moved
+-- mangling AFTER elaboration, so core's references now carry the names its author
+-- wrote and a USER interface method spelled like a core standalone matches them.
+-- MEASURED on `test/prelude_shadow_census.ledger`'s own probe shape — `interface Ifc c
+-- where identity : c -> Int` beside `impl Ifc Int`, in a module that defines no
+-- `identity` — `check` and `run` accept and print 1 while `build` died `E-PANIC: no
+-- impl of method 'identity' for type 'List'`: core's own `identity` call, on a `List`,
+-- had been rewritten to a dispatch on the USER's interface.  Four ledger rows
+-- (`identity`, `otherwise`, `arbitraryList`, `arbitraryString`) moved PASS -> FAIL_BUILD
+-- that way.  The rule applied is the one `coreShadowMapFor` already applies to the
+-- shadow map for the same reason: an interface declared in a USER module is not
+-- nameable in `core`, so no `core.mdk` occurrence is one of its method occurrences.
+-- Same fail-OPEN guard as `nameableIfaceShadows`: an absent graph index leaves the sets
+-- unfiltered rather than emptying them.
 moduleMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
-moduleMarkCtx ms "" _ = MarkCtx {
-  mcRp = omFromNames ms.msMarkRpNames omEmpty,
-  mcAn = omFromNames ms.msArgNames omEmpty,
-  mcSm = ms.msCoreShadowMap,
-}
+moduleMarkCtx ms "" coreProg
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = MarkCtx {
+    mcRp = omFromNames ms.msMarkRpNames omEmpty,
+    mcAn = omFromNames ms.msArgNames omEmpty,
+    mcSm = ms.msCoreShadowMap,
+  }
+  | otherwise =
+    let nameable = nameableIfaceMethodSet coreProg
+    let keep = n => omHasKey n nameable
+    MarkCtx {
+      mcRp = omFromNames (filterList keep ms.msMarkRpNames) omEmpty,
+      mcAn = omFromNames (filterList keep ms.msArgNames) omEmpty,
+      mcSm = ms.msCoreShadowMap,
+    }
 moduleMarkCtx ms _ prog
   -- fail OPEN when the graph index is absent, for the reason stated on
   -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
