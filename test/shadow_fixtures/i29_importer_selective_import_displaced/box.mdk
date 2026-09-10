@@ -1,0 +1,9 @@
+-- SHADOW-SEMANTICS cell I29 provider: the standalone `main.mdk` selectively
+-- imports, and the receiver type.  Its signature is DIFFERENT from the interface
+-- method's below -- it returns a pair, the method returns the element -- which is
+-- the whole content of the cell.
+public export data Box a = Box a
+
+export
+peek : Box a -> (String, a)
+peek (Box a) = ("box", a)

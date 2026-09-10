@@ -14,11 +14,11 @@
 -- forward-order spelling (`f` defined BEFORE `g`), which accepts and prints
 -- the same value both before and after the fix — definition ORDER must not
 -- change a well-typed program's meaning.
-import map.{Map, toList}
+import map.{Map, entries}
 
 g : Map Int Int
 g = Map { 1 => f 2 }
 
 f x = x + x
 
-main = println (toList g)
+main = println (entries g)

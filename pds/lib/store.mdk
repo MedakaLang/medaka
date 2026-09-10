@@ -55,7 +55,7 @@ import lib.credential.{CredentialRecord, ctEqBytes}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
 import lib.sha256.{sha256}
-import map.{Map(..), get, set, toList}
+import map.{Map(..), get, set, entries}
 import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
@@ -342,4 +342,4 @@ storeBlobCids (Store (BlobHalf blocks _) _ _) = blockStoreCids blocks
    module exposes no way to remove one. -}
 export
 storeBlobMimeIndex : Store -> List (String, String)
-storeBlobMimeIndex (Store (BlobHalf _ mimeTypes) _ _) = toList mimeTypes
+storeBlobMimeIndex (Store (BlobHalf _ mimeTypes) _ _) = entries mimeTypes

@@ -1,9 +1,9 @@
 issue: 1812
 what: A method occurrence reached through an ALIAS-QUALIFIED import (`import zmodI as Z`)
-what: is silently accepted by `medaka check` -- exit 0, ZERO diagnostics on every module
-what: of the graph -- while `medaka run` and `medaka build` both correctly REJECT the
-what: same program. Introduced by #1351's own L2 fix (030cfb2a) as a side effect on an
-what: adjacent corpus cell.
+what: is silently accepted by `medaka check` -- exit 0, and ZERO ERROR diagnostics on
+what: every module of the graph -- while `medaka run` and `medaka build` both correctly
+what: REJECT the same program. Introduced by #1351's own L2 fix (030cfb2a) as a side
+what: effect on an adjacent corpus cell.
 what:
 what: THE DIVERGENCE IS DECIDED BY IMPORT ORDER. This corpus is #1351's three modules
 what: (amodI/zmodI/fmodI) with zmodI alias-qualified. Measured first-hand at `main`
@@ -39,19 +39,21 @@ what: honest fix makes `check` LOUDER. A fix that instead quietens run/build to 
 what: check is a severity increase dressed as convergence, and it would drain this row.
 cmd: check-json main.mdk
 exit: 0
-stdout: {"files":[{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//zmodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//fmodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//amodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//main.mdk","diagnostics":[]}]}
+stdout: {"files":[{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//zmodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//fmodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//amodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//main.mdk","diagnostics":[{"code":"W-IMPORT-METHOD-SHADOW","help":"import it under another name (`import … {mth as mth'}`), or drop the import of 'IZ' if the method is not the one you meant","kind":"warning","message":"imported 'mth : String -> Int -> Int' is shadowed in module 'main' by interface method 'IZ.mth : Int -> b -> Int'; the two types differ, so an occurrence at a receiver with an impl of 'IZ' means the method, not the imported function","range":{"end":{"character":17,"line":5},"start":{"character":14,"line":5}},"severity":2,"source":"medaka"}]}]}
 control: run control.mdk
 why-verb: `check-json` rather than plain `check` because the defect IS the silence, and
 why-verb: only the JSON stream renders "how many diagnostics were produced" to a graded
 why-verb: channel. Plain `check` on this program prints `main : Unit` at exit 0, which is
 why-verb: what a CLEAN program prints -- pinning that would match any clean program in
 why-verb: this fixture, not specifically this bug. The JSON pins the whole per-module
-why-verb: diagnostic set as EMPTY across all four modules, which is the actual claim.
+why-verb: diagnostic set across all four modules -- empty on three, and on main only a
+why-verb: W-IMPORT-METHOD-SHADOW warning, so no ERROR anywhere -- which is the claim.
 why-verb: This is also the channel the harm lands on: CI, the LSP and MCP consume
 why-verb: `check --json`, and #1362 (D-JSON-HOLE) is the S0-graded sibling of exactly
 why-verb: this class.
-why-fixture: The row drains when `check --json` on this ordering stops reporting an empty
-why-fixture: diagnostic set -- i.e. when `check` agrees with `run`/`build`. A partial fix
+why-fixture: The row drains when `check --json` on this ordering reports an ERROR
+why-fixture: diagnostic -- i.e. when `check` agrees with `run`/`build`. A warning-only
+why-fixture: diagnostic is not agreement; `check` still exits 0. A partial fix
 why-fixture: that made only SOME of the three silent orderings loud would leave this one
 why-fixture: red, correctly: main.mdk is the `Z, amodI, fmodI` ordering specifically.
 why-fixture: Measured first-hand at `main` 2ed7b5b9 on a binary cold-built in this

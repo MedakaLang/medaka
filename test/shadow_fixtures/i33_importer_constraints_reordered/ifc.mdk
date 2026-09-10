@@ -1,0 +1,14 @@
+-- SHADOW-SEMANTICS cell I33 provider 1: the interface and its impl.  Two
+-- constraints, written `(Eq a, Debug b) =>`; `prov.mdk` writes the SAME two in the
+-- opposite order.
+--
+-- As in I32, the impl body does not consume the method's own constraint dicts: under
+-- this shadow an impl body that does makes `run` and the built binary disagree, on an
+-- axis this cell is not about.
+public export data Box a = Box a
+
+export interface Taggable t where
+  tagOf : (Eq a, Debug b) => t -> a -> b -> String
+
+export impl Taggable (Box c) where
+  tagOf _ _ _ = "iface"

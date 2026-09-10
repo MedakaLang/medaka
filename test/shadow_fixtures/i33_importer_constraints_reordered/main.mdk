@@ -1,0 +1,17 @@
+-- SHADOW-SEMANTICS cell I33: I32's CONTROL, and the row that keeps a
+-- constraint-aware comparison from warning on code that is correct.  The two
+-- declarations name the same two constraints in opposite order over
+-- alpha-equivalent bodies, so the schemes AGREE and S2-IMPORT-DIFFER's "not
+-- alpha-equivalent" antecedent is false: this cell must be silent on all three
+-- verbs.
+--
+-- Without it, a comparison that pairs constraints POSITIONALLY passes I32 and turns
+-- every reordered-but-identical declaration in the tree into a warning -- the
+-- false-positive direction, which no ACCEPT/REJECT column can see because the
+-- program still compiles and still prints the same value.
+--
+-- The resolution is I32's: the method dispatches at `Box`, printing `iface`.
+import ifc.{Taggable, Box(..)}
+import prov.{tagOf}
+
+main = println (tagOf (Box 1) 2 3)

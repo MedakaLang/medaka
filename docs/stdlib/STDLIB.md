@@ -737,28 +737,29 @@ will work once `set.mdk` adds the matching impl. See PLAN.md Phase 108.
 
 - **Construction:** `empty` (= `Tip`; standalone, *not* a `Monoid` method — see
   below), `singleton`, `fromList` (last write wins on duplicate keys)
-- **Query:** `size` (O(1)), `isEmpty`, `get`, `has`, `findWithDefault`
+- **Query:** `size` (O(1)), `isEmpty`, `get`, `has`, `findWithDefault`;
+  `isEmpty`/`length`/`elem`/`toList`/`sum`/`maximum`/`any`/`all` also come from
+  `Foldable (Map k)` (folds over values, ascending key order)
 - **Insertion:** `set`, `insertWith` (`f new old`), `adjust`
 - **Deletion:** `delete`, `deleteMin`, `deleteMax`
 - **Min/max:** `minView`, `maxView`, `getMin`, `getMax`
 - **Folds / traversal (ascending key order):** `foldrWithKey`, `foldlWithKey`,
-  `toList` (assoc pairs), `keys`, `elems`, `mapWithKey`, `filterWithKey`
+  `entries` (assoc pairs), `keys`, `values`, `mapWithKey`, `filterWithKey`
 - **Combining:** `union` (left-biased), `unionWith`, `difference`,
   `intersectionWith`
 - **Invariant checker:** `wellFormed` (exported; backs the property tests)
-- **Instances:** ✅ `Mappable (Map k)` (over values), `Eq`/`Debug` (via the
-  canonical ascending assoc list), `Semigroup (Map k v) requires Ord k`
-  (`++` = left-biased `union`)
+- **Instances:** ✅ `Mappable (Map k)` (over values), `Foldable (Map k)` (over
+  values, ascending key order), `Eq`/`Debug` (via the canonical ascending assoc
+  list), `Semigroup (Map k v) requires Ord k` (`++` = left-biased `union`)
 - **⛔ `Monoid (Map k v)` — intentionally not provided.** `Monoid.empty` is
   nullary, so it dispatches on its *result* type; a return-position dispatch
   can't supply the `Ord k` the instance requires (the Phase 83/84 flat-dict
   limitation — confirmed: even `array`'s `empty` mis-resolves through it). Use
   the standalone `empty` (= `Tip`) as the identity. `Semigroup.append` is fine
   because it dispatches on its first `Map` argument.
-- **Naming notes:** `toList` returns assoc pairs (the Map-conventional meaning);
-  `Foldable (Map k)` is **not** implemented to avoid hijacking `toList` to mean
-  "values" — use `elems`/`keys`/`size` instead. No `filter` (would clash with
-  `Filterable.filter`); use `filterWithKey`.
+- **Naming notes:** `toList` is the `Foldable` method and means the values, like
+  every other container; the assoc-pair form is `entries`. No `filter` (would
+  clash with `Filterable.filter`); use `filterWithKey`.
 
 ### `set` ✅ implemented (`stdlib/set.mdk`)
 
@@ -781,9 +782,8 @@ ascending inserts).
   `Semigroup` (`++` = `union`), `Monoid` (empty = `Tip`)
 - **Literal:** `Set { 1, 2, 3 }` works (Phase 108) via `impl FromEntries (Set a)
   a requires Ord a`.
-- **Naming:** unlike `Map` (whose standalone `toList` is shadowed by
-  `Foldable.toList`), Set *implements* `Foldable`, so `toList`/`elem`/etc. are the
-  Foldable methods and resolve cleanly from user files. No `map`/`filter`
+- **Naming:** like `Map`, Set *implements* `Foldable`, so `toList`/`elem`/etc. are
+  the Foldable methods and resolve cleanly from user files. No `map`/`filter`
   standalones (would clash with `Mappable`/`Filterable` method names, and `Set`
   is not a lawful `Mappable`); a future element-`map` needs a non-clashing name.
 
@@ -809,11 +809,11 @@ would break it. Iteration order is unspecified.
   allocates its own table), `fromList : Eq k => List (k, v) -> HashMap k v`.
 - **Query (pure):** `size` (O(1)), `isEmpty`, `get`, `has`, `findWithDefault`.
 - **Mutation (untracked, no effect row):** `set` (overwrites), `delete`.
-- **Iteration (pure, unspecified order):** `entries` (the pairs), `toList`
-  (alias of `entries`), `keys`, `values`.
+- **Iteration (pure, unspecified order):** `entries` (the pairs), `keys`,
+  `values`; `isEmpty`/`length`/`elem`/`toList`/`sum`/`any` also come from
+  `Foldable (HashMap k)` (`toList` means the values, not `entries`'s pairs).
 - **Instances:** `Eq` (order-independent — same entries), `Debug` (`fromList […]`
-  in hash order). *Not* `Foldable` (its `toList` means pairs, which would clash
-  with `Foldable.toList`'s element meaning — hence the internal `entries` name).
+  in hash order), `Foldable (HashMap k)` (over values, unspecified order).
 - 8 doctests.
 
 ### `hash_set` ✅ implemented (`stdlib/hash_set.mdk`)
