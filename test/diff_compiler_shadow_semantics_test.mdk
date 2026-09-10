@@ -52,15 +52,14 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, checkRunBuild, verdictOf
+  Agreement(..), binaryRanClean, checkRunBuild, sweepUnits, verdictOf
 }
 import fs.{fixtureDirs}
-import io.{runVerb}
 import list.{somes, sort}
 import path.{basename}
 import string.{endsWith, padRight, replaceAll, stripSuffix, unlines}
 import test.{Expectation, fail, pass}
-import test_process.{medakaRoot, scratchDir, unrosteredUnits}
+import test_process.{medakaRoot, unrosteredUnits}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -1035,13 +1034,7 @@ summarize graded failures =
     "\{intToString (length failures)} of \{intToString graded} cells disagree with their pinned verdict or value:\n\{unlines failures}"
 
 sweep : <Exec "_", FileRead "_", IO> Expectation
-sweep = match scratchDir
-  Err e => fail "could not make a scratch directory: \{e}"
-  Ok scratch =>
-    let graded = map (gradeOne scratch) table
-    let failures = somes (map rowFailure graded)
-    let _ = runVerb "rm" ["-rf", scratch]
-    summarize (length graded) failures
+sweep = sweepUnits table gradeOne rowFailure summarize
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/order-swapped.mdk`), which grades that directory a second way;
