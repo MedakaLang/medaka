@@ -5,7 +5,7 @@
 import test.{expectEqual}
 import frontend.ast.{Loc(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
-import frontend.parser.{parse}
+import frontend.parser.{parse, parseLocated}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.typecheck.{
   AssumptionTraceEntry(..),
@@ -58,7 +58,7 @@ data DefaultTraceView = DefaultTraceView {
   dtvKind : DefaultBodyRNoneKind,
   dtvScopeModule : String,
   dtvScopeOwner : String,
-  dtvHasParserLoc : Bool,
+  dtvStartLine : Int,
 }
   deriving (Eq, Debug)
 
@@ -106,9 +106,9 @@ defaultTraceView entry =
     OriginBuiltin => "<builtin>"
     OriginUnresolved => "<unresolved>"
   let (scopeModule, scopeOwner) = scopeTraceContext entry.dbrScope
-  let hasParserLoc = match entry.dbrOrigin
-    Some (Loc _ startLine _ _ _) => startLine > 0
-    None => False
+  let startLine = match entry.dbrOrigin
+    Some (Loc _ line _ _ _) => line
+    None => 0
   DefaultTraceView {
     dtvIfaceModule = ifaceModule,
     dtvIfaceName = owner.dbiIface.irName,
@@ -117,7 +117,7 @@ defaultTraceView entry =
     dtvKind = entry.dbrKind,
     dtvScopeModule = scopeModule,
     dtvScopeOwner = scopeOwner,
-    dtvHasParserLoc = hasParserLoc,
+    dtvStartLine = startLine,
   }
 
 runModulesObserved : List (String, String) -> ModuleTraceView
@@ -131,7 +131,7 @@ runModulesObserved sources =
       []
       []
       []
-      (map (entry => (fst entry, desugar (parse (snd entry)))) sources)
+      (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
   let defaultEntries = finishDefaultBodyRNoneTrace ()
   let assumptionEntries = finishAssumptionTrace ()
   ModuleTraceView {
@@ -588,7 +588,7 @@ test "genuine inherited Supply return keeps full default owner and parser origin
           dtvKind = DBRKReturn,
           dtvScopeModule = "supply_iface",
           dtvScopeOwner = "default:copy",
-          dtvHasParserLoc = True,
+          dtvStartLine = 4,
         },
       ],
       0,
@@ -608,7 +608,7 @@ test "mixed default separates argument fallback from qualified givens" =
           dtvKind = DBRKArg,
           dtvScopeModule = "mixed_default",
           dtvScopeOwner = "default:mixed",
-          dtvHasParserLoc = True,
+          dtvStartLine = 9,
         },
       ],
       [
@@ -625,8 +625,10 @@ test "mixed default separates argument fallback from qualified givens" =
     )
 
 test "same spelling retains module identity while impl bodies stay ordinary" =
-  let first = runModulesObserved [("owner_a", supplySource)]
-  let second = runModulesObserved [("owner_b", supplySource)]
+  let colliding = runModulesObserved [
+    ("owner_a", supplySource),
+    ("owner_b", supplySource),
+  ]
   let synthesized = runModulesObserved [
     (
       "owner_same",
@@ -660,25 +662,49 @@ test "same spelling retains module identity while impl bodies stay ordinary" =
   ]
   expectEqual
     (
-      (["owner_a"], ["owner_b"]),
+      ["owner_a", "owner_b"],
       (1, [], []),
-      [0, 0, 0, 0, 0],
+      [0, 0, 0, 0],
     )
     (
-      (
-        map (entry => entry.dtvIfaceModule) first.mtvDefaults,
-        map (entry => entry.dtvIfaceModule) second.mtvDefaults,
-      ),
+      map (entry => entry.dtvIfaceModule) colliding.mtvDefaults,
       (
         listLen synthesized.mtvDefaults,
         explicit.mtvDefaults,
         concrete.mtvDefaults,
       ),
       [
-        first.mtvErrors,
-        second.mtvErrors,
+        colliding.mtvErrors,
         synthesized.mtvErrors,
         explicit.mtvErrors,
         concrete.mtvErrors,
       ],
     )
+
+test "synthesized impl copy retains ordinary binding ownership" =
+  let observed = runModulesObserved [
+    (
+      "specialized_default",
+      joinNl [
+        "interface Other a where",
+        "  other : a -> Int",
+        "impl Other Int where",
+        "  other x = x",
+        "default interface Supply a where",
+        "  seed : a",
+        "  use : Other b => a -> b -> Int",
+        "  use x y = other y",
+        "impl Supply Bool where",
+        "  seed = False",
+      ],
+    ),
+  ]
+  expectEqual
+    (
+      [
+        (ATDirectPredicate, 0, "default:use", "default:use", True),
+        (ATDirectPredicate, 0, "binding:use", "binding:use", True),
+      ],
+      0,
+    )
+    (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
