@@ -3,7 +3,14 @@
 -- one shared type/effect substitution from structurally similar substitutions.
 
 import test.{expectEqual}
-import frontend.ast.{EvId(..), Loc(..), TyConOrigin(..)}
+import frontend.ast.{
+  EvId(..),
+  Ident(..),
+  Loc(..),
+  Ns(..),
+  TyConOrigin(..),
+  mkIdent,
+}
 import types.evidence.{EvidenceBinderId(..), GoalId(..), ScopeId(..)}
 import types.repr.{
   EffRow(..),
@@ -46,6 +53,12 @@ seenEffectVariables = Ref []
 seenBody : Ref (List Int)
 seenBody = Ref []
 
+seenGoalContexts : Ref (List (String, Int, String, Int))
+seenGoalContexts = Ref []
+
+seenDestinationContexts : Ref (List (String, Int, String, Int))
+seenDestinationContexts = Ref []
+
 resetCounts : Unit -> Unit
 resetCounts _ =
   makeCount := 0
@@ -54,6 +67,8 @@ resetCounts _ =
   seenTypeVariables := []
   seenEffectVariables := []
   seenBody := []
+  seenGoalContexts := []
+  seenDestinationContexts := []
 
 makeTestSubstitution : List Int -> List Int -> TestSubstitution
 makeTestSubstitution typeVariables effectVariables =
@@ -85,16 +100,40 @@ substituteTestArgument (TestSubstitution _ _ effectCell) (TEff _) =
   TEff (EffRow [] (Some effectCell))
 substituteTestArgument _ mono = mono
 
+originLocationLine : GoalOrigin -> Int
+originLocationLine origin = match origin.location
+  Some (Loc _ startLine _ _ _) => startLine
+  None => 0 - 1
+
+originBindingName : GoalOrigin -> String
+originBindingName origin = match origin.binding
+  Some (Ident _ _ name) => name
+  None => "<none>"
+
+scopeOrdinal : ScopeId -> Int
+scopeOrdinal (ScopeId ordinal) = ordinal
+
+contextSignature : GoalOrigin -> ScopeId -> (String, Int, String, Int)
+contextSignature origin scope = (
+  origin.moduleId,
+  originLocationLine origin,
+  originBindingName origin,
+  scopeOrdinal scope,
+)
+
 freshTestGoal : GoalOrigin -> ScopeId -> GoalId
-freshTestGoal origin _ =
+freshTestGoal origin scope =
   let ordinal = !goalCount + 1
   goalCount := ordinal
+  seenGoalContexts := contextSignature origin scope :: !seenGoalContexts
   GoalId origin.moduleId ordinal
 
 freshTestDestination : GoalOrigin -> ScopeId -> EvId
-freshTestDestination origin _ =
+freshTestDestination origin scope =
   let ordinal = !destinationCount + 1
   destinationCount := ordinal
+  seenDestinationContexts :=
+    contextSignature origin scope :: !seenDestinationContexts
   EvId origin.moduleId ordinal
 
 testServices : InstantiationServices TestSubstitution
@@ -113,6 +152,13 @@ testOrigin : GoalOrigin
 testOrigin = GoalOrigin {
   location = Some (Loc "contract.mdk" 3 2 3 9),
   moduleId = "contract",
+  binding = mkIdent NsValue (OriginModule "contract") "boundValue",
+}
+
+absentOrigin : GoalOrigin
+absentOrigin = GoalOrigin {
+  location = None,
+  moduleId = "synthetic",
   binding = None,
 }
 
@@ -348,3 +394,47 @@ test "qualifier order keeps nullary/n-ary vectors and formal associations" =
       [1, 2, 3, 4],
     )
     (vectorResult ())
+
+wantedContext : InstantiationArgument -> (String, Int, String, Int)
+wantedContext (InstantiationArgument { wanted = wanted, ... }) =
+  contextSignature wanted.origin wanted.scope
+
+wantedDestination : InstantiationArgument -> (String, Int)
+wantedDestination (InstantiationArgument { wanted = wanted, ... }) =
+  match wanted.destination
+    EvId moduleId ordinal => (moduleId, ordinal)
+
+contextForwardingResult : Unit -> List Bool
+contextForwardingResult _ =
+  resetCounts ()
+  -- The occurrence scope is deliberately unrelated to every qualifier's
+  -- formal-binder owner (`testScope = ScopeId 7`).  Substituting that owner for
+  -- the occurrence scope must therefore fail the stored and callback checks.
+  let richScope = ScopeId 37
+  let absentScope = ScopeId 53
+  let rich = instantiateQualified testServices richScope testOrigin vectorScheme
+  let absent =
+    instantiateQualified testServices absentScope absentOrigin sharedScheme
+  let richSignature = ("contract", 3, "boundValue", 37)
+  let absentSignature = ("synthetic", 0 - 1, "<none>", 53)
+  [
+    map wantedContext rich.arguments
+      == [richSignature, richSignature, richSignature, richSignature],
+    map wantedContext absent.arguments == [absentSignature],
+    !seenGoalContexts
+      == [
+        absentSignature, richSignature, richSignature, richSignature,
+        richSignature
+      ],
+    !seenDestinationContexts
+      == [
+        absentSignature, richSignature, richSignature, richSignature,
+        richSignature
+      ],
+    map wantedDestination rich.arguments
+      == [("contract", 1), ("contract", 2), ("contract", 3), ("contract", 4)],
+    map wantedDestination absent.arguments == [("synthetic", 5)],
+  ]
+
+test "wanted storage and both allocators receive the occurrence context" =
+  expectEqual [True, True, True, True, True, True] (contextForwardingResult ())
