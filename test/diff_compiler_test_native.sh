@@ -277,8 +277,27 @@ done
 # needs). What may not happen is a PASS.
 st="$WORK/strict_probe"
 mkdir -p "$st"
+# Closed test-body literals default to Int. Keep this valid control separate from
+# the explicit mismatch below: strict compilation must distinguish the two.
+cat > "$st/defaulted.mdk" <<'DEFAULTEOF'
+import test.{expectEqual}
+
+test "t" = expectEqual 1 1
+DEFAULTEOF
+default_out="$WORK/defaulted_probe.out"
+bound "$MEDAKA" test --native "$st/defaulted.mdk" >"$default_out" 2>&1
+default_rc=$?
+checked=$((checked + 1))
+if [ "$default_rc" -ne 0 ] || ! grep -qF '1/1 passed' "$default_out"; then
+  bad "defaulted.mdk: the closed numeric test body must compile and pass under the native engine. See $default_out"
+else
+  note "ok   defaulted.mdk: strict native compilation accepts the defaulted test body"
+fi
 cat > "$st/exempt_illtyped.mdk" <<'STRICTEOF'
 import test.{expectEqual}
+
+bad : Bool
+bad = (1 : Int)
 
 test "t" = expectEqual 1 1
 STRICTEOF
@@ -287,8 +306,8 @@ bound "$MEDAKA" test --native "$st/exempt_illtyped.mdk" >"$st_out" 2>&1
 st_rc=$?
 checked=$((checked + 1))
 if [ "$st_rc" -eq 0 ]; then
-  bad "exempt_illtyped.mdk: 'medaka test --native' exited 0 — the emitter records 'Ambiguous instance' type errors for this probe, so it must never report a pass (#2679). See $st_out"
-elif ! grep -qF 'Ambiguous instance' "$st_out"; then
+  bad "exempt_illtyped.mdk: 'medaka test --native' exited 0 — the explicit Bool/Int mismatch must fail the probe build (#2679). See $st_out"
+elif ! grep -qF 'Type mismatch: Bool vs Int' "$st_out"; then
   bad "exempt_illtyped.mdk: 'medaka test --native' failed without naming the type error the emitter recorded — the failure must carry the diagnostic, not just a nonzero code. See $st_out"
 else
   note "ok   exempt_illtyped.mdk: the native probe build is strict — emitter-recorded type errors fail the run and are named"
@@ -309,10 +328,9 @@ fi
 # The probe dies inside test 2 of 4: tests 2, 3 and 4 have no complete output
 # and must be reported as errors — never dropped, never counted as passing.
 # Test 1 already printed its result before the abort and is judged normally.
-# The fixture's `expectEqual` arguments carry `(n : Int)` ascriptions because the
-# probe build is strict (#2679): bare integer literals leave `Eq`/`Debug` ambiguous,
-# the emitter records that, and the probe would fail to BUILD — which is a different
-# failure from the abort this cell is about. Keep the ascriptions, and keep the test
+# The fixture's `expectEqual` arguments carry `(n : Int)` ascriptions to keep the
+# abort check independent of numeric-literal inference in the strict probe build.
+# Keep the ascriptions, and keep the test
 # decls on lines 13/15/17/19: the assertions below grep those line numbers.
 ab="$ROOT/test/compiler_test_fixtures/native_test_abort.mdk"
 ab_out="$WORK/abort.out"

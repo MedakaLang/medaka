@@ -24,8 +24,6 @@ dataEnvAddDecl	Decl	3/14
 deAliasMethodImports	Decl	1/14
 declBodyVarsOf	Decl	1/14
 declCtorIdentsOf	Decl	3/14
-declIfaceMethodIds	Decl	1/14
-declIfaceMethods	Decl	1/14
 declMethodIdentsOf	Decl	2/14
 declMethodNamesOf	Decl	3/14
 declRefNames	Decl	7/14
