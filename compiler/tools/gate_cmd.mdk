@@ -95,6 +95,7 @@ import support.util.{
   startsWith,
   stringTrim,
 }
+import string.{contains as strContains}
 
 -- `withStrictDash` (`args`): every `ArgSpec` in this file wraps its spec with
 -- it so an undeclared `-x`-shaped token is rejected as an unknown flag rather
@@ -1616,6 +1617,78 @@ shellBecauseViolations _ [] = []
 shellBecauseViolations root (g :: gs) =
   shellBecauseErrors root g ++ shellBecauseViolations root gs
 
+-- ── a native gate must grade the whole process it spawns (#2823, #2890) ─────
+
+-- Every current way a `kind = "native"` module can launch a process and get
+-- back its exit code and stderr alongside stdout: the sole `<Exec>`
+-- primitive (`runVerb`/`runCommandOk`, `stdlib/io.mdk`) and the bounded
+-- wrappers built on it (`boundedVerb`/`boundedVerbSeconds`/`boundedInTree`,
+-- `runMedaka`, `checkRunBuild` — `stdlib/test_process.mdk` and
+-- `test/compiler_cli_test_support.mdk`). This is deliberately about the
+-- SPAWN PRIMITIVE, not about `./medaka` specifically — a module that spawns
+-- an oracle binary through the same primitives is exactly as in-scope.
+rawSpawnMarkers : List String
+rawSpawnMarkers = [
+  "runVerb",
+  "runCommandOk",
+  "boundedVerb",
+  "boundedVerbSeconds",
+  "boundedInTree",
+  "runMedaka",
+  "checkRunBuild",
+]
+
+-- Evidence a module reached one of the markers above and still did
+-- something with the exit code/stderr it got back, rather than reading
+-- stdout alone: a helper whose own contract already grades them
+-- (`binaryRanClean`, the `expectCheck*`/`expectVerbExitStartsWith*`
+-- family, `test_process`'s `expectSpawnFails`/`expectSpawnOkLine`), an
+-- inline comparison against a code-shaped binding, or the code
+-- interpolated into a signature the gate diffs (the shape
+-- `diff_compiler_import_order_test.mdk` uses, where `\{intToString
+-- checkCode}` is what actually gets compared).
+gradeEvidenceMarkers : List String
+gradeEvidenceMarkers = [
+  "binaryRanClean",
+  "expectCheckAccept",
+  "expectCheckReject",
+  "expectVerbExitStartsWith",
+  "expectSpawnFails",
+  "expectSpawnOkLine",
+  "Code /=",
+  "Code ==",
+  "code /=",
+  "code ==",
+  "Code}",
+  "code}",
+]
+
+anyMarker : List String -> String -> Bool
+anyMarker [] _ = False
+anyMarker (m :: ms) src = strContains m src || anyMarker ms src
+
+nativeGradeErrors : String -> Gate -> <IO> List String
+nativeGradeErrors root g
+  | g.kind /= "native" = []
+  | otherwise = match readFile (joinPath root g.run)
+    Err m => [
+      "\{g.name}: kind 'native' but its module cannot be read to check process grading: \{g.run}: \{m}",
+    ]
+    Ok src =>
+      if not (anyMarker rawSpawnMarkers src) then
+        []
+      else if anyMarker gradeEvidenceMarkers src then
+        []
+      else
+        [
+          "\{g.name}: \{g.run} spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but appears to grade only its stdout — check the exit code and stderr the spawn returned too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine",
+        ]
+
+nativeGradeViolations : String -> List Gate -> <IO> List String
+nativeGradeViolations _ [] = []
+nativeGradeViolations root (g :: gs) =
+  nativeGradeErrors root g ++ nativeGradeViolations root gs
+
 -- ── assembling and rendering the violation classes ──────────────────────────
 
 verifyClasses : String ->
@@ -1640,6 +1713,7 @@ verifyClasses root gates shs = match gateCandidates root
       ("invalid tiers", invalidTiersViolations gates),
       ("invalid migration class", invalidMigrationViolations gates),
       ("unpaired shell-because", shellBecauseViolations root gates),
+      ("native gate stdout-only grading", nativeGradeViolations root gates),
     ]
 
 renderClass : (String, List String) -> String

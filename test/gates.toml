@@ -235,23 +235,6 @@ sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler
 corpus = ["test/parse_error_fixtures"]
 toolchain = []
 
-# A second oracle-reading differential, in a different area — the pair is what
-# proves `area:` discriminates rather than just echoing `project:`.
-[[gate]]
-name = "diff_compiler_eval_modules"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_modules.sh"
-oracles = ["eval_modules_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/backend/private_mangle.mdk", "test/diff_compiler_eval_modules.sh"]
-corpus = ["test/eval_modules_fixtures"]
-toolchain = []
-
 # ⚠️ INVERTED POLARITY ([G-MUST-FAIL]): every fixture under
 # test/must_fail_fixtures/ pins an OPEN bug, so RED is this gate's healthy
 # state. It is enrolled here precisely to prove the schema does NOT normalize
@@ -1782,96 +1765,6 @@ corpus = ["test/codemod_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_core_ir_list"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_list.sh"
-oracles = ["core_ir_prelude_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_list.sh"]
-corpus = ["test/eval_list_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_core_ir_modules"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_modules.sh"
-oracles = ["core_ir_modules_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_modules.sh"]
-corpus = ["test/eval_modules_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_core_ir_prelude"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_prelude.sh"
-oracles = ["core_ir_prelude_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_prelude.sh"]
-corpus = ["test/eval_prelude_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_core_ir_roundtrip"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_roundtrip.sh"
-oracles = ["core_ir_roundtrip_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_roundtrip.sh"]
-corpus = ["test/eval_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_core_ir_run"
-area = "eval"
-shard = "gates_5"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_run.sh"
-oracles = ["core_ir_run_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_run.sh"]
-corpus = ["test/diff_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_core_ir"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir.sh"
-oracles = ["core_ir_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir.sh"]
-corpus = ["test/eval_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_core_ir_typed_modules"
 area = "eval"
 shard = "gates_3"
@@ -1884,21 +1777,6 @@ run = "test/diff_compiler_core_ir_typed_modules.sh"
 oracles = ["core_ir_modules_main", "core_ir_typed_modules_main", "eval_modules_main"]
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/CORE-IR-TYPED-LEDGER.txt", "test/diff_compiler_core_ir_typed_modules.sh"]
 corpus = ["test/core_ir_typed_modules_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_core_ir_typed"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_typed.sh"
-oracles = ["core_ir_typed_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_typed.sh"]
-corpus = ["test/eval_typed_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2097,21 +1975,6 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
-name = "diff_compiler_eval_dict_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_dict_batch.sh"
-oracles = ["eval_dict_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_dict_batch.sh"]
-corpus = ["test/eval_dict_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_eval_json"
 area = "eval"
 shard = "gates_2"
@@ -2142,96 +2005,6 @@ corpus = ["test/error_quality_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_eval_list_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_list_batch.sh"
-oracles = ["eval_list_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_list_batch.sh"]
-corpus = ["test/eval_list_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_list"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_list.sh"
-oracles = ["eval_prelude_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_list.sh"]
-corpus = ["test/eval_list_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_prelude_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_prelude_batch.sh"
-oracles = ["eval_prelude_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_prelude_batch.sh"]
-corpus = ["test/eval_prelude_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_prelude"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_prelude.sh"
-oracles = ["eval_prelude_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_prelude.sh"]
-corpus = ["test/eval_prelude_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_run_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_run_batch.sh"
-oracles = ["eval_run_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_run_batch.sh"]
-corpus = ["test/diff_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_run"
-area = "eval"
-shard = "gates_5"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_run.sh"
-oracles = ["eval_run_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_run.sh"]
-corpus = ["test/diff_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
 shard = "gates_3"
@@ -2253,42 +2026,12 @@ shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval.sh"
-oracles = ["eval_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval.sh"]
-corpus = ["test/eval_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_typed_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_typed_batch.sh"
-oracles = ["eval_typed_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_eval_typed_batch.sh"]
-corpus = ["test/eval_typed_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_eval_typed_modules"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_typed_modules.sh"
-oracles = ["eval_typed_modules_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_eval_typed_modules.sh"]
-corpus = ["test/eval_typed_modules_fixtures"]
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_eval_test.mdk"
+oracles = ["core_ir_main", "core_ir_modules_main", "core_ir_prelude_main", "core_ir_roundtrip_main", "core_ir_run_main", "core_ir_typed_main", "eval_dict_batch", "eval_list_batch", "eval_main", "eval_modules_main", "eval_prelude_batch", "eval_prelude_main", "eval_run_batch", "eval_run_main", "eval_typed_batch", "eval_typed_modules_main"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_eval_test.mdk"]
+corpus = ["test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_fixtures", "test/eval_list_fixtures", "test/eval_modules_fixtures", "test/eval_prelude_fixtures", "test/eval_typed_fixtures", "test/eval_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2764,7 +2507,7 @@ project = "compiler"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
-migration = "native-wrap"
+migration = "split-first"
 run = "test/diff_compiler_lsp.sh"
 oracles = []
 sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp.sh"]

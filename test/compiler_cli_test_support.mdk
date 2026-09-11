@@ -5,8 +5,8 @@
    corpus. -}
 
 import io.{getEnvOr, runVerb}
-import list.{somes}
-import string.{contains, lines, startsWith, toLower}
+import list.{dropWhile, reverse, somes, takeWhile}
+import string.{contains, lines, startsWith, stripSuffix, toLower, unlines}
 import test_process.{boundedVerb, boundedVerbSeconds, medakaBin, scratchDir}
 import test.{
   Expectation,
@@ -227,3 +227,63 @@ sweepUnits units gradeOne rowFailure summarize = match scratchDir
     let failures = somes (map rowFailure graded)
     let _ = runVerb "rm" ["-rf", scratch]
     summarize (length graded) failures
+
+-- # Reading a spawned oracle's stdout
+
+{- | `s` without its trailing newlines.
+
+   Every golden these helpers grade against was minted under a shell gate
+   that read both sides through `$(…)`, which strips trailing newlines and
+   nothing else. `trimRight` is the wrong tool for that: it also eats
+   trailing spaces, so a row whose output gained one would keep passing.
+
+   > chompNewlines "a\nb\n\n"
+   "a\nb"
+
+   > chompNewlines "a \n"
+   "a " -}
+export
+chompNewlines : String -> String
+chompNewlines s = match stripSuffix "\n" s
+  Some t => chompNewlines t
+  None => s
+
+-- The last element dropped when it equals `want`.
+dropLastIf : String -> List String -> List String
+dropLastIf want ls = match reverse ls
+  l :: rest => if l == want then reverse rest else ls
+  [] => ls
+
+{- | `out` without the trailing `()` line the native runtime auto-prints for
+   a `main` that returns Unit (`runtime/medaka_rt.c`).
+
+   The goldens carry no such line, having been captured from an interpreter
+   that never printed one. Only a sole FINAL `()` goes: a `()` the program
+   itself printed mid-stream is output, not an epilogue.
+
+   > stripUnitAutoPrint "5\n()\n"
+   "5\n"
+
+   > stripUnitAutoPrint "()\n5\n"
+   "()\n5\n" -}
+export
+stripUnitAutoPrint : String -> String
+stripUnitAutoPrint out = unlines (dropLastIf "()" (dropLastIf "" (lines out)))
+
+{- | The section of `all` that a batch oracle emitted for `key`: the lines
+   after the `\{prefix}\{key}` marker, up to the next line carrying
+   `prefix`.
+
+   A batch oracle runs a whole corpus in ONE process and delimits its
+   fixtures in a single stdout stream, so grading it means cutting that
+   stream back apart. `""` when `key` has no marker at all — a fixture the
+   batch never reached, which the caller grades as a mismatch against that
+   fixture's golden rather than as a skip.
+
+   > batchSection "=== " "b" "=== a\none\n=== b\ntwo\n=== c\nthree\n"
+   "two\n" -}
+export
+batchSection : String -> String -> String -> String
+batchSection prefix key all = match dropWhile (/= "\{prefix}\{key}") (lines all)
+  [] => ""
+  _ :: rest => unlines (takeWhile (l => not (startsWith prefix l)) rest)

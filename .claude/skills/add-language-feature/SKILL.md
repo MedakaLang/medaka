@@ -159,8 +159,8 @@ sh   test/diff_compiler_engines.sh       # eval == native == wasm on the same pr
 
 If the change is **cross-cutting** — a marker/elaboration pass, dispatch, or
 anything threaded through the eval drivers — also run the multi-module and
-loader-path gates (`test/diff_compiler_eval_modules.sh`,
-`test/diff_compiler_core_ir_modules.sh`). Each driver assembles the prelude +
+loader-path oracles (`eval_modules_main`, `core_ir_modules_main`, both rows of
+`medaka gate run diff_compiler_eval`). Each driver assembles the prelude +
 pipeline slightly differently, so a change green in `diff_compiler_eval.sh` can
 still break one of them.
 

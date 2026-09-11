@@ -704,7 +704,8 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   **allocation**, not wall-clock. `whenL False (expensiveCall …)` still evaluates its arg.
 - ⚠️ **[T-DISPATCH-LOADER]** Dispatch bug via loader but green single-file? Usually the EVAL
   DRIVER, not dict-passing — verify (Phase 134 was the inverse). Method: `debug-pipeline`.
-  Regressions must use `test/diff_compiler_eval_modules.sh`.
+  Regressions must use the `eval_modules_fixtures` rows of
+  `test/diff_compiler_eval_test.mdk`.
 - ⚠️ **[T-EVAL-LOCKSTEP]** `evalModules` (`eval/eval.mdk`) / `cevalModules`
   (`ir/core_ir_eval.mdk`) are PARALLEL drivers — fix frame semantics in **both**. Cross-module
   ctor/name tables must key **per-module local**, never bare-name flat.

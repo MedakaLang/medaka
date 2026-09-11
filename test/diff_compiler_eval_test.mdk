@@ -1,0 +1,738 @@
+{- | The eval and Core IR value sweeps over the fixture corpora, as one
+   runner over a table of rows.
+
+   Eighteen shell gates used to do this, one script per (oracle, corpus)
+   pair, each a near-copy of the same loop: spawn an oracle over every
+   fixture in a corpus, strip the native runtime's trailing `()`, and diff
+   the result against a committed golden. The pairs are the data; the loop is
+   not. The rows here name them:
+
+   | oracle | corpus | what it proves |
+   |---|---|---|
+   | `eval_main` | `eval_fixtures` | the AST tree-walker on the engine core |
+   | `core_ir_main` | `eval_fixtures` | Core IR evaluates as the AST does |
+   | `core_ir_roundtrip_main` | `eval_fixtures` | S-expr serialization is lossless |
+   | `eval_prelude_main` | `eval_list_fixtures` | List combinators + comprehensions |
+   | `eval_list_batch` | `eval_list_fixtures` | batched == per-process |
+   | `core_ir_prelude_main` | `eval_list_fixtures` | the same through Core IR |
+   | `eval_prelude_main` | `eval_prelude_fixtures` | `core.mdk` dispatch |
+   | `eval_prelude_batch` | `eval_prelude_fixtures` | batched == per-process |
+   | `core_ir_prelude_main` | `eval_prelude_fixtures` | the same through Core IR |
+   | `eval_run_main` | `diff_fixtures` | the shared `medaka run` corpus |
+   | `eval_run_batch` | `diff_fixtures` | batched == per-process |
+   | `core_ir_run_main` | `diff_fixtures` | the same through Core IR |
+   | `core_ir_typed_main` | `eval_typed_fixtures` | Core IR's typed `CMethod`/`RKey` dispatch |
+   | `eval_typed_batch` | `eval_typed_fixtures` | batched == per-process |
+   | `eval_dict_batch` | `eval_dict_fixtures` | batched == per-process, dict-passed dispatch |
+   | `eval_modules_main` | `eval_modules_fixtures` | the loader-driven untyped `evalModules` |
+   | `core_ir_modules_main` | `eval_modules_fixtures` | the same corpus through per-module Core IR frames |
+   | `eval_typed_modules_main` | `eval_typed_modules_fixtures` | route-stamped dispatch the untyped path cannot resolve |
+
+   The last three take a corpus whose unit is a DIRECTORY of modules rather
+   than a single file (`DirFixture` below). Their goldens sit inside the
+   fixture beside its modules, their entry module is named per corpus rather
+   than per fixture, and their oracle takes the fixture's own directory as a
+   further argument so the loader can find the entry's siblings.
+
+   A `_batch` row is NOT a duplicate of the per-fixture row above it. It
+   spawns ONE process over the whole corpus and cuts the delimited stdout
+   back apart, so it is the only thing asserting that a cached prelude and a
+   shared heap leave no trace between fixtures. Deduplicating the table on
+   (corpus, golden) would silently delete that property, so the two stay
+   separate rows with separate spawns.
+
+   Three things this runner does that the retired scripts did not:
+
+   - It reads the oracle's EXIT CODE and STDERR, not stdout alone. The
+     scripts piped stderr to `/dev/null` and never looked at `$?`, which is
+     how `eval_prelude_fixtures/string_interp.mdk` sat green for a year while
+     its oracle panicked (`expectedPanics` below).
+   - It asserts each corpus still holds the number of fixtures it held when
+     the rows were written, so a corpus that silently shrinks reds rather
+     than passing over fewer rows.
+   - It grades every row in one process, so a red run names every failing
+     (gate, fixture) pair at once instead of the first script to exit 1.
+
+   `test/eval_fixtures`, `test/eval_list_fixtures`,
+   `test/eval_prelude_fixtures` and `test/eval_typed_modules_fixtures` are
+   FROZEN dev-probe corpora (#1241): `test/capture_goldens.sh` is a no-op for
+   them and there is no regeneration script, so a missing or wrong golden is
+   hand-derived from the fixture's semantics, never captured from whatever an
+   oracle prints today.
+
+   Most of these corpora never reach the type checker: the entries behind
+   `eval_main`, `core_ir_main` and `core_ir_roundtrip_main` import no
+   `types.typecheck`, so their pipeline is parse → desugar → [annotate →
+   lower] → eval and no `Mono` is ever built. The two typed entries
+   (`compiler/entries/core_ir_typed_main.mdk`,
+   `compiler/entries/eval_typed_modules_main.mdk`) do, because their fixtures
+   turn on dispatch that only resolves once the typed pipeline stamps routes.
+   Even there the assertion is a VALUE, not a type: a type-level assertion
+   belongs in `test/typecheck_error_fixtures/`, not here.
+
+   Runs under `medaka test --native`: it spawns oracle binaries and reads the
+   corpora, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  batchSection, boundedInTree, chompNewlines, stripUnitAutoPrint, sweepUnits
+}
+import fs.{fixtureDirs, fixtureFiles, mkdirAll}
+import io.{runVerb}
+import list.{dropWhile, reverse, somes, sort}
+import path.{basename, dirname, stem}
+import string.{contains, endsWith, lines, split, startsWith, unlines}
+import test.{Expectation, fail, pass}
+import test_process.{
+  boundedVerb, medakaBin, medakaRoot, scratchDir, spawnTimeoutSeconds
+}
+
+{- | What one fixture of a row's corpus IS, and where its expected value
+   lives. The two questions are one constructor because the corpus shape
+   decides both: a corpus of files keys its goldens off the fixture's stem,
+   and a corpus of directories keys them off a fixed name inside the
+   directory.
+
+   - `FileStem` — the fixture is a `.mdk` file in the corpus root, graded
+     against a sibling `<stem>.eval.golden` holding the whole value.
+   - `FileSection` — the same file shape, graded against the `=== EVAL ===`
+     section of a sibling `<stem>.golden`: the multi-stage golden
+     `test/diff_fixtures` shares with the parse, lex and typecheck gates.
+   - `DirFixture entry golden` — the fixture is a whole DIRECTORY of modules
+     under the corpus root. `entry` names the root module inside it, either
+     literally or as a single-`*` glob over the basename; `golden` is a file
+     name inside that same directory, unrelated to the entry's stem. A
+     directory-shaped row also spawns its oracle with the fixture's own
+     directory as a trailing argument, which is how the loader resolves the
+     entry's sibling imports. -}
+data Shape = FileStem | FileSection | DirFixture String String
+
+{- | One retired gate: an oracle, a corpus, and how to read the two apart.
+
+   `oracle` and `prelude` are spelled repo-relative and interpolated onto
+   `medakaRoot` at spawn time. The `test/bin/<name>` spelling is load-bearing
+   beyond readability: `test/build_oracles.sh --for` derives which oracles a
+   gate needs by grepping the gate's own source for that literal, so an
+   oracle assembled from fragments would be invisible to it and the gate
+   would run against a stale or missing binary. -}
+data Row = Row {
+  gate : String,
+  oracle : String,
+  corpus : String,
+  prelude : List String,
+  shape : Shape,
+  batched : Bool,
+  fixtures : Int,
+}
+
+coreMod : String
+coreMod = "stdlib/core.mdk"
+
+listMod : String
+listMod = "stdlib/list.mdk"
+
+runtimeMod : String
+runtimeMod = "stdlib/runtime.mdk"
+
+-- | Named once because two things spawn it: the corpus row below, and the
+-- FFI engine-wall probes at the foot of this file.
+coreIrModulesOracle : String
+coreIrModulesOracle = "test/bin/core_ir_modules_main"
+
+rows : List Row
+rows = [
+  Row {
+    gate = "diff_compiler_eval",
+    oracle = "test/bin/eval_main",
+    corpus = "test/eval_fixtures",
+    prelude = [],
+    shape = FileStem,
+    batched = False,
+    fixtures = 24,
+  },
+  Row {
+    gate = "diff_compiler_core_ir",
+    oracle = "test/bin/core_ir_main",
+    corpus = "test/eval_fixtures",
+    prelude = [],
+    shape = FileStem,
+    batched = False,
+    fixtures = 24,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_roundtrip",
+    oracle = "test/bin/core_ir_roundtrip_main",
+    corpus = "test/eval_fixtures",
+    prelude = [],
+    shape = FileStem,
+    batched = False,
+    fixtures = 24,
+  },
+  Row {
+    gate = "diff_compiler_eval_list",
+    oracle = "test/bin/eval_prelude_main",
+    corpus = "test/eval_list_fixtures",
+    prelude = [coreMod, listMod],
+    shape = FileStem,
+    batched = False,
+    fixtures = 1,
+  },
+  Row {
+    gate = "diff_compiler_eval_list_batch",
+    oracle = "test/bin/eval_list_batch",
+    corpus = "test/eval_list_fixtures",
+    prelude = [coreMod, listMod],
+    shape = FileStem,
+    batched = True,
+    fixtures = 1,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_list",
+    oracle = "test/bin/core_ir_prelude_main",
+    corpus = "test/eval_list_fixtures",
+    prelude = [coreMod, listMod],
+    shape = FileStem,
+    batched = False,
+    fixtures = 1,
+  },
+  Row {
+    gate = "diff_compiler_eval_prelude",
+    oracle = "test/bin/eval_prelude_main",
+    corpus = "test/eval_prelude_fixtures",
+    prelude = [coreMod],
+    shape = FileStem,
+    batched = False,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_eval_prelude_batch",
+    oracle = "test/bin/eval_prelude_batch",
+    corpus = "test/eval_prelude_fixtures",
+    prelude = [coreMod],
+    shape = FileStem,
+    batched = True,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_prelude",
+    oracle = "test/bin/core_ir_prelude_main",
+    corpus = "test/eval_prelude_fixtures",
+    prelude = [coreMod],
+    shape = FileStem,
+    batched = False,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_eval_run",
+    oracle = "test/bin/eval_run_main",
+    corpus = "test/diff_fixtures",
+    prelude = [coreMod, listMod],
+    shape = FileSection,
+    batched = False,
+    fixtures = 54,
+  },
+  Row {
+    gate = "diff_compiler_eval_run_batch",
+    oracle = "test/bin/eval_run_batch",
+    corpus = "test/diff_fixtures",
+    prelude = [coreMod, listMod],
+    shape = FileSection,
+    batched = True,
+    fixtures = 54,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_run",
+    oracle = "test/bin/core_ir_run_main",
+    corpus = "test/diff_fixtures",
+    prelude = [coreMod, listMod],
+    shape = FileSection,
+    batched = False,
+    fixtures = 54,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_typed",
+    oracle = "test/bin/core_ir_typed_main",
+    corpus = "test/eval_typed_fixtures",
+    prelude = [runtimeMod, coreMod],
+    shape = FileStem,
+    batched = False,
+    fixtures = 12,
+  },
+  Row {
+    gate = "diff_compiler_eval_typed_batch",
+    oracle = "test/bin/eval_typed_batch",
+    corpus = "test/eval_typed_fixtures",
+    prelude = [runtimeMod, coreMod],
+    shape = FileStem,
+    batched = True,
+    fixtures = 12,
+  },
+  Row {
+    gate = "diff_compiler_eval_dict_batch",
+    oracle = "test/bin/eval_dict_batch",
+    corpus = "test/eval_dict_fixtures",
+    prelude = [runtimeMod, coreMod],
+    shape = FileStem,
+    batched = True,
+    fixtures = 29,
+  },
+  Row {
+    gate = "diff_compiler_eval_modules",
+    oracle = "test/bin/eval_modules_main",
+    corpus = "test/eval_modules_fixtures",
+    prelude = [coreMod],
+    shape = DirFixture "main_*.mdk" "main.eval.golden",
+    batched = False,
+    fixtures = 12,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_modules",
+    oracle = coreIrModulesOracle,
+    corpus = "test/eval_modules_fixtures",
+    prelude = [coreMod],
+    shape = DirFixture "main_*.mdk" "main.eval.golden",
+    batched = False,
+    fixtures = 12,
+  },
+  Row {
+    gate = "diff_compiler_eval_typed_modules",
+    oracle = "test/bin/eval_typed_modules_main",
+    corpus = "test/eval_typed_modules_fixtures",
+    prelude = [runtimeMod, coreMod],
+    shape = DirFixture "main.mdk" "main.eval.golden",
+    batched = False,
+    fixtures = 23,
+  },
+]
+
+-- # The corpus
+
+{- | The ENTRY MODULE of each of a row's fixtures, sorted, as absolute paths.
+   One path per fixture either way: the fixture's own file for a file-shaped
+   corpus, the root module inside the fixture's directory for a
+   directory-shaped one. -}
+entriesOf : Row -> <FileRead "_", IO> Result String (List String)
+entriesOf r =
+  let dir = "\{medakaRoot}/\{r.corpus}"
+  match r.shape
+    DirFixture spec _ => dirEntries dir spec
+    _ => flatEntries r dir
+
+{- | The `.mdk` files directly under a file-shaped corpus root.
+
+   `fixtureFiles` walks recursively and carries the anti-vacuity floor, so a
+   corpus that reads cleanly but holds nothing is an `Err` rather than a
+   green run over zero rows. Only the corpus root holds fixtures.
+
+   `test/diff_fixtures`' `numlit_*` fixtures are excluded: they need the
+   typed `fromInt` elaboration that no entry behind these oracles performs,
+   and the typed gates cover them. -}
+flatEntries : Row -> String -> <FileRead "_"> Result String (List String)
+flatEntries r dir = match fixtureFiles dir
+  Err e => Err e
+  Ok paths =>
+    let own = p => endsWith ".mdk" p && dirname p == dir && isGraded r p
+    match sort (filter own paths)
+      [] => Err "no top-level .mdk fixtures"
+      fixtures => Ok fixtures
+
+isGraded : Row -> String -> Bool
+isGraded r p = match r.shape
+  FileSection => not (startsWith "numlit_" (stem p))
+  _ => True
+
+{- | The entry module of every fixture directory under `dir`, one per
+   directory, in directory order.
+
+   A directory holding no file matching `spec` is an `Err` naming it, not a
+   skip: the retired scripts printed `skip <name>` and went on, so a fixture
+   whose entry was renamed away stopped being graded and nothing said so. -}
+dirEntries : String -> String -> <FileRead "_"> Result String (List String)
+dirEntries dir spec = match fixtureDirs dir
+  Err e => Err e
+  Ok dirs => entriesIn spec (sort dirs) []
+
+entriesIn : String ->
+  List String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+entriesIn _ [] acc = Ok (reverse acc)
+entriesIn spec (d :: rest) acc = match entryIn spec d
+  Err e => Err e
+  Ok p => entriesIn spec rest (p :: acc)
+
+entryIn : String -> String -> <FileRead "_"> Result String String
+entryIn spec d = match listDir d
+  Err e => Err e
+  Ok names => match sort (filter (matchesSpec spec) names)
+    [] => Err "\{basename d}: no entry file matching \{debug spec}"
+    n :: _ => Ok "\{d}/\{n}"
+
+{- | Whether the file name `name` matches `spec`: a literal file name, or a
+   name with ONE `*` standing for any run of characters.
+
+   The two spellings are the two the retired scripts used — `ls
+   "$dir"main_*.mdk | head -1` and a bare `"$dir/main.mdk"` — kept apart
+   because they are not interchangeable. A glob loosened to a prefix would
+   let a directory holding both `main.mdk` and `main.extra.mdk` be graded on
+   whichever sorted first.
+
+   > matchesSpec "main_*.mdk" "main_basic.mdk"
+   True
+
+   > matchesSpec "main_*.mdk" "main_basic.eval.golden"
+   False
+
+   > matchesSpec "main.mdk" "main.extra.mdk"
+   False -}
+matchesSpec : String -> String -> Bool
+matchesSpec spec name = match split "*" spec
+  [pre, post] =>
+    startsWith pre name
+      && endsWith post name
+      && stringLength name >= stringLength pre + stringLength post
+  _ => spec == name
+
+-- | The expected value for one fixture, read from its committed golden.
+goldenOf : Row -> String -> <FileRead "_", IO> Result String String
+goldenOf r path =
+  let sibling = "\{dirname path}/\{stem path}"
+  match r.shape
+    FileStem => map chompNewlines (readFile "\{sibling}.eval.golden")
+    FileSection => map evalSection (readFile "\{sibling}.golden")
+    DirFixture _ golden =>
+      map chompNewlines (readFile "\{dirname path}/\{golden}")
+
+{- | Everything after a multi-stage golden's `=== EVAL ===` banner. `""` when
+   there is no banner, which grades as a mismatch against any oracle that
+   printed something. -}
+evalSection : String -> String
+evalSection raw =
+  match dropWhile (l => not (contains "=== EVAL ===" l)) (lines raw)
+    [] => ""
+    _ :: rest => chompNewlines (unlines rest)
+
+-- # Grading a spawn
+
+{- | The (oracle, unit) pairs known to exit nonzero or panic today, each with
+   the reason. A pair listed here is REQUIRED to misbehave: one that runs
+   clean fails the gate and is removed in the same commit that fixed it, so
+   this roster drains itself instead of outliving its subject.
+
+   The unit is a fixture path for a per-fixture row and the corpus path for
+   a batch row, whose one process carries the whole corpus's behavior.
+
+   `test/eval_prelude_fixtures/string_interp.mdk` panics with
+   `intToString: not an Int` under both prelude oracles, printing nothing —
+   and its committed golden is zero bytes, so the three shell gates that
+   graded it compared "" against "" and reported `ok`. Neither the panic nor
+   the empty pin is fixed here: this runner's job was to make them visible,
+   and they are now two named rows rather than three silent passes. -}
+expectedPanics : List (String, String)
+expectedPanics = [
+  (
+    "test/bin/eval_prelude_main",
+    "test/eval_prelude_fixtures/string_interp.mdk",
+  ),
+  (
+    "test/bin/core_ir_prelude_main",
+    "test/eval_prelude_fixtures/string_interp.mdk",
+  ),
+  ("test/bin/eval_prelude_batch", "test/eval_prelude_fixtures"),
+]
+
+{- | Fixtures that ship no `=== EVAL ===` golden, so this gate spawns them
+   but has no value to hold them to. Each is still graded on its exit code
+   and stderr, and one that GAINS a golden fails until it is taken off this
+   list.
+
+   The four below are `medaka run`'s binding-identity fixtures: their pinned
+   observable is the lexer's `<stem>.boot_lex.golden`, which the lex gate
+   reads. The retired shell rows never saw them at all — they iterated
+   `*.golden` and so could not distinguish "no value is owed here" from "a
+   value is owed and is missing". -}
+noEvalGolden : List String
+noEvalGolden = [
+  "test/diff_fixtures/bindingid_default_where.mdk",
+  "test/diff_fixtures/bindingid_impl_where.mdk",
+  "test/diff_fixtures/bindingid_method_where.mdk",
+  "test/diff_fixtures/bindingid_topvar.mdk",
+]
+
+{- | How a spawn's exit code and stderr graded, or `None` when they graded
+   clean and were expected to.
+
+   `code == 0` with no `E-PANIC` on stderr is the same shape
+   `binaryRanClean` asserts of a built binary: a process that printed the
+   right bytes on its way out of a panic has not passed. -}
+processFailure : String -> String -> Int -> String -> Option String
+processFailure oracle unit code err =
+  let clean = code == 0 && not (contains "E-PANIC" err)
+  let pinned = elem (oracle, unit) expectedPanics
+  if clean && pinned then
+    Some "\{unit}: runs clean now — drop it from `expectedPanics` in this file"
+  else if clean || pinned then
+    None
+  else
+    Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
+
+stderrTail : String -> String
+stderrTail "" = ""
+stderrTail err = match lines (chompNewlines err)
+  [] => ""
+  l :: _ => " — \{debug l}"
+
+-- # Grading a row
+
+{- | One row's outcome. `failures` is the whole list rather than the first,
+   since the vehicle absorbs anything a test body prints and a red run has
+   to name every disagreement in its message. -}
+data Outcome = Outcome { gate : String, graded : Int, failures : List String }
+
+structural : Row -> String -> Outcome
+structural r note = Outcome {
+  gate = r.gate,
+  graded = 0,
+  failures = ["\{r.corpus}: \{note}"],
+}
+
+{- | The repo-relative name of the fixture the entry module `path` belongs
+   to: the file itself for a file-shaped corpus, its directory for a
+   directory-shaped one. This is the name `expectedPanics` and `noEvalGolden`
+   are keyed by, so it has to name the FIXTURE and not the entry — two
+   directory fixtures can hold entries of the same name. -}
+unitOf : Row -> String -> String
+unitOf r path = match r.shape
+  DirFixture _ _ => "\{r.corpus}/\{basename (dirname path)}"
+  _ => "\{r.corpus}/\{stem path}.mdk"
+
+-- | The short name a failure message calls the fixture by.
+labelOf : Row -> String -> String
+labelOf r path = match r.shape
+  DirFixture _ _ => basename (dirname path)
+  _ => stem path
+
+valueFailure : Row -> String -> String -> <FileRead "_", IO> Option String
+valueFailure r path actual =
+  let label = labelOf r path
+  let exempt = elem (unitOf r path) noEvalGolden
+  match goldenOf r path
+    Err e => if exempt then None else Some "\{label}: no readable golden: \{e}"
+    Ok expected =>
+      if exempt then
+        Some "\{label}: has a golden now — drop it from `noEvalGolden`"
+      else if expected == actual then
+        None
+      else
+        Some "\{label}: expected \{debug expected}, got \{debug actual}"
+
+{- | A row that spawns the oracle once per fixture: the shape eleven of the
+   twelve retired scripts had, and the reference the `_batch` rows are
+   compared against. -}
+perFixture : Row -> List String -> <Exec "_", FileRead "_", IO> List String
+perFixture r paths = somes (map (oneFixture r) paths)
+
+oneFixture : Row -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture r path =
+  match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r path)
+    Err e => Some "\{labelOf r path}: could not spawn \{r.oracle}: \{e}"
+    Ok (code, out, err) =>
+      match processFailure r.oracle (unitOf r path) code err
+        Some m => Some m
+        None => valueFailure r path (chompNewlines (stripUnitAutoPrint out))
+
+{- | The oracle's argument vector for one fixture: the row's prelude modules,
+   then the entry.
+
+   A directory-shaped row passes the fixture's own directory as a further
+   trailing argument — the loader resolves the entry's sibling imports
+   against it, and an entry loaded without it fails to find the modules
+   sitting beside it. -}
+argsFor : Row -> String -> <IO> List String
+argsFor r path =
+  let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
+  match r.shape
+    DirFixture _ _ => prefix ++ [path, dirname path]
+    _ => prefix ++ [path]
+
+{- | A row that spawns the oracle ONCE over the whole corpus and cuts its
+   delimited stdout back apart — the property no per-fixture row can state,
+   since a leak between two fixtures needs both of them in one heap. -}
+batchedRow : Row -> List String -> <Exec "_", FileRead "_", IO> List String
+batchedRow r paths =
+  let args = map (p => "\{medakaRoot}/\{p}") r.prelude ++ paths
+  match boundedVerb "\{medakaRoot}/\{r.oracle}" args
+    Err e => ["\{r.corpus}: could not spawn \{r.oracle}: \{e}"]
+    Ok (code, out, err) =>
+      let all = chompNewlines (stripUnitAutoPrint out)
+      let section =
+        p => chompNewlines (batchSection "===SELFHOST-FIX=== " p all)
+      let values = somes (map (p => valueFailure r p (section p)) paths)
+      match processFailure r.oracle r.corpus code err
+        Some m => m :: values
+        None => values
+
+gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow _ r = match entriesOf r
+  Err e => structural r e
+  Ok paths =>
+    let found = length paths
+    let counted =
+      if found == r.fixtures then
+        []
+      else
+        [
+          "expected \{intToString r.fixtures} fixtures, found \{intToString found} — see this row's `fixtures` field",
+        ]
+    let values = if r.batched then batchedRow r paths else perFixture r paths
+    Outcome { gate = r.gate, graded = found, failures = counted ++ values }
+
+rowFailure : Outcome -> Option String
+rowFailure o = match o.failures
+  [] => None
+  fs =>
+    let body = unlines (map (f => "    \{f}") fs)
+    Some
+      "  \{o.gate} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
+
+summarize : Int -> List String -> Expectation
+summarize _ [] = pass
+summarize graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} gate rows failed:\n\{unlines failures}"
+
+test "every eval and Core IR oracle reproduces its corpus's goldens" =
+  sweepUnits rows gradeRow rowFailure summarize
+
+-- # The engine wall on a reached FFI extern
+
+{- | The three probes `diff_compiler_core_ir_modules.sh` carried alongside
+   its corpus loop (#2133). They are not corpus data: their fixtures are
+   three programs written on the spot, two of the three spawns take flags no
+   row has, and one of them spawns `medaka` itself rather than an oracle. So
+   they stay a second test rather than being bent into a `Row`.
+
+   What they pin: a user-declared `<FFI>` extern that is REACHED must stop
+   both engines with the same deliberate message, and the mutable classifier
+   that decides "reached" must be reset between two fixtures sharing one
+   process — an unreachable extern in the first must leave no trace on the
+   second. -}
+ffiReachedSrc : String
+ffiReachedSrc =
+  "extern ffiBlocked : Int -> <FFI> Int\n\nmain = println (ffiBlocked 1)\n"
+
+ffiUnreachableSrc : String
+ffiUnreachableSrc = "extern ffiBlocked : Int -> <FFI> Int\n\nmain = println 7\n"
+
+pureSrc : String
+pureSrc = "main = println 9\n"
+
+-- | Both halves of the wall diagnostic: what was rejected, and why this
+-- engine cannot serve it.
+wallNeedles : List String
+wallNeedles = [
+  "user-declared FFI extern",
+  "tree-walking interpreter cannot make a foreign C call",
+]
+
+{- | Runs `cmd` under `MEDAKA_STRICT=1`, so a `medaka` built from older
+   source than the tree fails loudly rather than answering.
+
+   `boundedInTree` already pins `MEDAKA_ROOT` and `MEDAKA_EMITTER` and takes
+   no further variables, so the strict flag is layered as a second `env`
+   rather than by hand-rolling the whole environment again. -}
+strictly : String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+strictly cmd args =
+  boundedInTree spawnTimeoutSeconds "env" (["MEDAKA_STRICT=1", cmd] ++ args)
+
+-- | `None` when `cmd` stopped at the wall: exit 1, with both needles in its
+-- output. Stdout and stderr are read together, since which stream the
+-- diagnostic lands on is not what this asserts.
+expectWall : String -> String -> List String -> <Exec "_", IO> Option String
+expectWall label cmd args = match strictly cmd args
+  Err e => Some "\{label}: could not spawn \{cmd}: \{e}"
+  Ok (code, out, err) =>
+    let text = out ++ err
+    if code /= 1 then
+      Some "\{label}: expected exit 1, got \{intToString code}: \{debug text}"
+    else match filter (n => not (contains n text)) wallNeedles
+      [] => None
+      missing :: _ =>
+        Some "\{label}: wall message lacks \{debug missing}: \{debug text}"
+
+{- | `None` when one process, handed an unreachable-extern program and then a
+   pure one, prints the pure one's value and exits clean.
+
+   A classifier that recorded the first program's extern and never cleared it
+   would reject the second, which declares no extern at all. -}
+expectStateReset : String -> <Exec "_", IO> Option String
+expectStateReset scratch =
+  let args = [
+    "\{medakaRoot}/\{coreMod}",
+    "--ffi-reset-control",
+    "\{scratch}/ffi_unreachable.mdk",
+    "\{scratch}/pure.mdk",
+    scratch,
+  ]
+  match strictly "\{medakaRoot}/\{coreIrModulesOracle}" args
+    Err e => Some "ffi-state-reset-same-process: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      let text = chompNewlines (out ++ err)
+      if code == 0 && text == "9" then
+        None
+      else
+        Some
+          "ffi-state-reset-same-process: expected exit 0 printing \"9\", got exit \{intToString code}: \{debug text}"
+
+writeAll : List (String, String) -> <FileWrite "_"> Result String Unit
+writeAll [] = Ok ()
+writeAll ((path, src) :: rest) = match writeFile path src
+  Err e => Err "\{path}: \{e}"
+  Ok () => writeAll rest
+
+{- | A directory of this test's own, under the process's scratch root.
+
+   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
+   per process and every test in this module is handed the same path —
+   including after the sweep above has removed it, which is what `sweepUnits`
+   does when it finishes. A second test in one module therefore has to make
+   its directory rather than assume one; `mkdirAll` remakes the root on the
+   way and is not an error when it is still there. -}
+ffiScratch : <Exec "_", FileWrite "_"> Result String String
+ffiScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/ffi"
+    map (() => dir) (mkdirAll dir)
+
+ffiEngineWall : <Exec "_", FileWrite "_", IO> Expectation
+ffiEngineWall = match ffiScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let reached = "\{scratch}/ffi_reached.mdk"
+    let written = writeAll [
+      (reached, ffiReachedSrc),
+      ("\{scratch}/ffi_unreachable.mdk", ffiUnreachableSrc),
+      ("\{scratch}/pure.mdk", pureSrc),
+    ]
+    match written
+      Err e => fail "could not write the FFI fixtures: \{e}"
+      Ok () =>
+        let findings = somes [
+          expectWall "ffi-engine-wall-ast" medakaBin ["run", reached],
+          expectWall
+            "ffi-engine-wall-core-ir"
+            "\{medakaRoot}/\{coreIrModulesOracle}"
+            ["\{medakaRoot}/\{coreMod}", reached, scratch],
+          expectStateReset scratch,
+        ]
+        let _ = runVerb "rm" ["-rf", scratch]
+        match findings
+          [] => pass
+          fs =>
+            fail
+              "\{intToString (length fs)} FFI engine-wall findings:\n\{unlines fs}"
+
+test "a reached FFI extern walls off both engines, and resets between fixtures" =
+  ffiEngineWall
