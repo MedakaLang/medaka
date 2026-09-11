@@ -1,5 +1,5 @@
 # META
-source_lines=1233
+source_lines=1235
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -10,11 +10,13 @@ stages=DESUGAR,MARK
 -- max_tests draws.  On the first failing draw, greedily shrink the
 -- counterexample and report it.
 --
--- The RNG lives in eval.mdk's externs (`randomInt`/…), a self-contained LCG
--- (NOT the reference's SplitMix64 nor OCaml's `Random`); a PASSING prop's output
--- (`OK (100 tests)`) is RNG-independent, so it matches `medaka test`.  A FAILING
--- prop's shrunk counterexample is RNG-dependent and diverges across all three
--- runners — see the report in test/diff_compiler_test.sh.
+-- Generation draws from this module's own private LCG (`rngNextLocal`), seeded
+-- by `--seed`/`seedPropRng` and isolated from the program under test — it does
+-- NOT go through eval.mdk's `randomInt`/`randomBool` externs, which use a
+-- separate SplitMix64 generator for the program's own `random*` calls.  A
+-- PASSING prop's output (`OK (100 tests)`) is RNG-independent, so it matches
+-- `medaka test`.  A FAILING prop's shrunk counterexample is RNG-dependent and
+-- diverges across all three runners — see the report in test/diff_compiler_test.sh.
 
 import frontend.ast.{
   Decl,
