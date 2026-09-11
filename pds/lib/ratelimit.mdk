@@ -36,6 +36,7 @@
    shared bucket, because it hands an attacker every other client's bucket
    to evict. -}
 
+import http.{Header, headerName, headerValue}
 import list.{head, reverse}
 import map.{Map(..), get, set}
 import string.{
@@ -50,7 +51,6 @@ import string.{
   trim,
   utf8ByteLength,
 }
-import lib.http.{Header, headerName, headerValue}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   maxConnectionsPerWindow,
@@ -294,7 +294,7 @@ isXffHeader h = headerName h == "x-forwarded-for"
 {- | Repeated `X-Forwarded-For` fields are one chain, not a contradiction: a
    reverse proxy APPENDS its view of the peer rather than replacing what it
    received, and RFC 7230 makes a repeated field equivalent to one
-   comma-joined field in field order, which `lib.http` preserves. So the last
+   comma-joined field in field order, which `http` preserves. So the last
    hop of the LAST field is the hop the nearest trusted proxy wrote, exactly
    as it is within a single field.
 

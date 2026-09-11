@@ -10,35 +10,33 @@
    one router and one `Store` transition for every path a client can ask for.
    Everything else outside `/xrpc/` remains a 404. -}
 
-import json.{Json, Json(..), jObject, stringify}
-import string.{fromUtf8, toUtf8}
-import lib.http.{
+import http.{
+  checkJsonBodyBytes,
+  checkRawBodyBytes,
+  checkTextBodyBytes,
   DecodedBody(..),
-  Header,
-  MediaType,
-  QueryParam,
-  Request,
-  Response,
   decodeRequestBody,
+  Header,
   headerName,
   headerValue,
   makeHeader,
   makeResponse,
+  MediaType,
   mediaTypeSubtype,
   mediaTypeType,
   parseMediaType,
   parseTargetQuery,
+  QueryParam,
+  Request,
   requestBody,
   requestBodyLength,
   requestHeaders,
   requestMethod,
+  Response,
 }
+import json.{Json, Json(..), jObject, stringify}
+import string.{fromUtf8, toUtf8}
 import lib.nsid.{sameNsidIdentity, validateNsid}
-import lib.resource_limits.{
-  checkJsonBodyBytes,
-  checkRawBodyBytes,
-  checkTextBodyBytes,
-}
 
 public export data InputPolicy = NoInput | JsonInput | TextInput | RawInput
 

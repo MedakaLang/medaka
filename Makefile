@@ -147,6 +147,11 @@ test: medaka
 	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_test.sh's explicit
 	## file list, so without this line nothing would run them.
 	./medaka test stdlib/base32.mdk
+	## stdlib/http.mdk's resource-limit examples. Its own module is outside
+	## every entry's import closure ([W-MODULE-BLIND]) and is not in
+	## test/diff_compiler_test.sh's explicit file list, so without this line
+	## nothing would run them.
+	./medaka test stdlib/http.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 

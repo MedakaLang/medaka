@@ -45,8 +45,10 @@ and `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
   exports any such identifier; `opaque_field_scalar.sh` derives and enforces
   that deployment boundary while observing the allowed test-only consumers
   under `pds/test/`.
-- `pds/lib/http.mdk` and `pds/lib/xrpc.mdk` — bounded HTTP/1.1 framing,
-  deterministic responses, body/query policy, and structural XRPC routing.
+- `stdlib/http.mdk` and `pds/lib/xrpc.mdk` — bounded HTTP/1.1 framing,
+  deterministic responses, body/query policy, and structural XRPC routing. The
+  framer and its framing/body ceilings are stdlib; only the XRPC routing on top
+  of them is atproto-specific.
 - `pds/lib/store.mdk` and `pds/lib/server_core.mdk` — opaque immutable state
   (blob blocks plus the configured account's repository — see "The Store is
   secret-bearing") plus configured pure composition from request bytes to
@@ -316,7 +318,7 @@ row requires its Wasm prerequisites, so a missing third engine is a failure.
 
 ## Phase 2 protocol core (#2192)
 
-`pds/lib/http.mdk` accepts one complete buffered HTTP/1.1 request with strict
+`stdlib/http.mdk` accepts one complete buffered HTTP/1.1 request with strict
 duplicate-aware framing and exposes typed malformed versus resource-excess
 failure classes without diagnostic-string inspection. Responses serialize
 deterministically. `pds/lib/xrpc.mdk` turns framed requests into typed query or

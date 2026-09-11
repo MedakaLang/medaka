@@ -3,9 +3,9 @@
    `(state, identity, class, now) -> (state, verdict)` step and the identity
    derivation from `X-Forwarded-For`. -}
 
+import http.{Header, makeHeader}
 import string.{toUtf8}
 import test.{expectAll, expectEqual, expectTrue}
-import lib.http.{Header, makeHeader}
 import lib.resource_limits.{
   maxCreateSessionPerWindow,
   maxRepoExportsPerWindow,

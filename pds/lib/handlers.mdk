@@ -57,6 +57,16 @@
    TID spelling as the record key, which is what a real PDS does with its
    clock and is deterministic here for the same reason. -}
 
+import http.{
+  Header,
+  makeHeader,
+  makeResponse,
+  MediaType,
+  mediaTypeSubtype,
+  mediaTypeType,
+  QueryParam(..),
+  Response,
+}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{filter, last, sort, take}
@@ -65,16 +75,6 @@ import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor, dagCborEncode}
-import lib.http.{
-  Header,
-  MediaType,
-  QueryParam(..),
-  Response,
-  makeHeader,
-  makeResponse,
-  mediaTypeSubtype,
-  mediaTypeType,
-}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.repo.{
   Repo,
@@ -248,7 +248,7 @@ contentTypeHeader value = match makeHeader "content-type" (toUtf8 value)
   Err message => panic "handlers: internal response header error: \{message}"
 
 {- | The success counterpart of `xrpcErrorResponse`: 200 with an exact body and
-   one declared media type. `lib.http`'s serializer owns all framing. -}
+   one declared media type. `http`'s serializer owns all framing. -}
 bytesOkResponse : String -> Array Int -> Response
 bytesOkResponse contentType body =
   match makeResponse 200 "OK" [contentTypeHeader contentType] body

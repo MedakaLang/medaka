@@ -2,7 +2,7 @@
    HTTP/1.1 lifecycle around the pure protocol core.
 
    Nothing here knows what a request means. Bytes arrive from a socket, are
-   framed by `lib.http`'s `scanRequestBoundaryWithin` and by nothing else, are
+   framed by `http`'s `scanRequestBoundaryWithin` and by nothing else, are
    handed whole to `lib.server_core`'s `handleBytes`, and the response bytes it
    returns go back out. The successor `Store` is persisted through `shell.persist`
    and `shell.blobfile` and then published into the one `Ref Store` every
@@ -18,8 +18,24 @@
    the pure core can express. The one bound this module does NOT own is the
    per-request byte ceiling: `scanRequestBoundaryWithin` already refuses a buffer
    past `maxHttpRequestBytes`, so re-checking it here would be a second,
-   divergent answer to a question `lib.http` has already settled. -}
+   divergent answer to a question `http` has already settled. -}
 
+import http.{
+  Header,
+  HttpFrame(..),
+  HttpParseFailure,
+  HttpScan,
+  httpScanInHeaders,
+  httpScanStart,
+  makeHeader,
+  parseRequestAt,
+  Request,
+  requestHeaders,
+  requestKeepAlive,
+  Response,
+  scanRequestBoundaryWithin,
+  serializeResponse,
+}
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
@@ -28,22 +44,6 @@ import lib.credential.{
   credentialIterations,
   ctEqBytes,
   saltBytes,
-}
-import lib.http.{
-  Header,
-  HttpFrame(..),
-  HttpParseFailure,
-  HttpScan,
-  Request,
-  httpScanInHeaders,
-  httpScanStart,
-  makeHeader,
-  parseRequestAt,
-  requestHeaders,
-  requestKeepAlive,
-  Response,
-  scanRequestBoundaryWithin,
-  serializeResponse,
 }
 import lib.ratelimit.{
   ClientIdentity,
