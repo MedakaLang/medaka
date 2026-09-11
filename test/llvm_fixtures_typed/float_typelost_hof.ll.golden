@@ -221,4 +221,6 @@ entry:
 }
 
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 @mdk_g_compute = global i64 0

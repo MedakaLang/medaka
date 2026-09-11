@@ -223,6 +223,8 @@ decend1:
 }
 
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 @mdk_g_cell = global i64 0
 ; mdk-module program
 @mdk_gs_cell = global i8 0

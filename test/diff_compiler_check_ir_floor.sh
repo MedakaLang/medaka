@@ -132,10 +132,25 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # #2719 (a per-binding solve memo) is the unit that brings it back down — when it
 # lands, re-derive these four DOWN with it rather than leaving the headroom.  The 20%
 # convention is applied to the CI figure, which this gate is graded on.
-CEIL_check="${CHECK_IR_CEIL:-1260000000}"
-CEIL_build="${BUILD_IR_CEIL:-815000000}"
-CEIL_run="${RUN_IR_CEIL:-1335000000}"
-CEIL_test="${TEST_IR_CEIL:-790000000}"
+# RE-DERIVED (S-hold-the-gains, #2848, sprint/emit-less-ir base 7dee7cd49), same method,
+# two back-to-back runs per verb on this box (no CI-runner figure available to this
+# slice, so the local box figure stands in for it, same as the pre-#2705 derivations):
+#
+#   verb    run 1        run 2        spread     CEIL (= measured x1.20, up to 5M)
+#   check   892,675,492  892,671,872  0.0004%    1,075,000,000
+#   build   578,604,169  578,604,816  0.0001%      695,000,000
+#   run     630,247,976  630,248,593  0.0001%      760,000,000
+#   test    563,378,538  563,378,538  0.000%        680,000,000
+#
+# All four fell from the #2705 M2 ceilings above: the sprint's two prior slices
+# (S-dead-tails, dropping the dead `@mdk_nonexhaustive_match` tail on exhaustive
+# switches; S-known-rep-discriminant, testing the cheapest discriminant a ctor roster
+# proves) shrink emitted-IR volume, and the prelude every hello-world pays is part of
+# that same graph. The 20% convention is re-applied to the fresh local measurement.
+CEIL_check="${CHECK_IR_CEIL:-1075000000}"
+CEIL_build="${BUILD_IR_CEIL:-695000000}"
+CEIL_run="${RUN_IR_CEIL:-760000000}"
+CEIL_test="${TEST_IR_CEIL:-680000000}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mdk-checkirfloor.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM

@@ -179,4 +179,6 @@ entry:
   ret i32 0
 }
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 @.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [6 x i8] } { i64 1, i64 5, i64 5, [6 x i8] c"\68\65\6C\6C\6F\00" }
