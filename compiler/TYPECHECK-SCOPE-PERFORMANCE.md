@@ -77,3 +77,26 @@ diagnostic/freshness checks; allocation repetitions were identical. Before recei
 `/tmp/rearch-cache-bypass-measure/baseline-{perf,allocation}`. The after arm here is
 the unmodified compiler, not the bypass experiment. These are allocation
 measurements, not retained-live-heap measurements.
+
+## Scope-store extraction follow-up
+
+Predecessor `433eaa9f7` versus extraction `10334a66d` (running equivalent
+`cc59a3298`), with the same N0–N3 streams and heap. All request checks pass and
+allocation repetitions match. Counts below are marginal request costs, not
+cumulative process totals.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,155,294 | 305,006,651 | 48,585,792 | 48,585,808 |
+| playground | first warm | 24,824,825 | 24,824,704 | 4,566,496 | 4,562,400 |
+| playground | second warm | 24,825,818 | 24,828,386 | 4,570,656 | 4,570,656 |
+| import-list | cold | 538,326,563 | 538,174,636 | 93,144,592 | 93,140,016 |
+| import-list | first warm | 38,164,804 | 38,145,075 | 6,884,272 | 6,867,872 |
+| import-list | second warm | 38,180,543 | 38,192,239 | 6,887,664 | 6,911,872 |
+
+Largest positive instruction delta: +0.0306%; allocated-byte delta: +0.3515%,
+within the existing 25% soft budget. After receipts:
+`/tmp/rearch-scope-store-perf/{instructions,allocation}`; before receipts:
+`/tmp/rearch-cache-bypass-measure/baseline-{perf,allocation}`. Scope lifecycle and
+copy isolation are asserted separately by sibling tests. These measurements do
+not discharge the later finalized-cache retained-memory requirement.

@@ -1199,11 +1199,13 @@ printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
-any_given_scope_guard='      && Scopes.givenVisibleFrom
-        (currentScopeStore ())
-        scope
-        (Scopes.binderScope g.geBinder)'
-if ! grep -Fq "$any_given_scope_guard" "$predicate_slot_src"; then
+# Match the whole condition inside its owning function. Embedded newlines in a
+# grep pattern are alternatives, so a multiline pattern would accept any one
+# surviving argument even if the visibility call itself had been removed.
+any_given_scope_guard='&& Scopes.givenVisibleFrom (currentScopeStore ()) scope (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'
+any_given_scope_body=$(sed -n '/^anyGivenMatches :/,/^isSemanticGivenAnswer :/p' "$predicate_slot_src" \
+  | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
+if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
   echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
   exit 1
 fi
@@ -1321,12 +1323,10 @@ printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
-operator_scope_guard='  | eid == id
-    && Scopes.givenVisibleFrom
-      (currentScopeStore ())
-      useScope
-      (Scopes.binderScope binder) = Some binder'
-if ! grep -Fq "$operator_scope_guard" "$predicate_slot_src"; then
+operator_scope_guard='| eid == id && Scopes.givenVisibleFrom (currentScopeStore ()) useScope (Scopes.binderScope binder) = Some binder'
+operator_scope_body=$(sed -n '/^firstDictForEncl :/,/^activeDictVarOfEncl :/p' "$predicate_slot_src" \
+  | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
+if ! printf '%s\n' "$operator_scope_body" | grep -Fq "$operator_scope_guard"; then
   echo "FAIL: operator route dropped its nominal evidence owner: $operator_scope_guard"
   exit 1
 fi
