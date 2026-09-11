@@ -1,0 +1,18 @@
+-- #2848: the control for the cheap-discriminant work -- a type with THREE OR MORE
+-- constructors of BOTH shapes (nullary and field-carrying).  Nothing about the
+-- roster licenses a cheaper test, so this switch must keep the generic
+-- immediate/boxed branch-and-phi (DiscRep RepMixed) and lower exactly as before.
+-- Every arm is reached, with immediate and boxed scrutinees interleaved.
+data Tok = TEnd | TNum Int | TPair Int Int | TFlag
+
+score : Tok -> Int
+score TEnd = 1
+score (TNum n) = n
+score (TPair a b) = a * b
+score TFlag = 2
+
+total : List Tok -> Int
+total [] = 0
+total (t :: rest) = score t + total rest
+
+main = total [TEnd, TNum 5, TPair 3 4, TFlag, TNum 100, TEnd]

@@ -1,0 +1,9 @@
+-- o2_survivor_census.sh corpus probe (#2521 census-bucketing split): a
+-- probe never called from `main`. Nothing in the module reaches it, so -O2's
+-- GlobalDCE removes the definition outright — the OPTIMAL outcome the
+-- ELIMINATED bucket exists to distinguish from a genuine build/tooling
+-- failure. Demonstrates the ELIMINATED row.
+probe : Int -> Int -> Int
+probe a b = a + b
+
+main = println 0

@@ -216,18 +216,13 @@ end15:
 define i64 @mdk_elem(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
+  %t2 = icmp eq i64 %arg2, 562949953421315
   %t3 = and i64 %arg2, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %discimm2, label %discbox2
-discimm2:
-  %t5 = ashr i64 %arg2, 1
-  br label %disccont2
-discbox2:
-  %t6 = inttoptr i64 %arg2 to ptr
+  %t4 = icmp eq i64 %t3, 0
+  %t5 = inttoptr i64 %arg2 to ptr
+  %t6 = select i1 %t4, ptr %t5, ptr @mdk_disc_none
   %t7 = load i64, ptr %t6
-  br label %disccont2
-disccont2:
-  %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
+  %t8 = select i1 %t2, i64 281474976710657, i64 %t7
   %t9 = icmp eq i64 %t8, 281474976710657
   br i1 %t9, label %conyes10, label %connext10
 conyes10:
@@ -283,5 +278,7 @@ entry:
   ret i64 %t3
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]

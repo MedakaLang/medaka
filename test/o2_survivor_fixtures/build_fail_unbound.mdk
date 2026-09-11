@@ -1,0 +1,8 @@
+-- o2_survivor_census.sh corpus probe (#2521 census-bucketing split): an
+-- unbound reference so `medaka build` fails outright, before -O2 ever runs.
+-- Demonstrates the BUILD_FAILED row (a genuine infra/tooling failure, not an
+-- elimination).
+probe : Int -> Int
+probe a = a + undefinedThing
+
+main = println (probe 3)

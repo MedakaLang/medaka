@@ -37,6 +37,7 @@ import frontend.parse_cache.{notePreludeParse}
 import driver.diagnostics.{
   Diag,
   SevWarning,
+  emitDiagExitCode,
   mkDiag,
   parseErrDiag,
   ppDiag,
@@ -523,6 +524,15 @@ keepIrOutcome path contents = match writeFile path contents
 -- outPath  = output binary path
 -- keepIrCli = True iff `--keep-ir` was passed on the command line (OR'd with
 --             MEDAKA_KEEP_IR inside effectiveKeepIr)
+-- quietEmitStderr = True on the `--json` route only.  The child's stderr is the
+--             build's diagnostics, and on that route this process has ALREADY
+--             rendered the same diagnostics into the stdout envelope through
+--             `checkJsonFileParts`, so forwarding the human copy reports one
+--             diagnostic twice on two channels — which no other verb does, and
+--             which docs/ops/CLI-CONFORMANCE.md exemplar X9 pins as empty stderr
+--             for the `--json` route.  This suppresses the DUPLICATE only: a
+--             failing emit still carries the child's text, through the report's
+--             `status` and into `cjBuildFailedJson`, so nothing goes silent.
 export
 runBuild : String ->
   String ->
@@ -531,13 +541,14 @@ runBuild : String ->
   String ->
   String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuild root medaka cc TNative inputAbs outPath keepIrCli =
+runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr =
   let _ = sweepStaleTempDirs ()
-  runBuildNative root medaka cc inputAbs outPath keepIrCli
-runBuild root medaka cc TWasm inputAbs outPath keepIrCli =
+  runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr
+runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr =
   let _ = sweepStaleTempDirs ()
-  runBuildWasm root medaka inputAbs outPath keepIrCli
+  runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr
 
 -- ---- native (LLVM/clang) target — the original path ----
 -- Wrapper: allocate the per-invocation scratch dir (see makeTempDir), run the
@@ -550,14 +561,25 @@ runBuildNative : String ->
   String ->
   String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNative root medaka cc inputAbs outPath keepIrCli = match makeTempDir ()
-  Err e =>
-    buildErr "error: could not create a scratch directory for the build: \{e}"
-  Ok tmpDir =>
-    let res = runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli
-    let _ = cleanupTempDir tmpDir
-    res
+runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr =
+  match makeTempDir ()
+    Err e =>
+      buildErr "error: could not create a scratch directory for the build: \{e}"
+    Ok tmpDir =>
+      let res =
+        runBuildNativeIn
+          root
+          medaka
+          cc
+          inputAbs
+          outPath
+          tmpDir
+          keepIrCli
+          quietEmitStderr
+      let _ = cleanupTempDir tmpDir
+      res
 
 -- Thin compatibility wrapper: every existing caller wants the plain P0-13 root
 -- set with nothing extra appended. Delegates to runBuildNativeRoots with
@@ -569,9 +591,20 @@ runBuildNativeIn : String ->
   String ->
   String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
-  runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli [] False
+runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr =
+  runBuildNativeRoots
+    root
+    medaka
+    cc
+    inputAbs
+    outPath
+    tmpDir
+    keepIrCli
+    []
+    False
+    quietEmitStderr
 
 -- Probe the C compiler up front — the native analogue of probeWasmTools
 -- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
@@ -608,15 +641,13 @@ clangMissingError cc = match runCommand "uname" ["-s"]
 -- must still see the real project's import roots.
 --
 -- `strictEmit` arms `MEDAKA_STRICT=1` for the EMIT SUBPROCESS ONLY (#2679).
--- The emitter's own elaboration is warn-first by ruling (#2089,
--- `emitElaborationGate` in `compiler/entries/entry_support.mdk`): it prints the
--- type errors it recorded and emits IR anyway.  For `medaka build` that is the
--- ruling and stays.  For a SYNTHESIZED probe — the entry the native test and
--- doctest runners write into a `mktemp -d` and immediately execute — warning is
--- not an option: nobody reads the child's stderr, the probe links, runs, and
--- reports `pass` for a module that does not typecheck.  Arming it here scopes
--- the flip to those generated entries and leaves every user-facing build on the
--- warn-first path.
+-- What it bought is now the default: under ruling 3 shape (a) the child's
+-- elaboration gate is HARD for every build, so a probe that does not typecheck
+-- can no longer link, run and report `pass` — which is the property #2679 asked
+-- for and `diff_compiler_test_native` pins. What the flag still selects in the
+-- child is the OTHER thing `MEDAKA_STRICT` governs, the source-fingerprint
+-- staleness check ([B-STALENESS]), which it turns from a warning into exit 1 for
+-- these synthesized entries.
 export
 runBuildNativeRoots : String ->
   String ->
@@ -627,8 +658,9 @@ runBuildNativeRoots : String ->
   Bool ->
   List String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr =
   match probeClang cc
     None => buildErr (clangMissingError cc)
     Some _ =>
@@ -642,6 +674,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
         keepIrCli
         extraRoots
         strictEmit
+        quietEmitStderr
 
 -- The original body, unmoved — split out only so the up-front probe above
 -- doesn't force reindenting this whole function under a match arm.
@@ -654,8 +687,9 @@ runBuildNativeRootsGo : String ->
   Bool ->
   List String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -708,9 +742,16 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   match emitRes
     Err e => buildErr "error: could not run emitter (\{emitProg}): \{e}"
     Ok (code, irRaw, emitErr) =>
-      if code /= 0 then
+      if code == emitDiagExitCode then
+        buildErr (dropTrailingNewline emitErr)
+      else if code /= 0 then
         buildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
       else
+        -- The child is the build's only typecheck, so its warnings go out here,
+        -- on stderr, before clang runs and before the `built <in> -> <out>` line
+        -- — the order `check` uses and a build log reads in.  Not on the `--json`
+        -- route, where the envelope already carries them; see `quietEmitStderr`.
+        let _ = forwardEmitterStderr quietEmitStderr emitErr
         let ir = stripTrailingUnit irRaw
         if stringLength ir == 0 then
           buildErr
@@ -757,7 +798,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 keepIrOutcome (outPath ++ ".ll") ir
               else
                 (None, [])
-            withBuildNotes keptIr emitErr keepNotes res
+            withBuildNotes keptIr "" keepNotes res
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
 -- Structurally identical to runBuildNative: run the emitter (here the WasmGC
@@ -796,14 +837,24 @@ runBuildWasm : String ->
   String ->
   String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildWasm root medaka inputAbs outPath keepIrCli = match makeTempDir ()
-  Err e =>
-    buildErr "error: could not create a scratch directory for the build: \{e}"
-  Ok tmpDir =>
-    let res = runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli
-    let _ = cleanupTempDir tmpDir
-    res
+runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr =
+  match makeTempDir ()
+    Err e =>
+      buildErr "error: could not create a scratch directory for the build: \{e}"
+    Ok tmpDir =>
+      let res =
+        runBuildWasmIn
+          root
+          medaka
+          inputAbs
+          outPath
+          tmpDir
+          keepIrCli
+          quietEmitStderr
+      let _ = cleanupTempDir tmpDir
+      res
 
 runBuildWasmIn : String ->
   String ->
@@ -811,8 +862,9 @@ runBuildWasmIn : String ->
   String ->
   String ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
+runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
   let compilerDir = joinPath root "compiler"
@@ -843,10 +895,13 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
       Err e =>
         buildErr "error: could not run wasm emitter (\{wasmEmitter}): \{e}"
       Ok (code, watRaw, emitErr) =>
-        if code /= 0 then
+        if code == emitDiagExitCode then
+          buildErr (dropTrailingNewline emitErr)
+        else if code /= 0 then
           buildErr
             "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
         else
+          let _ = forwardEmitterStderr quietEmitStderr emitErr
           let wat = stripTrailingUnit watRaw
           if stringLength wat == 0 then
             buildErr
@@ -863,7 +918,27 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
                   keepIrOutcome (outPath ++ ".wat") wat
                 else
                   (None, [])
-              withBuildNotes keptIr emitErr keepNotes res
+              withBuildNotes keptIr "" keepNotes res
+
+-- The emitter child writes the build's diagnostics to its own stderr.  On a
+-- clean emit that stream carries the WARNINGS `medaka build` prints, so it must
+-- reach the user's stderr rather than ride into `ppBuildReport`'s stdout line —
+-- routed, never suppressed (docs/ops/CLI-CONFORMANCE.md).  A failing emit keeps
+-- carrying its text in the report's `status` instead, where the CLI's own error
+-- path prints it.
+-- The CLI's error path adds its own newline, and the child's stream already
+-- ends in one; without this every build diagnostic gained a trailing blank line.
+dropTrailingNewline : String -> String
+dropTrailingNewline s =
+  let n = stringLength s
+  if n > 0 && stringSlice (n - 1) n s == "\n" then
+    stringSlice 0 (n - 1) s
+  else
+    s
+
+forwardEmitterStderr : Bool -> String -> <IO> Unit
+forwardEmitterStderr quiet err =
+  if quiet || stringLength err == 0 then () else ePutStr err
 
 -- Probe `wasm-tools` up front (the wasm analogue of the implicit clang
 -- requirement).  `wasm-tools --version` exits 0 iff the tool is reachable.

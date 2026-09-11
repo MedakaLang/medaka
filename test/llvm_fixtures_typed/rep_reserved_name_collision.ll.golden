@@ -1,0 +1,514 @@
+; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.
+; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.
+declare ptr @mdk_alloc(i64)
+declare ptr @mdk_alloc_atomic(i64)
+declare i64 @__mdk_apply(i64, i64, ptr)
+declare void @mdk_oob() noreturn
+declare void @mdk_oob_at(i64) noreturn
+declare void @mdk_slice_oob(i64, i64) noreturn
+declare void @mdk_cyclic_value(ptr) noreturn
+declare void @mdk_div_zero() noreturn
+declare void @mdk_mod_zero() noreturn
+declare void @mdk_nonexhaustive_match() noreturn
+declare void @mdk_dispatch_no_impl() noreturn
+declare void @mdk_dispatch_ambiguous() noreturn
+declare void @mdk_let_refute() noreturn
+declare void @mdk_print_int(i64)
+declare void @mdk_print_bool(i64)
+declare void @mdk_print_float(double)
+declare i64 @mdk_num_add(i64, i64)
+declare i64 @mdk_num_sub(i64, i64)
+declare i64 @mdk_num_mul(i64, i64)
+declare i64 @mdk_num_div(i64, i64)
+declare i64 @mdk_num_mod(i64, i64)
+declare void @mdk_print_num(i64)
+declare i64 @mdk_str_lit(ptr, i64)
+declare void @mdk_print_str(i64)
+declare i64 @mdk_int_to_string(i64)
+declare i64 @mdk_float_to_string(double)
+declare i64 @llvm.fptosi.sat.i64.f64(double)
+declare double @llvm.arithmetic.fence.f64(double)
+declare i64 @mdk_string_concat(i64)
+declare i64 @mdk_string_append(i64, i64)
+declare i64 @mdk_string_eq(i64, i64)
+declare i64 @mdk_value_eq(i64, i64)
+declare i64 @mdk_list_append(i64, i64)
+declare i64 @mdk_list_index(i64, i64)
+declare i64 @mdk_list_slice(i64, i64, i64)
+declare i64 @mdk_append(i64, i64)
+declare void @mdk_putstr(i64)
+declare void @mdk_putstrln(i64)
+declare void @mdk_eputstr(i64)
+declare void @mdk_eputstrln(i64)
+declare void @mdk_flushstdout(i64)
+declare void @mdk_print_unit()
+declare void @mdk_panic(i64)
+declare void @mdk_exit(i64)
+declare i64 @mdk_array_make(i64, i64)
+declare i64 @mdk_array_copy(i64)
+declare void @mdk_array_blit(i64, i64, i64, i64, i64)
+declare void @mdk_array_fill(i64, i64)
+declare i64 @mdk_array_from_list(i64)
+declare void @mdk_print_char(i64)
+declare i64 @mdk_char_to_str(i64)
+declare i64 @mdk_string_to_chars(i64)
+declare i64 @mdk_string_from_chars(i64)
+declare i64 @mdk_string_to_utf8_bytes(i64)
+declare i64 @mdk_string_from_utf8_bytes(i64)
+declare double @mdk_float_rem(double, double)
+declare double @mdk_sqrt(double)
+declare double @mdk_cbrt(double)
+declare double @mdk_exp(double)
+declare double @mdk_log(double)
+declare double @mdk_log2(double)
+declare double @mdk_log10(double)
+declare double @mdk_sin(double)
+declare double @mdk_cos(double)
+declare double @mdk_tan(double)
+declare double @mdk_asin(double)
+declare double @mdk_acos(double)
+declare double @mdk_atan(double)
+declare double @mdk_sinh(double)
+declare double @mdk_cosh(double)
+declare double @mdk_tanh(double)
+declare double @mdk_floor(double)
+declare double @mdk_ceil(double)
+declare double @mdk_round(double)
+declare double @mdk_trunc(double)
+declare double @mdk_pow(double, double)
+declare double @mdk_atan2(double, double)
+declare double @mdk_hypot(double, double)
+declare i64 @mdk_string_slice(i64, i64, i64)
+declare i64 @mdk_char_is_alpha(i64)
+declare i64 @mdk_char_is_space(i64)
+declare i64 @mdk_char_is_upper(i64)
+declare i64 @mdk_char_is_lower(i64)
+declare i64 @mdk_char_is_punct(i64)
+declare i64 @mdk_char_to_upper(i64)
+declare i64 @mdk_char_to_lower(i64)
+declare i64 @mdk_string_to_upper(i64)
+declare i64 @mdk_string_to_lower(i64)
+declare i64 @mdk_char_from_code(i64)
+declare i64 @mdk_string_to_float(i64)
+declare i64 @mdk_string_index_of(i64, i64)
+declare i64 @mdk_string_compare(i64, i64)
+declare i64 @mdk_string_compare_raw(i64, i64)
+declare i64 @mdk_value_cmp_raw(i64, i64)
+declare i64 @mdk_value_lt(i64, i64)
+declare i64 @mdk_value_le(i64, i64)
+declare i64 @mdk_value_gt(i64, i64)
+declare i64 @mdk_value_ge(i64, i64)
+declare void @mdk_set_args(i32, ptr)
+declare i64 @mdk_args(i64)
+declare i64 @mdk_get_env(i64)
+declare i64 @mdk_read_file(i64)
+declare i64 @mdk_read_file_bytes(i64)
+declare i64 @mdk_write_file(i64, i64)
+declare i64 @mdk_write_file_bytes(i64, i64)
+declare i64 @mdk_write_file_mode(i64, i64, i64)
+declare i64 @mdk_append_file(i64, i64)
+declare i64 @mdk_file_exists(i64)
+declare i64 @mdk_canonicalize_path(i64)
+declare i64 @mdk_list_dir(i64)
+declare i64 @mdk_read_line(i64)
+declare i64 @mdk_read_line_opt(i64)
+declare i64 @mdk_read_all(i64)
+declare i64 @mdk_read_exactly(i64)
+declare i64 @mdk_make_dir(i64)
+declare i64 @mdk_remove_file(i64)
+declare i64 @mdk_rename(i64, i64)
+declare i64 @mdk_remove_dir(i64)
+declare i64 @mdk_stat_file(i64)
+declare i64 @mdk_file_mode(i64)
+declare i64 @mdk_run_command(i64, i64)
+declare i64 @mdk_executable_path(i64)
+declare i64 @mdk_build_fingerprint(i64)
+declare i64 @mdk_build_commit(i64)
+declare i64 @mdk_build_date(i64)
+declare i64 @mdk_net_resolve(i64)
+declare i64 @mdk_net_tcp_connect(i64, i64)
+declare i64 @mdk_net_tcp_listen(i64, i64)
+declare i64 @mdk_net_listen_port(i64)
+declare i64 @mdk_net_tcp_accept(i64)
+declare i64 @mdk_net_send(i64, i64)
+declare i64 @mdk_net_recv(i64, i64)
+declare i64 @mdk_net_shutdown(i64, i64)
+declare i64 @mdk_net_close(i64)
+declare i64 @mdk_net_set_timeout(i64, i64)
+declare i64 @mdk_io_poll(i64, i64, i64)
+declare i64 @mdk_net_set_nonblock(i64, i64)
+declare i64 @mdk_net_try_accept(i64)
+declare i64 @mdk_net_try_recv(i64, i64)
+declare i64 @mdk_net_try_send(i64, i64)
+declare i64 @mdk_net_try_send_from(i64, i64, i64)
+declare void @mdk_set_seed(i64)
+declare i64 @mdk_random_int(i64, i64)
+declare i64 @mdk_random_bool(i64)
+declare i64 @mdk_random_float(i64)
+declare i64 @mdk_random_char(i64)
+declare i64 @mdk_os_entropy_bytes(i64)
+declare i64 @mdk_hash_int(i64)
+declare i64 @mdk_bit_and(i64, i64)
+declare i64 @mdk_bit_or(i64, i64)
+declare i64 @mdk_bit_xor(i64, i64)
+declare i64 @mdk_shift_left(i64, i64)
+declare i64 @mdk_shift_right(i64, i64)
+declare i64 @mdk_bit_not(i64)
+declare i64 @mdk_hash_char(i64)
+declare i64 @mdk_hash_bool(i64)
+declare i64 @mdk_hash_float(double)
+declare i64 @mdk_hash_string(i64)
+declare i64 @mdk_int_bits_to_float(i64)
+declare i64 @mdk_bytes_to_float64(i64, i64)
+declare i64 @mdk_float_to_bytes64(double)
+declare i64 @mdk_debug_string_lit(i64)
+declare i64 @mdk_debug_char_lit(i64)
+declare i64 @mdk_wall_time_sec(i64)
+declare i64 @mdk_monotonic_sec(i64)
+declare void @mdk_sleep_ms(i64)
+declare i64 @mdk_alloc_bytes(i64)
+declare void @mdk_stash_run_stdout(i64)
+declare void @mdk_enable_run_stdout_flush(i64)
+
+; mdk-module program
+define i32 @mdk_program_main(i32 %argc, ptr %argv) {
+entry:
+  call void @mdk_set_args(i32 %argc, ptr %argv)
+  %t0 = call i64 @mdk_isNil(i64 562949953421315)
+  %t1 = call i64 @mdk_isNil(i64 3)
+  %t2 = ashr i64 %t1, 1
+  %t3 = ashr i64 21, 1
+  %t4 = mul i64 %t2, %t3
+  %t5 = shl i64 %t4, 1
+  %t6 = or i64 %t5, 1
+  %t7 = ashr i64 %t0, 1
+  %t8 = ashr i64 %t6, 1
+  %t9 = add i64 %t7, %t8
+  %t10 = shl i64 %t9, 1
+  %t11 = or i64 %t10, 1
+  %t12 = call ptr @mdk_alloc(i64 16)
+  store i64 3, ptr %t12
+  %t13 = getelementptr i8, ptr %t12, i64 8
+  store i64 ptrtoint (ptr @.strc.program.0 to i64), ptr %t13
+  %t14 = ptrtoint ptr %t12 to i64
+  %t15 = call i64 @mdk_isNil(i64 %t14)
+  %t16 = ashr i64 %t15, 1
+  %t17 = ashr i64 201, 1
+  %t18 = mul i64 %t16, %t17
+  %t19 = shl i64 %t18, 1
+  %t20 = or i64 %t19, 1
+  %t21 = ashr i64 %t11, 1
+  %t22 = ashr i64 %t20, 1
+  %t23 = add i64 %t21, %t22
+  %t24 = shl i64 %t23, 1
+  %t25 = or i64 %t24, 1
+  %t26 = call i64 @mdk_render(i64 562949953421315)
+  %t27 = ashr i64 %t26, 1
+  %t28 = ashr i64 2001, 1
+  %t29 = mul i64 %t27, %t28
+  %t30 = shl i64 %t29, 1
+  %t31 = or i64 %t30, 1
+  %t32 = ashr i64 %t25, 1
+  %t33 = ashr i64 %t31, 1
+  %t34 = add i64 %t32, %t33
+  %t35 = shl i64 %t34, 1
+  %t36 = or i64 %t35, 1
+  %t37 = call i64 @mdk_render(i64 3)
+  %t38 = ashr i64 %t37, 1
+  %t39 = ashr i64 20001, 1
+  %t40 = mul i64 %t38, %t39
+  %t41 = shl i64 %t40, 1
+  %t42 = or i64 %t41, 1
+  %t43 = ashr i64 %t36, 1
+  %t44 = ashr i64 %t42, 1
+  %t45 = add i64 %t43, %t44
+  %t46 = shl i64 %t45, 1
+  %t47 = or i64 %t46, 1
+  %t48 = call i64 @mdk_render(i64 5)
+  %t49 = ashr i64 %t48, 1
+  %t50 = ashr i64 200001, 1
+  %t51 = mul i64 %t49, %t50
+  %t52 = shl i64 %t51, 1
+  %t53 = or i64 %t52, 1
+  %t54 = ashr i64 %t47, 1
+  %t55 = ashr i64 %t53, 1
+  %t56 = add i64 %t54, %t55
+  %t57 = shl i64 %t56, 1
+  %t58 = or i64 %t57, 1
+  %t59 = call ptr @mdk_alloc(i64 16)
+  store i64 3, ptr %t59
+  %t60 = getelementptr i8, ptr %t59, i64 8
+  store i64 ptrtoint (ptr @.strc.program.1 to i64), ptr %t60
+  %t61 = ptrtoint ptr %t59 to i64
+  %t62 = call i64 @mdk_render(i64 %t61)
+  %t63 = ashr i64 %t62, 1
+  %t64 = ashr i64 2000001, 1
+  %t65 = mul i64 %t63, %t64
+  %t66 = shl i64 %t65, 1
+  %t67 = or i64 %t66, 1
+  %t68 = ashr i64 %t58, 1
+  %t69 = ashr i64 %t67, 1
+  %t70 = add i64 %t68, %t69
+  %t71 = shl i64 %t70, 1
+  %t72 = or i64 %t71, 1
+  %t73 = call ptr @mdk_alloc(i64 24)
+  store i64 4, ptr %t73
+  %t74 = getelementptr i8, ptr %t73, i64 8
+  store i64 562949953421315, ptr %t74
+  %t75 = getelementptr i8, ptr %t73, i64 16
+  store i64 3, ptr %t75
+  %t76 = ptrtoint ptr %t73 to i64
+  %t77 = call i64 @mdk_render(i64 %t76)
+  %t78 = ashr i64 %t77, 1
+  %t79 = ashr i64 20000001, 1
+  %t80 = mul i64 %t78, %t79
+  %t81 = shl i64 %t80, 1
+  %t82 = or i64 %t81, 1
+  %t83 = ashr i64 %t72, 1
+  %t84 = ashr i64 %t82, 1
+  %t85 = add i64 %t83, %t84
+  %t86 = shl i64 %t85, 1
+  %t87 = or i64 %t86, 1
+  %t88 = call i64 @mdk_sumL(i64 ptrtoint (ptr @mdk_dc.program.4 to i64))
+  %t89 = ashr i64 %t88, 1
+  %t90 = ashr i64 200000001, 1
+  %t91 = mul i64 %t89, %t90
+  %t92 = shl i64 %t91, 1
+  %t93 = or i64 %t92, 1
+  %t94 = ashr i64 %t87, 1
+  %t95 = ashr i64 %t93, 1
+  %t96 = add i64 %t94, %t95
+  %t97 = shl i64 %t96, 1
+  %t98 = or i64 %t97, 1
+  %t99 = ashr i64 %t98, 1
+  call void @mdk_print_int(i64 %t99)
+  ret i32 0
+}
+; mdk-module program
+define i64 @mdk_isNil(i64 %arg0) {
+entry:
+  %t0 = alloca i64
+  %t4 = and i64 %arg0, 1
+  %t5 = icmp eq i64 %t4, 1
+  br i1 %t5, label %discimm3, label %discbox3
+discimm3:
+  %t6 = ashr i64 %arg0, 1
+  br label %disccont3
+discbox3:
+  %t7 = inttoptr i64 %arg0 to ptr
+  %t8 = load i64, ptr %t7
+  br label %disccont3
+disccont3:
+  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
+  %t10 = icmp eq i64 %t9, 281474976710657
+  br i1 %t10, label %conyes11, label %connext11
+conyes11:
+  store i64 3, ptr %t0
+  br label %decend1
+connext11:
+  br label %clause2
+clause2:
+  store i64 5, ptr %t0
+  br label %decend1
+decend1:
+  %t12 = load i64, ptr %t0
+  ret i64 %t12
+}
+
+; mdk-module program
+define i64 @mdk_render(i64 %arg0) {
+entry:
+  %t0 = alloca i64
+  %t4 = and i64 %arg0, 1
+  %t5 = icmp eq i64 %t4, 1
+  br i1 %t5, label %discimm3, label %discbox3
+discimm3:
+  %t6 = ashr i64 %arg0, 1
+  br label %disccont3
+discbox3:
+  %t7 = inttoptr i64 %arg0 to ptr
+  %t8 = load i64, ptr %t7
+  br label %disccont3
+disccont3:
+  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
+  %t10 = icmp eq i64 %t9, 281474976710657
+  br i1 %t10, label %conyes11, label %connext11
+conyes11:
+  store i64 1, ptr %t0
+  br label %decend1
+connext11:
+  br label %clause2
+clause2:
+  %t14 = and i64 %arg0, 1
+  %t15 = icmp eq i64 %t14, 1
+  br i1 %t15, label %discimm13, label %discbox13
+discimm13:
+  %t16 = ashr i64 %arg0, 1
+  br label %disccont13
+discbox13:
+  %t17 = inttoptr i64 %arg0 to ptr
+  %t18 = load i64, ptr %t17
+  br label %disccont13
+disccont13:
+  %t19 = phi i64 [ %t16, %discimm13 ], [ %t18, %discbox13 ]
+  %t20 = icmp eq i64 %t19, 1
+  br i1 %t20, label %conyes21, label %connext21
+conyes21:
+  store i64 3, ptr %t0
+  br label %decend1
+connext21:
+  br label %clause12
+clause12:
+  %t24 = and i64 %arg0, 1
+  %t25 = icmp eq i64 %t24, 1
+  br i1 %t25, label %discimm23, label %discbox23
+discimm23:
+  %t26 = ashr i64 %arg0, 1
+  br label %disccont23
+discbox23:
+  %t27 = inttoptr i64 %arg0 to ptr
+  %t28 = load i64, ptr %t27
+  br label %disccont23
+disccont23:
+  %t29 = phi i64 [ %t26, %discimm23 ], [ %t28, %discbox23 ]
+  %t30 = icmp eq i64 %t29, 2
+  br i1 %t30, label %conyes31, label %connext31
+conyes31:
+  store i64 5, ptr %t0
+  br label %decend1
+connext31:
+  br label %clause22
+clause22:
+  %t34 = and i64 %arg0, 1
+  %t35 = icmp eq i64 %t34, 1
+  br i1 %t35, label %discimm33, label %discbox33
+discimm33:
+  %t36 = ashr i64 %arg0, 1
+  br label %disccont33
+discbox33:
+  %t37 = inttoptr i64 %arg0 to ptr
+  %t38 = load i64, ptr %t37
+  br label %disccont33
+disccont33:
+  %t39 = phi i64 [ %t36, %discimm33 ], [ %t38, %discbox33 ]
+  %t40 = icmp eq i64 %t39, 3
+  br i1 %t40, label %conyes41, label %connext41
+conyes41:
+  %t42 = inttoptr i64 %arg0 to ptr
+  %t43 = getelementptr i8, ptr %t42, i64 8
+  %t44 = load i64, ptr %t43
+  %t45 = inttoptr i64 %arg0 to ptr
+  %t46 = getelementptr i8, ptr %t45, i64 8
+  %t47 = load i64, ptr %t46
+  store i64 7, ptr %t0
+  br label %decend1
+connext41:
+  br label %clause32
+clause32:
+  %t49 = and i64 %arg0, 1
+  %t50 = icmp eq i64 %t49, 1
+  br i1 %t50, label %discimm48, label %discbox48
+discimm48:
+  %t51 = ashr i64 %arg0, 1
+  br label %disccont48
+discbox48:
+  %t52 = inttoptr i64 %arg0 to ptr
+  %t53 = load i64, ptr %t52
+  br label %disccont48
+disccont48:
+  %t54 = phi i64 [ %t51, %discimm48 ], [ %t53, %discbox48 ]
+  %t55 = icmp eq i64 %t54, 4
+  br i1 %t55, label %conyes56, label %connext56
+conyes56:
+  %t57 = inttoptr i64 %arg0 to ptr
+  %t58 = getelementptr i8, ptr %t57, i64 8
+  %t59 = load i64, ptr %t58
+  %t60 = inttoptr i64 %arg0 to ptr
+  %t61 = getelementptr i8, ptr %t60, i64 16
+  %t62 = load i64, ptr %t61
+  %t63 = inttoptr i64 %arg0 to ptr
+  %t64 = getelementptr i8, ptr %t63, i64 8
+  %t65 = load i64, ptr %t64
+  %t66 = inttoptr i64 %arg0 to ptr
+  %t67 = getelementptr i8, ptr %t66, i64 16
+  %t68 = load i64, ptr %t67
+  store i64 9, ptr %t0
+  br label %decend1
+connext56:
+  call void @mdk_nonexhaustive_match()
+  unreachable
+decend1:
+  %t69 = load i64, ptr %t0
+  ret i64 %t69
+}
+
+; mdk-module program
+define i64 @mdk_sumL(i64 %arg0) {
+entry:
+  %t0 = alloca i64
+  %t4 = and i64 %arg0, 1
+  %t5 = icmp eq i64 %t4, 1
+  br i1 %t5, label %discimm3, label %discbox3
+discimm3:
+  %t6 = ashr i64 %arg0, 1
+  br label %disccont3
+discbox3:
+  %t7 = inttoptr i64 %arg0 to ptr
+  %t8 = load i64, ptr %t7
+  br label %disccont3
+disccont3:
+  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
+  %t10 = icmp eq i64 %t9, 281474976710657
+  br i1 %t10, label %conyes11, label %connext11
+conyes11:
+  store i64 1, ptr %t0
+  br label %decend1
+connext11:
+  br label %clause2
+clause2:
+  %t12 = icmp eq i64 %arg0, 562949953421315
+  %t13 = and i64 %arg0, 1
+  %t14 = icmp eq i64 %t13, 0
+  %t15 = inttoptr i64 %arg0 to ptr
+  %t16 = select i1 %t14, ptr %t15, ptr @mdk_disc_none
+  %t17 = load i64, ptr %t16
+  %t18 = select i1 %t12, i64 281474976710657, i64 %t17
+  %t19 = icmp eq i64 %t18, 281474976710656
+  br i1 %t19, label %conyes20, label %connext20
+conyes20:
+  %t21 = inttoptr i64 %arg0 to ptr
+  %t22 = getelementptr i8, ptr %t21, i64 8
+  %t23 = load i64, ptr %t22
+  %t24 = inttoptr i64 %arg0 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 16
+  %t26 = load i64, ptr %t25
+  %t27 = inttoptr i64 %arg0 to ptr
+  %t28 = getelementptr i8, ptr %t27, i64 8
+  %t29 = load i64, ptr %t28
+  %t30 = inttoptr i64 %arg0 to ptr
+  %t31 = getelementptr i8, ptr %t30, i64 16
+  %t32 = load i64, ptr %t31
+  %t33 = call i64 @mdk_sumL(i64 %t32)
+  %t34 = call i64 @mdk_num_add(i64 %t29, i64 %t33)
+  store i64 %t34, ptr %t0
+  br label %decend1
+connext20:
+  call void @mdk_nonexhaustive_match()
+  unreachable
+decend1:
+  %t35 = load i64, ptr %t0
+  ret i64 %t35
+}
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
+@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\78\00" }
+; mdk-module program
+@.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\79\00" }
+; mdk-module program
+@mdk_dc.program.2 = internal constant [3 x i64] [i64 281474976710656, i64 9, i64 562949953421315]
+; mdk-module program
+@mdk_dc.program.3 = internal constant [3 x i64] [i64 281474976710656, i64 5, i64 ptrtoint (ptr @mdk_dc.program.2 to i64)]
+; mdk-module program
+@mdk_dc.program.4 = internal constant [3 x i64] [i64 281474976710656, i64 3, i64 ptrtoint (ptr @mdk_dc.program.3 to i64)]

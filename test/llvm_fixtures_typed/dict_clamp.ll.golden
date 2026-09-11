@@ -212,6 +212,8 @@ entry:
 }
 
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]
 ; mdk-module program
 define i64 @mdk_lam.program.1(i64 %clos, i64 %arg0) {

@@ -1,0 +1,49 @@
+-- #2848 REGRESSION PIN (EXHAUSTIVENESS, sibling of rep_reserved_name_collision,
+-- which pins the REPRESENTATION question on the same collision).
+-- The reserved constructor spellings are exempt from module mangling
+-- (compiler/backend/private_mangle.mdk), so a USER type declaring `Nil`/`Cons`
+-- reaches the emitter under the bare names.  A roster lookup that answered the
+-- RESERVED table first would read `partial`'s covered set ["Nil","Cons"] as the
+-- complete two-constructor LIST roster, call the switch exhaustive, and drop the
+-- `@mdk_nonexhaustive_match` abort from a match that `Text` really can fall out
+-- of -- a silent wrong value on `build` where `run` aborts.
+--
+-- Every match here is written in `match` EXPRESSION form on purpose: the
+-- exhaustiveness elision lives in the CTSwitch lowering, and multi-CLAUSE
+-- function definitions lower to a per-clause test chain that never reaches it.
+data Doc = Nil | Cons Int Int | Text Int
+
+data Plain = Alpha | Beta Int Int | Gamma Int
+
+-- covers EXACTLY the two reserved spellings and nothing else: the shape whose
+-- abort tail must survive.  Applied only to values it covers, so its value is
+-- well-defined; the IR golden is what pins the tail's presence.
+partial : Doc -> Int
+partial d = match d
+  Nil => 1
+  Cons a b => 2 + a + b
+
+-- fully exhaustive with `Nil` FIRST: the roster must be resolved from SOME
+-- covered name rather than the head alone, or this keeps a never-taken abort
+-- tail purely because of arm order.
+full : Doc -> Int
+full d = match d
+  Nil => 10
+  Cons a b => 20 + a + b
+  Text n => 30 + n
+
+-- the same exhaustive shape on a type whose names collide with nothing: the
+-- control that says what `full`'s golden is supposed to look like.
+plain : Plain -> Int
+plain p = match p
+  Alpha => 10
+  Beta a b => 20 + a + b
+  Gamma n => 30 + n
+
+main =
+  partial Nil
+    + partial (Cons 1 2) * 10
+    + full Nil * 100
+    + full (Cons 3 4) * 1000
+    + full (Text 5) * 100000
+    + plain Alpha * 10000000

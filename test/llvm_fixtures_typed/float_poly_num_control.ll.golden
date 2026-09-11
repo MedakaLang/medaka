@@ -184,3 +184,6 @@ entry:
   %t0 = call i64 @mdk_num_add(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
