@@ -51,10 +51,11 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads the
    corpus, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{Agreement(..), checkRunBuild, verdictOf}
+import compiler_cli_test_support.{
+  Agreement(..), binaryRanClean, checkRunBuild, sweepUnits, verdictOf
+}
 import fs.{fixtureDirs}
-import io.{runVerb}
-import list.{somes, sort}
+import list.{sort}
 import path.{basename}
 import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unlines}
 import test.{Expectation, fail, pass}
@@ -1072,14 +1073,14 @@ gradeValue AllExact pinned a =
   if a.runCode /= 0 || a.buildCode /= 0 then
     "n/a"
   else if a.runOut == a.binOut && a.runOut == pinned then
-    "ok"
+    if binaryRanClean a then "ok" else "BINPANIC"
   else
     "DIFF"
 gradeValue BuildExact pinned a =
   if a.buildCode /= 0 then
     "n/a"
   else if a.binOut == pinned then
-    "ok"
+    if binaryRanClean a then "ok" else "BINPANIC"
   else
     "WRONG"
 
@@ -1163,13 +1164,7 @@ summarize graded failures =
     "\{intToString (length failures)} of \{intToString graded} cells disagree with their pinned verdict or value:\n\{unlines failures}"
 
 sweep : <Exec "_", FileRead "_", IO> Expectation
-sweep = match scratchDir
-  Err e => fail "could not make a scratch directory: \{e}"
-  Ok scratch =>
-    let graded = map (gradeOne scratch) table
-    let failures = somes (map rowFailure graded)
-    let _ = runVerb "rm" ["-rf", scratch]
-    summarize (length graded) failures
+sweep = sweepUnits table gradeOne rowFailure summarize
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/order-swapped.mdk`), which grades that directory a second way;
@@ -1204,6 +1199,46 @@ test "every fixture in the corpus is wired into the table" = match corpusUnits
     orphans =>
       fail
         "present in \{corpus} but not wired into this gate's table: \{debug orphans}"
+
+{- | `binaryRanClean`'s False branch has no vehicle anywhere in the tree:
+   every `table` row that reaches it would need to grade `"BINPANIC"`
+   forever, which `gradePasses`'s allowlist can never accept. This test runs
+   the two static fixtures in `test/binpanic_fixtures/` (a real binary that
+   panics after printing, and its clean counterpart) through the same
+   `checkRunBuild` the sweep uses, and asserts both of `binaryRanClean`'s
+   branches directly, outside the "every cell grades ok" sweep.
+
+   Declared BEFORE the heavy sweep below deliberately, not just
+   alphabetically, and deliberately leaves its `scratchDir` unremoved: an
+   `rm -rf` of one scratch directory followed later, in the same process, by
+   a *fresh* `scratchDir` and a real link can leave that later link unable
+   to see its own freshly-minted directory (`ld: cannot open output file …
+   No such file or directory`) — reproduced standalone with as few as two
+   prior builds, and specifically tied to the `rm -rf` step, not to spawn
+   volume. Both hazards (declaration order, no cleanup) keep this test and
+   the sweep after it clear of that artifact; it is a process-lifetime
+   spawn defect, not one in this test or in `binaryRanClean`. -}
+test "binaryRanClean distinguishes a panicking binary from a clean one" =
+  let binpanicCorpus = "\{medakaRoot}/test/binpanic_fixtures"
+  match scratchDir
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      match checkRunBuild "\{binpanicCorpus}/panics.mdk" "\{scratch}/panics.bin"
+        Err e => fail "checkRunBuild panics.mdk: \{e}"
+        Ok panicAgree =>
+          match (checkRunBuild
+            "\{binpanicCorpus}/clean.mdk"
+            "\{scratch}/clean.bin")
+            Err e => fail "checkRunBuild clean.mdk: \{e}"
+            Ok cleanAgree =>
+              if binaryRanClean panicAgree then
+                fail
+                  "expected binaryRanClean False for a panicking binary, got True (binCode=\{intToString panicAgree.binCode} binErr=\{debug panicAgree.binErr})"
+              else if not (binaryRanClean cleanAgree) then
+                fail
+                  "expected binaryRanClean True for a clean binary, got False (binCode=\{intToString cleanAgree.binCode} binErr=\{debug cleanAgree.binErr})"
+              else
+                pass
 
 -- `warnChecks` is looked up by `find (warnCheckFor r.entry) warnChecks` while
 -- sweeping `table` (`gradeOne`), so an entry naming no row is never visited

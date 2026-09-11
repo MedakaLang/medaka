@@ -1,0 +1,8 @@
+-- F2 (fix round, FIX-binpanic-fixture-v2): a real binary that prints known
+-- stdout and then panics, for `binaryRanClean`'s False branch. Not wired
+-- into any corpus's verdict table -- see the standalone test in
+-- diff_compiler_shadow_semantics_test.mdk that reads this file directly.
+main : <IO> Unit
+main =
+  let _ = println (7 : Int)
+  panic "boom"

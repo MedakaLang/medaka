@@ -5,8 +5,9 @@
    corpus. -}
 
 import io.{getEnvOr, runVerb}
+import list.{somes}
 import string.{contains, lines, startsWith, toLower}
-import test_process.{boundedVerb, boundedVerbSeconds, medakaBin}
+import test_process.{boundedVerb, boundedVerbSeconds, medakaBin, scratchDir}
 import test.{
   Expectation,
   expectLineContainsAll,
@@ -194,3 +195,35 @@ checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
               binOut = binOut,
               binErr = binErr,
             }
+
+-- | True when the built binary itself proves nothing pinned wrong: it
+-- exited 0 and its stderr carries no runtime panic. Only meaningful after
+-- the caller has already checked `buildCode == 0` — `checkRunBuild`
+-- synthesizes a zero-exit/empty-string `bin*` triple when the build itself
+-- failed, so this predicate reads as trivially true in that case.
+export
+binaryRanClean : Agreement -> Bool
+binaryRanClean a = a.binCode == 0 && not (contains "E-PANIC" a.binErr)
+
+-- # Sweeping a corpus
+
+{- | Grades every `unit` through `gradeOne` in a fresh scratch directory,
+   collects each row's failure message via `rowFailure`, then hands the
+   whole batch to `summarize`.
+
+   The two agreement gates share this exact outer dance and differ only in
+   their row shape and `summarize`'s wording, so those stay the caller's own
+   `gradeOne`/`rowFailure`/`summarize` rather than being unified here. -}
+export
+sweepUnits : List unit ->
+  (String -> unit -> <Exec "_", FileRead "_", IO> row) ->
+  (row -> Option String) ->
+  (Int -> List String -> Expectation) ->
+  <Exec "_", FileRead "_", IO> Expectation
+sweepUnits units gradeOne rowFailure summarize = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let graded = map (gradeOne scratch) units
+    let failures = somes (map rowFailure graded)
+    let _ = runVerb "rm" ["-rf", scratch]
+    summarize (length graded) failures
