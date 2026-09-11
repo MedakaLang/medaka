@@ -1812,21 +1812,6 @@ corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_core_ir_typed"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_core_ir_typed.sh"
-oracles = ["core_ir_typed_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_typed.sh"]
-corpus = ["test/eval_typed_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_diagnostics"
 area = "types"
 shard = "gates_2"
@@ -2022,21 +2007,6 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
-name = "diff_compiler_eval_dict_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_dict_batch.sh"
-oracles = ["eval_dict_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_dict_batch.sh"]
-corpus = ["test/eval_dict_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_eval_json"
 area = "eval"
 shard = "gates_2"
@@ -2091,25 +2061,9 @@ cost = "cheap"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_eval_test.mdk"
-oracles = ["core_ir_main", "core_ir_prelude_main", "core_ir_roundtrip_main", "core_ir_run_main", "eval_list_batch", "eval_main", "eval_prelude_batch", "eval_prelude_main", "eval_run_batch", "eval_run_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/compiler_cli_test_support.mdk", "test/diff_compiler_eval_test.mdk"]
-corpus = ["test/diff_fixtures", "test/eval_fixtures", "test/eval_list_fixtures", "test/eval_prelude_fixtures"]
-toolchain = []
-
-
-[[gate]]
-name = "diff_compiler_eval_typed_batch"
-area = "eval"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_eval_typed_batch.sh"
-oracles = ["eval_typed_batch"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_eval_typed_batch.sh"]
-corpus = ["test/eval_typed_fixtures"]
+oracles = ["core_ir_main", "core_ir_prelude_main", "core_ir_roundtrip_main", "core_ir_run_main", "core_ir_typed_main", "eval_dict_batch", "eval_list_batch", "eval_main", "eval_prelude_batch", "eval_prelude_main", "eval_run_batch", "eval_run_main", "eval_typed_batch"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_eval_test.mdk"]
+corpus = ["test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_fixtures", "test/eval_list_fixtures", "test/eval_prelude_fixtures", "test/eval_typed_fixtures"]
 toolchain = []
 
 [[gate]]

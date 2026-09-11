@@ -1,7 +1,7 @@
 {- | The untyped eval and Core IR value sweeps over the four prelude-free
    fixture corpora, as one runner over a table of rows.
 
-   Twelve shell gates used to do this, one script per (oracle, corpus) pair,
+   Fifteen shell gates used to do this, one script per (oracle, corpus) pair,
    each a near-copy of the same loop: spawn an oracle over every fixture in a
    corpus, strip the native runtime's trailing `()`, and diff the result
    against a committed golden. The pairs are the data; the loop is not. The
@@ -21,6 +21,9 @@
    | `eval_run_main` | `diff_fixtures` | the shared `medaka run` corpus |
    | `eval_run_batch` | `diff_fixtures` | batched == per-process |
    | `core_ir_run_main` | `diff_fixtures` | the same through Core IR |
+   | `core_ir_typed_main` | `eval_typed_fixtures` | Core IR's typed `CMethod`/`RKey` dispatch |
+   | `eval_typed_batch` | `eval_typed_fixtures` | batched == per-process |
+   | `eval_dict_batch` | `eval_dict_fixtures` | batched == per-process, dict-passed dispatch |
 
    A `_batch` row is NOT a duplicate of the per-fixture row above it. It
    spawns ONE process over the whole corpus and cuts the delimited stdout
@@ -29,7 +32,7 @@
    (corpus, golden) would silently delete that property, so the two stay
    separate rows with separate spawns.
 
-   Three things this runner does that the twelve scripts did not:
+   Three things this runner does that the retired scripts did not:
 
    - It reads the oracle's EXIT CODE and STDERR, not stdout alone. The
      scripts piped stderr to `/dev/null` and never looked at `$?`, which is
@@ -97,6 +100,9 @@ coreMod = "stdlib/core.mdk"
 
 listMod : String
 listMod = "stdlib/list.mdk"
+
+runtimeMod : String
+runtimeMod = "stdlib/runtime.mdk"
 
 rows : List Row
 rows = [
@@ -207,6 +213,33 @@ rows = [
     goldens = EvalSection,
     batched = False,
     fixtures = 54,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_typed",
+    oracle = "test/bin/core_ir_typed_main",
+    corpus = "test/eval_typed_fixtures",
+    prelude = [runtimeMod, coreMod],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 12,
+  },
+  Row {
+    gate = "diff_compiler_eval_typed_batch",
+    oracle = "test/bin/eval_typed_batch",
+    corpus = "test/eval_typed_fixtures",
+    prelude = [runtimeMod, coreMod],
+    goldens = EvalSuffix,
+    batched = True,
+    fixtures = 12,
+  },
+  Row {
+    gate = "diff_compiler_eval_dict_batch",
+    oracle = "test/bin/eval_dict_batch",
+    corpus = "test/eval_dict_fixtures",
+    prelude = [runtimeMod, coreMod],
+    goldens = EvalSuffix,
+    batched = True,
+    fixtures = 29,
   },
 ]
 
