@@ -158,6 +158,6 @@ stdlib/list.mdk:1190: Testing "concat of group recovers the list" ... OK (100 te
 Testing "span prefix all satisfies, and concatenates back" ... OK (100 tests)
 stdlib/list.mdk:1197: Testing "takeWhile ++ dropWhile recovers the list" ... OK (100 tests)
 Testing "break equals span of the negated predicate" ... OK (100 tests)
-Testing "range length is max 0 (hi - lo)" ... OK (100 tests)
+stdlib/list.mdk:1205: Testing "range length is max 0 (hi - lo)" ... OK (100 tests)
 
 15 passed, 0 failed
