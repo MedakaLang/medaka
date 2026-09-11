@@ -193,15 +193,25 @@ Until a stable frozen instance identity is specified and tested, instance-bearin
 summaries are non-cacheable. Do not hash a current ordinal and call it stable.
 
 While the return vertical is enabled, unconditionally force misses in all three
-existing typechecking memo layers: core, module-chain and prelude-preamble. A memo
-hit cannot tell us whether skipped inference would produce the migrated family;
-no post-hit classification can authorize replay. Current hits
-skip inference and restore already-drained snapshots, so there are no retained
-wanteds from which merely recomputing the output could recover the judgment.
-Do not replay a mutable snapshot and then attempt to repair its evidence. The
+existing typechecking memo layers: core, module-chain and prelude-preamble, and
+disable their stores. Core and chain hits cannot tell us whether skipped inference
+would produce the migrated family; no post-hit classification can authorize replay.
+They restore already-drained snapshots, so there are no retained wanteds from which
+merely recomputing the output could recover the judgment. Do not replay a mutable
+snapshot and then attempt to repair its evidence.
+
+Prelude-preamble has a different ownership defect: it does not restore a run bundle
+or itself skip inference, but `ppEnvAcc.daImpls.iaEnv` contains `ImplRow` values with
+request-local `InstRef`s. An otherwise immutable declaration payload is not a frozen
+instance summary. A later package-7 split may retain proven pure preamble fields
+while rebuilding/reminting its impl accumulator, under a separately verified contract.
+The [cache audit](https://github.com/MedakaLang/medaka/issues/2549#issuecomment-5639671213)
+records this distinction; it does not authorize an unchanged-preamble exemption. The
 September 10 owner ruling requires replacement of all three layers as families
-migrate; there is no prelude exemption. This bypass has a measured cost and package
-7 owns its deletion. Caching resumes only through immutable summaries/templates
+migrate; there is no prelude exemption. Measure the bypass's cold/warm instruction
+and allocation cost before enabling the vertical, and report any breach of the
+existing approximately 25% soft instruction-count budget. Package 7 owns its deletion.
+Caching resumes only through immutable summaries/templates
 whose freeze/thaw and graph-sensitive keys satisfy this section.
 
 ## Implementation slices and checks
