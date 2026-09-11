@@ -29,14 +29,19 @@ import hex as Hex
 import lib.event_log_record.{EventLogEntry(..)}
 import lib.sync_event.{syncErrorFrame, syncInfoFrame}
 import lib.websocket.{
+  AssembleEvent(..),
+  Assembly,
   DecodeResult(..),
   Direction(..),
   Frame(..),
   Opcode(..),
+  assembleFrame,
   closeFrame,
   decodeFrame,
   encodeServerFrame,
   handshakeResponseBytes,
+  isControl,
+  parseClosePayload,
 }
 import net.{Connection}
 import net_async as A
@@ -64,6 +69,23 @@ subscriptionPollInterval = millis 250
 maxClientFrameBytes : Int
 maxClientFrameBytes = 1024
 
+{- | The largest MESSAGE this server will reassemble out of a subscriber's
+   fragments.
+
+   `maxClientFrameBytes` bounds one frame on the wire; it bounds nothing
+   about a message, because RFC 6455 §5.4 lets a peer send a message as
+   however many continuation frames it likes and only the last one says so.
+   Without a cumulative bound, a peer that never sets `fin` grows this
+   connection's chunk list until the process dies — each frame individually
+   legal, the total unbounded.
+
+   Eight frames' worth. A subscriber has nothing to say to this server
+   (`ClientStep` below), so no real client reaches even one frame; the
+   allowance exists because §5.4 requires a server to be ABLE to receive a
+   fragmented message correctly, not to accept an arbitrarily large one. -}
+maxClientMessageBytes : Int
+maxClientMessageBytes = 8 * maxClientFrameBytes
+
 -- | Bytes asked for per read from a subscriber. Its traffic is control frames,
 -- so this is a ceiling that is never reached, not a buffer that is filled.
 clientReadChunkBytes : Int
@@ -90,6 +112,12 @@ normalCloseCode = 1000
 
 protocolCloseCode : Int
 protocolCloseCode = 1002
+
+-- RFC 6455 §7.4.1 again: the code for a message this server will not hold,
+-- which is what a subscriber past `maxClientMessageBytes` has asked it to.
+-- `decodeFrame` answers the same code for a single oversized FRAME.
+messageTooBigCloseCode : Int
+messageTooBigCloseCode = 1009
 
 {- | Serve one admitted subscription until the peer closes, a write fails, or
    the log cannot be read.
@@ -158,7 +186,7 @@ gradeCursor : String ->
   Int ->
   Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
 gradeCursor dir budget conn None pending newest =
-  tailFrom dir budget conn newest pending
+  tailFrom dir budget conn newest noReassembly pending
 gradeCursor dir budget conn (Some wanted) pending newest =
   if wanted > newest then
     refuseFuture budget conn wanted newest
@@ -227,7 +255,7 @@ replayThenTail dir budget conn wanted pending replay = defer
   delivered <- sendEntries budget conn wanted replay
   match delivered
     Err message => deferPure (Err message)
-    Ok lastSeq => tailFrom dir budget conn lastSeq pending
+    Ok lastSeq => tailFrom dir budget conn lastSeq noReassembly pending
 
 {- | Send each entry's stored frame and answer the sequence number the
    subscriber has now been delivered.
@@ -293,53 +321,61 @@ tailFrom : String ->
   Duration ->
   Connection ->
   Int ->
+  Reassembly ->
   Array Int ->
   Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
-tailFrom dir budget conn lastSeq buffered = match clientStep buffered
-  ClientFailed code => sendClose budget conn code
-  ClientClosed => sendClose budget conn normalCloseCode
-  ClientReply reply rest => defer
-    sent <- A.sendAllWithin budget conn reply
-    match sent
-      Err message => deferPure (Err message)
-      Ok () => tailFrom dir budget conn lastSeq rest
-  ClientNeedMore rest => defer
-    received <- A.recvWithin subscriptionPollInterval conn clientReadChunkBytes
-    match received
-      Ok bytes =>
-        if arrayLength bytes == 0 then
-          deferPure (Ok ())
-        else
-          tailFrom dir budget conn lastSeq (rest ++ bytes)
-      Err message =>
-        if message == pollTimedOut then
-          pollLog dir budget conn lastSeq rest
-        else
-          deferPure (Err message)
+tailFrom dir budget conn lastSeq pending buffered =
+  let step = clientStep pending buffered
+  match step
+    ClientFailed code => sendClose budget conn code
+    ClientClosed code => sendClose budget conn code
+    ClientReply next reply rest => defer
+      sent <- A.sendAllWithin budget conn reply
+      match sent
+        Err message => deferPure (Err message)
+        Ok () => tailFrom dir budget conn lastSeq next rest
+    ClientNeedMore next rest => defer
+      received <- A.recvWithin
+        subscriptionPollInterval
+        conn
+        clientReadChunkBytes
+      match received
+        Ok bytes =>
+          if arrayLength bytes == 0 then
+            deferPure (Ok ())
+          else
+            tailFrom dir budget conn lastSeq next (rest ++ bytes)
+        Err message =>
+          if message == pollTimedOut then
+            pollLog dir budget conn lastSeq next rest
+          else
+            deferPure (Err message)
 
 pollLog : String ->
   Duration ->
   Connection ->
   Int ->
+  Reassembly ->
   Array Int ->
   Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
-pollLog dir budget conn lastSeq buffered = defer
+pollLog dir budget conn lastSeq pending buffered = defer
   last <- liftIO (u => eventLogLast dir)
   match last
     Err message => deferPure (Err message)
     Ok promoted =>
       if newestSeq promoted <= lastSeq then
-        tailFrom dir budget conn lastSeq buffered
+        tailFrom dir budget conn lastSeq pending buffered
       else
-        deliverNew dir budget conn lastSeq buffered
+        deliverNew dir budget conn lastSeq pending buffered
 
 deliverNew : String ->
   Duration ->
   Connection ->
   Int ->
+  Reassembly ->
   Array Int ->
   Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
-deliverNew dir budget conn lastSeq buffered = defer
+deliverNew dir budget conn lastSeq pending buffered = defer
   fresh <- liftIO (u => eventLogRead dir lastSeq)
   match fresh
     Err message => deferPure (Err message)
@@ -347,33 +383,90 @@ deliverNew dir budget conn lastSeq buffered = defer
       delivered <- sendEntries budget conn lastSeq entries
       match delivered
         Err message => deferPure (Err message)
-        Ok nextSeq => tailFrom dir budget conn nextSeq buffered
+        Ok nextSeq => tailFrom dir budget conn nextSeq pending buffered
 
 {- | What the bytes a subscriber has sent so far mean, one frame at a time.
 
    Pure, and deliberately separate from the loop above: deciding what a frame
    is has nothing to do with when a socket is ready, and `lib.websocket` has
-   already decided it. A subscriber's data frames are IGNORED rather than
+   already decided it. A subscriber's data MESSAGES are IGNORED rather than
    refused — the lexicon gives a subscriber nothing to say, and closing a
-   connection over a frame that means nothing would be this server inventing a
-   rule RFC 6455 does not state. -}
+   connection over a message that means nothing would be this server inventing
+   a rule RFC 6455 does not state.
+
+   Ignoring a message is not the same as ignoring a frame, which is why
+   `Reassembly` is threaded through the loop: RFC 6455 §5.4's two orderings
+   that are protocol VIOLATIONS — a continuation frame with nothing open, a
+   new data frame while something is — are errors the peer must be told about,
+   and they are only visible to a reader that remembers the frame before. -}
 data ClientStep =
-  | ClientNeedMore (Array Int)
-  | ClientReply (Array Int) (Array Int)
-  | ClientClosed
+  | ClientNeedMore Reassembly (Array Int)
+  | ClientReply Reassembly (Array Int) (Array Int)
+  | ClientClosed Int
   | ClientFailed Int
 
-clientStep : Array Int -> ClientStep
-clientStep buffered =
+{- | How much of a fragmented message is open: what `assembleFrame` handed
+   back for the last frame, and the payload bytes accumulated under it.
+
+   The byte count is carried beside the `Assembly` rather than read out of
+   it because that constructor is deliberately not exported, and because the
+   bound is not `lib.websocket`'s to hold: the pure fold answers what a frame
+   MEANT, while how much reassembly this server is willing to pay for is a
+   resource ceiling and belongs beside the others above. -}
+data Reassembly = Reassembly (Option Assembly) Int
+
+-- | Nothing open: what a connection starts from, and what it returns to
+-- every time a message completes.
+noReassembly : Reassembly
+noReassembly = Reassembly None 0
+
+clientStep : Reassembly -> Array Int -> ClientStep
+clientStep pending buffered =
   match decodeFrame FromClient maxClientFrameBytes buffered 0
-    NeedMore => ClientNeedMore buffered
+    NeedMore => ClientNeedMore pending buffered
     Rejected code _ => ClientFailed (asCloseCode code)
-    Decoded (Frame _ Close _) _ => ClientClosed
-    Decoded (Frame _ Ping payload) consumed =>
-      ClientReply
-        (encodeServerFrame (Frame True Pong payload))
-        (afterFrame buffered consumed)
-    Decoded _ consumed => clientStep (afterFrame buffered consumed)
+    Decoded frame consumed =>
+      clientFrame pending frame (afterFrame buffered consumed)
+
+{- | One decoded frame folded into the reassembly state.
+
+   The cap is charged BEFORE the fold, so a message past it is refused while
+   its bytes are still separate chunks rather than after `assembleFrame` has
+   been asked to concatenate them. A control frame is not charged: RFC 6455
+   §5.5 lets one be interleaved inside a fragmented message, and it is no
+   part of that message. -}
+clientFrame : Reassembly -> Frame -> Array Int -> ClientStep
+clientFrame (Reassembly pending sofar) (Frame fin opcode payload) rest =
+  let grown = if isControl opcode then sofar else sofar + arrayLength payload
+  if grown > maxClientMessageBytes then
+    ClientFailed messageTooBigCloseCode
+  else match assembleFrame pending (Frame fin opcode payload)
+    (_, EventRejected code _) => ClientFailed (asCloseCode code)
+    (_, EventControl control) =>
+      clientControl (Reassembly pending sofar) control rest
+    (next, EventPartial) => clientStep (Reassembly next grown) rest
+    (next, EventMessage _ _) => clientStep (Reassembly next 0) rest
+
+-- A control frame leaves reassembly exactly as it found it, which is why the
+-- state travels through rather than being reset.
+clientControl : Reassembly -> Frame -> Array Int -> ClientStep
+clientControl _ (Frame _ Close payload) _ = ClientClosed (echoCloseCode payload)
+clientControl pending (Frame _ Ping payload) rest =
+  ClientReply pending (encodeServerFrame (Frame True Pong payload)) rest
+clientControl pending _ rest = clientStep pending rest
+
+{- | The status code to close with, given what the peer's Close frame
+   carried.
+
+   RFC 6455 §5.5.1 does not require the code to be echoed, but a peer that
+   said 3001 and is answered 1000 has been told something it never said. A
+   payload that does not parse is the peer breaking §5.5.1 — that is 1002,
+   never the value that failed to parse and never a normal close. -}
+echoCloseCode : Array Int -> Int
+echoCloseCode payload = match parseClosePayload payload
+  Err _ => protocolCloseCode
+  Ok None => normalCloseCode
+  Ok (Some (code, _)) => code
 
 -- `decodeFrame` reports a status code for every rejection; this is the
 -- residual guard for one it could not have produced, so a code that may not
