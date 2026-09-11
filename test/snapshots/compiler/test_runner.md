@@ -1,5 +1,5 @@
 # META
-source_lines=193
+source_lines=195
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -19,6 +19,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{Decl, DAttrib, DExtern, DFunDef, DTest, Expr(..), Loc(..)}
 import frontend.marker.{declRefs, localBoundNames}
+import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
 import support.util.{filterList}
 import tools.doctest.{ExResult(..)}
@@ -31,18 +32,19 @@ hasTests [] = False
 hasTests ((DTest _ _ _) :: _) = True
 hasTests (_ :: rest) = hasTests rest
 
--- Line number of a body expr (peel the transparent ELoc wrapper). An
--- `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
--- comment: "binop levels stay unwrapped") — its left operand's own location
--- recovers the decl's line instead, since both operands of a same-line
--- binop share it.
+-- Line number of a body expr: the first `ELoc` in a pre-order walk, or 0 when
+-- the subtree carries none.  A shallow peel is not enough — a `test`/`prop`
+-- body headed by `let`, `match`, `if` or a lambda is NOT itself `ELoc`-wrapped
+-- (nor is an `EBinOp`; parser.mdk, `stripLoc1`'s comment: "binop levels stay
+-- unwrapped"), so the line has to come from the first located sub-expression.
+-- The deep walk is `resolve`'s `firstExprLoc` rather than a sixth private
+-- fork of it (ast.mdk, "Loc plumbing": the Expr walkers stay per-judgment, but
+-- this IS that judgment).
+export
 exprLine : Expr -> Int
-exprLine (ELoc (Loc _ l _ _ _) _) = l
-exprLine (EApp f _) = exprLine f
-exprLine (EAnnot e _) = exprLine e
-exprLine (EHeadAnnot e _) = exprLine e
-exprLine (EBinOp _ a _ _) = exprLine a
-exprLine _ = 0
+exprLine e = match firstExprLoc e
+  Some (Loc _ l _ _ _) => l
+  None => 0
 
 -- Each `test "…" = body` as (name, line, body), in source order.
 export
@@ -198,6 +200,7 @@ closureOver graph seen (w :: work)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DAttrib" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DTest" false) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
@@ -206,13 +209,8 @@ closureOver graph seen (w :: work)
 (DFunDef false "hasTests" ((PList)) (EVar "False"))
 (DFunDef false "hasTests" ((PCons (PCon "DTest" PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "hasTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasTests") (EVar "rest")))
-(DTypeSig false "exprLine" (TyFun (TyCon "Expr") (TyCon "Int")))
-(DFunDef false "exprLine" ((PCon "ELoc" (PCon "Loc" PWild (PVar "l") PWild PWild PWild) PWild)) (EVar "l"))
-(DFunDef false "exprLine" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLine") (EVar "f")))
-(DFunDef false "exprLine" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
-(DFunDef false "exprLine" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
-(DFunDef false "exprLine" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "exprLine") (EVar "a")))
-(DFunDef false "exprLine" (PWild) (ELit (LInt 0)))
+(DTypeSig true "exprLine" (TyFun (TyCon "Expr") (TyCon "Int")))
+(DFunDef false "exprLine" ((PVar "e")) (EMatch (EApp (EVar "firstExprLoc") (EVar "e")) (arm (PCon "Some" (PCon "Loc" PWild (PVar "l") PWild PWild PWild)) () (EVar "l")) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig true "collectTests" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr")))))
 (DFunDef false "collectTests" ((PList)) (EListLit))
 (DFunDef false "collectTests" ((PCons (PCon "DTest" PWild (PVar "name") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLine") (EVar "body")) (EVar "body")) (EApp (EVar "collectTests") (EVar "rest"))))
@@ -252,6 +250,7 @@ closureOver graph seen (w :: work)
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DAttrib" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DTest" false) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
@@ -260,13 +259,8 @@ closureOver graph seen (w :: work)
 (DFunDef false "hasTests" ((PList)) (EVar "False"))
 (DFunDef false "hasTests" ((PCons (PCon "DTest" PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "hasTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasTests") (EVar "rest")))
-(DTypeSig false "exprLine" (TyFun (TyCon "Expr") (TyCon "Int")))
-(DFunDef false "exprLine" ((PCon "ELoc" (PCon "Loc" PWild (PVar "l") PWild PWild PWild) PWild)) (EVar "l"))
-(DFunDef false "exprLine" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLine") (EVar "f")))
-(DFunDef false "exprLine" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
-(DFunDef false "exprLine" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
-(DFunDef false "exprLine" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "exprLine") (EVar "a")))
-(DFunDef false "exprLine" (PWild) (ELit (LInt 0)))
+(DTypeSig true "exprLine" (TyFun (TyCon "Expr") (TyCon "Int")))
+(DFunDef false "exprLine" ((PVar "e")) (EMatch (EApp (EVar "firstExprLoc") (EVar "e")) (arm (PCon "Some" (PCon "Loc" PWild (PVar "l") PWild PWild PWild)) () (EVar "l")) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig true "collectTests" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr")))))
 (DFunDef false "collectTests" ((PList)) (EListLit))
 (DFunDef false "collectTests" ((PCons (PCon "DTest" PWild (PVar "name") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLine") (EVar "body")) (EVar "body")) (EApp (EVar "collectTests") (EVar "rest"))))

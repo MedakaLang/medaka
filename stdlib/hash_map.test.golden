@@ -22,8 +22,8 @@ running doctests in stdlib/hash_map.mdk
   ok   stdlib/hash_map.mdk:349: (fromList [(1, 10), (2, 20)])[2]
 
 stdlib/hash_map.mdk: 21/21 passed
-Testing "Display HashMap is layout-independent" ... OK (100 tests)
-Testing "Display HashMap agrees with Eq and lists keys ascending" ... OK (100 tests)
-Testing "Index HashMap agrees with get on present keys" ... OK (100 tests)
+stdlib/hash_map.mdk:364: Testing "Display HashMap is layout-independent" ... OK (100 tests)
+stdlib/hash_map.mdk:371: Testing "Display HashMap agrees with Eq and lists keys ascending" ... OK (100 tests)
+stdlib/hash_map.mdk:386: Testing "Index HashMap agrees with get on present keys" ... OK (100 tests)
 
 3 passed, 0 failed
