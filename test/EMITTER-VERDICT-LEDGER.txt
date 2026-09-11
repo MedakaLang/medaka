@@ -111,11 +111,40 @@
 # "THE EMITTER-VERDICT ARM"). Rows below citing this paragraph share this ONE
 # mechanism — the wildcard match on `underivedMainDiags`, not five or six
 # independent bugs.
+#
+# ── SUPERSEDED IN BOTH HALVES (ruling 3 shape (a), on top of #2809) ───────────
+#
+# Neither half of the paragraph above still describes the emit path, and the two
+# rows that drained are the measurement that says so.
+#
+#   * The MANGLED-decls half is gone: #2809 made the child elaborate the trees the
+#     loader parsed and mangle afterwards, so the child and `check` now solve the
+#     same program. That is what drained `1667-emitter-accepts-check-rejects` —
+#     its `check=1;emit=0:ir` became `check=1;emit=3:noir`, i.e. the emitter now
+#     REJECTS, with no IR, the program it used to accept, link and run to a
+#     confident wrong answer. The row is deleted per the drain protocol above; the
+#     CASE stays in the corpus, unledgered, which is the stronger guard (an
+#     unledgered case must AGREE, so a regression fails this gate by name). The
+#     `1667` row in test/MUST-FAIL-NOT-PINNABLE.txt still holds: the guard named
+#     there is this arm, and this arm is still grading that case.
+#   * The discard-diagnostics half is gone: the child no longer discards its
+#     per-module diagnostics at all. `entry_support.emitFullGate` renders them
+#     through the same face `check` uses and exits 3 on any error, so
+#     `underivedMainDiags`' wildcard clause is no longer the only arm that can
+#     reject — which is why the reject reaches a multi-module case for the first
+#     time.
+#
+# WHAT STILL DISAGREES, AND IT IS ONE THING. The child owns the TYPE verdict for a
+# build; resolve stays with the parent (ruling 3), and no child process ever sees
+# an R- code. So every remaining row here is a case whose only reject is
+# R-AMBIGUOUS-CTOR — `1253`, `control-…`, and `733` in the orderings where the
+# cascade does not fire. `733`'s row is now two signatures for that reason: its
+# emitter verdict inherits #733's own order-dependence, because whether the child
+# rejects is exactly whether that ordering produced a T- code for it to see. Read
+# that as #733 becoming observable one stage later, not as a new order-dependence.
 
 1253-record-form-ctor-head-decided-by-import-order | DISAGREE | Emitter accepts (exit 0, non-empty IR) an entry that `check`/`run`/`build` reject in EVERY ordering with R-AMBIGUOUS-CTOR (drained from test/IMPORT-ORDER-LEDGER.txt by #1319 unit 1 — that drain closed the ORDER-dependence of the reject, not the emitter's own failure to reject at all). Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
 
-1667-emitter-accepts-check-rejects | DISAGREE | #1667's own minimized 2-module repro (enrolled here per RUN-XMOD-030 item 7's binding requirement). Emitter accepts (exit 0, non-empty IR) in BOTH orderings; check/run/build reject at exit 1 with T-TYPE-MISMATCH in both. Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
-
-733-ambiguous-ctor-reject-cascade-order-dependent | DISAGREE | Emitter accepts (exit 0, non-empty IR) an entry check/run/build reject at exit 1 with R-AMBIGUOUS-CTOR (and, in one ordering, a cascading T-TYPE-MISMATCH — the #733 order-dependence itself, ledgered separately in test/IMPORT-ORDER-LEDGER.txt). Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
+733-ambiguous-ctor-reject-cascade-order-dependent | DISAGREE | The emitter's verdict is now ORDER-DEPENDENT on this case, which is #733's own defect become visible through the child rather than a second one. In the ordering where typecheck raises the cascading T- code, the child rejects (exit 3, no IR) exactly as check does; in the orderings where the only reject is resolve's R-AMBIGUOUS-CTOR, the child still accepts and emits IR, because R-stage verdicts are the PARENT's and no child ever sees them (ruling 3 leaves resolve with the parent by design). So this row now pins two signatures, and the disagreement it records has narrowed to the R-only orderings. | check=1;emit=0:ir | check=1;emit=3:noir
 
 control-ambiguous-ctor-reject-invariant | DISAGREE | This case's own name says CONTROL for the import-order axis (R-AMBIGUOUS-CTOR fires invariantly in both orderings, per its case.txt) — it is not a control for the emitter-verdict axis. Emitter accepts (exit 0, non-empty IR) in both orderings despite check/run/build rejecting invariantly. Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
