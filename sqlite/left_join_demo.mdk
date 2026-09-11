@@ -55,6 +55,8 @@ showUO (UO { uid = i, uname = n, orow = (Some (o, u, a)) }) =
   "\{i}|\{n}|\{o}|\{u}|\{a}"
 
 printUO : List UO -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 printUO [] = ()
 printUO (r :: rest) = let _ = println (showUO r) in printUO rest
 
@@ -97,6 +99,8 @@ showABC (ABC { aid = a1, av = a2, bid = b1, aref = b2, crow = (Some (c1, c2)) })
   "\{a1}|\{a2}|\{b1}|\{b2}|\{c1}|\{c2}"
 
 printABC : List ABC -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 printABC [] = ()
 printABC (r :: rest) = let _ = println (showABC r) in printABC rest
 

@@ -5766,11 +5766,6 @@ isUpperFirst s =
   else
     isUpper (arrayGetUnsafe 0 (stringToChars s))
 
--- combined eligibility: big enough AND not pure data.
-dupEligible : Expr -> Bool
-dupEligible body =
-  bodyComplexity body >= dupComplexityThreshold && not (isPureDataExpr body)
-
 -- Same-file eligibility uses a HIGHER complexity floor than the cross-file
 -- rule.  This is not tuning-to-the-corpus: it is a structural consequence of
 -- how the two comparisons scale.  Cross-file compares bodies across a small
@@ -5895,24 +5890,112 @@ dupGroupFires : List (String, Int, String, String) -> Bool
 dupGroupFires grp =
   listLen grp >= 2 && listLen (sortUniqS (map occFile grp)) >= 2
 
--- one occurrence per eligible top-level DFunDef: (file, line, name, structuralKey)
+-- ── the per-clause floor blind spot (#2651) ────────────────────────────────────
+-- A function written as several pattern clauses is several `DFunDef`s sharing
+-- one name.  Judging the complexity floor on ONE clause's body meant a function
+-- whose clauses are individually small never reached it, however faithfully the
+-- whole set of them duplicated another file's — so a multi-clause recursion, the
+-- commonest shape in this codebase, was the shape the rule could not see.
+-- Clauses are therefore collected first and the floor applied to the FUNCTION:
+-- complexities summed (`bodyComplexity` counts '(' in the sexp dump, so the
+-- units are additive and nothing is re-serialized) and clause keys concatenated
+-- in declaration order, so a function matches only when every clause matches, in
+-- the same order.
+--
+-- The occurrence TUPLE is unchanged, which is what keeps the `--cache` path in
+-- lockstep for free: `fileDupOccs` is what a cached run persists per file, and
+-- the aggregation happens strictly inside it, so `runCrossFileRulesFromOccs`
+-- runs the identical join over the identical shape.
+data DupClause = DupClause {
+  dcName : String,
+  dcLine : Int,
+  dcKey : String,
+  dcCost : Int,
+  dcPure : Bool,
+}
+
+-- one occurrence per eligible top-level FUNCTION: (file, line, name, key)
 export
 fileDupOccs : (String, Positions, List Decl) ->
   List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
-  flatMap (dupOccOfDecl path) (declLocList pos decls)
+  flatMap
+    (dupOccOfGroup path)
+    (dupClauseGroups (flatMap dupClauseOfDecl (declLocList pos decls)))
 
-dupOccOfDecl : String ->
-  (Decl, Option Loc) ->
-  List (String, Int, String, String)
-dupOccOfDecl path (d, loc) = match d
-  DFunDef _ name pats body =>
-    if dupEligible body then
-      [(path, locLineOf loc, name, structuralKey pats body)]
-    else
-      []
-  DAttrib _ inner => dupOccOfDecl path (inner, loc)
+dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
+dupClauseOfDecl (d, loc) = match d
+  DFunDef _ name pats body => [
+    DupClause {
+      dcName = name,
+      dcLine = locLineOf loc,
+      dcKey = structuralKey pats body,
+      dcCost = bodyComplexity body,
+      dcPure = isPureDataExpr body,
+    },
+  ]
+  DAttrib _ inner => dupClauseOfDecl (inner, loc)
   _ => []
+
+-- Clauses of one function are adjacent in the decl list, so consecutive runs of
+-- a name group them.  Grouping by name across the whole file instead would fuse
+-- two unrelated definitions if a file ever held one name twice.
+dupClauseGroups : List DupClause -> List (List DupClause)
+dupClauseGroups [] = []
+dupClauseGroups (c :: rest) =
+  let (same, others) = dupSpanName c.dcName rest
+  (c :: same) :: dupClauseGroups others
+
+dupSpanName : String -> List DupClause -> (List DupClause, List DupClause)
+dupSpanName _ [] = ([], [])
+dupSpanName nm (c :: rest)
+  | c.dcName == nm =
+    let (same, others) = dupSpanName nm rest
+    (c :: same, others)
+  | otherwise = ([], c :: rest)
+
+-- The group is eligible when the COMBINED body clears the floor and at least one
+-- clause is real logic: a function all of whose clauses are pure data is data,
+-- which is #893's narrowing applied at function grain instead of clause grain.
+dupOccOfGroup : String -> List DupClause -> List (String, Int, String, String)
+dupOccOfGroup _ [] = []
+dupOccOfGroup path (c :: cs)
+  | dupGroupCost (c :: cs) >= dupComplexityThreshold
+    && not (allList dcPureOf (c :: cs)) = [
+    (
+      path,
+      dupAnchorLine (c :: cs) c.dcLine,
+      c.dcName,
+      joinWith "\n" (map dcKeyOf (c :: cs)),
+    ),
+  ]
+  | otherwise = []
+
+-- WHERE the finding points, and this is load-bearing rather than cosmetic.
+-- A suppression directive is matched against the reported line, so moving an
+-- anchor silently un-suppresses a duplicate someone has already adjudicated —
+-- and this tree carries over a hundred such directives.  So the anchor is the
+-- first clause that clears the floor ON ITS OWN, which is exactly the clause the
+-- per-clause rule used to report and therefore exactly the clause every existing
+-- directive was placed above.  Aggregation then only ADDS findings; it moves
+-- none.  A function that fires only in aggregate has no such clause and no
+-- directive to preserve, so it anchors at its first clause, where a reader looks
+-- to find the function.
+dupAnchorLine : List DupClause -> Int -> Int
+dupAnchorLine [] fallback = fallback
+dupAnchorLine (c :: cs) fallback
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure = c.dcLine
+  | otherwise = dupAnchorLine cs fallback
+
+dcKeyOf : DupClause -> String
+dcKeyOf c = c.dcKey
+
+dcPureOf : DupClause -> Bool
+dcPureOf c = c.dcPure
+
+dupGroupCost : List DupClause -> Int
+dupGroupCost [] = 0
+dupGroupCost (c :: cs) = c.dcCost + dupGroupCost cs
 
 locLineOf : Option Loc -> Int
 locLineOf (Some (Loc _ l _ _ _)) = l
@@ -5983,11 +6066,18 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- takes every target file at once and requires ≥2 DISTINCT files per group) —
 -- so two byte-identical top-level bodies in the SAME file (e.g. parser.mdk's
 -- `parseBracketBlock`/`indentedBody`) were structurally invisible to it.  This
--- is the in-file counterpart: same structural key (`structuralKey`), same
--- eligibility gate (`dupEligible` — size threshold + not-pure-data), but grouped
--- within ONE file's own decls instead of across the whole project.  Registered
--- under the SAME rule name (`ruleNameDuplicateBody`) so `--disable`/`--only`/
--- `-- lint-disable-*` all address both halves of the rule with one name.
+-- is the in-file counterpart: same structural key (`structuralKey`), its own
+-- higher floor (`dupEligibleSameFile` — size threshold + not-pure-data), but
+-- grouped within ONE file's own decls instead of across the whole project.
+-- Registered under the SAME rule name (`ruleNameDuplicateBody`) so
+-- `--disable`/`--only`/`-- lint-disable-*` address both halves with one name.
+--
+-- It keys one CLAUSE at a time, so the multi-clause aggregation the cross-file
+-- half gained above does not apply here: a multi-clause same-file duplicate is
+-- still invisible, and a function whose clauses all match another's is reported
+-- once PER CLAUSE rather than once.  Both are left as they are deliberately —
+-- the same-file collision space is O(bindings²) (see the floor note above), so
+-- widening this half needs an over-fire budget of its own.
 sameFileOccOfDecl : (Decl, Option Loc) -> List (String, Int, String)
 sameFileOccOfDecl (d, loc) = match d
   DFunDef _ name pats body =>

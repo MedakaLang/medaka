@@ -1,5 +1,5 @@
 # META
-source_lines=44134
+source_lines=44139
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -19012,6 +19012,11 @@ funClausePair : FunClause -> (List Pat, Expr)
 funClausePair (FunClause pats body) = (pats, body)
 
 funDefs : List Decl -> List (String, (List Pat, Expr))
+-- Intentional cross-file duplicate of eval.mdk's copy. The two flatten the same
+-- decl shapes for different consumers — an eval frame there, an inference SCC
+-- here — and eval.mdk deliberately imports nothing from types/ so that untyped
+-- eval stays runnable without the typechecker.
+-- lint-disable-next-line rule-duplicate-body
 funDefs [] = []
 funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses to

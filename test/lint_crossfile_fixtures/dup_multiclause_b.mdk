@@ -1,0 +1,7 @@
+-- Twin of dup_multiclause_a.mdk: the same two clauses under a different function
+-- name. Neither file carries a directive, so the multi-clause cross-file finding
+-- must appear on BOTH sides of the pair in the golden.
+export
+stepB : Int -> Int -> String
+stepB 0 m = if m > 10 then "many" else "few"
+stepB n m = if n > m then "left" else "right"

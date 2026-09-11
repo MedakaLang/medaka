@@ -1,5 +1,5 @@
 # META
-source_lines=4991
+source_lines=4996
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -356,6 +356,11 @@ ownersOf field idx =
 
 -- ── pat_bindings ──────────────────────────────────────────────────────────
 patBindings : Pat -> List String
+-- Intentional cross-file duplicate of annotate.mdk's copy. This one is on
+-- resolve's own hot path and annotate.mdk imports nothing from the frontend
+-- beyond the AST, deliberately: annotate runs after resolve and sharing this
+-- would make the post-resolve pass depend on the pass that precedes it.
+-- lint-disable-next-line rule-duplicate-body
 patBindings (PVar x _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []

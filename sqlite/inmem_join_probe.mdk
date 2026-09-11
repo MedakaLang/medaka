@@ -68,6 +68,8 @@ showUO (UO { uid = i, uname = n, oid = o, oUser = u, amount = a }) =
   "\{i}|\{n}|\{o}|\{u}|\{a}"
 
 printUO : List UO -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 printUO [] = ()
 printUO (r :: rest) = let _ = println (showUO r) in printUO rest
 

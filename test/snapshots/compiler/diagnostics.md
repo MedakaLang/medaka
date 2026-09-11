@@ -1,5 +1,5 @@
 # META
-source_lines=2571
+source_lines=2576
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -2207,6 +2207,11 @@ cjFoldIntoFile path extra ((p, s, ds) :: rest)
 -- locate the body's first ELoc span.
 export
 findMainFunDef : List Decl -> Option (List Pat, Expr)
+-- This is the canonical copy; the twin is entries/playground_main.mdk's, which
+-- keeps its own so the playground entry's module graph stays small enough to
+-- compile to wasm (that file's header states the constraint and suppresses the
+-- rule file-wide). Removing this one is not the fix — the entry's copy is.
+-- lint-disable-next-line rule-duplicate-body
 findMainFunDef [] = None
 findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
 findMainFunDef ((DFunDef _ "main" ps body) :: _) = Some (ps, body)

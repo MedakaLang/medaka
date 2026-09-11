@@ -1,5 +1,5 @@
 # META
-source_lines=171
+source_lines=180
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -84,6 +84,11 @@ routeImportCheck "" runtimeP coreP raw desugared =
 routeImportCheck diags _ _ _ _ = diags
 
 reportFor : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
+-- Intentional cross-file duplicate of entries/check_batch.mdk's copy, for the
+-- same reason `cleanReport` below carries: both are module-private, and sharing
+-- them means exporting this module's report assembly to an entry that exists to
+-- reproduce its semantics exactly. Consolidate the two drivers or neither.
+-- lint-disable-next-line rule-duplicate-body
 reportFor "" runtimeP coreP raw desugared =
   cleanReport runtimeP coreP raw desugared
 reportFor resDiags _ _ _ _ = resDiags
@@ -101,6 +106,10 @@ cleanReport runtimeP coreP raw desugared =
 -- so a user impl overriding a prelude impl is not flagged as overlapping.
 
 joinNonEmpty : String -> String -> String
+-- Intentional cross-file duplicate of entries/check_batch.mdk's copy — same
+-- constraint as `reportFor` above: module-private in both, consolidated with
+-- their drivers or not at all.
+-- lint-disable-next-line rule-duplicate-body
 joinNonEmpty "" b = b
 joinNonEmpty a "" = a
 joinNonEmpty a b = "\{a}\n\{b}"
