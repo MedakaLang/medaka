@@ -452,7 +452,8 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
   → effect domains          ← [BREAK #3] Flat populates inline; Module relies on the driver
   → checkEffectParams / checkLetRecDecls → shadows (#4) → mode-specific ref setup
   → dataEnv → checkUndeterminedRetEffVars → checkGradedImplHeads → rejectCyclicAliases
-  → globalS = ifaceMethodSchemes ++ externSchemes → env1
+  → currentMethodRows = ifaceMethodSchemeRows prog
+  → globalS = legacyMethodSchemes currentMethodRows ++ externSchemes → env1
   → processTopGroups            ← [BREAK #1] inference plan; Flat is two-phase
   → cross-module dict snapshot (#3, Module only)
   → groundMultiParamObligations
@@ -461,6 +462,14 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
 ```
 
 (`stampBindingIds` is not local — the spine calls out to `compiler/frontend/resolve.mdk`.)
+
+Method declaration rows now pair identity, scheme and method predicate slots in
+one allocation. Flat retains its second row construction for `methodNames` and
+the first-write slot registry; Module constructs visible rows from `implDecls`
+for admitted lookup and Num seeding. Those rows remain setup-local. The numeric
+scheme and optional legacy declaration parameters share `LegacyNumLiteralAnchor`;
+this is preparation for qualified schemes, not a shared solving judgment. See
+[TYPECHECK-METHOD-ROWS.md](TYPECHECK-METHOD-ROWS.md).
 
 This sequence runs ONCE per module on the Module arm: marking happens inside it, per
 binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's

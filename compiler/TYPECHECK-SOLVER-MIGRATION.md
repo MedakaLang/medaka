@@ -332,6 +332,13 @@ No new numerical performance ceiling is introduced here.
 
 Read-only census at `f57016b44`, after the initial design review:
 
+Method-row preparation (`ee61c0a35`) subsequently replaced the separate numeric
+scheme/parameter refs with `numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor)`.
+In the numeric row below, `numLitFromIntParamsRef` names the historical
+field; its current reader consumes the anchor's `lnlaParams`. This ownership
+consolidation preserves the legacy parameter walk and does not resolve the
+checker/return-producer identity split identified by the census.
+
 | Current population | Predicate information and required migration |
 |---|---|
 | Genuine marked method, one admitted interface | The declaration and occurrence instantiation can supply the complete vector; assert their common identity at construction. |
