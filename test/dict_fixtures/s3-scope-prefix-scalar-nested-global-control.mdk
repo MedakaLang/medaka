@@ -1,0 +1,12 @@
+-- Direct-global control for the nested scalar call.  With no sibling method
+-- scopes involved, ordinary given-before-instance forwarding still returns 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+useD : D a => a -> Int
+useD x = d x
+
+main = println (useD 0)

@@ -1,0 +1,274 @@
+-- Production-path observations for nominal typechecker scopes and givens.
+-- Every scope id is projected while its request graph is still live.  Tests
+-- compare immutable module/owner labels across requests, never raw ordinals.
+
+import test.{expectEqual}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse}
+import types.evidence.{EvidenceBinderId(..), ScopeId}
+import types.typecheck.{
+  AssumptionTraceEntry(..),
+  AssumptionTraceKind(..),
+  ModDiags,
+  beginAssumptionTrace,
+  checkModulesDiagsChain,
+  checkOneDiags,
+  finishAssumptionTrace,
+  scopeFrameStats,
+  scopeTraceContext,
+}
+import support.util.{joinNl, listLen}
+
+data TraceView = TraceView {
+  tvKind : AssumptionTraceKind,
+  tvGoalModule : String,
+  tvGoalOwner : String,
+  tvBinderModule : String,
+  tvBinderOwner : String,
+  tvSameScope : Bool,
+  tvBinder : EvidenceBinderId,
+}
+  deriving (Eq, Debug)
+
+data RequestView = RequestView {
+  rvTrace : List TraceView,
+  rvErrors : Int,
+  rvFrameCount : Int,
+  rvFrameCapacity : Int,
+}
+  deriving (Eq, Debug)
+
+data ContextView = ContextView {
+  cvKind : AssumptionTraceKind,
+  cvGoalModule : String,
+  cvGoalOwner : String,
+  cvBinderModule : String,
+  cvBinderOwner : String,
+  cvSameScope : Bool,
+}
+  deriving (Eq, Debug)
+
+traceView : AssumptionTraceEntry -> TraceView
+traceView entry =
+  let (EvidenceBinderId binderScope _) = entry.atBinder
+  let (goalModule, goalOwner) = scopeTraceContext entry.atGoalScope
+  let (binderModule, binderOwner) = scopeTraceContext binderScope
+  TraceView {
+    tvKind = entry.atKind,
+    tvGoalModule = goalModule,
+    tvGoalOwner = goalOwner,
+    tvBinderModule = binderModule,
+    tvBinderOwner = binderOwner,
+    tvSameScope = entry.atGoalScope == binderScope,
+    tvBinder = entry.atBinder,
+  }
+
+-- This recursion forces every context projection before the next request can
+-- reset the graph that owns the request-local ScopeIds.
+traceViewsNow : List AssumptionTraceEntry -> List TraceView
+traceViewsNow entries = map traceView entries
+
+runObserved : String -> String -> RequestView
+runObserved moduleId source =
+  beginAssumptionTrace ()
+  let (errors, _) = checkOneDiags [] [] (moduleId, desugar (parse source))
+  let entries = finishAssumptionTrace ()
+  let views = traceViewsNow entries
+  let (count, capacity) = scopeFrameStats ()
+  RequestView {
+    rvTrace = views,
+    rvErrors = listLen errors,
+    rvFrameCount = count,
+    rvFrameCapacity = capacity,
+  }
+
+modErrorCount : List ModDiags -> Int
+modErrorCount [] = 0
+modErrorCount ((_, (_, errors, _)) :: rest) =
+  listLen errors + modErrorCount rest
+
+runCachedObserved : String -> RequestView
+runCachedObserved entrySource =
+  beginAssumptionTrace ()
+  let results =
+    checkModulesDiagsChain
+      (Some (731, 733))
+      "typecheck-scope-cache"
+      [Some "stable-prefix-v1", None]
+      []
+      []
+      [
+        ("cache_prefix", desugar (parse scalarSource)),
+        ("cache_entry", desugar (parse entrySource)),
+      ]
+  let entries = finishAssumptionTrace ()
+  let views = traceViewsNow entries
+  let (count, capacity) = scopeFrameStats ()
+  RequestView {
+    rvTrace = views,
+    rvErrors = modErrorCount results,
+    rvFrameCount = count,
+    rvFrameCapacity = capacity,
+  }
+
+withoutBinderIds : List TraceView -> List ContextView
+withoutBinderIds views =
+  map
+    (view => ContextView {
+      cvKind = view.tvKind,
+      cvGoalModule = view.tvGoalModule,
+      cvGoalOwner = view.tvGoalOwner,
+      cvBinderModule = view.tvBinderModule,
+      cvBinderOwner = view.tvBinderOwner,
+      cvSameScope = view.tvSameScope,
+    })
+    views
+
+context : AssumptionTraceKind -> String -> String -> ContextView
+context kind moduleId owner = ContextView {
+  cvKind = kind,
+  cvGoalModule = moduleId,
+  cvGoalOwner = owner,
+  cvBinderModule = moduleId,
+  cvBinderOwner = owner,
+  cvSameScope = True,
+}
+
+directSource : String
+directSource = joinNl [
+  "data Wrap a = Wrap a",
+  "data Box a = Box a",
+  "data Other a = Other a",
+  "interface D t where",
+  "  d : t -> Int",
+  "interface C t where",
+  "  foo : t -> Int",
+  "impl D (Wrap a) where",
+  "  d _ = 99",
+  "impl C (Box a) requires D (Wrap a) where",
+  "  foo (Box x) = d (Wrap x)",
+  "impl C (Other a) requires D (Wrap a) where",
+  "  foo (Other x) = d (Wrap x)",
+]
+
+scalarSource : String
+scalarSource = joinNl [
+  "interface D a where",
+  "  d : a -> Int",
+  "f : D a => a -> Int",
+  "f x = d x",
+]
+
+superSource : String
+superSource = joinNl [
+  "data Wrap a = Wrap a",
+  "interface Base t where",
+  "  base : t -> Int",
+  "interface Sub t requires Base t where",
+  "  sub : t -> Int",
+  "f : Sub (Wrap a) => Wrap a -> Int",
+  "f x = base x",
+]
+
+failedSource : String
+failedSource = "bad : Int\nbad = True\n"
+
+conflictingSource : String
+conflictingSource = joinNl [
+  "interface D a where",
+  "  d : a -> Int",
+  "impl D Int where",
+  "  d _ = 1",
+  "impl D Int where",
+  "  d _ = 2",
+]
+
+test "direct predicate evidence keeps same-rendering binders nominal" =
+  let observed = runObserved "trace_direct" directSource
+  let contexts = withoutBinderIds observed.rvTrace
+  let binders = map (entry => entry.tvBinder) observed.rvTrace
+  expectEqual
+    (
+      [
+        context ATDirectPredicate "trace_direct" "binding:foo",
+        context ATDirectPredicate "trace_direct" "binding:foo",
+      ],
+      True,
+      0,
+    )
+    (
+      contexts,
+      match binders
+        first :: second :: [] => first /= second
+        _ => False,
+      observed.rvErrors,
+    )
+
+test "scalar and superclass assumption paths remain explicit legacy kinds" =
+  let scalar = runObserved "trace_scalar" scalarSource
+  let super = runObserved "trace_super" superSource
+  expectEqual
+    (
+      [context ATLegacyScalar "trace_scalar" "binding:f"],
+      [context ATLegacySuperclass "trace_super" "binding:f"],
+      0,
+      0,
+    )
+    (
+      withoutBinderIds scalar.rvTrace,
+      withoutBinderIds super.rvTrace,
+      scalar.rvErrors,
+      super.rvErrors,
+    )
+
+requestProjection : RequestView -> (List ContextView, Int)
+requestProjection view = (withoutBinderIds view.rvTrace, view.rvFrameCount)
+
+sameProjection : RequestView -> RequestView -> Bool
+sameProjection left right = requestProjection left == requestProjection right
+
+test "fresh repeat and failed/conflicting intervening requests retain ownership" =
+  let first = runObserved "trace_repeat" scalarSource
+  let repeated = runObserved "trace_repeat" scalarSource
+  let failed = runObserved "trace_failed" failedSource
+  let afterFailed = runObserved "trace_repeat" scalarSource
+  let conflicting = runObserved "trace_conflict" conflictingSource
+  let afterConflict = runObserved "trace_repeat" scalarSource
+  expectEqual
+    [True, True, True, True, True, True]
+    [
+      sameProjection first repeated,
+      sameProjection first afterFailed,
+      sameProjection first afterConflict,
+      failed.rvErrors > 0,
+      conflicting.rvErrors > 0,
+      first.rvFrameCount <= first.rvFrameCapacity
+        && repeated.rvFrameCount <= repeated.rvFrameCapacity
+        && afterFailed.rvFrameCount <= afterFailed.rvFrameCapacity
+        && afterConflict.rvFrameCount <= afterConflict.rvFrameCapacity,
+    ]
+
+test "module-chain cache hits restore bounded scopes across failing suffixes" =
+  let cold = runCachedObserved "entry = 0\n"
+  let hit = runCachedObserved "entry = 0\n"
+  let failed = runCachedObserved failedSource
+  let afterFailed = runCachedObserved "entry = 0\n"
+  let conflicting = runCachedObserved conflictingSource
+  let afterConflict = runCachedObserved "entry = 0\n"
+  expectEqual
+    [True, True, True, True, True, True, True]
+    [
+      withoutBinderIds cold.rvTrace
+        == [context ATLegacyScalar "cache_prefix" "binding:f"],
+      hit.rvTrace == [],
+      afterFailed.rvTrace == [],
+      afterConflict.rvTrace == [],
+      cold.rvFrameCount == hit.rvFrameCount
+        && cold.rvFrameCount == afterFailed.rvFrameCount
+        && cold.rvFrameCount == afterConflict.rvFrameCount,
+      failed.rvErrors > 0 && conflicting.rvErrors > 0,
+      cold.rvFrameCount <= cold.rvFrameCapacity
+        && hit.rvFrameCount <= hit.rvFrameCapacity
+        && afterFailed.rvFrameCount <= afterFailed.rvFrameCapacity
+        && afterConflict.rvFrameCount <= afterConflict.rvFrameCapacity,
+    ]

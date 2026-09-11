@@ -216,6 +216,11 @@ import types.repr.{
   tupleTagArityGo,
   wrapIf,
 }
+import types.evidence.{
+  EvidenceBinderId(..),
+  ScopeId(..),
+  SolverEvidence(..),
+}
 import types.registry.{
   RegKey,
   Registry,
@@ -2885,7 +2890,7 @@ data PendingEntry =
   -- Minted where the carrier is built, which is the one point at which the marked
   -- node and its cell are both in hand; the reader flip sources it from the node
   -- itself instead, leaving everything downstream of here unchanged.
-  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc) EvId
+  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc) ScopeId EvId
 
 -- ── #2547 unit 2 (ARCH M1): one deferred-goal channel ─────────────────────────
 -- The route-stamped site goals used to live on five per-kind lists (`pendingSites`,
@@ -2943,6 +2948,7 @@ data Obligation = Obligation {
   oEv : EvId,
   oEncl : String,
   oLoc : Option Loc,
+  oScope : ScopeId,
   oPayload : GoalPayload,
 }
 
@@ -2964,12 +2970,13 @@ pushGoal o =
   g.goalsN := g.goalsN.value + 1
 
 siteObligation : GoalKind -> PendingEntry -> Obligation
-siteObligation k (PendingEntry name tagRef m encl site loc ev) = Obligation {
+siteObligation k (PendingEntry name tagRef m encl site loc scope ev) = Obligation {
   oKind = k,
   oDest = EvRoute tagRef,
   oEv = ev,
   oEncl = encl,
   oLoc = loc,
+  oScope = scope,
   oPayload = GPSite name m site,
 }
 
@@ -2984,6 +2991,7 @@ pushArithGoal dref m ev = pushGoal Obligation {
   oEv = ev,
   oEncl = "",
   oLoc = None,
+  oScope = captureScope (),
   oPayload = GPArith m,
 }
 
@@ -2994,6 +3002,7 @@ pushDictApp app = pushGoal Obligation {
   oEv = app.pdaEv,
   oEncl = app.pdaEncl,
   oLoc = app.pdaLoc,
+  oScope = app.pdaScope,
   oPayload = GPDictApp app,
 }
 
@@ -3004,17 +3013,19 @@ pushMethodDictGoal pmd = pushGoal Obligation {
   oEv = pmd.pmdEv,
   oEncl = pmd.pmdEncl,
   oLoc = None,
+  oScope = pmd.pmdScope,
   oPayload = GPMethodDict pmd,
 }
 
 pushRecDictAppGoal : RecDictApp -> Unit
-pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _ ev)) = pushGoal
+pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _ scope ev)) = pushGoal
   Obligation {
     oKind = GKRecDictApp,
     oDest = EvRoutes routesRef,
     oEv = ev,
     oEncl = encl,
     oLoc = None,
+    oScope = scope,
     oPayload = GPRecDictApp r,
   }
 
@@ -3041,7 +3052,7 @@ siteGoalsIn k gs = flatMap siteEntry (goalsOfKindIn k gs)
 siteEntry : Obligation -> List PendingEntry
 siteEntry o = match o.oPayload
   GPSite name m site =>
-    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc o.oEv]
+    [PendingEntry name (evCell o.oDest) m o.oEncl site o.oLoc o.oScope o.oEv]
   _ => []
 
 evCell : EvDest -> Ref Route
@@ -7554,7 +7565,9 @@ pushPendingObl : IfaceRef ->
   Option Loc ->
   Unit
 pushPendingObl iface typarams mty occ prov loc =
-  wPush perRun.value.implObls (mkMethodOccObl iface typarams mty occ prov loc)
+  wPush
+    perRun.value.implObls
+    (mkMethodOccObl iface typarams mty occ prov loc (captureScope ()))
 
 -- the mint for an impl-channel obligation.  `pred.args` is EMPTY and must stay so:
 -- the dispatch vector is `OpMethodOcc`'s to project, at check time, via `uOblArgs`.
@@ -7564,12 +7577,14 @@ mkMethodOccObl : IfaceRef ->
   Mono ->
   Provenance ->
   Option Loc ->
+  ScopeId ->
   UObligation
-mkMethodOccObl iface typarams mty occ prov loc = UObligation {
+mkMethodOccObl iface typarams mty occ prov loc scope = UObligation {
   pred = Predicate { iface = iface, args = [] },
   originId = 0,
   prov = prov,
   loc = loc,
+  uoScope = scope,
   oblProj = OpMethodOcc typarams mty occ,
 }
 
@@ -8031,6 +8046,7 @@ data UObligation = UObligation {
   originId : Int,
   prov : Provenance,
   loc : Option Loc,
+  uoScope : ScopeId,
   oblProj : OblProjection,
 }
 
@@ -8054,11 +8070,16 @@ data AbsorptionEvent = AbsorptionEvent {
 -- The single recorder for the (now-ported) call channel: every producer becomes a
 -- thin caller stamping its own provenance.
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
-recordObl p originId prov loc = wPush perRun.value.obls UObligation {
+recordObl p originId prov loc =
+  recordOblAt p originId prov loc (captureScope ())
+
+recordOblAt : Predicate -> Int -> Provenance -> Option Loc -> ScopeId -> Unit
+recordOblAt p originId prov loc scope = wPush perRun.value.obls UObligation {
   pred = p,
   originId = originId,
   prov = prov,
   loc = loc,
+  uoScope = scope,
   oblProj = OpProjected,
 }
 
@@ -8104,6 +8125,9 @@ uOblArgs o = match o.oblProj
 -- the call channel's window, in the pre-#838 tuple shape (see oblAsTuple).
 callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callOblsWindow mark = map oblAsTuple (wWindow perRun.value.obls mark)
+
+callUOblsWindow : Int -> List UObligation
+callUOblsWindow mark = wWindow perRun.value.obls mark
 
 -- #1114 (DICT-SEMANTICS §4.2 D1): would `checkOneCallObligation` reach a VERDICT on this
 -- recorded predicate right now?  That — not groundness — is the question the D1-preserving
@@ -8254,6 +8278,7 @@ data PendingDictApp = PendingDictApp {
   pdaArgVecs : List (List Mono),
   pdaEncl : String,
   pdaLoc : Option Loc,
+  pdaScope : ScopeId,
 }
 
 -- Method-level-constraint dict-passing.  `methodPredicateSlotsRef` is the sole
@@ -8275,6 +8300,7 @@ data PendingMethodDict = PendingMethodDict {
   pmdEv : EvId,
   pmdSlots : List PredicateSlot,
   pmdEncl : String,
+  pmdScope : ScopeId,
 }
 
 -- #158 PR2: the 22 per-run cross-module accumulators declared above (the six
@@ -8446,7 +8472,7 @@ resetCrossModuleState _ =
 -- still the constraint variable).  Mirrors the reference's recursive_promoted_usages
 -- / realize_recursive_dict_apps (Phase 115/136).
 -- #2549 M2: the 5th field is this application's evidence id — see `pdaEv`.
-data RecDictApp = RecDictApp (Ref (List Route)) String String Mono EvId
+data RecDictApp = RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
 
 -- the top-level fn whose body is currently being inferred ("" = none); captured
 -- into a deferred RecDictApp so its recursive calls forward the right dict param.
@@ -8650,6 +8676,7 @@ recordArgStamp name tagRef implRef idx mono
           perRun.value.currentFn.value
           (SKArg implRef mono)
           !currentLoc
+          (captureScope ())
           (freshEvId ()))
     None => ()
 
@@ -8682,11 +8709,11 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
 resolveArgStamps : List PendingEntry -> Unit
 resolveArgStamps [] = goalSiteLoc := None
-resolveArgStamps ((PendingEntry name tagRef am encl kind loc _) :: rest) =
+resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKArg implRef fullMono =>
-      resolveArgStamp name tagRef implRef am fullMono encl
+      resolveArgStamp name tagRef implRef am fullMono encl scope
     _ => ()
   resolveArgStamps rest
 
@@ -8713,9 +8740,10 @@ resolveArgStamp : String ->
   Mono ->
   Mono ->
   String ->
+  ScopeId ->
   Unit
-resolveArgStamp name tagRef implRef am fullMono encl =
-  let (route, routes) = entail name am encl (EKArg fullMono)
+resolveArgStamp name tagRef implRef am fullMono encl scope =
+  let (route, routes) = entail name am encl scope (EKArg fullMono)
   let _ = match route
     RNone => ()
     _ => tagRef := route
@@ -9275,6 +9303,179 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- an entry can only ever match its own module's sites.
 data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 
+data ScopeOwner =
+  | ModuleOwner
+  | BindingOwner String
+  | PropOwner String
+  | TestOwner String
+
+data ScopeCursor = ScopeClosed | ScopeOpen ScopeId
+
+data ScopeFrame = ScopeFrame {
+  sfId : ScopeId,
+  sfParent : Option ScopeId,
+  sfLevel : Int,
+  sfModuleId : String,
+  sfOwner : ScopeOwner,
+}
+
+public export data AssumptionTraceKind =
+  | ATDirectPredicate
+  | ATLegacyScalar
+  | ATLegacySuperclass
+  | ATLegacyPredicate
+  deriving (Eq, Debug)
+
+public export data AssumptionTraceEntry = AssumptionTraceEntry {
+  atGoalScope : ScopeId,
+  atBinder : EvidenceBinderId,
+  atKind : AssumptionTraceKind,
+}
+
+data AssumAnswer =
+  | SemanticGiven SolverEvidence
+  | LegacyScalar EvidenceBinderId
+  | LegacySuperAlias EvidenceBinderId
+  | LegacyPredicate EvidenceBinderId
+
+assumptionTraceEnabled : Ref Bool
+assumptionTraceEnabled = Ref False
+
+assumptionTraceEntries : Ref (List AssumptionTraceEntry)
+assumptionTraceEntries = Ref []
+
+export
+beginAssumptionTrace : Unit -> Unit
+beginAssumptionTrace _ =
+  assumptionTraceEntries := []
+  assumptionTraceEnabled := True
+
+export
+finishAssumptionTrace : Unit -> List AssumptionTraceEntry
+finishAssumptionTrace _ =
+  let entries = reverseL assumptionTraceEntries.value
+  assumptionTraceEntries := []
+  assumptionTraceEnabled := False
+  entries
+
+assumAnswerBinder : AssumAnswer -> EvidenceBinderId
+assumAnswerBinder (SemanticGiven (GivenEvidence binder)) = binder
+assumAnswerBinder (SemanticGiven _) = panic "non-given assumption evidence"
+assumAnswerBinder (LegacyScalar binder) = binder
+assumAnswerBinder (LegacySuperAlias binder) = binder
+assumAnswerBinder (LegacyPredicate binder) = binder
+
+assumAnswerKind : AssumAnswer -> AssumptionTraceKind
+assumAnswerKind (SemanticGiven _) = ATDirectPredicate
+assumAnswerKind (LegacyScalar _) = ATLegacyScalar
+assumAnswerKind (LegacySuperAlias _) = ATLegacySuperclass
+assumAnswerKind (LegacyPredicate _) = ATLegacyPredicate
+
+noteAssumption : ScopeId -> AssumAnswer -> Unit
+noteAssumption scope answer =
+  if assumptionTraceEnabled.value then
+    assumptionTraceEntries :=
+      AssumptionTraceEntry {
+          atGoalScope = scope,
+          atBinder = assumAnswerBinder answer,
+          atKind = assumAnswerKind answer,
+        }
+        :: assumptionTraceEntries.value
+
+assumAnswerName : AssumAnswer -> String
+assumAnswerName answer = renderEvidenceBinder (assumAnswerBinder answer)
+
+scopeOrdinal : ScopeId -> Int
+scopeOrdinal (ScopeId i) = i
+
+scopeFrame : ScopeId -> ScopeFrame
+scopeFrame sid =
+  let i = scopeOrdinal sid
+  let frames = graphRun.value.scopeFrames.value
+  if i < 0 || i >= arrayLength frames then
+    panic "scope frame missing"
+  else match arrayGetUnsafe i frames
+    Some frame => frame
+    None => panic "scope frame missing"
+
+freshScope : Option ScopeId -> Int -> String -> ScopeOwner -> ScopeId
+freshScope parent level moduleId owner =
+  let g = graphRun.value
+  let i = g.scopeCounter.value
+  let sid = ScopeId i
+  let arr0 = g.scopeFrames.value
+  let arr =
+    if i < arrayLength arr0 then
+      arr0
+    else
+      let grown = arrayMake (max 16 (2 * (i + 1))) None
+      let _ = arrayBlit arr0 0 grown 0 (arrayLength arr0)
+      g.scopeFrames := grown
+      grown
+  let _ =
+    arraySetUnsafe
+      i
+      (Some ScopeFrame {
+        sfId = sid,
+        sfParent = parent,
+        sfLevel = level,
+        sfModuleId = moduleId,
+        sfOwner = owner,
+      })
+      arr
+  g.scopeCounter := i + 1
+  sid
+
+captureScope : Unit -> ScopeId
+captureScope _ = match perRun.value.currentScope.value
+  ScopeOpen sid => sid
+  ScopeClosed => panic "scope capture outside inference"
+
+openScope : ScopeId -> Unit
+openScope sid = perRun.value.currentScope := ScopeOpen sid
+
+closeScope : Unit -> Unit
+closeScope _ = match perRun.value.currentScope.value
+  ScopeClosed => panic "scope close outside inference"
+  ScopeOpen sid => match (scopeFrame sid).sfParent
+    Some parent => perRun.value.currentScope := ScopeOpen parent
+    None => perRun.value.currentScope := ScopeClosed
+
+givenVisibleFrom : ScopeId -> ScopeId -> Bool
+givenVisibleFrom useScope binderScope
+  | useScope == binderScope = True
+  | otherwise = match (scopeFrame useScope).sfParent
+    Some parent => givenVisibleFrom parent binderScope
+    None => False
+
+binderAt : ScopeId -> Int -> EvidenceBinderId
+binderAt sid ordinal = EvidenceBinderId sid ordinal
+
+renderEvidenceBinder : EvidenceBinderId -> String
+renderEvidenceBinder (EvidenceBinderId sid ordinal) =
+  match (scopeFrame sid).sfOwner
+    BindingOwner owner => dictParamName owner ordinal
+    _ => panic "evidence binder outside binding scope"
+
+scopeOwnerLabel : ScopeOwner -> String
+scopeOwnerLabel ModuleOwner = "module"
+scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
+scopeOwnerLabel (PropOwner name) = "prop:" ++ name
+scopeOwnerLabel (TestOwner name) = "test:" ++ name
+
+export
+scopeTraceContext : ScopeId -> (String, String)
+scopeTraceContext sid =
+  let frame = scopeFrame sid
+  (frame.sfModuleId, scopeOwnerLabel frame.sfOwner)
+
+export
+scopeFrameStats : Unit -> (Int, Int)
+scopeFrameStats _ = (
+  graphRun.value.scopeCounter.value,
+  arrayLength graphRun.value.scopeFrames.value,
+)
+
 -- #2547 unit 3: ONE stored given — the predicate a dict parameter discharges, and the
 -- parameter's name.  The two per-module tables this replaces (`activeDictPreds`, keyed
 -- `(slot, dname)`, and `implReqPredicateSlots`, keyed `(dname, slot)`) held the same pair
@@ -9287,11 +9488,10 @@ data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 -- `IfaceRef`'s (name, origin) pair would be a second spelling of the same fact, and the
 -- vector half (`psArgs`) and the bound-id half (`psBoundIds`) are already on the slot.
 --
--- The OWNER is not a field: every reader selects on the `$dict_<encl>_` prefix of
--- [geDict], because a dict parameter's name IS its owner plus its slot index
--- (`dictParamName`), and the residual reader that scans with an EMPTY prefix
--- (`activeDictPredOf`'s unscoped fallback) needs the whole module's entries, not one
--- binding's.  Splitting the owner out would make that fallback a second lookup shape.
+-- Ownership is nominal: `geBinder` carries the binding scope and slot ordinal.
+-- Readers prove that binder scope is the goal scope or one of its lexical ancestors;
+-- rendering to the existing `$dict_<owner>_<slot>` ABI spelling happens only after a
+-- final assumption answer has been chosen.
 --
 -- [geMatch] is what makes ONE environment sound, and it is a property of the given,
 -- not a record of which table it came from.  MEASURED: merging the two tables with no
@@ -9302,9 +9502,12 @@ data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 -- cover.  See `GivenMatch`.
 data GivenEntry = GivenEntry {
   geSlot : PredicateSlot,
-  geDict : String,
+  geBinder : EvidenceBinderId,
   geMatch : GivenMatch,
+  geProvenance : GivenProvenance,
 }
+
+data GivenProvenance = DirectGiven | LegacySuperclassAlias
 
 -- May this given answer a goal on PREDICATE IDENTITY ALONE, or only when the asker also
 -- witnesses that the goal's dispatch variable is one the slot binds?
@@ -9359,14 +9562,12 @@ data GraphRun = GraphRun {
   -- the numlit channel's length, maintained by `pushNumlit` beside every write, so a
   -- mark is O(1) — the goals channel's `goalsN`, for the one other windowed channel
   numlitN : Ref Int,
-  activeDictVars : Ref (List (Int, String)),
+  activeDictVars : Ref (List (Int, EvidenceBinderId)),
   -- #2547 unit 3: the given environment, keyed by MODULE.  Graph lifetime, but NOT
-  -- graph-global visibility: every read goes through `givensHere`, which selects the
-  -- current module's bucket, so a given from module A cannot answer a goal in module B.
-  -- The module key is what reproduces the scoping the per-module `PerRun` re-mint used
-  -- to give these entries physically — `D-I5-names` bounds instance CANDIDACY, not name
-  -- visibility, so givens stay lexical.  Keying by module rather than by nothing is also
-  -- what keeps each scan the length of one module's givens instead of the graph's.
+  -- graph-global visibility: every read derives a module bucket from the captured
+  -- goal scope, then applies lexical ancestor visibility to each binder.  A given from
+  -- module A therefore cannot answer a goal in module B, and sibling binding scopes
+  -- cannot answer one another even when their rendered names share a prefix.
   gGiven : Ref (OrdMap (List GivenEntry)),
   moduleRanges : Ref (List (String, GraphMarks)),
   -- #2548: one `StampCtx` per module that finished elaborating, NEWEST FIRST, cut at
@@ -9392,6 +9593,8 @@ data GraphRun = GraphRun {
   -- `checkBodyImpl` resets a Flat graph, and a reset that dropped them would leave
   -- every marked node pointing at nothing.
   evCells : Ref (Array (Option EvCell)),
+  scopeFrames : Ref (Array (Option ScopeFrame)),
+  scopeCounter : Ref Int,
 }
 
 freshGraphRun : Unit -> GraphRun
@@ -9409,6 +9612,8 @@ freshGraphRun _ = GraphRun {
   evCounter = Ref 0,
   evTable = Ref [],
   evCells = Ref (arrayMake 0 None),
+  scopeFrames = Ref (arrayMake 0 None),
+  scopeCounter = Ref 0,
 }
 
 -- #2705: mint the cells for one `EMethodAt` node and return the id the node
@@ -9557,27 +9762,77 @@ copyGraphRun g = GraphRun {
   -- the ids of the cells minted for it, and its nodes must keep answering.  Only
   -- the INDEX is copied, so a mint on one side cannot grow the other's array.
   evCells = Ref (arrayCopy g.evCells.value),
+  scopeFrames = Ref (arrayCopy g.scopeFrames.value),
+  scopeCounter = Ref g.scopeCounter.value,
 }
+
+-- Private service check for the nominal scope substrate.  It proves the ancestor
+-- relation, rejects a sibling with the same rendered owner, keeps those binders
+-- nominally distinct, and observes that a copied graph owns detached frame storage
+-- and a detached counter.
+scopeServiceProbe : Unit -> (Bool, Bool, Bool, Bool)
+scopeServiceProbe _ =
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let root = freshScope None 0 "scope-probe" ModuleOwner
+  let left = freshScope (Some root) 1 "scope-probe" (BindingOwner "foo")
+  let inner = freshScope (Some left) 2 "scope-probe" (BindingOwner "local")
+  let right = freshScope (Some root) 1 "scope-probe" (BindingOwner "foo")
+  let leftBinder = binderAt left 0
+  let rightBinder = binderAt right 0
+  let original = graphRun.value
+  graphRun := copyGraphRun original
+  let _ = freshScope (Some right) 2 "scope-probe" (BindingOwner "copy-only")
+  let copyDetached =
+    original.scopeCounter.value == 4
+      && (match arrayGetUnsafe 4 original.scopeFrames.value
+        None => True
+        Some _ => False)
+  let result = (
+    givenVisibleFrom inner left,
+    not (givenVisibleFrom right left),
+    leftBinder /= rightBinder,
+    copyDetached,
+  )
+  graphRun := savedGraph
+  perRun := savedPerRun
+  result
+
+-- > scopeServiceProbe ()
+-- (True, True, True, True)
 
 -- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
 -- per module by `checkBodyImpl` before any body is inferred and copied by
 -- `copyDriverState`, so both memo layers restore the key and the bucket together.
-givensHere : Unit -> List GivenEntry
-givensHere _ =
-  optionOr
-    []
-    (omLookup
-      driverState.value.currentModuleRef.value
-      graphRun.value.gGiven.value)
+givensForScope : ScopeId -> List GivenEntry
+givensForScope sid =
+  optionOr [] (omLookup (scopeFrame sid).sfModuleId graphRun.value.gGiven.value)
 
 -- The ONE given write.  Newest first, as both retired tables were, so every reader's
 -- first-match order is the write order it had before.
-pushGiven : GivenMatch -> PredicateSlot -> String -> Unit
-pushGiven gm slot dname =
-  let mid = driverState.value.currentModuleRef.value
-  let entry = GivenEntry { geSlot = slot, geDict = dname, geMatch = gm }
+pushGiven : GivenMatch ->
+  GivenProvenance ->
+  PredicateSlot ->
+  EvidenceBinderId ->
+  Unit
+pushGiven gm provenance slot binder =
+  let mid = (scopeFrame (binderScope binder)).sfModuleId
+  let entry = GivenEntry {
+    geSlot = slot,
+    geBinder = binder,
+    geMatch = gm,
+    geProvenance = provenance,
+  }
   graphRun.value.gGiven :=
-    omInsert mid (entry :: givensHere ()) graphRun.value.gGiven.value
+    omInsert
+      mid
+      (entry :: optionOr [] (omLookup mid graphRun.value.gGiven.value))
+      graphRun.value.gGiven.value
+
+binderScope : EvidenceBinderId -> ScopeId
+binderScope (EvidenceBinderId sid _) = sid
 
 -- What a rung declares it can soundly read out of the one environment.  This is the
 -- eligibility half of `GivenMatch`, and the only place the two interact.
@@ -9658,6 +9913,7 @@ pushNumlit e =
 -- (#158 PR4 extracted shadowHeadCtxRef OUT of here into `Toggles`; its resetState clearing is
 -- preserved by freshToggles being minted in the same resetState — see resetState below.)
 data PerRun = PerRun {
+  currentScope : Ref ScopeCursor,
   -- True while an IMPL or DEFAULT method body is being inferred — the scope in
   -- which registerLocalScheme records obligations (see its comment).
   inRigidityBodyRef : Ref Bool,
@@ -9768,6 +10024,7 @@ data PerRun = PerRun {
 -- A derivation is only honest if someone ran it — so run it, don't read a number here.
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
+  currentScope = Ref ScopeClosed,
   inRigidityBodyRef = Ref False,
   admittedOccObls = Ref [],
   curEffect = Ref (EffRow [] None),
@@ -11960,6 +12217,7 @@ recordRLocalSite env name tagRef inst
         perRun.value.currentFn.value
         (SKRLocal (routeLocalSym !tagRef) True [] [] [])
         !currentLoc
+        (captureScope ())
         (freshEvId ()))
   | not (omHasKey name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
@@ -11986,6 +12244,7 @@ recordRLocalSite env name tagRef inst
               dicts.sdIfaces
               dicts.sdArgVecs)
             !currentLoc
+            (captureScope ())
             (freshEvId ()))
       None => ()
 
@@ -12140,6 +12399,7 @@ recordMethodDicts name methodRef subst =
       pmdEv = freshEvId (),
       pmdSlots = instantiateMethodPredicateSlots slots subst,
       pmdEncl = perRun.value.currentFn.value,
+      pmdScope = captureScope (),
     }
 
 -- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
@@ -12236,6 +12496,7 @@ recordSite name tagRef implRef methodType =
       perRun.value.currentFn.value
       (SKReturn implRef methodType)
       !currentLoc
+      (captureScope ())
       (freshEvId ()))
   perRun.value.methodSiteFns :=
     consSiteFn
@@ -12547,6 +12808,7 @@ inferDictAtFound name ev inst =
       pdaArgVecs = argVecs,
       pdaEncl = perRun.value.currentFn.value,
       pdaLoc = !currentLoc,
+      pdaScope = captureScope (),
     }
     perRun.value.dictAppFns :=
       consSiteFn
@@ -12561,7 +12823,13 @@ inferDictAtFound name ev inst =
     fst inst
   else
     pushRecDictAppGoal
-      (RecDictApp (Ref []) name perRun.value.currentFn.value (fst inst) ev)
+      (RecDictApp
+        (Ref [])
+        name
+        perRun.value.currentFn.value
+        (fst inst)
+        (captureScope ())
+        ev)
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -14243,6 +14511,7 @@ recordBinopSite op dref m = match binopMethod op
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
         !currentLoc
+        (captureScope ())
         (freshEvId ()))
   None => ()
 
@@ -14297,6 +14566,7 @@ recordUnopSite op dref m = match unopMethod op
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
         !currentLoc
+        (captureScope ())
         (freshEvId ()))
   None => ()
 
@@ -16264,6 +16534,7 @@ recordImporterShadowDicts env mname (r :: rest) tx =
           dicts.sdIfaces
           dicts.sdArgVecs)
         !currentLoc
+        (captureScope ())
         (freshEvId ()))
   recordImporterShadowDicts env mname rest tx
 
@@ -16303,6 +16574,7 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
           dicts.sdIfaces
           dicts.sdArgVecs)
         !currentLoc
+        (captureScope ())
         (freshEvId ()))
   recordImporterShadowDictsAt env mname rest ats tx
 
@@ -16560,6 +16832,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
             dicts.sdIfaces
             dicts.sdArgVecs)
           !currentLoc
+          (captureScope ())
           (freshEvId ()))
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
@@ -16577,6 +16850,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
           perRun.value.currentFn.value
           (SKArg implRef (if dispatches then ft else xt))
           !currentLoc
+          (captureScope ())
           (freshEvId ()))
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
@@ -19493,7 +19767,7 @@ methodConstrainedPairs _ =
 -- the explanation.  Dropping was the earlier behaviour and it is why a `where` helper
 -- pinned by this channel got a bare mismatch with no help at all.
 argStampPairs : PendingEntry -> List (Int, String)
-argStampPairs (PendingEntry name _ am _ _ _ _) =
+argStampPairs (PendingEntry name _ am _ _ _ _ _) =
   map (id => (id, optionOr "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
 -- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
@@ -20121,6 +20395,7 @@ registerAmbiguousGo (o :: rest) groupLevel memberIds anchoredIds =
         mty
         occ
         o.loc
+        o.uoScope
         groupLevel
         memberIds
         anchoredIds
@@ -20140,11 +20415,12 @@ registerOneAmbiguous : IfaceRef ->
   Ty ->
   Mono ->
   Option Loc ->
+  ScopeId ->
   Int ->
   List Int ->
   List Int ->
   Unit
-registerOneAmbiguous iface typarams mty occ loc groupLevel memberIds anchoredIds
+registerOneAmbiguous iface typarams mty occ loc scope groupLevel memberIds anchoredIds
   | iface.irName == "Num" = ()
   -- F0: register call obligations for the RECEIVER (dispatch) typaram only — a
   -- return-only typaram is impl-determined, not an impl-selection key (see
@@ -20154,6 +20430,7 @@ registerOneAmbiguous iface typarams mty occ loc groupLevel memberIds anchoredIds
       iface
       (dispatchMonosOf (dispatchTyparams typarams) mty occ)
       loc
+      scope
       groupLevel
       memberIds
       anchoredIds
@@ -20161,12 +20438,13 @@ registerOneAmbiguous iface typarams mty occ loc groupLevel memberIds anchoredIds
 registerDispatchMonos : IfaceRef ->
   List Mono ->
   Option Loc ->
+  ScopeId ->
   Int ->
   List Int ->
   List Int ->
   Unit
-registerDispatchMonos _ [] _ _ _ _ = ()
-registerDispatchMonos iface (dm :: rest) loc groupLevel memberIds anchoredIds =
+registerDispatchMonos _ [] _ _ _ _ _ = ()
+registerDispatchMonos iface (dm :: rest) loc scope groupLevel memberIds anchoredIds =
   let ambig =
     filterList
       (p =>
@@ -20178,8 +20456,8 @@ registerDispatchMonos iface (dm :: rest) loc groupLevel memberIds anchoredIds =
     if isEmptyL ambig then
       ()
     else
-      recordObl Predicate { iface = iface, args = [dm] } 0 PCallSlot loc
-  registerDispatchMonos iface rest loc groupLevel memberIds anchoredIds
+      recordOblAt Predicate { iface = iface, args = [dm] } 0 PCallSlot loc scope
+  registerDispatchMonos iface rest loc scope groupLevel memberIds anchoredIds
 
 -- the (id, level) of every UNBOUND tyvar in [t] (sibling of monoUnboundIds, but
 -- carrying the level so registerOneAmbiguous can tell a this-group constraint var
@@ -21023,11 +21301,11 @@ constraintNonParamVars typarams (Constraint { constraintArgs = args }) =
 
 resolveSites : List String -> List PendingEntry -> Unit
 resolveSites _ [] = goalSiteLoc := None
-resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc _) :: rest) =
+resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKReturn implRef fullMono =>
-      resolveSite rpNames name tagRef implRef resultMono fullMono encl
+      resolveSite rpNames name tagRef implRef resultMono fullMono encl scope
     _ => ()
   resolveSites rpNames rest
 
@@ -21059,6 +21337,7 @@ resolveSite : List String ->
   Mono ->
   Mono ->
   String ->
+  ScopeId ->
   Unit
 -- #156 S3b: a thin adapter over `entail` (EKReturn kind).  `entail` returns
 -- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
@@ -21071,9 +21350,14 @@ resolveSite : List String ->
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
-resolveSite rpNames name tagRef implRef resultMono fullMono encl =
+resolveSite rpNames name tagRef implRef resultMono fullMono encl scope =
   let (route, routes) =
-    entail name resultMono encl (EKReturn fullMono (contains name rpNames))
+    entail
+      name
+      resultMono
+      encl
+      scope
+      (EKReturn fullMono (contains name rpNames))
   let _ = match route
     RNone => ()
     _ => tagRef := route
@@ -21523,14 +21807,25 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
 resolveRLocalSites : List Decl -> List PendingEntry -> Unit
 resolveRLocalSites _ [] = goalSiteLoc := None
-resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc _) :: rest) =
+resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef := RLocal sym (routesOfMonosTopV prog encl monos ifaces argVecs)
+        tagRef :=
+          RLocal sym (routesOfMonosTopV prog encl scope monos ifaces argVecs)
       else
-        resolveRLocalSite prog name tagRef am encl sym monos ifaces argVecs
+        resolveRLocalSite
+          prog
+          name
+          tagRef
+          am
+          encl
+          scope
+          sym
+          monos
+          ifaces
+          argVecs
     _ => ()
   resolveRLocalSites prog rest
 
@@ -21546,12 +21841,13 @@ resolveRLocalSite : List Decl ->
   Ref Route ->
   Mono ->
   String ->
+  ScopeId ->
   String ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   Unit
-resolveRLocalSite prog name tagRef am encl sym monos ifaces argVecs =
+resolveRLocalSite prog name tagRef am encl scope sym monos ifaces argVecs =
   match headTyconMono am
     -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
@@ -21584,12 +21880,13 @@ resolveRLocalSite prog name tagRef am encl sym monos ifaces argVecs =
           && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
         tagRef
         sym
-        (routesOfMonosTopV prog encl monos ifaces argVecs)
+        (routesOfMonosTopV prog encl scope monos ifaces argVecs)
     -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
     -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
     None =>
       if omHasKey name perRun.value.definerShadowNamesRef.value then
-        tagRef := RLocal sym (routesOfMonosTopV prog encl monos ifaces argVecs)
+        tagRef :=
+          RLocal sym (routesOfMonosTopV prog encl scope monos ifaces argVecs)
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
 -- or RKey stamped by resolveArgStamps on emit) — leave untouched.
@@ -21605,39 +21902,40 @@ stampRLocalOrFallback False tagRef sym dicts = tagRef := RLocal sym dicts
 -- m) Unit) carries the dict var in the application HEAD, not at top level — recurse
 -- through TApp to find it.  (A concrete head, e.g. `Option Unit` after unification,
 -- is a TCon and falls through to None → RKey, unchanged.)
-activeDictVarOf : Mono -> Option String
-activeDictVarOf m = match normalize m
-  TVar cell => lookupAssocI (tyvarId cell) graphRun.value.activeDictVars.value
-  TApp a _ => activeDictVarOf a
+activeDictVarOf : Mono -> ScopeId -> Option EvidenceBinderId
+activeDictVarOf m useScope = match normalize m
+  TVar cell =>
+    firstDictForEncl (tyvarId cell) useScope graphRun.value.activeDictVars.value
+  TApp a _ => activeDictVarOf a useScope
   _ => None
 
--- The lexical active-dict lookup: return an activeDictVars entry only when its
--- dict-param name belongs to the enclosing method [encl]
--- (`$dict_<encl>_<slot>`).  registerImplRequires
--- registers EVERY method of an impl under the SAME impl tyvar id (`impl Ord (List a)`
--- registers `a`'s id once per compare/lt/gt/min/max/… each to `$dict_<method>_<slot>`),
--- so the global first-match `activeDictVarOf` returns whichever method registered
--- LAST — inside `compare`'s body that wrongly yields `$dict_max_0` (out of compare's
--- scope → emitter "unbound dict witness").  Picking the [encl]-owned entry keeps each
--- method body's element-dict route bound to ITS OWN leading param.  An empty owner or
--- owner-prefix miss is not evidence: it must not borrow an unrelated global entry.
-activeDictVarForEncl : Mono -> String -> Option String
-activeDictVarForEncl m encl
+-- The lexical active-dict lookup.  `registerImplRequires` registers every method
+-- of an impl under the same impl tyvar id (`impl Ord (List a)` registers `a` once
+-- per compare/lt/gt/min/max/…).  Each entry now carries the exact body scope that
+-- owns its slot.  The occurrence's captured scope may read that owner or an
+-- ancestor and rejects every sibling; generated dictionary spellings play no
+-- part in selection.  [encl] remains only as the legacy empty-owner guard and for
+-- downstream rendering compatibility.
+activeDictVarForEncl : Mono -> String -> ScopeId -> Option EvidenceBinderId
+activeDictVarForEncl m encl useScope
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
       firstDictForEncl
         (tyvarId cell)
-        ("$dict_" ++ encl ++ "_")
+        useScope
         graphRun.value.activeDictVars.value
-    TApp a _ => activeDictVarForEncl a encl
+    TApp a _ => activeDictVarForEncl a encl useScope
     _ => None
 
-firstDictForEncl : Int -> String -> List (Int, String) -> Option String
+firstDictForEncl : Int ->
+  ScopeId ->
+  List (Int, EvidenceBinderId) ->
+  Option EvidenceBinderId
 firstDictForEncl _ _ [] = None
-firstDictForEncl id pfx ((eid, ename) :: rest)
-  | eid == id && startsWith pfx ename = Some ename
-  | otherwise = firstDictForEncl id pfx rest
+firstDictForEncl id useScope ((eid, binder) :: rest)
+  | eid == id && givenVisibleFrom useScope (binderScope binder) = Some binder
+  | otherwise = firstDictForEncl id useScope rest
 
 -- activeDictVarOf, but for a constraint var that is the ENCLOSING fn's OWN constraint
 -- var, return [encl]'s in-scope dict param (the slot it sits at) rather than the
@@ -21651,15 +21949,20 @@ firstDictForEncl id pfx ((eid, ename) :: rest)
 -- the instantiated argument vector when the occurrence let one be recovered), NOT
 -- just the constraint var — see `enclDictVarOf`.  `None` selects the legacy scalar
 -- lookup, still bounded by the same lexical owner.
-activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
-activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
-activeDictVarOfEncl (Some request) m encl =
+activeDictVarOfEncl : Option PredicateRequest ->
+  Mono ->
+  String ->
+  ScopeId ->
+  Option AssumAnswer
+activeDictVarOfEncl None m encl useScope =
+  map LegacyScalar (activeDictVarForEncl m encl useScope)
+activeDictVarOfEncl (Some request) m encl useScope =
   -- A complete predicate request is terminal: a miss must not be overwritten by
   -- the scalar tyvar-id registry, whose key cannot distinguish declarations or
   -- complete argument vectors.  The None arm above is the legacy scalar control.
   orElseOpt
-    (enclDictVarOf (Some request) m encl)
-    (implReqDictVarOf (Some request) m encl)
+    (map LegacyScalar (enclDictVarOf (Some request) m encl useScope))
+    (implReqDictVarOf (Some request) m encl useScope)
 
 -- 🚨 #1154 RESIDUAL: AN IMPL-`requires` SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS
 -- CONSTRAINT VAR'S ID — the same rule #1177 established for the SIGNATURE `=>` channel,
@@ -21686,9 +21989,13 @@ activeDictVarOfEncl (Some request) m encl =
 -- #2547 unit 3: the scan is `firstPredForEnclAt` — the id-gated given lookup — not a
 -- private `implReqPick`.  The two were term-for-term the same test over the same pair in
 -- opposite tuple orders; one given environment leaves one of them.
-implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
-implReqDictVarOf None _ _ = None
-implReqDictVarOf (Some request) m encl
+implReqDictVarOf : Option PredicateRequest ->
+  Mono ->
+  String ->
+  ScopeId ->
+  Option AssumAnswer
+implReqDictVarOf None _ _ _ = None
+implReqDictVarOf (Some request) m encl useScope
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
@@ -21696,9 +22003,9 @@ implReqDictVarOf (Some request) m encl
         GSImplRequires
         (tyvarId cell)
         request
-        "$dict_\{encl}_"
-        (givensHere ())
-    TApp a _ => implReqDictVarOf (Some request) a encl
+        useScope
+        (givensForScope useScope)
+    TApp a _ => implReqDictVarOf (Some request) a encl useScope
     _ => None
 
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
@@ -21717,13 +22024,17 @@ predicateSlotKnownArgs (PSArgsKnown args) = args
 --
 -- `funPredicateSlotsRef` carries the authoritative slots in order, so this lookup
 -- never has to reconstruct a predicate from parallel scalar tables.
-enclDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
-enclDictVarOf goal m encl
+enclDictVarOf : Option PredicateRequest ->
+  Mono ->
+  String ->
+  ScopeId ->
+  Option EvidenceBinderId
+enclDictVarOf goal m encl useScope
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
-      map (dictParamName encl) (enclSlotIndex goal (tyvarId cell) encl)
-    TApp a _ => enclDictVarOf goal a encl
+      map (binderAt useScope) (enclSlotIndex goal (tyvarId cell) encl)
+    TApp a _ => enclDictVarOf goal a encl useScope
     _ => None
 
 -- the slot index [target]'s dict param sits at in [encl]'s own constraint slots:
@@ -21872,10 +22183,11 @@ resolveArithSite dref m = match !dref
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
 resolveOpSites : Bool -> List PendingEntry -> Unit
 resolveOpSites _ [] = goalSiteLoc := None
-resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc _) :: rest) =
+resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
-    SKOp inImpl => resolveOpSite isBinop method tagRef operandMono inImpl encl
+    SKOp inImpl =>
+      resolveOpSite isBinop method tagRef operandMono inImpl encl scope
     _ => ()
   resolveOpSites isBinop rest
 
@@ -21945,12 +22257,15 @@ opDictVarOf : Option PredicateRequest ->
   Mono ->
   Bool ->
   String ->
-  Option String
-opDictVarOf request True "append" m _ encl = enclDictVarOf request m encl
-opDictVarOf request True _ m inImpl encl
-  | inImpl = activeDictVarOf m
-  | otherwise = enclDictVarOf request m encl
-opDictVarOf request False _ m _ encl = enclDictVarOf request m encl
+  ScopeId ->
+  Option AssumAnswer
+opDictVarOf request True "append" m _ encl useScope =
+  map LegacyScalar (enclDictVarOf request m encl useScope)
+opDictVarOf request True _ m inImpl encl useScope
+  | inImpl = map LegacyScalar (activeDictVarOf m useScope)
+  | otherwise = map LegacyScalar (enclDictVarOf request m encl useScope)
+opDictVarOf request False _ m _ encl useScope =
+  map LegacyScalar (enclDictVarOf request m encl useScope)
 
 -- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
 -- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
@@ -21960,9 +22275,16 @@ opDictVarOf request False _ m _ encl = enclDictVarOf request m encl
 -- EBinOp/EUnOp keeping the same ref, never re-seeding it), so the two do-nothing arms
 -- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed
 -- byte-identically — reproducing the pre-S3c `()` arms.
-resolveOpSite : Bool -> String -> Ref Route -> Mono -> Bool -> String -> Unit
-resolveOpSite isBinop method tagRef operandMono inImpl encl =
-  match fst (entail method operandMono encl (EKOp isBinop inImpl))
+resolveOpSite : Bool ->
+  String ->
+  Ref Route ->
+  Mono ->
+  Bool ->
+  String ->
+  ScopeId ->
+  Unit
+resolveOpSite isBinop method tagRef operandMono inImpl encl scope =
+  match fst (entail method operandMono encl scope (EKOp isBinop inImpl))
     RNone => ()
     route => tagRef := route
 
@@ -22002,8 +22324,8 @@ resolveOpSite isBinop method tagRef operandMono inImpl encl =
 -- Else a concrete non-builtin head → `RKey key reqs` with the element `requires` dicts
 -- PACKED into the primary route's reqs (binopRouteSplit later rips them onto the
 -- EMethodAt impl-dict ref).  Byte-identical to the pre-S3c stampOpRoute stamper.
-stampOpRouteVal : Bool -> String -> String -> Mono -> String -> Route
-stampOpRouteVal isBinop encl method operandMono tag =
+stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
+stampOpRouteVal isBinop encl useScope method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
   -- #2356: a builtin head is not a dispatch, but it is not nothing either.  A
@@ -22044,8 +22366,13 @@ stampOpRouteVal isBinop encl method operandMono tag =
           innerDefaultMethod method
       else
         method
-    let reqs =
-      argImplDictRoutesForEncl encl dictMethod tag operandMono [operandMono]
+    let reqs = argImplDictRoutesForEncl
+      encl
+      useScope
+      dictMethod
+      tag
+      operandMono
+      [operandMono]
     RKey key reqs
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
@@ -26859,6 +27186,7 @@ headKeyNameOr dflt None = dflt
 -- measurement — it is NOT threaded for a live re-bucketing).
 -- The OUTER head match still uses headSubstWithParams (multi-param augmentation).
 implDictRoutesForFull : String ->
+  ScopeId ->
   String ->
   String ->
   Mono ->
@@ -26881,12 +27209,12 @@ implDictRoutesForFull : String ->
 -- reads the table; each link only forwards it, and the one `KeyBuckets`-consuming
 -- fallback (`undeterminedRoute`'s `CountImpls` arm) is unreachable because
 -- `argReqRoute` seeds the recursion with `KeepNone`.
-implDictRoutesForFull encl name tag resultMono paramMonos =
+implDictRoutesForFull encl useScope name tag resultMono paramMonos =
   match (ieRowHeadTriple
     (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name paramMonos))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys resultMono paramMonos
-        Some subst => argImplReqRoutes encl subst reqs 0 0
+        Some subst => argImplReqRoutes encl useScope subst reqs 0 0
         None => []
     None => []
 
@@ -27077,7 +27405,13 @@ resolveDictApps _ [] = goalSiteLoc := None
 resolveDictApps prog (app :: rest) =
   goalSiteLoc := app.pdaLoc
   let routes =
-    routesOfMonosTopV prog app.pdaEncl app.pdaMonos app.pdaIfaces app.pdaArgVecs
+    routesOfMonosTopV
+      prog
+      app.pdaEncl
+      app.pdaScope
+      app.pdaMonos
+      app.pdaIfaces
+      app.pdaArgVecs
   app.pdaRoutesRef := routes
   resolveDictApps prog rest
 
@@ -27203,12 +27537,19 @@ data EntailKind =
 -- `Option` — same reason `headTyconNameTy`/`headTyconNameMono` exist at all
 -- (`compiler/AGENTS.md`): Medaka is strict, so the combinator spelling would
 -- allocate a second `Option` on every entailment to throw it away.
-entail : String -> Mono -> String -> EntailKind -> (Route, List Route)
-entail name m encl kind = match entailAssum m encl name kind
-  Some dname => (entailAssumRoute dname kind, [])
+entail : String ->
+  Mono ->
+  String ->
+  ScopeId ->
+  EntailKind ->
+  (Route, List Route)
+entail name m encl useScope kind = match entailAssum m encl name useScope kind
+  Some answer =>
+    let _ = noteAssumption useScope answer
+    (entailAssumRoute (assumAnswerName answer) kind, [])
   None => match headTyconMono m
-    Some hk => entailInst name m encl (headKeyName hk) kind
-    None => (entailFallback kind, [])
+    Some hk => entailInst name m encl useScope (headKeyName hk) kind
+    None => (entailFallback useScope kind, [])
 
 -- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`
 -- takes precedence over `inst`; a predicate already in scope is USED, and `inst` fires only
@@ -27218,13 +27559,18 @@ entail name m encl kind = match entailAssum m encl name kind
 -- STRUCTURED given (`requires S (List a)`) that `activeDictVarOf` structurally cannot see,
 -- because it recurses to the spine head and a structured subject has a TCon there.
 -- Strictly additive: every goal the tyvar path already answers routes exactly as before.
-entailAssum : Mono -> String -> String -> EntailKind -> Option String
-entailAssum m encl name kind =
+entailAssum : Mono ->
+  String ->
+  String ->
+  ScopeId ->
+  EntailKind ->
+  Option AssumAnswer
+entailAssum m encl name useScope kind =
   let request = goalRequestOfKind name kind
-  match entailAssumVar request m encl name kind
-    Some dname => Some dname
+  match entailAssumVar request m encl name useScope kind
+    Some answer => Some answer
     None => match request
-      Some req => activeDictPredOf req m encl
+      Some req => activeDictPredOf req m encl useScope
       None => None
 
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
@@ -27242,31 +27588,35 @@ entailAssumVar : Option PredicateRequest ->
   Mono ->
   String ->
   String ->
+  ScopeId ->
   EntailKind ->
-  Option String
+  Option AssumAnswer
 -- #1177: the genuine/arg kinds now hand `activeDictVarOfEncl` the site's PREDICATE —
 -- [name]'s interface plus the vector `ifaceParamMonos` recovers from the kind's own
 -- full occurrence mono, the SAME vector `entailInst` selects the impl row on — so the
 -- slot the body reads and the impl the site dispatches to answer one question.  The
 -- nested/top kind keeps `activeDictVarForEncl` (no predicate: [name] there is a
 -- constrained FUNCTION, not a method occurrence).
-entailAssumVar request m encl _ (EKReturn _ _) =
-  activeDictVarOfEncl request m encl
-entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
+entailAssumVar request m encl _ useScope (EKReturn _ _) =
+  activeDictVarOfEncl request m encl useScope
+entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
   match (activeFunDictPredOf
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
-    encl)
-    Some dname => Some dname
+    encl
+    useScope)
+    Some answer => Some answer
     -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
     -- its pre-migration spelling fallback until that producer has declaration identity.
-    None => match activeFunDictPredOfResidual iface.irName (m :: rest) encl
-      Some dname => Some dname
-      None => activeDictVarForEncl m encl
-entailAssumVar request m encl _ (EKArg _) = activeDictVarOfEncl request m encl
-entailAssumVar request m encl name (EKOp isBinop inImpl) =
+    None =>
+      match activeFunDictPredOfResidual iface.irName (m :: rest) encl useScope
+        Some answer => Some answer
+        None => map LegacyScalar (activeDictVarForEncl m encl useScope)
+entailAssumVar request m encl _ useScope (EKArg _) =
+  activeDictVarOfEncl request m encl useScope
+entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
   -- #1318 residual: the in-impl non-append operator arm in opDictVarOf retains its
   -- historical scalar bypass; fixing its parameter-offset contract is later work.
-  opDictVarOf request isBinop name m inImpl encl
+  opDictVarOf request isBinop name m inImpl encl useScope
 
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumRoute dname (EKReturn _ isRp) =
@@ -27285,6 +27635,7 @@ entailAssumRoute dname (EKOp _ _) = RDict dname
 entailInst : String ->
   Mono ->
   String ->
+  ScopeId ->
   String ->
   EntailKind ->
   (Route, List Route)
@@ -27294,10 +27645,10 @@ entailInst : String ->
 -- selector and the requires router now agree on one goal by construction.  A method
 -- with no registered interface (ifaceParamMonos → None) still selects on [m],
 -- exactly as before.
-entailInst name m encl tag (EKReturn fullMono _) =
+entailInst name m encl useScope tag (EKReturn fullMono _) =
   let paramMonos = optionOr [m] (ifaceParamMonos name fullMono)
   let routeKey = optionOr tag (keyForSite name paramMonos)
-  (RKey routeKey [], implDictRoutesForFull encl name tag m paramMonos)
+  (RKey routeKey [], implDictRoutesForFull encl useScope name tag m paramMonos)
 -- #203 (E, the root fix): mirror EKReturn.  Was `RKey tag …` — a BARE ambiguous head
 -- tag whose constructor carried no KeyBuckets, so it could not reach the min⊑ selector;
 -- every nested-`requires` and super-projection goal funnels through here.  Now the
@@ -27320,7 +27671,7 @@ entailInst name m encl tag (EKReturn fullMono _) =
 -- recording it beside `funConstraintsRef` (rather than inside it) leaves the SHATTERED
 -- per-tyvar dict slots, and hence emitted dict arity, exactly as they were.  #607
 -- punch-list item 3 (dict slot = predicate, which really would move arity) stays open.
-entailInst _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
+entailInst _ m encl useScope tag (EKNestedTop iface _ prevSize spent rest) =
   -- 🚨 B-4b-ii LEFT THIS BARE ON PURPOSE, AND THE REASON IS THE SOURCE, NOT THE
   -- PLUMBING.  Widening `EKNestedTop`'s field is mechanical; the question is whether
   -- anything upstream HAS an origin worth supplying, and on this leg it does not.
@@ -27381,7 +27732,9 @@ entailInst _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
   -- it.  Vary the collision away and re-measure before attributing.
   let routeKey = optionOr tag (keyForSiteByIface iface (m :: rest))
   (
-    RKey routeKey (argImplRequiresRoutes iface encl m rest prevSize spent),
+    RKey
+      routeKey
+      (argImplRequiresRoutes iface encl useScope m rest prevSize spent),
     [],
   )
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
@@ -27392,7 +27745,7 @@ entailInst _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
 -- the SAME impl, and the first cut of this fix computed the vector here and then
 -- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
-entailInst name m encl tag (EKArg fullMono) =
+entailInst name m encl useScope tag (EKArg fullMono) =
   let goals = optionOr [m] (ifaceParamMonos name fullMono)
   let routeKey = optionOr tag (keyForSite name goals)
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
@@ -27411,23 +27764,25 @@ entailInst name m encl tag (EKArg fullMono) =
       innerDefaultMethod name
   (
     RKey routeKey [],
-    argImplDictRoutesForEncl encl dictName tag m goals,
+    argImplDictRoutesForEncl encl useScope dictName tag m goals,
   )
-entailInst name m encl tag (EKOp isBinop _) =
-  (stampOpRouteVal isBinop encl name m tag, [])
+entailInst name m encl useScope tag (EKOp isBinop _) =
+  (stampOpRouteVal isBinop encl useScope name m tag, [])
 
-entailFallback : EntailKind -> Route
-entailFallback (EKReturn _ _) = RNone
-entailFallback (EKNestedTop _ policy _ _ _) = undeterminedRoute policy
-entailFallback (EKArg _) = RNone
-entailFallback (EKOp _ _) = RNone
+entailFallback : ScopeId -> EntailKind -> Route
+entailFallback _ (EKReturn _ _) = RNone
+entailFallback scope (EKNestedTop _ policy _ _ _) =
+  undeterminedRoute scope policy
+entailFallback _ (EKArg _) = RNone
+entailFallback _ (EKOp _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
 -- Only a non-empty [encl] can supply an active dict, and only from that owner's
 -- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
-routeOf : IfaceRef -> String -> Undetermined -> Mono -> Route
-routeOf iface encl policy m = routeOfD iface encl policy m [] 0 0
+routeOf : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> Route
+routeOf iface encl useScope policy m =
+  routeOfD iface encl useScope policy m [] 0 0
 
 -- #217: fuse-carrying core of routeOf.  [prevSize]/[spent] thread the WS-4b fuse
 -- through the aware recursion (routeOfD → argImplRequiresRoutes → argImplReqRoutes
@@ -27438,6 +27793,7 @@ routeOf iface encl policy m = routeOfD iface encl policy m [] 0 0
 -- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
 routeOfD : IfaceRef ->
   String ->
+  ScopeId ->
   Undetermined ->
   Mono ->
   List Mono ->
@@ -27449,12 +27805,13 @@ routeOfD : IfaceRef ->
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
 -- here via argImplRequiresRoutes → argImplReqRoutes → argReqRoute → routeOfD, with the
 -- fuse pair threaded through the EKNestedTop payload.
-routeOfD iface encl policy m rest prevSize spent =
-  fst (entail "" m encl (EKNestedTop iface policy prevSize spent rest))
+routeOfD iface encl useScope policy m rest prevSize spent =
+  fst (entail "" m encl useScope (EKNestedTop iface policy prevSize spent rest))
 
-undeterminedRoute : Undetermined -> Route
-undeterminedRoute KeepNone = RNone
-undeterminedRoute (CountImpls prog iface) = routeUndeterminedTop prog iface
+undeterminedRoute : ScopeId -> Undetermined -> Route
+undeterminedRoute _ KeepNone = RNone
+undeterminedRoute scope (CountImpls prog iface) =
+  routeUndeterminedTop prog scope iface
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
@@ -27495,20 +27852,21 @@ undeterminedRoute (CountImpls prog iface) = routeUndeterminedTop prog iface
 -- absence-of-regression, never correctness of the new path — as before.
 routesOfMonosTopV : List Decl ->
   String ->
+  ScopeId ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
-routesOfMonosTopV prog encl monos ifaces [] =
-  routesOfMonosTop prog encl monos ifaces
-routesOfMonosTopV _ _ [] _ _ = []
-routesOfMonosTopV prog encl (m :: rest) [] (_ :: vs) =
-  routeOf ifaceRefNone encl (CountImpls prog "") m
-    :: routesOfMonosTopV prog encl rest [] vs
-routesOfMonosTopV prog encl (m :: rest) (iface :: ifacesRest) (v :: vs) =
-  topRouteV prog encl iface m v
-    :: routesOfMonosTopV prog encl rest ifacesRest vs
+routesOfMonosTopV prog encl useScope monos ifaces [] =
+  routesOfMonosTop prog encl useScope monos ifaces
+routesOfMonosTopV _ _ _ [] _ _ = []
+routesOfMonosTopV prog encl useScope (m :: rest) [] (_ :: vs) =
+  routeOf ifaceRefNone encl useScope (CountImpls prog "") m
+    :: routesOfMonosTopV prog encl useScope rest [] vs
+routesOfMonosTopV prog encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
+  topRouteV prog encl useScope iface m v
+    :: routesOfMonosTopV prog encl useScope rest ifacesRest vs
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
@@ -27519,10 +27877,17 @@ routesOfMonosTopV prog encl (m :: rest) (iface :: ifacesRest) (v :: vs) =
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : List Decl -> String -> IfaceRef -> Mono -> List Mono -> Route
-topRouteV prog encl iface m goals = match vectorGoal iface goals
-  Some (g0, gs) => routeOfD iface encl (CountImpls prog iface.irName) g0 gs 0 0
-  None => routeOf iface encl (CountImpls prog iface.irName) m
+topRouteV : List Decl ->
+  String ->
+  ScopeId ->
+  IfaceRef ->
+  Mono ->
+  List Mono ->
+  Route
+topRouteV prog encl useScope iface m goals = match vectorGoal iface goals
+  Some (g0, gs) =>
+    routeOfD iface encl useScope (CountImpls prog iface.irName) g0 gs 0 0
+  None => routeOf iface encl useScope (CountImpls prog iface.irName) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -27545,20 +27910,21 @@ vectorGoal iface (g0 :: gs) = if iface.irName == "" then None else Some (g0, gs)
 
 routesOfMonosTop : List Decl ->
   String ->
+  ScopeId ->
   List Mono ->
   List IfaceRef ->
   List Route
-routesOfMonosTop _ _ [] _ = []
-routesOfMonosTop prog encl (m :: rest) [] =
-  routeOf ifaceRefNone encl (CountImpls prog "") m
-    :: routesOfMonosTop prog encl rest []
-routesOfMonosTop prog encl (m :: rest) (iface :: ifacesRest) =
-  routeOf iface encl (CountImpls prog iface.irName) m
-    :: routesOfMonosTop prog encl rest ifacesRest
+routesOfMonosTop _ _ _ [] _ = []
+routesOfMonosTop prog encl useScope (m :: rest) [] =
+  routeOf ifaceRefNone encl useScope (CountImpls prog "") m
+    :: routesOfMonosTop prog encl useScope rest []
+routesOfMonosTop prog encl useScope (m :: rest) (iface :: ifacesRest) =
+  routeOf iface encl useScope (CountImpls prog iface.irName) m
+    :: routesOfMonosTop prog encl useScope rest ifacesRest
 
 -- the undetermined-constraint resolution: count impls of [iface] in [prog].
-routeUndeterminedTop : List Decl -> String -> Route
-routeUndeterminedTop prog iface
+routeUndeterminedTop : List Decl -> ScopeId -> String -> Route
+routeUndeterminedTop prog scope iface
   | iface == "" = RNone
   | otherwise = match implHeadTagsForIface prog iface
     [] => RNone
@@ -27574,6 +27940,7 @@ routeUndeterminedTop prog iface
         (argImplRequiresRoutes
           (ifaceRefBare iface)
           ""
+          scope
           (tconUnresolved tag)
           []
           0
@@ -27716,12 +28083,13 @@ ambiguousImplMsg iface =
 -- is `[]`, which is the only value `rest` takes there.
 argImplRequiresRoutes : IfaceRef ->
   String ->
+  ScopeId ->
   Mono ->
   List Mono ->
   Int ->
   Int ->
   List Route
-argImplRequiresRoutes iface encl m rest prevSize spent =
+argImplRequiresRoutes iface encl useScope m rest prevSize spent =
   -- #1576: the goal vector is bound BEFORE the fuse test now, because the fuse test
   -- reads it.  It is pure, so hoisting it costs a `monoSizes` walk on the limit-hit
   -- path and changes no answer.
@@ -27744,7 +28112,7 @@ argImplRequiresRoutes iface encl m rest prevSize spent =
       Some subst =>
         -- THIS level's goal size becomes the child's [prevSize] — that is the whole
         -- shrinking comparison, one parent/child pair at a time.
-        argImplReqRoutes encl subst reqs size spentNow
+        argImplReqRoutes encl useScope subst reqs size spentNow
       None => []
     None => []
 
@@ -27817,6 +28185,7 @@ selectReqImpl iface goals =
 -- every later argument.  Regression:
 -- test/eval_typed_fixtures/multiparam_impl_requires_arity{,_swapped}.mdk.
 argImplDictRoutesForEncl : String ->
+  ScopeId ->
   String ->
   String ->
   Mono ->
@@ -27825,12 +28194,12 @@ argImplDictRoutesForEncl : String ->
 -- ARCH B-2.1-b2 (LEG 3b): the arg-position twin of leg 3a, repointed for the same
 -- reason and in the same bite — the two legs select the SAME way at the same goal
 -- and a split between them is the §6 C2 break the header describes.
-argImplDictRoutesForEncl encl name _tag mono goals =
+argImplDictRoutesForEncl encl useScope name _tag mono goals =
   match (ieRowHeadTriple
     (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name goals))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys mono goals
-        Some subst => argImplReqRoutes encl subst reqs 0 0
+        Some subst => argImplReqRoutes encl useScope subst reqs 0 0
         None => []
     None => []
 
@@ -27841,32 +28210,35 @@ argImplDictRoutesForEncl encl name _tag mono goals =
 -- == 0` is the "no parent goal yet" sentinel, so a seed's own first level is counted
 -- as non-shrinking and costs one unit of fuel.
 argImplReqRoutes : String ->
+  ScopeId ->
   List (String, Mono) ->
   List Require ->
   Int ->
   Int ->
   List Route
-argImplReqRoutes _ _ [] _ _ = []
-argImplReqRoutes encl subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
-  argReqRoute rIface encl subst rargs prevSize spent
-    :: argImplReqRoutes encl subst rest prevSize spent
+argImplReqRoutes _ _ _ [] _ _ = []
+argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
+  argReqRoute rIface encl useScope subst rargs prevSize spent
+    :: argImplReqRoutes encl useScope subst rest prevSize spent
 
 argReqRoute : String ->
   String ->
+  ScopeId ->
   List (String, Mono) ->
   List Ty ->
   Int ->
   Int ->
   Route
-argReqRoute _ _ _ [] _ _ = RNone
+argReqRoute _ _ _ _ [] _ _ = RNone
 -- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
 -- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
 -- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
-argReqRoute iface encl subst (arg :: more) prevSize spent =
+argReqRoute iface encl useScope subst (arg :: more) prevSize spent =
   routeOfD
     (ifaceRefBare iface)
     encl
+    useScope
     KeepNone
     (fromAstType subst arg)
     (map (fromAstType subst) more)
@@ -27881,17 +28253,18 @@ argReqRoute iface encl subst (arg :: more) prevSize spent =
 resolveMethodDicts : List PendingMethodDict -> Unit
 resolveMethodDicts [] = ()
 resolveMethodDicts (pending :: rest) =
-  pending.pmdRoutesRef := methodPredicateRoutes pending.pmdEncl pending.pmdSlots
+  pending.pmdRoutesRef :=
+    methodPredicateRoutes pending.pmdEncl pending.pmdScope pending.pmdSlots
   resolveMethodDicts rest
 
-methodPredicateRoutes : String -> List PredicateSlot -> List Route
-methodPredicateRoutes _ [] = []
-methodPredicateRoutes encl (slot :: rest) =
-  methodPredicateRoute encl slot :: methodPredicateRoutes encl rest
+methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
+methodPredicateRoutes _ _ [] = []
+methodPredicateRoutes encl scope (slot :: rest) =
+  methodPredicateRoute encl scope slot :: methodPredicateRoutes encl scope rest
 
-methodPredicateRoute : String -> PredicateSlot -> Route
-methodPredicateRoute encl slot = match slot.psArgs
-  PSArgsKnown (g0 :: gs) => routeOfD slot.psIface encl KeepNone g0 gs 0 0
+methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
+methodPredicateRoute encl scope slot = match slot.psArgs
+  PSArgsKnown (g0 :: gs) => routeOfD slot.psIface encl scope KeepNone g0 gs 0 0
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -27901,31 +28274,31 @@ methodPredicateRoute encl slot = match slot.psArgs
 -- fully populated.
 realizeRecDictApps : List RecDictApp -> Unit
 realizeRecDictApps [] = ()
-realizeRecDictApps ((RecDictApp routesRef callee encl mono _) :: rest) =
+realizeRecDictApps ((RecDictApp routesRef callee encl mono scope _) :: rest) =
   let slots =
     optionOr
       []
       (lookupPredicateSlots callee perRun.value.funPredicateSlotsRef.value)
-  let routes = recRoutes encl mono slots
+  let routes = recRoutes encl scope mono slots
   routesRef := routes
   realizeRecDictApps rest
 
-recRoutes : String -> Mono -> List PredicateSlot -> List Route
-recRoutes _ _ [] = []
-recRoutes encl mono (slot :: rest) =
-  recRoute encl mono slot :: recRoutes encl mono rest
+recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
+recRoutes _ _ _ [] = []
+recRoutes encl scope mono (slot :: rest) =
+  recRoute encl scope mono slot :: recRoutes encl scope mono rest
 
 -- For one of the callee's constraint ids, recover the live occurrence type from
 -- [mono] (the var the body unified it to).  Concrete head → RKey; still a
 -- constraint variable that is one of [encl]'s own → forward [encl]'s dict param
 -- (RDict, the slot it sits at); otherwise leave the route unresolved.
-recRoute : String -> Mono -> PredicateSlot -> Route
-recRoute encl mono slot = match recPredicateArgs mono slot
-  Some (g0 :: gs) => routeOfD slot.psIface encl KeepNone g0 gs 0 0
+recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
+recRoute encl scope mono slot = match recPredicateArgs mono slot
+  Some (g0 :: gs) => routeOfD slot.psIface encl scope KeepNone g0 gs 0 0
   _ => match slot.psBoundIds
     id :: _ => match findTvarInMono mono id
       None => RNone
-      Some m => resolveRecMono encl m
+      Some m => resolveRecMono encl scope m
     [] => RNone
 
 recPredicateArgs : Mono -> PredicateSlot -> Option (List Mono)
@@ -27942,12 +28315,12 @@ recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   None => None
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
 
-resolveRecMono : String -> Mono -> Route
-resolveRecMono encl m = match headTyconNameMono m
+resolveRecMono : String -> ScopeId -> Mono -> Route
+resolveRecMono encl scope m = match headTyconNameMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
-    Some slot => RDict (dictParamName encl slot)
-    None => routeOf ifaceRefNone "" KeepNone m
+    Some slot => RDict (renderEvidenceBinder (binderAt scope slot))
+    None => routeOf ifaceRefNone "" scope KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
 -- constraint ids (its position in funConstraintsRef[encl] = the kept slot)
@@ -28664,6 +29037,10 @@ modeModuleId : CheckMode -> String
 modeModuleId (Flat _) = ""
 modeModuleId (Module mid _ _) = mid
 
+scopeModuleId : CheckMode -> String
+scopeModuleId (Flat _) = "<flat>"
+scopeModuleId (Module mid _ _) = mid
+
 checkBodyImpl : List (String, Scheme) ->
   CheckMode ->
   List Decl ->
@@ -28679,6 +29056,13 @@ checkBodyImpl seed mode prog0 =
   let _ = match mode
     Flat _ => resetGraphState ()
     Module _ _ _ => ()
+  let moduleScope =
+    freshScope
+      None
+      perRun.value.currentLevel.value
+      (scopeModuleId mode)
+      ModuleOwner
+  let _ = openScope moduleScope
   let _ = recordModuleStart (modeModuleId mode)
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
@@ -29464,7 +29848,9 @@ checkBodyImpl seed mode prog0 =
     -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
     -- reload reads the alias universe at this module's own ordinal.
     Module mid _ _ => appendDataUniverse mid prog0
-  (globalS ++ topSchemes, progOut)
+  let result = (globalS ++ topSchemes, progOut)
+  let _ = closeScope ()
+  result
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (the LetRecNonFunction guard,
 -- which fires for
@@ -29517,15 +29903,24 @@ inferPropBodies env prog =
 
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferPropBodiesGo _ [] = ()
-inferPropBodiesGo env ((DProp _ _ params body) :: rest) =
+inferPropBodiesGo env ((DProp _ name params body) :: rest) =
   let local = extendPropParams env params
   let _ = enterLevel ()
+  let parentScope = captureScope ()
+  let bodyScope =
+    freshScope
+      (Some parentScope)
+      perRun.value.currentLevel.value
+      (scopeFrame parentScope).sfModuleId
+      (PropOwner name)
+  let _ = openScope bodyScope
   let oblMark = wMark perRun.value.implObls
   let callMark = wMark perRun.value.obls
   let dictMark = goalsMark ()
   let _ = infer local body
   let _ = exitLevel ()
   let _ = defaultClosedBodyNum oblMark callMark dictMark
+  let _ = closeScope ()
   inferPropBodiesGo env rest
 inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 
@@ -29537,8 +29932,16 @@ inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 -- and `test "x" = 42` slipped through `check` with zero diagnostics.
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferTestBodies _ [] = ()
-inferTestBodies env ((DTest _ _ body) :: rest) =
+inferTestBodies env ((DTest _ name body) :: rest) =
   let _ = enterLevel ()
+  let parentScope = captureScope ()
+  let bodyScope =
+    freshScope
+      (Some parentScope)
+      perRun.value.currentLevel.value
+      (scopeFrame parentScope).sfModuleId
+      (TestOwner name)
+  let _ = openScope bodyScope
   let oblMark = wMark perRun.value.implObls
   let callMark = wMark perRun.value.obls
   let dictMark = goalsMark ()
@@ -29551,6 +29954,7 @@ inferTestBodies env ((DTest _ _ body) :: rest) =
   let _ = unify (infer env body) (tconUnresolved "Expectation")
   let _ = exitLevel ()
   let _ = defaultClosedBodyNum oblMark callMark dictMark
+  let _ = closeScope ()
   inferTestBodies env rest
 inferTestBodies env (_ :: rest) = inferTestBodies env rest
 
@@ -29859,6 +30263,14 @@ inferDefaultMethod : TcEnv ->
   IfaceMethod ->
   Unit
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
+  let parentScope = captureScope ()
+  let bodyScope =
+    freshScope
+      (Some parentScope)
+      perRun.value.currentLevel.value
+      (scopeFrame parentScope).sfModuleId
+      (BindingOwner mname)
+  let _ = openScope bodyScope
   -- #822: [dscope] is the same declaration-derived graded scope the method's own
   -- scheme was built under (inferOneIfaceDefaults → methodSchemesPure) — a DEFAULT
   -- body of a graded method must see its Row slots as rows, not as tyvars.
@@ -29954,7 +30366,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- Registering BEFORE inference recorded the pre-unification id; the in-body
   -- site could become the surviving root instead, so activeDictVarOf missed it →
   -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
-  let _ = registerMethodDictSlots mname 0 ids (snd inst)
+  let _ = registerMethodDictSlots bodyScope 0 ids (snd inst)
   -- The predicate-keyed twin of the scalar registrations above.  Instantiate the
   -- authoritative method carrier with this very default-body substitution, then
   -- publish the same slots into the lexical given registry before route resolution.
@@ -29964,8 +30376,9 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
       typarams
       mty
       (instantiateNamedMonos (snd st) (snd inst))
-  let _ = registerSlotPredGivens mname 0 slots
+  let _ = registerSlotPredGivens bodyScope 0 slots
   perRun.value.currentFn := savedCurrentFn
+  closeScope ()
 inferDefaultMethod _ _ _ _ _ = ()
 
 instantiateNamedMonos : List (String, Mono) ->
@@ -30839,7 +31252,7 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
   -- differential was the only thing in the tree that caught it.
   let occs = uOblArgs o
   let loc = o.loc
-  let _ = checkOneCallObligation deferNonGround univ iface occs loc
+  let _ = checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
   checkCallObligationsU deferNonGround univ rest
 
 -- [occs] is the predicate's whole argument vector.  At arity 1 the match test stays
@@ -30853,8 +31266,9 @@ checkOneCallObligation : Bool ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
+  ScopeId ->
   Unit
-checkOneCallObligation deferNonGround univ iface occs loc =
+checkOneCallObligation deferNonGround univ iface occs loc scope =
   let args = map normalize occs
   if isEmptyL args then
     ()
@@ -30897,7 +31311,7 @@ checkOneCallObligation deferNonGround univ iface occs loc =
     if deferNonGround then
       ()
     else
-      checkUndeterminedObligations univ iface args loc
+      checkUndeterminedObligations univ iface args loc scope
   else match oblCallVerdict univ iface args
     -- 🚨 #1867 (S1): A TRUNCATED GOAL IS UNDER-DETERMINED, NOT DECIDABLE HERE.
     -- `recordCallObligations` records one obligation per SHATTERED per-tyvar dict slot,
@@ -30949,14 +31363,18 @@ checkOneCallObligation deferNonGround univ iface occs loc =
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
     -- (`main = (Red, 5)` → `No impl of Display for Color`) instead of the head-only
     -- match silently accepting (→ null element dict → SIGSEGV at runtime).
-    Some True => checkNestedReqs univ iface args loc
-    Some False => checkOneCallObligationNoImpl iface args loc
+    Some True => checkNestedReqs univ iface args loc scope
+    Some False => checkOneCallObligationNoImpl iface args loc scope
 
 -- the no-impl tail of `checkOneCallObligation` — reached when the goal is neither a
 -- truncation nor matched by any impl.  Extracted verbatim so `oblCallVerdict`'s three
 -- verdicts can be a `match` without duplicating it; the two arms below are unchanged.
-checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
-checkOneCallObligationNoImpl iface args loc =
+checkOneCallObligationNoImpl : IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkOneCallObligationNoImpl iface args loc scope =
   -- 🚨 #1939 / #1938 (OPEN WORLD): `allConcreteHeads` IS NOT GROUNDNESS, AND ONLY
   -- GROUNDNESS LICENSES A REJECT HERE.  It asks whether every argument has a head
   -- TYCON, which `Wrap a` satisfies while still carrying a variable — so a goal like
@@ -30995,7 +31413,7 @@ checkOneCallObligationNoImpl iface args loc =
   --     end-of-sprint review's S0-2 asserted the opposite and called this conjunct
   --     vacuous for a declared context; it is vacuous only for a goal whose openness is
   --     ALL rigid — S2-5's nested-rigid shape, which conjunct 3 now covers.)
-  if goalDefersOpenWorld iface args then
+  if goalDefersOpenWorld scope iface args then
     ()
   else
     -- #838 I4 (was checkOneImplObligation step 9): reportNumOrNoImpl is a strict superset
@@ -31055,11 +31473,12 @@ checkUndeterminedObligations : ImplUniverse ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
+  ScopeId ->
   Unit
-checkUndeterminedObligations _ _ [] _ = ()
-checkUndeterminedObligations univ iface (a :: rest) loc =
-  let _ = checkUndeterminedObligation univ iface a loc
-  checkUndeterminedObligations univ iface rest loc
+checkUndeterminedObligations _ _ [] _ _ = ()
+checkUndeterminedObligations univ iface (a :: rest) loc scope =
+  let _ = checkUndeterminedObligation univ iface a loc scope
+  checkUndeterminedObligations univ iface rest loc scope
 
 -- WS-1c: a constrained call whose constraint var stays UNDETERMINED (pinned by
 -- neither arg nor result, `roundtrip 14` where `roundtrip : Sub a => Int -> Int`).
@@ -31084,10 +31503,11 @@ checkUndeterminedObligation : ImplUniverse ->
   IfaceRef ->
   Mono ->
   Option Loc ->
+  ScopeId ->
   Unit
-checkUndeterminedObligation univ iface occ loc
+checkUndeterminedObligation univ iface occ loc scope
   | iface.irName == "Num" = ()  -- RULE 4a: Num → literal defaulting, never ambiguity (a SPELLING test — see checkOneCallObligation)
-  | isSome (activeDictVarOf occ) = ()  -- forwarded enclosing-dict slot (fold-in)
+  | isSome (activeDictVarOf occ scope) = ()  -- forwarded enclosing-dict slot (fold-in)
   | anyIn (monoUnboundIds occ) perRun.value.poisonedVars.value = ()  -- Chunk A: primary mismatch already explained this var
   -- RULE 2 (#838 I2, DESIGN.md §2.4): every free var of this predicate is QUANTIFIED by
   -- some enclosing scheme (`deferrableVarIds`, populated from `schemeIds` at each
@@ -31292,15 +31712,20 @@ monoIsFunction m = match normalize m
 -- accepting the unsatisfiable element constraint (→ null element dict → SIGSEGV).
 -- A satisfied requirement (`Display Int`, `Display String`) recurses into ITS own
 -- (empty) requires and accepts, so `(5, "hi")` / `[1,2,3]` still build.
-checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
-checkNestedReqs univ iface args loc =
+checkNestedReqs : ImplUniverse ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkNestedReqs univ iface args loc scope =
   -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this is
   -- the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE the
   -- five resolver drains — publish the obligation's own snapshotted span so the
   -- ambiguity reject lands on the use site rather than on `currentLoc`'s stale one.
   -- Restored to None after, per `goalSiteLoc`'s scoping rule.
   goalSiteLoc := loc
-  let _ = checkReqObligations univ loc (reqObligationsFor univ iface args)
+  let _ = checkReqObligations univ loc scope (reqObligationsFor univ iface args)
   goalSiteLoc := None
 
 -- Impl decls paired with their `requires` (implHeadsOf drops reqs; this keeps them).
@@ -31455,12 +31880,13 @@ reqTyToMono _ (TyRow labels tail loc) =
 -- top-level obligation, recursing into a satisfied conditional impl's own reqs.
 checkReqObligations : ImplUniverse ->
   Option Loc ->
+  ScopeId ->
   List (IfaceRef, List Mono) ->
   Unit
-checkReqObligations _ _ [] = ()
-checkReqObligations univ loc ((ifaceR, monoArgs) :: rest) =
-  let _ = checkReqOne univ ifaceR monoArgs loc
-  checkReqObligations univ loc rest
+checkReqObligations _ _ _ [] = ()
+checkReqObligations univ loc scope ((ifaceR, monoArgs) :: rest) =
+  let _ = checkReqOne univ ifaceR monoArgs loc scope
+  checkReqObligations univ loc scope rest
 
 -- A function-typed requirement arg is fully GROUND yet structurally un-Ord/Eq/etc
 -- (no `impl Ord (a -> b)` exists), so it must REJECT — but its head has no tycon,
@@ -31469,12 +31895,17 @@ checkReqObligations univ loc ((ifaceR, monoArgs) :: rest) =
 -- `requires Ord k` with k = (Int -> Int) — e.g. `Map { f => 1 }` selecting
 -- `FromEntries (Map k v) (k, v) requires Ord k` — would DEFER into a silent accept,
 -- and `check` would pass a program `run` rejects at runtime (P0-18).
-checkReqOne : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
-checkReqOne univ iface args loc
+checkReqOne : ImplUniverse ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkReqOne univ iface args loc scope
   | anyListM monoIsFunction args && not (implMatchesU univ iface args) =
     pushNoImplError iface.irName loc args
   | not (allConcreteHeads args) = ()
-  | implMatchesU univ iface args = checkNestedReqs univ iface args loc
+  | implMatchesU univ iface args = checkNestedReqs univ iface args loc scope
   -- #1939 / #1938 (OPEN WORLD): the nested-`requires` twin of
   -- `checkOneCallObligation`'s open-world defer, and it moves WITH it by the same
   -- argument this header already makes about the function-typed reject — the two
@@ -31483,7 +31914,7 @@ checkReqOne univ iface args loc
   -- top-level obligation or as a conditional impl's `requires`.  `residualPredsOf`
   -- reduces through `requires` too, so a deferred sub-goal reaches the enclosing scheme
   -- by the route the top-level one takes and is adjudicated where it grounds.
-  | goalDefersOpenWorld iface args = ()
+  | goalDefersOpenWorld scope iface args = ()
   | otherwise = pushNoImplError iface.irName loc args
 
 -- #838 I4: the function-typed Ord/Eq unimplementable-head rejects were only used by the
@@ -31804,19 +32235,19 @@ allHeadArgsMatch ((ty, m) :: rest) = match matchTyMono ty m
 -- in activeDictVars, so an in-body method ref unified to that var routes RDict.
 -- Run AFTER body inference so the id is the SURVIVING (normalized) union-find root —
 -- the same id the in-body site normalizes to (mirrors registerImplRequires).
-registerMethodDictSlots : String -> Int -> List Int -> List (Int, Mono) -> Unit
+registerMethodDictSlots : ScopeId -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodDictSlots _ _ [] _ = ()
-registerMethodDictSlots mname slot (id :: rest) subst =
-  let _ = registerOneMethodDict mname slot id subst
-  registerMethodDictSlots mname (slot + 1) rest subst
+registerMethodDictSlots scope slot (id :: rest) subst =
+  let _ = registerOneMethodDict scope slot id subst
+  registerMethodDictSlots scope (slot + 1) rest subst
 
-registerOneMethodDict : String -> Int -> Int -> List (Int, Mono) -> Unit
-registerOneMethodDict mname slot id subst = match lookupAssocI id subst
+registerOneMethodDict : ScopeId -> Int -> Int -> List (Int, Mono) -> Unit
+registerOneMethodDict scope slot id subst = match lookupAssocI id subst
   None => ()
   Some m => match normalize m
     TVar cell =>
       graphRun.value.activeDictVars :=
-        (tyvarId cell, dictParamName mname slot)
+        (tyvarId cell, binderAt scope slot)
           :: graphRun.value.activeDictVars.value
     _ => ()
 
@@ -31860,7 +32291,13 @@ inferPlainImpl : TcEnv ->
 inferPlainImpl env allProg iface tys methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
-  inferImplMethods env allProg iface implTvMap headMonos methods
+  inferImplMethods
+    env
+    allProg
+    iface
+    implTvMap
+    headMonos
+    (scopeImplMethods (captureScope ()) methods)
 
 -- one impl `impl Iface (List a) requires Iface a where …`: build ONE tyvar map
 -- shared between the head (`List a`) and the requires (`Iface a`) so the body's
@@ -31878,15 +32315,34 @@ inferRequiresImpl : TcEnv ->
 inferRequiresImpl env allProg rpNames iface tys reqs methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
-  let _ = inferImplMethods env allProg iface implTvMap headMonos methods
-  registerImplRequires implTvMap rpNames reqs methods
+  let scopedMethods = scopeImplMethods (captureScope ()) methods
+  let _ = inferImplMethods env allProg iface implTvMap headMonos scopedMethods
+  registerImplRequires implTvMap rpNames reqs scopedMethods
+
+data ScopedImplMethod = ScopedImplMethod {
+  simMethod : ImplMethod,
+  simScope : ScopeId,
+}
+
+scopeImplMethods : ScopeId -> List ImplMethod -> List ScopedImplMethod
+scopeImplMethods _ [] = []
+scopeImplMethods parent (method :: rest) =
+  let name = implMethodName method
+  let scope =
+    freshScope
+      (Some parent)
+      perRun.value.currentLevel.value
+      (scopeFrame parent).sfModuleId
+      (BindingOwner name)
+  ScopedImplMethod { simMethod = method, simScope = scope }
+    :: scopeImplMethods parent rest
 
 inferImplMethods : TcEnv ->
   List Decl ->
   IfaceRef ->
   List (String, Mono) ->
   List Mono ->
-  List ImplMethod ->
+  List ScopedImplMethod ->
   Unit
 inferImplMethods _ _ _ _ _ [] = ()
 inferImplMethods env allProg iface implTvMap headMonos (m :: rest) =
@@ -31898,9 +32354,22 @@ inferImplMethod : TcEnv ->
   IfaceRef ->
   List (String, Mono) ->
   List Mono ->
+  ScopedImplMethod ->
+  Unit
+inferImplMethod env allProg iface implTvMap headMonos scoped =
+  let _ = openScope scoped.simScope
+  let _ =
+    inferImplMethodBody env allProg iface implTvMap headMonos scoped.simMethod
+  closeScope ()
+
+inferImplMethodBody : TcEnv ->
+  List Decl ->
+  IfaceRef ->
+  List (String, Mono) ->
+  List Mono ->
   ImplMethod ->
   Unit
-inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats body) =
+inferImplMethodBody env allProg iface implTvMap headMonos (ImplMethod mname pats body) =
   match ifaceMethodTyResolved allProg iface mname
     None => ()
     Some (ifaceParams, mty, gscope) =>
@@ -32112,14 +32581,14 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
       -- return-position methods to the dict param directly; the eval path relies on
       -- the route, so register the var → dict-param mapping here (AFTER body inference,
       -- so each var is its surviving union-find root, mirroring registerMethodDictSlots).
-      let _ = registerImplMethodDicts mname ifaceParams mty extraMap
+      let _ = registerImplMethodDicts (captureScope ()) ifaceParams mty extraMap
       -- Complete-predicate twin: specialized default copies and explicit impl methods
       -- publish the method-level slots from THIS body instantiation.  The generic
       -- default's carrier belongs to a distinct tyvar population and cannot answer a
       -- Known request under recursive mono identity.
       let _ =
         registerSlotPredGivens
-          mname
+          (captureScope ())
           0
           (methodLevelPredicateSlots ifaceParams mty extraMap)
       -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
@@ -32921,39 +33390,39 @@ effVarLaunderMsg subject evar escaping =
 -- registering.  Slot numbering matches methodConstraintSlotIds (same flatMap order),
 -- so it lines up with implDictPassMethods' prepended params and the call-site
 -- methodRoutes resolveMethodDicts fills.
-registerImplMethodDicts : String ->
+registerImplMethodDicts : ScopeId ->
   List String ->
   Ty ->
   List (String, Mono) ->
   Unit
-registerImplMethodDicts mname ifaceParams mty tvMap =
+registerImplMethodDicts scope ifaceParams mty tvMap =
   registerImplMethodDictsGo
-    mname
+    scope
     0
     (methodLevelConstraintVarNames ifaceParams mty)
     tvMap
 
-registerImplMethodDictsGo : String ->
+registerImplMethodDictsGo : ScopeId ->
   Int ->
   List String ->
   List (String, Mono) ->
   Unit
 registerImplMethodDictsGo _ _ [] _ = ()
-registerImplMethodDictsGo mname slot (vname :: rest) tvMap =
-  let _ = registerImplMethodDictOne mname slot vname tvMap
-  registerImplMethodDictsGo mname (slot + 1) rest tvMap
+registerImplMethodDictsGo scope slot (vname :: rest) tvMap =
+  let _ = registerImplMethodDictOne scope slot vname tvMap
+  registerImplMethodDictsGo scope (slot + 1) rest tvMap
 
-registerImplMethodDictOne : String ->
+registerImplMethodDictOne : ScopeId ->
   Int ->
   String ->
   List (String, Mono) ->
   Unit
-registerImplMethodDictOne mname slot vname tvMap = match lookupAssoc vname tvMap
+registerImplMethodDictOne scope slot vname tvMap = match lookupAssoc vname tvMap
   None => ()
   Some m => match normalize m
     TVar cell =>
       graphRun.value.activeDictVars :=
-        (tyvarId cell, dictParamName mname slot)
+        (tyvarId cell, binderAt scope slot)
           :: graphRun.value.activeDictVars.value
     _ => ()
 
@@ -33102,14 +33571,17 @@ methodTyOf mname ((IfaceMethod n ty _ _) :: rest)
 registerImplRequires : List (String, Mono) ->
   List String ->
   List Require ->
-  List ImplMethod ->
+  List ScopedImplMethod ->
   Unit
 registerImplRequires _ _ _ [] = ()
-registerImplRequires implTvMap rpNames reqs ((ImplMethod mname _ _) :: rest)
+registerImplRequires implTvMap rpNames reqs (scoped :: rest)
   | registersElementDict mname rpNames =
-    let _ = registerReqSlots mname implTvMap (methodDictArityOf mname) reqs
+    let _ =
+      registerReqSlots scoped.simScope implTvMap (methodDictArityOf mname) reqs
     registerImplRequires implTvMap rpNames reqs rest
   | otherwise = registerImplRequires implTvMap rpNames reqs rest
+  where
+    mname = implMethodName scoped.simMethod
 
 -- a method registers an element dict if it is return-position (rpNames) or — on
 -- the emit path only — an arg-position dispatch method (argDispatchOf is Some).
@@ -33117,14 +33589,15 @@ registersElementDict : String -> List String -> Bool
 registersElementDict mname rpNames =
   contains mname rpNames || isSome (argDispatchOf mname)
 
-registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
+registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
 registerReqSlots _ _ _ [] = ()
-registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
+registerReqSlots scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
-  let _ = registerEachActive ids (dictParamName mname slot)
+  let binder = binderAt scope slot
+  let _ = registerEachActive ids binder
   let reqIface = IfaceRef { irName = iface, irOrigin = ro }
-  let _ = registerPredGiven reqIface argMonos (dictParamName mname slot)
+  let _ = registerPredGiven reqIface argMonos binder
   -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
   -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
   -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
@@ -33134,13 +33607,14 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
   -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
   pushGiven
     GMIdWitnessed
+    DirectGiven
     PredicateSlot {
       psIface = reqIface,
       psArgs = PSArgsKnown argMonos,
       psBoundIds = ids,
     }
-    (dictParamName mname slot)
-  registerReqSlots mname implTvMap (slot + 1) rest
+    binder
+  registerReqSlots scope implTvMap (slot + 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
 -- by TYVAR ID, which cannot express a STRUCTURED given: `requires S (List a)` registers
@@ -33193,7 +33667,7 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- which is why this is a widening of an existing hazard rather than a new one.  Removing
 -- it is the same scoped-projection question `activeDictVarOf`'s `inImpl` gate answers,
 -- and belongs with the key-side work (#1904), not here.
-registerPredGiven : IfaceRef -> List Mono -> String -> Unit
+registerPredGiven : IfaceRef -> List Mono -> EvidenceBinderId -> Unit
 registerPredGiven _ [] _ = ()
 registerPredGiven iface args dname
   | allList monoIsBareTyvar args = ()
@@ -33203,7 +33677,7 @@ registerPredGiven iface args dname
       psArgs = PSArgsKnown args,
       psBoundIds = dedupI (flatMap monoTyvarIds args),
     }
-    pushGiven GMPredicate slot dname
+    pushGiven GMPredicate DirectGiven slot dname
 
 monoIsBareTyvar : Mono -> Bool
 monoIsBareTyvar m = match normalize m
@@ -33253,33 +33727,24 @@ monoVecSameGiven (a :: arest) (b :: brest) =
   monoSameGiven a b && monoVecSameGiven arest brest
 monoVecSameGiven _ _ = False
 
--- assum lookup over the predicate-keyed givens: the in-scope dict param holding evidence
--- for `iface subject`.  PREFERS the entry owned by the enclosing method [encl] (`$dict_
--- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does.
-activeDictPredOf : PredicateRequest -> Mono -> String -> Option String
-activeDictPredOf request targetMono encl =
-  let preds = givensHere ()
-  let local =
-    if encl == "" then
-      None
-    else match request.prArgs
-      PSArgsKnown _ => firstPredForEncl request "$dict_\{encl}_" preds
+-- Assumption lookup over predicate-keyed givens.  The occurrence's captured
+-- scope selects only its own or an ancestor's binder; generated dictionary names
+-- and registration order across sibling bodies are irrelevant.  [encl] remains
+-- the legacy empty-owner guard and downstream rendering context.
+activeDictPredOf : PredicateRequest ->
+  Mono ->
+  String ->
+  ScopeId ->
+  Option AssumAnswer
+activeDictPredOf request targetMono encl useScope
+  | encl == "" = None
+  | otherwise =
+    let preds = givensForScope useScope
+    match request.prArgs
+      PSArgsKnown _ => firstPredForEncl request useScope preds
       PSArgsUnknown => match predicateTargetId targetMono
         Some target =>
-          firstPredForEnclAt
-            GSPredicateOnly
-            target
-            request
-            "$dict_\{encl}_"
-            preds
-        None => None
-  match local
-    Some dname => Some dname
-    None => match request.prArgs
-      PSArgsKnown _ => firstPredForEncl request "" preds
-      PSArgsUnknown => match predicateTargetId targetMono
-        Some target =>
-          firstPredForEnclAt GSPredicateOnly target request "" preds
+          firstPredForEnclAt GSPredicateOnly target request useScope preds
         None => None
 
 predicateTargetId : Mono -> Option Int
@@ -33291,21 +33756,45 @@ predicateTargetId m = match normalize m
 -- Function-carrier predicate evidence is lexical to [encl].  Unlike activeDictPredOf,
 -- this lookup deliberately has no global fallback: a module's givens accumulate across
 -- its functions, so an unscoped hit could route stale evidence from a different body.
-activeFunDictPredOf : PredicateRequest -> String -> Option String
-activeFunDictPredOf _ "" = None
-activeFunDictPredOf request encl =
-  firstPredForEncl request ("$dict_" ++ encl ++ "_") (givensHere ())
+activeFunDictPredOf : PredicateRequest ->
+  String ->
+  ScopeId ->
+  Option AssumAnswer
+activeFunDictPredOf _ "" _ = None
+activeFunDictPredOf request _ useScope =
+  firstPredForEncl request useScope (givensForScope useScope)
 
 firstPredForEncl : PredicateRequest ->
-  String ->
+  ScopeId ->
   List GivenEntry ->
-  Option String
+  Option AssumAnswer
 firstPredForEncl _ _ [] = None
-firstPredForEncl request pfx (g :: rest)
+firstPredForEncl request useScope (g :: rest)
   | givenInScope GSPredicateOnly g
-    && startsWith pfx g.geDict
-    && predicateRequestMatchesSlot request g.geSlot = Some g.geDict
-  | otherwise = firstPredForEncl request pfx rest
+    && givenVisibleFrom useScope (binderScope g.geBinder)
+    && predicateRequestMatchesSlot request g.geSlot =
+    Some (givenAnswerForRequest request g)
+  | otherwise = firstPredForEncl request useScope rest
+
+-- Semantic given evidence is issued only when the request supplied and matched a
+-- complete argument vector.  Unknown-vector and unresolved-declaration paths
+-- retain their historical routing but stay explicitly legacy.
+givenAnswerExact : GivenEntry -> AssumAnswer
+givenAnswerExact g = match g.geProvenance
+  DirectGiven => SemanticGiven (GivenEvidence g.geBinder)
+  LegacySuperclassAlias => LegacySuperAlias g.geBinder
+
+givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
+givenAnswerForRequest request g = match (request.prArgs, g.geSlot.psArgs)
+  (PSArgsKnown _, PSArgsKnown _) => givenAnswerExact g
+  _ => match g.geProvenance
+    DirectGiven => LegacyPredicate g.geBinder
+    LegacySuperclassAlias => LegacySuperAlias g.geBinder
+
+givenAnswerResidual : GivenEntry -> AssumAnswer
+givenAnswerResidual g = match g.geProvenance
+  DirectGiven => LegacyPredicate g.geBinder
+  LegacySuperclassAlias => LegacySuperAlias g.geBinder
 
 -- The id-witnessed scan.  [scope] is the rung's own declaration of what it may read —
 -- both rungs that reach here supply a tyvar-id witness, but only one of them is keyed on
@@ -33313,38 +33802,43 @@ firstPredForEncl request pfx (g :: rest)
 firstPredForEnclAt : GivenScope ->
   Int ->
   PredicateRequest ->
-  String ->
+  ScopeId ->
   List GivenEntry ->
-  Option String
+  Option AssumAnswer
 firstPredForEnclAt _ _ _ _ [] = None
-firstPredForEnclAt scope target request pfx (g :: rest)
+firstPredForEnclAt scope target request useScope (g :: rest)
   | givenInScope scope g
     && containsI target g.geSlot.psBoundIds
-    && startsWith pfx g.geDict
-    && predicateRequestMatchesSlot request g.geSlot = Some g.geDict
-  | otherwise = firstPredForEnclAt scope target request pfx rest
+    && givenVisibleFrom useScope (binderScope g.geBinder)
+    && predicateRequestMatchesSlot request g.geSlot =
+    Some (givenAnswerForRequest request g)
+  | otherwise = firstPredForEnclAt scope target request useScope rest
 
 -- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
 -- for a producer that can still supply OriginUnresolved.  Complete method requests do
 -- not reach it.
-activeFunDictPredOfResidual : String -> List Mono -> String -> Option String
-activeFunDictPredOfResidual _ _ "" = None
-activeFunDictPredOfResidual iface args encl =
-  firstPredForEnclResidual iface args ("$dict_" ++ encl ++ "_") (givensHere ())
+activeFunDictPredOfResidual : String ->
+  List Mono ->
+  String ->
+  ScopeId ->
+  Option AssumAnswer
+activeFunDictPredOfResidual _ _ "" _ = None
+activeFunDictPredOfResidual iface args _ useScope =
+  firstPredForEnclResidual iface args useScope (givensForScope useScope)
 
 firstPredForEnclResidual : String ->
   List Mono ->
-  String ->
+  ScopeId ->
   List GivenEntry ->
-  Option String
+  Option AssumAnswer
 firstPredForEnclResidual _ _ _ [] = None
-firstPredForEnclResidual iface args pfx (g :: rest)
+firstPredForEnclResidual iface args useScope (g :: rest)
   | givenInScope GSPredicateOnly g
     && g.geSlot.psIface.irName == iface
-    && startsWith pfx g.geDict
+    && givenVisibleFrom useScope (binderScope g.geBinder)
     && predicateRequestArgsMatch (PSArgsKnown args) g.geSlot.psArgs =
-    Some g.geDict
-  | otherwise = firstPredForEnclResidual iface args pfx rest
+    Some (givenAnswerResidual g)
+  | otherwise = firstPredForEnclResidual iface args useScope rest
 
 -- the interface a method NAME belongs to, for the predicate-keyed assum lookup.  A
 -- non-method [name] (a top-level constrained call routed through EKNestedTop) is absent
@@ -33355,7 +33849,7 @@ ifaceOfMethodName name =
     ((iface, _, _, _) => iface.irName)
     (omLookup name perRun.value.methodIfaceParamsRef.value)
 
-registerEachActive : List Int -> String -> Unit
+registerEachActive : List Int -> EvidenceBinderId -> Unit
 registerEachActive [] _ = ()
 registerEachActive (id :: rest) dname =
   graphRun.value.activeDictVars :=
@@ -34924,11 +35418,18 @@ processSCCs env sigs grouped (scc :: rest) =
 -- the rest mirror inferNumLitBare's placeholder shape.
 -- Num is 1-param, so its obligation vector is a singleton; a wider predicate can
 -- never be "Num" and is filtered out anyway.
-numCallObls : List (IfaceRef, List Mono, Option Loc) -> List UObligation
+numCallObls : List UObligation -> List UObligation
 numCallObls [] = []
-numCallObls ((iface, monos, loc) :: rest) = match (iface.irName, monos)
+numCallObls (o :: rest) = match (o.pred.iface.irName, uOblArgs o)
   ("Num", [mono]) =>
-    mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") mono PNumLit loc
+    mkMethodOccObl
+        (builtinIfaceRef BNum)
+        ["a"]
+        (TyVar "a")
+        mono
+        PNumLit
+        o.loc
+        o.uoScope
       :: numCallObls rest
   _ => numCallObls rest
 
@@ -34955,7 +35456,8 @@ numDictObls (app :: rest) =
               (TyVar "a")
               (snd p)
               PNumLit
-              app.pdaLoc,
+              app.pdaLoc
+              app.pdaScope,
           ]
         else
           [])
@@ -35073,8 +35575,9 @@ processSCC env sigs grouped0 members =
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let placeholders = map (m => (m, freshVar ())) members
+  let scopedMembers = scopeMembers (captureScope ()) placeholders
   let env2 = extendVars env (map placeholderBinding placeholders)
-  let (regs, sigTvMaps) = preunifySigsEx sigs placeholders
+  let (regs, sigTvMaps) = preunifySigsEx sigs scopedMembers
   -- P0-19 (constrained-receiver arm): publish THIS group's `=>`-constraint vars for
   -- the duration of body inference, so a definer-shadow method occurrence on one of
   -- them (`neq x y = not (eq x y)` under `neq : Eq a => …`) is seen as a DISPATCH and
@@ -35090,7 +35593,7 @@ processSCC env sigs grouped0 members =
   -- top-level `g` in a later body (a phantom `Num a =>` on types/numlit_bidir's
   -- signed fn).  Registration/lookup now key by (name, binding-id), so a top-level
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
-  let _ = inferMembers env2 sigs groupedStamped placeholders
+  let _ = inferMembers env2 sigs groupedStamped scopedMembers
   perRun.value.groupConstraintMonosRef := []
   let _ = checkSigsTooGeneral sigTvMaps
   let _ = registerConstraintRegs regs
@@ -35110,13 +35613,14 @@ processSCC env sigs grouped0 members =
   -- feed ONLY the Num-defaulting search; addedObls alone still drives the
   -- ambiguous-constraint/scheme-obligation registration below.
   let extraNumObls =
-    numCallObls (callOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
+    numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
   let defaultObls = addedObls ++ extraNumObls
   let _ = defaultGroupNum defaultObls (map snd placeholders)
   let _ = defaultEachMember defaultObls placeholders
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)  -- RETPOS soundness
   let schemes =
     sccSchemes env2 sigs groupedStamped (isLetrecGroup members) placeholders
+  let scopedSchemes = alignScopedSchemes scopedMembers schemes
   let _ = checkSigsOverExpansive env2 groupedStamped sigTvMaps
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
   -- callee (living on the call delta, never in addedObls) into schemeObligationsRef,
@@ -35150,11 +35654,11 @@ processSCC env sigs grouped0 members =
       callOblsDelta
       addedObls
       schemes
-  let _ = registerInferredConstraints sigs callOblsDelta addedObls schemes
+  let _ = registerInferredConstraints sigs callOblsDelta addedObls scopedSchemes
   -- The group's own occurrences of the members it just promoted (see
   -- `markRecursiveOccurrences`); Flat marks nothing here.
   let groupedOut = match marking
-    Some mm => markRecursiveOccurrences mm placeholders members grouped
+    Some mm => markRecursiveOccurrences mm placeholders scopedMembers grouped
     None => grouped
   -- FLAT-PATH SHADOW FIX (facet 1): thread forward only the NON-method-shadowing
   -- schemes, so a method name a user fn shadows keeps resolving to the METHOD
@@ -35181,6 +35685,52 @@ isLetrecGroup _ = True
 placeholderBinding : (String, Mono) -> (String, Scheme)
 placeholderBinding (m, v) = (m, monoScheme v)
 
+data ScopedMember = ScopedMember {
+  smName : String,
+  smMono : Mono,
+  smScope : ScopeId,
+}
+
+data ConstraintReg = ConstraintReg {
+  crName : String,
+  crScope : ScopeId,
+  crIfaceMonos : List (IfaceRef, List Mono),
+  crArgVecs : List (List Mono),
+}
+
+data ScopedScheme = ScopedScheme {
+  ssName : String,
+  ssScheme : Scheme,
+  ssScope : ScopeId,
+}
+
+scopeMembers : ScopeId -> List (String, Mono) -> List ScopedMember
+scopeMembers _ [] = []
+scopeMembers parent ((name, mono) :: rest) =
+  let sid =
+    freshScope
+      (Some parent)
+      perRun.value.currentLevel.value
+      (scopeFrame parent).sfModuleId
+      (BindingOwner name)
+  ScopedMember { smName = name, smMono = mono, smScope = sid }
+    :: scopeMembers parent rest
+
+alignScopedSchemes : List ScopedMember ->
+  List (String, Scheme) ->
+  List ScopedScheme
+alignScopedSchemes [] [] = []
+alignScopedSchemes (member :: members) ((name, scheme) :: schemes)
+  | member.smName == name =
+    ScopedScheme {
+        ssName = name,
+        ssScheme = scheme,
+        ssScope = member.smScope,
+      }
+      :: alignScopedSchemes members schemes
+  | otherwise = panic "scope/member scheme alignment mismatch"
+alignScopedSchemes _ _ = panic "scope/member scheme arity mismatch"
+
 -- Extended Pass A: same as preunifySigs but also returns the tyvar maps (for
 -- the signature-too-general check after body inference).  Returns a pair:
 -- (constraintRegs, sigTvMaps) where sigTvMaps is [(name, sig_ast, tvs)] for
@@ -35190,24 +35740,28 @@ placeholderBinding (m, v) = (m, monoScheme v)
 -- the third is carried alongside, never instead of, so nothing downstream that sizes or
 -- orders dict slots can move.
 preunifySigsEx : List (String, Ty) ->
-  List (String, Mono) ->
-  (List (String, List (IfaceRef, List Mono), List (List Mono)), List (String, Ty, List (String, Mono)))
+  List ScopedMember ->
+  (List ConstraintReg, List (String, Ty, List (String, Mono)))
 preunifySigsEx _ [] = ([], [])
-preunifySigsEx sigs ((m, v) :: rest) =
+preunifySigsEx sigs (member :: rest) =
+  let m = member.smName
+  let v = member.smMono
   let (restRegs, restTvs) = preunifySigsEx sigs rest
   match omLookup m driverState.value.sigTyMapRef.value
     Some ty =>
       let inst = instantiateSigTracked ty
       let _ = unify v (fst inst)
       let regs = [
-        (
-          m,
-          constraintVarIfaceMonos (sigConstraints ty) (snd inst),
-          constraintVarArgMonos
-            (sigConstraints ty)
-            (sigConstraintArgTys ty)
-            (snd inst),
-        ),
+        ConstraintReg {
+          crName = m,
+          crScope = member.smScope,
+          crIfaceMonos = constraintVarIfaceMonos (sigConstraints ty) (snd inst),
+          crArgVecs =
+            constraintVarArgMonos
+              (sigConstraints ty)
+              (sigConstraintArgTys ty)
+              (snd inst),
+        },
       ]
       (regs ++ restRegs, (m, ty, snd inst) :: restTvs)
     None => (restRegs, restTvs)
@@ -35328,11 +35882,10 @@ constraintVarArgMonos ((_, names) :: rest) (args :: argsRest) tvMap =
 -- in-body RDict routing) and per-fn in funConstraintsRef (for call-site dict
 -- application).  Done per group so a callee's constraints are known before its
 -- (later-group) callers infer.
-registerConstraintRegs : List (String, List (IfaceRef, List Mono), List (List Mono)) ->
-  Unit
+registerConstraintRegs : List ConstraintReg -> Unit
 registerConstraintRegs [] = ()
-registerConstraintRegs ((m, ifaceMonos, argVecs) :: rest) =
-  let _ = registerMember m ifaceMonos argVecs
+registerConstraintRegs (reg :: rest) =
+  let _ = registerMember reg.crName reg.crScope reg.crIfaceMonos reg.crArgVecs
   registerConstraintRegs rest
 
 -- #994 (B-3-a): THE per-entry write op for the fn-constraint tables.  `CSlot` (U1b,
@@ -35386,6 +35939,7 @@ setFunConstraintEntry m slots =
 -- body-forced-concrete constraint takes no dict slot); it emits the (iface, id) pair in
 -- ONE traversal, so the iface list cannot be filtered differently from the id list.
 registerMember : String ->
+  ScopeId ->
   List (IfaceRef, List Mono) ->
   List (List Mono) ->
   Unit
@@ -35399,13 +35953,13 @@ registerMember : String ->
 -- constraint ids → 0 dict args at the call site → `unbound identifier:
 -- $dict_find_0` at eval.  An unconstrained fn is never marked EDictAt, so it needs
 -- no entry (mirrors registerInferredFor's empty-ids guard).
-registerMember _ [] _ = ()
-registerMember m ifaceMonos argVecs =
-  let slots = registerMemberSlots m 0 ifaceMonos argVecs
+registerMember _ _ [] _ = ()
+registerMember m scope ifaceMonos argVecs =
+  let slots = registerMemberSlots scope 0 ifaceMonos argVecs
   -- #1909: the PREDICATE-keyed half of the given, alongside the tyvar-id half
   -- `registerMemberSlots` just wrote.  Exactly `registerReqSlots`' pairing, one channel
   -- over — see `registerSlotPredGivens`.
-  let _ = registerSlotPredGivens m 0 slots
+  let _ = registerSlotPredGivens scope 0 slots
   setFunConstraintEntry m slots
 
 -- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
@@ -35443,34 +35997,34 @@ registerMember m ifaceMonos argVecs =
 -- is what answers those sites (`enclSlotIndex`'s predicate/first-id rungs are keyed on
 -- the slot's lead id and legitimately miss).  This mirrors `registerReqSlots`'
 -- `registerEachActive`, which has keyed many ids onto one `requires` slot all along.
-registerMemberSlots : String ->
+registerMemberSlots : ScopeId ->
   Int ->
   List (IfaceRef, List Mono) ->
   List (List Mono) ->
   List PredicateSlot
 registerMemberSlots _ _ [] _ = []
-registerMemberSlots m kept ((iface, monos) :: rest) [] =
+registerMemberSlots scope kept ((iface, monos) :: rest) [] =
   match abstractSlotIds monos
-    [] => registerMemberSlots m kept rest []
+    [] => registerMemberSlots scope kept rest []
     id :: more =>
-      let _ = registerEachActiveId (id :: more) (dictParamName m kept)
+      let _ = registerEachActiveId (id :: more) (binderAt scope kept)
       PredicateSlot {
           psIface = iface,
           psArgs = PSArgsUnknown,
           psBoundIds = id :: more,
         }
-        :: registerMemberSlots m (kept + 1) rest []
-registerMemberSlots m kept ((iface, monos) :: rest) (args :: argRest) =
+        :: registerMemberSlots scope (kept + 1) rest []
+registerMemberSlots scope kept ((iface, monos) :: rest) (args :: argRest) =
   match abstractSlotIds monos
-    [] => registerMemberSlots m kept rest argRest
+    [] => registerMemberSlots scope kept rest argRest
     id :: more =>
-      let _ = registerEachActiveId (id :: more) (dictParamName m kept)
+      let _ = registerEachActiveId (id :: more) (binderAt scope kept)
       PredicateSlot {
           psIface = iface,
           psArgs = PSArgsKnown args,
           psBoundIds = id :: more,
         }
-        :: registerMemberSlots m (kept + 1) rest argRest
+        :: registerMemberSlots scope (kept + 1) rest argRest
 
 -- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
 -- `registerMemberSlots` and `keptConstraintArgs` must agree on, factored so the two
@@ -35483,7 +36037,7 @@ abstractSlotIds (mono :: rest) = match normalize mono
   TVar cell => tyvarId cell :: abstractSlotIds rest
   _ => abstractSlotIds rest
 
-registerEachActiveId : List Int -> String -> Unit
+registerEachActiveId : List Int -> EvidenceBinderId -> Unit
 registerEachActiveId [] _ = ()
 registerEachActiveId (id :: rest) dname =
   graphRun.value.activeDictVars :=
@@ -35509,33 +36063,32 @@ registerEachActiveId (id :: rest) dname =
 -- slot gets `dictParamName m n`.  The vector list is legitimately a PREFIX of the slots
 -- (`keptConstraintArgs` stops when its input runs out — see `setFunConstraintEntry`), so
 -- the second clause stops early rather than inventing a subject for a vectorless slot.
-registerSlotPredGivens : String -> Int -> List PredicateSlot -> Unit
+registerSlotPredGivens : ScopeId -> Int -> List PredicateSlot -> Unit
 registerSlotPredGivens _ _ [] = ()
-registerSlotPredGivens m slot (s :: srest) =
-  let _ = registerFunPredGiven s (dictParamName m slot)
-  registerSlotPredGivens m (slot + 1) srest
+registerSlotPredGivens scope slot (s :: srest) =
+  let _ = registerFunPredGiven s (binderAt scope slot)
+  registerSlotPredGivens scope (slot + 1) srest
 
-registerFunPredGiven : PredicateSlot -> String -> Unit
-registerFunPredGiven slot dname
+registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
+registerFunPredGiven slot binder
   | slot.psIface.irName == "" = ()
   | otherwise =
-    registerFunPredGivenSlots (predicateSlotSelfAndSupers slot) dname
+    let _ = pushGiven GMPredicate DirectGiven slot binder
+    registerFunPredGivenSlots (predicateSlotKnownSupers slot) binder
 
-registerFunPredGivenSlots : List PredicateSlot -> String -> Unit
+registerFunPredGivenSlots : List PredicateSlot -> EvidenceBinderId -> Unit
 registerFunPredGivenSlots [] _ = ()
-registerFunPredGivenSlots (slot :: rest) dname =
-  pushGiven GMPredicate slot dname
-  registerFunPredGivenSlots rest dname
+registerFunPredGivenSlots (slot :: rest) binder =
+  pushGiven GMPredicate LegacySuperclassAlias slot binder
+  registerFunPredGivenSlots rest binder
 
 -- A dictionary supplied for one predicate also supplies every transitive
--- superinterface.  This is routing-only: all aliases retain the SAME dict parameter,
--- so it does not alter dict arity.  Unlike `expandSupersVecs`, this closure is ungated
--- because prelude chains (`Thenable` -> `Applicative` -> `Mappable`) are evidence too.
--- Unknown vectors stay direct-only: projecting a superclass argument without the
--- sub-predicate's positional vector would invent identity.
-predicateSlotSelfAndSupers : PredicateSlot -> List PredicateSlot
-predicateSlotSelfAndSupers slot = slot :: predicateSlotKnownSupers slot
-
+-- superinterface.  The original predicate is registered separately as direct evidence;
+-- all aliases retain the SAME dict parameter, so this does not alter dict arity.  Unlike
+-- `expandSupersVecs`, this closure is ungated because prelude chains (`Thenable` ->
+-- `Applicative` -> `Mappable`) are evidence too.  Unknown vectors stay direct-only:
+-- projecting a superclass argument without the sub-predicate's positional vector would
+-- invent identity.
 predicateSlotKnownSupers : PredicateSlot -> List PredicateSlot
 predicateSlotKnownSupers slot = match slot.psArgs
   PSArgsUnknown => []
@@ -35578,14 +36131,18 @@ predicateSuperSlot subst (Super { superHead = superName, superParams = params, s
 inferMembers : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
-  List (String, Mono) ->
+  List ScopedMember ->
   Unit
 inferMembers _ _ _ [] = ()
-inferMembers env sigs grouped ((m, v) :: rest) =
+inferMembers env sigs grouped (member :: rest) =
+  let m = member.smName
+  let v = member.smMono
+  let _ = openScope member.smScope
   perRun.value.currentFn := m
   let peel = memberPeelSource sigs m v
   let effs = inferMemberClauses env peel v (clausesOf m grouped)
   perRun.value.currentFn := ""
+  let _ = closeScope ()
   let _ = checkEffectEscape sigs m effs
   inferMembers env sigs grouped rest
 
@@ -35901,20 +36458,28 @@ annotTooGeneralMsg ty =
 registerInferredConstraints : List (String, Ty) ->
   List (IfaceRef, List Mono, Option Loc) ->
   List UObligation ->
-  List (String, Scheme) ->
+  List ScopedScheme ->
   Unit
 registerInferredConstraints _ _ _ [] = ()
-registerInferredConstraints sigs callObls addedObls ((m, sch) :: rest) =
-  let _ = maybeInferConstraint sigs callObls addedObls m sch
+registerInferredConstraints sigs callObls addedObls (scoped :: rest) =
+  let _ =
+    maybeInferConstraint
+      sigs
+      callObls
+      addedObls
+      scoped.ssName
+      scoped.ssScope
+      scoped.ssScheme
   registerInferredConstraints sigs callObls addedObls rest
 
 maybeInferConstraint : List (String, Ty) ->
   List (IfaceRef, List Mono, Option Loc) ->
   List UObligation ->
   String ->
+  ScopeId ->
   Scheme ->
   Unit
-maybeInferConstraint sigs callObls addedObls m sch
+maybeInferConstraint sigs callObls addedObls m scope sch
   | not (omHasKey m driverState.value.dictEligibleSetRef.value) = ()
   | omHasKey m driverState.value.sigNameSetRef.value = ()
   | otherwise =
@@ -35930,7 +36495,7 @@ maybeInferConstraint sigs callObls addedObls m sch
     let ids =
       dedupI
         (inferredConstraintIds m boundIds ++ map inferredPredLead residualPreds)
-    registerInferredFor m ids vecs
+    registerInferredFor m scope ids vecs
 
 -- #11 soundness (ALWAYS-ON): for each generalized member, record the deferred impl
 -- obligations it quantifies over — an addedObls entry whose discriminating mono is a
@@ -36734,15 +37299,15 @@ monoClosed t = match normalize t
 -- `Tag (Box TVar#736)` — the SAME cell), so conjunct 4 was never vacuous for S0-2; it
 -- passed because the id genuinely IS deferrable.  The review's conclusion stands, its
 -- mechanism does not, and conjunct 5 is keyed on the fact that was actually there.
-goalDefersOpenWorld : IfaceRef -> List Mono -> Bool
-goalDefersOpenWorld iface args =
+goalDefersOpenWorld : ScopeId -> IfaceRef -> List Mono -> Bool
+goalDefersOpenWorld scope iface args =
   not (monoVectorClosed args)
     && allList monoHeadIsDecl args
     && isNonEmptyL (flatMap monoUnboundIds args)
     && allList
       (i => containsI i perRun.value.deferrableVarIds.value)
       (flatMap monoUnboundIds args)
-    && (goalMatchesGiven iface args || goalSlotStillOpen args)
+    && (goalMatchesGiven scope iface args || goalSlotStillOpen args)
 
 -- is there an in-scope PREDICATE-keyed given that answers this goal exactly?
 -- Deliberately `registerPredGiven`'s own shape — the WHOLE argument vector, structural,
@@ -36758,18 +37323,107 @@ goalDefersOpenWorld iface args =
 -- #2547 unit 3: `GSPredicateOnly` is what still says so now that both registries share one
 -- environment — it selects exactly the `GMPredicate` entries, which are exactly the ones
 -- `registerPredGiven` / `registerFunPredGiven` write.
-goalMatchesGiven : IfaceRef -> List Mono -> Bool
-goalMatchesGiven _ [] = False
-goalMatchesGiven iface args =
+goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
+goalMatchesGiven _ _ [] = False
+goalMatchesGiven scope iface args =
   anyGivenMatches
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-    (givensHere ())
+    scope
+    (givensForScope scope)
 
-anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
-anyGivenMatches _ [] = False
-anyGivenMatches request (g :: rest) =
-  givenInScope GSPredicateOnly g && predicateRequestMatchesSlot request g.geSlot
-    || anyGivenMatches request rest
+anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
+anyGivenMatches _ _ [] = False
+anyGivenMatches request scope (g :: rest) =
+  givenInScope GSPredicateOnly g
+      && givenVisibleFrom scope (binderScope g.geBinder)
+      && predicateRequestMatchesSlot request g.geSlot
+    || anyGivenMatches request scope rest
+
+isSemanticGivenAnswer : Option AssumAnswer -> Bool
+isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
+isSemanticGivenAnswer _ = False
+
+isLegacyPredicateAnswer : Option AssumAnswer -> Bool
+isLegacyPredicateAnswer (Some (LegacyPredicate _)) = True
+isLegacyPredicateAnswer _ = False
+
+-- Private service check for the selection half of the scope adapter.  It keeps
+-- the full-vector and id-witness eligibility rules observable independently of
+-- production examples, and its sibling query fails if lexical filtering is
+-- removed from `anyGivenMatches`.
+scopeGivenProbe : Unit -> List Bool
+scopeGivenProbe _ =
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let root = freshScope None 0 "given-probe" ModuleOwner
+  let owner = freshScope (Some root) 1 "given-probe" (BindingOwner "owner")
+  let sibling = freshScope (Some root) 1 "given-probe" (BindingOwner "sibling")
+  let iface =
+    IfaceRef { irName = "PairGiven", irOrigin = OriginModule "given-probe" }
+  let args = [tconBuiltin "Int", tconBuiltin "Bool"]
+  let slot = PredicateSlot {
+    psIface = iface,
+    psArgs = PSArgsKnown args,
+    psBoundIds = [41],
+  }
+  let _ = pushGiven GMPredicate DirectGiven slot (binderAt owner 0)
+  let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+  let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
+  let truncated = PredicateRequest {
+    prIface = iface,
+    prArgs = PSArgsKnown [tconBuiltin "Int"],
+  }
+  let witnessIface = IfaceRef {
+    irName = "WitnessGiven",
+    irOrigin = OriginModule "given-probe",
+  }
+  let witnessSlot = PredicateSlot {
+    psIface = witnessIface,
+    psArgs = PSArgsKnown [tconBuiltin "Int"],
+    psBoundIds = [73],
+  }
+  let witnessRequest = PredicateRequest {
+    prIface = witnessIface,
+    prArgs = PSArgsKnown [tconBuiltin "Int"],
+  }
+  let _ = pushGiven GMIdWitnessed DirectGiven witnessSlot (binderAt owner 1)
+  let compatibleIface = IfaceRef {
+    irName = "CompatibleGiven",
+    irOrigin = OriginModule "given-probe",
+  }
+  let compatibleSlot = PredicateSlot {
+    psIface = compatibleIface,
+    psArgs = PSArgsUnknown,
+    psBoundIds = [89],
+  }
+  let compatibleRequest = PredicateRequest {
+    prIface = compatibleIface,
+    prArgs = PSArgsKnown [tconBuiltin "Int"],
+  }
+  let _ = pushGiven GMPredicate DirectGiven compatibleSlot (binderAt owner 2)
+  let givens = givensForScope owner
+  let result = [
+    anyGivenMatches exact owner givens,
+    not (anyGivenMatches exact sibling givens),
+    not (anyGivenMatches truncated owner givens),
+    not (anyGivenMatches witnessRequest owner givens),
+    isSome (firstPredForEnclAt GSImplRequires 73 witnessRequest owner givens),
+    isNone (firstPredForEnclAt GSImplRequires 74 witnessRequest owner givens),
+    isSemanticGivenAnswer (firstPredForEncl exact owner givens),
+    isLegacyPredicateAnswer
+      (firstPredForEnclAt GSPredicateOnly 41 unknown owner givens),
+    isLegacyPredicateAnswer
+      (firstPredForEnclResidual "PairGiven" args owner givens),
+    isLegacyPredicateAnswer (firstPredForEncl compatibleRequest owner givens),
+  ]
+  graphRun := savedGraph
+  perRun := savedPerRun
+  result
+
+-- > scopeGivenProbe ()
+-- [True, True, True, True, True, True, True, True, True, True]
 
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
@@ -37038,7 +37692,7 @@ pairsOfVecObls (o :: rest) =
 -- (arity >= 2) whose EXACT argument vector is not among the declared vectors
 -- (vector-valued superclass closure, censusSuperCloseVec / superSlotVecOf) is
 -- uncovered, and is reported when the pair test did not already flag one of its args.
-checkSigConstraintCoverage : List (String, List (IfaceRef, List Mono), List (List Mono)) ->
+checkSigConstraintCoverage : List ConstraintReg ->
   List (String, Ty) ->
   List (String, Ty, List (String, Mono)) ->
   List (IfaceRef, List Mono, Option Loc) ->
@@ -37050,7 +37704,7 @@ checkSigConstraintCoverage regs sigs sigTvMaps callObls addedObls ((m, sch) :: r
   let _ = checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch
   checkSigConstraintCoverage regs sigs sigTvMaps callObls addedObls rest
 
-checkSigConstraintOne : List (String, List (IfaceRef, List Mono), List (List Mono)) ->
+checkSigConstraintOne : List ConstraintReg ->
   List (String, Ty) ->
   List (String, Ty, List (String, Mono)) ->
   List (IfaceRef, List Mono, Option Loc) ->
@@ -37098,25 +37752,20 @@ pairIface m id =
 -- the declared (iface, id) constraint pairs of member m: each declared constraint
 -- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
 -- constraints — no tyvar — carry no dict slot and are skipped).
-declaredPairsFor : String ->
-  List (String, List (IfaceRef, List Mono), List (List Mono)) ->
-  List (IfaceRef, Int)
+declaredPairsFor : String -> List ConstraintReg -> List (IfaceRef, Int)
 declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
 
 -- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
 -- accessor (`snd`/`lookupAssoc` no longer apply).  Both spellings — first-match by name,
 -- and the whole-list projection — are exactly what the two consumers used before.
-regIfaceMonosFor : String ->
-  List (String, List (IfaceRef, List Mono), List (List Mono)) ->
-  List (IfaceRef, List Mono)
+regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
 regIfaceMonosFor _ [] = []
-regIfaceMonosFor m ((n, ims, _) :: rest)
-  | m == n = ims
+regIfaceMonosFor m (reg :: rest)
+  | m == reg.crName = reg.crIfaceMonos
   | otherwise = regIfaceMonosFor m rest
 
-regIfaceMonosOf : (String, List (IfaceRef, List Mono), List (List Mono)) ->
-  List (IfaceRef, List Mono)
-regIfaceMonosOf (_, ims, _) = ims
+regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
+regIfaceMonosOf reg = reg.crIfaceMonos
 
 -- U1b (#1482): project a reg's (interface occurrence, mono) pair back to the SPELLING
 -- for `groupConstraintMonosRef`, whose only reader (`dictVarSatisfiesIface`) compares
@@ -37329,11 +37978,12 @@ boundTvarId boundIds mono = match normalize mono
 -- by DICT-SEMANTICS §3.  The vectors are looked up per slot, keyed on (interface, lead
 -- id), and a slot that matches nothing keeps `[]`, i.e. exactly its historical goal.
 registerInferredFor : String ->
+  ScopeId ->
   List Int ->
   List (IfaceRef, Int, List Mono) ->
   Unit
-registerInferredFor _ [] _ = ()
-registerInferredFor m ids vecs =
+registerInferredFor _ _ [] _ = ()
+registerInferredFor m scope ids vecs =
   -- #994 (B-3-a): one `CSlot` per id, so the iface list is a `map` over the very list
   -- that is stored and cannot differ from it in length or order.  ⚠️ This moves
   -- `ifaceForInferredId`'s evaluation BEFORE the `funConstraintsRef` write (it used to
@@ -37342,7 +37992,7 @@ registerInferredFor m ids vecs =
   -- NEITHER fn-constraint table — checked, since a recovery that consulted them would change answers here.
   let slots = inferredPredicateSlots m ids vecs
   let _ = setFunConstraintEntry m slots
-  let _ = registerActiveDictVars m 0 slots
+  let _ = registerActiveDictVars scope 0 slots
   -- #1909, the INFERRED twin of `registerMember`'s call: this writer is likewise ids-only
   -- (`registerActiveDictVars` above), so an inferred binding whose deferred predicate is
   -- STRUCTURED (`nest x = tagOf (Wrap x)`) had the same unreachable-`entailAssum` gap as
@@ -37350,7 +38000,7 @@ registerInferredFor m ids vecs =
   -- The subject comes from the vector `inferredVecFor` already recovers per slot since
   -- #1869; a slot that recovered nothing carries `[]` and registers nothing, exactly as
   -- it did before.  See `registerSlotPredGivens` for why this adds no selector call.
-  let _ = registerSlotPredGivens m 0 slots
+  let _ = registerSlotPredGivens scope 0 slots
   perRun.value.promotedRef := m :: perRun.value.promotedRef.value
 
 inferredPredicateSlots : String ->
@@ -37481,11 +38131,11 @@ ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
     _ => ifaceForConstraintIdGo id rest
   OpProjected => ifaceForConstraintIdGo id rest
 
-registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
+registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 registerActiveDictVars _ _ [] = ()
-registerActiveDictVars m slot (s :: rest) =
-  let _ = registerEachActiveId s.psBoundIds (dictParamName m slot)
-  registerActiveDictVars m (slot + 1) rest
+registerActiveDictVars scope slot (s :: rest) =
+  let _ = registerEachActiveId s.psBoundIds (binderAt scope slot)
+  registerActiveDictVars scope (slot + 1) rest
 
 -- Render accumulated type errors as `TYPE ERROR: <msg>` lines (in order of
 -- occurrence — typeErrors accumulates newest-first, so reverse).
@@ -44118,8 +44768,9 @@ runStampCtxs [] = ()
 runStampCtxs (ctx :: rest) =
   perRun := ctx.scPerRun
   toggles := ctx.scToggles
-  -- `givensHere` selects this module's bucket off `gGiven` by exactly this key
-  -- (#2547 unit 3), and `superDeclsRef` is the impl universe the stampers'
+  -- Deferred goals select their `gGiven` bucket from their captured scope frames;
+  -- `currentModuleRef` remains the legacy routing context, and `superDeclsRef` is
+  -- the impl universe the stampers'
   -- super-expansion reads — both are what `graphModuleWorker` set for this module
   -- (`elabModuleStamp` for the core pass, which is the only module still on it).
   driverState.value.currentModuleRef := ctx.scModule
@@ -44347,10 +44998,10 @@ mapGroupClauses f (m :: rest) grouped =
 -- rewriting after inference leaves the group's inference unchanged.
 markRecursiveOccurrences : ModuleMarking ->
   List (String, Mono) ->
-  List String ->
+  List ScopedMember ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
-markRecursiveOccurrences mm placeholders members grouped =
+markRecursiveOccurrences mm placeholders scopedMembers grouped =
   -- `promotedRef` is this module's promoted names so far (cumulative within the
   -- module); a member already in the dict-name set — a bare-name collision with a
   -- signatured graph name or an earlier module's promotion — was marked before
@@ -44359,20 +45010,25 @@ markRecursiveOccurrences mm placeholders members grouped =
   let fresh =
     filterList
       (m => omHasKey m promoted && not (omHasKey m mm.mmDictSet.value))
-      members
+      (map (member => member.smName) scopedMembers)
   match fresh
     [] => grouped
     _ =>
       mm.mmDictSet := omFromNames fresh mm.mmDictSet.value
-      recMarkMembers (omFromNames fresh omEmpty) placeholders members grouped
+      recMarkMembers
+        (omFromNames fresh omEmpty)
+        placeholders
+        scopedMembers
+        grouped
 
 recMarkMembers : OrdMap Unit ->
   List (String, Mono) ->
-  List String ->
+  List ScopedMember ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
 recMarkMembers _ _ [] grouped = grouped
-recMarkMembers dn placeholders (m :: rest) grouped =
+recMarkMembers dn placeholders (member :: rest) grouped =
+  let m = member.smName
   let onDict =
     callee ev =>
       pushRecDictAppGoal
@@ -44381,6 +45037,7 @@ recMarkMembers dn placeholders (m :: rest) grouped =
           callee
           m
           (placeholderMonoOf callee placeholders)
+          member.smScope
           ev)
   let rw = ArgRw omEmpty dn omEmpty [] onDict
   recMarkMembers

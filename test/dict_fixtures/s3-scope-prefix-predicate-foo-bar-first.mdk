@@ -1,0 +1,24 @@
+-- Declaration-order twin of s3-scope-prefix-predicate-foo-first.  Lexical
+-- ownership, rather than dictionary-name prefix order, still yields exactly 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+data X = X
+data Y = Y
+
+interface A a where
+  foo : a -> Int
+
+interface B a where
+  foo_bar : a -> Int
+
+impl B Y requires D Int where
+  foo_bar _ = d 0
+
+impl A X requires D Int where
+  foo _ = d 0
+
+main = println (foo X)

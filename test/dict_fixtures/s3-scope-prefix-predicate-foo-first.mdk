@@ -1,0 +1,25 @@
+-- DICT §3: both impl bodies own a distinct `D Int` given.  The `foo` body
+-- must use its own given even though `$dict_foo_0` prefixes `$dict_foo_bar_0`.
+-- The global `D Int` implementation returns 7, so the exact answer is 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+data X = X
+data Y = Y
+
+interface A a where
+  foo : a -> Int
+
+interface B a where
+  foo_bar : a -> Int
+
+impl A X requires D Int where
+  foo _ = d 0
+
+impl B Y requires D Int where
+  foo_bar _ = d 0
+
+main = println (foo X)
