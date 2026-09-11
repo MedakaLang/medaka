@@ -1107,12 +1107,17 @@ collectPropLines (_ :: rest) = collectPropLines rest
 -- Peel a transparent ELoc wrapper to recover a body's source line. Intentional
 -- cross-file duplicate of `test_runner.mdk`'s private (unexported) `exprLine`
 -- — tiny helper, not worth exporting across a module boundary for one caller.
+-- An `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
+-- comment: "binop levels stay unwrapped") — its left operand's own location
+-- recovers the decl's line instead, since both operands of a same-line
+-- binop share it.
 -- lint-disable-next-line rule-duplicate-body
 exprLineLocal : Expr -> Int
 exprLineLocal (ELoc (Loc _ l _ _ _) _) = l
 exprLineLocal (EApp f _) = exprLineLocal f
 exprLineLocal (EAnnot e _) = exprLineLocal e
 exprLineLocal (EHeadAnnot e _) = exprLineLocal e
+exprLineLocal (EBinOp _ a _ _) = exprLineLocal a
 exprLineLocal _ = 0
 
 -- ── #1292: elaborate, then rename cross-unit-colliding constructors ──────────
@@ -2114,22 +2119,53 @@ cliTypecheckSkippedField : Bool -> List (String, Json)
 cliTypecheckSkippedField False = []
 cliTypecheckSkippedField True = [("typecheckSkipped", JBool True)]
 
+-- #2341: which engine the (possibly type-error-short-circuited) doctest run
+-- reflects, mirroring `mcp.mdk`'s `doctestRunEngineNames`/`primaryEngineName`
+-- pair — not shared across a module boundary (mcp.mdk already imports
+-- test_cmd.mdk, so the reverse import would cycle).
+-- lint-disable-next-line rule-duplicate-body
+cliDoctestRunEngineNames : List (Engine, RunResult) -> List Engine
+cliDoctestRunEngineNames [] = []
+cliDoctestRunEngineNames ((e, _) :: rest) = e :: cliDoctestRunEngineNames rest
+
+-- lint-disable-next-line rule-duplicate-body
+cliPrimaryEngineName : List Engine -> String
+cliPrimaryEngineName [] = "unknown"
+cliPrimaryEngineName (e :: _) = engineName e
+
 -- The full envelope: doctests + properties (same shape `medaka_test`'s
 -- `testReportJson` uses) PLUS a `tests` array for `test "…"` decls, and a
 -- `summary` folding all three phases together — this is the field
 -- `testReportJson` cannot provide (it never runs this phase, by its own
 -- documented scope), and the one this slice's acceptance check depends on.
+--
+-- `engine` names the doctest phase's PRIMARY (first-requested) engine, the
+-- same field `medaka_test`'s envelope already carries (#2341) — read
+-- alongside each `tests[]` entry's own per-result `engine` (#2588) and each
+-- doctest `--engines` block already being labelled on the human arm, this is
+-- shape parity, not new information: under multiple engines the `doctests`
+-- block itself still reports only the primary engine's examples, same as
+-- `medaka_test`. No separate `note` caveat is added — unlike `medaka_test`,
+-- which has no other channel to say so, the CLI's own `--engines` flag is
+-- the caller's own input, and each engine's block is already labelled on the
+-- human arm.
 export
 cliTestReportJson : String ->
   Option String ->
+  List Engine ->
   List (Engine, RunResult) ->
   List PropResult ->
   List (Engine, String, Int, ExResult) ->
   Bool ->
   Json
-cliTestReportJson path typeError runs props tests typecheckSkipped =
+cliTestReportJson path typeError engines runs props tests typecheckSkipped =
+  let runEngines =
+    if isNone typeError then cliDoctestRunEngineNames runs else engines
   jObject
-    ([("file", JString path)]
+    ([
+        ("file", JString path),
+        ("engine", JString (cliPrimaryEngineName runEngines)),
+      ]
       ++ cliTypeErrorField typeError
       ++ cliTypecheckSkippedField typecheckSkipped
       ++ [

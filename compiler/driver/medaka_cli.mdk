@@ -3427,6 +3427,7 @@ runTestJsonCmd engines cases filterOpt target =
                   (cliTestReportJson
                     target
                     typeError
+                    engines
                     runs
                     props
                     tests
