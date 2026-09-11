@@ -111,6 +111,8 @@ import driver.loader.{
   LoadMsg,
   LoadParseFailed,
   loadProgramFilesLocatedE,
+  dropPathTriple,
+  modIdToPath,
   findProjectRoot,
   findProjectRootOrSelf,
   entrySearchRoots,
@@ -167,6 +169,15 @@ import driver.diagnostics.{
   cjFoldIntoFile,
   readFileSafe,
   diagIsError,
+  diagIsWarn,
+  cohWarnsOfTriple,
+  joinedOrNone,
+  renderTripleErrors,
+  renderTripleWarnings,
+  residualOrGeneric,
+  coherenceWarnCode,
+  runBuildWarnCodes,
+  isCoherenceWarn,
   findMainFunDef,
   mainBodyLoc,
   mainArityMsg,
@@ -746,7 +757,7 @@ runCheckCmd argv =
                       ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
                     exit 1
                   Ok modsWithPath =>
-                    let mods = map dropModPath modsWithPath
+                    let mods = map dropPathTriple modsWithPath
                     let pathMap = map modIdToPath modsWithPath
                     let trusted = projectTrustedMods target roots stdlibDir mods
                     -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
@@ -904,9 +915,6 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
     perMod,
   )
 
-cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
-cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
-
 -- `run --json`'s multi-module arms' own copy of `diagnostics.relDiagTriple`
 -- (not exported there — only `relDiagPath`, its one-line body, is): strip the
 -- project-root prefix from a triple's `file` so an imported module resolved
@@ -924,73 +932,7 @@ hiddenWarnsOfTriple : (String, String, List Diag) -> List Diag
 hiddenWarnsOfTriple (_, _, diags) = filter isHiddenNonEntryWarn diags
 
 isHiddenNonEntryWarn : Diag -> Bool
-isHiddenNonEntryWarn d = isDiagWarn d && not (isCoherenceWarn d)
-
-joinedOrNone : List String -> Option String
-joinedOrNone [] = None
-joinedOrNone ls = Some (joinNl ls)
-
--- #2044: split the source ONCE, not once per diagnostic — and, per the strictness
--- trap the 🚨 note on `locatedProjectDiags` above already spells out, not at all
--- when there is nothing to render.  `map f xs` with `f = ppDiagCliLines
--- (srcLinesArr src) path` builds that partial application from ALREADY-EVALUATED
--- arguments, so a strict language splits the whole file before `map` ever looks at
--- whether `xs` is empty — which made a clean multi-module project pay a full
--- per-file `Array String` split on EVERY file for output that does not exist.
--- The `[]` arm is what keeps the split off the zero-diagnostic path; keep it.
---
--- #2400 F2b: `path` here is the LOADER-NORMALISED form (`./main.mdk` for an
--- entry named with no directory part), where the single-file arm passes the
--- CLI's `target` verbatim — the same tool printed `./main.mdk` for a
--- multi-module TYPE error and `main.mdk` for a single-file one.  `displayPath`
--- reconciles the two INSIDE `ppDiagCliLines`, for DISPLAY only, so the triples
--- reaching here keep the loader's spelling and `locatedProjectDiags` can go on
--- identifying the entry triple positionally (it works BECAUSE these paths do
--- not compare equal to `target`).
-renderTripleErrors : (String, String, List Diag) -> List String
-renderTripleErrors (path, src, diags) =
-  let errs = filter isDiagError diags
-  match errs
-    [] => []
-    _ => map (ppDiagCliLines (srcLinesArr src) path) errs
-
-renderTripleWarnings : (String, String, List Diag) -> List String
-renderTripleWarnings (path, src, diags) =
-  let ws = filter isDiagWarn diags
-  match ws
-    [] => []
-    _ => map (ppDiagCliLines (srcLinesArr src) path) ws
-
--- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
--- looser `hadTypeErrors`: once that gate has already fired, render the residual —
--- the graph-end drain's own diagnostics, which the per-module lists do not carry
--- (they close before the drain runs) — falling back to the generic deflection only
--- if the residual carries nothing (never leaves the user with exit 1 and no text).
---
--- #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
--- when the per-module diagnostics this elaboration produced were empty while the
--- same elaboration armed `hadTypeErrors` — i.e. precisely the #1812 divergence,
--- where `medaka check` on this program exits 0 and reports success.  The old text
--- read "Run `medaka check` for details" and so named the one command guaranteed to
--- confirm the wrong thing.  #2544 (M4): the residual IS reachable — `elaborateModules`
--- returns every diagnostic the elaboration left standing, each with its own `Loc` —
--- so this renders it located, through the same face `check` uses.
---
--- The `analyzeProject` re-run this used to prefer over the residual is gone with the
--- second typecheck it belonged to: the per-module errors the caller already rendered
--- ARE that pass's output, and they were empty on every path that reaches here.
-residualOrGeneric : List (String, String) ->
-  String ->
-  List (String, TcDiag) ->
-  <IO> String
-residualOrGeneric pathMap target residual = match renderTcDiags pathMap residual
-  [] =>
-    "error: type error in "
-      ++ target
-      ++ ", detected during elaboration (the run/build type pass); no located"
-      ++ " diagnostic is available for it, and `medaka check` may not report this"
-      ++ " program at all — see issue #1812"
-  rendered => joinNl rendered
+isHiddenNonEntryWarn d = diagIsWarn d && not (isCoherenceWarn d)
 
 -- ── run --json structured error exit (#2798) ────────────────────────────────
 -- `run`'s error arms used to call `runAbort` unconditionally on a non-empty
@@ -1187,7 +1129,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       csrc
       decls
       (internalGuardFor (allowInternal || contains mid trusted))
-  let errs = filter isDiagError diags
+  let errs = filter diagIsError diags
   match errs
     [] =>
       -- Clean (no errors): the scheme dump goes to STDOUT loc-free, but any
@@ -1196,7 +1138,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- bundles the warning loc-free into stdout, so we strip its "Warning: …"
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
-      let warns = filter isDiagWarn diags
+      let warns = filter diagIsWarn diags
       -- S-3/#164: same rationale as `analyzeFrom` above — `decls` is already
       -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
       -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
@@ -1548,90 +1490,6 @@ cjFileNotFoundJson target err =
     jObject [("file", JString target), ("diagnostics", jArray [diagJson])]
   stringify (jObject [("files", jArray [filesJson])])
 
-isDiagError : Diag -> Bool
-isDiagError (Diag SevError _ _ _ _ _) = True
-isDiagError _ = False
-
-isDiagWarn : Diag -> Bool
-isDiagWarn d = not (isDiagError d)
-
--- ── the ONE typecheck warning `run`/`build` surface (F-3d, #614/#311) ───────
--- 🚨 READ THIS BEFORE WIDENING IT TO `isDiagWarn`.  That was tried, on the reasoning
--- that `run`/`build` "should show the same warnings `check` does", and it is wrong on
--- three counts, each measured:
---
---  (1) IT IS NOT THE ACCEPTANCE CRITERION.  F-3d's criterion is "nothing that was
---      LOUD goes silent".  The only diagnostic that was loud on `run`/`build` before
---      F-3d is the coherence reject F-3d demoted.  Every other warning on the
---      `matchWarnings` channel was ALREADY invisible on those verbs and stays exactly
---      as it was — not a regression, and not this change's to fix.
---  (2) SPEW, ~96% FALSE.  The channel is populated over the WHOLE MODULE GRAPH, and
---      `checkGuardExhaustivenessWith` draws its constructor oracle from the graph
---      rather than from the scrutinee's own type — so a fully exhaustive
---      `List`-matching function is reported "Missing case: `Text _`", `Text` being a
---      constructor of an unrelated type in another module (issue 1185, PRE-EXISTING).
---      Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 → 4896 stderr
---      lines, 1249 of them demanding that phantom `Text _`; a 25-line three-module
---      toy went 0 → 20, all false.  That makes `build` ~200× noisier than `check`.
---  (3) PERF.  Surfacing the channel means RENDERING it, and rendering a located
---      diagnostic materialises the containing file's lines (`ppDiagCliSrc` →
---      `srcLinesArr`) — a cost paid per file whose channel is non-empty.
---      Interleaved A/B on a quiet box: multi-module `check` 16.0–17.1 s → 38.9–40.6 s
---      with byte-identical stdout.  Narrowing to one code removes the render, which
---      fixes that at its cause rather than optimising around it.
---
--- So: exactly the demoted code, nothing else.  Widening this predicate is a decision
--- about which verb is the diagnostic one, not a cleanup.
-coherenceWarnCode : String
-coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
-
--- #1499 / D1.  The predicate above is now a MEMBERSHIP TEST over a short
--- allowlist, not a single-literal test — and the three measured objections
--- recorded above do NOT reach the second member.  `W-PRELUDE-METHOD-SHADOW` has
--- no oracle at all (a pure name-set intersection, so it cannot be false), fires
--- at most ONCE PER COLLIDING INTERFACE-METHOD DECLARATION, and measures zero
--- occurrences across compiler/, stdlib/ and sqlite/ — so both the (2) spew and
--- (3) render costs are bounded by the collision count rather than by the module
--- graph.  This list is the decision, taken deliberately; it is not a place to
--- park codes, and every addition owes the same three measurements.
---
--- ⚠️ #2400 / F4 (2026-09-01): THIS LIST IS NOW THE MULTI-MODULE ALLOWLIST ONLY.
--- The SINGLE-FILE / single-module arms of `run` and `build` bypass it entirely via
--- `allWarnTriples` (`filter isDiagWarn`), matching what `checkRoute`'s single-file
--- arm already does with the identical `diags` value.  The split is deliberate, not
--- an oversight: objections (2) and (3) above are properties of the module graph and
--- do not reach a single-file program (measured — see `allWarnTriples`'s note), while
--- on a graph the #1185 phantom is still ~99% of the channel.  So the multi-module
--- side stays here, BLOCKED ON #1185, and collapsing the two arms back together is a
--- decision that waits on #1185's constructor oracle becoming scrutinee-typed.
--- #2738 / D2.  The third member owes the same three measurements, and they answer the
--- same way as the second's.  (1) It is not a demotion of anything loud: the path it
--- covers returned NOTHING on any verb, so `run`/`build` going silent about it is what
--- is being repaired, not preserved.  (2) No oracle, so no false positive is
--- representable: it is a name-set intersection filtered by a comparison of two DECLARED
--- signatures, and it fires at most once per import MEMBER, not per occurrence —
--- measured TWICE over this file's whole module closure (`eval/eval.mdk`'s `add` and
--- `sub`, each importing a `U64` standalone that `Num`'s method of the same name
--- displaces), against the #1185 phantom's 1249 lines on the same command.  (3) The
--- render cost is therefore bounded by the collision count, not by the module graph,
--- exactly as for `W-PRELUDE-METHOD-SHADOW`.
---
--- The count is not zero: unlike `W-PRELUDE-METHOD-SHADOW`, this code DOES fire on the
--- compiler's own source today.  Those sites are live members of the class, not false
--- positives, and they are the derived worklist the drain half of #2769 consumes.  Do
--- not re-copy the number out of this comment — re-derive it, since the set moves with
--- the tree (it was three until `map.toList` was deleted and `types/registry.mdk`
--- switched to `map.{entries}`):
---
---     ./medaka check compiler/driver/medaka_cli.mdk 2>&1 | grep -c 'is shadowed in module'
-runBuildWarnCodes : List String
-runBuildWarnCodes =
-  [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW", "W-IMPORT-METHOD-SHADOW"]
-
-isCoherenceWarn : Diag -> Bool
-isCoherenceWarn (Diag SevWarning c _ _ _ _) = contains c runBuildWarnCodes
-isCoherenceWarn _ = False
-
 -- Drop the loc-free "Warning: …" lines runCheck bundles into its scheme dump, so
 -- the located re-render (emitLocatedWarnings) is the single warning surface —
 -- otherwise the CLI would print each warning twice (loc-free + located).  Scheme
@@ -1727,13 +1585,13 @@ emitHiddenDiagNote n =
 -- site is what lets one carrier serve both.
 --
 -- #2400 / F4.  This USED TO BE `cohWarnTriples`, filtering `isCoherenceWarn`; it now
--- filters `isDiagWarn`, and it is the ONLY place `run`/`build` widen past
+-- filters `diagIsWarn`, and it is the ONLY place `run`/`build` widen past
 -- `runBuildWarnCodes`.  (Its two call sites — `run`'s single-file arm and
 -- `typecheckGateRoute`'s single-module arm — were its ONLY callers, so nothing on
 -- the multi-module path lost a filter; those arms carry `projWarns` from
 -- `locatedProjectDiags` and still go through `cohWarnsOfTriple`/`isCoherenceWarn`.)
 -- Read `isCoherenceWarn`'s 🚨 block first: it records why widening the WHOLE channel
--- to `isDiagWarn` was tried and reverted.  Every one of its three measured
+-- to `diagIsWarn` was tried and reverted.  Every one of its three measured
 -- objections is a property of the MODULE GRAPH, and none of them reaches this door:
 --
 --  (2) SPEW.  The ~96%-false `Missing case: 'Text _'` phantom is #1185, whose
@@ -1747,7 +1605,7 @@ emitHiddenDiagNote n =
 --      is exactly ONE file, already read into `src` for the error path.
 --  (1) CRITERION.  `check`'s single-file arm (`checkRoute`) and `run`'s
 --      (`runRunCmd`'s `[(runMid, runDecls)]` arm) apply the SAME
---      `filter isDiagWarn` to an `analyzeFrom` result over the SAME program.
+--      `filter diagIsWarn` to an `analyzeFrom` result over the SAME program.
 --      ⚠️ NOT to the same `diags` VALUE: the two `analyzeFrom` calls differ in
 --      their guard — `check` passes `internalGuardFor (allowInternal || contains
 --      mid trusted)`, `run` passes `internalGuardFor allowInternal`, the
@@ -1756,7 +1614,7 @@ emitHiddenDiagNote n =
 --      decides only which constructs count as "internal" for `ResError` gating,
 --      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`
 --      — so the two results can differ ONLY in their ERROR set, never in the
---      `isDiagWarn` subset either arm surfaces.  So this still cannot surface a
+--      `diagIsWarn` subset either arm surfaces.  So this still cannot surface a
 --      warning `check` does not already show — it makes the three verbs agree on
 --      one input, which IS the criterion.
 --
@@ -1768,7 +1626,7 @@ allWarnTriples : String ->
   String ->
   List Diag ->
   List (String, String, List Diag)
-allWarnTriples src file diags = match filter isDiagWarn diags
+allWarnTriples src file diags = match filter diagIsWarn diags
   [] => []
   ws => [(file, src, ws)]
 
@@ -2426,12 +2284,7 @@ runBuildPlainCmd a =
           None => defaultOutPath target input
         match typecheckGate allowInternal root inputAbs
           Err msg => dieMsg msg
-          -- Warnings BEFORE the emitter runs, so they precede clang's own output
-          -- and any `built <in> -> <out>` line — the same order `check` uses and
-          -- the order a reader scanning a build log expects.  They never change
-          -- the exit code.
-          Ok gateWarns =>
-            let _ = emitWarningLines gateWarns
+          Ok _ =>
             let perfTTc = now ()
             let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
             match runBuild root medaka cc target inputAbs outPath keepIrCli
@@ -2510,44 +2363,19 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- an ill-typed program that is garbage (the G1 bug), so we abort here on any
 -- type error.  Mirrors the OCaml driver's STEP-0 check gate.
 
--- G1 typecheck gate result, a `Result String (List String)`: `Ok warnings` /
--- `Err diagnostic` (a resolve or type error, or a pre-typecheck read/load
--- failure) whose message we surface verbatim.
--- `Ok` CARRIES THE WARNINGS, and that is the whole reason it has a payload.
--- `build`'s gate used to be a bare Bool-shaped verdict, so every warning the check
--- it runs produced was computed and dropped — `medaka build` had NO warning surface
--- at all, for any warning class.  That was invisible while the typecheck channel
--- carried only non-exhaustive-match warnings (which `check` still showed); F-3d
--- demoted a formerly-loud coherence reject onto the same channel, at which point a
--- diagnostic `build` used to print became a silent accept.  The lines are rendered
--- by the gate (which knows each module's own source) and emitted by the caller.
+-- G1 typecheck gate result, a `Result String Unit`: `Err diagnostic` (a resolve
+-- error, or a pre-typecheck read/load failure) whose message we surface
+-- verbatim, or `Ok ()` — a clean-enough-to-emit verdict, not a clean-program
+-- one.  The payload is Unit because this process no longer typechecks: the
+-- `medaka_emitter` child does, once, and every diagnostic that pass produces —
+-- errors and warnings alike — reaches the user through the child's own stderr,
+-- which `runBuild` forwards verbatim whichever way the build goes.
 --
--- ⚠️ RENDERED `String`s HERE, TRIPLES ON THE `run` PATH — an asymmetry that is a
--- FACT ABOUT THIS PLAIN-TEXT CODE PATH, not the whole CLI. #1078 gave `medaka
--- build` a `--json` flag, but it does NOT flow through `typecheckGate`/`Ok`
--- at all: `runBuildCmd` branches on `jsonMode` BEFORE reaching this function and
--- routes to `runBuildJsonCmd` instead, which reuses `checkJsonFile` (the same
--- structured pass `check --json` runs) for the front-end gate and wraps a
--- build-stage failure in `cjBuildFailedJson`. So this comment's original
--- warning still holds for THIS (human-text) path specifically: `typecheckGate`
--- itself was never changed to carry structure, and if some future caller starts
--- routing `--json` through it, that payload must become triples and follow
--- `finishRunEval`'s `pendingRunDiags` discipline, or it reproduces the bug that
--- fix exists for.
---
--- Load the entry + transitive imports and run the SAME front-end `medaka check`
--- runs, reporting whether any error fired AND rendering it exactly as `check`
--- does.  This is the CHECK path, not the EMIT path (elaborateModules): the check
--- drivers are what render every diagnostic LOCATED, exactly as `check` prints it,
--- so an ill-typed program like `"x" + 1` is rejected here rather than by the
--- emitter's own elaboration with a downstream `emitter failed …`.  (Since #2705
--- both drivers solve and check the same obligations; the remaining difference is
--- the rendering, and folding the two passes into one is the target's step E.)
--- We mirror checkRoute: surface the exact diagnostic `check` prints and abort
--- BEFORE the emitter/clang.
+-- Load the entry + transitive imports, resolve them, and abort BEFORE the
+-- emitter/clang on a naming error, rendering it exactly as `check` renders it.
 -- Read/load failures become Err (surfaced as-is) so the caller mirrors
 -- runBuild/loadProgram's own diagnostics.
-typecheckGate : Bool -> String -> String -> <IO> Result String (List String)
+typecheckGate : Bool -> String -> String -> <IO> Result String Unit
 typecheckGate allowInternal root input =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
@@ -2574,7 +2402,7 @@ typecheckGate allowInternal root input =
       Ok _ => match loadProgramFilesLocatedE (_ => None) input roots
         Err lerr => Err (moduleLoadErrText tsrc input stdlibDir lerr)
         Ok modsWithPath =>
-          let mods = map dropModPath modsWithPath
+          let mods = map dropPathTriple modsWithPath
           let pathMap = map modIdToPath modsWithPath
           let trusted = projectTrustedMods input roots stdlibDir mods
           -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
@@ -2594,41 +2422,23 @@ typecheckGate allowInternal root input =
             input
             modsWithPath
 
--- Route by module count.  A single loaded module (no non-core imports) runs the
--- ACCURATE located check `medaka check` uses for single files — analyzeLocatedG
--- (which runs checkImplObligations, the very pass the emit path skips and the one
--- that catches `"x" + 1`'s `No impl of Num for String`) — and renders BYTE-IDENTICAL
--- carat diagnostics via ppDiagCliSrc.  This is the case the G1 bug fixture exercises.
+-- Route by module count.  Both arms run the RAW-TREE passes only and hand the
+-- program to the `medaka_emitter` child, which owns the type verdict for a build
+-- (ruling 3 on #2705): one process typechecks the graph, and it is the one whose
+-- tree the backend actually consumes.  So `Ok` no longer carries warnings —
+-- every warning `build` prints is rendered by the child, against the per-module
+-- diagnostics of its own elaboration of the program the user wrote (#2809), and
+-- reaches the user through the child's stderr (`emitGateDiags`,
+-- driver/diagnostics.mdk).
 --
--- The MULTI-MODULE case gates on `locatedProjectErrors` — LITERALLY the predicate
--- `checkRoute`'s multi-module arm uses (analyzeProject), so `build`/`run` reject
--- exactly the graphs `check` rejects, by construction (bug #40).
---
--- WHY THE PREDICATE IS THE CHECK PATH'S.  A predicate of the shape `resolve
--- diagnostics + elaborateModules + hadTypeErrors` is only as sound as the
--- obligations the elaborate driver checks; until #2705 that driver skipped the
--- impl-obligation channel entirely (the pass that raises `No impl of Display for
--- Foo`), so `hadTypeErrors` stayed False and multi-module `run` EXECUTED the
--- ill-typed program, dying later on an unrelated runtime panic.  A plain
--- unification `Type mismatch` DID set the sticky flag — probing with a type
--- mismatch shows correct behaviour.  Both drivers check both channels now; the
--- check path is kept as the gate because it is the one that renders located.
---
--- WHY THIS DOES NOT OVER-REJECT.  The historical fear (recorded here as "the
--- multi-module obligation check flags the compiler's own source with a spurious
--- `No impl of Alternative for Parser`") named a predicate that no longer exists, and
--- the false positive it described was fixed by checkModuleFullDiags's `accAll` seed
--- (typecheck.mdk "Bug C": without the imported-standalone-shadow universe an imported
--- standalone that shadows a `Foldable` method routed to method dispatch instead of to
--- the standalone the importer named).  The proof that
--- analyzeProject is clean on compiler source is a REQUIRED CI check:
--- test/typecheck_compiler_source.sh runs exactly this driver over
--- compiler/driver/medaka_cli.mdk's whole import closure and fails on ANY
--- error-severity diagnostic.  So gating the oracle builds on it is safe.
---
--- The elaborate + hadTypeErrors gate is KEPT behind it as belt-and-braces (it is the
--- emit path's own view, and it is not a superset of nothing — a diagnostic only the
--- emit elaboration can see still aborts before the emitter).
+-- WHAT STAYS HERE, and why it is not a second pass.  Resolve is the one verdict
+-- the child cannot deliver usefully: a graph that does not resolve produces
+-- cascade noise from the elaboration rather than the naming error the user
+-- needs, and the emitter would be spawned only to fail.  The single-module arm
+-- takes it from `analyzeSurface` (resolve + `deriving` + guard exhaustiveness
+-- over one raw tree); the multi-module arm from `resolveModulesErrorsByFile`,
+-- the SAME seam `checkRoute` has used since #41, so `build` still rejects
+-- exactly the graphs `check` rejects on that channel.
 typecheckGateRoute : Bool ->
   List String ->
   List (String, String) ->
@@ -2638,55 +2448,30 @@ typecheckGateRoute : Bool ->
   String ->
   String ->
   List (String, String, List Decl) ->
-  <IO> Result String (List String)
+  <IO> Result String Unit
 typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _path, decls)] =
-  -- Same fix as checkRoute's single-module arm: honour the caller-computed
-  -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
-  -- S-3/#164 (F-converge): the SAME conversion `checkRoute`'s single-module arm
-  -- already carries, applied to `build`'s structurally identical twin.  This arm
-  -- already holds the loader's parsed, real-span `decls` for this one module
-  -- (`loadProgramFilesLocatedE` → `parseLocatedResult`), so calling `analyzeFrom`
-  -- directly skips the redundant `parseLocated tsrc` inside `analyzeLocatedG` and
-  -- picks up `desugaredPrelude` for the prelude halves.  Same predicate, same
-  -- diagnostics: `analyzeLocatedG mid g rsrc csrc tsrc` IS
-  -- `analyzeFrom mid rsrc csrc (parseLocated tsrc) (internalGuardFor g)`.
-  let diags =
-    analyzeFrom
+  -- Resolve and the other RAW-TREE passes, and nothing else: since ruling 3 the
+  -- `medaka_emitter` child owns the whole type verdict for a build, warnings
+  -- included, so this process must not typecheck the program a second time.
+  -- What stays here is what the child cannot report — a graph that does not
+  -- resolve never reaches the emitter at all.
+  let surface =
+    analyzeSurface
       mid
       rsrc
       csrc
       decls
       (internalGuardFor (allowInternal || contains mid trusted))
-  let errs = filter isDiagError diags
-  match errs
-    [] =>
-      -- #1236: `medaka build` used to have NO main-shape warning surface at
-      -- all (defect 4 of the matrix) — fold it in beside the coherence
-      -- warning, same rendering path (`renderTripleWarnings`), same order
-      -- (`check`'s `warns ++ mainWarns`).  `mainShapeWarnings` re-elaborates
-      -- NOTHING (it has been pure since S-3/#2234): this arm's producer of
-      -- `mainSchemeRef` is the `analyzeLocatedG` above (line ~1756), exactly as on
-      -- `checkRoute`'s single-module arm.  Its first three parameters are IGNORED,
-      -- so they are passed empty rather than computed — the `desugar (parse …)` pair
-      -- this used to build was dead work on every `medaka build`/`run`.
-      let mainWarns = mainShapeWarnings [] [] [] decls
-      -- #2400 / F4: SINGLE-MODULE only, so `allWarnTriples` carries the FULL
-      -- warning set here (it filters `isDiagWarn`, not `runBuildWarnCodes`).  See
-      -- its note for why the #1185 phantom cannot reach this arm; the multi-module
-      -- arm below keeps `locatedProjectDiags`' coherence-only allowlist.
-      let allWarns =
-        allWarnTriples tsrc target diags
-          ++ nonEmptyTriples [(target, tsrc, mainWarns)]
-      Ok (flatMap renderTripleWarnings allWarns)
-    _ => Err (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+  match filter diagIsError surface.surfaceDiags
+    [] => Ok ()
+    errs => Err (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target modsWithPath =
   -- S-1/#2234 (F-converge): live use (they feed `resolveModulesErrorsByFile`
   -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
   -- content-keyed memo of exactly `desugar (parsePrelude src)`.
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
-  let mods = map dropModPath modsWithPath
-  let modsD = map desugarPair mods
+  let modsD = map desugarPair (map dropPathTriple modsWithPath)
   -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
   -- loader's modId → path map — the SAME `resolveModulesErrorsByFile` seam
   -- `checkRoute` has used since #41.  The single `target` fallback this replaced
@@ -2702,41 +2487,7 @@ typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target mo
         coreD
         modsD)
   match resDiags
-    "" =>
-      -- ONE typecheck of the graph (ARCH §E): the elaboration `build` needs anyway
-      -- is also the diagnostics producer, so the CHECK-STRENGTH gate below reads
-      -- ITS per-module output instead of a second, check-only pass over the same
-      -- graph.
-      let _ = resetTypeErrorsSticky ()
-      let (_, _, perMod, residual, _) = elaborateModules rtD coreD modsD
-      match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
-        -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
-        -- what `medaka check` prints and to what `--json` reports.
-        -- "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
-        -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
-        -- module's warnings; this gate's `Ok` payload carries EVERY module's
-        -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
-        -- incomparable overlap warns where `check` of the entry does not.  That is the
-        -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
-        -- not identity, and reading it as identity is how the next reader "restores"
-        -- the entry-only scoping and re-silences the imported case.
-        (Some errText, _, _) => Err errText
-        (None, projWarns, _) => match hadTypeErrors ()
-          True => Err (residualOrGeneric pathMap target residual)
-          -- #1236: same main-shape fold as the single-module arm above.
-          -- `elaborateModules` just ran over the WHOLE graph (line above), so
-          -- mainSchemeRef is already populated — no second typecheck pass.
-          False =>
-            let mainWarns = match lastModPair mods
-              Some (_, edecls) => match mainArityWarning edecls
-                Some d => [d]
-                None => match mainNonUnitWarning edecls
-                  Some d => [d]
-                  None => []
-              None => []
-            let allWarns =
-              projWarns ++ nonEmptyTriples [(target, tsrc, mainWarns)]
-            Ok (flatMap renderTripleWarnings allWarns)
+    "" => Ok ()
     _ => Err resDiags
 
 -- Read `[-o <out>] [--target <native|wasm>]` off the parsed argv; the
@@ -3019,7 +2770,7 @@ runRunCmd argv =
               (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
           panic "unreachable"
         Ok mp => mp
-      let mods = map dropModPath modsWithPath
+      let mods = map dropPathTriple modsWithPath
       let pathMap = map modIdToPath modsWithPath
       -- #1542: same per-module (modId -> path) map #41 already built
       -- here for resolve-phase attribution, now ALSO published to the
@@ -3096,7 +2847,7 @@ runRunCmd argv =
                     (joinNl
                       (map
                         (ppDiagCliLines (srcLinesArr tsrc) target)
-                        (filter isDiagError surfaceDiags)))
+                        (filter diagIsError surfaceDiags)))
             True =>
               let _ = resetTypeErrorsSticky ()
               let (coreE, modsE, perMod, residual, _) =
@@ -3106,7 +2857,7 @@ runRunCmd argv =
               -- program, whose errors would otherwise land in this read.
               let residualHit = hadTypeErrors ()
               let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
-              match filter isDiagError diags
+              match filter diagIsError diags
                 [] => match residualHit
                   -- Belt-and-braces, as on the multi-module arm: anything only
                   -- the graph-end drain can see still aborts before eval.
@@ -3120,7 +2871,7 @@ runRunCmd argv =
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                     -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
-                    -- the FULL warning set here (it filters `isDiagWarn`, not
+                    -- the FULL warning set here (it filters `diagIsWarn`, not
                     -- `runBuildWarnCodes`; see its note).
                     -- `finishRunEval` carries this triple down BOTH channels
                     -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
@@ -3241,17 +2992,7 @@ runRunCmd argv =
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
 
--- Drop the file-path component of a located-loader triple back to the
--- (modId, decls) pair shape loadProgram returns.
-dropModPath : (String, String, List Decl) -> (String, List Decl)
-dropModPath (mid, _, prog) = (mid, prog)
-
 -- (modId, path, decls) → (modId, path): the per-module file map threaded into the
--- multi-module resolve renderer so an imported module's diagnostics report ITS
--- own path, not the entry's (#41).
-modIdToPath : (String, String, List Decl) -> (String, String)
-modIdToPath (mid, path, _) = (mid, path)
-
 -- `run`'s elaborate: one pass to learn `main`'s type, then — for a `main : Async _`
 -- (ASYNC-DESIGN D5) — a second pass over the graph rewritten to apply the
 -- `async` module's scheduler driver (main_autoprint.asyncWrapModules, #2506), so

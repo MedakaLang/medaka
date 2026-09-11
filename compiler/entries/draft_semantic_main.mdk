@@ -12,10 +12,10 @@ import ir.draft_semantic_program.{
   draftWithWrongMethodIfaceProvenance,
   draftSemanticProgramToSexp,
 }
-import entries.entry_support.{driveModules, runEmitWith}
+import entries.entry_support.{driveModulesLocated, runEmitWith}
 
 main : <IO> Unit
-main = driveModules (runEmitWith "runAsyncIOMain" reportDraft)
+main = driveModulesLocated (runEmitWith "runAsyncIOMain" reportDraft)
 
 unrelatedModule : List (String, List Decl) -> (String, List Decl)
 unrelatedModule [] = ("__draft_unrelated__", [])

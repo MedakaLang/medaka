@@ -52,7 +52,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgram, emitProgramWithStats, makeEmitInput}
 import ir.dce.{dceFilter}
-import entries.entry_support.{driveModules, runEmitWith}
+import entries.entry_support.{driveModulesLocated, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
@@ -64,7 +64,7 @@ srcNameFromArgs (_ :: _ :: entry :: _) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
-main = driveModules (runEmitWith "runAsyncIOMain" emitTail)
+main = driveModulesLocated (runEmitWith "runAsyncIOMain" emitTail)
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared elaborate+auto-print-wrap+mangle glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this

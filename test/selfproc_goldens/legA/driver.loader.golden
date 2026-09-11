@@ -45,6 +45,7 @@ loadedSourcesLimit : Int
 loadedSourcesRef : Ref (List (String, String))
 manifestAllowsInternal : String -> <IO> Bool
 mdkBaseName : String -> Option String
+modIdToPath : (String, String, List Decl) -> (String, String)
 moduleIdOfPath : List String -> String -> String
 noteLoadedSource : String -> String -> Unit
 parentDir : String -> String
