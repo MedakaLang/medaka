@@ -18,13 +18,13 @@ import support.util.{splitLast}
 import types.typecheck.{
   elaborateOne,
   elaborateModules,
-  tcMsg,
   hadTypeErrors,
   setLocalPinDisabled,
 }
 import driver.diagnostics.{
   emitDiagExitCode,
   emitGateDiags,
+  renderTcDiags,
   residualOrGeneric,
 }
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
@@ -278,13 +278,33 @@ emitFullGate : List (String, String, List Decl) ->
 emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
   let (errLines, warnLines) =
     emitGateDiags runtimeDecls coreDecls modsWithPath modules perMod
-  let _ = map ePutStrLn warnLines
   let pathMap = map modIdToPath modsWithPath
   match errLines
-    [] => emitResidualGate pathMap (entryPathOf modsWithPath) residual
+    -- Warnings ride the CLEAN path only, which is what `check` does with the same
+    -- diagnostics: once a program has an error the errors are the whole report.
+    -- Printing both made a rejecting `build` louder than `medaka check` on the
+    -- same file, and louder than this same `build` was before the child owned the
+    -- verdict.
+    [] =>
+      let _ = map ePutStrLn warnLines
+      emitResidualGate pathMap (entryPathOf modsWithPath) residual
     _ =>
       let _ = map ePutStrLn errLines
       exit emitDiagExitCode
+
+-- The auto-print / async wrap re-checks the WRAPPED program, and its diagnostics
+-- are about the user's own `main`.  They go out through the same located face as
+-- every other diagnostic of a build: `failWith` prints a bare message, so on the
+-- one path that reached it the reader lost the file, the line and the caret that
+-- `medaka check` gives them for the identical program.
+emitWrapDiags : List (String, String, List Decl) -> List TcDiag -> <IO> Unit
+emitWrapDiags modsWithPath ds =
+  let mid = entryMidOf modsWithPath
+  let _ =
+    map
+      ePutStrLn
+      (renderTcDiags (map modIdToPath modsWithPath) (map (d => (mid, d)) ds))
+  exit emitDiagExitCode
 
 -- The entry module's path, for the residual's fallback text.  The loader is
 -- dependency-first, so the entry is last.
@@ -292,6 +312,11 @@ entryPathOf : List (String, String, List Decl) -> String
 entryPathOf [] = ""
 entryPathOf [(_, path, _)] = path
 entryPathOf (_ :: rest) = entryPathOf rest
+
+entryMidOf : List (String, String, List Decl) -> String
+entryMidOf [] = ""
+entryMidOf [(mid, _, _)] = mid
+entryMidOf (_ :: rest) = entryMidOf rest
 
 export
 runEmitWith : String ->
@@ -324,8 +349,8 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
     let coreW = autoPrintPinCore coreDecls
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags runtimeDecls coreW modulesW
-      d :: _ => failWith (tcMsg d)
       [] => emitModulesWith emitTail modsWithPath runtimeDecls coreW modulesW
+      ds => emitWrapDiags modsWithPath ds
   else match asyncMainShapeError modules
     Some msg => failWith msg
     None =>
@@ -336,7 +361,6 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
         -- here with a type error, not in the emitter or at run time.
         let modulesW = asyncWrapModules asyncDriver modules
         match underivedMainDiags runtimeDecls coreDecls modulesW
-          d :: _ => failWith (tcMsg d)
           [] =>
             emitModulesWith
               emitTail
@@ -344,6 +368,7 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
               runtimeDecls
               coreDecls
               modulesW
+          ds => emitWrapDiags modsWithPath ds
       else
         let (coreD, modules2) = mangleUnitsEv coreE modulesE
         emitTail runtimeDecls coreD modules2
