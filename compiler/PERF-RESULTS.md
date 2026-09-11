@@ -1179,3 +1179,168 @@ medaka check hello.mdk      740,492,836 / 740,345,100
 The last row is directly comparable to `test/diff_compiler_check_ir_floor.sh`, whose live
 `CEIL_check` is 880,000,000 and whose most recent derivation (2026-09-02, PR #2491) records
 729,831,411 for its own tree. 740,492,836 sits 1.5% above that and 16% under the ceiling.
+
+## Scoped typechecker contracts and cache bypass (2026-09-11)
+
+Owners: [#2549](https://github.com/MedakaLang/medaka/issues/2549), [#2586](https://github.com/MedakaLang/medaka/issues/2586) and [#2719](https://github.com/MedakaLang/medaka/issues/2719).
+
+### Nominal scopes
+
+Measured cumulative running branch `a4927caaf5ea4e4185ff404f96871b59b3346c78` against starting revision `2b6e08c8d9da9fd02ed06bc748b2fd313e174726`. These are workload observations, not an attribution of every difference to one helper.
+
+| Workload | Metric | Before | After | Change |
+|---|---|---:|---:|---:|
+| playground | cold instructions | 356,961,559 | 305,249,022 | -14.49% |
+| playground | first warm instructions | 24,936,667 | 24,952,500 | +0.06% |
+| playground | second warm instructions | 24,945,515 | 24,945,821 | +0.001% |
+| import-list | cold instructions | 593,052,249 | 538,578,855 | -9.19% |
+| import-list | first warm instructions | 38,318,523 | 38,330,580 | +0.03% |
+| import-list | second warm instructions | 38,273,108 | 38,316,900 | +0.11% |
+| playground | cold allocated bytes | 59,258,992 | 48,594,048 | -18.00% |
+| playground | first warm allocated bytes | 4,570,096 | 4,578,784 | +0.19% |
+| playground | second warm allocated bytes | 4,582,448 | 4,587,056 | +0.10% |
+| import-list | cold allocated bytes | 104,422,192 | 93,160,864 | -10.78% |
+| import-list | first warm allocated bytes | 6,895,456 | 6,904,432 | +0.13% |
+| import-list | second warm allocated bytes | 6,886,320 | 6,907,888 | +0.31% |
+
+Use the same N=0..3 request streams on both binaries. N0 initializes/shuts down; N1 adds didOpen; N2/N3 add successive one-integer didChange edits. Subtract N0 from N1 for cold work and adjacent measurements for warm work. The playground source defines `add : Int -> Int -> Int` and prints `add 2 3`; import-list additionally imports `list.range` and defines `ys : List Int = range 1 3`. Both use fixed file URIs under `/tmp/rearch-scope-perf`.
+
+Instruction instrument: Valgrind Cachegrind 3.24.0 with cache/branch simulation disabled. Allocation instrument: an external LD_PRELOAD destructor prints `GC_get_total_bytes()` and process id at exit, with no compiler instrumentation or source changes. Pin `GC_INITIAL_HEAP_SIZE=1073741824`, set the appropriate `MEDAKA_ROOT`, and require `MEDAKA_STRICT=1`. Every run exited successfully and published the expected empty diagnostics for its selected URI; allocation records were unique and matched the parent process. Two allocation repetitions were byte-identical. Frame counts and allocation totals do not measure retained/live heap; matched lifecycle live-heap instrumentation remains package-7 debt.
+
+The request framing and Cachegrind command follow the [memo-path baseline's
+reproduction procedure](#reproducing). The
+[implementation record](https://github.com/MedakaLang/medaka/issues/2549#issuecomment-5641443211)
+preserves the scope boundary and acceptance criteria.
+
+This scope slice leaves cache policy unchanged and is within the existing approximately 25% soft instruction budget on these workloads. It says nothing about the later return vertical's proposed all-three memo bypass, whose cost must be measured separately before activation.
+
+### Method-row preparation follow-up
+
+The independent Sol reviewer repeated the same instruments on method-row revision
+`cd42e56f4` (running-branch equivalent `ee61c0a35`) against its scope predecessor
+`a4927caaf`. These results isolate that preparation step more narrowly than the
+cumulative table above. Both allocation repetitions were byte-identical; all
+selected request diagnostics were empty and no stale-source warnings occurred.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,249,022 | 305,233,973 | 48,594,048 | 48,577,648 |
+| playground | first warm | 24,952,500 | 24,818,526 | 4,578,784 | 4,566,496 |
+| playground | second warm | 24,945,821 | 24,826,707 | 4,587,056 | 4,570,656 |
+| import-list | cold | 538,578,855 | 538,290,319 | 93,160,864 | 93,135,952 |
+| import-list | first warm | 38,330,580 | 38,146,599 | 6,904,432 | 6,871,904 |
+| import-list | second warm | 38,316,900 | 38,200,952 | 6,907,888 | 6,903,744 |
+
+Every measured delta is negative: instructions range from -0.005% to -0.537%,
+allocation from -0.027% to -0.471%. The predecessor is the scope measurement
+above. These remain allocation and instruction measurements, not
+retained-live-heap measurements. The later scope classification fix and future
+cache changes are outside this exact comparison.
+
+### Default-body provenance follow-up
+
+Exact predecessor `1840eb036` versus `433eaa9f7` (source-identical to `f35e93280`),
+using the same N0–N3 instruments and heap. Later review fixes change only the
+excluded sibling test. This includes the pre-entail route read and default-owner
+allocation, with tracing disabled as in normal production.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,160,142 | 305,155,294 | 48,581,712 | 48,585,792 |
+| playground | first warm | 24,821,737 | 24,824,825 | 4,566,496 | 4,566,496 |
+| playground | second warm | 24,831,133 | 24,825,818 | 4,570,656 | 4,570,656 |
+| import-list | cold | 538,298,575 | 538,326,563 | 93,140,272 | 93,144,592 |
+| import-list | first warm | 38,169,208 | 38,164,804 | 6,879,936 | 6,884,272 |
+| import-list | second warm | 38,172,048 | 38,180,543 | 6,891,504 | 6,887,664 |
+
+Largest positive instruction delta: +0.0223%; allocated-byte delta: +0.0630%.
+These are within the existing 25% soft budget. All fixed requests passed their
+diagnostic/freshness checks; allocation repetitions were identical. The after arm is
+the unmodified compiler, not the bypass experiment. These are allocation
+measurements, not retained-live-heap measurements.
+
+### Scope-store extraction follow-up
+
+Predecessor `433eaa9f7` versus extraction `10334a66d` (running equivalent
+`cc59a3298`), with the same N0–N3 streams and heap. All request checks pass and
+allocation repetitions match. Counts below are marginal request costs, not
+cumulative process totals.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,155,294 | 305,006,651 | 48,585,792 | 48,585,808 |
+| playground | first warm | 24,824,825 | 24,824,704 | 4,566,496 | 4,562,400 |
+| playground | second warm | 24,825,818 | 24,828,386 | 4,570,656 | 4,570,656 |
+| import-list | cold | 538,326,563 | 538,174,636 | 93,144,592 | 93,140,016 |
+| import-list | first warm | 38,164,804 | 38,145,075 | 6,884,272 | 6,867,872 |
+| import-list | second warm | 38,180,543 | 38,192,239 | 6,887,664 | 6,911,872 |
+
+Largest positive instruction delta: +0.0306%; allocated-byte delta: +0.3515%,
+within the existing 25% soft budget. The
+[scope-store review](https://github.com/MedakaLang/medaka/issues/2586#issuecomment-5641339195)
+records acceptance and mutation results. Scope lifecycle and
+copy isolation are asserted separately by sibling tests. These measurements do
+not discharge the later finalized-cache retained-memory requirement.
+
+### Rejected experiment: bypass all three memos
+
+Owners: #2549 finalized-result caching, #2719 performance, #2902 request
+contamination; prerequisite to #2646 defaulting and the return-family migration.
+This is an isolated experiment, not a production patch or budget waiver.
+
+Base: `433eaa9f78763ea64fdbde57a477359a0816cb90`, typecheck source SHA-256
+`d330cbd60f11a927c00053b36a0c70fc239e0792da17ee6890803908efbea0c9`.
+The [experiment report](https://github.com/MedakaLang/medaka/issues/2719#issuecomment-5640781986)
+records the budget breach and disposition. The controlled change is described below.
+
+#### Controlled change
+
+Bypass PreludePreamble through preludePreambleOf, CoreCheckMemo through its None
+key path, and ChainMemo through a fresh full fold without snapshot construction
+or reads/writes. Remove unused ChainStep construction. Preserve core, keyed
+intermediate, and final drains exactly, with no solver/defaulting change.
+PreludePreamble is included because its implementation rows carry InstRefs.
+
+Use the existing M2 same-process LSP instrument and identical heaps. Cold is
+N1−N0, first warm N2−N1, second warm N3−N2.
+
+| Workload | Phase | Baseline instructions | Bypass | Change |
+|---|---|---:|---:|---:|
+| playground | cold | 305,155,294 | 305,216,700 | +0.0201% |
+| playground | first warm | 24,824,825 | 296,842,903 | +1095.8% |
+| playground | second warm | 24,825,818 | 296,792,383 | +1095.5% |
+| import-list | cold | 538,326,563 | 538,226,157 | −0.0187% |
+| import-list | first warm | 38,164,804 | 395,988,745 | +937.7% |
+| import-list | second warm | 38,180,543 | 395,920,623 | +936.9% |
+
+| Workload | Phase | Baseline allocated bytes | Bypass | Change |
+|---|---|---:|---:|---:|
+| playground | cold | 48,585,792 | 48,570,480 | −0.0315% |
+| playground | first warm | 4,566,496 | 47,142,240 | +932.7% |
+| playground | second warm | 4,570,656 | 47,109,760 | +930.8% |
+| import-list | cold | 93,144,592 | 93,106,720 | −0.0407% |
+| import-list | first warm | 6,884,272 | 62,901,568 | +813.9% |
+| import-list | second warm | 6,887,664 | 62,881,760 | +812.9% |
+
+Warm cost exceeds the 25% soft budget by a wide margin. This measures the aggregate
+cost of losing all three caches, not the safety or cost of one independently.
+It measures instructions and allocation, not retained heap.
+
+#### Validation and disposition
+
+Normalized diagnostics and hover match byte-for-byte on both fixed workloads;
+strict freshness and all N0–N3 exits pass. check_self passes, registry tests pass
+32/32, and solver-contract tests pass 3/3.
+
+The typecheck sibling reports 14/15 on the bypass arm. The failing test requires
+empty traces on three prefix-cache hits. Bypass re-infers those prefixes and emits
+traces, so those three assertions fail. The same test's frame count/capacity and
+error assertions remain true. This is an expected cache-observation mismatch, not
+evidence of a changed semantic result; preserve the failure receipt.
+
+The experiment was restored byte-exact, rebuilt and checked strictly; its tree is
+clean. No bypass source was committed to the running branch. Safe finalized or
+freshly instantiated summaries are needed before enabling the semantic migration
+within the current budget. Shared mutable snapshots are not an acceptable shortcut:
+#2902 reproduces false type errors on the pristine baseline and current source.
+The scope-store extraction can proceed independently.

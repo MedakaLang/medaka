@@ -1,0 +1,159 @@
+-- Nominal lexical scope storage for one typechecking graph.  Raw ScopeIds are
+-- request-local: every lookup and ancestry query therefore receives the store
+-- that minted the id.
+
+import types.evidence.{EvidenceBinderId(..), ScopeId(..)}
+import types.repr.{IfaceRef}
+
+public export data DefaultBodyIdentity = DefaultBodyIdentity {
+  dbiIface : IfaceRef,
+  dbiMethod : String,
+}
+
+public export data ScopeOwner =
+  | ModuleOwner
+  | BindingOwner String
+  | DefaultBodyOwner DefaultBodyIdentity
+  | PropOwner String
+  | TestOwner String
+
+-- The named closed/open states preserve the inference gateway's distinct capture
+-- and close misuse diagnostics; a plain Option would erase that contract.
+-- lint-disable-next-line rule-clone-type
+public export data ScopeCursor = ScopeClosed | ScopeOpen ScopeId
+
+public export data ScopeFrame = ScopeFrame {
+  sfId : ScopeId,
+  sfParent : Option ScopeId,
+  sfLevel : Int,
+  sfModuleId : String,
+  sfOwner : ScopeOwner,
+}
+
+-- Mutable storage stays abstract so ids cannot be looked up without their store
+-- and copied graphs cannot accidentally share its counter or backing array.
+export data ScopeStore = ScopeStore {
+  ssFrames : Ref (Array (Option ScopeFrame)),
+  ssNext : Ref Int,
+}
+
+export
+freshScopeStore : Unit -> ScopeStore
+freshScopeStore _ = ScopeStore {
+  ssFrames = Ref (arrayMake 0 None),
+  ssNext = Ref 0,
+}
+
+export
+copyScopeStore : ScopeStore -> ScopeStore
+copyScopeStore store = ScopeStore {
+  ssFrames = Ref (arrayCopy store.ssFrames.value),
+  ssNext = Ref store.ssNext.value,
+}
+
+scopeOrdinal : ScopeId -> Int
+scopeOrdinal (ScopeId i) = i
+
+export
+scopeFrame : ScopeStore -> ScopeId -> ScopeFrame
+scopeFrame store sid =
+  let i = scopeOrdinal sid
+  let frames = store.ssFrames.value
+  if i < 0 || i >= arrayLength frames then
+    panic "scope frame missing"
+  else match arrayGetUnsafe i frames
+    Some frame => frame
+    None => panic "scope frame missing"
+
+export
+freshScope : ScopeStore ->
+  Option ScopeId ->
+  Int ->
+  String ->
+  ScopeOwner ->
+  ScopeId
+freshScope store parent level moduleId owner =
+  let i = store.ssNext.value
+  let sid = ScopeId i
+  let arr0 = store.ssFrames.value
+  let arr =
+    if i < arrayLength arr0 then
+      arr0
+    else
+      let grown = arrayMake (max 16 (2 * (i + 1))) None
+      let _ = arrayBlit arr0 0 grown 0 (arrayLength arr0)
+      store.ssFrames := grown
+      grown
+  let _ =
+    arraySetUnsafe
+      i
+      (Some ScopeFrame {
+        sfId = sid,
+        sfParent = parent,
+        sfLevel = level,
+        sfModuleId = moduleId,
+        sfOwner = owner,
+      })
+      arr
+  store.ssNext := i + 1
+  sid
+
+export
+givenVisibleFrom : ScopeStore -> ScopeId -> ScopeId -> Bool
+givenVisibleFrom store useScope binderScope
+  | useScope == binderScope = True
+  | otherwise = match (scopeFrame store useScope).sfParent
+    Some parent => givenVisibleFrom store parent binderScope
+    None => False
+
+export
+enclosingDefaultBody : ScopeStore -> ScopeId -> Option DefaultBodyIdentity
+enclosingDefaultBody store sid =
+  let frame = scopeFrame store sid
+  match frame.sfOwner
+    DefaultBodyOwner owner => Some owner
+    _ => match frame.sfParent
+      Some parent => enclosingDefaultBody store parent
+      None => None
+
+export
+binderAt : ScopeId -> Int -> EvidenceBinderId
+binderAt sid ordinal = EvidenceBinderId sid ordinal
+
+export
+binderScope : EvidenceBinderId -> ScopeId
+binderScope (EvidenceBinderId sid _) = sid
+
+export
+captureScopeCursor : ScopeCursor -> ScopeId
+captureScopeCursor (ScopeOpen sid) = sid
+captureScopeCursor ScopeClosed = panic "scope capture outside inference"
+
+export
+openScopeCursor : ScopeId -> ScopeCursor
+openScopeCursor sid = ScopeOpen sid
+
+export
+closeScopeCursor : ScopeStore -> ScopeCursor -> ScopeCursor
+closeScopeCursor _ ScopeClosed = panic "scope close outside inference"
+closeScopeCursor store (ScopeOpen sid) = match (scopeFrame store sid).sfParent
+  Some parent => ScopeOpen parent
+  None => ScopeClosed
+
+export
+scopeOwnerLabel : ScopeOwner -> String
+scopeOwnerLabel ModuleOwner = "module"
+scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
+scopeOwnerLabel (DefaultBodyOwner owner) = "default:" ++ owner.dbiMethod
+scopeOwnerLabel (PropOwner name) = "prop:" ++ name
+scopeOwnerLabel (TestOwner name) = "test:" ++ name
+
+export
+scopeTraceContext : ScopeStore -> ScopeId -> (String, String)
+scopeTraceContext store sid =
+  let frame = scopeFrame store sid
+  (frame.sfModuleId, scopeOwnerLabel frame.sfOwner)
+
+export
+scopeFrameStats : ScopeStore -> (Int, Int)
+scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)

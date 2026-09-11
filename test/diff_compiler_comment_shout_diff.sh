@@ -48,8 +48,10 @@ if [ -z "$BASE" ]; then
   # S-gate-cost-discharge time, #2621).
   git rev-parse --verify --quiet origin/main >/dev/null 2>&1 ||
     git fetch --quiet --depth=50 origin refs/heads/main:refs/remotes/origin/main 2>/dev/null
+  # Resolve locally: the remote's HEAD names main, not the CI merge commit.
+  # Fetch its history at an absolute depth so a shallow merge tip is included.
   git merge-base origin/main "$HEAD" >/dev/null 2>&1 ||
-    git fetch --quiet --deepen=50 origin "$HEAD" 2>/dev/null
+    git fetch --quiet --depth=50 origin "$(git rev-parse "$HEAD")" 2>/dev/null
   BASE="$(git merge-base origin/main "$HEAD" 2>/dev/null)"
   [ -n "$BASE" ] || BASE="$(git merge-base main "$HEAD" 2>/dev/null)"
 fi

@@ -297,11 +297,16 @@ compiler/frontend/parser.mdk"
 # same sprint. A filename entry granted on "nothing calls this file" cannot survive
 # the file acquiring callers, so the exemption is pinned to its four actual lines
 # the way `typecheck.mdk`'s is.
+# The scope and typecheck sibling tests observe unresolved default-owner origins
+# in total matches. Their sole eliminator lines are pinned below; this grants no
+# new constructor mint.
 originun_allowed="compiler/entries/origin_agreement_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/types/route_key.mdk
-compiler/types/typecheck.mdk"
+compiler/types/scopes_test.mdk
+compiler/types/typecheck.mdk
+compiler/types/typecheck_test.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
   echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
@@ -422,6 +427,35 @@ if [ "$originun_actual" != "$originun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved constructor site(s)"
 
+# Keep the sibling test's filename allowance restricted to its read-only observer.
+# A new sentinel-producing expression in the same file must still fail the gate.
+tctest_originun_allowed='OriginUnresolved => "<unresolved>"'
+tctest_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck_test.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$tctest_originun_actual" != "$tctest_originun_allowed" ]; then
+  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck_test.mdk changed."
+  echo "  Only the default-origin observer's pattern is allowed; no sentinel mint."
+  printf '%s\n' "$tctest_originun_actual" | sed 's/^/    /'
+  exit 1
+fi
+echo "  ok: typecheck_test.mdk only observes OriginUnresolved"
+
+# The extracted scope service has its own total default-origin observer.
+scopetest_originun_allowed='OriginUnresolved =>'
+scopetest_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/scopes_test.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$scopetest_originun_actual" != "$scopetest_originun_allowed" ]; then
+  echo "FAIL: the OriginUnresolved lines of compiler/types/scopes_test.mdk changed."
+  echo "  Only the default-origin observer's pattern is allowed; no sentinel mint."
+  printf '%s\n' "$scopetest_originun_actual" | sed 's/^/    /'
+  exit 1
+fi
+echo "  ok: scopes_test.mdk only observes OriginUnresolved"
+
 # The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
 # filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one
 # 20k-line file; this pins the exact lines, so a `Ty`-layer
@@ -514,7 +548,12 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 #     entry above carries, one layer further out.
 # If `KeyEntry`'s key field ever acquires a reader, this line stops being justified
 # and the word must come from the row like the other two.
-tc_originun_allowed="OriginUnresolved => \"<unresolved>\"
+# #2549 nominal-given classification: these two tuple patterns ELIMINATE an
+# unresolved request/given origin, keeping the answer explicitly legacy. They
+# mint no identity and must not license unresolved semantic given evidence.
+tc_originun_allowed="(OriginUnresolved, _) => givenAnswerResidual g
+(_, OriginUnresolved) => givenAnswerResidual g
+OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
 bcNum = OriginUnresolved,
@@ -1086,7 +1125,8 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # form it actually takes today: `requires Ix a Char` must reach route selection with
 # `Char` intact, not as the pair ("Ix","a") a tyvar-keyed producer would leave behind.
 # The single stored given is `GivenEntry` on `GraphRun.gGiven`, written by the one
-# writer `pushGiven` and read only through `givensHere`; `GivenMatch`/`GivenScope` are
+# writer `pushGiven` and read only through captured-scope `givensForScope`;
+# `GivenMatch`/`GivenScope` are
 # the soundness half of that consolidation — a vector that is ALL bare tyvars is
 # `GMIdWitnessed` and readable only by a rung that supplies a tyvar-id witness, so an
 # undifferentiated predicate-only reader cannot answer `Debug e` with `Debug a`.
@@ -1099,11 +1139,11 @@ data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
 data MethodPredicateSlot = MethodPredicateSlot {
 data PendingMethodDict = PendingMethodDict {
-registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
+registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
       psArgs = PSArgsKnown argMonos,
       psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
-registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
+registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
 expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
@@ -1116,28 +1156,32 @@ data GivenMatch =
   | GMPredicate
   | GMIdWitnessed
 gGiven : Ref (OrdMap (List GivenEntry)),
-givensHere : Unit -> List GivenEntry
-pushGiven : GivenMatch -> PredicateSlot -> String -> Unit
+givensForScope : ScopeId -> List GivenEntry
+pushGiven : GivenMatch ->
+pushGiven gm provenance slot binder =
 data GivenScope =
   | GSPredicateOnly
   | GSImplRequires
 givenInScope : GivenScope -> GivenEntry -> Bool
-registerFunPredGiven : PredicateSlot -> String -> Unit
-activeFunDictPredOf : PredicateRequest -> String -> Option String
+registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
+activeFunDictPredOf : PredicateRequest ->
+activeFunDictPredOf request _ useScope =
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOfOp : String -> Option PredicateRequest
-activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
-activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
-activeDictVarOfEncl (Some request) m encl =
+activeDictVarOfEncl : Option PredicateRequest ->
+activeDictVarOfEncl None m encl useScope =
+map LegacyScalar (activeDictVarForEncl m encl useScope)
+activeDictVarOfEncl (Some request) m encl useScope =
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
 enclSlotIndex (Some request) target encl =
-implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
+implReqDictVarOf : Option PredicateRequest ->
+implReqDictVarOf (Some request) m encl useScope
 firstPredForEnclAt : GivenScope ->
-entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
-goalMatchesGiven : IfaceRef -> List Mono -> Bool
-anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
+entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
+goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
+anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
 crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
@@ -1150,16 +1194,16 @@ crossRun.value.crossModuleFunPredicateSlotsRef
 crossRun.value.crossModuleFunPredicateSlotsQualRef
 crossRun.value.crossModuleMethodPredicateSlotsRef :=
 crossRun.value.crossModuleMethodPredicateSlotsQualRef
-registerMethodConstraints : List String ->
+installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
 resolveMethodDicts : List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
-methodPredicateRoutes : String -> List PredicateSlot -> List Route
-methodPredicateRoute : String -> PredicateSlot -> Route
+methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
+methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 realizeRecDictApps : List RecDictApp -> Unit
-recRoutes : String -> Mono -> List PredicateSlot -> List Route
-recRoute : String -> Mono -> PredicateSlot -> Route
+recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
+recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
 scopePredicateSlots : List ((String, String), List PredicateSlot) ->
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
 attributeMethodModulePredicateSlots : String ->'
@@ -1167,6 +1211,77 @@ attributeMethodModulePredicateSlots : String ->'
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+# Match the whole condition inside its owning function. Embedded newlines in a
+# grep pattern are alternatives, so a multiline pattern would accept any one
+# surviving argument even if the visibility call itself had been removed.
+any_given_scope_guard='&& Scopes.givenVisibleFrom (currentScopeStore ()) scope (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'
+any_given_scope_body=$(sed -n '/^anyGivenMatches :/,/^isSemanticGivenAnswer :/p' "$predicate_slot_src" \
+  | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
+if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
+  echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
+  exit 1
+fi
+
+# #2549 method-row preparation: declaration identity, scheme, and method-level slots
+# are built in one row walk.  The Flat arm deliberately performs two constructions;
+# the Module arm one.  Positional key/scheme zips and graph-lived row state are retired.
+method_row_required='data MethodSchemeRow = MethodSchemeRow {
+  msrIface : IfaceRef,
+  msrName : String,
+  msrScheme : Scheme,
+  msrMethodSlots : List MethodPredicateSlot,
+data LegacyNumLiteralAnchor = LegacyNumLiteralAnchor {
+  numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor),
+ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
+methodSchemeRows : List (String, List Kind) ->
+legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
+installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
+seedNumLitFromIntAnchor : List MethodSchemeRow -> List Decl -> Unit
+pickSchemesByDecl : List String ->
+admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
+  List MethodSchemeRow ->
+  let currentMethodRows = ifaceMethodSchemeRows prog
+      let visibleMethodRows = ifaceMethodSchemeRows implDecls'
+
+printf '%s\n' "$method_row_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: #2549 method-row preparation is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+method_row_flat_count="$(grep -Fc 'ifaceMethodSchemeRows prog' "$predicate_slot_src")"
+if [ "$method_row_flat_count" -ne 2 ]; then
+  echo "FAIL: expected exactly two Flat ifaceMethodSchemeRows constructions, got $method_row_flat_count"
+  exit 1
+fi
+method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows implDecls' "$predicate_slot_src")"
+if [ "$method_row_module_count" -ne 1 ]; then
+  echo "FAIL: expected exactly one Module ifaceMethodSchemeRows construction, got $method_row_module_count"
+  exit 1
+fi
+
+method_row_retired='ifaceMethodSchemes :
+declIfaceMethods :
+methodSchemes :
+ifaceMethodSchemeIds
+declIfaceMethodIds
+ifaceMethodIdRow
+zipIfaceMethodSchemeIds
+ifaceMethodSchemesByIdRef
+numLitFromIntSchemeRef
+numLitFromIntParamsRef
+seedNumLitFromIntScheme
+seedNumLitFromIntParams
+registerMethodConstraints :'
+
+printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$predicate_slot_src"; then
+    echo "FAIL: #2549 retired method-row authority remains: $retired"
     exit 1
   fi
 done || exit 1
@@ -1193,9 +1308,9 @@ printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
 done || exit 1
 
 # Deferred operator routes keep their lexical evidence owner through the concrete-head
-# stamper.  The scalar registry is global and uncleared, so an empty owner or an
-# owner-prefix miss must not borrow another method's dict.  The direct in-impl operator
-# bypass remains a separately tracked residual and is pinned independently below.
+# stamper. The scalar registry is graph-lived, so an empty owner or nominal-scope
+# miss must not borrow another method's dict. The direct in-impl operator path
+# retains its legacy scalar classification but now checks the same scope boundary.
 lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
 printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
   echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
@@ -1206,7 +1321,7 @@ printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {
   exit 1
 }
 printf '%s\n' "$lexical_dict_block" | grep -Fq 'firstDictForEncl' || {
-  echo "FAIL: activeDictVarForEncl must reject an owner-prefix miss"
+  echo "FAIL: activeDictVarForEncl must use the scoped binder lookup"
   exit 1
 }
 if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
@@ -1214,24 +1329,31 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
   exit 1
 fi
 
-operator_owner_required='stampOpRouteVal : Bool ->
-argImplDictRoutesForEncl encl dictName tag m goals,
-entailInst name m encl tag (EKOp isBinop _) =
-(stampOpRouteVal isBinop encl name m tag, [])'
+operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
+argImplDictRoutesForEncl encl useScope dictName tag m goals,
+entailInst name m encl useScope tag (EKOp isBinop _) =
+(stampOpRouteVal isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"
     exit 1
   fi
 done || exit 1
+operator_scope_guard='| eid == id && Scopes.givenVisibleFrom (currentScopeStore ()) useScope (Scopes.binderScope binder) = Some binder'
+operator_scope_body=$(sed -n '/^firstDictForEncl :/,/^activeDictVarOfEncl :/p' "$predicate_slot_src" \
+  | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
+if ! printf '%s\n' "$operator_scope_body" | grep -Fq "$operator_scope_guard"; then
+  echo "FAIL: operator route dropped its nominal evidence owner: $operator_scope_guard"
+  exit 1
+fi
 if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_src"; then
   echo "FAIL: owner-erasing argImplDictRoutesFor wrapper remains"
   exit 1
 fi
 
 op_dict_block="$(sed -n '/^opDictVarOf :/,/^resolveOpSite :/p' "$predicate_slot_src")"
-printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = activeDictVarOf m' || {
-  echo "FAIL: direct opDictVarOf in-impl residual moved during the lexical cutoff"
+printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDictVarOf m useScope)' || {
+  echo "FAIL: direct opDictVarOf in-impl residual must retain legacy classification and captured scope"
   exit 1
 }
 
@@ -1250,6 +1372,7 @@ if [ "$predicate_relation_uses" -ne 5 ]; then
 fi
 
 predicate_slot_retired='implReqPreds
+givensHere
 implReqPredicateSlot
 implReqPredicateSlots
 implReqPick

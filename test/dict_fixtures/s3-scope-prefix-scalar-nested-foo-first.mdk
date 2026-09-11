@@ -1,0 +1,23 @@
+-- The nested `useD` call exercises the remaining scalar dictionary lookup.
+-- Both methods own `D a`; selecting `foo_bar` by rendered-name prefix would
+-- corrupt `foo`.  DICT §3 requires the lexical given, producing exactly 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+useD : D a => a -> Int
+useD x = d x
+
+data Box a = Box a
+
+interface C t where
+  foo : t -> Int
+  foo_bar : t -> Int
+
+impl C (Box a) requires D a where
+  foo (Box x) = useD x
+  foo_bar (Box x) = useD x
+
+main = println (foo (Box 0))

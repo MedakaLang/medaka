@@ -1,0 +1,11 @@
+-- Both bodies share the element variable of a value-restricted outer binding.
+-- The first body must leave it live for the later Float use.
+import test.{expectEqual}
+
+shared = map identity []
+
+test "first body must not close the enclosing cell" =
+  expectEqual [1] (1 :: shared)
+
+test "a later body still determines that cell" =
+  expectEqual [2.5] (2.5 :: shared)

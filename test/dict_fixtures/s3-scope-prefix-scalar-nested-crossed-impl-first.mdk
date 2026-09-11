@@ -1,0 +1,22 @@
+-- Crossed-order control: interface order is foo/foo_bar while implementation
+-- order is foo_bar/foo.  Positional scope pairing must still produce 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+useD : D a => a -> Int
+useD x = d x
+
+data Box a = Box a
+
+interface C t where
+  foo : t -> Int
+  foo_bar : t -> Int
+
+impl C (Box a) requires D a where
+  foo_bar (Box x) = useD x
+  foo (Box x) = useD x
+
+main = println (foo (Box 0))

@@ -1,0 +1,15 @@
+-- D1/D2: a closed test body defaults its literal to Int before checking Eq/Debug.
+-- The test runner executes the assertion; the semantic gate checks every verb.
+import test.{expectEqual}
+
+chooseNum : Num a => a -> a
+chooseNum x = x
+
+test "closed body defaults Num" = expectEqual 1 1
+
+test "inner generalized Num remains caller selected twice" =
+  let choose = x => chooseNum x
+  let _ = expectEqual 3 (choose 3)
+  expectEqual 2.5 (choose 2.5)
+
+test "explicit Float remains Float" = expectEqual 1.0 (1 : Float)

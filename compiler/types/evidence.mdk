@@ -1,0 +1,33 @@
+-- Request-owned identities and semantic evidence for the scoped solver.
+--
+-- These identities are nominal even where an ordinal would currently suffice:
+-- callers cannot accidentally exchange a goal, scope, evidence binder, instance,
+-- or destination merely because two of them were allocated at the same count.
+-- `RequestInstanceId` is deliberately request-local.  It is not a stable cache
+-- identity and must not be persisted across typechecking requests.
+
+import frontend.ast.{EvId}
+import types.repr.{Mono}
+
+public export data GoalId = GoalId String Int deriving (Eq, Ord, Debug)
+
+public export data ScopeId = ScopeId Int deriving (Eq, Ord, Debug)
+
+-- The owning scope is part of a formal evidence binder's identity.  Generated
+-- dictionary names are later renderings of this value, never scope keys.
+public export data EvidenceBinderId =
+  | EvidenceBinderId ScopeId Int
+  deriving (Eq, Ord, Debug)
+
+public export data RequestInstanceId =
+  | RequestInstanceId Int
+  deriving (Eq, Ord, Debug)
+
+-- Request evidence forms a DAG: prerequisite and superclass edges name other
+-- request nodes by `EvId`.  No constructor embeds a recursively copied proof
+-- tree.  `Mono` is permitted here because this value is request-owned; a later
+-- frozen contract must translate it to immutable templates before publication.
+public export data SolverEvidence =
+  | GivenEvidence EvidenceBinderId
+  | InstanceEvidence RequestInstanceId (List Mono) (List EvId)
+  | SuperclassEvidence EvId (List Int)

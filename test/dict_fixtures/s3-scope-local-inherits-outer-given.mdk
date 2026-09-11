@@ -1,0 +1,15 @@
+-- A local binding inherits its enclosing body's scope, so the local lambda
+-- sees `outer`'s `D a` given.  At the Int call site that given is the unique
+-- D Int dictionary, whose result is 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+outer : D a => a -> Int
+outer x =
+  let local = y => d y
+  local x
+
+main = println (outer 0)

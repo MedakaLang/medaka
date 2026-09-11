@@ -1,0 +1,126 @@
+-- Request-local contracts for scoped class solving and qualified-scheme
+-- instantiation.  This module owns no inference state and imports no private
+-- typechecker operation.  The substitution representation stays opaque behind
+-- `InstantiationServices`, allowing the production adapter to preserve the HM
+-- kernel's existing variance-sensitive body substitution.
+
+import frontend.ast.{EvId, Ident, Loc}
+import types.evidence.{
+  EvidenceBinderId,
+  GoalId,
+  RequestInstanceId,
+  ScopeId,
+  SolverEvidence,
+}
+import types.repr.{IfaceRef, Mono, Scheme(..)}
+
+public export data ClassPredicate = ClassPredicate {
+  predicateInterface : IfaceRef,
+  predicateArguments : List Mono,
+}
+
+-- Predicate order is dictionary-parameter order.  Keeping the formal binder in
+-- the same record makes the correspondence indivisible during instantiation.
+public export data Qualifier = Qualifier {
+  predicate : ClassPredicate,
+  formal : EvidenceBinderId,
+}
+
+public export data QualifiedScheme = QualifiedScheme {
+  hm : Scheme,
+  qualifiers : List Qualifier,
+}
+
+public export data GoalOrigin = GoalOrigin {
+  location : Option Loc,
+  moduleId : String,
+  binding : Option Ident,
+}
+
+public export data Wanted = Wanted {
+  id : GoalId,
+  predicate : ClassPredicate,
+  origin : GoalOrigin,
+  scope : ScopeId,
+  destination : EvId,
+}
+
+public export data InstantiationArgument = InstantiationArgument {
+  formal : EvidenceBinderId,
+  wanted : Wanted,
+}
+
+public export data Instantiation = Instantiation {
+  body : Mono,
+  arguments : List InstantiationArgument,
+}
+
+public export data InstantiationServices subst = InstantiationServices {
+  makeSubstitution : List Int -> List Int -> subst,
+  substituteBody : subst -> Mono -> Mono,
+  substituteArgument : subst -> Mono -> Mono,
+  freshGoal : GoalOrigin -> ScopeId -> GoalId,
+  freshDestination : GoalOrigin -> ScopeId -> EvId,
+}
+
+-- The deferred form preserves the original wanted and classifies why it cannot
+-- yet be decided.  Whole-graph finalization is explicit rather than encoded as
+-- an empty blocker list.
+public export data SolverBlocker =
+  | BlockingTypeVariable Int
+  | BlockingEffectVariable Int
+  | BlockingScope ScopeId
+  | BlockingFinalization
+
+public export data SolverFailure =
+  | MissingInstance
+  | AmbiguousInstances (List RequestInstanceId)
+  | ResolutionCycle (List GoalId)
+
+public export data SolverOutcome =
+  | Solved SolverEvidence
+  | Deferred Wanted (List SolverBlocker)
+  | Insoluble Wanted SolverFailure
+
+substitutePredicate : InstantiationServices subst ->
+  subst ->
+  ClassPredicate ->
+  ClassPredicate
+substitutePredicate services subst pred = ClassPredicate {
+  predicateInterface = pred.predicateInterface,
+  predicateArguments =
+    map (services.substituteArgument subst) pred.predicateArguments,
+}
+
+instantiateQualifiers : InstantiationServices subst ->
+  subst ->
+  ScopeId ->
+  GoalOrigin ->
+  List Qualifier ->
+  List InstantiationArgument
+instantiateQualifiers _ _ _ _ [] = []
+instantiateQualifiers services subst scope origin (qualifier :: rest) =
+  let wanted = Wanted {
+    id = services.freshGoal origin scope,
+    predicate = substitutePredicate services subst qualifier.predicate,
+    origin = origin,
+    scope = scope,
+    destination = services.freshDestination origin scope,
+  }
+  InstantiationArgument { formal = qualifier.formal, wanted = wanted }
+    :: instantiateQualifiers services subst scope origin rest
+
+export
+instantiateQualified : InstantiationServices subst ->
+  ScopeId ->
+  GoalOrigin ->
+  QualifiedScheme ->
+  Instantiation
+instantiateQualified services scope origin qualified = match qualified.hm
+  Forall typeVariables effectVariables schemeBody =>
+    let subst = services.makeSubstitution typeVariables effectVariables
+    Instantiation {
+      body = services.substituteBody subst schemeBody,
+      arguments =
+        instantiateQualifiers services subst scope origin qualified.qualifiers,
+    }

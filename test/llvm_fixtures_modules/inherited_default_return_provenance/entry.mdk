@@ -1,0 +1,11 @@
+-- A genuine cross-module inherited MethodDefault.  `copy` remains the generic
+-- default body owned by supply::Supply, while this impl supplies only `seed`.
+import supply.{Supply(..), seed, copy}
+
+impl Supply Int where
+  seed = 41
+
+answer : Int
+answer = copy
+
+main = putStrLn (intToString answer)

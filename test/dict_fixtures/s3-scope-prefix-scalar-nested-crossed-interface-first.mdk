@@ -1,0 +1,22 @@
+-- Other crossed-order control: interface order is foo_bar/foo while
+-- implementation order is foo/foo_bar.  Exact body ownership yields 7.
+interface D a where
+  d : a -> Int
+
+impl D Int where
+  d _ = 7
+
+useD : D a => a -> Int
+useD x = d x
+
+data Box a = Box a
+
+interface C t where
+  foo_bar : t -> Int
+  foo : t -> Int
+
+impl C (Box a) requires D a where
+  foo (Box x) = useD x
+  foo_bar (Box x) = useD x
+
+main = println (foo (Box 0))

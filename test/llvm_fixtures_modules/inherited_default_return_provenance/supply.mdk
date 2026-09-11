@@ -1,0 +1,4 @@
+export default interface Supply a where
+  seed : a
+  copy : a
+  copy = seed
