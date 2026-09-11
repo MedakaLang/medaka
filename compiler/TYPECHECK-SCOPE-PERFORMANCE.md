@@ -53,3 +53,27 @@ allocation from -0.027% to -0.471%. Raw candidate receipts are in
 measurements above. These remain allocation and instruction measurements, not
 retained-live-heap measurements. The later scope classification fix and future
 cache changes are outside this exact comparison.
+
+## Default-body provenance follow-up
+
+Exact predecessor `1840eb036` versus `433eaa9f7` (source-identical to `f35e93280`),
+using the same N0–N3 instruments and heap. Later review fixes change only the
+excluded sibling test. This includes the pre-entail route read and default-owner
+allocation, with tracing disabled as in normal production.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,160,142 | 305,155,294 | 48,581,712 | 48,585,792 |
+| playground | first warm | 24,821,737 | 24,824,825 | 4,566,496 | 4,566,496 |
+| playground | second warm | 24,831,133 | 24,825,818 | 4,570,656 | 4,570,656 |
+| import-list | cold | 538,298,575 | 538,326,563 | 93,140,272 | 93,144,592 |
+| import-list | first warm | 38,169,208 | 38,164,804 | 6,879,936 | 6,884,272 |
+| import-list | second warm | 38,172,048 | 38,180,543 | 6,891,504 | 6,887,664 |
+
+Largest positive instruction delta: +0.0223%; allocated-byte delta: +0.0630%.
+These are within the existing 25% soft budget. All fixed requests passed their
+diagnostic/freshness checks; allocation repetitions were identical. Before receipts:
+`/tmp/rearch-default-perf-base/{instructions,allocation}`. After receipts:
+`/tmp/rearch-cache-bypass-measure/baseline-{perf,allocation}`. The after arm here is
+the unmodified compiler, not the bypass experiment. These are allocation
+measurements, not retained-live-heap measurements.

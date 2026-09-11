@@ -54,10 +54,15 @@ prefix solve on a cache hit. Final rows re-observe the live cell.
 The destination contract forbids sharing mutable inference cells between requests.
 The adopted migration plan requires bypassing or replacing all three affected
 memos: CoreCheckMemo, ChainMemo and PreludePreamble (whose implementation rows carry
-InstRef). A measurement-only bypass is being tested separately with the existing
-drain schedule preserved. This census does not establish its performance cost or
-license retaining an unsafe memo. A separate uninstrumented same-process repro is
-checking the effect on user-visible diagnostics and hover.
+InstRef). The separate measurement in TYPECHECK-CACHE-BYPASS-MEASUREMENT.md
+preserves the drain schedule but exceeds the warm budget by a wide margin.
+No production bypass is enabled.
+
+The independent uninstrumented native repro is now #2902: Float then explicitly
+Int-using suffixes produce a false type mismatch; reverse order falsely rejects
+Float. Ordinary cold processes accept both. The matrix is byte-identical on
+pristine `2b6e08c8d` and `f35e93280`, so this defect predates the current slices.
+Both arms' command/output/hash receipts are in `/tmp/rearch-cache-poison-repro/logs`.
 
 ## Controls and limits
 
