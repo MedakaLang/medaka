@@ -44,15 +44,15 @@ running doctests in stdlib/array.mdk
   ok   stdlib/array.mdk:670: length (empty : Array Int)
 
 stdlib/array.mdk: 43/43 passed
-Testing "sortBy ascending and length-preserving" ... OK (100 tests)
-Testing "sortBy idempotent" ... OK (100 tests)
-Testing "sortBy stable: equal keys preserve original order" ... OK (100 tests)
-Testing "makeWith length" ... OK (100 tests)
-Testing "makeWith element at index 0" ... OK (100 tests)
-Testing "foldWithIndex matches fold over zip with range" ... OK (100 tests)
-Testing "forEachWithIndex visits every index once, in order, matching zip with range" ... OK (100 tests)
-Testing "mapWithIndex with an index-ignoring callback is map" ... OK (100 tests)
-Testing "mapWithIndex hands the callback 0..n-1 in order" ... OK (100 tests)
-Testing "mapWithIndex agrees with zipWith over range" ... OK (100 tests)
+stdlib/array.mdk:693: Testing "sortBy ascending and length-preserving" ... OK (100 tests)
+stdlib/array.mdk:698: Testing "sortBy idempotent" ... OK (100 tests)
+stdlib/array.mdk:703: Testing "sortBy stable: equal keys preserve original order" ... OK (100 tests)
+stdlib/array.mdk:708: Testing "makeWith length" ... OK (100 tests)
+stdlib/array.mdk:712: Testing "makeWith element at index 0" ... OK (100 tests)
+stdlib/array.mdk:721: Testing "foldWithIndex matches fold over zip with range" ... OK (100 tests)
+stdlib/array.mdk:728: Testing "forEachWithIndex visits every index once, in order, matching zip with range" ... OK (100 tests)
+stdlib/array.mdk:741: Testing "mapWithIndex with an index-ignoring callback is map" ... OK (100 tests)
+stdlib/array.mdk:745: Testing "mapWithIndex hands the callback 0..n-1 in order" ... OK (100 tests)
+stdlib/array.mdk:749: Testing "mapWithIndex agrees with zipWith over range" ... OK (100 tests)
 
 10 passed, 0 failed

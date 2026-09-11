@@ -15,6 +15,7 @@
 
 import frontend.ast.{Decl, DAttrib, DExtern, DFunDef, DTest, Expr(..), Loc(..)}
 import frontend.marker.{declRefs, localBoundNames}
+import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
 import support.util.{filterList}
 import tools.doctest.{ExResult(..)}
@@ -27,18 +28,19 @@ hasTests [] = False
 hasTests ((DTest _ _ _) :: _) = True
 hasTests (_ :: rest) = hasTests rest
 
--- Line number of a body expr (peel the transparent ELoc wrapper). An
--- `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
--- comment: "binop levels stay unwrapped") — its left operand's own location
--- recovers the decl's line instead, since both operands of a same-line
--- binop share it.
+-- Line number of a body expr: the first `ELoc` in a pre-order walk, or 0 when
+-- the subtree carries none.  A shallow peel is not enough — a `test`/`prop`
+-- body headed by `let`, `match`, `if` or a lambda is NOT itself `ELoc`-wrapped
+-- (nor is an `EBinOp`; parser.mdk, `stripLoc1`'s comment: "binop levels stay
+-- unwrapped"), so the line has to come from the first located sub-expression.
+-- The deep walk is `resolve`'s `firstExprLoc` rather than a sixth private
+-- fork of it (ast.mdk, "Loc plumbing": the Expr walkers stay per-judgment, but
+-- this IS that judgment).
+export
 exprLine : Expr -> Int
-exprLine (ELoc (Loc _ l _ _ _) _) = l
-exprLine (EApp f _) = exprLine f
-exprLine (EAnnot e _) = exprLine e
-exprLine (EHeadAnnot e _) = exprLine e
-exprLine (EBinOp _ a _ _) = exprLine a
-exprLine _ = 0
+exprLine e = match firstExprLoc e
+  Some (Loc _ l _ _ _) => l
+  None => 0
 
 -- Each `test "…" = body` as (name, line, body), in source order.
 export

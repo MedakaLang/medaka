@@ -243,8 +243,9 @@ td_expected="running tests in test/compiler_test_fixtures/test_decls.mdk
        expected 1 but got 2
   FAIL test/compiler_test_fixtures/test_decls.mdk:10: explicit fail
        boom
+  ok   test/compiler_test_fixtures/test_decls.mdk:16: block body
 
-test/compiler_test_fixtures/test_decls.mdk: 1/3 passed (2 failed, 0 errors)"
+test/compiler_test_fixtures/test_decls.mdk: 2/4 passed (2 failed, 0 errors)"
 if printf '%s' "$td_out" | grep -qF "$td_expected"; then
   pass=$((pass + 1)); printf 'ok   test_decls.mdk (test-decl runner: discovery + ok/FAIL report + summary)\n'
 else

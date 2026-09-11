@@ -12,7 +12,7 @@ running doctests in stdlib/hash_set.mdk
   ok   stdlib/hash_set.mdk:263: display (new () : HashSet Int)
 
 stdlib/hash_set.mdk: 11/11 passed
-Testing "Display HashSet is layout-independent" ... OK (100 tests)
-Testing "Display HashSet agrees with Eq and lists elements ascending" ... OK (100 tests)
+stdlib/hash_set.mdk:282: Testing "Display HashSet is layout-independent" ... OK (100 tests)
+stdlib/hash_set.mdk:289: Testing "Display HashSet agrees with Eq and lists elements ascending" ... OK (100 tests)
 
 2 passed, 0 failed

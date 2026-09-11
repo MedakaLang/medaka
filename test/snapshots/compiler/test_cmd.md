@@ -1,5 +1,5 @@
 # META
-source_lines=2327
+source_lines=2313
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -54,7 +54,7 @@ stages=DESUGAR,MARK
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
-import frontend.ast.{Decl, DData, DInterface, DProp, Expr(..), Loc(..)}
+import frontend.ast.{Decl, DData, DInterface, DProp, Expr}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
@@ -119,7 +119,9 @@ import tools.prop_runner.{
   propResultPassed,
   propResultDetail,
 }
-import tools.test_runner.{collectTests, runOneTest, hasTests, uncapableExterns}
+import tools.test_runner.{
+  collectTests, exprLine, runOneTest, hasTests, uncapableExterns
+}
 import driver.diagnostics.{
   analyzeLocated,
   projectDiagsFromTc,
@@ -1105,24 +1107,8 @@ propLineTests tsrc = collectPropLines (desugar (parseLocated tsrc))
 collectPropLines : List Decl -> List (String, Int)
 collectPropLines [] = []
 collectPropLines ((DProp _ name _ body) :: rest) =
-  (name, exprLineLocal body) :: collectPropLines rest
+  (name, exprLine body) :: collectPropLines rest
 collectPropLines (_ :: rest) = collectPropLines rest
-
--- Peel a transparent ELoc wrapper to recover a body's source line. Intentional
--- cross-file duplicate of `test_runner.mdk`'s private (unexported) `exprLine`
--- — tiny helper, not worth exporting across a module boundary for one caller.
--- An `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
--- comment: "binop levels stay unwrapped") — its left operand's own location
--- recovers the decl's line instead, since both operands of a same-line
--- binop share it.
--- lint-disable-next-line rule-duplicate-body
-exprLineLocal : Expr -> Int
-exprLineLocal (ELoc (Loc _ l _ _ _) _) = l
-exprLineLocal (EApp f _) = exprLineLocal f
-exprLineLocal (EAnnot e _) = exprLineLocal e
-exprLineLocal (EHeadAnnot e _) = exprLineLocal e
-exprLineLocal (EBinOp _ a _ _) = exprLineLocal a
-exprLineLocal _ = 0
 
 -- ── #1292: elaborate, then rename cross-unit-colliding constructors ──────────
 -- `eval.evalModulesRootEnvWith` / `evalModulesWith` apply this rename themselves,
@@ -2330,7 +2316,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
     rest
     (acc || not ok)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" true) (mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -2344,7 +2330,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
-(DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
+(DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -2467,15 +2453,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "propLineTests" ((PVar "tsrc")) (EApp (EVar "collectPropLines") (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "tsrc")))))
 (DTypeSig false "collectPropLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "collectPropLines" ((PList)) (EListLit))
-(DFunDef false "collectPropLines" ((PCons (PCon "DProp" PWild (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLineLocal") (EVar "body"))) (EApp (EVar "collectPropLines") (EVar "rest"))))
+(DFunDef false "collectPropLines" ((PCons (PCon "DProp" PWild (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLine") (EVar "body"))) (EApp (EVar "collectPropLines") (EVar "rest"))))
 (DFunDef false "collectPropLines" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectPropLines") (EVar "rest")))
-(DTypeSig false "exprLineLocal" (TyFun (TyCon "Expr") (TyCon "Int")))
-(DFunDef false "exprLineLocal" ((PCon "ELoc" (PCon "Loc" PWild (PVar "l") PWild PWild PWild) PWild)) (EVar "l"))
-(DFunDef false "exprLineLocal" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLineLocal") (EVar "f")))
-(DFunDef false "exprLineLocal" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprLineLocal") (EVar "e")))
-(DFunDef false "exprLineLocal" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLineLocal") (EVar "e")))
-(DFunDef false "exprLineLocal" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "exprLineLocal") (EVar "a")))
-(DFunDef false "exprLineLocal" (PWild) (ELit (LInt 0)))
 (DTypeSig false "elaborateModulesMangled" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE"))))))
 (DTypeSig false "runProps" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))
@@ -2673,7 +2652,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "args") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "f"))) (DoLet false false (PVar "ok") (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": DEAD (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" true) (mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -2687,7 +2666,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
-(DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
+(DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTest" false) (mem "hasTests" false) (mem "uncapableExterns" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -2810,15 +2789,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "propLineTests" ((PVar "tsrc")) (EApp (EVar "collectPropLines") (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EVar "tsrc")))))
 (DTypeSig false "collectPropLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "collectPropLines" ((PList)) (EListLit))
-(DFunDef false "collectPropLines" ((PCons (PCon "DProp" PWild (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLineLocal") (EVar "body"))) (EApp (EVar "collectPropLines") (EVar "rest"))))
+(DFunDef false "collectPropLines" ((PCons (PCon "DProp" PWild (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "exprLine") (EVar "body"))) (EApp (EVar "collectPropLines") (EVar "rest"))))
 (DFunDef false "collectPropLines" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectPropLines") (EVar "rest")))
-(DTypeSig false "exprLineLocal" (TyFun (TyCon "Expr") (TyCon "Int")))
-(DFunDef false "exprLineLocal" ((PCon "ELoc" (PCon "Loc" PWild (PVar "l") PWild PWild PWild) PWild)) (EVar "l"))
-(DFunDef false "exprLineLocal" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLineLocal") (EVar "f")))
-(DFunDef false "exprLineLocal" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprLineLocal") (EVar "e")))
-(DFunDef false "exprLineLocal" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLineLocal") (EVar "e")))
-(DFunDef false "exprLineLocal" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "exprLineLocal") (EVar "a")))
-(DFunDef false "exprLineLocal" (PWild) (ELit (LInt 0)))
 (DTypeSig false "elaborateModulesMangled" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "elaborateModulesMangled" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE"))))))
 (DTypeSig false "runProps" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))))

@@ -27,11 +27,11 @@ running doctests in stdlib/vector.mdk
   ok   stdlib/vector.mdk:372: display (fromList ["a", "b"])
 
 stdlib/vector.mdk: 26/26 passed
-Testing "sortInPlace agrees with an independent insertion sortInPlace" ... OK (100 tests)
-Testing "sortInPlace is idempotent" ... OK (100 tests)
-Testing "sortInPlaceBy is stable on ties" ... OK (100 tests)
-Testing "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ... OK (100 tests)
-Testing "removeAtInPlace out of range is a no-op" ... OK (100 tests)
-Testing "Display Vector shows only the live range and agrees with Eq" ... OK (100 tests)
+stdlib/vector.mdk:473: Testing "sortInPlace agrees with an independent insertion sortInPlace" ... OK (100 tests)
+stdlib/vector.mdk:479: Testing "sortInPlace is idempotent" ... OK (100 tests)
+stdlib/vector.mdk:489: Testing "sortInPlaceBy is stable on ties" ... OK (100 tests)
+stdlib/vector.mdk:497: Testing "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ... OK (100 tests)
+stdlib/vector.mdk:508: Testing "removeAtInPlace out of range is a no-op" ... OK (100 tests)
+stdlib/vector.mdk:518: Testing "Display Vector shows only the live range and agrees with Eq" ... OK (100 tests)
 
 6 passed, 0 failed
