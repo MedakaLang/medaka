@@ -27,12 +27,17 @@ hasTests [] = False
 hasTests ((DTest _ _ _) :: _) = True
 hasTests (_ :: rest) = hasTests rest
 
--- Line number of a body expr (peel the transparent ELoc wrapper).
+-- Line number of a body expr (peel the transparent ELoc wrapper). An
+-- `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
+-- comment: "binop levels stay unwrapped") — its left operand's own location
+-- recovers the decl's line instead, since both operands of a same-line
+-- binop share it.
 exprLine : Expr -> Int
 exprLine (ELoc (Loc _ l _ _ _) _) = l
 exprLine (EApp f _) = exprLine f
 exprLine (EAnnot e _) = exprLine e
 exprLine (EHeadAnnot e _) = exprLine e
+exprLine (EBinOp _ a _ _) = exprLine a
 exprLine _ = 0
 
 -- Each `test "…" = body` as (name, line, body), in source order.

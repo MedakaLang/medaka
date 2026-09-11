@@ -1,0 +1,11 @@
+import test.{expectTrue}
+
+-- A file whose only assertion is a `test` decl, so the `--json` report's
+-- `tests` array is the whole of its content: nothing else can supply the
+-- top-level engine name or a location, and a regression in either is
+-- unmasked rather than covered by a doctest's own entry.
+--
+-- The body is a bare `EBinOp` rather than a block, so the reported `line` has
+-- to come from the declaration itself -- an operator node carries no span a
+-- location can be read off, and reading one off it yields 0.
+test "a bare binop body still reports its own line" = 1 == 1 |> expectTrue

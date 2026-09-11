@@ -1,0 +1,22 @@
+import test.{expectEqual, expectTrue}
+
+-- A fixture for the medaka_test MCP tool (#2339): `test` decls ONLY, and both
+-- of them fail.  `doctest_sample.mdk` carries no `test` decl at all, so its
+-- `testDeclsSkipped:true` is trivially true — nothing was there to skip, and
+-- the golden cannot show what the flag costs.  Here the skipped decls are the
+-- file's entire content, so the golden records what an agent is actually told
+-- about a file whose every assertion failed.
+--
+-- The golden PINS that report; it does not endorse it.  `summary.ok` and
+-- `isError` there describe a file that passed, which is the whole of #2339's
+-- complaint — a fix moves this golden rather than leaving it alone.
+--
+-- Deterministic and prelude-only apart from `test` itself: no timings, no
+-- paths, no RNG.
+
+double : Int -> Int
+double n = n * 2
+
+test "double 3 is deliberately expected to be 7" = expectEqual (double 3) 7
+
+test "a deliberately false claim" = expectTrue (1 == 2)

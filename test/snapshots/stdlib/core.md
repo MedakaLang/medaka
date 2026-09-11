@@ -1,5 +1,5 @@
 # META
-source_lines=1996
+source_lines=2004
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1719,20 +1719,25 @@ apply f a = f a
 {- | Types that can generate random values for property tests.
 
    `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
-   candidates, tried in order to reduce a failing example; it defaults to
-   none.
+   candidates, tried in order to reduce a failing example for code that
+   shrinks by hand; it defaults to none.
 
    `medaka test` draws each `prop` parameter from its declared type. A
    user-defined type that takes no type arguments is drawn through its
    `Arbitrary` instance when one is in scope, and built from its constructors
-   otherwise. That applies to the parameter's own type only: a user type
-   reached as a field of another type is always built from its constructors,
-   whether or not it has an instance. Every other parameter type the runner
-   builds itself: `Int`,
+   otherwise — wherever it appears, as the parameter's own type or as a field
+   of another type. An instance the runner cannot draw through, because it is
+   constrained (`requires`) or stands at an applied head, is reported rather
+   than ignored. Every other parameter type the runner builds itself: `Int`,
    `Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
    `Result`, tuples, and any type applied to arguments, so an instance at one
-   of those is not consulted. Counterexamples are shrunk by the runner, so
-   `shrink` serves hand-written generators. -}
+   of those is not consulted for drawing either.
+
+   A failing counterexample is shrunk by the runner's own built-in strategy,
+   never by calling `shrink` — for any type, built-in or user-defined.
+   `shrink` is for property code that shrinks values by hand, outside the
+   runner; an instance's `shrink` has no effect on what `medaka test`
+   reports. -}
 export interface Arbitrary a where
   arbitrary : Unit -> <Rand> a
   shrink : a -> List a
@@ -1908,11 +1913,14 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) =
 -- ─── Instance laws ───────────────────────────────────────────────────────
 {- Two things constrain how these are written.
 
-   1. `medaka test`'s property runner does NOT dispatch on `Arbitrary` — it
-      generates from the declared TYPE (`prop_runner.mdk`'s `genForType`,
-      which handles `List`/`Array`/tuple/`Option`/`Result` structurally).  So
-      a `prop` PARAMETER cannot observe these instances; every law below calls
-      `arbitrary` / `shrink` explicitly instead.
+   1. `medaka test`'s property runner consults a user `Arbitrary` instance for
+      a `prop` parameter's own type and for that type reached as a field of
+      another, but deliberately never for `Int`/`Bool`/`Float`/`Char`/`String`
+      (honoring those would route generation onto the program-under-test's
+      `randomInt`/`randomBool` externs, making `--seed` inert for those
+      params).  Since the types below have no such instance in scope here
+      anyway, every law calls `arbitrary` / `shrink` explicitly rather than
+      relying on a `prop` parameter to draw them.
    2. Inside this module the `==` OPERATOR does not resolve to `Eq` for a
       non-primitive (`Some n == Some n` fails to check here while
       `eq (Some n) (Some n)` succeeds, and the same program compiles in any

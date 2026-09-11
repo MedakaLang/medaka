@@ -1,0 +1,19 @@
+-- Regression for #2813 case 3: an `Arbitrary` instance the runner cannot draw
+-- through — constrained (`requires`), at an applied head, or both — used to be
+-- filtered out of the generation environment entirely, so the draw fell back to
+-- the structural one and the declared instance was silently ignored.  Honoring
+-- it would need the runner to build the leading dictionary, which needs
+-- constraint entailment it has no access to, so it reports instead.
+--
+-- Asserted on CONTENT by test/diff_compiler_test.sh, not on a golden: the
+-- diagnostic is a panic, and the wrong answer (a structural `Node …`
+-- counterexample) also exits nonzero.
+
+data Tree a = Leaf | Node a (Tree a) (Tree a)
+
+impl Arbitrary (Tree a) requires Arbitrary a where
+  arbitrary () = Leaf
+
+prop "constrained instance is reported, not ignored" (t : Tree Int) = match t
+  Leaf => True
+  Node _ _ _ => False

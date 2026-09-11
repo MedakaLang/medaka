@@ -1,0 +1,14 @@
+-- Both `a` and `b` declare a `Color` AND an `Arbitrary` instance for it, so one
+-- impl route word carries two runtime candidates.  The prop here is over `a`'s
+-- `Color`, so the draw must come from `a`'s instance: every case is `Red`.
+--
+-- An alias-qualified name is a parse error in type position, so one file can
+-- name only one of the two `Color`s; `b` is brought in bare, which binds no
+-- names but does put its instance in dispatch scope.  `main_b.mdk` is the same
+-- program with the roles swapped -- the two together are what tell a correct
+-- fix apart from one that always takes the first candidate.
+import a.{Color(..), tag}
+import b
+
+prop "a's own Arbitrary instance is what a's Color draws from" (c : Color) =
+  tag c == "a-red"

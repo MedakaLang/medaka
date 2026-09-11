@@ -1489,6 +1489,18 @@ typecheckSkippedField : Bool -> List (String, Json)
 typecheckSkippedField False = []
 typecheckSkippedField True = [("typecheckSkipped", JBool True)]
 
+-- #2339: `runTestTool` always calls `runTestReport` with `includeTestDecls =
+-- False` (F3 — a panicking `test "…"` body must not crash the MCP server),
+-- so the `test "…"` phase never runs here at all, and unlike
+-- `typecheckSkippedField` above there is no live/absent case to distinguish
+-- — the field is unconditional, always `true`, for exactly the one call site
+-- that ever builds this envelope. It says in the JSON itself what previously
+-- only the tool's prose description said, so a caller reading the envelope
+-- alone (not the description) is not misled by `ok:true`/`summary` counts
+-- that silently cover doctests+props only.
+testDeclsSkippedField : List (String, Json)
+testDeclsSkippedField = [("testDeclsSkipped", JBool True)]
+
 -- The full structured result body.  `engine`/`note` carry the interpreter
 -- caveat INTO the payload (not just the tool description) so a consumer that
 -- never read the description is still told what these results cover — and,
@@ -1514,6 +1526,7 @@ testReportJson path typeError runs props typecheckSkipped =
       ]
       ++ typeErrorField typeError
       ++ typecheckSkippedField typecheckSkipped
+      ++ testDeclsSkippedField
       ++ [
         ("doctests", doctestsJson (primaryDoctestRun runs)),
         ("properties", jArray (map propJson props)),

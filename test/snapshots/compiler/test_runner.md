@@ -1,5 +1,5 @@
 # META
-source_lines=188
+source_lines=193
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -31,12 +31,17 @@ hasTests [] = False
 hasTests ((DTest _ _ _) :: _) = True
 hasTests (_ :: rest) = hasTests rest
 
--- Line number of a body expr (peel the transparent ELoc wrapper).
+-- Line number of a body expr (peel the transparent ELoc wrapper). An
+-- `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
+-- comment: "binop levels stay unwrapped") — its left operand's own location
+-- recovers the decl's line instead, since both operands of a same-line
+-- binop share it.
 exprLine : Expr -> Int
 exprLine (ELoc (Loc _ l _ _ _) _) = l
 exprLine (EApp f _) = exprLine f
 exprLine (EAnnot e _) = exprLine e
 exprLine (EHeadAnnot e _) = exprLine e
+exprLine (EBinOp _ a _ _) = exprLine a
 exprLine _ = 0
 
 -- Each `test "…" = body` as (name, line, body), in source order.
@@ -206,6 +211,7 @@ closureOver graph seen (w :: work)
 (DFunDef false "exprLine" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLine") (EVar "f")))
 (DFunDef false "exprLine" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
 (DFunDef false "exprLine" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
+(DFunDef false "exprLine" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "exprLine") (EVar "a")))
 (DFunDef false "exprLine" (PWild) (ELit (LInt 0)))
 (DTypeSig true "collectTests" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr")))))
 (DFunDef false "collectTests" ((PList)) (EListLit))
@@ -259,6 +265,7 @@ closureOver graph seen (w :: work)
 (DFunDef false "exprLine" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLine") (EVar "f")))
 (DFunDef false "exprLine" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
 (DFunDef false "exprLine" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprLine") (EVar "e")))
+(DFunDef false "exprLine" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "exprLine") (EVar "a")))
 (DFunDef false "exprLine" (PWild) (ELit (LInt 0)))
 (DTypeSig true "collectTests" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr")))))
 (DFunDef false "collectTests" ((PList)) (EListLit))

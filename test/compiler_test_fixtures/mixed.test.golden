@@ -6,6 +6,6 @@ running doctests in test/compiler_test_fixtures/mixed.mdk
   ok   test/compiler_test_fixtures/mixed.mdk:16: addOne 4
 
 test/compiler_test_fixtures/mixed.mdk: 2/3 passed (1 failed, 0 errors)
-Testing "double is add-to-self" ... OK (100 tests)
+test/compiler_test_fixtures/mixed.mdk:22: Testing "double is add-to-self" ... OK (100 tests)
 
 1 passed, 0 failed

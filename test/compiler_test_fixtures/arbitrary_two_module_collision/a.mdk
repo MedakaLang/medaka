@@ -1,0 +1,15 @@
+-- Module `a`'s `Color`, with its own `Arbitrary` instance.  Module `b` declares
+-- a `Color` and an instance too, so both instances mint the SAME impl route word
+-- (`implRouteKeyWord` renders the head spelling and nothing else) and the runner
+-- sees two runtime candidates under one word.
+public export data Color = Red | Green
+
+impl Arbitrary Color where
+  arbitrary () = Red
+
+-- Total over `a`'s constructors only: handed one of `b`'s it would be a
+-- non-exhaustive match, which is the loud half of the wrong-candidate answer.
+export
+tag : Color -> String
+tag Red = "a-red"
+tag Green = "a-green"
