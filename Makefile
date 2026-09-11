@@ -142,6 +142,11 @@ test: medaka
 	## without this line nothing would run them and reverting the variable-key
 	## schedule would be caught by nothing.
 	./medaka test stdlib/hmac.mdk
+	## S-base32: stdlib/base32.mdk's RFC 4648 vectors and canonical-rejection
+	## checks. Its own module is outside every entry's import closure
+	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_test.sh's explicit
+	## file list, so without this line nothing would run them.
+	./medaka test stdlib/base32.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 

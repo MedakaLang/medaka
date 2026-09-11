@@ -6,8 +6,9 @@
    fabricate a CID that violates those invariants. -}
 
 import array.{drop, take}
-import lib.base32.{multibaseBase32Lower, multibaseBase32LowerDecode}
 import lib.multiformats.{
+  multibaseBase32Lower,
+  multibaseBase32LowerDecode,
   multicodecDagCbor,
   multicodecRaw,
   multicodecSha2_256,

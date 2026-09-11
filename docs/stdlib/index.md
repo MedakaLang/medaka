@@ -91,6 +91,13 @@ Operations on `Array a`.
 - [`runAsyncIOMain`](async.md#runasynciomain)
 - [`runAsyncMain`](async.md#runasyncmain)
 
+## [`base32`](base32.md)
+
+Base32 encoding and decoding of bytes, per RFC 4648.
+
+- [`base32Encode`](base32.md#base32encode)
+- [`base32Decode`](base32.md#base32decode)
+
 ## [`base64`](base64.md)
 
 Base64 encoding and decoding of bytes, per RFC 4648.
