@@ -23,9 +23,20 @@ what:   check main.mdk  -> 134, stderr "runtime error [E-STACK-OVERFLOW]: ..."
 what:   run   main.mdk  -> 134, same single line
 what:   build main.mdk  -> 134, same single line
 cmd: build main.mdk
-exit: 134
+exit: 1
 stdout-line: runtime error [E-STACK-OVERFLOW]: stack overflow (recursion too deep)
 control: build control.mdk
+why-exit: 134 until ruling 3 shape (a) made the `medaka_emitter` child `build`'s only
+why-exit: typecheck. The overflow did not go away and nothing about #1575 is fixed:
+why-exit: `medaka run main.mdk` still dies at 134, and `build` still prints this exact
+why-exit: E-STACK-OVERFLOW line. What moved is WHERE the abort happens -- the parent no
+why-exit: longer typechecks, so the overflow is now inside the emitter subprocess, and
+why-exit: the parent reports a failed emit as exit 1 with the child's stderr forwarded.
+why-exit: The pinned code was always the second of two independent observations; the
+why-exit: discriminating one is the `stdout-line` above, unchanged, which nothing but
+why-exit: the compiler running out of stack produces. Re-pointing the code rather than
+why-exit: draining the row is deliberate: draining would close a live soundness bug on
+why-exit: the strength of a process boundary.
 why-verb: `build` rather than `check`, for ONE mechanical reason: the abort text lands
 why-verb: on STDERR, and `build` is the only verb in this harness whose graded stream is
 why-verb: stdout and stderr COMBINED (`run_verb`: `>"$_out" 2>&1`). Under `check` or

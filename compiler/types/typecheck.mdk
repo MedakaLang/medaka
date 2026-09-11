@@ -29592,8 +29592,9 @@ extendPropParams env ((PropParam x _ ty) :: rest) =
 -- body (`sig _ = idInt "str"` where `idInt : Int -> Int` but `sig`'s declared return
 -- is `String`) is a `unify`/`typeMismatch` error pushed DURING body inference, not an
 -- obligation.  Blanket-restoring `typeErrors` here (as this did before #777) discarded
--- it, and because `medaka build`'s soundness gate (medaka_cli.typecheckGate) runs this
--- SAME check path, both `check` and `build` accepted the program — the built binary
+-- it, and because every driver that decides a build reaches this same body inference —
+-- `check`'s directly, `build`'s through the `medaka_emitter` child's `elaborateModules` —
+-- discarding it here makes `check` and `build` accept the program together: the built binary
 -- then printed a wrong value at exit 0 or SEGFAULTED (an impl method returning a
 -- differently-typed field/value).  We now KEEP those body clash errors so both paths
 -- reject.
