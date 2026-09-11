@@ -48,17 +48,38 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # names by name.
 broad="$(sh "$ROOT/test/build_oracles.sh" --for --list 'diff_compiler_*' | sort -u)"
 
-# The union of EVERY individual `diff_compiler_*.sh` gate's own derived set —
-# each one is the narrowest possible "same-family" pattern for that gate (an
-# exact, non-wildcard basename), so their union is definitionally what the broad
-# wildcard ought to produce. Derived from the filesystem, not a hand-listed set:
-# a new diff_compiler_*.sh gate is covered the moment it is added.
+# The union of EVERY individual `diff_compiler_*` gate's own derived set — each
+# one is the narrowest possible "same-family" pattern for that gate (an exact,
+# non-wildcard name), so their union is definitionally what the broad wildcard
+# ought to produce. Derived from the filesystem plus the registry, not a
+# hand-listed set: a new diff_compiler_*.sh gate OR `kind = "native"` gate is
+# covered the moment it is added.
+#
+# A `kind = "native"` gate (#2591) has no `.sh` for the filesystem glob to find
+# — its `run` is a `.mdk` module, sharing the family's oracle set exactly like
+# any `.sh` gate does, and #2600's testing-architecture migration is steadily
+# converting `.sh` gates into these. Sourcing the same `_native_rows` helper
+# `build_oracles.sh` itself uses to resolve such a name (test/gate_native_rows.sh,
+# #2636 — one parser, three callers) keeps this gate from silently narrowing as
+# that migration proceeds.
 checked=0
 union=""
 for f in "$ROOT"/test/diff_compiler_*.sh; do
   [ -f "$f" ] || continue
   checked=$((checked + 1))
   name="$(basename "$f" .sh)"
+  for o in $(sh "$ROOT/test/build_oracles.sh" --for --list "$name" 2>/dev/null); do
+    case " $union " in *" $o "*) ;; *) union="$union $o" ;; esac
+  done
+done
+. "$ROOT/test/gate_native_rows.sh"
+for _row in $(_native_rows | tr ' ' ':'); do
+  name="${_row%%:*}"
+  case "$name" in
+    diff_compiler_*) ;;
+    *) continue ;;
+  esac
+  checked=$((checked + 1))
   for o in $(sh "$ROOT/test/build_oracles.sh" --for --list "$name" 2>/dev/null); do
     case " $union " in *" $o "*) ;; *) union="$union $o" ;; esac
   done

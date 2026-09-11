@@ -691,7 +691,7 @@ while IFS= read -r f; do
     compiler/types/*)
       add 'diff_compiler_typecheck*'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_check*'; add 'diff_compiler_exhaust'
-      add 'diff_compiler_diagnostics'; add 'diff_compiler_eval_typed*'
+      add 'diff_compiler_diagnostics'; add 'diff_compiler_eval*'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
@@ -822,7 +822,7 @@ while IFS= read -r f; do
     # #1131: ir/core_ir_lower.mdk (SHADOW) and ir/core_ir.mdk (DICT) are both
     # cited sites under compiler/ir/*.
     compiler/ir/*)
-      add 'diff_compiler_core_ir*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
+      add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_draft_semantic'
       add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines'
@@ -846,7 +846,7 @@ while IFS= read -r f; do
     # #1131: llvm_emit.mdk/wasm_emit.mdk (both tables) and private_mangle.mdk
     # (SHADOW) are all cited sites under compiler/backend/*.
     compiler/backend/*)
-      add 'diff_compiler_llvm*'; add 'diff_compiler_build'; add 'diff_compiler_core_ir*'
+      add 'diff_compiler_llvm*'; add 'diff_compiler_build'; add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'
       add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'

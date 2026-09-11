@@ -73,8 +73,9 @@ Adding, moving, or deleting a fixture **silently enrols (or de-enrols) you in ga
 Before touching one: `grep -rl '<fixture_dir>' test/` — then run **all** of them.
 
 Known multi-consumer dirs:
-- `test/eval_modules_fixtures/*/` → `diff_compiler_eval_modules.sh` **and**
-  `diff_compiler_core_ir_modules.sh` (a P0 shipped "green" having run only the first)
+- `test/eval_modules_fixtures/*/` → the `eval_modules_main` **and**
+  `core_ir_modules_main` oracles of `diff_compiler_eval` (a P0 shipped "green"
+  having run only the first, back when these were two separate scripts)
 - `test/wasm/fixtures/` → **four** consumers (`diff_wasm.sh`, `diff_compiler_engines.sh`,
   `tmc_census.sh`, and the keys of `test/engine_divergence.txt`)
 

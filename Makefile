@@ -122,6 +122,12 @@ test: medaka
 	## parseSelector doctests and its `prop` block (selector parsing, glob
 	## matching) would be fixtures that never execute.
 	./medaka test compiler/tools/gate_registry.mdk
+	## S-sweep-is-one-runner (#2593): same reason, for the native gates' shared
+	## support module. `medaka test --native <gate>.mdk` runs only the named
+	## module's own doctests, so chompNewlines/stripUnitAutoPrint/batchSection —
+	## the pure text surgery every migrated sweep grades its goldens through —
+	## would otherwise be documented and never executed.
+	./medaka test test/compiler_cli_test_support.mdk
 	## FIX-lint-mechanism-correctness (Fix C): compiler/tools/lint_baseline.mdk
 	## is outside every entry's import closure ([W-MODULE-BLIND]), so its
 	## fail-closed parse/validation paths (missing file, malformed TOML, a

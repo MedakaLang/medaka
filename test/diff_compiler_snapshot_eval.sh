@@ -17,8 +17,8 @@
 # Only the two MAIN gate SCRIPTS are removed. The `.eval.golden` files, the fixtures,
 # and the eval_dict_main / eval_typed_main probes all SURVIVE, because they are SHARED:
 #
-#   * diff_compiler_eval_dict_batch.sh / diff_compiler_eval_typed_batch.sh — the
-#     out-of-scope BATCH gates — read the SAME `<name>.eval.golden` files and the SAME
+#   * the eval_dict_batch / eval_typed_batch oracles of diff_compiler_eval — the
+#     out-of-scope BATCH rows — read the SAME `<name>.eval.golden` files and the SAME
 #     fixture dirs. Deleting the goldens would break them.
 #   * fuzz_diff.sh drives test/bin/eval_dict_main as its differential oracle.
 #   * capture_goldens.sh regenerates those goldens (for the surviving batch gates).
