@@ -82,6 +82,34 @@ removing it:
   didn't.** Loud → silent is a severity increase even though the old behavior (a spurious reject)
   was also wrong — see `AGENTS.md`'s "fix that makes a defect QUIETER" section, of which this is
   a typecheck-specific instance.
+  **Updated 2026-09-09 (#2839):** the stamp is no longer the receiver's unmangled head name.
+  `inferFieldAccess`/`inferRecordUpdateField` now write `stampedRecordHead`, which qualifies the
+  selected record's key with the module that DECLARED it (read off the record's own result-type
+  head), in the mangler's spelling — so the stamp's cross-module identity no longer comes from
+  `mangleUnits` happening to run before `elaborateModules`. What is still bare-keyed is
+  `recordByNameRef` itself (#1319 unit 4 / #1288).
+  **Amended 2026-09-10 (the #2809 reorder's fix round):** two sentences of the above were true
+  only while the mangler still ran first. "On the emit path the qualification is the identity
+  function, so the emitted IR is byte-identical" — the emit path now elaborates an UNMANGLED
+  tree, so the key is bare and this qualification is the whole of what distinguishes two
+  same-named records at the emitter. And "`lookupRecordByMangledHead` still selects the
+  `RecordInfo` on the emit path" — it no longer can, because no key reaching elaboration is
+  mangled there; the arm that fires is now the pre-elaboration ctor rename
+  (`mangleCtorCollisions`) on `eval` / `core_ir_eval` / `test`. The stamp is also now applied
+  EXACTLY ONCE: the mangler's `renameScoped` no longer renames the cell, and the stamp's
+  idempotence prefix-guard is gone with it — a record whose source name already carried its own
+  module's prefix read as "already qualified" and collided with its sibling, compiling a wrong
+  slot at exit 0 on a program the parent commit refused.
+  **Updated 2026-09-10 (#2809):** the emit order itself is now the other way round.
+  `runEmitWith` / `emitModulesWith` (`compiler/entries/entry_support.mdk`) run
+  `elaborateModules` on the graph the user wrote, then the #2089 residual gate, then
+  `mangleUnitsEv` (`compiler/backend/private_mangle.mdk`) over the
+  elaborated, dict-passed trees and the installed evidence table — so the emitter child's
+  verdict equals `check`'s by construction rather than by a table-by-table audit, and no
+  diagnostic it renders can carry a mangled spelling. Read every "the mangler ran first"
+  claim in this file and in `compiler/` comments as history: `TYPECHECK-TARGET-ARCHITECTURE.md`
+  SA-10a item 20 carries the landing record and the census of the accommodations that
+  existed only because of the old order.
 
 **Application notes:**
 

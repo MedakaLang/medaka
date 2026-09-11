@@ -1,5 +1,5 @@
 # META
-source_lines=1561
+source_lines=1594
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -28,11 +28,13 @@ stages=DESUGAR,MARK
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
-import support.util.{stringTrim, joinWith}
+import support.util.{stringTrim, joinWith, joinNl}
 import string.{words}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
-import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
+import driver.loader.{
+  entrySearchRoots, findProjectRootOrSelf, readDeps, readForeignLibs
+}
 import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
@@ -248,6 +250,37 @@ makeTempDir _ = match runCommandOk "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
   Ok (out, _) =>
     let dir = stringTrim out
     if dir == "" then Err "mktemp -d printed no path" else Ok dir
+
+-- The manifest a scratch project gets when a probe for `target` is compiled
+-- outside the target's own tree.  It carries the target project's own
+-- `[dependencies]`, because dependency names are resolved from the ENTRY's
+-- manifest, never from the module search roots (`loader.mdk`'s `readDeps` ->
+-- `resolveModulePath`): a scratch manifest with no `[dependencies]` makes every
+-- cross-project import of the target unresolvable in the probe, however many
+-- roots the emitter is handed.
+--
+-- Every dep path is absolutized by canonicalizing the project root FIRST.
+-- `readDeps` joins each declared path onto the root literally, so a relatively
+-- named target yields a relatively named dep (`sqlite/../parsec`) that would be
+-- re-resolved against the scratch dir — a wrong path, and silently so.
+export
+scratchProjectManifest : String -> String -> <IO> String
+scratchProjectManifest projectName target =
+  let root = canonicalizePath (findProjectRootOrSelf (dirOf target))
+  stringConcat [
+    "[project]\nname = \"",
+    projectName,
+    "\"\n",
+    renderScratchDeps (readDeps root),
+  ]
+
+renderScratchDeps : List (String, String) -> String
+renderScratchDeps [] = ""
+renderScratchDeps deps =
+  stringConcat ["\n[dependencies]\n", joinNl (map renderScratchDep deps), "\n"]
+
+renderScratchDep : (String, String) -> String
+renderScratchDep (name, path) = stringConcat [name, " = \"", path, "\""]
 
 -- Best-effort unlink of every entry the build staged in the scratch dir.  The
 -- driver only ever writes flat files there, so removeFile suffices.
@@ -1564,11 +1597,11 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
     let _ = cleanupTempDir tmpDir
     res
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false))))
 (DUse false (UseGroup ("string") ((mem "words" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readForeignLibs" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false) (mem "readForeignLibs" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
@@ -1598,6 +1631,13 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "makeTempDir" (PWild) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (ELit (LString "/tmp/medaka_build_XXXXXX")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
+(DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
+(DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "[project]\nname = \"")) (EVar "projectName") (ELit (LString "\"\n")) (EApp (EVar "renderScratchDeps") (EApp (EVar "readDeps") (EVar "root"))))))))
+(DTypeSig false "renderScratchDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "renderScratchDeps" ((PList)) (ELit (LString "")))
+(DFunDef false "renderScratchDeps" ((PVar "deps")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "\n[dependencies]\n")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "renderScratchDep")) (EVar "deps"))) (ELit (LString "\n")))))
+(DTypeSig false "renderScratchDep" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
+(DFunDef false "renderScratchDep" ((PTuple (PVar "name") (PVar "path"))) (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString " = \"")) (EVar "path") (ELit (LString "\"")))))
 (DTypeSig false "removeEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "removeEntries" (PWild (PList)) (ELit LUnit))
 (DFunDef false "removeEntries" ((PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "n")))) (DoExpr (EApp (EApp (EVar "removeEntries") (EVar "dir")) (EVar "rest")))))
@@ -1701,11 +1741,11 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "emitRtObjGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))
 (DFunDef false "emitRtObjGo" ((PVar "cc") (PVar "root") (PVar "outObjPath")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the runtime compile: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EMatch (EApp (EApp (EVar "detectGC") (EVar "cc")) (EVar "tmpDir")) (arm (PCon "None") () (EApp (EVar "buildErr") (EApp (EVar "libgcMissingError") (ELit LUnit)))) (arm (PCon "Some" (PTuple (PVar "gcCflags") (PVar "_gcLibs"))) () (EBlock (DoLet false false (PVar "optFlag") (EVar "clangOptFlag")) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "outObjPath")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommandOk") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: compiling runtime object failed\n")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "buildOk") (EBinOp "++" (EBinOp "++" (ELit (LString "compiled runtime object -> ")) (EApp (EVar "display") (EVar "outObjPath"))) (ELit (LString ""))))))))))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false))))
 (DUse false (UseGroup ("string") ((mem "words" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readForeignLibs" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false) (mem "readForeignLibs" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
@@ -1735,6 +1775,13 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "makeTempDir" (PWild) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (ELit (LString "/tmp/medaka_build_XXXXXX")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
+(DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
+(DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "[project]\nname = \"")) (EVar "projectName") (ELit (LString "\"\n")) (EApp (EVar "renderScratchDeps") (EApp (EVar "readDeps") (EVar "root"))))))))
+(DTypeSig false "renderScratchDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "renderScratchDeps" ((PList)) (ELit (LString "")))
+(DFunDef false "renderScratchDeps" ((PVar "deps")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "\n[dependencies]\n")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "renderScratchDep")) (EVar "deps"))) (ELit (LString "\n")))))
+(DTypeSig false "renderScratchDep" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
+(DFunDef false "renderScratchDep" ((PTuple (PVar "name") (PVar "path"))) (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString " = \"")) (EVar "path") (ELit (LString "\"")))))
 (DTypeSig false "removeEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "removeEntries" (PWild (PList)) (ELit LUnit))
 (DFunDef false "removeEntries" ((PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "n")))) (DoExpr (EApp (EApp (EVar "removeEntries") (EVar "dir")) (EVar "rest")))))

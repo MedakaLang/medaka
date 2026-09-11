@@ -1,0 +1,6 @@
+-- The module that OWNS the standalone `length`.  `main` does not import it.
+export length : Int -> Int
+length n = n + 1
+
+export ol : Int
+ol = length 1

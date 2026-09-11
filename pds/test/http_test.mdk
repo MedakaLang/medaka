@@ -31,6 +31,7 @@ import lib.http.{
   requestTrailers,
   scanRequestBoundary,
   scanRequestBoundaryFrom,
+  scanRequestBoundaryWithin,
   serializeResponse,
 }
 import lib.resource_limits.{
@@ -839,3 +840,58 @@ test "a resumed scan matches a whole-buffer scan from a pipelined offset" =
     (resumeAgrees (arrayLength simpleGet) 1 pipelined
       && resumeAgrees (arrayLength simpleGet) 1 (appendBytes pipelined chunked)
       && resumeAgrees (arrayLength simpleGet) 3 (appendBytes pipelined chunked))
+
+-- A caller that accumulates into a backing array with spare capacity hands the
+-- scanner more bytes than it has received. Only the first `avail` bytes are
+-- input; framing a request out of the rest would be the server answering a
+-- request its client never sent.
+
+-- Bytes that could complete a fixed-length body, a chunk-size line, or a
+-- trailer section if the scanner ever mistook capacity for input.
+slackBytes : Array Int
+slackBytes = toUtf8 "\r\n0\r\n\r\nZZZZ"
+
+tenByteBody : Array Int
+tenByteBody =
+  toUtf8
+    "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 10\r\n\r\nabc"
+
+test "a body short of its content length is pending, padding notwithstanding" =
+  let padded = appendBytes tenByteBody (arrayMakeWith 7 (_ => 0))
+  match (
+    fst
+      (scanRequestBoundaryWithin
+        padded
+        (arrayLength tenByteBody)
+        0
+        httpScanStart),
+    scanRequestBoundary padded 0,
+  )
+    (HttpNeedMore, HttpFramedAt at) => expectEqual at (arrayLength padded)
+    _ => expectTrue False
+
+-- Scanning a padded backing array one received byte at a time has to agree with
+-- scanning the exact prefix of that many bytes, for every shape in the corpus.
+availAgreesGo : Array Int -> Int -> Int -> HttpScan -> Bool
+availAgreesGo padded live avail scan =
+  let (resumed, next) = scanRequestBoundaryWithin padded avail 0 scan
+  let agrees = sameFrame resumed (scanRequestBoundary (prefix padded avail) 0)
+  if avail >= live then
+    agrees
+  else
+    agrees && availAgreesGo padded live (avail + 1) next
+
+availAgrees : Array Int -> Bool
+availAgrees input =
+  availAgreesGo
+    (appendBytes input slackBytes)
+    (arrayLength input)
+    0
+    httpScanStart
+
+allAvailAgree : List (Array Int) -> Bool
+allAvailAgree [] = True
+allAvailAgree (input :: rest) = availAgrees input && allAvailAgree rest
+
+test "a scan bounded by its received length ignores the bytes past it" =
+  expectTrue (allAvailAgree resumeCorpus)

@@ -58,6 +58,7 @@ import frontend.ast.{Decl, DFunDef, DData, DInterface}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
+  scratchProjectManifest,
   cleanupTempDir,
   runBuildNativeRoots,
   envOr,
@@ -239,8 +240,13 @@ nativeRendered target tsrc userDecls examples synthResults =
 -- rejected: it would grant EVERY native doctest run unguarded access to the
 -- unsafe array kernels, which is strictly more permission than the module under
 -- test has at its real path.
-scratchManifest : String
-scratchManifest = "[project]\nname = \"medaka_native_doctest\"\n"
+--
+-- The manifest also carries the TARGET project's own `[dependencies]`, without
+-- which the probe cannot resolve a cross-project import the interpreter arm
+-- resolves fine — see `scratchProjectManifest`.  That is content, not trust:
+-- the trust argument above is unchanged by it.
+scratchManifest : String -> <IO> String
+scratchManifest target = scratchProjectManifest "medaka_native_doctest" target
 
 -- The copy is named `dt_<basename>` rather than `<basename>`.  A module id
 -- collision is otherwise reachable: a copy of `stdlib/string.mdk` in the scratch
@@ -259,7 +265,7 @@ runInTmp : String ->
 runInTmp target tsrc examples synthResults tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "dt_probe"
-  let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
+  let _ = writeFile (joinPath tmpDir "medaka.toml") (scratchManifest target)
   match writeFile entryPath (probeSource nonce tsrc examples synthResults)
     Err e => Err "native doctest runner: could not write the probe source: \{e}"
     Ok _ =>
