@@ -306,8 +306,9 @@ No new numerical performance ceiling is introduced here.
 ## Decisions required before the vertical switch
 
 * Complete the full-vector producer census, including Flat/unmarked occurrences.
-* Resolve multi-admitted return denotation under the current shadow semantics;
-  any required new language rule is an owner decision.
+* Classify multi-admitted return occurrences under the current shadow semantics.
+  The measured import/shadow cases below require no new language rule; a new
+  uncovered case must be reproduced before proposing an owner decision.
 * Enumerate the default-body legacy exception by reachable site, owner and fixture.
 * Complete the non-checking implObls consumer ledger before removing return entries.
 * Specify stable instance identity before freezing instance-bearing evidence.
@@ -327,7 +328,7 @@ Read-only census at `f57016b44`, after the initial design review:
 | Multi-parameter result dispatch | `fromEntries` needs both container and element, not just the result carrier. |
 | Numeric literal | The checker uses `numLitFromIntParamsRef`, but the return route reads a spelling-keyed `fromInt` row. A collision can produce a known vector for the wrong interface. Construct the wanted directly from the identity-selected builtin declaration and its occurrence substitution. |
 | Name-marked standalone or local shadow | May currently have a known method vector or a mismatched/unknown vector. Classify term denotation before constructing a wanted; a known vector does not prove method denotation. |
-| At least two admitted interfaces | A known vector can belong to the arbitrary floor row. Argument-position admission has a receiver index; these return occurrences do not. A semantic decision and import/declaration permutation fixture are required before inclusion. |
+| At least two admitted interfaces | Admission alone does not identify the term declaration. Preserve resolver rejection of two actual method imports, the unique actual method when the other import binds only an interface, and SHADOW S4/I9 standalone precedence. Obtain the vector from that resolved declaration, not the arbitrary floor row; pin import-order permutations. |
 | Missing row or shape mismatch | Existing code can fall back to the scalar result. Exclude the population until its producer supplies the vector. After that precondition, a mismatch is a located internal invariant failure, not a licensed new language rejection; never construct an incomplete class wanted. |
 | Ordinary Flat/unmarked check | `inferVarPlainId` emits the obligation but no return goal or AST evidence destination. Its eventual wanted needs an explicitly owned destination or the shared marking schedule. |
 
@@ -344,6 +345,18 @@ Strong existing pins include `engine_fixtures/single_impl_return_pos.mdk`,
 `nested_instance_dicts.mdk`, and the set/map literal build fixtures. Dictionary
 semantics rows X9/X10 pin numeric identity; D24/D25 and I9/I21 pin shadows.
 These are existing fixture names under `test/`, not a new gate registration.
+
+Follow-up reproduction on separately built base `2b6e08c8d` and slice
+`f57016b44` resolved the suspected policy gap in the multi-admitted row. Two
+interfaces define `make : Int -> a`, with distinguishable implementations for
+the same result type. Importing both actual methods rejects with an ambiguous
+occurrence in both orders. Importing one actual method and only the other
+interface name selects the former and prints `1` in both orders. With the
+standalone `make` shadow, both orders print `901`, as SHADOW S4/I9 requires.
+Accepted cases agree across checking, interpretation and native execution.
+This corrects the earlier census claim that this population necessarily needed
+a semantic decision. Producer identity remains an implementation obligation;
+these controls do not establish that every return occurrence has been classified.
 
 Removing return `PMethodOcc` entries from `implObls` owes each replacement below.
 Every adapter is a projection of the authoritative wanted/qualified scheme; none
