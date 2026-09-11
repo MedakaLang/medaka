@@ -69,18 +69,27 @@ seedPropRng : Int -> Unit
 seedPropRng n = propRngStateRef := n
 
 rngNextLocal : Unit -> Int
--- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
+-- Odd multiplier and odd increment make the low bit of consecutive `s` values
+-- strictly alternate (Knuth: an LCG's low k bits have period <= 2^(k+1)), so
+-- callers extracting a small modulus straight from `s` would see a fixed
+-- pattern instead of a sample.  Discard the low 8 bits (period <= 512, well
+-- past the ~100 draws a property actually runs) and read from higher up the
+-- 31-bit state instead; state advancement is unchanged, so `--seed`
+-- reproducibility is unaffected.
 rngNextLocal _ =
   let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
   propRngStateRef := s
-  s
+  s / 256
 
 randIntRange : Int -> Int -> Int
 randIntRange lo hi =
   let range = hi - lo + 1
   if range <= 0 then lo else lo + rngNextLocal () % range
 
+-- Exported so a distribution regression test can seed the runner's private
+-- RNG (`seedPropRng`) and draw a raw sequence directly, without going through
+-- a `prop`'s randomized-length `List Bool` generation.
+export
 randBoolL : Unit -> Bool
 randBoolL _ = rngNextLocal () % 2 == 1
 

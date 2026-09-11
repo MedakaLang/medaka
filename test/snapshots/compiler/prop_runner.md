@@ -1,5 +1,5 @@
 # META
-source_lines=1083
+source_lines=1092
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -73,18 +73,27 @@ seedPropRng : Int -> Unit
 seedPropRng n = propRngStateRef := n
 
 rngNextLocal : Unit -> Int
--- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
+-- Odd multiplier and odd increment make the low bit of consecutive `s` values
+-- strictly alternate (Knuth: an LCG's low k bits have period <= 2^(k+1)), so
+-- callers extracting a small modulus straight from `s` would see a fixed
+-- pattern instead of a sample.  Discard the low 8 bits (period <= 512, well
+-- past the ~100 draws a property actually runs) and read from higher up the
+-- 31-bit state instead; state advancement is unchanged, so `--seed`
+-- reproducibility is unaffected.
 rngNextLocal _ =
   let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
   propRngStateRef := s
-  s
+  s / 256
 
 randIntRange : Int -> Int -> Int
 randIntRange lo hi =
   let range = hi - lo + 1
   if range <= 0 then lo else lo + rngNextLocal () % range
 
+-- Exported so a distribution regression test can seed the runner's private
+-- RNG (`seedPropRng`) and draw a raw sequence directly, without going through
+-- a `prop`'s randomized-length `List Bool` generation.
+export
 randBoolL : Unit -> Bool
 randBoolL _ = rngNextLocal () % 2 == 1
 
@@ -1097,10 +1106,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EBinOp "/" (EVar "s") (ELit (LInt 256))))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
-(DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "randBoolL" (PWild) (EBinOp "==" (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 2))) (ELit (LInt 1))))
 (DData Public "TyDef" () ((variant "TDData" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))) ())
 (DTypeSig false "buildTyDefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef")))))
@@ -1366,10 +1375,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EBinOp "/" (EVar "s") (ELit (LInt 256))))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
-(DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "randBoolL" (PWild) (EBinOp "==" (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 2))) (ELit (LInt 1))))
 (DData Public "TyDef" () ((variant "TDData" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))) ())
 (DTypeSig false "buildTyDefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef")))))

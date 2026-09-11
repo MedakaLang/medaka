@@ -138,6 +138,12 @@ test: medaka
 	## crash, never a pass.
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
+	## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
+	## is outside every entry's import closure ([W-MODULE-BLIND]), so without
+	## this line its `rngNextLocal` distribution regression (both Bool values
+	## appear across a run of draws, not a fixed alternation) would be a
+	## fixture that never executes.
+	./medaka test compiler/tools/prop_runner_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
