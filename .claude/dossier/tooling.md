@@ -194,3 +194,12 @@ is only honest if someone executed it; this one failed at the last inch. `test/p
 own "Word-boundaries" comment models the discipline this trap is asking for. Also noted: this
 harness mangles a `${…}` inside a quoted inline shell argument and returns zero matches for a
 pattern that is really there — run the grep through a script file, not inline.
+
+## `fmtSentinel`'s `\u{01}` escape
+
+`compiler/eval/eval.mdk`'s `fmtSentinel` (the 0x01 marker a preformatted runtime diagnostic
+must print verbatim) is written as `\u{01}`, not a raw 0x01 byte, because `medaka fmt`'s string
+escaper used to pass control characters through untouched — the raw byte survived every
+reformat. The same defect put a literal NUL in `printer.mdk`, which made that file BINARY to
+grep (see `printer.mdk`'s `escStringLit` note). The escaper now emits `\0` and `\u{XX}`, so the
+`\u{01}` form round-trips instead of being lowered back to a raw byte.

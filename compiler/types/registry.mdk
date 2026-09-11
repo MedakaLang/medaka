@@ -31,11 +31,10 @@
 -- deletion/enumeration because two conversions cannot be written without them.
 --
 -- `types.registry` is on every driver's import closure through
--- `compiler/types/typecheck.mdk`, so `make medaka` / `make check-self` /
--- `test/typecheck_compiler_source.sh` do walk it. Its DOCTESTS are a separate
--- question — `medaka test` visits only the files it is given — which is why
--- `Makefile`'s `test:` target names this file and its sibling explicitly.
--- General trap for a module with no importer: `[W-MODULE-BLIND]`, AGENTS.md.
+-- `compiler/types/typecheck.mdk`, but its DOCTESTS are not — `medaka test`
+-- visits only the files it is given — which is why `Makefile`'s `test:`
+-- target names this file and its sibling explicitly. Full incident:
+-- `[W-MODULE-BLIND]`, `.claude/dossier/workflow.md` and `AGENTS.md`.
 --
 -- ── Why one `Ident` type generalizes a pattern already in the tree ─────────
 -- `crossModuleFunConstraintsQualRef` (`types/typecheck.mdk`) is already keyed
@@ -62,11 +61,6 @@
 -- is the BYTE-IDENTICAL set `compiler/types/typecheck.mdk` selects, so this
 -- module costs a later A-2 unit nothing at all. For reference `ast.mdk`
 -- selects 16 — NARROWER than this file, not wider.
--- 🚨 The first cut of this paragraph asserted the opposite ("`ast.mdk` … a
--- ~26-gate import surface (vs. `types/registry.mdk`'s narrower blast
--- radius)"). Both numbers were invented and the comparison was inverted.
--- The exact gate LISTS are in this PR's body, and the command above
--- regenerates them; the counts here are dated because counts rot.
 --
 -- ── Backing store ───────────────────────────────────────────────────────────
 -- Wraps the EXISTING `OrdMap` (`support/ordmap.mdk`, itself a transparent
