@@ -98,11 +98,15 @@ test: medaka
 	## `checkTestMdkRoster` (compiler/driver/medaka_cli.mdk): the roster check runs
 	## inside `runTestManyTargets`, which only a multi-target/directory invocation
 	## takes, so with file targets alone its "git-tracked but never walked" arm was
-	## dead code. `compiler/types` holds a tracked `*_test.mdk` (registry_test.mdk),
+	## dead code. `compiler/types` holds tracked `*_test.mdk` siblings
+	## (`registry_test.mdk` and `solver_contract_test.mdk`),
 	## so the roster has something real to account for. It subsumes the four file
 	## lines that stood here, each for its own [W-MODULE-BLIND] reason:
 	##   registry.mdk / registry_test.mdk — the module is outside every entry's
 	##     import closure, so nothing else walks it;
+	##   evidence.mdk / solver_contract.mdk / solver_contract_test.mdk — the
+	##     scoped-solver foundation remains outside every production entry's
+	##     import closure until its first vertical consumer lands;
 	##   route_key.mdk (ARCH B-2.2-a) — the shared route-word mint is call-site-free
 	##     BY DESIGN, so this is the only thing that typechecks it at all;
 	##   typecheck.mdk (A-3.2, #1112) — reached by check-self and

@@ -1,0 +1,350 @@
+-- Sibling tests for the scoped solver contract.  The service double exposes
+-- allocation identity through the cells it returns, so these tests distinguish
+-- one shared type/effect substitution from structurally similar substitutions.
+
+import test.{expectEqual}
+import frontend.ast.{EvId(..), Loc(..), TyConOrigin(..)}
+import types.evidence.{EvidenceBinderId(..), GoalId(..), ScopeId(..)}
+import types.repr.{
+  EffRow(..),
+  Effvar(..),
+  IfaceRef(..),
+  Mono(..),
+  Scheme(..),
+  Tyvar(..),
+}
+import types.solver_contract.{
+  ClassPredicate(..),
+  GoalOrigin(..),
+  Instantiation(..),
+  InstantiationArgument(..),
+  InstantiationServices(..),
+  QualifiedScheme(..),
+  Qualifier(..),
+  Wanted(..),
+  instantiateQualified,
+}
+import support.util.{listLen}
+
+data TestSubstitution = TestSubstitution Int (Ref Tyvar) (Ref Effvar)
+
+makeCount : Ref Int
+makeCount = Ref 0
+
+goalCount : Ref Int
+goalCount = Ref 0
+
+destinationCount : Ref Int
+destinationCount = Ref 0
+
+seenTypeVariables : Ref (List Int)
+seenTypeVariables = Ref []
+
+seenEffectVariables : Ref (List Int)
+seenEffectVariables = Ref []
+
+seenBody : Ref (List Int)
+seenBody = Ref []
+
+resetCounts : Unit -> Unit
+resetCounts _ =
+  makeCount := 0
+  goalCount := 0
+  destinationCount := 0
+  seenTypeVariables := []
+  seenEffectVariables := []
+  seenBody := []
+
+makeTestSubstitution : List Int -> List Int -> TestSubstitution
+makeTestSubstitution typeVariables effectVariables =
+  let serial = !makeCount + 1
+  makeCount := serial
+  seenTypeVariables := typeVariables
+  seenEffectVariables := effectVariables
+  -- Both quantified-id vectors contribute to the observable cell ids.  A test
+  -- that accidentally stopped forwarding either vector would therefore fail.
+  let typeTag = match typeVariables
+    id :: _ => serial * 1000 + id
+    [] => serial * 1000
+  let effectTag = match effectVariables
+    id :: _ => serial * 1000 + id
+    [] => serial * 1000
+  TestSubstitution serial (Ref (Unbound typeTag 0)) (Ref (EUnbound effectTag 0))
+
+substituteTestBody : TestSubstitution -> Mono -> Mono
+substituteTestBody (TestSubstitution _ typeCell effectCell) originalBody =
+  seenBody := match originalBody
+    TFun argument effectRow result =>
+      [typeCellId argument, effectCellId (TEff effectRow), typeCellId result]
+    _ => []
+  TFun (TVar typeCell) (EffRow [] (Some effectCell)) (TVar typeCell)
+
+substituteTestArgument : TestSubstitution -> Mono -> Mono
+substituteTestArgument (TestSubstitution _ typeCell _) (TVar _) = TVar typeCell
+substituteTestArgument (TestSubstitution _ _ effectCell) (TEff _) =
+  TEff (EffRow [] (Some effectCell))
+substituteTestArgument _ mono = mono
+
+freshTestGoal : GoalOrigin -> ScopeId -> GoalId
+freshTestGoal origin _ =
+  let ordinal = !goalCount + 1
+  goalCount := ordinal
+  GoalId origin.moduleId ordinal
+
+freshTestDestination : GoalOrigin -> ScopeId -> EvId
+freshTestDestination origin _ =
+  let ordinal = !destinationCount + 1
+  destinationCount := ordinal
+  EvId origin.moduleId ordinal
+
+testServices : InstantiationServices TestSubstitution
+testServices = InstantiationServices {
+  makeSubstitution = makeTestSubstitution,
+  substituteBody = substituteTestBody,
+  substituteArgument = substituteTestArgument,
+  freshGoal = freshTestGoal,
+  freshDestination = freshTestDestination,
+}
+
+testScope : ScopeId
+testScope = ScopeId 7
+
+testOrigin : GoalOrigin
+testOrigin = GoalOrigin {
+  location = Some (Loc "contract.mdk" 3 2 3 9),
+  moduleId = "contract",
+  binding = None,
+}
+
+iface : String -> IfaceRef
+iface name = IfaceRef { irName = name, irOrigin = OriginBuiltin }
+
+oldTypeCell : Ref Tyvar
+oldTypeCell = Ref (Unbound 101 0)
+
+oldEffectCell : Ref Effvar
+oldEffectCell = Ref (EUnbound 202 0)
+
+sharedQualifier : Qualifier
+sharedQualifier = Qualifier {
+  predicate = ClassPredicate {
+    predicateInterface = iface "Shared",
+    predicateArguments = [
+      TVar oldTypeCell,
+      TEff (EffRow [] (Some oldEffectCell)),
+    ],
+  },
+  formal = EvidenceBinderId testScope 41,
+}
+
+sharedScheme : QualifiedScheme
+sharedScheme = QualifiedScheme {
+  hm =
+    Forall
+      [101, 103]
+      [202, 204]
+      (TFun
+        (TVar oldTypeCell)
+        (EffRow [] (Some oldEffectCell))
+        (TVar oldTypeCell)),
+  qualifiers = [sharedQualifier],
+}
+
+typeCellId : Mono -> Int
+typeCellId mono = match typeCellOf mono
+  Some cell => match !cell
+    Unbound id _ => id
+    Link _ => 0 - 1
+  None => 0 - 2
+
+effectCellId : Mono -> Int
+effectCellId (TEff (EffRow _ (Some cell))) = match !cell
+  EUnbound id _ => id
+  EJoin id _ _ => id
+  ELink _ => 0 - 1
+effectCellId (TFun _ (EffRow _ (Some cell)) _) = match !cell
+  EUnbound id _ => id
+  EJoin id _ _ => id
+  ELink _ => 0 - 1
+effectCellId _ = 0 - 2
+
+instantiationSignature : Instantiation -> (Int, Int, Int, Int)
+instantiationSignature inst = match inst.arguments
+  [InstantiationArgument { wanted = wanted, ... }] =>
+    match wanted.predicate.predicateArguments
+      [typeArgument, effectArgument] => (
+        typeCellId inst.body,
+        effectCellId inst.body,
+        typeCellId typeArgument,
+        effectCellId effectArgument,
+      )
+      _ => (0, 0, 0, 0)
+  _ => (0, 0, 0, 0)
+
+instantiationIds : Instantiation -> (GoalId, Int)
+instantiationIds inst = match inst.arguments
+  [InstantiationArgument { wanted = wanted, ... }] => match wanted.destination
+    EvId _ ordinal => (wanted.id, ordinal)
+  _ => (GoalId "missing" 0, 0)
+
+typeCellOf : Mono -> Option (Ref Tyvar)
+typeCellOf (TVar cell) = Some cell
+typeCellOf (TFun argument _ _) = typeCellOf argument
+typeCellOf _ = None
+
+effectCellOf : Mono -> Option (Ref Effvar)
+effectCellOf (TEff (EffRow _ (Some cell))) = Some cell
+effectCellOf (TFun _ (EffRow _ (Some cell)) _) = Some cell
+effectCellOf _ = None
+
+predicateCells : Instantiation -> (Option (Ref Tyvar), Option (Ref Effvar))
+predicateCells inst = match inst.arguments
+  [InstantiationArgument { wanted = wanted, ... }] =>
+    match wanted.predicate.predicateArguments
+      [typeArgument, effectArgument] =>
+        (typeCellOf typeArgument, effectCellOf effectArgument)
+      _ => (None, None)
+  _ => (None, None)
+
+cellsAliasWithinAndSeparateAcross : Instantiation -> Instantiation -> List Bool
+cellsAliasWithinAndSeparateAcross first second =
+  let (firstPredicateType, firstPredicateEffect) = predicateCells first
+  match (
+    typeCellOf first.body,
+    effectCellOf first.body,
+    firstPredicateType,
+    firstPredicateEffect,
+    typeCellOf second.body,
+    effectCellOf second.body,
+  )
+    (Some firstBodyType, Some firstBodyEffect, Some firstPredType, Some firstPredEffect, Some secondBodyType, Some secondBodyEffect) =>
+      firstBodyType := Link (TRigid "linked")
+      firstBodyEffect := ELink (EffRow [] None)
+      [
+        match !firstPredType
+          Link _ => True
+          _ => False,
+        match !firstPredEffect
+          ELink _ => True
+          _ => False,
+        match !secondBodyType
+          Unbound _ _ => True
+          _ => False,
+        match !secondBodyEffect
+          EUnbound _ _ => True
+          _ => False,
+      ]
+    _ => [False, False, False, False]
+
+sharedSubstitutionResult : Unit -> List Bool
+sharedSubstitutionResult _ =
+  resetCounts ()
+  let first =
+    instantiateQualified testServices testScope testOrigin sharedScheme
+  let second =
+    instantiateQualified testServices testScope testOrigin sharedScheme
+  let (firstBodyType, firstBodyEffect, firstPredType, firstPredEffect) =
+    instantiationSignature first
+  let (secondBodyType, secondBodyEffect, secondPredType, secondPredEffect) =
+    instantiationSignature second
+  let (firstGoal, firstDestination) = instantiationIds first
+  let (secondGoal, secondDestination) = instantiationIds second
+  [
+      !makeCount == 2,
+      !seenTypeVariables == [101, 103],
+      !seenEffectVariables == [202, 204],
+      !seenBody == [101, 202, 101],
+      firstBodyType == firstPredType,
+      firstBodyEffect == firstPredEffect,
+      secondBodyType == secondPredType,
+      secondBodyEffect == secondPredEffect,
+      firstBodyType /= secondBodyType,
+      firstBodyEffect /= secondBodyEffect,
+      firstGoal /= secondGoal,
+      firstDestination /= secondDestination,
+    ]
+    ++ cellsAliasWithinAndSeparateAcross first second
+
+test "one type/effect substitution is shared and each instantiation is fresh" =
+  expectEqual
+    [
+      True, True, True, True, True, True, True, True, True, True, True, True,
+      True, True, True, True
+    ]
+    (sharedSubstitutionResult ())
+
+vectorScheme : QualifiedScheme
+vectorScheme = QualifiedScheme {
+  hm = Forall [] [] (TRigid "body"),
+  qualifiers = [
+    Qualifier {
+      predicate = ClassPredicate {
+        predicateInterface = iface "Nullary",
+        predicateArguments = [],
+      },
+      formal = EvidenceBinderId testScope 50,
+    },
+    Qualifier {
+      predicate = ClassPredicate {
+        predicateInterface = iface "Nary",
+        predicateArguments = [TRigid "left", TRigid "right", TRigid "last"],
+      },
+      formal = EvidenceBinderId testScope 51,
+    },
+    Qualifier {
+      predicate = ClassPredicate {
+        predicateInterface = iface "FirstDistinct",
+        predicateArguments = [TRigid "sameArity"],
+      },
+      formal = EvidenceBinderId testScope 61,
+    },
+    Qualifier {
+      predicate = ClassPredicate {
+        predicateInterface = iface "SecondDistinct",
+        predicateArguments = [TRigid "sameArity"],
+      },
+      formal = EvidenceBinderId testScope 62,
+    },
+  ],
+}
+
+argumentSummary : InstantiationArgument -> (EvidenceBinderId, String, Int)
+argumentSummary (InstantiationArgument { formal = formal, wanted = wanted }) = (
+  formal,
+  wanted.predicate.predicateInterface.irName,
+  listLen wanted.predicate.predicateArguments,
+)
+
+goalOrdinal : InstantiationArgument -> Int
+goalOrdinal (InstantiationArgument { wanted = Wanted { id = (GoalId _ ordinal), ... }, ... }) =
+  ordinal
+
+destinationOrdinal : InstantiationArgument -> Int
+destinationOrdinal (InstantiationArgument { wanted = Wanted { destination = (EvId _ ordinal), ... }, ... }) =
+  ordinal
+
+vectorResult : Unit ->
+  (List (EvidenceBinderId, String, Int), List Int, List Int)
+vectorResult _ =
+  resetCounts ()
+  let instantiation =
+    instantiateQualified testServices testScope testOrigin vectorScheme
+  (
+    map argumentSummary instantiation.arguments,
+    map goalOrdinal instantiation.arguments,
+    map destinationOrdinal instantiation.arguments,
+  )
+
+test "qualifier order keeps nullary/n-ary vectors and formal associations" =
+  expectEqual
+    (
+      [
+        (EvidenceBinderId testScope 50, "Nullary", 0),
+        (EvidenceBinderId testScope 51, "Nary", 3),
+        (EvidenceBinderId testScope 61, "FirstDistinct", 1),
+        (EvidenceBinderId testScope 62, "SecondDistinct", 1),
+      ],
+      [1, 2, 3, 4],
+      [1, 2, 3, 4],
+    )
+    (vectorResult ())
