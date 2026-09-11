@@ -2,6 +2,6 @@ running doctests in test/native_cli_fixtures/test/prop.mdk
   ok   test/native_cli_fixtures/test/prop.mdk:1: triple 2
 
 test/native_cli_fixtures/test/prop.mdk: 1/1 passed
-Testing "triple is add-thrice" ... OK (100 tests)
+test/native_cli_fixtures/test/prop.mdk:6: Testing "triple is add-thrice" ... OK (100 tests)
 
 1 passed, 0 failed
