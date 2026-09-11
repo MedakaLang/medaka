@@ -6,9 +6,6 @@ running doctests in test/compiler_test_fixtures/user_arbitrary.mdk
 
 test/compiler_test_fixtures/user_arbitrary.mdk: 4/4 passed
 test/compiler_test_fixtures/user_arbitrary.mdk:38: Testing "user generator is honored" ... OK (100 tests)
-test/compiler_test_fixtures/user_arbitrary.mdk:40: Testing "user generator is honored at a nested field" ... FAILED after 1 test
-  Seed: 123456789 (rerun with: medaka test --seed 123456789 --filter "user generator is honored at a nested field" <file>)
-  Counterexample:
-    w = Wrap Green
+test/compiler_test_fixtures/user_arbitrary.mdk:40: Testing "user generator is honored at a nested field" ... OK (100 tests)
 
-1 passed, 1 failed
+2 passed, 0 failed

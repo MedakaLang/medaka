@@ -1,5 +1,5 @@
 # META
-source_lines=4996
+source_lines=5032
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -1993,12 +1993,17 @@ declLoc _ = None
 
 -- First ELoc span in a pre-order traversal of an expr (None if the subtree has
 -- no ELoc wrapper).  Pre-order so it matches map_expr's outermost-first order.
+-- Exported for `tools/test_runner.mdk`'s `exprLine`, which needs exactly this
+-- deep-pre-order judgment to locate a `test "…"`/`prop "…"` body whose head is
+-- a `let`/`match`/lambda and therefore carries no `ELoc` of its own.
+export
 firstExprLoc : Expr -> Option Loc
 firstExprLoc (ELoc l _) = Some l
 firstExprLoc (EApp f x) = orElseLoc (firstExprLoc f) (firstExprLoc x)
 firstExprLoc (ELam _ body) = firstExprLoc body
 firstExprLoc (ELet _ _ _ e1 e2) = orElseLoc (firstExprLoc e1) (firstExprLoc e2)
-firstExprLoc (ELetGroup _ body) = firstExprLoc body
+firstExprLoc (ELetGroup binds body) =
+  orElseLoc (firstBindLoc binds) (firstExprLoc body)
 firstExprLoc (EMatch e0 _) = firstExprLoc e0
 firstExprLoc (EIf c t el) =
   orElseLoc (firstExprLoc c) (orElseLoc (firstExprLoc t) (firstExprLoc el))
@@ -2018,12 +2023,43 @@ firstExprLoc (ERangeArray lo hi _) =
 firstExprLoc (EIndex e0 i _) = orElseLoc (firstExprLoc e0) (firstExprLoc i)
 firstExprLoc (ESlice e0 lo hi _ _) =
   orElseLoc (firstExprLoc e0) (orElseLoc (firstExprLoc lo) (firstExprLoc hi))
+firstExprLoc (EBlock stmts) = firstStmtLoc stmts
+firstExprLoc (EDo _ stmts) = firstStmtLoc stmts
 firstExprLoc (EDoOrigin _ e) = firstExprLoc e
 firstExprLoc _ = None
 
 firstLocList : List Expr -> Option Loc
 firstLocList [] = None
 firstLocList (e :: rest) = orElseLoc (firstExprLoc e) (firstLocList rest)
+
+-- A let-group's BOUND expressions, left to right.  Pre-order means the binds
+-- come before the body: `let c = f x` on the line after a `prop`'s `=` is the
+-- only located sub-expression that decl has, and skipping it left the whole
+-- group unlocated.
+firstBindLoc : List LetBind -> Option Loc
+firstBindLoc [] = None
+firstBindLoc ((LetBind _ clauses) :: rest) =
+  orElseLoc (firstClauseLoc clauses) (firstBindLoc rest)
+
+firstClauseLoc : List FunClause -> Option Loc
+firstClauseLoc [] = None
+firstClauseLoc ((FunClause _ body) :: rest) =
+  orElseLoc (firstExprLoc body) (firstClauseLoc rest)
+
+-- A statement block's own expressions, in order.  A layout block headed by a
+-- `let` statement parses as `EBlock`, which carries no `ELoc` of its own — so
+-- without this arm a `test`/`prop`/function body written that way had no
+-- recoverable line at all.
+firstStmtLoc : List DoStmt -> Option Loc
+firstStmtLoc [] = None
+firstStmtLoc (s :: rest) = orElseLoc (stmtLoc s) (firstStmtLoc rest)
+
+stmtLoc : DoStmt -> Option Loc
+stmtLoc (DoExpr e) = firstExprLoc e
+stmtLoc (DoBind _ e) = firstExprLoc e
+stmtLoc (DoLet _ _ _ e) = firstExprLoc e
+stmtLoc (DoAssign _ e) = firstExprLoc e
+stmtLoc (DoFieldAssign _ _ e) = firstExprLoc e
 
 unionStr : List String -> List String -> List String
 unionStr acc [] = acc
@@ -5556,12 +5592,12 @@ takeOriginTrace _ =
 (DFunDef false "declLoc" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declLoc") (EVar "d")))
 (DFunDef false "declLoc" ((PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EApp (EVar "firstExprLoc") (EVar "body")))
 (DFunDef false "declLoc" (PWild) (EVar "None"))
-(DTypeSig false "firstExprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DTypeSig true "firstExprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstExprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "firstExprLoc" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "f"))) (EApp (EVar "firstExprLoc") (EVar "x"))))
 (DFunDef false "firstExprLoc" ((PCon "ELam" PWild (PVar "body"))) (EApp (EVar "firstExprLoc") (EVar "body")))
 (DFunDef false "firstExprLoc" ((PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e1"))) (EApp (EVar "firstExprLoc") (EVar "e2"))))
-(DFunDef false "firstExprLoc" ((PCon "ELetGroup" PWild (PVar "body"))) (EApp (EVar "firstExprLoc") (EVar "body")))
+(DFunDef false "firstExprLoc" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstBindLoc") (EVar "binds"))) (EApp (EVar "firstExprLoc") (EVar "body"))))
 (DFunDef false "firstExprLoc" ((PCon "EMatch" (PVar "e0") PWild)) (EApp (EVar "firstExprLoc") (EVar "e0")))
 (DFunDef false "firstExprLoc" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "c"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "t"))) (EApp (EVar "firstExprLoc") (EVar "el")))))
 (DFunDef false "firstExprLoc" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "a"))) (EApp (EVar "firstExprLoc") (EVar "b"))))
@@ -5577,11 +5613,28 @@ takeOriginTrace _ =
 (DFunDef false "firstExprLoc" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi"))))
 (DFunDef false "firstExprLoc" ((PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EVar "firstExprLoc") (EVar "i"))))
 (DFunDef false "firstExprLoc" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi")))))
+(DFunDef false "firstExprLoc" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
+(DFunDef false "firstExprLoc" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DFunDef false "firstExprLoc" (PWild) (EVar "None"))
 (DTypeSig false "firstLocList" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstLocList" ((PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e"))) (EApp (EVar "firstLocList") (EVar "rest"))))
+(DTypeSig false "firstBindLoc" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstBindLoc" ((PList)) (EVar "None"))
+(DFunDef false "firstBindLoc" ((PCons (PCon "LetBind" PWild (PVar "clauses")) (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstClauseLoc") (EVar "clauses"))) (EApp (EVar "firstBindLoc") (EVar "rest"))))
+(DTypeSig false "firstClauseLoc" (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstClauseLoc" ((PList)) (EVar "None"))
+(DFunDef false "firstClauseLoc" ((PCons (PCon "FunClause" PWild (PVar "body")) (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EApp (EVar "firstClauseLoc") (EVar "rest"))))
+(DTypeSig false "firstStmtLoc" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstStmtLoc" ((PList)) (EVar "None"))
+(DFunDef false "firstStmtLoc" ((PCons (PVar "s") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "stmtLoc") (EVar "s"))) (EApp (EVar "firstStmtLoc") (EVar "rest"))))
+(DTypeSig false "stmtLoc" (TyFun (TyCon "DoStmt") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "stmtLoc" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DTypeSig false "unionStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unionStr" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "unionStr" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "acc")) (EApp (EApp (EVar "unionStr") (EVar "acc")) (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unionStr") (EBinOp "++" (EVar "acc") (EListLit (EVar "x")))) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6797,12 +6850,12 @@ takeOriginTrace _ =
 (DFunDef false "declLoc" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declLoc") (EVar "d")))
 (DFunDef false "declLoc" ((PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EApp (EVar "firstExprLoc") (EVar "body")))
 (DFunDef false "declLoc" (PWild) (EVar "None"))
-(DTypeSig false "firstExprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DTypeSig true "firstExprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstExprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "firstExprLoc" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "f"))) (EApp (EVar "firstExprLoc") (EVar "x"))))
 (DFunDef false "firstExprLoc" ((PCon "ELam" PWild (PVar "body"))) (EApp (EVar "firstExprLoc") (EVar "body")))
 (DFunDef false "firstExprLoc" ((PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e1"))) (EApp (EVar "firstExprLoc") (EVar "e2"))))
-(DFunDef false "firstExprLoc" ((PCon "ELetGroup" PWild (PVar "body"))) (EApp (EVar "firstExprLoc") (EVar "body")))
+(DFunDef false "firstExprLoc" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstBindLoc") (EVar "binds"))) (EApp (EVar "firstExprLoc") (EVar "body"))))
 (DFunDef false "firstExprLoc" ((PCon "EMatch" (PVar "e0") PWild)) (EApp (EVar "firstExprLoc") (EVar "e0")))
 (DFunDef false "firstExprLoc" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "c"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "t"))) (EApp (EVar "firstExprLoc") (EVar "el")))))
 (DFunDef false "firstExprLoc" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "a"))) (EApp (EVar "firstExprLoc") (EVar "b"))))
@@ -6818,11 +6871,28 @@ takeOriginTrace _ =
 (DFunDef false "firstExprLoc" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi"))))
 (DFunDef false "firstExprLoc" ((PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EVar "firstExprLoc") (EVar "i"))))
 (DFunDef false "firstExprLoc" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi")))))
+(DFunDef false "firstExprLoc" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
+(DFunDef false "firstExprLoc" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DFunDef false "firstExprLoc" (PWild) (EVar "None"))
 (DTypeSig false "firstLocList" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstLocList" ((PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e"))) (EApp (EVar "firstLocList") (EVar "rest"))))
+(DTypeSig false "firstBindLoc" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstBindLoc" ((PList)) (EVar "None"))
+(DFunDef false "firstBindLoc" ((PCons (PCon "LetBind" PWild (PVar "clauses")) (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstClauseLoc") (EVar "clauses"))) (EApp (EVar "firstBindLoc") (EVar "rest"))))
+(DTypeSig false "firstClauseLoc" (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstClauseLoc" ((PList)) (EVar "None"))
+(DFunDef false "firstClauseLoc" ((PCons (PCon "FunClause" PWild (PVar "body")) (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EApp (EVar "firstClauseLoc") (EVar "rest"))))
+(DTypeSig false "firstStmtLoc" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstStmtLoc" ((PList)) (EVar "None"))
+(DFunDef false "firstStmtLoc" ((PCons (PVar "s") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "stmtLoc") (EVar "s"))) (EApp (EVar "firstStmtLoc") (EVar "rest"))))
+(DTypeSig false "stmtLoc" (TyFun (TyCon "DoStmt") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "stmtLoc" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
+(DFunDef false "stmtLoc" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DTypeSig false "unionStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unionStr" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "unionStr" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "acc")) (EApp (EApp (EVar "unionStr") (EVar "acc")) (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unionStr") (EBinOp "++" (EVar "acc") (EListLit (EVar "x")))) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

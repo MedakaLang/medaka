@@ -49,13 +49,13 @@ running doctests in stdlib/toml.mdk
   ok   stdlib/toml.mdk:685: display (Toml [])
 
 stdlib/toml.mdk: 48/48 passed
-Testing "a section key round-trips an Int-derived value" ... OK (100 tests)
-Testing "a sibling key is stable regardless of the varying value" ... OK (100 tests)
-Testing "parse is deterministic" ... OK (100 tests)
-Testing "an unquoted integer round-trips as TInt" ... OK (100 tests)
-Testing "array-of-tables entries stay separate" ... OK (100 tests)
-Testing "Display TomlValue separates the four variants" ... OK (100 tests)
-Testing "Display Toml agrees with Eq Toml" ... OK (100 tests)
-Testing "Display Toml renders every entry" ... OK (100 tests)
+stdlib/toml.mdk:702: Testing "a section key round-trips an Int-derived value" ... OK (100 tests)
+stdlib/toml.mdk:706: Testing "a sibling key is stable regardless of the varying value" ... OK (100 tests)
+stdlib/toml.mdk:709: Testing "parse is deterministic" ... OK (100 tests)
+stdlib/toml.mdk:716: Testing "an unquoted integer round-trips as TInt" ... OK (100 tests)
+stdlib/toml.mdk:730: Testing "array-of-tables entries stay separate" ... OK (100 tests)
+stdlib/toml.mdk:743: Testing "Display TomlValue separates the four variants" ... OK (100 tests)
+stdlib/toml.mdk:755: Testing "Display Toml agrees with Eq Toml" ... OK (100 tests)
+stdlib/toml.mdk:767: Testing "Display Toml renders every entry" ... OK (100 tests)
 
 8 passed, 0 failed
