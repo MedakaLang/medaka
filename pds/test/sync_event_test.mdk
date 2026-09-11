@@ -1,0 +1,87 @@
+{- | The `#commit` body's own lexicon bounds (`pds/lib/sync_event.mdk`).
+
+   `com.atproto.sync.subscribeRepos` def `commit` caps `ops` at 200 entries,
+   and nothing at the repository layer caps a write batch, so a legal
+   `applyWrites` can produce more ops than the event is allowed to carry. The
+   field the lexicon provides for that is `tooBig`, whose own description says
+   the consumer fetches the missing data in a separate request — so an
+   over-long commit is REPORTED (`tooBig` true, `ops` empty), never emitted
+   over the cap.
+
+   The three cases below are the boundary and its two sides. A cap written
+   with the wrong comparison passes one of them and fails another, which is
+   why 200 and 201 are both here rather than a single "large" commit. -}
+
+import list.{lookup, range}
+import string.{toUtf8}
+import test.{expectEqual}
+import lib.cid.{Cid, cidForRaw}
+import lib.dagcbor.{DagCbor(..)}
+import lib.sync_event.{SyncCommitEvent(..), SyncRepoOp(..), syncCommitBody}
+import lib.tid.{Tid, tidEncode}
+
+recordCid : Cid
+recordCid = cidForRaw (toUtf8 "record")
+
+commitCid : Cid
+commitCid = cidForRaw (toUtf8 "commit")
+
+mustTid : Result String Tid -> Tid
+mustTid (Ok tid) = tid
+mustTid (Err message) = panic message
+
+sampleRev : Tid
+sampleRev = mustTid (tidEncode 1 1)
+
+-- Distinct paths, so a cap that deduplicated rather than counted would not
+-- pass by accident.
+opAt : Int -> SyncRepoOp
+opAt i =
+  SyncOpCreate (toUtf8 ("app.bsky.feed.post/rec-" ++ intToString i)) recordCid
+
+-- A commit carrying `count` creates. `blocksCar` is empty because nothing
+-- here grades the CAR: the cap under test is on `ops` alone.
+eventWithOps : Int -> SyncCommitEvent
+eventWithOps count = SyncCommitEvent {
+  seq = 1,
+  time = "2026-01-01T00:00:00.000Z",
+  repoDid = "did:plc:medakaexamplerepo",
+  commitCid = commitCid,
+  rev = sampleRev,
+  since = None,
+  prevData = None,
+  blocksCar = [||],
+  ops = map opAt (range 0 count),
+}
+
+bodyField : String -> DagCbor -> Option DagCbor
+bodyField name (DcMap fields) = lookup name fields
+bodyField _ _ = None
+
+-- `DagCbor` derives no `Eq`, so each assertion projects the one field it is
+-- about down to a primitive rather than comparing encoded values.
+asBool : Option DagCbor -> Option Bool
+asBool (Some (DcBool value)) = Some value
+asBool _ = None
+
+-- `-1` for "not an array at all", which no legal length can collide with.
+arrayLen : Option DagCbor -> Int
+arrayLen (Some (DcArray items)) = length items
+arrayLen _ = 0 - 1
+
+tooBigOf : Int -> Option Bool
+tooBigOf count =
+  asBool (bodyField "tooBig" (syncCommitBody (eventWithOps count)))
+
+opsLengthOf : Int -> Int
+opsLengthOf count =
+  arrayLen (bodyField "ops" (syncCommitBody (eventWithOps count)))
+
+test "an ordinary commit reports its ops and is not tooBig" =
+  expectEqual (tooBigOf 3, opsLengthOf 3) (Some False, 3)
+
+test "a commit exactly at the lexicon cap still carries every op" =
+  expectEqual (tooBigOf 200, opsLengthOf 200) (Some False, 200)
+
+test "a commit one op over the cap is reported as tooBig with no ops" =
+  expectEqual (tooBigOf 201, opsLengthOf 201) (Some True, 0)
