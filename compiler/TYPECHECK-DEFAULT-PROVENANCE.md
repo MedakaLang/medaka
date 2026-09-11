@@ -27,9 +27,11 @@ export default interface Supply a where
 ```
 
 A second module imports Supply/copy, supplies only seed=41 in `impl Supply Int`,
-and evaluates `answer : Int; answer = copy`. Additional backend receipts are
-pending proper native oracle setup; interpreting compiler entry source overflowed
-the evaluator and is not a backend verdict.
+and evaluates `answer : Int; answer = copy`. Native typed-Core and Wasm module
+probes also print 41 on `cd42e56f4`; Wasm emission, parsing, validation and Node
+execution all succeed. The same-module specialized-copy control passes checking,
+interpretation, typed-Core and native execution. Proper native probes replaced an
+initial inconclusive attempt to interpret the compiler entry source itself.
 
 A no-prelude mixed default with Rich/Other method qualifiers and a Base superclass
 accepts and observes two direct givens plus one legacy superclass given. It also
