@@ -1,0 +1,207 @@
+{- | Base32 encoding and decoding of bytes, per RFC 4648.
+
+   Bytes are an `Array Int` with each element from `0` to `255`. `base32Encode`
+   uses the lowercase alphabet and never emits `=` padding. `base32Decode`
+   accepts exactly that canonical form: uppercase, `=` padding, non-alphabet
+   characters, non-zero residual bits, and non-canonical lengths are rejected
+   rather than normalized.
+
+   Both build a `List Char`/`List Int` through non-tail recursion, so under
+   the tree-walking interpreter (`medaka run`/`test`) they overflow the
+   stack at a few kilobytes of input; native builds have no such limit. -}
+
+-- base32Encode/base32Decode declare the same signatures as base64's
+-- encode/decode — a signature-only match between two distinct codecs; the
+-- rule has no semantic/type-level check to tell them apart, not a real
+-- duplicate.
+-- lint-disable-file rule-stdlib-reimpl
+
+-- base32/base64/hex property-test helpers share an identical
+-- List Int -> Array Int clamp body by design, same precedent as those two
+-- files.
+-- lint-disable-file rule-duplicate-body
+
+import string.{fromChars, toChars}
+import list.{reverse}
+
+alphabet : String
+alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+
+alphabetChars : Array Char
+alphabetChars = toChars alphabet
+
+alphabetAt : Int -> Char
+alphabetAt i = alphabetChars[i]
+
+byteList : Array Int -> Int -> List Int
+byteList bytes i =
+  if i >= arrayLength bytes then [] else bytes[i] :: byteList bytes (i + 1)
+
+encodeGo : List Int -> Int -> Int -> List Char
+encodeGo [] bits buffer =
+  if bits == 0 then
+    []
+  else
+    [alphabetAt (bitAnd (shiftLeft buffer (5 - bits)) 31)]
+encodeGo (b :: rest) bits buffer =
+  let next = bitOr (shiftLeft buffer 8) b
+  emitGroups rest (bits + 8) next
+
+emitGroups : List Int -> Int -> Int -> List Char
+emitGroups rest bits buffer =
+  if bits < 5 then
+    encodeGo rest bits buffer
+  else
+    let remaining = bits - 5
+    alphabetAt (bitAnd (shiftRight buffer remaining) 31)
+      :: emitGroups rest remaining (bitAnd buffer (shiftLeft 1 remaining - 1))
+
+validBytes : Array Int -> Int -> Bool
+validBytes bytes i =
+  if i >= arrayLength bytes then
+    True
+  else
+    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
+
+{- | The bytes as lowercase, unpadded base32.
+
+   Panics when an element of `bytes` is outside `0..255`.
+
+   > base32Encode [|102, 111, 111|]
+   "mzxw6" -}
+export
+base32Encode : Array Int -> String
+base32Encode bytes =
+  if not (validBytes bytes 0) then
+    panic "base32: input element outside byte range 0..255"
+  else
+    fromChars (encodeGo (byteList bytes 0) 0 0)
+
+-- RFC 4648 test vectors, padding stripped (this module's canonical form has
+-- none).
+-- > base32Encode [||]
+-- ""
+-- > base32Encode [|102|]
+-- "my"
+-- > base32Encode [|102, 111|]
+-- "mzxq"
+-- > base32Encode [|102, 111, 111, 98|]
+-- "mzxw6yq"
+-- > base32Encode [|102, 111, 111, 98, 97|]
+-- "mzxw6ytb"
+-- > base32Encode [|102, 111, 111, 98, 97, 114|]
+-- "mzxw6ytboi"
+
+digit : Char -> Result String Int
+digit c =
+  let n = charCode c
+  if c == '=' then
+    Err "base32: padding is not allowed"
+  else if n >= 65 && n <= 90 then
+    Err "base32: uppercase is not canonical"
+  else if n >= 97 && n <= 122 then
+    if n <= 122 then
+      let d = n - 97
+      if d < 26 then Ok d else Err "base32: invalid alphabet character"
+    else
+      Err "base32: invalid alphabet character"
+  else if n >= 50 && n <= 55 then
+    Ok (n - 24)
+  else
+    Err "base32: invalid alphabet character"
+
+decodeChars : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  List Int ->
+  Result String (List Int, Int, Int)
+decodeChars chars i bits buffer acc =
+  if i >= arrayLength chars then
+    Ok (reverse acc, bits, buffer)
+  else match digit chars[i]
+    Err message => Err message
+    Ok d =>
+      let next = bitOr (shiftLeft buffer 5) d
+      let nextBits = bits + 5
+      if nextBits >= 8 then
+        let remaining = nextBits - 8
+        let b = bitAnd (shiftRight next remaining) 255
+        decodeChars
+          chars
+          (i + 1)
+          remaining
+          (bitAnd next (shiftLeft 1 remaining - 1))
+          (b :: acc)
+      else
+        decodeChars chars (i + 1) nextBits next acc
+
+{- | The bytes written in canonical (lowercase, unpadded) base32.
+
+   `Err` when the input carries padding, uppercase, a non-alphabet
+   character, non-zero trailing bits, or any other non-canonical length.
+
+   > base32Decode "mzxw6"
+   Ok [|102, 111, 111|]
+   > base32Decode "MZXW6"
+   Err "base32: uppercase is not canonical" -}
+export
+base32Decode : String -> Result String (Array Int)
+base32Decode text = match decodeChars (toChars text) 0 0 0 []
+  Err message => Err message
+  Ok (decoded, bits, residual) =>
+    if residual /= 0 then
+      Err "base32: non-zero trailing bits"
+    else
+      let bytes = arrayFromList decoded
+      if base32Encode bytes /= text then
+        Err "base32: non-canonical length"
+      else
+        Ok bytes
+
+-- > base32Decode ""
+-- Ok [||]
+-- > base32Decode "my"
+-- Ok [|102|]
+-- > base32Decode "mzxq"
+-- Ok [|102, 111|]
+-- > base32Decode "mzxw6yq"
+-- Ok [|102, 111, 111, 98|]
+-- > base32Decode "mzxw6ytb"
+-- Ok [|102, 111, 111, 98, 97|]
+-- > base32Decode "mzxw6ytboi"
+-- Ok [|102, 111, 111, 98, 97, 114|]
+-- > base32Decode "a1"
+-- Err "base32: invalid alphabet character"
+
+-- Every RFC 4648 vector, rejected in its uppercase and (where the RFC pads
+-- it) padded forms.
+-- > base32Decode "MY"
+-- Err "base32: uppercase is not canonical"
+-- > base32Decode "MZXQ"
+-- Err "base32: uppercase is not canonical"
+-- > base32Decode "MZXW6"
+-- Err "base32: uppercase is not canonical"
+-- > base32Decode "MZXW6YQ"
+-- Err "base32: uppercase is not canonical"
+-- > base32Decode "MZXW6YTB"
+-- Err "base32: uppercase is not canonical"
+-- > base32Decode "MZXW6YTBOI"
+-- Err "base32: uppercase is not canonical"
+-- > base32Decode "my======"
+-- Err "base32: padding is not allowed"
+-- > base32Decode "mzxq===="
+-- Err "base32: padding is not allowed"
+-- > base32Decode "mzxw6==="
+-- Err "base32: padding is not allowed"
+-- > base32Decode "mzxw6yq="
+-- Err "base32: padding is not allowed"
+-- > base32Decode "mzxw6ytboi======"
+-- Err "base32: padding is not allowed"
+
+toByteArray : List Int -> Array Int
+toByteArray xs = arrayFromList (map (b => (b % 256 + 256) % 256) xs)
+
+prop "base32 round-trip: decode (encode bs) == Ok bs" (xs : List Int) =
+  let bs = toByteArray xs
+  base32Decode (base32Encode bs) == Ok bs

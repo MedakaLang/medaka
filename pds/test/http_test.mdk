@@ -1,41 +1,6 @@
 {- | Focused structural tests for strict bounded HTTP/1.1 request framing. -}
 
-import test.{expectEqual, expectTrue}
-import string.{contains, toUtf8}
-import lib.http.{
-  DecodedBody(..),
-  Header,
-  HttpFrame(..),
-  HttpParseFailure(..),
-  HttpScan,
-  QueryParam(..),
-  Request,
-  Response,
-  decodeRequestBody,
-  headerName,
-  headerValue,
-  httpScanStart,
-  makeHeader,
-  makeResponse,
-  mediaTypeSubtype,
-  mediaTypeType,
-  parseMediaType,
-  parseRequest,
-  parseRequestAt,
-  parseTargetQuery,
-  requestBody,
-  requestHeaders,
-  requestKeepAlive,
-  requestMethod,
-  requestTarget,
-  requestTrailers,
-  scanRequestBoundary,
-  scanRequestBoundaryFrom,
-  scanRequestBoundaryWithin,
-  serializeResponse,
-}
-import lib.resource_limits.{
-  checkJsonBodyBytes,
+import http.{
   checkHttpBodyBytes,
   checkHttpChunks,
   checkHttpHeaderBytes,
@@ -43,9 +8,20 @@ import lib.resource_limits.{
   checkHttpRequestBytes,
   checkHttpRequestLineBytes,
   checkHttpTrailerFields,
+  checkJsonBodyBytes,
   checkRawBodyBytes,
   checkTextBodyBytes,
-  maxJsonBodyBytes,
+  DecodedBody(..),
+  decodeRequestBody,
+  Header,
+  headerName,
+  headerValue,
+  HttpFrame(..),
+  HttpParseFailure(..),
+  HttpScan,
+  httpScanStart,
+  makeHeader,
+  makeResponse,
   maxHttpBodyBytes,
   maxHttpChunks,
   maxHttpHeaderBytes,
@@ -53,9 +29,31 @@ import lib.resource_limits.{
   maxHttpRequestBytes,
   maxHttpRequestLineBytes,
   maxHttpTrailerFields,
+  maxJsonBodyBytes,
   maxRawBodyBytes,
   maxTextBodyBytes,
+  mediaTypeSubtype,
+  mediaTypeType,
+  parseMediaType,
+  parseRequest,
+  parseRequestAt,
+  parseTargetQuery,
+  QueryParam(..),
+  Request,
+  requestBody,
+  requestHeaders,
+  requestKeepAlive,
+  requestMethod,
+  requestTarget,
+  requestTrailers,
+  Response,
+  scanRequestBoundary,
+  scanRequestBoundaryFrom,
+  scanRequestBoundaryWithin,
+  serializeResponse,
 }
+import test.{expectEqual, expectTrue}
+import string.{contains, toUtf8}
 
 isErr : Result e a -> Bool
 isErr (Err _) = True
@@ -720,14 +718,26 @@ everyProperPrefixNeedsMore input size =
     HttpNeedMore => everyProperPrefixNeedsMore input (size + 1)
     _ => False
 
+-- A prefix a later byte could still complete must never report a failure the
+-- server would answer 400 to, and the byte that completes it must frame.
+-- Feeding one byte at a time checks both halves against the same scanner: the
+-- verdict on every proper prefix, and the frame the one-shot parser then
+-- accepts at exactly that length.
+feedOneByteAtATime : Array Int -> Bool
+feedOneByteAtATime input =
+  everyProperPrefixNeedsMore input 0
+    && (match scanRequestBoundary input 0
+      HttpFramedAt at => at == arrayLength input && isOk (parseRequest input)
+      _ => False)
+
 test "scanner and one-shot parser agree across the whole HTTP corpus" =
   expectTrue (allAgree corpus)
 
-test "every proper prefix of a well-formed request asks for more bytes" =
+test "a byte-at-a-time feed asks for more until the completing byte frames it" =
   expectTrue
-    (everyProperPrefixNeedsMore simpleGet 0
-      && everyProperPrefixNeedsMore fixedBinary 0
-      && everyProperPrefixNeedsMore chunked 0)
+    (feedOneByteAtATime simpleGet
+      && feedOneByteAtATime fixedBinary
+      && feedOneByteAtATime chunked)
 
 test "a definitively malformed prefix is rejected rather than left pending" =
   match scanRequestBoundary (toUtf8 "GET / HTTP/1.0\r\n") 0

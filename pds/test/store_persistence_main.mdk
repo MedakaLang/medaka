@@ -34,7 +34,7 @@ import lib.repo.{
   repoList,
   repoMutationState,
 }
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}

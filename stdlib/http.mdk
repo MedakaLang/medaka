@@ -1,30 +1,185 @@
-{- | Pure, bounded HTTP/1.1 request framing for the PDS protocol core.
+{- | Pure, bounded HTTP/1.1 request framing and response building.
 
    The parser accepts exactly one complete origin-form HTTP/1.1 request. It
    preserves field order and duplicates until framing has been validated,
    keeps bodies as raw bytes, and exposes connection lifetime as plain data.
-   No socket, filesystem, or other effect is involved. -}
+   No socket, filesystem, or other effect is involved, so a caller supplies
+   the bytes and decides what to do with the frame. `net` is the socket
+   layer.
+
+   Every ceiling the framer enforces is an exported `max*` value paired with
+   a `check*` predicate, so a caller can test either side of a boundary
+   without building a maximum-sized request. -}
 
 import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
 import byteparser.{BResult(..), runBP, takeSlice}
 import json.{Json, parse}
 import list.{reverse}
 import string.{fromUtf8, toUtf8}
-import lib.resource_limits.{
-  checkJsonBodyBytes,
-  checkHttpBodyBytes,
-  checkHttpChunks,
-  checkHttpHeaderBytes,
-  checkHttpHeaderFields,
-  checkHttpRequestBytes,
-  checkHttpRequestLineBytes,
-  checkHttpTrailerFields,
-  checkRawBodyBytes,
-  checkTextBodyBytes,
-  maxHttpBodyBytes,
-  maxHttpHeaderBytes,
-  maxHttpRequestLineBytes,
-}
+
+-- # Resource limits
+
+{- | The ceiling on one raw request, request line and framing bytes included.
+
+   > maxHttpRequestBytes
+   6291456 -}
+export
+maxHttpRequestBytes : Int
+maxHttpRequestBytes = 6291456
+
+-- | The ceiling on the combined header and trailer sections of one request.
+export
+maxHttpHeaderBytes : Int
+maxHttpHeaderBytes = 65536
+
+-- | The ceiling on one decoded body, after chunked transfer coding is removed.
+export
+maxHttpBodyBytes : Int
+maxHttpBodyBytes = 5242880
+
+-- | The ceiling on one request line.
+export
+maxHttpRequestLineBytes : Int
+maxHttpRequestLineBytes = 8192
+
+-- | The ceiling on the number of header fields in one request.
+export
+maxHttpHeaderFields : Int
+maxHttpHeaderFields = 100
+
+-- | The ceiling on the number of trailer fields in one request.
+export
+maxHttpTrailerFields : Int
+maxHttpTrailerFields = 32
+
+-- | The ceiling on the number of chunks in one chunked body.
+export
+maxHttpChunks : Int
+maxHttpChunks = 65536
+
+-- | The ceiling on a body decoded as JSON by `decodeRequestBody`.
+export
+maxJsonBodyBytes : Int
+maxJsonBodyBytes = 153600
+
+-- | The ceiling on a body decoded as text by `decodeRequestBody`.
+export
+maxTextBodyBytes : Int
+maxTextBodyBytes = 102400
+
+-- | The ceiling on a body kept as raw bytes by `decodeRequestBody`.
+export
+maxRawBodyBytes : Int
+maxRawBodyBytes = 5242880
+
+{- | `Ok` when `size` is within `maxHttpRequestBytes`, `Err` with the
+   diagnostic the framer reports otherwise.
+
+   > isOk (checkHttpRequestBytes maxHttpRequestBytes)
+   True -}
+export
+checkHttpRequestBytes : Int -> Result String Unit
+checkHttpRequestBytes size =
+  if size > maxHttpRequestBytes then
+    Err "http: request exceeds 6291456-byte resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `size` is within `maxHttpHeaderBytes`, `Err` with the
+-- diagnostic the framer reports otherwise.
+export
+checkHttpHeaderBytes : Int -> Result String Unit
+checkHttpHeaderBytes size =
+  if size > maxHttpHeaderBytes then
+    Err
+      "http: combined header and trailer section exceeds 65536-byte resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `size` is within `maxHttpBodyBytes`, `Err` with the diagnostic
+-- the framer reports otherwise.
+export
+checkHttpBodyBytes : Int -> Result String Unit
+checkHttpBodyBytes size =
+  if size > maxHttpBodyBytes then
+    Err "http: decoded body exceeds 5242880-byte resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `size` is within `maxHttpRequestLineBytes`, `Err` with the
+-- diagnostic the framer reports otherwise.
+export
+checkHttpRequestLineBytes : Int -> Result String Unit
+checkHttpRequestLineBytes size =
+  if size > maxHttpRequestLineBytes then
+    Err "http: request line exceeds 8192-byte resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `count` is within `maxHttpHeaderFields`, `Err` with the
+-- diagnostic the framer reports otherwise.
+export
+checkHttpHeaderFields : Int -> Result String Unit
+checkHttpHeaderFields count =
+  if count > maxHttpHeaderFields then
+    Err "http: header field count exceeds 100 resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `count` is within `maxHttpTrailerFields`, `Err` with the
+-- diagnostic the framer reports otherwise.
+export
+checkHttpTrailerFields : Int -> Result String Unit
+checkHttpTrailerFields count =
+  if count > maxHttpTrailerFields then
+    Err "http: trailer field count exceeds 32 resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `count` is within `maxHttpChunks`, `Err` with the diagnostic
+-- the framer reports otherwise.
+export
+checkHttpChunks : Int -> Result String Unit
+checkHttpChunks count =
+  if count > maxHttpChunks then
+    Err "http: chunk count exceeds 65536 resource limit"
+  else
+    Ok ()
+
+{- | `Ok` when `size` is within `maxJsonBodyBytes`, `Err` with the diagnostic
+   `decodeRequestBody` reports otherwise.
+
+   > isErr (checkJsonBodyBytes (maxJsonBodyBytes + 1))
+   True -}
+export
+checkJsonBodyBytes : Int -> Result String Unit
+checkJsonBodyBytes size =
+  if size > maxJsonBodyBytes then
+    Err "http: JSON body exceeds 153600-byte resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `size` is within `maxTextBodyBytes`, `Err` with the diagnostic
+-- `decodeRequestBody` reports otherwise.
+export
+checkTextBodyBytes : Int -> Result String Unit
+checkTextBodyBytes size =
+  if size > maxTextBodyBytes then
+    Err "http: text body exceeds 102400-byte resource limit"
+  else
+    Ok ()
+
+-- | `Ok` when `size` is within `maxRawBodyBytes`, `Err` with the diagnostic
+-- `decodeRequestBody` reports otherwise.
+export
+checkRawBodyBytes : Int -> Result String Unit
+checkRawBodyBytes size =
+  if size > maxRawBodyBytes then
+    Err "http: raw body exceeds 5242880-byte resource limit"
+  else
+    Ok ()
+
+-- # Requests
 
 -- | An ordered HTTP field. Names are canonical lowercase ASCII; values are
 -- raw bytes with surrounding optional whitespace removed.
@@ -68,15 +223,20 @@ resourceExcess : Result String Unit -> Result FrameError Unit
 resourceExcess (Ok ()) = Ok ()
 resourceExcess (Err message) = Err (Fatal (HttpResourceExcess message))
 
+-- | The diagnostic a framing failure carries, whichever class it is.
 export
 httpParseFailureMessage : HttpParseFailure -> String
 httpParseFailureMessage (HttpMalformed message) = message
 httpParseFailureMessage (HttpResourceExcess message) = message
 
+-- | The field's canonical lowercase ASCII name.
 export
 headerName : Header -> String
 headerName (Header name _) = name
 
+-- | The field's raw value bytes, with surrounding optional whitespace
+-- already removed. The result is a copy, so mutating it cannot reach the
+-- header.
 export
 headerValue : Header -> Array Int
 headerValue (Header _ value) = arrayCopy value
@@ -86,22 +246,30 @@ copyHeaders [] = []
 copyHeaders ((Header name value) :: rest) =
   Header name (arrayCopy value) :: copyHeaders rest
 
+-- | The request method token, exactly as it was received.
 export
 requestMethod : Request -> String
 requestMethod (Request method _ _ _ _ _) = method
 
+-- | The origin-form request target, still percent-encoded. `parseTargetQuery`
+-- splits and decodes it.
 export
 requestTarget : Request -> String
 requestTarget (Request _ target _ _ _ _) = target
 
+-- | The header fields in received order, duplicates retained.
 export
 requestHeaders : Request -> List Header
 requestHeaders (Request _ _ headers _ _ _) = copyHeaders headers
 
+-- | The trailer fields in received order, empty for a request that was not
+-- chunked.
 export
 requestTrailers : Request -> List Header
 requestTrailers (Request _ _ _ trailers _ _) = copyHeaders trailers
 
+-- | The decoded body bytes, with any chunked transfer coding removed. The
+-- result is a copy; `requestBodyLength` reports the length without one.
 export
 requestBody : Request -> Array Int
 requestBody (Request _ _ _ _ body _) = arrayCopy body
@@ -111,6 +279,8 @@ export
 requestBodyLength : Request -> Int
 requestBodyLength (Request _ _ _ _ body _) = arrayLength body
 
+-- | Whether the connection stays open after this request, as its Connection
+-- field settled it.
 export
 requestKeepAlive : Request -> Bool
 requestKeepAlive (Request _ _ _ _ _ keepAlive) = keepAlive
@@ -1112,6 +1282,8 @@ export
 parseRequestClassified : Array Int -> Result HttpParseFailure Request
 parseRequestClassified input = settle (parseWholeBuffer input)
 
+-- # Incremental framing
+
 -- | Where a scan over a byte buffer stopped. `HttpNeedMore` is the one verdict
 -- more bytes can change; `HttpFramedAt` reports the index one past the last
 -- byte of the framed request, which is where the next one begins.
@@ -1131,7 +1303,7 @@ requestBytesVerdict size framed = match checkHttpRequestBytes size
    only grown at its end, and gets a fresh one to carry to the next read.
 
    A state is only meaningful for the buffer prefix it was produced from. Any
-   other buffer, or a different `start`, needs `httpScanStart` again — which is
+   other buffer, or a different `start`, needs `httpScanStart` again, which is
    what a caller does at a request boundary, since the next request is a new
    scan. Nothing is lost by starting over: a fresh state reaches exactly the
    verdict a resumed one does. -}
@@ -1143,11 +1315,11 @@ httpScanStart : HttpScan
 httpScanStart = HttpScan 0 (PhaseLine 0)
 
 {- | Whether a scan that has not yet framed a request is still inside the
-   request line or the header fields — that is, the request's header section
-   has not been terminated. Only this module can answer it, `ScanPhase` being
-   private, and a caller that budgets the header phase apart from the body
-   (`pds/shell/server.mdk`) has no other way to tell the two apart. A scan
-   that already framed a request reports False: its header section ended. -}
+   request line or the header fields, meaning the request's header section has
+   not been terminated. Only this module can answer it, the scan's phase being
+   private, so a caller that budgets the header phase apart from the body has
+   no other way to tell the two apart. A scan that already framed a request
+   reports False: its header section ended. -}
 export
 httpScanInHeaders : HttpScan -> Bool
 httpScanInHeaders (HttpScan _ (PhaseLine _)) = True
@@ -1233,29 +1405,21 @@ parseRequestAt input start end =
   else
     parseRequestClassified (slice input start (end - start))
 
--- | Compatibility wrapper retaining the original diagnostic-facing API.
+-- | Parse one complete request, reporting a failure as its diagnostic alone.
+-- `parseRequestClassified` keeps the structural class a caller needs to
+-- choose 400 against 413.
 export
 parseRequest : Array Int -> Result String Request
 parseRequest input = match parseRequestClassified input
   Ok request => Ok request
   Err failure => Err (httpParseFailureMessage failure)
 
+-- # Responses
+
 -- | A buffered HTTP response. The constructor is private: responses can only
 -- be obtained through `makeResponse`, after their status line and fields have
 -- been checked for response splitting and reserved framing fields.
 export data Response = Response Int String (List Header) (Array Int)
-
--- | A parsed, canonical media type. Parameters are validated by
--- `parseMediaType` but are not retained because Phase 2 routing only depends
--- on the lowercased type and subtype.
-export data MediaType = MediaType String String
-
-public export data DecodedBody =
-  | JsonBody MediaType Json
-  | TextBody MediaType String
-  | RawBody MediaType (Array Int)
-
-public export data QueryParam = QueryParam String String
 
 validResponseValue : Array Int -> Int -> Bool
 validResponseValue value i =
@@ -1314,14 +1478,19 @@ makeResponse status reason headers body =
   else
     Ok (Response status reason (copyHeaders headers) (arrayCopy body))
 
+-- | The response status code.
 export
 responseStatus : Response -> Int
 responseStatus (Response status _ _ _) = status
 
+-- | The caller's response fields in the order they were supplied. The
+-- computed Content-Length is added by `serializeResponse` and is not among
+-- them.
 export
 responseHeaders : Response -> List Header
 responseHeaders (Response _ _ headers _) = copyHeaders headers
 
+-- | The response body bytes.
 export
 responseBody : Response -> Array Int
 responseBody (Response _ _ _ body) = arrayCopy body
@@ -1355,6 +1524,24 @@ serializeResponse (Response status reason headers body) =
   emitAscii "\r\n\r\n" out
   emitArray body 0 out
   buildArray out
+
+-- # Targets, media types, and bodies
+
+-- | A parsed, canonical media type, holding only the lowercased type and
+-- subtype. `parseMediaType` validates any parameters but does not retain
+-- them.
+export data MediaType = MediaType String String
+
+-- | A request body decoded according to its media type. JSON and text are
+-- strictly UTF-8; every other media type keeps its raw bytes.
+public export data DecodedBody =
+  | JsonBody MediaType Json
+  | TextBody MediaType String
+  | RawBody MediaType (Array Int)
+
+-- | One decoded query parameter: its name and its value, empty when the
+-- query gave it none.
+public export data QueryParam = QueryParam String String
 
 percentNibble : Int -> Option Int
 percentNibble byte = hexDigit byte
@@ -1548,10 +1735,12 @@ parseTargetQuery (Request _ target _ _ _ _) =
           params <- parseQueryFields bytes (queryAt + 1) []
           Ok (path, params)
 
+-- | The lowercased type, such as `"text"` for `text/plain`.
 export
 mediaTypeType : MediaType -> String
 mediaTypeType (MediaType kind _) = kind
 
+-- | The lowercased subtype, such as `"plain"` for `text/plain`.
 export
 mediaTypeSubtype : MediaType -> String
 mediaTypeSubtype (MediaType _ subtype) = subtype

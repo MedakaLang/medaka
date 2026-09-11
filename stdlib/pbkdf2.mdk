@@ -1,0 +1,85 @@
+{- | PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2), the password-hashing key
+   derivation function.
+
+   A password, a salt and the derived key are each an `Array Int` with every
+   element from `0` to `255`. The caller supplies the salt; nothing here
+   draws entropy, reads a clock, or performs any I/O. -}
+
+import array.{blit, concat, copy, make, setInPlace}
+import hmac.{hmacSha256}
+
+hashBytes : Int
+hashBytes = 32
+
+-- Big-endian 4-byte encoding of the PBKDF2 block index (RFC 2898 §5.2,
+-- `INT (i)`).
+int32Be : Int -> Array Int
+int32Be n = [|
+  bitAnd (shiftRight n 24) 255,
+  bitAnd (shiftRight n 16) 255,
+  bitAnd (shiftRight n 8) 255,
+  bitAnd n 255,
+|]
+
+xorInto : Array Int -> Array Int -> Int -> Unit
+xorInto acc u i =
+  if i >= arrayLength acc then
+    ()
+  else
+    let () = setInPlace i (bitXor acc[i] u[i]) acc
+    xorInto acc u (i + 1)
+
+-- Folds U_2 .. U_iterations into `acc` (already seeded with U_1), each
+-- `Uj = HMAC(P, U_{j-1})`, XORing every one in (RFC 2898 §5.2 `F`).
+foldU : Array Int -> Int -> Array Int -> Array Int -> Int -> Array Int
+foldU password iterations acc prevU j =
+  if j >= iterations then
+    acc
+  else
+    let u = hmacSha256 password prevU
+    let () = xorInto acc u 0
+    foldU password iterations acc u (j + 1)
+
+-- One 32-byte PBKDF2 block `T_blockIndex` (RFC 2898 §5.2 `F(P, S, c, i)`).
+pbkdf2Block : Array Int -> Array Int -> Int -> Int -> Array Int
+pbkdf2Block password salt iterations blockIndex =
+  let u1 = hmacSha256 password (concat [|salt, int32Be blockIndex|])
+  let acc = copy u1
+  foldU password iterations acc u1 1
+
+buildBlocks : Array Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  Array Int
+buildBlocks password salt iterations dkLen total out blockIndex =
+  if blockIndex > total then
+    out
+  else
+    let block = pbkdf2Block password salt iterations blockIndex
+    let offset = (blockIndex - 1) * hashBytes
+    let remaining = dkLen - offset
+    let take = min remaining hashBytes
+    let () = blit block 0 out offset take
+    buildBlocks password salt iterations dkLen total out (blockIndex + 1)
+
+{- | The `dkLen`-byte key derived from `password` and `salt` by RFC 2898's
+   PBKDF2 with HMAC-SHA-256.
+
+   `salt` is caller-supplied; this function never draws entropy itself.
+   Panics when `iterations` or `dkLen` is less than 1, and when any element
+   of `password` or `salt` is outside `0` to `255`. -}
+export
+pbkdf2HmacSha256 : Array Int -> Array Int -> Int -> Int -> Array Int
+pbkdf2HmacSha256 password salt iterations dkLen =
+  if iterations < 1 then
+    panic "pbkdf2: iterations must be >= 1"
+  else if dkLen < 1 then
+    panic "pbkdf2: dkLen must be >= 1"
+  else
+    let total = (dkLen + hashBytes - 1) / hashBytes
+    let out = make dkLen 0
+    buildBlocks password salt iterations dkLen total out 1

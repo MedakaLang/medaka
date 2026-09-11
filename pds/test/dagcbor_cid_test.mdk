@@ -5,7 +5,7 @@
 import array as A
 import string.{contains, toLower}
 import test.{expectEqual, expectTrue}
-import lib.base32.{base32Decode, base32Encode}
+import base32.{base32Decode, base32Encode}
 import lib.cid.{
   cidDigest,
   cidEqual,

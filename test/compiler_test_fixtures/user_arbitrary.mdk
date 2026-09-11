@@ -8,7 +8,14 @@
 -- typechecking for a prop-only, doctest-free module (#1229), so without one
 -- nothing here would prove the instance is well-typed.
 
+-- Regression for #2813 case 2: the instance was consulted only for a prop
+-- parameter's OWN top-level type, so `Color` reached as a FIELD of `Wrap` was
+-- still drawn structurally.  `wrapIsRed` fails within a handful of structural
+-- draws for the same reason `isRed` does.
+
 data Color = Red | Green deriving (Eq, Debug)
+
+data Wrap = Wrap Color deriving (Eq, Debug)
 
 -- > isRed Red
 -- True
@@ -21,4 +28,13 @@ isRed Green = False
 impl Arbitrary Color where
   arbitrary () = Red
 
+-- > wrapIsRed (Wrap Red)
+-- True
+-- > wrapIsRed (Wrap Green)
+-- False
+wrapIsRed : Wrap -> Bool
+wrapIsRed (Wrap c) = isRed c
+
 prop "user generator is honored" (c : Color) = isRed c
+
+prop "user generator is honored at a nested field" (w : Wrap) = wrapIsRed w

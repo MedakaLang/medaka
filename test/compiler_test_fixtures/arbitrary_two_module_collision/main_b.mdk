@@ -1,0 +1,8 @@
+-- `main_a.mdk`'s mirror: same two modules in the same load order, but the prop
+-- is over `b`'s `Color`, whose instance is the SECOND candidate under the shared
+-- route word.  Every case must be `Blue`.
+import a
+import b.{Color(..), tag}
+
+prop "b's own Arbitrary instance is what b's Color draws from" (c : Color) =
+  tag c == "b-blue"

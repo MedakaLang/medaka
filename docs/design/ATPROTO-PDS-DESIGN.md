@@ -227,7 +227,7 @@ it against the implementation rather than copying it from here.
 - `pds/lib/scalar.mdk` — arithmetic modulo the group order `n`. Separate from `field`
   on purpose: it runs a few times per signature rather than thousands, so it takes the
   simpler, slower representation and shares no code.
-- `pds/lib/sha256.mdk` — straightforward 32-bit-word FIPS 180-4. The easiest module
+- `stdlib/sha256.mdk` — straightforward 32-bit-word FIPS 180-4. The easiest module
   in this document and the one with the best-published vectors.
 - `pds/lib/secp256k1.mdk` — field arithmetic, point add/double in Jacobian
   coordinates, scalar multiplication, **RFC 6979 deterministic `k`**, low-S
@@ -302,10 +302,10 @@ PDS ever shipping.
 
 Account bootstrap and `createSession` (both landed, §6 Phase 4) need to turn a
 user password into a storable credential without keeping the password itself. Chosen
-algorithm: **PBKDF2-HMAC-SHA-256** (`pds/lib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
+algorithm: **PBKDF2-HMAC-SHA-256** (`stdlib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
 this server signs and serves one account, so there is no attacker-throughput budget
 that a memory-hard KDF is defending against, and PBKDF2-HMAC-SHA-256 reuses the
-already-audited `pds/lib/sha256.mdk` rather than adding a new primitive family. It is
+already-audited `stdlib/sha256.mdk` rather than adding a new primitive family. It is
 also RFC-vectored (RFC 7914 §11), keeping it inside G1's cross-implementation-agreed
 corpus discipline rather than resting on a self-captured golden (G5).
 

@@ -1,18 +1,20 @@
 {- | Focused structural XRPC registry, routing, and canonical-error tests. -}
 
-import json.{stringify}
-import string.{toUtf8}
-import test.{expectEqual, expectTrue}
-import lib.http.{
-  QueryParam(..),
-  Request,
+import http.{
+  maxJsonBodyBytes,
+  maxRawBodyBytes,
+  maxTextBodyBytes,
   mediaTypeSubtype,
   mediaTypeType,
   parseRequest,
+  QueryParam(..),
+  Request,
   serializeResponse,
 }
+import json.{stringify}
+import string.{toUtf8}
+import test.{expectEqual, expectTrue}
 import lib.nsid.{validateNsid}
-import lib.resource_limits.{maxJsonBodyBytes, maxRawBodyBytes, maxTextBodyBytes}
 import lib.xrpc.{
   AuthPolicy(..),
   Endpoint,

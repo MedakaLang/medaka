@@ -6,19 +6,19 @@
    deterministic response serialization. No filesystem, socket, clock, async,
    or other effect is available in this module. -}
 
-import string.{fromUtf8, splitAt, toLower}
-import lib.atsyntax.{validateDid, validateHandle}
-import lib.http.{
+import http.{
   Header,
-  HttpParseFailure(..),
-  Request,
-  Response,
   headerName,
   headerValue,
+  HttpParseFailure(..),
   parseRequestClassified,
+  Request,
   requestHeaders,
+  Response,
   serializeResponse,
 }
+import string.{fromUtf8, splitAt, toLower}
+import lib.atsyntax.{validateDid, validateHandle}
 import lib.jwt.{Claims(..), JwtError(..), verifyToken}
 import lib.store.{
   Store,

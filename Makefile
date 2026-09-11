@@ -136,6 +136,22 @@ test: medaka
 	## is a host primitive the interpreter does not bind (`listDir` panics with
 	## `unbound identifier` under it), so the interpreter arm can only report a
 	## crash, never a pass.
+	## S-hashes: stdlib/hmac.mdk's RFC 4231 / boundary-key-length checks. Its
+	## own module is outside every entry's import closure ([W-MODULE-BLIND]),
+	## and it is not in test/diff_compiler_test.sh's explicit file list, so
+	## without this line nothing would run them and reverting the variable-key
+	## schedule would be caught by nothing.
+	./medaka test stdlib/hmac.mdk
+	## S-base32: stdlib/base32.mdk's RFC 4648 vectors and canonical-rejection
+	## checks. Its own module is outside every entry's import closure
+	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_test.sh's explicit
+	## file list, so without this line nothing would run them.
+	./medaka test stdlib/base32.mdk
+	## stdlib/http.mdk's resource-limit examples. Its own module is outside
+	## every entry's import closure ([W-MODULE-BLIND]) and is not in
+	## test/diff_compiler_test.sh's explicit file list, so without this line
+	## nothing would run them.
+	./medaka test stdlib/http.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
@@ -144,6 +160,12 @@ test: medaka
 	## `--native`: every property here parses real fixture files, an extern
 	## `medaka test`'s interpreter policy does not bind.
 	./medaka test --native compiler/tools/lint_test.mdk
+	## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
+	## is outside every entry's import closure ([W-MODULE-BLIND]), so without
+	## this line its `rngNextLocal` distribution regression (both Bool values
+	## appear across a run of draws, not a fixed alternation) would be a
+	## fixture that never executes.
+	./medaka test compiler/tools/prop_runner_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

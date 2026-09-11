@@ -498,5 +498,36 @@ case "$ki_json$ki_json_rc" in
     printf '  got:  [%s] rc=%s\n' "$ki_json" "$ki_json_rc" ;;
 esac
 
+# ── test --json carries the engine and a real location ────────────────────
+# `medaka test --json` had no gate anywhere: the plain-text `test/` goldens
+# above pin the human report and nothing pinned the machine one, so the two
+# fields an agent reads a `tests` entry BY could both regress silently.
+# Asserted on CONTENT rather than against a golden, because the report embeds
+# the target path and a golden would pin the harness's cwd along with it.
+#
+# `"engine"` is asserted at the TOP LEVEL specifically — each `tests` entry
+# carries its own `"engine"` too, so a top-level regression is invisible to a
+# bare substring search. `"file"` is the first field of the envelope
+# (cliTestReportJson, compiler/tools/test_cmd.mdk), so `","engine":"eval",`
+# can only match after it closes; a nested one is preceded by a bare comma.
+#
+# The fixture's single `test` decl has a bare-operator body, the shape with no
+# span of its own to read a location off — `"line":0` is what reading one off
+# it yields, and is what this rejects.
+tj_f="$FIX/test/test_decl_json.mdk"
+tj_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test --json "$tj_f" 2>/dev/null)"
+tj_rc=$?
+tj_ok=1
+case "$tj_json" in '{"file":"'*'","engine":"eval",'*) ;; *) tj_ok=0 ;; esac
+case "$tj_json" in *'"name":"a bare binop body still reports its own line","line":'*'"status":"pass"'*) ;; *) tj_ok=0 ;; esac
+case "$tj_json" in *'"line":0,'*) tj_ok=0 ;; esac
+if [ "$tj_ok" -eq 1 ] && [ "$tj_rc" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   test/json-engine-and-line\n'
+else
+  fail=$((fail+1))
+  printf 'FAIL test/json-engine-and-line (want a top-level "engine":"eval", the test entry passing at a NONZERO line, exit 0)\n'
+  printf '  got:  [%s] rc=%s\n' "$tj_json" "$tj_rc"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -1,47 +1,70 @@
 {- | Direct unit coverage for `ReadBuffer`'s capacity arithmetic
-   (`pds/shell/server.mdk`).
+   (`pds/shell/server.mdk`) and for the `vector.pushArray`/`vector.rawParts`
+   it is built from (#2859).
 
    The accumulation buffer's only other exercise is a live 5 MiB upload in
    `pds/test/serve_e2e.sh` (case 4d), which needs a socket, a server process
    and several seconds, and reports one bit. The arithmetic itself is pure:
-   `growCapacity` is a function of two integers, and `readBufferAppend`'s two
-   `blit` calls are a function of the live count. That is what this file
-   asserts — every doubling boundary, and that the live bytes after many
-   small appends are exactly the appended bytes in order, with the spare
-   capacity invisible to `readBufferLive`. -}
+   `readBufferAppend` is `vector.pushArray`, and `readBufferBacking` is
+   `vector.rawParts`'s first half — this file asserts the growth-boundary
+   and zero-copy properties directly against `Vector`, then again through
+   `ReadBuffer`'s end-to-end wrapping, so a regression in either the
+   stdlib API or the fold onto it shows up here. -}
 
 import array.{fromList}
 import shell.server.{
   ReadBuffer,
-  growCapacity,
   readBufferAppend,
   readBufferBacking,
   readBufferLen,
   readBufferLive,
   readBufferNew,
 }
-import test.{expectEqual}
+import test.{expectAll, expectEqual}
+import vector.{capacity, fromArray, get, new, pushArray, rawParts}
 
--- # (a) The doubling function itself
+-- # `vector.pushArray`/`vector.rawParts` directly
 
-test "growCapacity keeps a capacity that already fits" =
-  expectEqual 4096 (growCapacity 4096 3000)
+test "pushArray into an empty vector allocates the smallest doubling that fits" =
+  let v = new ()
+  let () = pushArray (fromList [1]) v
+  expectEqual 1 (capacity v)
 
-test "growCapacity of an unallocated store starts doubling from 1" =
-  expectEqual 1 (growCapacity 0 1)
+test "pushArray doubles past the requested size, not to it" =
+  let v = new ()
+  let () = pushArray (fromList [1, 2, 3]) v
+  expectEqual 4 (capacity v)
 
-test "growCapacity doubles past the requested size, not to it" =
-  expectEqual 4 (growCapacity 0 3)
+test "pushArray of nothing into nothing allocates nothing" =
+  let v = new ()
+  let () = pushArray (fromList []) v
+  expectEqual 0 (capacity v)
 
-test "growCapacity doubles an allocated store" =
-  expectEqual 16 (growCapacity 8 9)
+-- 128 is the smallest doubling of 1 that is at least 80: a single call
+-- crosses every boundary from 1 to 128 (1, 2, 4, 8, 16, 32, 64, 128) in one
+-- grow, not seven. `push`'s own doubling can never need more than one `* 2`
+-- step per call because it adds one element at a time; this is the case
+-- that distinguishes `pushArray` from a naive "call `push` `n` times."
+test "pushArray spanning many doubling boundaries in one call grows once, to the smallest doubling that holds it" =
+  let v = new ()
+  let () = pushArray (arrayMakeWith 80 (i => i)) v
+  expectAll [expectEqual 128 (capacity v), expectEqual 80 (length v)]
 
--- A zero-byte append must not allocate: `needed > arrayLength !backing` is
--- false for a zero-length request against a zero-length store.
-test "growCapacity of nothing into nothing stays nothing" =
-  expectEqual 0 (growCapacity 0 0)
+test "rawParts reports the live length, not the backing capacity" =
+  let v = new ()
+  let () = pushArray (fromList [1, 2, 3]) v
+  let (_, liveLen) = rawParts v
+  expectEqual 3 liveLen
 
--- # (b) The buffer's own growth
+-- `rawParts` hands back the vector's OWN backing array, not a copy: writing
+-- through it must be visible back through the vector's own reads.
+test "rawParts is zero-copy: mutating through it is visible in the vector" =
+  let v = fromArray (fromList [10, 20, 30])
+  let (backing, _) = rawParts v
+  let () = arraySetUnsafe 1 99 backing
+  expectEqual (Some 99) (get 1 v)
+
+-- # The buffer's own growth
 
 -- How many three-byte chunks `filled` is built from, and the live count that
 -- implies. 1000 chunks cross every doubling boundary from 4 to 4096.

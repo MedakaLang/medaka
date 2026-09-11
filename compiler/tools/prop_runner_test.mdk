@@ -1,0 +1,61 @@
+-- Sibling test module for `compiler/tools/prop_runner.mdk`.
+--
+-- A `*_test.mdk` file lives beside its subject and is NOT compiler source:
+-- excluded from the source fingerprint and the snapshot corpus. See
+-- AGENTS.md's `[P-TEST-SIBLING]`.
+--
+-- Distribution regression for `rngNextLocal`'s bit extraction (#2344): before
+-- the fix, an odd multiplier and odd increment made the low bit of
+-- consecutive draws strictly alternate, so `randBoolL` drew a fixed
+-- true/false/true/false… pattern instead of a genuine sample. This pins the
+-- observable symptom directly against the runner's own private RNG
+-- (`seedPropRng`/`randBoolL`), independent of any `prop`'s randomized-length
+-- `List Bool` generation.
+
+import test.{expectTrue}
+import tools.prop_runner.{seedPropRng, randBoolL}
+import list.{nub}
+
+drawBools : Int -> List Bool
+drawBools 0 = []
+drawBools n = randBoolL () :: drawBools (n - 1)
+
+hasTrue : List Bool -> Bool
+hasTrue [] = False
+hasTrue (x :: xs) = x || hasTrue xs
+
+hasFalse : List Bool -> Bool
+hasFalse [] = False
+hasFalse (x :: xs) = not x || hasFalse xs
+
+-- True iff every adjacent pair of draws differs — the exact pre-fix symptom.
+strictlyAlternates : List Bool -> Bool
+strictlyAlternates [] = True
+strictlyAlternates (_ :: []) = True
+strictlyAlternates (a :: b :: rest) = a /= b && strictlyAlternates (b :: rest)
+
+test "a run of Bool draws hits both values and is not a fixed alternation" =
+  let _ = seedPropRng 123456789
+  let draws = drawBools 100
+  expectTrue (hasTrue draws && hasFalse draws && not (strictlyAlternates draws))
+
+-- Bit-window periodicity regression (#2344 slice 1 residual): a shift/
+-- truncate fix (`s / 256`) still leaves every contiguous bit-window of the
+-- LCG state with a short period at its own low end, so an 8-tuple of
+-- consecutive draws only ever reaches a small fraction of the 256 possible
+-- assignments no matter how many are drawn. Encode each run of 8 draws as
+-- an 8-bit Int and count distinct values directly, rather than relying on a
+-- `prop`'s shrinking to expose it.
+boolsToBits : List Bool -> Int
+boolsToBits [] = 0
+boolsToBits (True :: rest) = 2 * boolsToBits rest + 1
+boolsToBits (False :: rest) = 2 * boolsToBits rest
+
+drawTuples : Int -> List Int
+drawTuples 0 = []
+drawTuples n = boolsToBits (drawBools 8) :: drawTuples (n - 1)
+
+test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
+  let _ = seedPropRng 123456789
+  let tuples = drawTuples 625  -- 625 * 8 = 5000 raw draws
+  expectTrue (length (nub tuples) >= 200)

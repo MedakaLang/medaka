@@ -4,49 +4,20 @@
    different public length here keeps accidental variable-key HMAC out of the
    secret-bearing path. Message lengths are fixed by the caller to 32, 33, or
    97 bytes, so both SHA-256 block counts and all allocation sizes are fixed
-   for each schedule site. -}
+   for each schedule site.
 
-import lib.sha256.{sha256FixedBytes}
-import array as A
+   The schedule itself is `stdlib/hmac.mdk`'s. This module is the length
+   guard, not a second implementation of it. -}
 
-blockBytes : Int
-blockBytes = 64
+-- The whole point of this declaration is that it shares `hmac.hmacSha256`'s
+-- signature while refusing every key length but 32, so "use the stdlib
+-- version" is the one remedy that cannot apply here.
+-- lint-disable-file rule-stdlib-reimpl
+
+import hmac.{hmacSha256FixedBytes}
 
 keyBytes : Int
 keyBytes = 32
-
-digestBytes : Int
-digestBytes = 32
-
-fillKeyPad : Array Int -> Array Int -> Int -> Int -> Unit
-fillKeyPad key out pad i =
-  if i >= keyBytes then
-    ()
-  else
-    let () = A.setInPlace i (bitXor key[i] pad) out
-    fillKeyPad key out pad (i + 1)
-
-keyPad : Array Int -> Int -> Array Int
-keyPad key pad =
-  let out = arrayMake blockBytes pad
-  let () = fillKeyPad key out pad 0
-  out
-
-copyBytes : Array Int -> Array Int -> Int -> Int -> Unit
-copyBytes input out offset i =
-  if i >= arrayLength input then
-    ()
-  else
-    let () = A.setInPlace (offset + i) input[i] out
-    copyBytes input out offset (i + 1)
-
-joined : Array Int -> Array Int -> Array Int
-joined prefix suffix =
-  let prefixLen = arrayLength prefix
-  let out = arrayMake (prefixLen + arrayLength suffix) 0
-  let () = copyBytes prefix out 0 0
-  let () = copyBytes suffix out prefixLen 0
-  out
 
 -- | Signing-internal HMAC. The key length is deliberately exact; all RFC
 --   state keys are SHA-256 digests and therefore 32 bytes.
@@ -56,9 +27,4 @@ hmacSha256FixedKey key message =
   if arrayLength key /= keyBytes then
     panic "hmac_sha256: expected a 32-byte key"
   else
-    let inner = sha256FixedBytes (joined (keyPad key 0x36) message)
-    let outerInput = joined (keyPad key 0x5c) inner
-    if arrayLength outerInput /= blockBytes + digestBytes then
-      panic "hmac_sha256: internal digest length invariant failed"
-    else
-      sha256FixedBytes outerInput
+    hmacSha256FixedBytes key message

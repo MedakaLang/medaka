@@ -49,7 +49,12 @@
 #   test/compiler_test_fixtures/user_arbitrary.mdk  GH #2292: a prop parameter
 #     at an argument-free user-defined type is drawn through that type's
 #     `Arbitrary` instance, not structurally. Passes only when the instance is
-#     honored; a structural draw fails it within a few tests.
+#     honored; a structural draw fails it within a few tests. GH #2813 case 2
+#     extends it to a nested FIELD of that type, which was still structural.
+#   test/compiler_test_fixtures/arbitrary_constrained_instance.mdk  GH #2813
+#     case 3: an `Arbitrary` instance the runner cannot draw through must be
+#     reported rather than silently replaced by the structural draw. Driven by
+#     its own block below (the diagnostic is a panic, not golden output).
 #   test/compiler_test_fixtures/arbitrary_name_collision/  two modules spelling
 #     one type name, an `Arbitrary` instance at only one of them. The runner
 #     must decide on the type's IDENTITY, not on its spelling: keyed on the
@@ -57,6 +62,13 @@
 #     other module's type, which reaches the prop body as a foreign value.
 #     Driven by its own block below (a multi-module project has no single
 #     `.test.golden`).
+#   test/compiler_test_fixtures/arbitrary_two_module_collision/  GH #2820: the
+#     same two spellings, but an instance at BOTH, across four entries — each
+#     type named from each import order. Driven by its own block below.
+#   test/compiler_test_fixtures/shrink_not_called.mdk  GH #2812: the runner's
+#     own reduction strategy, not `Arbitrary.shrink`, produces a counterexample.
+#     Driven by its own block below (the claim is which value is REPORTED, and
+#     a golden diff would not say which of the two answers it recorded).
 #
 # DEFERRED (pre-existing compiler/native gaps, NOT gate-rerooting regressions):
 #   error-path doctests — compiler eval has no per-binding panic recovery.
@@ -330,6 +342,81 @@ if printf '%s' "$anc_out" | grep -qF "prop_runner: no generator for type 'Color'
   pass=$((pass + 1)); printf 'ok   arbitrary_name_collision (an Arbitrary instance is chosen by type identity, not by spelling)\n'
 else
   fail=$((fail + 1)); printf 'FAIL arbitrary_name_collision: expected the no-generator report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$anc_code" "$anc_out"
+fi
+
+# GH #2820, the OPPOSITE shape to arbitrary_name_collision above: BOTH modules
+# spell a `Color` and BOTH declare an `Arbitrary` instance for their own, so one
+# impl route word carries two runtime candidates (`implRouteKeyWord` renders the
+# head spelling and nothing else). Each prop is over a specific, resolvable
+# module's `Color`, so each must draw from THAT module's instance.
+#
+# Four entries, not one: an alias-qualified name is a parse error in type
+# position, so a single file can name only one of the two `Color`s. They are the
+# SET this arm exists for -- a fix that always takes the first candidate passes
+# main_a and fails main_b, and one arm alone cannot tell the two apart.
+# Asserted on CONTENT: the declining base and a wrong-candidate pick both exit
+# nonzero, and the wrong pick's shape varies (a non-exhaustive match here, a
+# dispatch panic for other constructor arities).
+#
+# The `2` entries vary the second, independent axis: WHICH type the prop is over
+# and WHICH order the two modules were imported in are separate questions, and
+# the candidate list under the shared route word is built in load order. main_a
+# and main_a2 name the same type from opposite load orders, so a fix keyed on
+# position rather than on the resolved type's own identity splits the pair.
+atmc_dir="$ROOT/test/compiler_test_fixtures/arbitrary_two_module_collision"
+for atmc_entry in main_a main_b main_a2 main_b2; do
+  case "$atmc_entry" in
+    main_a|main_a2) atmc_want="a's own Arbitrary instance is what a's Color draws from" ;;
+    *)              atmc_want="b's own Arbitrary instance is what b's Color draws from" ;;
+  esac
+  atmc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$atmc_dir/$atmc_entry.mdk" "$atmc_dir" 2>&1 | sed "s#$ROOT/##g")"
+  atmc_code=0
+  run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$atmc_dir/$atmc_entry.mdk" "$atmc_dir" >/dev/null 2>&1 || atmc_code=$?
+  if printf '%s' "$atmc_out" | grep -qF "Testing \"$atmc_want\" ... OK (100 tests)" \
+    && printf '%s' "$atmc_out" | grep -qF "1 passed, 0 failed" \
+    && [ "$atmc_code" -eq 0 ]; then
+    pass=$((pass + 1)); printf 'ok   arbitrary_two_module_collision/%s.mdk (two same-spelled types BOTH carrying an Arbitrary instance still resolve)\n' "$atmc_entry"
+  else
+    fail=$((fail + 1)); printf 'FAIL arbitrary_two_module_collision/%s.mdk: expected the prop to pass from its OWN module instance\n  --- actual (exit %d) ---\n%s\n' "$atmc_entry" "$atmc_code" "$atmc_out"
+  fi
+done
+
+# GH #2813 case 3: an `Arbitrary` instance the runner cannot draw through (it is
+# constrained, or stands at an applied head) must be REPORTED, not silently
+# dropped in favor of the structural draw. Asserted on CONTENT for the same
+# reason the collision arm is: the silent-drop answer also exits nonzero, with a
+# structural `Node …` counterexample.
+aci="$ROOT/test/compiler_test_fixtures/arbitrary_constrained_instance.mdk"
+aci_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$aci" "$ROOT/test/compiler_test_fixtures" 2>&1 | sed "s#$ROOT/##g")"
+aci_code=0
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$aci" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1 || aci_code=$?
+if printf '%s' "$aci_out" | grep -qF "the 'Arbitrary' instance for 'Tree' cannot be drawn from" \
+  && ! printf '%s' "$aci_out" | grep -qF "Counterexample" \
+  && [ "$aci_code" -ne 0 ]; then
+  pass=$((pass + 1)); printf 'ok   arbitrary_constrained_instance (an unusable Arbitrary instance is reported, not ignored)\n'
+else
+  fail=$((fail + 1)); printf 'FAIL arbitrary_constrained_instance: expected the unusable-instance report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$aci_code" "$aci_out"
+fi
+
+# GH #2812: the runner reduces a counterexample with its own internal strategy
+# (`shrinkValue`/`shrinkInt`, compiler/tools/prop_runner.mdk), which has no arm
+# for a user ADT — `Arbitrary.shrink` is declared but never consulted. The
+# fixture's instance draws `Wrap 500` deterministically and its `shrink` names
+# `Wrap 0`, so the two answers are distinguishable in the report itself.
+# Asserted on CONTENT, not on a golden: a consulted `shrink` fails the prop the
+# same way and exits nonzero too — only the reported counterexample separates
+# them, and `Wrap 0`'s ABSENCE is the half that carries the claim.
+snc="$ROOT/test/compiler_test_fixtures/shrink_not_called.mdk"
+snc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$snc" "$ROOT/test/compiler_test_fixtures" 2>&1 | sed "s#$ROOT/##g")"
+snc_code=0
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$snc" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1 || snc_code=$?
+if printf '%s' "$snc_out" | grep -qF "w = Wrap 500" \
+  && ! printf '%s' "$snc_out" | grep -qF "w = Wrap 0" \
+  && printf '%s' "$snc_out" | grep -qF "0 passed, 1 failed" \
+  && [ "$snc_code" -ne 0 ]; then
+  pass=$((pass + 1)); printf 'ok   shrink_not_called (the counterexample is the drawn value; Arbitrary.shrink is never consulted)\n'
+else
+  fail=$((fail + 1)); printf 'FAIL shrink_not_called: expected the unshrunk `Wrap 500` counterexample, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$snc_code" "$snc_out"
 fi
 
 # Issue #892 (S2): a FILE-LEVEL parse error in the TARGET must surface as the SAME

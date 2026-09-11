@@ -127,6 +127,11 @@ rule = "rule-stdlib-reimpl"
 count = 5
 
 [[entry]]
+file = "stdlib/http.mdk"
+rule = "rule-clone-type"
+count = 2
+
+[[entry]]
 file = "stdlib/string.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2

@@ -1,0 +1,25 @@
+-- The runner never calls `Arbitrary.shrink` — its own internal strategy
+-- (`shrinkValue`/`shrinkInt`, compiler/tools/prop_runner.mdk) does the
+-- reducing, and a user ADT has no arm there at all. `arbitrary` here is a
+-- deterministic pure draw so the reported counterexample is pinned: if the
+-- runner ever consulted `shrink`, the always-failing prop below would let it
+-- shrink `Wrap 500` down to `Wrap 0` (the value `shrink` names); since it
+-- never does, the counterexample stays exactly the value first drawn.
+--
+-- The doctest is load-bearing beyond what it asserts: `medaka test` skips
+-- typechecking for a prop-only, doctest-free module (#1229), so without one
+-- nothing here would prove the instance is well-typed.
+
+data Wrap = Wrap Int deriving (Eq, Debug)
+
+-- > unwrap (Wrap 500)
+-- 500
+unwrap : Wrap -> Int
+unwrap (Wrap n) = n
+
+impl Arbitrary Wrap where
+  arbitrary () = Wrap 500
+  shrink (Wrap 0) = []
+  shrink (Wrap _) = [Wrap 0]
+
+prop "always fails, so a consulted shrink would reach Wrap 0" (w : Wrap) = False

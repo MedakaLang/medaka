@@ -4,18 +4,18 @@
    pinned XRPC error envelope. They are intentionally not captured from an
    engine. -}
 
-import string.{repeat, toUtf8}
-import lib.cid.{cidForRaw}
-import lib.http.{
+import http.{
   Header,
-  QueryParam(..),
-  Response,
   makeHeader,
   makeResponse,
+  maxHttpRequestLineBytes,
   mediaTypeSubtype,
   mediaTypeType,
+  QueryParam(..),
+  Response,
 }
-import lib.resource_limits.{maxHttpRequestLineBytes}
+import string.{repeat, toUtf8}
+import lib.cid.{cidForRaw}
 import lib.server_core.{
   Account,
   RequestContext(..),
