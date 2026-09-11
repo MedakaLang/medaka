@@ -316,3 +316,58 @@ No new numerical performance ceiling is introduced here.
 * Re-derive the numeric-defaulting census. The two historical examples named in
   #2646 produced no elaboration residual on the pinned base. The closed test/prop
   body fix on this branch is a prerequisite, not completion of graph defaulting.
+
+## Producer census and constraint-consumer ledger
+
+Read-only census at `f57016b44`, after the initial design review:
+
+| Current population | Predicate information and required migration |
+|---|---|
+| Genuine marked method, one admitted interface | The declaration and occurrence instantiation can supply the complete vector; assert their common identity at construction. |
+| Multi-parameter result dispatch | `fromEntries` needs both container and element, not just the result carrier. |
+| Numeric literal | The checker uses `numLitFromIntParamsRef`, but the return route reads a spelling-keyed `fromInt` row. A collision can produce a known vector for the wrong interface. Construct the wanted directly from the identity-selected builtin declaration and its occurrence substitution. |
+| Name-marked standalone or local shadow | May currently have a known method vector or a mismatched/unknown vector. Classify term denotation before constructing a wanted; a known vector does not prove method denotation. |
+| At least two admitted interfaces | A known vector can belong to the arbitrary floor row. Argument-position admission has a receiver index; these return occurrences do not. A semantic decision and import/declaration permutation fixture are required before inclusion. |
+| Missing row or shape mismatch | Existing code can fall back to the scalar result. Exclude the population until its producer supplies the vector. After that precondition, a mismatch is a located internal invariant failure, not a licensed new language rejection; never construct an incomplete class wanted. |
+| Ordinary Flat/unmarked check | `inferVarPlainId` emits the obligation but no return goal or AST evidence destination. Its eventual wanted needs an explicitly owned destination or the shared marking schedule. |
+
+The two current `recordSite` callers are `inferMethodAt` and
+`inferNumLitMethod`. `recordSite` also independently adds a scalar entry to
+`methodSiteFns`. Module inference marks SCCs and tail bodies on its schedule;
+Flat `elaborateDict` pre-marks, while ordinary Flat checking remains unmarked.
+Eligibility cannot be reduced to `PSArgsKnown`: it requires method denotation,
+one resolved admitted declaration, and the complete vector from that same
+declaration and occurrence substitution.
+
+Strong existing pins include `engine_fixtures/single_impl_return_pos.mdk`,
+`same_head_impls.mdk`, `inferred_empty.mdk`, `instance_requires_list.mdk`,
+`nested_instance_dicts.mdk`, and the set/map literal build fixtures. Dictionary
+semantics rows X9/X10 pin numeric identity; D24/D25 and I9/I21 pin shadows.
+These are existing fixture names under `test/`, not a new gate registration.
+
+Removing return `PMethodOcc` entries from `implObls` owes each replacement below.
+Every adapter is a projection of the authoritative wanted/qualified scheme; none
+may perform a second instance selection.
+
+| Consumer | Replacement before deletion | Discriminating existing pins |
+|---|---|---|
+| `groundMultiParamObligations` and final obligation checks | Selected instance substitution, verdict and evidence come from one outcome. | set/map literals; nested function-key rejection; same-head specificity; nested requires |
+| Local/SCC/impl/default/test/prop numeric defaulting windows | Scope-owned wanted predicates remain visible; defaulting unifies the direct Num variable but does not discard the wanted. | new s6-d1 test/prop fixtures; impl-body numeric overlap and polymorphism fixtures |
+| `registerAmbiguousConstraints` | Preserve receiver projection, owner level, member ids, anchors and location until binding-boundary solving replaces the adapter. | `ambiguous_return_{noconstraint,nested}.mdk`; `ambiguous_captured_in_let.mdk` |
+| `registerSchemeObligations` | Qualified schemes own ordered full predicates and formal binders; old call-site rows are derived, with the signed/unsigned distinction retained. | s4-gen signature/residual fixtures; `inferred_empty.mdk` |
+| `checkSigConstraintCoverage` | Compare declared context against body-required full predicates, including uses discharged by a declared given. | s4-gen signature rejection; s9 vector rejection; joint cross-pairing fixtures |
+| Impl/default method rigidity | Preserve interface-vs-method variable ownership and survivor entailment. Deferral is not proof. | s3-w3 rigidity fixtures; `impl_constraint_via_{helper,local_alias}.mdk` |
+| `maybeInferConstraint`, `inferredConstraintIds`, `ifaceForInferredId` and `methodSiteFns` | Derive temporary scalar and full-vector views from the same wanted; replace the recovery joins when qualified-scheme consumers migrate. | `inferred_empty.mdk`; `inferred_chain.mdk`; s-cardinality-inferred; s4-gen residual fixtures |
+| Impl/default body snapshots and rollback | Scope-local commit/discard or equivalent transactional windows; preserve decidable-obligation filtering and cascade suppression. | `accept_792_parametric_impl_abstract_and_ground.mdk`; ground impl-body rejection; `iface_default_dedup_cascade.mdk` |
+| Bundled method-level obligations | Split the producer so removing the receiver occurrence retains its independent method-level predicates. | method-constraint foldMap fixtures |
+
+`methodOccArgPairs` needs no return adapter: its `firstDispatchIdx = None` arm
+contributes no argument pairs. Argument-position entries remain unchanged.
+
+An intermediate single-admitted cut would leave excluded return populations using
+the legacy stamper. It therefore cannot delete `SSReturnSites`, `resolveSites`,
+`resolveSite`, `EKReturn`, `SKReturn` or `GKReturnSite` globally, and cannot claim
+completion of the selected goal family. This record retains the full-family
+completion requirement. Before that switch, resolve the populations above and
+the numeric literal's existing standalone/local suppression policy. The current
+foundation packet is independent of those decisions.
