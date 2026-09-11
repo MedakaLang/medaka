@@ -1207,11 +1207,10 @@ Use the same N=0..3 request streams on both binaries. N0 initializes/shuts down;
 
 Instruction instrument: Valgrind Cachegrind 3.24.0 with cache/branch simulation disabled. Allocation instrument: an external LD_PRELOAD destructor prints `GC_get_total_bytes()` and process id at exit, with no compiler instrumentation or source changes. Pin `GC_INITIAL_HEAP_SIZE=1073741824`, set the appropriate `MEDAKA_ROOT`, and require `MEDAKA_STRICT=1`. Every run exited successfully and published the expected empty diagnostics for its selected URI; allocation records were unique and matched the parent process. Two allocation repetitions were byte-identical. Frame counts and allocation totals do not measure retained/live heap; matched lifecycle live-heap instrumentation remains package-7 debt.
 
-Receipts and reusable runners in this workspace:
-
-- `/tmp/rearch-scope-perf/run_lsp_cachegrind.py` and baseline `measure.log`.
-- `/tmp/rearch-scope-allocation/gc_counter.c`, `libgc_counter.so`, `run_allocation.py`, baseline `measure.log`.
-- `/tmp/rearch-nominal-perf.py`, candidate `/tmp/rearch-nominal-perf/instructions.log` and `allocation.log`; individual request responses and tool output in their subdirectories.
+The request framing and Cachegrind command follow the [memo-path baseline's
+reproduction procedure](#reproducing). The
+[implementation record](https://github.com/MedakaLang/medaka/issues/2549#issuecomment-5641443211)
+preserves the scope boundary and acceptance criteria.
 
 This scope slice leaves cache policy unchanged and is within the existing approximately 25% soft instruction budget on these workloads. It says nothing about the later return vertical's proposed all-three memo bypass, whose cost must be measured separately before activation.
 
@@ -1233,10 +1232,8 @@ selected request diagnostics were empty and no stale-source warnings occurred.
 | import-list | second warm | 38,316,900 | 38,200,952 | 6,907,888 | 6,903,744 |
 
 Every measured delta is negative: instructions range from -0.005% to -0.537%,
-allocation from -0.027% to -0.471%. Raw candidate receipts are in
-`/tmp/rearch-method-rows-review-instructions` and
-`/tmp/rearch-method-rows-review-allocation`; predecessor receipts are the scope
-measurements above. These remain allocation and instruction measurements, not
+allocation from -0.027% to -0.471%. The predecessor is the scope measurement
+above. These remain allocation and instruction measurements, not
 retained-live-heap measurements. The later scope classification fix and future
 cache changes are outside this exact comparison.
 
@@ -1258,9 +1255,7 @@ allocation, with tracing disabled as in normal production.
 
 Largest positive instruction delta: +0.0223%; allocated-byte delta: +0.0630%.
 These are within the existing 25% soft budget. All fixed requests passed their
-diagnostic/freshness checks; allocation repetitions were identical. Before receipts:
-`/tmp/rearch-default-perf-base/{instructions,allocation}`. After receipts:
-`/tmp/rearch-cache-bypass-measure/baseline-{perf,allocation}`. The after arm here is
+diagnostic/freshness checks; allocation repetitions were identical. The after arm is
 the unmodified compiler, not the bypass experiment. These are allocation
 measurements, not retained-live-heap measurements.
 
@@ -1281,9 +1276,9 @@ cumulative process totals.
 | import-list | second warm | 38,180,543 | 38,192,239 | 6,887,664 | 6,911,872 |
 
 Largest positive instruction delta: +0.0306%; allocated-byte delta: +0.3515%,
-within the existing 25% soft budget. After receipts:
-`/tmp/rearch-scope-store-perf/{instructions,allocation}`; before receipts:
-`/tmp/rearch-cache-bypass-measure/baseline-{perf,allocation}`. Scope lifecycle and
+within the existing 25% soft budget. The
+[scope-store review](https://github.com/MedakaLang/medaka/issues/2586#issuecomment-5641339195)
+records acceptance and mutation results. Scope lifecycle and
 copy isolation are asserted separately by sibling tests. These measurements do
 not discharge the later finalized-cache retained-memory requirement.
 
@@ -1295,8 +1290,8 @@ This is an isolated experiment, not a production patch or budget waiver.
 
 Base: `433eaa9f78763ea64fdbde57a477359a0816cb90`, typecheck source SHA-256
 `d330cbd60f11a927c00053b36a0c70fc239e0792da17ee6890803908efbea0c9`.
-Guarded mutator: `/tmp/rearch-all3-memo-bypass.py`; receipts, diff, normalized
-protocol responses, and restoration hashes: `/tmp/rearch-cache-bypass-measure`.
+The [experiment report](https://github.com/MedakaLang/medaka/issues/2719#issuecomment-5640781986)
+records the budget breach and disposition. The controlled change is described below.
 
 #### Controlled change
 
