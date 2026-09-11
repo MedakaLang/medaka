@@ -5913,9 +5913,43 @@ dupJoin occs =
     filterList
       (k => dupGroupFires (findWithDefault [] k groups))
       (dupDistinctKeys occs)
-  flatMap
-    (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
-    (sortUniqS live)
+  dedupeFindings
+    (flatMap
+      (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
+      (sortUniqS live))
+
+-- Both occurrence grains can key the SAME duplicate pair: a multi-clause
+-- function whose every clause matches another's fires once per matching clause
+-- and once in aggregate, and the aggregate anchors at the first individually
+-- eligible clause — the very line the clause grain reports.  The two findings
+-- are then word-for-word identical, and a reader gains nothing from reading the
+-- sentence twice.
+--
+-- Repeats are dropped HERE rather than prevented at the occurrence level because
+-- only the rendered finding can tell whether two grains say the same thing: the
+-- grains carry different keys, so they group over different partner-file sets,
+-- and a clause grain that spans strictly more files than the aggregate says
+-- something the aggregate does not.  First finding wins, so the `sortUniqS`-
+-- ordered output above keeps its order.
+dedupeFindings : List Finding -> List Finding
+dedupeFindings fs =
+  let seen = new ()
+  dedupeFindingsGo seen fs
+
+dedupeFindingsGo : HashMap String Unit -> List Finding -> List Finding
+dedupeFindingsGo _ [] = []
+dedupeFindingsGo seen (f :: rest)
+  | has (findingDedupeKey f) seen = dedupeFindingsGo seen rest
+  | otherwise =
+    let _ = setInPlace (findingDedupeKey f) () seen
+    f :: dedupeFindingsGo seen rest
+
+findingDedupeKey : Finding -> String
+findingDedupeKey f = "\{f.rule}\n\{dupLocKey f.loc}\n\{f.message}"
+
+dupLocKey : Option Loc -> String
+dupLocKey (Some (Loc file line col _ _)) = "\{file}:\{line}:\{col}"
+dupLocKey None = "-"
 
 -- key → its occurrences, in one linear pass.  Each bucket accumulates REVERSED
 -- (prepend is O(1)); `dupJoin` reverses on the way out so the occurrence order
@@ -5970,11 +6004,20 @@ dupGroupFires grp =
 -- whose clauses are individually small never reached it, however faithfully the
 -- whole set of them duplicated another file's — so a multi-clause recursion, the
 -- commonest shape in this codebase, was the shape the rule could not see.
--- Clauses are therefore collected first and the floor applied to the FUNCTION:
--- complexities summed (`bodyComplexity` counts '(' in the sexp dump, so the
--- units are additive and nothing is re-serialized) and clause keys concatenated
--- in declaration order, so a function matches only when every clause matches, in
--- the same order.
+-- Clauses are therefore collected first and the floor ALSO applied to the
+-- FUNCTION: complexities summed (`bodyComplexity` counts '(' in the sexp dump,
+-- so the units are additive and nothing is re-serialized) and clause keys
+-- concatenated in declaration order, so a function matches only when every
+-- clause matches, in the same order.
+--
+-- The function grain does not subsume the clause grain, and emitting only the
+-- former silently dropped every PARTIAL match: one clause of a multi-clause
+-- function duplicating a whole single-clause function elsewhere, or two
+-- multi-clause functions sharing some clauses but not all, produce unequal
+-- aggregate keys however exactly the shared clauses coincide.  Both grains are
+-- therefore emitted, each judged against the floor on its own terms.  A
+-- single-clause function's two grains are the same occurrence, so the aggregate
+-- is emitted only for a group of two or more clauses.
 --
 -- The occurrence TUPLE is unchanged, which is what keeps the `--cache` path in
 -- lockstep for free: `fileDupOccs` is what a cached run persists per file, and
@@ -5988,13 +6031,14 @@ data DupClause = DupClause {
   dcPure : Bool,
 }
 
--- one occurrence per eligible top-level FUNCTION: (file, line, name, key)
+-- one occurrence per eligible top-level CLAUSE, plus one per eligible
+-- multi-clause FUNCTION: (file, line, name, key)
 export
 fileDupOccs : (String, Positions, List Decl) ->
   List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
   flatMap
-    (dupOccOfGroup path)
+    (dupOccsOfGroup path)
     (dupClauseGroups (flatMap dupClauseOfDecl (declLocList pos decls)))
 
 dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
@@ -6028,12 +6072,27 @@ dupSpanName nm (c :: rest)
     (c :: same, others)
   | otherwise = ([], c :: rest)
 
--- The group is eligible when the COMBINED body clears the floor and at least one
--- clause is real logic: a function all of whose clauses are pure data is data,
--- which is #893's narrowing applied at function grain instead of clause grain.
-dupOccOfGroup : String -> List DupClause -> List (String, Int, String, String)
-dupOccOfGroup _ [] = []
-dupOccOfGroup path (c :: cs)
+dupOccsOfGroup : String -> List DupClause -> List (String, Int, String, String)
+dupOccsOfGroup path cs = dupClauseOccs path cs ++ dupAggregateOcc path cs
+
+-- Clause grain: each clause that clears the floor on its own, keyed and reported
+-- at its own line.  This is the original (pre-#2651) occurrence set.
+dupClauseOccs : String -> List DupClause -> List (String, Int, String, String)
+dupClauseOccs _ [] = []
+dupClauseOccs path (c :: cs)
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure =
+    (path, c.dcLine, c.dcName, c.dcKey) :: dupClauseOccs path cs
+  | otherwise = dupClauseOccs path cs
+
+-- Function grain.  The group is eligible when the COMBINED body clears the floor
+-- and at least one clause is real logic: a function all of whose clauses are
+-- pure data is data, which is #893's narrowing applied at function grain instead
+-- of clause grain.  A one-clause group has nothing to aggregate — its function
+-- grain is byte-for-byte its clause grain — so it yields nothing here.
+dupAggregateOcc : String -> List DupClause -> List (String, Int, String, String)
+dupAggregateOcc _ [] = []
+dupAggregateOcc _ [_] = []
+dupAggregateOcc path (c :: cs)
   | dupGroupCost (c :: cs) >= dupComplexityThreshold
     && not (allList dcPureOf (c :: cs)) = [
     (

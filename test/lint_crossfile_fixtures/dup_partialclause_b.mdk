@@ -1,0 +1,12 @@
+-- Single-clause twin of dup_partialclause_a.mdk's SECOND clause. Neither file
+-- carries a directive, so the partial-match finding must appear on both sides of
+-- the pair in the golden — on a.mdk at its second clause, not at its first.
+export
+pickB : Int -> Int -> String
+pickB n m =
+  if n > m then
+    "left \{n} over \{m}"
+  else if n < m then
+    "right \{m} over \{n}"
+  else
+    "same \{n}"

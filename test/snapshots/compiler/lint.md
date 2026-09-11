@@ -1,5 +1,5 @@
 # META
-source_lines=6405
+source_lines=6464
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -5917,9 +5917,43 @@ dupJoin occs =
     filterList
       (k => dupGroupFires (findWithDefault [] k groups))
       (dupDistinctKeys occs)
-  flatMap
-    (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
-    (sortUniqS live)
+  dedupeFindings
+    (flatMap
+      (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
+      (sortUniqS live))
+
+-- Both occurrence grains can key the SAME duplicate pair: a multi-clause
+-- function whose every clause matches another's fires once per matching clause
+-- and once in aggregate, and the aggregate anchors at the first individually
+-- eligible clause — the very line the clause grain reports.  The two findings
+-- are then word-for-word identical, and a reader gains nothing from reading the
+-- sentence twice.
+--
+-- Repeats are dropped HERE rather than prevented at the occurrence level because
+-- only the rendered finding can tell whether two grains say the same thing: the
+-- grains carry different keys, so they group over different partner-file sets,
+-- and a clause grain that spans strictly more files than the aggregate says
+-- something the aggregate does not.  First finding wins, so the `sortUniqS`-
+-- ordered output above keeps its order.
+dedupeFindings : List Finding -> List Finding
+dedupeFindings fs =
+  let seen = new ()
+  dedupeFindingsGo seen fs
+
+dedupeFindingsGo : HashMap String Unit -> List Finding -> List Finding
+dedupeFindingsGo _ [] = []
+dedupeFindingsGo seen (f :: rest)
+  | has (findingDedupeKey f) seen = dedupeFindingsGo seen rest
+  | otherwise =
+    let _ = setInPlace (findingDedupeKey f) () seen
+    f :: dedupeFindingsGo seen rest
+
+findingDedupeKey : Finding -> String
+findingDedupeKey f = "\{f.rule}\n\{dupLocKey f.loc}\n\{f.message}"
+
+dupLocKey : Option Loc -> String
+dupLocKey (Some (Loc file line col _ _)) = "\{file}:\{line}:\{col}"
+dupLocKey None = "-"
 
 -- key → its occurrences, in one linear pass.  Each bucket accumulates REVERSED
 -- (prepend is O(1)); `dupJoin` reverses on the way out so the occurrence order
@@ -5974,11 +6008,20 @@ dupGroupFires grp =
 -- whose clauses are individually small never reached it, however faithfully the
 -- whole set of them duplicated another file's — so a multi-clause recursion, the
 -- commonest shape in this codebase, was the shape the rule could not see.
--- Clauses are therefore collected first and the floor applied to the FUNCTION:
--- complexities summed (`bodyComplexity` counts '(' in the sexp dump, so the
--- units are additive and nothing is re-serialized) and clause keys concatenated
--- in declaration order, so a function matches only when every clause matches, in
--- the same order.
+-- Clauses are therefore collected first and the floor ALSO applied to the
+-- FUNCTION: complexities summed (`bodyComplexity` counts '(' in the sexp dump,
+-- so the units are additive and nothing is re-serialized) and clause keys
+-- concatenated in declaration order, so a function matches only when every
+-- clause matches, in the same order.
+--
+-- The function grain does not subsume the clause grain, and emitting only the
+-- former silently dropped every PARTIAL match: one clause of a multi-clause
+-- function duplicating a whole single-clause function elsewhere, or two
+-- multi-clause functions sharing some clauses but not all, produce unequal
+-- aggregate keys however exactly the shared clauses coincide.  Both grains are
+-- therefore emitted, each judged against the floor on its own terms.  A
+-- single-clause function's two grains are the same occurrence, so the aggregate
+-- is emitted only for a group of two or more clauses.
 --
 -- The occurrence TUPLE is unchanged, which is what keeps the `--cache` path in
 -- lockstep for free: `fileDupOccs` is what a cached run persists per file, and
@@ -5992,13 +6035,14 @@ data DupClause = DupClause {
   dcPure : Bool,
 }
 
--- one occurrence per eligible top-level FUNCTION: (file, line, name, key)
+-- one occurrence per eligible top-level CLAUSE, plus one per eligible
+-- multi-clause FUNCTION: (file, line, name, key)
 export
 fileDupOccs : (String, Positions, List Decl) ->
   List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
   flatMap
-    (dupOccOfGroup path)
+    (dupOccsOfGroup path)
     (dupClauseGroups (flatMap dupClauseOfDecl (declLocList pos decls)))
 
 dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
@@ -6032,12 +6076,27 @@ dupSpanName nm (c :: rest)
     (c :: same, others)
   | otherwise = ([], c :: rest)
 
--- The group is eligible when the COMBINED body clears the floor and at least one
--- clause is real logic: a function all of whose clauses are pure data is data,
--- which is #893's narrowing applied at function grain instead of clause grain.
-dupOccOfGroup : String -> List DupClause -> List (String, Int, String, String)
-dupOccOfGroup _ [] = []
-dupOccOfGroup path (c :: cs)
+dupOccsOfGroup : String -> List DupClause -> List (String, Int, String, String)
+dupOccsOfGroup path cs = dupClauseOccs path cs ++ dupAggregateOcc path cs
+
+-- Clause grain: each clause that clears the floor on its own, keyed and reported
+-- at its own line.  This is the original (pre-#2651) occurrence set.
+dupClauseOccs : String -> List DupClause -> List (String, Int, String, String)
+dupClauseOccs _ [] = []
+dupClauseOccs path (c :: cs)
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure =
+    (path, c.dcLine, c.dcName, c.dcKey) :: dupClauseOccs path cs
+  | otherwise = dupClauseOccs path cs
+
+-- Function grain.  The group is eligible when the COMBINED body clears the floor
+-- and at least one clause is real logic: a function all of whose clauses are
+-- pure data is data, which is #893's narrowing applied at function grain instead
+-- of clause grain.  A one-clause group has nothing to aggregate — its function
+-- grain is byte-for-byte its clause grain — so it yields nothing here.
+dupAggregateOcc : String -> List DupClause -> List (String, Int, String, String)
+dupAggregateOcc _ [] = []
+dupAggregateOcc _ [_] = []
+dupAggregateOcc path (c :: cs)
   | dupGroupCost (c :: cs) >= dupComplexityThreshold
     && not (allList dcPureOf (c :: cs)) = [
     (
@@ -8185,7 +8244,17 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "ruleDuplicateBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ruleDuplicateBody" ((PVar "files")) (EApp (EVar "dupJoin") (EApp (EApp (EVar "flatMap") (EVar "fileDupOccs")) (EVar "files"))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
-(DFunDef false "dupJoin" ((PVar "occs")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "groupOccsByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "dupGroupFires") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))))) (EApp (EVar "dupDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitDupGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
+(DFunDef false "dupJoin" ((PVar "occs")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "groupOccsByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "dupGroupFires") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))))) (EApp (EVar "dupDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EVar "dedupeFindings") (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitDupGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live")))))))
+(DTypeSig false "dedupeFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "dedupeFindings" ((PVar "fs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "fs")))))
+(DTypeSig false "dedupeFindingsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "dedupeFindingsGo" (PWild (PList)) (EListLit))
+(DFunDef false "dedupeFindingsGo" ((PVar "seen") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "findingDedupeKey") (EVar "f"))) (EVar "seen")) (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "findingDedupeKey") (EVar "f"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "findingDedupeKey" (TyFun (TyCon "Finding") (TyCon "String")))
+(DFunDef false "findingDedupeKey" ((PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "dupLocKey") (EFieldAccess (EVar "f") "loc")))) (ELit (LString "\n"))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString ""))))
+(DTypeSig false "dupLocKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "dupLocKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "line"))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "col"))) (ELit (LString ""))))
+(DFunDef false "dupLocKey" ((PCon "None")) (ELit (LString "-")))
 (DTypeSig false "groupOccsByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupOccsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
@@ -8200,7 +8269,7 @@ directiveReasonFinding c = Finding {
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DData Private "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "dupOccOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))))
+(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))))
 (DTypeSig false "dupClauseOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "dupClauseOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EListLit (ERecordCreate "DupClause" ((fa "dcName" (EVar "name")) (fa "dcLine" (EApp (EVar "locLineOf") (EVar "loc"))) (fa "dcKey" (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body"))) (fa "dcCost" (EApp (EVar "bodyComplexity") (EVar "body"))) (fa "dcPure" (EApp (EVar "isPureDataExpr") (EVar "body"))))))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "dupClauseOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "dupClauseGroups" (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "DupClause")))))
@@ -8209,9 +8278,15 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "dupSpanName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyTuple (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyCon "DupClause"))))))
 (DFunDef false "dupSpanName" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "dupSpanName" ((PVar "nm") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "dcName") (EVar "nm")) (EBlock (DoLet false false (PTuple (PVar "same") (PVar "others")) (EApp (EApp (EVar "dupSpanName") (EVar "nm")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "c") (EVar "same")) (EVar "others")))) (EIf (EVar "otherwise") (ETuple (EListLit) (EBinOp "::" (EVar "c") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "dupOccOfGroup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "dupOccOfGroup" (PWild (PList)) (EListLit))
-(DFunDef false "dupOccOfGroup" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dupGroupCost") (EBinOp "::" (EVar "c") (EVar "cs"))) (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "dcPureOf")) (EBinOp "::" (EVar "c") (EVar "cs"))))) (EListLit (ETuple (EVar "path") (EApp (EApp (EVar "dupAnchorLine") (EBinOp "::" (EVar "c") (EVar "cs"))) (EFieldAccess (EVar "c") "dcLine")) (EFieldAccess (EVar "c") "dcName") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "dcKeyOf")) (EBinOp "::" (EVar "c") (EVar "cs")))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dupOccsOfGroup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupOccsOfGroup" ((PVar "path") (PVar "cs")) (EBinOp "++" (EApp (EApp (EVar "dupClauseOccs") (EVar "path")) (EVar "cs")) (EApp (EApp (EVar "dupAggregateOcc") (EVar "path")) (EVar "cs"))))
+(DTypeSig false "dupClauseOccs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupClauseOccs" (PWild (PList)) (EListLit))
+(DFunDef false "dupClauseOccs" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "c") "dcCost") (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EFieldAccess (EVar "c") "dcPure"))) (EBinOp "::" (ETuple (EVar "path") (EFieldAccess (EVar "c") "dcLine") (EFieldAccess (EVar "c") "dcName") (EFieldAccess (EVar "c") "dcKey")) (EApp (EApp (EVar "dupClauseOccs") (EVar "path")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "dupClauseOccs") (EVar "path")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dupAggregateOcc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupAggregateOcc" (PWild (PList)) (EListLit))
+(DFunDef false "dupAggregateOcc" (PWild (PList PWild)) (EListLit))
+(DFunDef false "dupAggregateOcc" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dupGroupCost") (EBinOp "::" (EVar "c") (EVar "cs"))) (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "dcPureOf")) (EBinOp "::" (EVar "c") (EVar "cs"))))) (EListLit (ETuple (EVar "path") (EApp (EApp (EVar "dupAnchorLine") (EBinOp "::" (EVar "c") (EVar "cs"))) (EFieldAccess (EVar "c") "dcLine")) (EFieldAccess (EVar "c") "dcName") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "dcKeyOf")) (EBinOp "::" (EVar "c") (EVar "cs")))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupAnchorLine" (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "dupAnchorLine" ((PList) (PVar "fallback")) (EVar "fallback"))
 (DFunDef false "dupAnchorLine" ((PCons (PVar "c") (PVar "cs")) (PVar "fallback")) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "c") "dcCost") (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EFieldAccess (EVar "c") "dcPure"))) (EFieldAccess (EVar "c") "dcLine") (EIf (EVar "otherwise") (EApp (EApp (EVar "dupAnchorLine") (EVar "cs")) (EVar "fallback")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -10079,7 +10154,17 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "ruleDuplicateBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ruleDuplicateBody" ((PVar "files")) (EApp (EVar "dupJoin") (EApp (EApp (EDictApp "flatMap") (EVar "fileDupOccs")) (EVar "files"))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
-(DFunDef false "dupJoin" ((PVar "occs")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "groupOccsByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "dupGroupFires") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))))) (EApp (EVar "dupDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitDupGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
+(DFunDef false "dupJoin" ((PVar "occs")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "groupOccsByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EApp (EVar "dupGroupFires") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))))) (EApp (EVar "dupDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EVar "dedupeFindings") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitDupGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live")))))))
+(DTypeSig false "dedupeFindings" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "dedupeFindings" ((PVar "fs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "fs")))))
+(DTypeSig false "dedupeFindingsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
+(DFunDef false "dedupeFindingsGo" (PWild (PList)) (EListLit))
+(DFunDef false "dedupeFindingsGo" ((PVar "seen") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "findingDedupeKey") (EVar "f"))) (EVar "seen")) (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "findingDedupeKey") (EVar "f"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeFindingsGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "findingDedupeKey" (TyFun (TyCon "Finding") (TyCon "String")))
+(DFunDef false "findingDedupeKey" ((PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "dupLocKey") (EFieldAccess (EVar "f") "loc")))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString ""))))
+(DTypeSig false "dupLocKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "dupLocKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "col"))) (ELit (LString ""))))
+(DFunDef false "dupLocKey" ((PCon "None")) (ELit (LString "-")))
 (DTypeSig false "groupOccsByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupOccsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
@@ -10094,7 +10179,7 @@ directiveReasonFinding c = Finding {
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DData Private "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dupOccOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))))
+(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))))
 (DTypeSig false "dupClauseOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "dupClauseOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EListLit (ERecordCreate "DupClause" ((fa "dcName" (EVar "name")) (fa "dcLine" (EApp (EVar "locLineOf") (EVar "loc"))) (fa "dcKey" (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body"))) (fa "dcCost" (EApp (EVar "bodyComplexity") (EVar "body"))) (fa "dcPure" (EApp (EVar "isPureDataExpr") (EVar "body"))))))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "dupClauseOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "dupClauseGroups" (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "DupClause")))))
@@ -10103,9 +10188,15 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "dupSpanName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyTuple (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyCon "DupClause"))))))
 (DFunDef false "dupSpanName" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "dupSpanName" ((PVar "nm") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "dcName") (EVar "nm")) (EBlock (DoLet false false (PTuple (PVar "same") (PVar "others")) (EApp (EApp (EVar "dupSpanName") (EVar "nm")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "c") (EVar "same")) (EVar "others")))) (EIf (EVar "otherwise") (ETuple (EListLit) (EBinOp "::" (EVar "c") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "dupOccOfGroup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "dupOccOfGroup" (PWild (PList)) (EListLit))
-(DFunDef false "dupOccOfGroup" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dupGroupCost") (EBinOp "::" (EVar "c") (EVar "cs"))) (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "dcPureOf")) (EBinOp "::" (EVar "c") (EVar "cs"))))) (EListLit (ETuple (EVar "path") (EApp (EApp (EVar "dupAnchorLine") (EBinOp "::" (EVar "c") (EVar "cs"))) (EFieldAccess (EVar "c") "dcLine")) (EFieldAccess (EVar "c") "dcName") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "dcKeyOf")) (EBinOp "::" (EVar "c") (EVar "cs")))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dupOccsOfGroup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupOccsOfGroup" ((PVar "path") (PVar "cs")) (EBinOp "++" (EApp (EApp (EVar "dupClauseOccs") (EVar "path")) (EVar "cs")) (EApp (EApp (EVar "dupAggregateOcc") (EVar "path")) (EVar "cs"))))
+(DTypeSig false "dupClauseOccs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupClauseOccs" (PWild (PList)) (EListLit))
+(DFunDef false "dupClauseOccs" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "c") "dcCost") (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EFieldAccess (EVar "c") "dcPure"))) (EBinOp "::" (ETuple (EVar "path") (EFieldAccess (EVar "c") "dcLine") (EFieldAccess (EVar "c") "dcName") (EFieldAccess (EVar "c") "dcKey")) (EApp (EApp (EVar "dupClauseOccs") (EVar "path")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "dupClauseOccs") (EVar "path")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dupAggregateOcc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupAggregateOcc" (PWild (PList)) (EListLit))
+(DFunDef false "dupAggregateOcc" (PWild (PList PWild)) (EListLit))
+(DFunDef false "dupAggregateOcc" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dupGroupCost") (EBinOp "::" (EVar "c") (EVar "cs"))) (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "dcPureOf")) (EBinOp "::" (EVar "c") (EVar "cs"))))) (EListLit (ETuple (EVar "path") (EApp (EApp (EVar "dupAnchorLine") (EBinOp "::" (EVar "c") (EVar "cs"))) (EFieldAccess (EVar "c") "dcLine")) (EFieldAccess (EVar "c") "dcName") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "dcKeyOf")) (EBinOp "::" (EVar "c") (EVar "cs")))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupAnchorLine" (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "dupAnchorLine" ((PList) (PVar "fallback")) (EVar "fallback"))
 (DFunDef false "dupAnchorLine" ((PCons (PVar "c") (PVar "cs")) (PVar "fallback")) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "c") "dcCost") (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EFieldAccess (EVar "c") "dcPure"))) (EFieldAccess (EVar "c") "dcLine") (EIf (EVar "otherwise") (EApp (EApp (EVar "dupAnchorLine") (EVar "cs")) (EVar "fallback")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

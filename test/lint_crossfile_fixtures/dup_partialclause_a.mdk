@@ -1,0 +1,17 @@
+-- Cross-file fixture for the PARTIAL-match shape (the clause grain).
+-- `pickA` is one function written as two clauses; only the second one clears
+-- `dupComplexityThreshold`, and it is byte-identical to the whole of
+-- dup_partialclause_b.mdk's single-clause `pickB`. The two functions' AGGREGATE
+-- keys differ (two clauses versus one), so this pair is visible only while
+-- occurrences are also emitted per clause. Exported so only rule-duplicate-body
+-- has anything to say.
+export
+pickA : Int -> Int -> String
+pickA 0 _ = "zero"
+pickA n m =
+  if n > m then
+    "left \{n} over \{m}"
+  else if n < m then
+    "right \{m} over \{n}"
+  else
+    "same \{n}"
