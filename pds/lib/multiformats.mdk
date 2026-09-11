@@ -1,5 +1,5 @@
 {- multiformats.mdk — unsigned-varint (LEB128), multicodec prefix constants,
-   and multibase `z`-prefixed base58btc.
+   and multibase `z`-prefixed base58btc and `b`-prefixed lowercase base32.
 
    ⚠️ COLLISION WARNING [#1701's named trap]. This is the multiformats
    unsigned-varint (unsigned LEB128): 7 bits per byte **starting with the
@@ -36,6 +36,7 @@
 import array.{get}
 import string.{stripPrefix}
 import lib.base58.{base58btcEncode, base58btcDecode}
+import base32.{base32Encode, base32Decode}
 
 byteAt : Int -> Array Int -> Int
 byteAt i arr = match get i arr
@@ -242,3 +243,26 @@ multibaseBase58btcDecode s = match stripPrefix "z" s
   Some rest => base58btcDecode rest
   None =>
     Err "multibaseBase58btcDecode: missing 'z' (base58btc) multibase prefix"
+
+-- ── multibase base32 (`b` prefix, lowercase, unpadded) ─────────────────────
+
+{- | Bytes -> multibase-prefixed lowercase base32 string
+   (`"b" ++ base32Encode`), used by atproto CIDs.
+
+   > multibaseBase32Lower [||]
+   "b" -}
+export
+multibaseBase32Lower : Array Int -> String
+multibaseBase32Lower bytes = "b" ++ base32Encode bytes
+
+{- | The exact inverse of `multibaseBase32Lower`. `Err` when the leading `b`
+   is missing, or when the remainder is not canonical base32.
+
+   > multibaseBase32LowerDecode "b"
+   Ok [||] -}
+export
+multibaseBase32LowerDecode : String -> Result String (Array Int)
+multibaseBase32LowerDecode s = match stripPrefix "b" s
+  Some rest => base32Decode rest
+  None =>
+    Err "multibaseBase32LowerDecode: missing 'b' (base32) multibase prefix"

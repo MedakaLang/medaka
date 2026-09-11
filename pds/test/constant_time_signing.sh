@@ -22,7 +22,8 @@ write_internal_claimed_source_files() {
   for rel in \
     pds/lib/field.mdk \
     pds/lib/scalar.mdk \
-    pds/lib/sha256.mdk \
+    stdlib/sha256.mdk \
+    stdlib/hmac.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/test/constant_time_signing_main.mdk
@@ -35,7 +36,8 @@ write_public_claimed_source_files() {
   for rel in \
     pds/lib/field.mdk \
     pds/lib/scalar.mdk \
-    pds/lib/sha256.mdk \
+    stdlib/sha256.mdk \
+    stdlib/hmac.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/lib/sign.mdk \
@@ -56,8 +58,9 @@ expected_internal_source_manifest() {
   cat <<'EOF'
 3840689225 26477  pds/lib/field.mdk
 771369044 31975  pds/lib/scalar.mdk
-104684450 13107  pds/lib/sha256.mdk
-2565296540 2009  pds/lib/hmac_sha256.mdk
+1728882051 12086  stdlib/sha256.mdk
+4205512882 5228  stdlib/hmac.mdk
+4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
 EOF
@@ -67,12 +70,32 @@ expected_public_source_manifest() {
   cat <<'EOF'
 3840689225 26477  pds/lib/field.mdk
 771369044 31975  pds/lib/scalar.mdk
-104684450 13107  pds/lib/sha256.mdk
-2565296540 2009  pds/lib/hmac_sha256.mdk
+1728882051 12086  stdlib/sha256.mdk
+4205512882 5228  stdlib/hmac.mdk
+4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3175129806 3842  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF
+}
+
+# The signing closure's SHA-256 and HMAC live in stdlib/, reached by a bare
+# `import sha256` / `import hmac` rather than `import lib.<mod>`. Following only
+# the `lib.` form would silently shrink the audited closure to the pds half,
+# which is the one failure this whole function exists to prevent, so the second
+# arm below follows the bare form too. It is restricted to the stdlib modules
+# the signing path actually carries: a blanket `^import <anything>` arm would
+# drag in `array`, `string` and every transitive leaf, and the manifest is a
+# hand-maintained claim about the SIGNING source, not about the stdlib.
+SIGNING_STDLIB_MODULES='sha256 hmac'
+
+derive_stdlib_imports() {
+  file=$1
+  for mod in $SIGNING_STDLIB_MODULES; do
+    if grep -E -q "^import ${mod}(\.|\$| )" "$file"; then
+      printf 'stdlib/%s.mdk\n' "$mod"
+    fi
+  done
 }
 
 derive_source_files() {
@@ -82,6 +105,7 @@ derive_source_files() {
     cp "$WORK/source-derived.current" "$WORK/source-derived.next"
     while IFS= read -r rel; do
       sed -n 's/^import lib\.\([A-Za-z0-9_]*\).*/pds\/lib\/\1.mdk/p' "$tree/$rel" >> "$WORK/source-derived.next"
+      derive_stdlib_imports "$tree/$rel" >> "$WORK/source-derived.next"
     done < "$WORK/source-derived.current"
     LC_ALL=C sort -u "$WORK/source-derived.next" > "$WORK/source-derived.sorted"
     if cmp "$WORK/source-derived.current" "$WORK/source-derived.sorted" >/dev/null; then break; fi
@@ -117,8 +141,9 @@ internal_source_routes_ok() {
   tree=$1
   secp="$tree/pds/lib/secp256k1.mdk"
   scalar="$tree/pds/lib/scalar.mdk"
-  hmac="$tree/pds/lib/hmac_sha256.mdk"
-  sha="$tree/pds/lib/sha256.mdk"
+  guard="$tree/pds/lib/hmac_sha256.mdk"
+  hmac="$tree/stdlib/hmac.mdk"
+  sha="$tree/stdlib/sha256.mdk"
   grep -F -q 'let candidate1Bytes = hmacSha256FixedKey rejectionKey rejectionValue' "$secp" || return 1
   grep -F -q 'let signed0 = signCandidate secret digest candidate0' "$secp" || return 1
   grep -F -q 'let signed1 = signCandidate secret digest candidate1' "$secp" || return 1
@@ -129,8 +154,18 @@ internal_source_routes_ok() {
   grep -F -q 'let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)' "$secp" || return 1
   grep -F -q 'let r = scFromFixedBytesReduce (feToBytes x)' "$secp" || return 1
   grep -F -q 'scFromFixedBytesReduce bs = reduceWide (wideOfRaw (limbsOfBytes bs))' "$scalar" || return 1
-  [ "$(grep -F -c 'sha256FixedBytes (joined (keyPad key 0x36) message)' "$hmac" || true)" -eq 1 ] || return 1
-  [ "$(grep -F -c 'sha256FixedBytes outerInput' "$hmac" || true)" -eq 1 ] || return 1
+  # The signing side takes the UNCHECKED SHA-256 entry at every step of the
+  # HMAC schedule: normalization, inner hash and outer hash. Each anchor is
+  # pinned once so a stray `sha256` (the byte-domain-checking entry) in any of
+  # the three positions reds this instead of quietly putting a secret-derived
+  # early exit in the signing closure.
+  [ "$(grep -F -c 'if arrayLength key > blockBytes then sha256FixedBytes key else key' "$hmac" || true)" -eq 1 ] || return 1
+  [ "$(grep -F -c 'let inner = sha256FixedBytes (concat [|keyPad normalized 0x36, message|])' "$hmac" || true)" -eq 1 ] || return 1
+  [ "$(grep -F -c 'sha256FixedBytes (concat [|keyPad normalized 0x5c, inner|])' "$hmac" || true)" -eq 1 ] || return 1
+  # The 32-byte guard is the whole of pds/lib/hmac_sha256.mdk: it must still
+  # reject every other length, and it must delegate to the unchecked entry.
+  grep -F -q 'if arrayLength key /= keyBytes then' "$guard" || return 1
+  [ "$(grep -F -c 'hmacSha256FixedBytes key message' "$guard" || true)" -eq 1 ] || return 1
   grep -F -q 'sha256FixedBytes msg = sha256AssumeByteDomain msg' "$sha" || return 1
   return 0
 }
@@ -171,7 +206,8 @@ restore_source_tree() {
   for rel in \
     pds/lib/field.mdk \
     pds/lib/scalar.mdk \
-    pds/lib/sha256.mdk \
+    stdlib/sha256.mdk \
+    stdlib/hmac.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/test/constant_time_signing_main.mdk
@@ -302,6 +338,10 @@ conditional_jumps() {
 }
 
 cp -R "$ROOT/pds" "$WORK/pds"
+# Two of the claimed signing sources now live in stdlib/, and the scratch tree
+# is what every source-shape control runs against, so it needs them too.
+mkdir -p "$WORK/stdlib"
+cp "$ROOT/stdlib/sha256.mdk" "$ROOT/stdlib/hmac.mdk" "$WORK/stdlib/"
 write_internal_claimed_source_files > "$WORK/internal-source.claimed"
 write_public_claimed_source_files > "$WORK/public-source.claimed"
 internal_source_closure_ok "$ROOT" "$WORK/internal-source.claimed" || fail 'baseline internal signing source matches the exact manifest and independently derived closure'
@@ -456,6 +496,18 @@ if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/consta
 pass 'M14 claimed HMAC wrapper omission is rejected by independently derived source closure'
 cmp "$WORK/manifest.baseline" "$WORK/internal-source.claimed" >/dev/null || fail 'M14 claimed source manifest restores byte-exactly'
 
+# M15: the same control for the stdlib half of the claim. Without the bare-import
+# arm in derive_source_files the derived closure would stop at pds/lib, so
+# dropping stdlib/sha256.mdk from the claim would go UNNOTICED -- which is the
+# state this gate was in the moment SHA-256 moved out of pds/lib. Proving the
+# omission reds is what makes the new arm load-bearing rather than decorative.
+sed '/stdlib\/sha256.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
+if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib closure omission unexpectedly green'; fi
+sed '/stdlib\/hmac.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
+if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib HMAC omission unexpectedly green'; fi
+pass 'M15 claimed stdlib SHA-256/HMAC omission is rejected by independently derived source closure'
+cmp "$WORK/manifest.baseline" "$WORK/internal-source.claimed" >/dev/null || fail 'M15 claimed source manifest restores byte-exactly'
+
 apply_mutation M16 "$WORK/pds/lib/secp256k1.mdk" \
   'let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)' \
   's/let signed1 = signCandidate secret digest \(injectedCandidate bytes1 valid1\)/let signed1 = signed0/'
@@ -483,14 +535,25 @@ pass 'native internal carrier retains the exact signature plus candidate-1/exhau
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
-# Re-derived when the emitter stopped emitting an identity Int.fromInt call: the
-# measured delta against the previous grade is exactly one removed line,
-# mdk_impl_Int_fromInt, and no other symbol entered or left the secret closure.
-[ "$closure_grade" = '3150384095 4910' ] || fail "emitted transitive closure drifted ($closure_grade)"
-for prefix in field scalar sha256 hmac_sha256 secp256k1; do
-  grep -F -q "mdk_lib_${prefix}__" "$WORK/full-closure.lst" || fail "emitted closure reaches $prefix"
+# Re-derived when SHA-256 and the HMAC schedule moved to stdlib/. Measured
+# against the previous closure, symbol by symbol: 26 lines are a pure 1:1
+# rename (mdk_lib_sha256__X -> mdk_sha256__X, 24 of them, plus the two forced
+# constants h0Init and k); 6 lines left, all of them the old pds-side HMAC
+# privates (copyBytes, fillKeyPad, joined, keyPad and the forced blockBytes and
+# digestBytes); 8 entered -- mdk_hmac__{keyPad,fillKeyPad,hmacSha256FixedBytes},
+# the forced mdk_force_hmac__blockBytes, and array.concat's four definitions,
+# which replace the hand-rolled element-at-a-time joined/copyBytes with a
+# length-summing pass and a bulk arrayBlit. 170 -> 172 definitions. Nothing
+# else entered or left, and no SHA-256 helper dropped out.
+[ "$closure_grade" = '4136339374 4796' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Two of the five modules now live in stdlib/, which mangles without the `lib_`
+# segment, so the prefixes are spelled out rather than built from a module name.
+for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_sha256__ mdk_hmac__ \
+  mdk_lib_hmac_sha256__ mdk_lib_secp256k1__
+do
+  grep -F -q "$prefix" "$WORK/full-closure.lst" || fail "emitted closure reaches $prefix"
 done
-if grep -F -q 'mdk_lib_sha256__byteDomainOk' "$WORK/full-closure.lst"; then
+if grep -F -q 'mdk_sha256__byteDomainOk' "$WORK/full-closure.lst"; then
   fail 'signing HMAC closure re-entered the secret-derived public byte-domain scan'
 fi
 pass "emitted LLVM closes every transitive helper from the signing carrier ($(wc -l < "$WORK/full-closure.lst") definitions)"
@@ -506,20 +569,19 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-# Re-derived when the emitter began loading a constructor discriminant directly
-# for a roster it knows is always boxed, instead of the generic test-tag-bit /
-# shift-or-load / phi sequence. Measured column-wise against the previous
-# manifest over the same 170 symbols, in the same order, with no symbol entering
-# or leaving: the comparison, index, write, make, copy and call-total columns did
-# not move in a single row, in either direction. The branch column fell in 14
-# rows and rose in none. In every one of those 14 the only basic blocks that
-# disappeared are the discimm/discbox/disccont triple -- the two ways of fetching
-# the tag word, joined by a phi, neither of which did any secret work and neither
-# of which was a failure arm. Every conyes/connext pair survives, comparing the
-# same constructor tag against the same compile-time constant, and no function in
-# the closure holds a comparison with a non-constant right operand, before or
-# after.
-[ "$control_grade" = '1930568706 7306' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived across two independent changes landing on top of each other: the
+# stdlib hmac/sha256 migration (170 -> 172 shared symbols, same set/order as
+# before) and the emitter's direct-discriminant optimization (deletes the
+# discimm/discbox/disccont triple per constructor match). Measured column-wise
+# against the migration-only manifest over all 172 rows, same set, same order:
+# comparisons, indices, writes, makes, copies and the call total did not move
+# in a single row. The branch column fell by exactly 1 in the same 14 rows the
+# discriminant optimization affects elsewhere in the tree (mdk_core__not,
+# rawFe, rawSc, the four point/select helpers, secretAffine,
+# selectSigningCandidates, signCandidate, and three sha256 internals) and rose
+# in none. No function outside those 14 changed at all; no branch anywhere in
+# the closure tests a byte.
+[ "$control_grade" = '2431464021 7220' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -529,8 +591,8 @@ for symbol in \
   mdk_lib_secp256k1__selectSigningCandidates \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_lib_hmac_sha256__hmacSha256FixedKey \
-  mdk_lib_sha256__sha256FixedBytes \
-  mdk_lib_sha256__sha256AssumeByteDomain \
+  mdk_sha256__sha256FixedBytes \
+  mdk_sha256__sha256AssumeByteDomain \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_scalar__scInverse \
@@ -544,11 +606,16 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 
 # Clang may inline wrappers, so require the audited non-inlined leaves rather
 # than pretending every emitted definition survives as a symbol.
+# hmac_sha256.mdk's guard is a two-call delegation (length test, then the
+# stdlib schedule) and clang inlines it away, so the leaf pinned here is the
+# schedule itself, mdk_hmac__hmacSha256FixedBytes. The guard is still pinned
+# by source text above and by the IR closure manifests, which read definitions
+# rather than surviving link-time symbols.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
-  mdk_lib_hmac_sha256__hmacSha256FixedKey \
-  mdk_lib_sha256__compressRounds \
+  mdk_hmac__hmacSha256FixedBytes \
+  mdk_sha256__compressRounds \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
@@ -608,8 +675,10 @@ grep -F -x -q 'mdk_lib_sign__publicKeyForSecret' "$WORK/full-closure.lst" || fai
 if grep -F -q 'ForTest' "$WORK/full-closure.lst"; then
   fail 'public consumer closure reaches a ForTest symbol'
 fi
-for prefix in field scalar sha256 hmac_sha256 secp256k1 sign; do
-  grep -F -q "mdk_lib_${prefix}__" "$WORK/full-closure.lst" || fail "public union reaches $prefix"
+for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_sha256__ mdk_hmac__ \
+  mdk_lib_hmac_sha256__ mdk_lib_secp256k1__ mdk_lib_sign__
+do
+  grep -F -q "$prefix" "$WORK/full-closure.lst" || fail "public union reaches $prefix"
 done
 for symbol in \
   mdk_lib_secp256k1__ecdsaSignFixed \
@@ -617,8 +686,8 @@ for symbol in \
   mdk_lib_secp256k1__selectSigningCandidates \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_lib_hmac_sha256__hmacSha256FixedKey \
-  mdk_lib_sha256__sha256FixedBytes \
-  mdk_lib_sha256__sha256AssumeByteDomain \
+  mdk_sha256__sha256FixedBytes \
+  mdk_sha256__sha256AssumeByteDomain \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
@@ -632,27 +701,25 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-# The closure grade did not move: the public union reaches the same symbols it
-# did before. Only the control grade was re-derived, alongside the secret-side one
-# above and by the same mechanism -- a directly loaded constructor discriminant
-# for an always-boxed roster. Measured column-wise over all 174 rows, identical
-# set and identical order: comparisons, indices, writes, makes, copies and the
-# call total did not move in a single row, in either direction. Branches fell in
-# 16 rows and rose in none -- the 14 shared with the secret-side manifest, plus
-# publicKeyForSecret (2->1) and signDigest (5->4), which are public wrappers
-# outside the secret closure. In every one of the 16 the only basic blocks that
-# disappeared are the discimm/discbox/disccont triple, and no function in the
-# union holds a comparison with a non-constant right operand, before or after.
-if [ "$public_closure_grade" != '1809078386 5029' ] || [ "$public_control_grade" != '794568868 7481' ]; then
+# Same two changes as the secret-side grade above. The closure grade did not
+# move -- the public union reaches the same 176 symbols it did after the
+# migration alone. Only the control grade shifted, and by the same mechanism:
+# measured column-wise over all 176 rows, same set, same order, nothing rose
+# in any column. Branches fell by exactly 1 in 16 rows -- the 14 shared with
+# the secret-side manifest, plus publicKeyForSecret (2->1) and signDigest
+# (5->4), the two public wrappers outside the secret closure that the
+# discriminant optimization also reaches.
+if [ "$public_closure_grade" != '824690028 4915' ] || [ "$public_control_grade" != '3601723552 7395' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
 
+# Same inlined-guard reasoning as the internal native-symbol list above.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
-  mdk_lib_hmac_sha256__hmacSha256FixedKey \
-  mdk_lib_sha256__compressRounds \
+  mdk_hmac__hmacSha256FixedBytes \
+  mdk_sha256__compressRounds \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \

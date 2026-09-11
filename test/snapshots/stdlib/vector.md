@@ -1,5 +1,5 @@
 # META
-source_lines=479
+source_lines=525
 stages=DESUGAR,MARK
 # SOURCE
 {- | A growable, mutable array.
@@ -378,6 +378,52 @@ export impl Debug (Vector a) requires Debug a where
 export impl Display (Vector a) requires Display a where
   display ma = "fromList \{display (elems ma)}"
 
+-- # Bulk operations
+
+-- The smallest doubling of `cap` that is at least `needed`, starting from 1
+-- when `cap` is 0. `push` only ever needs one `* 2` step because it adds one
+-- element at a time; `pushArray` can jump several capacity classes in a
+-- single call, so this loops the same way `push`'s own doubling would if it
+-- had to.
+growTo : Int -> Int -> Int
+growTo cap needed =
+  if cap >= needed then cap else growTo (if cap == 0 then 1 else cap * 2) needed
+
+{- | Appends every element of `xs`, in order, in one bulk copy.
+
+   Amortized `O(1)` per element: the backing store grows at most once, to
+   the smallest doubling that holds the result, so appending an `n`-element
+   array costs one `blit` of the live prefix (on grow) plus one `blit` of
+   `xs` — never `n` separate single-element grows. `pds/test/read_buffer_test.mdk`
+   covers the growth boundary directly; no doctest here, since asserting a
+   capacity rather than a returned value doesn't fit a doctest's shape. -}
+export
+pushArray : Array a -> Vector a -> Unit
+pushArray xs (Vector backing len) =
+  let n = arrayLength xs
+  let needed = !len + n
+  let () =
+    if needed > arrayLength !backing then
+      let newArr =
+        arrayMake (growTo (arrayLength !backing) needed) (arrayGetUnsafe 0 xs)
+      arrayBlit !backing 0 newArr 0 !len
+      backing := newArr
+  let () = arrayBlit xs 0 !backing !len n
+  len := needed
+
+{- | The live backing array and its length, with no copy.
+
+   For a caller that scans elements in place (an HTTP framer reading
+   buffered bytes, say) and would rather not pay `toArray`'s allocation. The
+   returned array is the vector's own backing store: mutating through it is
+   visible in the vector, and slots at or past the returned length are spare
+   capacity, not live elements. `pds/test/read_buffer_test.mdk` proves the
+   identity directly (a write through the returned array is visible back in
+   the vector); a doctest can show the length but not the aliasing. -}
+export
+rawParts : Vector a -> (Array a, Int)
+rawParts (Vector backing len) = (!backing, !len)
+
 -- ── Property tests ──────────────────────────────────────────────────────
 
 -- An INDEPENDENT sortInPlace oracle (insertion sortInPlace, not a mergesort) so the laws
@@ -544,6 +590,12 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DImpl true "Eq" ((TyApp (TyCon "Vector") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "count") (EVar "a")) (EApp (EVar "count") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "elems") (EVar "a"))) (EApp (EVar "elems") (EVar "b")))))))
 (DImpl true "Debug" ((TyApp (TyCon "Vector") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
 (DImpl true "Display" ((TyApp (TyCon "Vector") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "display") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
+(DTypeSig false "growTo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
+(DTypeSig true "pushArray" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "pushArray" ((PVar "xs") (PCon "Vector" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "xs"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "arrayLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newArr") (EApp (EApp (EVar "arrayMake") (EApp (EApp (EVar "growTo") (EApp (EVar "arrayLength") (EUnOp "!" (EVar "backing")))) (EVar "needed"))) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newArr")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newArr")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "xs")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
+(DTypeSig true "rawParts" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyTuple (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int"))))
+(DFunDef false "rawParts" ((PCon "Vector" (PVar "backing") (PVar "len"))) (ETuple (EUnOp "!" (EVar "backing")) (EUnOp "!" (EVar "len"))))
 (DTypeSig false "naiveInsert" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "naiveInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
 (DFunDef false "naiveInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "lte") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EVar "naiveInsert") (EVar "x")) (EVar "ys")))))
@@ -632,6 +684,12 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DImpl true "Eq" ((TyApp (TyCon "Vector") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "count") (EVar "a")) (EApp (EVar "count") (EVar "b"))) (EVar "False") (EApp (EApp (EMethodRef "eq") (EApp (EVar "elems") (EVar "a"))) (EApp (EVar "elems") (EVar "b")))))))
 (DImpl true "Debug" ((TyApp (TyCon "Vector") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
 (DImpl true "Display" ((TyApp (TyCon "Vector") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
+(DTypeSig false "growTo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
+(DTypeSig true "pushArray" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "pushArray" ((PVar "xs") (PCon "Vector" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "xs"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "arrayLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newArr") (EApp (EApp (EVar "arrayMake") (EApp (EApp (EVar "growTo") (EApp (EVar "arrayLength") (EUnOp "!" (EVar "backing")))) (EVar "needed"))) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newArr")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newArr")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "xs")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
+(DTypeSig true "rawParts" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyTuple (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int"))))
+(DFunDef false "rawParts" ((PCon "Vector" (PVar "backing") (PVar "len"))) (ETuple (EUnOp "!" (EVar "backing")) (EUnOp "!" (EVar "len"))))
 (DTypeSig false "naiveInsert" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "naiveInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
 (DFunDef false "naiveInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EMethodRef "lte") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EDictApp "naiveInsert") (EVar "x")) (EVar "ys")))))

@@ -31,7 +31,7 @@ import lib.mst.{
 }
 import lib.nsid.{nsidErrorMessage, validateNsidPrefix}
 import lib.resource_limits.{checkMstBlocks, checkMstTraversalDepth}
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import lib.sign.{
   PublicKey,
   SecretKey,

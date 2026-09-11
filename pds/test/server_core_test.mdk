@@ -1,20 +1,20 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
+import http.{
+  Header,
+  HttpParseFailure(..),
+  makeHeader,
+  makeResponse,
+  maxHttpRequestLineBytes,
+  parseRequest,
+  parseRequestClassified,
+  Response,
+  serializeResponse,
+}
 import array as A
 import string.{repeat, toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.cid.{cidForRaw}
-import lib.http.{
-  HttpParseFailure(..),
-  Header,
-  Response,
-  makeHeader,
-  makeResponse,
-  parseRequest,
-  parseRequestClassified,
-  serializeResponse,
-}
-import lib.resource_limits.{maxHttpRequestLineBytes}
 import lib.server_core.{
   Account,
   RequestContext(..),

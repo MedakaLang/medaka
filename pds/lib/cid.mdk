@@ -6,15 +6,16 @@
    fabricate a CID that violates those invariants. -}
 
 import array.{drop, take}
-import lib.base32.{multibaseBase32Lower, multibaseBase32LowerDecode}
 import lib.multiformats.{
+  multibaseBase32Lower,
+  multibaseBase32LowerDecode,
   multicodecDagCbor,
   multicodecRaw,
   multicodecSha2_256,
   uvarintDecode,
   uvarintEncode,
 }
-import lib.sha256.{sha256}
+import sha256.{sha256}
 
 -- | An admitted atproto CID. Its constructor is private to this module.
 export data Cid = Cid Int (Array Int)

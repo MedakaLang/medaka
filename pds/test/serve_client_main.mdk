@@ -18,7 +18,7 @@ import lib.credential.{
   makeCredential,
   saltBytes,
 }
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
@@ -38,7 +38,7 @@ import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
 
 -- # Small ad-hoc helpers this test driver owns
 
--- `pds/lib/http.mdk` never needs a response PARSER — the server only ever
+-- `stdlib/http.mdk` never needs a response PARSER — the server only ever
 -- serializes responses, never reads one — so a minimal one lives here,
 -- test-only, reading exactly what `serializeResponse` always produces: a
 -- status line, headers, and a `content-length:` body (never chunked; see

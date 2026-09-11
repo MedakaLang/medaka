@@ -113,6 +113,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`args.md`](stdlib/args.md) | args | — |
 | [`array.md`](stdlib/array.md) | array | — |
 | [`async.md`](stdlib/async.md) | async | — |
+| [`base32.md`](stdlib/base32.md) | base32 | — |
 | [`base64.md`](stdlib/base64.md) | base64 | — |
 | [`bits64.md`](stdlib/bits64.md) | bits64 | — |
 | [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
@@ -122,6 +123,8 @@ What's in the standard library, what's planned, module-by-module status.
 | [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
 | [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |
 | [`hex.md`](stdlib/hex.md) | hex | — |
+| [`hmac.md`](stdlib/hmac.md) | hmac | — |
+| [`http.md`](stdlib/http.md) | http | — |
 | [`index.md`](stdlib/index.md) | Library Index | — |
 | [`io.md`](stdlib/io.md) | io | — |
 | [`json.md`](stdlib/json.md) | json | — |
@@ -132,8 +135,10 @@ What's in the standard library, what's planned, module-by-module status.
 | [`net_async.md`](stdlib/net_async.md) | net_async | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
 | [`path.md`](stdlib/path.md) | path | — |
+| [`pbkdf2.md`](stdlib/pbkdf2.md) | pbkdf2 | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |
 | [`set.md`](stdlib/set.md) | set | — |
+| [`sha256.md`](stdlib/sha256.md) | sha256 | — |
 | [`string.md`](stdlib/string.md) | string | — |
 | [`test.md`](stdlib/test.md) | test | — |
 | [`test_process.md`](stdlib/test_process.md) | test_process | — |

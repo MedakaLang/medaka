@@ -91,6 +91,13 @@ Operations on `Array a`.
 - [`runAsyncIOMain`](async.md#runasynciomain)
 - [`runAsyncMain`](async.md#runasyncmain)
 
+## [`base32`](base32.md)
+
+Base32 encoding and decoding of bytes, per RFC 4648.
+
+- [`base32Encode`](base32.md#base32encode)
+- [`base32Decode`](base32.md#base32decode)
+
 ## [`base64`](base64.md)
 
 Base64 encoding and decoding of bytes, per RFC 4648.
@@ -332,6 +339,76 @@ Hexadecimal encoding and decoding of bytes.
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
 
+## [`hmac`](hmac.md)
+
+HMAC-SHA-256 (RFC 2104) over byte arrays.
+
+- [`hmacSha256`](hmac.md#hmacsha256)
+- [`hmacSha256FixedBytes`](hmac.md#hmacsha256fixedbytes)
+
+## [`http`](http.md)
+
+Pure, bounded HTTP/1.1 request framing and response building.
+
+- [`maxHttpRequestBytes`](http.md#maxhttprequestbytes)
+- [`maxHttpHeaderBytes`](http.md#maxhttpheaderbytes)
+- [`maxHttpBodyBytes`](http.md#maxhttpbodybytes)
+- [`maxHttpRequestLineBytes`](http.md#maxhttprequestlinebytes)
+- [`maxHttpHeaderFields`](http.md#maxhttpheaderfields)
+- [`maxHttpTrailerFields`](http.md#maxhttptrailerfields)
+- [`maxHttpChunks`](http.md#maxhttpchunks)
+- [`maxJsonBodyBytes`](http.md#maxjsonbodybytes)
+- [`maxTextBodyBytes`](http.md#maxtextbodybytes)
+- [`maxRawBodyBytes`](http.md#maxrawbodybytes)
+- [`checkHttpRequestBytes`](http.md#checkhttprequestbytes)
+- [`checkHttpHeaderBytes`](http.md#checkhttpheaderbytes)
+- [`checkHttpBodyBytes`](http.md#checkhttpbodybytes)
+- [`checkHttpRequestLineBytes`](http.md#checkhttprequestlinebytes)
+- [`checkHttpHeaderFields`](http.md#checkhttpheaderfields)
+- [`checkHttpTrailerFields`](http.md#checkhttptrailerfields)
+- [`checkHttpChunks`](http.md#checkhttpchunks)
+- [`checkJsonBodyBytes`](http.md#checkjsonbodybytes)
+- [`checkTextBodyBytes`](http.md#checktextbodybytes)
+- [`checkRawBodyBytes`](http.md#checkrawbodybytes)
+- [`Header`](http.md#header)
+- [`Request`](http.md#request)
+- [`HttpParseFailure`](http.md#httpparsefailure)
+- [`httpParseFailureMessage`](http.md#httpparsefailuremessage)
+- [`headerName`](http.md#headername)
+- [`headerValue`](http.md#headervalue)
+- [`requestMethod`](http.md#requestmethod)
+- [`requestTarget`](http.md#requesttarget)
+- [`requestHeaders`](http.md#requestheaders)
+- [`requestTrailers`](http.md#requesttrailers)
+- [`requestBody`](http.md#requestbody)
+- [`requestBodyLength`](http.md#requestbodylength)
+- [`requestKeepAlive`](http.md#requestkeepalive)
+- [`parseRequestClassified`](http.md#parserequestclassified)
+- [`HttpFrame`](http.md#httpframe)
+- [`HttpScan`](http.md#httpscan)
+- [`httpScanStart`](http.md#httpscanstart)
+- [`httpScanInHeaders`](http.md#httpscaninheaders)
+- [`scanRequestBoundaryWithin`](http.md#scanrequestboundarywithin)
+- [`scanRequestBoundaryFrom`](http.md#scanrequestboundaryfrom)
+- [`scanRequestBoundary`](http.md#scanrequestboundary)
+- [`parseRequestAt`](http.md#parserequestat)
+- [`parseRequest`](http.md#parserequest)
+- [`Response`](http.md#response)
+- [`makeHeader`](http.md#makeheader)
+- [`makeResponse`](http.md#makeresponse)
+- [`responseStatus`](http.md#responsestatus)
+- [`responseHeaders`](http.md#responseheaders)
+- [`responseBody`](http.md#responsebody)
+- [`serializeResponse`](http.md#serializeresponse)
+- [`MediaType`](http.md#mediatype)
+- [`DecodedBody`](http.md#decodedbody)
+- [`QueryParam`](http.md#queryparam)
+- [`parseTargetQuery`](http.md#parsetargetquery)
+- [`mediaTypeType`](http.md#mediatypetype)
+- [`mediaTypeSubtype`](http.md#mediatypesubtype)
+- [`parseMediaType`](http.md#parsemediatype)
+- [`decodeRequestBody`](http.md#decoderequestbody)
+
 ## [`io`](io.md)
 
 Output to standard error, debug printing, and helpers for files and the environment.
@@ -569,6 +646,12 @@ Manipulation of `/`-separated paths as text.
 - [`stripPrefix`](path.md#stripprefix)
 - [`normalize`](path.md#normalize)
 
+## [`pbkdf2`](pbkdf2.md)
+
+PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2), the password-hashing key derivation function.
+
+- [`pbkdf2HmacSha256`](pbkdf2.md#pbkdf2hmacsha256)
+
 ## [`runtime`](runtime.md)
 
 The host primitives.
@@ -726,6 +809,13 @@ An immutable set of distinct elements, ordered by `Ord`.
 - [`difference`](set.md#difference)
 - [`isSubsetOf`](set.md#issubsetof)
 - [`wellFormed`](set.md#wellformed)
+
+## [`sha256`](sha256.md)
+
+SHA-256 hashing of a byte array (FIPS 180-4).
+
+- [`sha256FixedBytes`](sha256.md#sha256fixedbytes)
+- [`sha256`](sha256.md#sha256)
 
 ## [`string`](string.md)
 
@@ -907,4 +997,6 @@ A growable, mutable array.
 - [`removeAtInPlace`](vector.md#removeatinplace)
 - [`sortInPlaceBy`](vector.md#sortinplaceby)
 - [`sortInPlace`](vector.md#sortinplace)
+- [`pushArray`](vector.md#pusharray)
+- [`rawParts`](vector.md#rawparts)
 

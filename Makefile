@@ -136,6 +136,22 @@ test: medaka
 	## is a host primitive the interpreter does not bind (`listDir` panics with
 	## `unbound identifier` under it), so the interpreter arm can only report a
 	## crash, never a pass.
+	## S-hashes: stdlib/hmac.mdk's RFC 4231 / boundary-key-length checks. Its
+	## own module is outside every entry's import closure ([W-MODULE-BLIND]),
+	## and it is not in test/diff_compiler_test.sh's explicit file list, so
+	## without this line nothing would run them and reverting the variable-key
+	## schedule would be caught by nothing.
+	./medaka test stdlib/hmac.mdk
+	## S-base32: stdlib/base32.mdk's RFC 4648 vectors and canonical-rejection
+	## checks. Its own module is outside every entry's import closure
+	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_test.sh's explicit
+	## file list, so without this line nothing would run them.
+	./medaka test stdlib/base32.mdk
+	## stdlib/http.mdk's resource-limit examples. Its own module is outside
+	## every entry's import closure ([W-MODULE-BLIND]) and is not in
+	## test/diff_compiler_test.sh's explicit file list, so without this line
+	## nothing would run them.
+	./medaka test stdlib/http.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 

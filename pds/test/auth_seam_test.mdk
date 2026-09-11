@@ -22,19 +22,19 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
+import http.{
+  Header,
+  makeHeader,
+  makeResponse,
+  Response,
+  responseBody,
+  responseStatus,
+}
 import json.{Json(..), get, parse}
 import list.{sort}
 import string.{fromUtf8, toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.handlers.{pdsRegistry, pdsServer}
-import lib.http.{
-  Header,
-  Response,
-  makeHeader,
-  makeResponse,
-  responseBody,
-  responseStatus,
-}
 import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,

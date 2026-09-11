@@ -54,7 +54,7 @@ import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord, ctEqBytes}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import map.{Map(..), get, set, entries}
 import string.{toUtf8}
 
