@@ -40,11 +40,18 @@ must be observed separately from successful qualifier dispatch.
 
 ## Concrete API and placement
 
-Keep these types/services in `compiler/types/typecheck.mdk`:
+The nominal identity and scope owner now live in `compiler/types/scopes.mdk`,
+which owns structural ancestry:
 
 ```text
 DefaultBodyIdentity { dbiIface: IfaceRef, dbiMethod: String }
 ScopeOwner += DefaultBodyOwner DefaultBodyIdentity
+enclosingDefaultBody : ScopeStore -> ScopeId -> Option DefaultBodyIdentity
+```
+
+Keep the opt-in trace types and hooks in `compiler/types/typecheck.mdk`:
+
+```text
 DefaultBodyRNoneKind = DBRKArg | DBRKReturn
 DefaultBodyRNoneTraceEntry {
   dbrOwner: DefaultBodyIdentity, dbrCallee: String,
@@ -66,19 +73,20 @@ own DefaultBodyIdentity from that IfaceRef and method name, then opens its body
 scope with DefaultBodyOwner. Project irName only into existing display/default
 subject helpers. Never recover identity by matching the method's spelling.
 
-`renderEvidenceBinder` handles DefaultBodyOwner by applying the existing
-dictParamName to dbiMethod and ordinal. The resulting ABI names are unchanged.
-`scopeOwnerLabel` gains an explicit default label for observation; the label is
-never an identity or visibility key. Explicit and synthesized ImplMethod bodies
-retain BindingOwner.
+`renderEvidenceBinder` remains in typecheck and handles DefaultBodyOwner by applying
+the existing dictParamName to dbiMethod and ordinal. The resulting ABI names are
+unchanged. `scopeOwnerLabel` lives with the scope store and retains its explicit
+default label for observation; the label is never an identity or visibility key.
+Explicit and synthesized ImplMethod bodies retain BindingOwner.
 
-Private `enclosingDefaultBody` follows parent ScopeIds. Private
-`noteDefaultBodyRNone` returns immediately when tracing is disabled, before any
-ancestry lookup or trace allocation. Record only if the computed entail route is
-RNone, the existing route cell was itself RNone before calling entail, and the captured
-scope has a DefaultBodyOwner ancestor. Capture the prior tag before entail. Both `resolveSite` and `resolveArgStamp`
-call this helper in their existing RNone branch; thread the PendingEntry location
-explicitly through their adapters. Preserve all current writes and order.
+`types.scopes.enclosingDefaultBody` follows parent ScopeIds in the request's
+ScopeStore. Private `noteDefaultBodyRNone` returns immediately when tracing is
+disabled, before any ancestry lookup or trace allocation. Record only if the
+computed entail route is RNone, the existing route cell was itself RNone before
+calling entail, and the captured scope has a DefaultBodyOwner ancestor. Capture the
+prior tag before entail. Both `resolveSite` and `resolveArgStamp` call this helper in
+their existing RNone branch; thread the PendingEntry location explicitly through
+their adapters. Preserve all current writes and order.
 
 Begin clears/enables a dedicated trace buffer outside replayed inference state;
 finish disables, returns entries in occurrence order, and clears it. This is an
@@ -87,10 +95,13 @@ perform no new fallback and therefore produce no entries; it is not evidence los
 
 ## Deletions and strict limits
 
-Delete only the generic-default path's BindingOwner construction and String-only
+The scope-store extraction supersedes this slice's original GraphRun placement:
+GraphRun carries one `scopeStore` rather than separate scope-frame and counter
+fields. No trace payload is added to replay state. Beyond that ownership move,
+delete only the generic-default path's BindingOwner construction and String-only
 interface argument in the two default inference helpers. Add no new field to
-PendingEntry, Obligation, EvCell, GraphRun, MethodSchemeRow, or qualified schemes.
-There is no route/checker/backend deletion or new semantic evidence publication.
+PendingEntry, Obligation, EvCell, MethodSchemeRow, or qualified schemes. There is
+no route/checker/backend deletion or new semantic evidence publication.
 
 Keep argument and return observations distinct. Ord's inner compare is an
 argument site; it cannot justify a return-family compatibility exception. Only

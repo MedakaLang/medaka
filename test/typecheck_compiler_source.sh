@@ -1166,7 +1166,6 @@ firstPredForEnclAt : GivenScope ->
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
-&& givenVisibleFrom scope (binderScope g.geBinder)
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
 crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
@@ -1199,6 +1198,15 @@ printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
+
+any_given_scope_guard='      && Scopes.givenVisibleFrom
+        (currentScopeStore ())
+        scope
+        (Scopes.binderScope g.geBinder)'
+if ! grep -Fq "$any_given_scope_guard" "$predicate_slot_src"; then
+  echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
+  exit 1
+fi
 
 # #2549 method-row preparation: declaration identity, scheme, and method-level slots
 # are built in one row walk.  The Flat arm deliberately performs two constructions;
@@ -1306,14 +1314,22 @@ fi
 operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
 argImplDictRoutesForEncl encl useScope dictName tag m goals,
 entailInst name m encl useScope tag (EKOp isBinop _) =
-(stampOpRouteVal isBinop encl useScope name m tag, [])
-| eid == id && givenVisibleFrom useScope (binderScope binder) = Some binder'
+(stampOpRouteVal isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"
     exit 1
   fi
 done || exit 1
+operator_scope_guard='  | eid == id
+    && Scopes.givenVisibleFrom
+      (currentScopeStore ())
+      useScope
+      (Scopes.binderScope binder) = Some binder'
+if ! grep -Fq "$operator_scope_guard" "$predicate_slot_src"; then
+  echo "FAIL: operator route dropped its nominal evidence owner: $operator_scope_guard"
+  exit 1
+fi
 if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_src"; then
   echo "FAIL: owner-erasing argImplDictRoutesFor wrapper remains"
   exit 1

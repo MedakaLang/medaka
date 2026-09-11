@@ -183,6 +183,7 @@ bangOnBoolHelp : String
 bangOnBoolMsg : String
 bareLocalBound : BareLocals -> String -> Bool
 beginAssumptionTrace : Unit -> Unit
+beginDefaultBodyRNoneTrace : Unit -> Unit
 beginModuleMarking : String -> List Decl -> Map String Int -> Unit
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindEach : List (Ref Effvar) -> EffRow -> Unit
@@ -190,8 +191,6 @@ bindOutsideDoMsg : String
 bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
 bindTyName : List (String, String) -> String -> String -> Option (List (String, String))
 bindVar : Ref Tyvar -> Mono -> Unit
-binderAt : ScopeId -> Int -> EvidenceBinderId
-binderScope : EvidenceBinderId -> ScopeId
 binopBuiltinHead : String -> String -> Bool
 binopMethod : String -> Option String
 binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
@@ -540,6 +539,7 @@ currentLocalSchemes : Unit -> List (String, Scheme)
 currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentModuleMarks : Unit -> GraphMarks
+currentScopeStore : Unit -> ScopeStore
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
@@ -665,6 +665,9 @@ dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
 dedupVecObls : List VecObl -> List VecObl
 defaultAmbiguousNum : List UObligation -> Mono -> Unit
 defaultBodyLocalNum : List UObligation -> Mono -> Unit
+defaultBodyRNoneServiceProbe : Unit -> (Bool, Bool, List String, Bool)
+defaultBodyRNoneTraceEnabled : Ref Bool
+defaultBodyRNoneTraceEntries : Ref (List DefaultBodyRNoneTraceEntry)
 defaultClosedBodyNum : Int -> Int -> Int -> Unit
 defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
 defaultEachMember : List UObligation -> List (String, Mono) -> Unit
@@ -912,6 +915,7 @@ findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
 finishAssumptionTrace : Unit -> List AssumptionTraceEntry
+finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
 finishModuleMarking : ModuleMarking -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 firstCtorSiblingWithholding : String -> String -> List String -> Option String
 firstDictForEncl : Int -> ScopeId -> List (Int, EvidenceBinderId) -> Option EvidenceBinderId
@@ -953,7 +957,6 @@ freshEffvarAt : Int -> Ref Effvar
 freshEvId : Unit -> EvId
 freshGraphRun : Unit -> GraphRun
 freshPerRun : Unit -> PerRun
-freshScope : Option ScopeId -> Int -> String -> ScopeOwner -> ScopeId
 freshSubst : List Int -> List (Int, Mono)
 freshToggles : Unit -> Toggles
 freshTvMap : List String -> List (String, Mono)
@@ -977,7 +980,6 @@ givenAnswerExact : GivenEntry -> AssumAnswer
 givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
 givenAnswerResidual : GivenEntry -> AssumAnswer
 givenInScope : GivenScope -> GivenEntry -> Bool
-givenVisibleFrom : ScopeId -> ScopeId -> Bool
 givensForScope : ScopeId -> List GivenEntry
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 goalDefersOpenWorld : ScopeId -> IfaceRef -> List Mono -> Bool
@@ -1246,9 +1248,9 @@ inferClauseEff : TcEnv -> Option Mono -> (List Pat, Expr) -> (Mono, List Atom)
 inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
 inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
-inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
+inferDefaultMethod : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
 inferDefaultMethodBody : String -> String -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
-inferDefaultMethods : TcEnv -> String -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
+inferDefaultMethods : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
 inferDefinerShadowAppAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
@@ -1644,6 +1646,7 @@ notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
+noteDefaultBodyRNone : DefaultBodyRNoneKind -> String -> Option Loc -> ScopeId -> Route -> Route -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
 noteTypeErrorDetected : Unit -> Unit
@@ -2035,7 +2038,7 @@ residualReduceFuel : Int
 residualRefutableNow : IfaceRef -> List Mono -> Bool
 residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
-resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> ScopeId -> Unit
+resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
 resolveArgStamps : List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSites : List (Ref Route, Mono) -> Unit
@@ -2051,7 +2054,7 @@ resolveOpSites : Bool -> List PendingEntry -> Unit
 resolveRLocalSite : List Decl -> String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 resolveRLocalSites : List Decl -> List PendingEntry -> Unit
 resolveRecMono : String -> ScopeId -> Mono -> Route
-resolveSite : List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> ScopeId -> Unit
+resolveSite : List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
 resolveSites : List String -> List PendingEntry -> Unit
 restAtoms : List (List Atom) -> List (List Atom)
 restoreCoreDriverFields : DriverState -> Unit
@@ -2116,17 +2119,13 @@ schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) 
 schemeObligationsOf : List Int -> List UObligation -> List VecObl
 schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
 schemesAgree : Option Ty -> Ty -> Bool
-scopeFrame : ScopeId -> ScopeFrame
 scopeFrameStats : Unit -> (Int, Int)
 scopeGivenProbe : Unit -> List Bool
 scopeImplMethods : ScopeId -> List ImplMethod -> List ScopedImplMethod
 scopeMembers : ScopeId -> List (String, Mono) -> List ScopedMember
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> Map String Unit -> List (String, List MethodPredicateSlot)
 scopeModuleId : CheckMode -> String
-scopeOrdinal : ScopeId -> Int
-scopeOwnerLabel : ScopeOwner -> String
 scopePredicateSlots : List ((String, String), List PredicateSlot) -> Map String Unit -> List Decl -> List (String, List PredicateSlot)
-scopeServiceProbe : Unit -> (Bool, Bool, Bool, Bool)
 scopeShadowsCore : Unit -> Unit
 scopeShadowsForGroup : List String -> Unit
 scopeShadowsUser : Unit -> Unit

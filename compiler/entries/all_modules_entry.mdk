@@ -20,6 +20,7 @@ import frontend.resolve.{resolveToLines}
 import frontend.exhaust.{exhaustToLines}
 import driver.loader.{loadProgram}
 import types.repr.{ppScheme}
+import types.scopes.{freshScopeStore}
 import eval.eval.{ppValue}
 import tools.check.{runCheck}
 import tools.codemod.{codemodSource}

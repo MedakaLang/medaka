@@ -1,0 +1,266 @@
+-- Sibling tests for the nominal lexical scope store.  The production owner and
+-- frame types intentionally have no Eq/Debug instances, so assertions compare
+-- projected immutable views and booleans.
+
+import test.{expectEqual}
+import frontend.ast.{TyConOrigin(..)}
+import types.evidence.{ScopeId(..)}
+import types.repr.{IfaceRef(..)}
+import types.scopes.{
+  DefaultBodyIdentity(..),
+  ScopeCursor(..),
+  ScopeFrame(..),
+  ScopeOwner(..),
+  ScopeStore,
+  binderAt,
+  captureScopeCursor,
+  closeScopeCursor,
+  copyScopeStore,
+  enclosingDefaultBody,
+  freshScope,
+  freshScopeStore,
+  givenVisibleFrom,
+  openScopeCursor,
+  scopeFrame,
+  scopeFrameStats,
+  scopeOwnerLabel,
+}
+
+data FrameView = FrameView {
+  fvId : ScopeId,
+  fvParent : Option ScopeId,
+  fvLevel : Int,
+  fvModule : String,
+  fvOwner : String,
+}
+  deriving (Eq, Debug)
+
+frameView : ScopeStore -> ScopeId -> FrameView
+frameView store sid =
+  let frame = scopeFrame store sid
+  FrameView {
+    fvId = frame.sfId,
+    fvParent = frame.sfParent,
+    fvLevel = frame.sfLevel,
+    fvModule = frame.sfModuleId,
+    fvOwner = scopeOwnerLabel frame.sfOwner,
+  }
+
+bindingOwner : ScopeStore -> ScopeId -> Option String
+bindingOwner store sid = match (scopeFrame store sid).sfOwner
+  BindingOwner name => Some name
+  _ => None
+
+data CopyView = CopyView {
+  copyOriginalId : ScopeId,
+  copyCopiedId : ScopeId,
+  copyOriginalOwner : Option String,
+  copyCopiedOwner : Option String,
+  copyOriginalStats : (Int, Int),
+  copyCopiedStats : (Int, Int),
+}
+  deriving (Eq, Debug)
+
+data DefaultView =
+  | NoDefault
+  | DefaultView String String String
+  deriving (Eq, Debug)
+
+defaultView : ScopeStore -> ScopeId -> DefaultView
+defaultView store sid = match enclosingDefaultBody store sid
+  None => NoDefault
+  Some owner => match owner.dbiIface.irOrigin
+    OriginModule moduleId =>
+      DefaultView moduleId owner.dbiIface.irName owner.dbiMethod
+    OriginBuiltin =>
+      DefaultView "<builtin>" owner.dbiIface.irName owner.dbiMethod
+    OriginUnresolved =>
+      DefaultView "<unresolved>" owner.dbiIface.irName owner.dbiMethod
+
+cursorView : ScopeCursor -> Option ScopeId
+cursorView ScopeClosed = None
+cursorView (ScopeOpen sid) = Some sid
+
+test "frames preserve identity ancestry level module owner and lexical visibility" =
+  let store = freshScopeStore ()
+  let initialStats = scopeFrameStats store
+  let root = freshScope store None 0 "scope-test" ModuleOwner
+  let left = freshScope store (Some root) 1 "scope-test" (BindingOwner "same")
+  let inner = freshScope store (Some left) 2 "scope-test" (BindingOwner "inner")
+  let right = freshScope store (Some root) 1 "scope-test" (BindingOwner "same")
+  expectEqual
+    (
+      (0, 0),
+      [
+        FrameView {
+          fvId = ScopeId 0,
+          fvParent = None,
+          fvLevel = 0,
+          fvModule = "scope-test",
+          fvOwner = "module",
+        },
+        FrameView {
+          fvId = ScopeId 1,
+          fvParent = Some (ScopeId 0),
+          fvLevel = 1,
+          fvModule = "scope-test",
+          fvOwner = "binding:same",
+        },
+        FrameView {
+          fvId = ScopeId 2,
+          fvParent = Some (ScopeId 1),
+          fvLevel = 2,
+          fvModule = "scope-test",
+          fvOwner = "binding:inner",
+        },
+        FrameView {
+          fvId = ScopeId 3,
+          fvParent = Some (ScopeId 0),
+          fvLevel = 1,
+          fvModule = "scope-test",
+          fvOwner = "binding:same",
+        },
+      ],
+      (4, 16),
+      [True, True, True],
+    )
+    (
+      initialStats,
+      map (frameView store) [root, left, inner, right],
+      scopeFrameStats store,
+      [
+        givenVisibleFrom store inner left,
+        not (givenVisibleFrom store right left),
+        binderAt left 0 /= binderAt right 0,
+      ],
+    )
+
+test "copy owns a detached counter and backing array" =
+  let original = freshScopeStore ()
+  let root = freshScope original None 0 "copy-test" ModuleOwner
+  let left = freshScope original (Some root) 1 "copy-test" (BindingOwner "left")
+  let _ = freshScope original (Some left) 2 "copy-test" (BindingOwner "inner")
+  let right =
+    freshScope original (Some root) 1 "copy-test" (BindingOwner "right")
+  let copied = copyScopeStore original
+  let originalId =
+    freshScope original (Some right) 2 "copy-test" (BindingOwner "original-id4")
+  let copiedId =
+    freshScope copied (Some right) 2 "copy-test" (BindingOwner "copied-id4")
+  expectEqual
+    CopyView {
+      copyOriginalId = ScopeId 4,
+      copyCopiedId = ScopeId 4,
+      copyOriginalOwner = Some "original-id4",
+      copyCopiedOwner = Some "copied-id4",
+      copyOriginalStats = (5, 16),
+      copyCopiedStats = (5, 16),
+    }
+    CopyView {
+      copyOriginalId = originalId,
+      copyCopiedId = copiedId,
+      copyOriginalOwner = bindingOwner original (ScopeId 4),
+      copyCopiedOwner = bindingOwner copied (ScopeId 4),
+      copyOriginalStats = scopeFrameStats original,
+      copyCopiedStats = scopeFrameStats copied,
+    }
+
+test "independent stores may reuse raw ids without sharing frames" =
+  let first = freshScopeStore ()
+  let second = freshScopeStore ()
+  let firstRoot = freshScope first None 0 "first-module" (BindingOwner "first")
+  let secondRoot =
+    freshScope second None 7 "second-module" (BindingOwner "second")
+  expectEqual
+    (
+      ScopeId 0,
+      ScopeId 0,
+      FrameView {
+        fvId = ScopeId 0,
+        fvParent = None,
+        fvLevel = 0,
+        fvModule = "first-module",
+        fvOwner = "binding:first",
+      },
+      FrameView {
+        fvId = ScopeId 0,
+        fvParent = None,
+        fvLevel = 7,
+        fvModule = "second-module",
+        fvOwner = "binding:second",
+      },
+    )
+    (
+      firstRoot,
+      secondRoot,
+      frameView first firstRoot,
+      frameView second secondRoot,
+    )
+
+test "default ancestry keeps full interface identity and rejects siblings" =
+  let store = freshScopeStore ()
+  let root = freshScope store None 0 "defaults" ModuleOwner
+  let ifaceA = IfaceRef {
+    irName = "Supply",
+    irOrigin = OriginModule "owner-a",
+  }
+  let ifaceB = IfaceRef {
+    irName = "Supply",
+    irOrigin = OriginModule "owner-b",
+  }
+  let bodyA =
+    freshScope
+      store
+      (Some root)
+      1
+      "defaults"
+      (DefaultBodyOwner DefaultBodyIdentity {
+        dbiIface = ifaceA,
+        dbiMethod = "copy",
+      })
+  let childA = freshScope store (Some bodyA) 2 "defaults" (BindingOwner "local")
+  let sibling = freshScope store (Some root) 1 "defaults" (BindingOwner "copy")
+  let bodyB =
+    freshScope
+      store
+      (Some root)
+      1
+      "defaults"
+      (DefaultBodyOwner DefaultBodyIdentity {
+        dbiIface = ifaceB,
+        dbiMethod = "copy",
+      })
+  let childB = freshScope store (Some bodyB) 2 "defaults" (BindingOwner "local")
+  let unrelated = freshScope store None 0 "unrelated" ModuleOwner
+  expectEqual
+    [
+      DefaultView "owner-a" "Supply" "copy",
+      NoDefault,
+      NoDefault,
+      DefaultView "owner-b" "Supply" "copy",
+    ]
+    [
+      defaultView store childA,
+      defaultView store sibling,
+      defaultView store unrelated,
+      defaultView store childB,
+    ]
+
+test "cursor open capture and close restore the parent then closed" =
+  let store = freshScopeStore ()
+  let root = freshScope store None 0 "cursor-test" ModuleOwner
+  let child =
+    freshScope store (Some root) 1 "cursor-test" (BindingOwner "child")
+  let atRoot = openScopeCursor root
+  let atChild = openScopeCursor child
+  let backAtRoot = closeScopeCursor store atChild
+  let backClosed = closeScopeCursor store backAtRoot
+  expectEqual
+    (
+      [Some root, Some child, Some root, None],
+      [root, child],
+    )
+    (
+      map cursorView [atRoot, atChild, backAtRoot, backClosed],
+      [captureScopeCursor atRoot, captureScopeCursor atChild],
+    )

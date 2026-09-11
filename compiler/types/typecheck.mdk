@@ -221,6 +221,14 @@ import types.evidence.{
   ScopeId(..),
   SolverEvidence(..),
 }
+import types.scopes.{
+  DefaultBodyIdentity(..),
+  ScopeCursor(..),
+  ScopeFrame(..),
+  ScopeOwner(..),
+  ScopeStore,
+}
+import types.scopes as Scopes
 import types.registry.{
   RegKey,
   Registry,
@@ -9358,18 +9366,6 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- an entry can only ever match its own module's sites.
 data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 
-data ScopeOwner =
-  | ModuleOwner
-  | BindingOwner String
-  | DefaultBodyOwner DefaultBodyIdentity
-  | PropOwner String
-  | TestOwner String
-
-public export data DefaultBodyIdentity = DefaultBodyIdentity {
-  dbiIface : IfaceRef,
-  dbiMethod : String,
-}
-
 public export data DefaultBodyRNoneKind =
   | DBRKArg
   | DBRKReturn
@@ -9381,16 +9377,6 @@ public export data DefaultBodyRNoneTraceEntry = DefaultBodyRNoneTraceEntry {
   dbrKind : DefaultBodyRNoneKind,
   dbrOrigin : Option Loc,
   dbrScope : ScopeId,
-}
-
-data ScopeCursor = ScopeClosed | ScopeOpen ScopeId
-
-data ScopeFrame = ScopeFrame {
-  sfId : ScopeId,
-  sfParent : Option ScopeId,
-  sfLevel : Int,
-  sfModuleId : String,
-  sfOwner : ScopeOwner,
 }
 
 public export data AssumptionTraceKind =
@@ -9479,94 +9465,25 @@ noteAssumption scope answer =
 assumAnswerName : AssumAnswer -> String
 assumAnswerName answer = renderEvidenceBinder (assumAnswerBinder answer)
 
-scopeOrdinal : ScopeId -> Int
-scopeOrdinal (ScopeId i) = i
-
-scopeFrame : ScopeId -> ScopeFrame
-scopeFrame sid =
-  let i = scopeOrdinal sid
-  let frames = graphRun.value.scopeFrames.value
-  if i < 0 || i >= arrayLength frames then
-    panic "scope frame missing"
-  else match arrayGetUnsafe i frames
-    Some frame => frame
-    None => panic "scope frame missing"
-
-freshScope : Option ScopeId -> Int -> String -> ScopeOwner -> ScopeId
-freshScope parent level moduleId owner =
-  let g = graphRun.value
-  let i = g.scopeCounter.value
-  let sid = ScopeId i
-  let arr0 = g.scopeFrames.value
-  let arr =
-    if i < arrayLength arr0 then
-      arr0
-    else
-      let grown = arrayMake (max 16 (2 * (i + 1))) None
-      let _ = arrayBlit arr0 0 grown 0 (arrayLength arr0)
-      g.scopeFrames := grown
-      grown
-  let _ =
-    arraySetUnsafe
-      i
-      (Some ScopeFrame {
-        sfId = sid,
-        sfParent = parent,
-        sfLevel = level,
-        sfModuleId = moduleId,
-        sfOwner = owner,
-      })
-      arr
-  g.scopeCounter := i + 1
-  sid
-
 captureScope : Unit -> ScopeId
-captureScope _ = match perRun.value.currentScope.value
-  ScopeOpen sid => sid
-  ScopeClosed => panic "scope capture outside inference"
+captureScope _ = Scopes.captureScopeCursor perRun.value.currentScope.value
 
 openScope : ScopeId -> Unit
-openScope sid = perRun.value.currentScope := ScopeOpen sid
+openScope sid = perRun.value.currentScope := Scopes.openScopeCursor sid
 
 closeScope : Unit -> Unit
-closeScope _ = match perRun.value.currentScope.value
-  ScopeClosed => panic "scope close outside inference"
-  ScopeOpen sid => match (scopeFrame sid).sfParent
-    Some parent => perRun.value.currentScope := ScopeOpen parent
-    None => perRun.value.currentScope := ScopeClosed
-
-givenVisibleFrom : ScopeId -> ScopeId -> Bool
-givenVisibleFrom useScope binderScope
-  | useScope == binderScope = True
-  | otherwise = match (scopeFrame useScope).sfParent
-    Some parent => givenVisibleFrom parent binderScope
-    None => False
-
-binderAt : ScopeId -> Int -> EvidenceBinderId
-binderAt sid ordinal = EvidenceBinderId sid ordinal
+closeScope _ =
+  perRun.value.currentScope :=
+    Scopes.closeScopeCursor
+      (currentScopeStore ())
+      perRun.value.currentScope.value
 
 renderEvidenceBinder : EvidenceBinderId -> String
 renderEvidenceBinder (EvidenceBinderId sid ordinal) =
-  match (scopeFrame sid).sfOwner
+  match (Scopes.scopeFrame (currentScopeStore ()) sid).sfOwner
     BindingOwner owner => dictParamName owner ordinal
     DefaultBodyOwner owner => dictParamName owner.dbiMethod ordinal
     _ => panic "evidence binder outside binding scope"
-
-scopeOwnerLabel : ScopeOwner -> String
-scopeOwnerLabel ModuleOwner = "module"
-scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
-scopeOwnerLabel (DefaultBodyOwner owner) = "default:" ++ owner.dbiMethod
-scopeOwnerLabel (PropOwner name) = "prop:" ++ name
-scopeOwnerLabel (TestOwner name) = "test:" ++ name
-
-enclosingDefaultBody : ScopeId -> Option DefaultBodyIdentity
-enclosingDefaultBody sid =
-  let frame = scopeFrame sid
-  match frame.sfOwner
-    DefaultBodyOwner owner => Some owner
-    _ => match frame.sfParent
-      Some parent => enclosingDefaultBody parent
-      None => None
 
 noteDefaultBodyRNone : DefaultBodyRNoneKind ->
   String ->
@@ -9579,32 +9496,28 @@ noteDefaultBodyRNone kind callee origin scope tagBefore computedRoute =
   if not defaultBodyRNoneTraceEnabled.value then
     ()
   else match (tagBefore, computedRoute)
-    (RNone, RNone) => match enclosingDefaultBody scope
-      Some owner =>
-        defaultBodyRNoneTraceEntries :=
-          DefaultBodyRNoneTraceEntry {
-              dbrOwner = owner,
-              dbrCallee = callee,
-              dbrKind = kind,
-              dbrOrigin = origin,
-              dbrScope = scope,
-            }
-            :: defaultBodyRNoneTraceEntries.value
-      None => ()
+    (RNone, RNone) =>
+      match Scopes.enclosingDefaultBody (currentScopeStore ()) scope
+        Some owner =>
+          defaultBodyRNoneTraceEntries :=
+            DefaultBodyRNoneTraceEntry {
+                dbrOwner = owner,
+                dbrCallee = callee,
+                dbrKind = kind,
+                dbrOrigin = origin,
+                dbrScope = scope,
+              }
+              :: defaultBodyRNoneTraceEntries.value
+        None => ()
     _ => ()
 
 export
 scopeTraceContext : ScopeId -> (String, String)
-scopeTraceContext sid =
-  let frame = scopeFrame sid
-  (frame.sfModuleId, scopeOwnerLabel frame.sfOwner)
+scopeTraceContext sid = Scopes.scopeTraceContext (currentScopeStore ()) sid
 
 export
 scopeFrameStats : Unit -> (Int, Int)
-scopeFrameStats _ = (
-  graphRun.value.scopeCounter.value,
-  arrayLength graphRun.value.scopeFrames.value,
-)
+scopeFrameStats _ = Scopes.scopeFrameStats (currentScopeStore ())
 
 -- #2547 unit 3: ONE stored given — the predicate a dict parameter discharges, and the
 -- parameter's name.  The two per-module tables this replaces (`activeDictPreds`, keyed
@@ -9723,8 +9636,7 @@ data GraphRun = GraphRun {
   -- `checkBodyImpl` resets a Flat graph, and a reset that dropped them would leave
   -- every marked node pointing at nothing.
   evCells : Ref (Array (Option EvCell)),
-  scopeFrames : Ref (Array (Option ScopeFrame)),
-  scopeCounter : Ref Int,
+  scopeStore : ScopeStore,
 }
 
 freshGraphRun : Unit -> GraphRun
@@ -9742,8 +9654,7 @@ freshGraphRun _ = GraphRun {
   evCounter = Ref 0,
   evTable = Ref [],
   evCells = Ref (arrayMake 0 None),
-  scopeFrames = Ref (arrayMake 0 None),
-  scopeCounter = Ref 0,
+  scopeStore = Scopes.freshScopeStore (),
 }
 
 -- #2705: mint the cells for one `EMethodAt` node and return the id the node
@@ -9837,6 +9748,11 @@ publishEvidence _ =
 graphRun : Ref GraphRun
 graphRun = Ref (freshGraphRun ())
 
+-- Scope storage is graph-owned; this accessor keeps the request store explicit
+-- at service calls without allocating or threading it through inference.
+currentScopeStore : Unit -> ScopeStore
+currentScopeStore _ = graphRun.value.scopeStore
+
 -- #2549 M2: the next evidence id for the module currently being inferred.  The
 -- module component comes from `driverState`, which `checkBodyImpl` sets once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
@@ -9892,46 +9808,8 @@ copyGraphRun g = GraphRun {
   -- the ids of the cells minted for it, and its nodes must keep answering.  Only
   -- the INDEX is copied, so a mint on one side cannot grow the other's array.
   evCells = Ref (arrayCopy g.evCells.value),
-  scopeFrames = Ref (arrayCopy g.scopeFrames.value),
-  scopeCounter = Ref g.scopeCounter.value,
+  scopeStore = Scopes.copyScopeStore g.scopeStore,
 }
-
--- Private service check for the nominal scope substrate.  It proves the ancestor
--- relation, rejects a sibling with the same rendered owner, keeps those binders
--- nominally distinct, and observes that a copied graph owns detached frame storage
--- and a detached counter.
-scopeServiceProbe : Unit -> (Bool, Bool, Bool, Bool)
-scopeServiceProbe _ =
-  let savedGraph = graphRun.value
-  let savedPerRun = perRun.value
-  graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
-  let root = freshScope None 0 "scope-probe" ModuleOwner
-  let left = freshScope (Some root) 1 "scope-probe" (BindingOwner "foo")
-  let inner = freshScope (Some left) 2 "scope-probe" (BindingOwner "local")
-  let right = freshScope (Some root) 1 "scope-probe" (BindingOwner "foo")
-  let leftBinder = binderAt left 0
-  let rightBinder = binderAt right 0
-  let original = graphRun.value
-  graphRun := copyGraphRun original
-  let _ = freshScope (Some right) 2 "scope-probe" (BindingOwner "copy-only")
-  let copyDetached =
-    original.scopeCounter.value == 4
-      && (match arrayGetUnsafe 4 original.scopeFrames.value
-        None => True
-        Some _ => False)
-  let result = (
-    givenVisibleFrom inner left,
-    not (givenVisibleFrom right left),
-    leftBinder /= rightBinder,
-    copyDetached,
-  )
-  graphRun := savedGraph
-  perRun := savedPerRun
-  result
-
--- > scopeServiceProbe ()
--- (True, True, True, True)
 
 -- Test-only seam for route states that production inference cannot place together:
 -- an RLocal seed inside a default body, and a retained RNone in a synthetic child
@@ -9948,10 +9826,19 @@ defaultBodyRNoneServiceProbe _ =
   let iface =
     IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
-  let root = freshScope None 0 "owner-module" ModuleOwner
-  let body = freshScope (Some root) 1 "owner-module" (DefaultBodyOwner owner)
-  let child = freshScope (Some body) 2 "owner-module" (BindingOwner "local")
-  let ordinary = freshScope (Some root) 1 "owner-module" (BindingOwner "copy")
+  let store = currentScopeStore ()
+  let root = Scopes.freshScope store None 0 "owner-module" ModuleOwner
+  let body =
+    Scopes.freshScope
+      store
+      (Some root)
+      1
+      "owner-module"
+      (DefaultBodyOwner owner)
+  let child =
+    Scopes.freshScope store (Some body) 2 "owner-module" (BindingOwner "local")
+  let ordinary =
+    Scopes.freshScope store (Some root) 1 "owner-module" (BindingOwner "copy")
   let _ =
     noteDefaultBodyRNone DBRKReturn "disabled" None (ScopeId 9999) RNone RNone
   let _ = beginDefaultBodyRNoneTrace ()
@@ -9973,8 +9860,8 @@ defaultBodyRNoneServiceProbe _ =
           _ => False)
     _ => False
   let rendered = [
-    renderEvidenceBinder (binderAt body 0),
-    renderEvidenceBinder (binderAt body 1),
+    renderEvidenceBinder (Scopes.binderAt body 0),
+    renderEvidenceBinder (Scopes.binderAt body 1),
   ]
   let cleared = match finishDefaultBodyRNoneTrace ()
     [] => True
@@ -9988,7 +9875,11 @@ defaultBodyRNoneServiceProbe _ =
 -- `copyDriverState`, so both memo layers restore the key and the bucket together.
 givensForScope : ScopeId -> List GivenEntry
 givensForScope sid =
-  optionOr [] (omLookup (scopeFrame sid).sfModuleId graphRun.value.gGiven.value)
+  optionOr
+    []
+    (omLookup
+      (Scopes.scopeFrame (currentScopeStore ()) sid).sfModuleId
+      graphRun.value.gGiven.value)
 
 -- The ONE given write.  Newest first, as both retired tables were, so every reader's
 -- first-match order is the write order it had before.
@@ -9998,7 +9889,10 @@ pushGiven : GivenMatch ->
   EvidenceBinderId ->
   Unit
 pushGiven gm provenance slot binder =
-  let mid = (scopeFrame (binderScope binder)).sfModuleId
+  let mid =
+    (Scopes.scopeFrame
+      (currentScopeStore ())
+      (Scopes.binderScope binder)).sfModuleId
   let entry = GivenEntry {
     geSlot = slot,
     geBinder = binder,
@@ -10010,9 +9904,6 @@ pushGiven gm provenance slot binder =
       mid
       (entry :: optionOr [] (omLookup mid graphRun.value.gGiven.value))
       graphRun.value.gGiven.value
-
-binderScope : EvidenceBinderId -> ScopeId
-binderScope (EvidenceBinderId sid _) = sid
 
 -- What a rung declares it can soundly read out of the one environment.  This is the
 -- eligibility half of `GivenMatch`, and the only place the two interact.
@@ -22114,7 +22005,11 @@ firstDictForEncl : Int ->
   Option EvidenceBinderId
 firstDictForEncl _ _ [] = None
 firstDictForEncl id useScope ((eid, binder) :: rest)
-  | eid == id && givenVisibleFrom useScope (binderScope binder) = Some binder
+  | eid == id
+    && Scopes.givenVisibleFrom
+      (currentScopeStore ())
+      useScope
+      (Scopes.binderScope binder) = Some binder
   | otherwise = firstDictForEncl id useScope rest
 
 -- activeDictVarOf, but for a constraint var that is the ENCLOSING fn's OWN constraint
@@ -22213,7 +22108,7 @@ enclDictVarOf goal m encl useScope
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
-      map (binderAt useScope) (enclSlotIndex goal (tyvarId cell) encl)
+      map (Scopes.binderAt useScope) (enclSlotIndex goal (tyvarId cell) encl)
     TApp a _ => enclDictVarOf goal a encl useScope
     _ => None
 
@@ -28499,7 +28394,7 @@ resolveRecMono : String -> ScopeId -> Mono -> Route
 resolveRecMono encl scope m = match headTyconNameMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
-    Some slot => RDict (renderEvidenceBinder (binderAt scope slot))
+    Some slot => RDict (renderEvidenceBinder (Scopes.binderAt scope slot))
     None => routeOf ifaceRefNone "" scope KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
@@ -29237,7 +29132,8 @@ checkBodyImpl seed mode prog0 =
     Flat _ => resetGraphState ()
     Module _ _ _ => ()
   let moduleScope =
-    freshScope
+    Scopes.freshScope
+      (currentScopeStore ())
       None
       perRun.value.currentLevel.value
       (scopeModuleId mode)
@@ -30077,10 +29973,11 @@ inferPropBodiesGo env ((DProp _ name params body) :: rest) =
   let _ = enterLevel ()
   let parentScope = captureScope ()
   let bodyScope =
-    freshScope
+    Scopes.freshScope
+      (currentScopeStore ())
       (Some parentScope)
       perRun.value.currentLevel.value
-      (scopeFrame parentScope).sfModuleId
+      (Scopes.scopeFrame (currentScopeStore ()) parentScope).sfModuleId
       (PropOwner name)
   let _ = openScope bodyScope
   let oblMark = wMark perRun.value.implObls
@@ -30105,10 +30002,11 @@ inferTestBodies env ((DTest _ name body) :: rest) =
   let _ = enterLevel ()
   let parentScope = captureScope ()
   let bodyScope =
-    freshScope
+    Scopes.freshScope
+      (currentScopeStore ())
       (Some parentScope)
       perRun.value.currentLevel.value
-      (scopeFrame parentScope).sfModuleId
+      (Scopes.scopeFrame (currentScopeStore ()) parentScope).sfModuleId
       (TestOwner name)
   let _ = openScope bodyScope
   let oblMark = wMark perRun.value.implObls
@@ -30441,10 +30339,11 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   let parentScope = captureScope ()
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = mname }
   let bodyScope =
-    freshScope
+    Scopes.freshScope
+      (currentScopeStore ())
       (Some parentScope)
       perRun.value.currentLevel.value
-      (scopeFrame parentScope).sfModuleId
+      (Scopes.scopeFrame (currentScopeStore ()) parentScope).sfModuleId
       (DefaultBodyOwner owner)
   let _ = openScope bodyScope
   -- #822: [dscope] is the same declaration-derived graded scope the method's own
@@ -32423,7 +32322,7 @@ registerOneMethodDict scope slot id subst = match lookupAssocI id subst
   Some m => match normalize m
     TVar cell =>
       graphRun.value.activeDictVars :=
-        (tyvarId cell, binderAt scope slot)
+        (tyvarId cell, Scopes.binderAt scope slot)
           :: graphRun.value.activeDictVars.value
     _ => ()
 
@@ -32505,10 +32404,11 @@ scopeImplMethods _ [] = []
 scopeImplMethods parent (method :: rest) =
   let name = implMethodName method
   let scope =
-    freshScope
+    Scopes.freshScope
+      (currentScopeStore ())
       (Some parent)
       perRun.value.currentLevel.value
-      (scopeFrame parent).sfModuleId
+      (Scopes.scopeFrame (currentScopeStore ()) parent).sfModuleId
       (BindingOwner name)
   ScopedImplMethod { simMethod = method, simScope = scope }
     :: scopeImplMethods parent rest
@@ -33598,7 +33498,7 @@ registerImplMethodDictOne scope slot vname tvMap = match lookupAssoc vname tvMap
   Some m => match normalize m
     TVar cell =>
       graphRun.value.activeDictVars :=
-        (tyvarId cell, binderAt scope slot)
+        (tyvarId cell, Scopes.binderAt scope slot)
           :: graphRun.value.activeDictVars.value
     _ => ()
 
@@ -33770,7 +33670,7 @@ registerReqSlots _ _ _ [] = ()
 registerReqSlots scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
-  let binder = binderAt scope slot
+  let binder = Scopes.binderAt scope slot
   let _ = registerEachActive ids binder
   let reqIface = IfaceRef { irName = iface, irOrigin = ro }
   let _ = registerPredGiven reqIface argMonos binder
@@ -33947,7 +33847,10 @@ firstPredForEncl : PredicateRequest ->
 firstPredForEncl _ _ [] = None
 firstPredForEncl request useScope (g :: rest)
   | givenInScope GSPredicateOnly g
-    && givenVisibleFrom useScope (binderScope g.geBinder)
+    && Scopes.givenVisibleFrom
+      (currentScopeStore ())
+      useScope
+      (Scopes.binderScope g.geBinder)
     && predicateRequestMatchesSlot request g.geSlot =
     Some (givenAnswerForRequest request g)
   | otherwise = firstPredForEncl request useScope rest
@@ -33993,7 +33896,10 @@ firstPredForEnclAt _ _ _ _ [] = None
 firstPredForEnclAt scope target request useScope (g :: rest)
   | givenInScope scope g
     && containsI target g.geSlot.psBoundIds
-    && givenVisibleFrom useScope (binderScope g.geBinder)
+    && Scopes.givenVisibleFrom
+      (currentScopeStore ())
+      useScope
+      (Scopes.binderScope g.geBinder)
     && predicateRequestMatchesSlot request g.geSlot =
     Some (givenAnswerForRequest request g)
   | otherwise = firstPredForEnclAt scope target request useScope rest
@@ -34019,7 +33925,10 @@ firstPredForEnclResidual _ _ _ [] = None
 firstPredForEnclResidual iface args useScope (g :: rest)
   | givenInScope GSPredicateOnly g
     && g.geSlot.psIface.irName == iface
-    && givenVisibleFrom useScope (binderScope g.geBinder)
+    && Scopes.givenVisibleFrom
+      (currentScopeStore ())
+      useScope
+      (Scopes.binderScope g.geBinder)
     && predicateRequestArgsMatch (PSArgsKnown args) g.geSlot.psArgs =
     Some (givenAnswerResidual g)
   | otherwise = firstPredForEnclResidual iface args useScope rest
@@ -35846,10 +35755,11 @@ scopeMembers : ScopeId -> List (String, Mono) -> List ScopedMember
 scopeMembers _ [] = []
 scopeMembers parent ((name, mono) :: rest) =
   let sid =
-    freshScope
+    Scopes.freshScope
+      (currentScopeStore ())
       (Some parent)
       perRun.value.currentLevel.value
-      (scopeFrame parent).sfModuleId
+      (Scopes.scopeFrame (currentScopeStore ()) parent).sfModuleId
       (BindingOwner name)
   ScopedMember { smName = name, smMono = mono, smScope = sid }
     :: scopeMembers parent rest
@@ -36145,7 +36055,7 @@ registerMemberSlots scope kept ((iface, monos) :: rest) [] =
   match abstractSlotIds monos
     [] => registerMemberSlots scope kept rest []
     id :: more =>
-      let _ = registerEachActiveId (id :: more) (binderAt scope kept)
+      let _ = registerEachActiveId (id :: more) (Scopes.binderAt scope kept)
       PredicateSlot {
           psIface = iface,
           psArgs = PSArgsUnknown,
@@ -36156,7 +36066,7 @@ registerMemberSlots scope kept ((iface, monos) :: rest) (args :: argRest) =
   match abstractSlotIds monos
     [] => registerMemberSlots scope kept rest argRest
     id :: more =>
-      let _ = registerEachActiveId (id :: more) (binderAt scope kept)
+      let _ = registerEachActiveId (id :: more) (Scopes.binderAt scope kept)
       PredicateSlot {
           psIface = iface,
           psArgs = PSArgsKnown args,
@@ -36204,7 +36114,7 @@ registerEachActiveId (id :: rest) dname =
 registerSlotPredGivens : ScopeId -> Int -> List PredicateSlot -> Unit
 registerSlotPredGivens _ _ [] = ()
 registerSlotPredGivens scope slot (s :: srest) =
-  let _ = registerFunPredGiven s (binderAt scope slot)
+  let _ = registerFunPredGiven s (Scopes.binderAt scope slot)
   registerSlotPredGivens scope (slot + 1) srest
 
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
@@ -37473,7 +37383,10 @@ anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
 anyGivenMatches _ _ [] = False
 anyGivenMatches request scope (g :: rest) =
   givenInScope GSPredicateOnly g
-      && givenVisibleFrom scope (binderScope g.geBinder)
+      && Scopes.givenVisibleFrom
+        (currentScopeStore ())
+        scope
+        (Scopes.binderScope g.geBinder)
       && predicateRequestMatchesSlot request g.geSlot
     || anyGivenMatches request scope rest
 
@@ -37495,9 +37408,12 @@ scopeGivenProbe _ =
   let savedPerRun = perRun.value
   graphRun := freshGraphRun ()
   perRun := freshPerRun ()
-  let root = freshScope None 0 "given-probe" ModuleOwner
-  let owner = freshScope (Some root) 1 "given-probe" (BindingOwner "owner")
-  let sibling = freshScope (Some root) 1 "given-probe" (BindingOwner "sibling")
+  let store = currentScopeStore ()
+  let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
+  let owner =
+    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "owner")
+  let sibling =
+    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "sibling")
   let iface =
     IfaceRef { irName = "PairGiven", irOrigin = OriginModule "given-probe" }
   let args = [tconBuiltin "Int", tconBuiltin "Bool"]
@@ -37506,7 +37422,7 @@ scopeGivenProbe _ =
     psArgs = PSArgsKnown args,
     psBoundIds = [41],
   }
-  let _ = pushGiven GMPredicate DirectGiven slot (binderAt owner 0)
+  let _ = pushGiven GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
   let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
   let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
   let truncated = PredicateRequest {
@@ -37526,7 +37442,8 @@ scopeGivenProbe _ =
     prIface = witnessIface,
     prArgs = PSArgsKnown [tconBuiltin "Int"],
   }
-  let _ = pushGiven GMIdWitnessed DirectGiven witnessSlot (binderAt owner 1)
+  let _ =
+    pushGiven GMIdWitnessed DirectGiven witnessSlot (Scopes.binderAt owner 1)
   let compatibleIface = IfaceRef {
     irName = "CompatibleGiven",
     irOrigin = OriginModule "given-probe",
@@ -37540,7 +37457,8 @@ scopeGivenProbe _ =
     prIface = compatibleIface,
     prArgs = PSArgsKnown [tconBuiltin "Int"],
   }
-  let _ = pushGiven GMPredicate DirectGiven compatibleSlot (binderAt owner 2)
+  let _ =
+    pushGiven GMPredicate DirectGiven compatibleSlot (Scopes.binderAt owner 2)
   let givens = givensForScope owner
   let result = [
     anyGivenMatches exact owner givens,
@@ -38586,7 +38504,7 @@ ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 registerActiveDictVars _ _ [] = ()
 registerActiveDictVars scope slot (s :: rest) =
-  let _ = registerEachActiveId s.psBoundIds (binderAt scope slot)
+  let _ = registerEachActiveId s.psBoundIds (Scopes.binderAt scope slot)
   registerActiveDictVars scope (slot + 1) rest
 
 -- Render accumulated type errors as `TYPE ERROR: <msg>` lines (in order of

@@ -1,0 +1,15 @@
+binderAt : ScopeId -> Int -> EvidenceBinderId
+binderScope : EvidenceBinderId -> ScopeId
+captureScopeCursor : ScopeCursor -> ScopeId
+closeScopeCursor : ScopeStore -> ScopeCursor -> ScopeCursor
+copyScopeStore : ScopeStore -> ScopeStore
+enclosingDefaultBody : ScopeStore -> ScopeId -> Option DefaultBodyIdentity
+freshScope : ScopeStore -> Option ScopeId -> Int -> String -> ScopeOwner -> ScopeId
+freshScopeStore : Unit -> ScopeStore
+givenVisibleFrom : ScopeStore -> ScopeId -> ScopeId -> Bool
+openScopeCursor : ScopeId -> ScopeCursor
+scopeFrame : ScopeStore -> ScopeId -> ScopeFrame
+scopeFrameStats : ScopeStore -> (Int, Int)
+scopeOrdinal : ScopeId -> Int
+scopeOwnerLabel : ScopeOwner -> String
+scopeTraceContext : ScopeStore -> ScopeId -> (String, String)
