@@ -21,7 +21,7 @@ LegacyNumLiteralAnchor {
 }
 methodSchemeRows : List (String, List Kind) -> IfaceRef -> List String
                    -> List IfaceMethod -> List MethodSchemeRow
-ifaceMethodRows : List Decl -> List MethodSchemeRow
+ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 seedNumLitFromIntAnchor : List MethodSchemeRow -> List Decl -> Unit
@@ -37,9 +37,9 @@ No new interface-vector or unused declaration-metadata fields are retained in th
 
 ### Wiring and compatibility
 
-At `checkBodyImpl`, bind `currentMethodRows = ifaceMethodRows prog` where the current method schemes are built. Project `globalS` from those rows at the same point. Preserve the Flat arm's existing second method-scheme construction used for `methodNames`: it has an observable fresh-id allocation schedule and registration side effects. Removing that build is outside this slice.
+At `checkBodyImpl`, bind `currentMethodRows = ifaceMethodSchemeRows prog` where the current method schemes are built. Project `globalS` from those rows at the same point. Preserve the Flat arm's existing second method-scheme construction used for `methodNames`: it has an observable fresh-id allocation schedule and registration side effects. Removing that build is outside this slice.
 
-The Module arm builds `visibleMethodRows = ifaceMethodRows implDecls` at the existing `ifaceSchemes` construction point. Keep these rows local and pass them directly to `pickSchemesByDecl` and the Num seeder. Delete `ifaceMethodSchemesByIdRef` with no replacement `PerRun` field: its only reader is the immediate setup call, so graph-lived full rows would retain unused declaration/type metadata in every `StampCtx`. `admittedSchemeFor` and `lookupSchemeById` project `msrScheme` using their existing `sameTyConHead` comparison. The Num seeder separately preserves `sameIfaceDecl`. These are two distinct comparison policies; do not merge them. No fallback or resolution rule changes.
+The Module arm builds `visibleMethodRows = ifaceMethodSchemeRows implDecls` at the existing `ifaceSchemes` construction point. Keep these rows local and pass them directly to `pickSchemesByDecl` and the Num seeder. Delete `ifaceMethodSchemesByIdRef` with no replacement `PerRun` field: its only reader is the immediate setup call, so graph-lived full rows would retain unused declaration/type metadata in every `StampCtx`. `admittedSchemeFor` and `lookupSchemeById` project `msrScheme` using their existing `sameTyConHead` comparison. The Num seeder separately preserves `sameIfaceDecl`. These are two distinct comparison policies; do not merge them. No fallback or resolution rule changes.
 
 Replace `numLitFromIntSchemeRef` and `numLitFromIntParamsRef` with `numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor)`. The single seeder selects `(builtinIfaceRef BNum, "fromInt")` from the rows using `sameIfaceDecl`, and obtains optional params through the unchanged legacy declaration walk. Store an anchor only if the scheme is present. Literal inference reads its scheme; the obligation recorder reads its optional params and preserves the existing absent-params branch. Preserve all literal suppression/defaulting rules. This consolidates state ownership; it does not yet unify numeric scheme and parameter declaration identity.
 
@@ -52,7 +52,7 @@ These rows contain live scheme/type cells and remain local to setup. Only the se
 ### Deletions
 
 - `ifaceMethodSchemeIds`, `declIfaceMethodIds`, `ifaceMethodIdRow`, `zipIfaceMethodSchemeIds` and all positional-zip calls.
-- The superseded builders `ifaceMethodSchemes`, `declIfaceMethods` and `methodSchemes`: both existing construction invocations use `ifaceMethodRows` and its projection. Preserving the Flat second invocation does not license retaining a second implementation of the builder.
+- The superseded builders `ifaceMethodSchemes`, `declIfaceMethods` and `methodSchemes`: both existing construction invocations use `ifaceMethodSchemeRows` and its projection. Preserving the Flat second invocation does not license retaining a second implementation of the builder.
 - The old `ifaceMethodSchemesByIdRef` field and constructor/copy entries, with no replacement graph-lived row field.
 - Both numeric scheme/params refs and their separate seed entry points: `seedNumLitFromIntScheme`, `seedNumLitFromIntParams`. Replace the old pair-table scheme picker with a row picker using the same strict comparison. Retain `numLitFromIntParamsOf`, `numLitFromIntParamsDecl`, and `pickIfaceMethodParams` as the explicit legacy params walk.
 - `registerMethodConstraints`, replaced by `installMethodPredicateSlots`: only the row builder computes slots; the installer receives them at the same old registration point.
@@ -123,4 +123,6 @@ Numeric cases are `attrOnly`, `directOnly`, `attrThenDirect`, `directThenAttr`, 
 
 ### Construction-schedule source guard
 
-Extend the existing source assertions in `test/typecheck_compiler_source.sh`; do not add a new gate script. Require exactly two production occurrences of `ifaceMethodRows prog` (initial setup and the preserved Flat second build), and exactly one `ifaceMethodRows implDecls` (Module setup). Update the existing required `registerMethodConstraints` assertion to `installMethodPredicateSlots` and reject the deleted builder/zip/ref names above. A unit test that manually constructs rows twice cannot detect removal of the actual second production call, so this narrow source guard complements the identity tests. It protects the explicit construction schedule, not a general runtime equivalence claim.
+Extend the existing source assertions in `test/typecheck_compiler_source.sh`; do not add a new gate script. Require exactly two production occurrences of `ifaceMethodSchemeRows prog` (initial setup and the preserved Flat second build), and exactly one `ifaceMethodSchemeRows implDecls` (Module setup). Update the existing required `registerMethodConstraints` assertion to `installMethodPredicateSlots` and reject the deleted builder/zip/ref names above. A unit test that manually constructs rows twice cannot detect removal of the actual second production call, so this narrow source guard complements the identity tests. It protects the explicit construction schedule, not a general runtime equivalence claim.
+
+Naming correction: the new scheme-bearing builder is `ifaceMethodSchemeRows`. The existing `ifaceMethodRows : List Decl -> List (String, List String)` is the unrelated pure interface/method-name projection used by graph visibility and `PreludePreamble`; retain it and `ppIfaceMethodRows` unchanged. Never store the new live scheme rows in that pure memo.
