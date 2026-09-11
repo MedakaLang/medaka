@@ -1167,6 +1167,70 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    stated above, with `depExportsUnknown` naming the fail-open condition that the wildcard
    arm and `depExportsStandalone` now share instead of each restating it.
 
+21. **Ruling 3 shape (a) passes its acceptance on top of #2809, 2026-09-10** (branch
+   `rearch4-build-child`, off main `69107a07c`; not merged). Item 16's refutation had one
+   stated prerequisite — make the emit elaboration's verdict agree with the front end's —
+   and item 20 is that prerequisite. Re-running item 16's eight acceptance items against
+   the same change, ported rather than cherry-picked (`typecheckGateRoute` had become
+   `Result String Unit` over `analyzeSurface` / `resolveModulesErrorsByFile`, and the
+   elaborate-then-mangle order had to survive the port), **all eight pass.**
+   - **The five lost rejections are recovered.** `reject_845_xmod_inferred_{alias,reexport,
+     reexport_2hop,selective}` and `reject_ambiguous_reexport_inside_map_literal` all reject
+     through the child at exit 1 with `check`'s text, byte-identical modulo `check`'s absent
+     trailing newline, and with no `__` anywhere in stderr;
+     `diff_compiler_run_check_agreement` is green.
+   - **The phantom drain is gone.** `must_fail`'s `1359-reexport-ctor-mangle-miss` still
+     REPROduces; the suite reads 33 fixtures, 33 REPRO, 0 drained.
+   - **The two drivers no longer differ on a single file.** `check` and `build` are
+     byte-identical on all ten fixtures item 16 named (`p0_18_*`, `p0_19_*`, `p0_21_*`,
+     `s1_constrained_shadow_dispatch`, the three `s6-*`).
+   - **Mangled names no longer leak** into any diagnostic the corpus produces.
+   **#2810 does not reproduce.** `diff_compiler_test_native` is green with the gate hard,
+   `native_test_abort.mdk` included; the `Ambiguous instance for Debug/Eq` on the
+   synthesized `expectEqual` shim was itself an artifact of elaborating the mangled graph
+   (the #1675 class of item 20: two mangled denotations of one name are two names), so
+   #2809 discharged it. It was measured, not assumed — the same gate, the same fixture.
+   **Measured.** `selfcompile_fixpoint` C3a PASS and C3b PASS with the gate hard. Emitted
+   IR byte-identical across the loader swap, one source tree and two emitter binaries:
+   `medaka_cli` 36,868,184 B and the emitter entry 18,001,690 B, `cmp`-equal. Two-arm
+   `build` differential (stdout+stderr+exit plus the built binary's own output, temp paths
+   and the per-arm output name normalized) over `test/{run_check_agreement,dict,
+   eval_modules,llvm}_fixtures*`, `error_quality_fixtures/build` and `engine_fixtures` —
+   **782 entries, 2 divergent** (the enumeration is flat `.mdk` plus `*/main.mdk` and
+   `*/entry.mdk`, which is why it is not item 16's 1022). The gate set
+   (`run_check_agreement`, `llvm*`, `engines`, `must_fail`, `error_quality*`,
+   `eval_modules`, `eval_typed_modules`, `dict_semantics`, `snapshot_*`, `selfproc`,
+   `core_ir*`, `test*`, `catch_all_census`, `shadow*`, `cli*`, `diff_native_cli`) is 39/39
+   green, and every `test/wasm/*.sh` gate is green.
+   **Ir, held workload** (the same source tree, only the binary swapped;
+   `GC_INITIAL_HEAP_SIZE` at 4 GB; `--trace-children=no` so each process is its own figure
+   and clang, identical on both arms, is in neither): `check` of the compiler's own graph
+   72.764B → 72.460B (**-0.42%**, i.e. the parent's check path is untouched, as the port
+   claims); `build`'s PARENT 57.211B → 24.765B (**-56.7%**); the emitter CHILD 62.346B →
+   70.020B (**+12.3%**, the located loader and the diagnostic render). Compiler-side total
+   for a `build` **119.557B → 94.785B, -20.7%** — item 16's "about -25%" was the right
+   order and slightly optimistic.
+   **The two divergences, and they are the child's REPORT, never its verdict.**
+   `error_quality_fixtures/build/main_takes_unit.out` re-blessed: on a FAILING emit the
+   child's stderr, warnings included, rides inside the parent's `emitter failed compiling`
+   wrap instead of preceding it, so two lines swap. And on the auto-print path a rejecting
+   build still prints the clean-path `W-MAIN-SHAPE` warning ahead of the wrap's error,
+   where `check` would print the error alone — `emitFullGate` has already decided the
+   unwrapped program is clean by the time the wrap re-checks. Both were found by the
+   differential, not reasoned about.
+   **A must-fail pin was RE-POINTED, not drained, and the distinction is the finding.**
+   `1575-self-naming-requires-aborts-compiler` flipped to DRAINED at `exit: expected 134,
+   got 1`. It is a phantom: `medaka run` still aborts 134 and `build` still prints the same
+   `E-STACK-OVERFLOW` line — the overflow simply moved into the emitter child, whose SIGABRT
+   the parent reports as a failed emit. The claim's `exit:` is now 1 with a `why-exit:`
+   block; the discriminating `stdout-line` is untouched. **Any shape-(a)-like change must
+   re-read every `must_fail` row whose verb is `build`: a process boundary between the
+   defect and the exit code can drain a pin that nothing fixed.**
+   **What is still NOT converged**, and was not in this unit's scope: `build --json` still
+   runs `checkJsonFileParts` in the parent plus the child (`runBuildJsonCmd`), because the
+   child has no machine channel and `runCommand` takes no environment — item 16's reading,
+   unchanged. The parent therefore still typechecks on the `--json` route alone.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
