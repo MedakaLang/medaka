@@ -100,6 +100,7 @@ suites = [
   ("ratelimit_test", (25, Eval)),
   ("read_buffer_test", (12, Eval)),
   ("websocket_test", (43, NativeSpeed)),
+  ("event_log_test", (22, NativeCapability)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -263,6 +264,9 @@ test "pds/test/read_buffer_test.mdk executed >= 12 assertions" =
 
 test "pds/test/websocket_test.mdk executed >= 43 assertions" =
   floorExpectation "websocket_test"
+
+test "pds/test/event_log_test.mdk executed >= 22 assertions" =
+  floorExpectation "event_log_test"
 
 -- # Non-vacuity
 

@@ -15,12 +15,25 @@
 
 import array
 import list.{reverse, sortBy}
-import map.{Map(..), has, set}
+import map.{Map(..), get, has, set}
 import string.{fromUtf8}
+import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
-import lib.cid.{Cid, cidToString}
+import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
-import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
+import lib.mst.{Mst, mstCoveringProofBlocks, mstEmpty, mstNodeBlocks}
+import lib.repo.{
+  Repo,
+  RepoCommit,
+  repoCommitCid,
+  repoCommitDataCid,
+  repoCommitSignedBytes,
+  repoCommitTid,
+  repoEntries,
+  repoLatestCommit,
+  repoStore,
+  repoTree,
+}
 import lib.tid.{Tid, tidToString}
 
 {- | One `ops` entry: the mutation of a single record.
@@ -209,3 +222,143 @@ syncCommitFrame event = do
   header <- dagCborEncode syncCommitHeader
   body <- dagCborEncode (syncCommitBody event)
   Ok (header ++ body)
+
+indexEntries : List (Array Int, Cid) -> Map String Cid -> Map String Cid
+indexEntries [] index = index
+indexEntries ((path, cid) :: rest) index =
+  indexEntries rest (set (fromUtf8 path) cid index)
+
+-- A record present after the write is a create when the prior tree did not
+-- name its path, and an update when it did under a different CID. A path whose
+-- CID did not move is not an op at all: a batch may rewrite a record to the
+-- bytes it already held, and announcing that as an update would claim a
+-- mutation the MST cannot show.
+writesAgainst : List (Array Int, Cid) ->
+  Map String Cid ->
+  List SyncRepoOp ->
+  List SyncRepoOp
+writesAgainst [] _ acc = reverse acc
+writesAgainst ((path, cid) :: rest) priorIndex acc =
+  match get (fromUtf8 path) priorIndex
+    None => writesAgainst rest priorIndex (SyncOpCreate path cid :: acc)
+    Some prior =>
+      if cidEqual prior cid then
+        writesAgainst rest priorIndex acc
+      else
+        writesAgainst rest priorIndex (SyncOpUpdate path cid prior :: acc)
+
+deletesAgainst : List (Array Int, Cid) ->
+  Map String Cid ->
+  List SyncRepoOp ->
+  List SyncRepoOp
+deletesAgainst [] _ acc = reverse acc
+deletesAgainst ((path, cid) :: rest) nextIndex acc =
+  if has (fromUtf8 path) nextIndex then
+    deletesAgainst rest nextIndex acc
+  else
+    deletesAgainst rest nextIndex (SyncOpDelete path cid :: acc)
+
+opPath : SyncRepoOp -> Array Int
+opPath (SyncOpCreate path _) = path
+opPath (SyncOpUpdate path _ _) = path
+opPath (SyncOpDelete path _) = path
+
+opRecordCid : SyncRepoOp -> Option Cid
+opRecordCid (SyncOpCreate _ cid) = Some cid
+opRecordCid (SyncOpUpdate _ cid _) = Some cid
+opRecordCid (SyncOpDelete _ _) = None
+
+-- The record blocks this write added, read out of the POST-write store. A
+-- missing one is an error rather than an omission: a `blocks` CAR short a
+-- record the `ops` list names is a frame a relay cannot apply, and shipping
+-- it silently is worse than failing the write.
+addedRecordBlocks : List SyncRepoOp ->
+  BlockStore ->
+  List (Cid, Array Int) ->
+  Result String (List (Cid, Array Int))
+addedRecordBlocks [] _ acc = Ok (reverse acc)
+addedRecordBlocks (op :: rest) store acc = match opRecordCid op
+  None => addedRecordBlocks rest store acc
+  Some cid => match blockStoreGet cid store
+    None =>
+      Err
+        "sync_event: record block \{cidToString cid} is absent from the post-write block store"
+    Some bytes => addedRecordBlocks rest store ((cid, bytes) :: acc)
+
+optionalCommit : Option Repo -> Option RepoCommit
+optionalCommit None = None
+optionalCommit (Some repo) = Some (repoLatestCommit repo)
+
+commitRev : Option RepoCommit -> Option Tid
+commitRev None = None
+commitRev (Some commit) = Some (repoCommitTid commit)
+
+commitData : Option RepoCommit -> Option Cid
+commitData None = None
+commitData (Some commit) = Some (repoCommitDataCid commit)
+
+commitBlocksFor : Mst ->
+  Mst ->
+  List SyncRepoOp ->
+  List (Cid, Array Int) ->
+  RepoCommit ->
+  Result String (List (Cid, Array Int))
+commitBlocksFor priorTree nextTree ops added commit =
+  syncCommitBlocks
+    priorTree
+    nextTree
+    (map opPath ops)
+    added
+    (repoCommitCid commit)
+    (repoCommitSignedBytes commit)
+
+{- | The `#commit` event one write produced, assembled from the repository
+   either side of it.
+
+   The ops are derived from the two trees rather than from the request that
+   caused them, so the event states what the repository actually did: a route
+   that wrote a record to the bytes it already held emits no op, and a batch
+   emits exactly the paths whose CIDs moved. `before` is `None` only for the
+   genesis commit, which is the one case the lexicon spells `since = null`.
+
+   The op ORDER is creates and updates in post-write key order, then deletes
+   in pre-write key order. The lexicon constrains it no further, and a total
+   order chosen here keeps the emitted frame a function of the two trees
+   rather than of the order a request happened to list its writes in.
+
+   `seq` is the caller's: this module performs no I/O and cannot know what the
+   durable counter stands at. `pds/shell/eventlog.mdk` assigns it. -}
+export
+syncCommitEventFor : Int ->
+  String ->
+  String ->
+  Option Repo ->
+  Repo ->
+  Result String SyncCommitEvent
+syncCommitEventFor seq time did before after = do
+  let priorEntries = match before
+    None => []
+    Some repo => repoEntries repo
+  let nextEntries = repoEntries after
+  let ops =
+    writesAgainst nextEntries (indexEntries priorEntries Tip) []
+      ++ deletesAgainst priorEntries (indexEntries nextEntries Tip) []
+  let priorTree = match before
+    None => mstEmpty
+    Some repo => repoTree repo
+  let commit = repoLatestCommit after
+  let commitCid = repoCommitCid commit
+  added <- addedRecordBlocks ops (repoStore after) []
+  blocks <- commitBlocksFor priorTree (repoTree after) ops added commit
+  car <- syncCommitCar commitCid blocks
+  Ok SyncCommitEvent {
+    seq = seq,
+    time = time,
+    repoDid = did,
+    commitCid = commitCid,
+    rev = repoCommitTid commit,
+    since = commitRev (optionalCommit before),
+    prevData = commitData (optionalCommit before),
+    blocksCar = car,
+    ops = ops,
+  }

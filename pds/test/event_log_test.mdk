@@ -1,0 +1,441 @@
+{- | The durable firehose event log: its record format and cursor arithmetic
+   (`pds/lib/event_log_record.mdk`) and the on-disk log itself
+   (`pds/shell/eventlog.mdk`).
+
+   The file-backed half runs against a `mktemp -d` scratch directory rather
+   than a fixture under the tree, because what it asserts is what a directory
+   looks like AFTER a sequence of writes, and two concurrent gate runs sharing
+   one would each grade the other's.
+
+   Four properties it is shaped to separate, none of which a single append can
+   see:
+
+   - a sequence number is strictly increasing and comes off disk, so a restart
+     resumes where the process that died left off rather than at one.
+   - a cursor at each of its three boundaries — below the oldest entry, exactly
+     at an entry, past the newest — behaves as `eventLogAfterCursor` defines.
+   - a commit and its event land together or neither does. The two torn states
+     are driven directly: an entry staged for a commit that did not persist,
+     and an entry staged for one that did, each resolved against the head the
+     repository actually holds.
+   - an append does not rewrite the log. The entries already present are read
+     back byte for byte after an append, which is the property #2692's
+     whole-set rewrite would fail. -}
+
+import fs.{mkdirAll}
+import hex.{encode}
+import list.{take}
+import string.{toUtf8}
+import test.{Expectation(..), expectEqual, expectTrue}
+import test_process.{scratchDir}
+import lib.cid.{cidToString}
+import lib.dagcbor.{DagCbor(..)}
+import lib.event_log_record.{
+  EventLogEntry(..),
+  eventLogAfterCursor,
+  eventLogDecodeEntry,
+  eventLogEncodeEntry,
+  eventLogEntryName,
+  eventLogExpired,
+  eventLogFirstSeq,
+  eventLogNextSeq,
+  eventLogParseEntryName,
+  eventLogPartitionExpired,
+  eventLogRetentionSeconds,
+  eventLogSweepsAt,
+}
+import lib.repo.{
+  Repo,
+  repoCommitCid,
+  repoCreate,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoMutationState,
+}
+import lib.sync_event.{syncCommitEventFor, syncCommitFrame}
+import lib.tid.{Tid, tidEncode}
+import shell.eventlog.{
+  eventLogLast,
+  eventLogNextSequence,
+  eventLogPromote,
+  eventLogRead,
+  eventLogRecover,
+  eventLogStage,
+  eventLogStaged,
+  eventLogSweep,
+}
+
+-- # The record format
+
+entryAt : Int -> Int -> EventLogEntry
+entryAt seq timeSeconds = EventLogEntry {
+  seq = seq,
+  timeSeconds = timeSeconds,
+  commitCid = "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  frameHex = "a1626f7001",
+}
+
+test "an entry survives encode and decode unchanged" =
+  let entry = entryAt 7 1700000000
+  match eventLogDecodeEntry (eventLogEncodeEntry entry)
+    Err message => Fail message "the same entry" message
+    Ok back =>
+      expectTrue
+        (back.seq == entry.seq
+          && back.timeSeconds == entry.timeSeconds
+          && back.commitCid == entry.commitCid
+          && back.frameHex == entry.frameHex)
+
+test "a truncated entry is rejected rather than half-read" =
+  match eventLogDecodeEntry "7\t1700000000"
+    Err _ => Pass "a rejection" "a rejection"
+    Ok _ => Fail "a two-field entry decoded" "a rejection" "an entry"
+
+test "an entry file name carries its sequence number and its timestamp" =
+  expectEqual
+    (eventLogParseEntryName (eventLogEntryName 42 1700000000))
+    (Ok (42, 1700000000))
+
+test "entry file names sort as text in the order they sort as numbers" =
+  expectTrue (eventLogEntryName 9 1000 < eventLogEntryName 10 1000)
+
+test "a name that nobody wrote is reported rather than skipped" =
+  match eventLogParseEntryName "README"
+    Err _ => Pass "a rejection" "a rejection"
+    Ok _ => Fail "an unrecognized name parsed" "a rejection" "a pair"
+
+test "the first sequence number leaves zero free as the empty cursor" =
+  expectTrue (eventLogFirstSeq == 1 && eventLogNextSeq 1 == 2)
+
+-- # Cursor boundaries
+
+threeEntries : List EventLogEntry
+threeEntries = [entryAt 3 3000, entryAt 1 1000, entryAt 2 2000]
+
+seqsOf : List EventLogEntry -> List Int
+seqsOf entries = map entrySeq entries
+
+entrySeq : EventLogEntry -> Int
+entrySeq entry = entry.seq
+
+-- The staged slot is empty. Spelled as a match rather than a comparison
+-- because `EventLogEntry` has no `Eq` impl, and giving it one to write this
+-- assertion would put an instance on the record for the sake of a test.
+stagedIsEmpty : Result String (Option EventLogEntry) -> Bool
+stagedIsEmpty (Ok None) = True
+stagedIsEmpty _ = False
+
+test "a cursor below the oldest entry replays the whole log in order" =
+  expectEqual (seqsOf (eventLogAfterCursor 0 threeEntries)) [1, 2, 3]
+
+test "a cursor exactly at an entry excludes that entry" =
+  expectEqual (seqsOf (eventLogAfterCursor 2 threeEntries)) [3]
+
+test "a cursor at the newest entry yields nothing rather than repeating it" =
+  expectEqual (seqsOf (eventLogAfterCursor 3 threeEntries)) []
+
+test "a cursor past the newest entry yields nothing" =
+  expectEqual (seqsOf (eventLogAfterCursor 99 threeEntries)) []
+
+-- # The retention window
+
+test "an entry exactly at the bound is live and one second older is not" =
+  expectTrue
+    (not (eventLogExpired 100 1000 900) && eventLogExpired 100 1000 899)
+
+test "the window partitions a listing without losing or reordering a row" =
+  let rows = [(3, 3000, "c"), (1, 1000, "a"), (2, 2000, "b")]
+  let (expired, live) = eventLogPartitionExpired 500 3000 rows
+  expectTrue
+    (map (row => rowName row) expired == ["a", "b"]
+      && map (row => rowName row) live == ["c"])
+
+rowName : (Int, Int, String) -> String
+rowName (_, _, name) = name
+
+test "a sweep is due on every interval-th entry and on no other" =
+  expectTrue (eventLogSweepsAt 256 && not (eventLogSweepsAt 255))
+
+-- # The log on disk
+
+{- | One scratch directory for the whole file, made once — a top-level nullary
+   binding is memoized, so every case below names a subdirectory of the same
+   `mktemp -d` rather than spawning its own. -}
+scratch : <Exec "_", IO> String
+scratch = match scratchDir
+  Ok dir => dir
+  Err message => panic "event_log_test: mktemp -d failed: \{message}"
+
+caseDir : String -> <Exec "_", FileRead "_", FileWrite "_", IO> String
+caseDir name =
+  let path = "\{scratch}/\{name}"
+  match mkdirAll path
+    Err message => panic "event_log_test: cannot create \{path}: \{message}"
+    Ok () => path
+
+-- An append as the server performs one: assign off disk, stage, promote.
+appendAt : String ->
+  Int ->
+  String ->
+  <FileRead "_", FileWrite "_"> Result String Int
+appendAt dir timeSeconds commitCid = do
+  seq <- eventLogNextSequence dir
+  let entry = EventLogEntry {
+    seq = seq,
+    timeSeconds = timeSeconds,
+    commitCid = commitCid,
+    frameHex = "a1626f7001",
+  }
+  () <- eventLogStage dir entry
+  () <- eventLogPromote dir eventLogRetentionSeconds timeSeconds
+  Ok seq
+
+appendMany : String ->
+  Int ->
+  Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+appendMany dir 0 _ = Ok ()
+appendMany dir remaining timeSeconds =
+  match appendAt dir timeSeconds "bafyrei\{intToString remaining}"
+    Err message => Err message
+    Ok _ => appendMany dir (remaining - 1) timeSeconds
+
+mustSeqs : Result String (List EventLogEntry) -> List Int
+mustSeqs (Ok entries) = seqsOf entries
+mustSeqs (Err message) = panic "event_log_test: log unreadable: \{message}"
+
+sequencedDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+sequencedDir =
+  let dir = caseDir "sequenced"
+  match appendMany dir 3 1700000000
+    Err message => panic "event_log_test: append failed: \{message}"
+    Ok () => dir
+
+test "successive appends take strictly increasing sequence numbers from one" =
+  expectEqual (mustSeqs (eventLogRead sequencedDir 0)) [1, 2, 3]
+
+test "the next sequence number is read back off disk, not held in memory" =
+  expectEqual (eventLogNextSequence sequencedDir) (Ok 4)
+
+test "the last-entry pointer names the sequence number it promoted" =
+  match eventLogLast sequencedDir
+    Ok (Some (seq, _)) => expectEqual seq 3
+    Ok None => Fail "no last-entry pointer after three appends" "3" "none"
+    Err message => Fail message "3" "an error"
+
+-- # A commit and its event land together or neither does
+
+stagedButNotCommitted : <Exec "_", FileRead "_", FileWrite "_", IO> String
+stagedButNotCommitted =
+  let dir = caseDir "torn-before-commit"
+  let entry = EventLogEntry {
+    seq = 1,
+    timeSeconds = 1700000000,
+    commitCid = "bafyreinewhead",
+    frameHex = "a1626f7001",
+  }
+  match eventLogStage dir entry
+    Err message => panic "event_log_test: stage failed: \{message}"
+    Ok () => dir
+
+{- | The injected failure: the entry for a commit is staged, and the commit's
+   own persist then fails, so the head on disk is still the OLD one. Recovery
+   is handed that head — exactly what `pds/serve.mdk` hands it on the next
+   start — and must drop the entry rather than announce a commit no reader can
+   fetch. -}
+test "an event staged for a commit that did not persist is dropped" =
+  let dir = stagedButNotCommitted
+  match (eventLogRecover
+    dir
+    (Some "bafyreioldhead")
+    eventLogRetentionSeconds
+    1700000000)
+    Err message => Fail message "an empty log" "an error"
+    Ok () =>
+      expectTrue
+        (mustSeqs (eventLogRead dir 0) == []
+          && stagedIsEmpty (eventLogStaged dir))
+
+stagedAndCommitted : <Exec "_", FileRead "_", FileWrite "_", IO> String
+stagedAndCommitted =
+  let dir = caseDir "torn-after-commit"
+  let entry = EventLogEntry {
+    seq = 1,
+    timeSeconds = 1700000000,
+    commitCid = "bafyreinewhead",
+    frameHex = "a1626f7001",
+  }
+  match eventLogStage dir entry
+    Err message => panic "event_log_test: stage failed: \{message}"
+    Ok () => dir
+
+{- | The mirror injected failure: the commit persisted and the process died
+   before the promote, so the head on disk IS the staged entry's. Recovery must
+   finish the promotion rather than leave a persisted commit unannounced. -}
+test "an event staged for a commit that did persist is finished" =
+  let dir = stagedAndCommitted
+  match (eventLogRecover
+    dir
+    (Some "bafyreinewhead")
+    eventLogRetentionSeconds
+    1700000000)
+    Err message => Fail message "the event promoted" "an error"
+    Ok () =>
+      expectTrue
+        (mustSeqs (eventLogRead dir 0) == [1]
+          && stagedIsEmpty (eventLogStaged dir))
+
+{- | Recovery re-running over an entry it already promoted — the crash between
+   the entry file and the pointer — must not double it. An entry's file name is
+   a function of the entry, so the second promotion overwrites the first. -}
+test "promoting the same entry twice leaves one entry, not two" =
+  let dir = stagedAndCommitted
+  let entry = EventLogEntry {
+    seq = 1,
+    timeSeconds = 1700000000,
+    commitCid = "bafyreinewhead",
+    frameHex = "a1626f7001",
+  }
+  match eventLogStage dir entry
+    Err message => Fail message "one entry" "an error"
+    Ok () => match eventLogPromote dir eventLogRetentionSeconds 1700000000
+      Err message => Fail message "one entry" "an error"
+      Ok () => expectEqual (mustSeqs (eventLogRead dir 0)) [1]
+
+-- # Truncation
+
+expiringDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+expiringDir =
+  let dir = caseDir "expiring"
+  match appendAt dir 1000 "bafyreiold1"
+    Err message => panic "event_log_test: append failed: \{message}"
+    Ok _ => match appendAt dir 2000 "bafyreiold2"
+      Err message => panic "event_log_test: append failed: \{message}"
+      Ok _ => match appendAt dir 100000 "bafyreifresh"
+        Err message => panic "event_log_test: append failed: \{message}"
+        Ok _ => dir
+
+test "a sweep removes exactly the entries the window no longer admits" =
+  let dir = expiringDir
+  let before = mustSeqs (eventLogRead dir 0)
+  match eventLogSweep dir 5000 100000
+    Err message => Fail message "two entries dropped" "an error"
+    Ok dropped =>
+      let after = mustSeqs (eventLogRead dir 0)
+      expectTrue (before == [1, 2, 3] && dropped == 2 && after == [3])
+
+-- # An append does not rewrite the log
+
+bulkDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+bulkDir =
+  let dir = caseDir "bulk"
+  match appendMany dir 40 1700000000
+    Err message => panic "event_log_test: bulk append failed: \{message}"
+    Ok () => dir
+
+mustEntries : Result String (List EventLogEntry) -> List EventLogEntry
+mustEntries (Ok entries) = entries
+mustEntries (Err message) = panic "event_log_test: log unreadable: \{message}"
+
+sameEntry : EventLogEntry -> EventLogEntry -> Bool
+sameEntry left right =
+  left.seq == right.seq
+    && left.timeSeconds == right.timeSeconds
+    && left.commitCid == right.commitCid
+    && left.frameHex == right.frameHex
+
+sameEntries : List EventLogEntry -> List EventLogEntry -> Bool
+sameEntries [] [] = True
+sameEntries (l :: ls) (r :: rs) = sameEntry l r && sameEntries ls rs
+sameEntries _ _ = False
+
+{- | The #2692 property, directly: after appending to a log that already holds
+   forty entries, every one of those forty reads back exactly as it did before.
+   A log that rewrote itself on each append would have to reproduce all forty
+   byte for byte to pass, and an append that touched any of them would not. -}
+test "an append leaves every entry already in the log untouched" =
+  let dir = bulkDir
+  let before = mustEntries (eventLogRead dir 0)
+  match appendAt dir 1700000001 "bafyreiappended"
+    Err message => Fail message "forty untouched entries" "an error"
+    Ok seq =>
+      let after = mustEntries (eventLogRead dir 0)
+      expectTrue
+        (length before == 40 && seq == 41 && sameEntries before (take 40 after))
+
+-- # A real commit's event, end to end
+
+mustTid : Int -> Tid
+mustTid micros = match tidEncode micros 7
+  Ok tid => tid
+  Err message => panic "event_log_test: TID setup failed: \{message}"
+
+testDid : String
+testDid = "did:plc:medakaeventlog"
+
+genesis : Repo
+genesis = match repoInitFromKeyBytes testDid (arrayMake 32 1) (mustTid 1000000)
+  Ok repo => repo
+  Err message => panic "event_log_test: repo init failed: \{message}"
+
+written : Repo
+written =
+  let record = DcMap [
+    ("$type", DcString "app.bsky.feed.post"),
+    ("text", DcString "hello"),
+  ]
+  let path = toUtf8 "app.bsky.feed.post/self"
+  match repoCreate path record (mustTid 2000000) genesis
+    Ok mutation => repoMutationState mutation
+    Err message => panic "event_log_test: repo write failed: \{message}"
+
+liveFrameHex : String
+liveFrameHex =
+  match (syncCommitEventFor
+    1
+    "2024-01-01T00:00:00Z"
+    testDid
+    (Some genesis)
+    written)
+    Err message => panic "event_log_test: event assembly failed: \{message}"
+    Ok event => match syncCommitFrame event
+      Err message => panic "event_log_test: frame encoding failed: \{message}"
+      Ok bytes => encode bytes
+
+writtenHead : String
+writtenHead = cidToString (repoCommitCid (repoLatestCommit written))
+
+endToEndDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+endToEndDir =
+  let dir = caseDir "end-to-end"
+  let entry = EventLogEntry {
+    seq = 1,
+    timeSeconds = 1700000000,
+    commitCid = writtenHead,
+    frameHex = liveFrameHex,
+  }
+  match eventLogStage dir entry
+    Err message => panic "event_log_test: stage failed: \{message}"
+    Ok () => dir
+
+{- | A real write's frame, staged against the real head it announces, recovered
+   against that same head, and read back out of the log unchanged. This is the
+   whole path the server takes, less the socket. -}
+test "a real commit's frame is stored and read back byte for byte" =
+  let dir = endToEndDir
+  match (eventLogRecover
+    dir
+    (Some writtenHead)
+    eventLogRetentionSeconds
+    1700000000)
+    Err message => Fail message "the frame" "an error"
+    Ok () => match eventLogRead dir 0
+      Err message => Fail message "the frame" "an error"
+      Ok [stored] =>
+        expectTrue
+          (stored.frameHex == liveFrameHex && stored.commitCid == writtenHead)
+      Ok entries =>
+        Fail
+          "expected exactly one stored entry"
+          "1 entry"
+          "\{intToString (length entries)} entries"
