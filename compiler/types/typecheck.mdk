@@ -33816,20 +33816,28 @@ firstPredForEncl request useScope (g :: rest)
     Some (givenAnswerForRequest request g)
   | otherwise = firstPredForEncl request useScope rest
 
--- Semantic given evidence is issued only when the request supplied and matched a
--- complete argument vector.  Unknown-vector and unresolved-declaration paths
--- retain their historical routing but stay explicitly legacy.
+-- Semantic given evidence requires predicate-only eligibility, complete matched
+-- vectors, and resolved declaration identities.  Id-witnessed, unknown-vector,
+-- and unresolved-declaration paths keep their routing but remain legacy.
 givenAnswerExact : GivenEntry -> AssumAnswer
 givenAnswerExact g = match g.geProvenance
   DirectGiven => SemanticGiven (GivenEvidence g.geBinder)
   LegacySuperclassAlias => LegacySuperAlias g.geBinder
 
 givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
-givenAnswerForRequest request g = match (request.prArgs, g.geSlot.psArgs)
-  (PSArgsKnown _, PSArgsKnown _) => givenAnswerExact g
-  _ => match g.geProvenance
-    DirectGiven => LegacyPredicate g.geBinder
-    LegacySuperclassAlias => LegacySuperAlias g.geBinder
+givenAnswerForRequest request g = match (
+  request.prArgs,
+  g.geSlot.psArgs,
+  g.geMatch,
+)
+  (PSArgsKnown _, PSArgsKnown _, GMPredicate) => match (
+    request.prIface.irOrigin,
+    g.geSlot.psIface.irOrigin,
+  )
+    (OriginUnresolved, _) => givenAnswerResidual g
+    (_, OriginUnresolved) => givenAnswerResidual g
+    _ => givenAnswerExact g
+  _ => givenAnswerResidual g
 
 givenAnswerResidual : GivenEntry -> AssumAnswer
 givenAnswerResidual g = match g.geProvenance

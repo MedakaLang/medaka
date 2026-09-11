@@ -514,7 +514,12 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 #     entry above carries, one layer further out.
 # If `KeyEntry`'s key field ever acquires a reader, this line stops being justified
 # and the word must come from the row like the other two.
-tc_originun_allowed="OriginUnresolved => \"<unresolved>\"
+# #2549 nominal-given classification: these two tuple patterns ELIMINATE an
+# unresolved request/given origin, keeping the answer explicitly legacy. They
+# mint no identity and must not license unresolved semantic given evidence.
+tc_originun_allowed="(OriginUnresolved, _) => givenAnswerResidual g
+(_, OriginUnresolved) => givenAnswerResidual g
+OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
 bcNum = OriginUnresolved,
@@ -1086,7 +1091,8 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # form it actually takes today: `requires Ix a Char` must reach route selection with
 # `Char` intact, not as the pair ("Ix","a") a tyvar-keyed producer would leave behind.
 # The single stored given is `GivenEntry` on `GraphRun.gGiven`, written by the one
-# writer `pushGiven` and read only through `givensHere`; `GivenMatch`/`GivenScope` are
+# writer `pushGiven` and read only through captured-scope `givensForScope`;
+# `GivenMatch`/`GivenScope` are
 # the soundness half of that consolidation — a vector that is ALL bare tyvars is
 # `GMIdWitnessed` and readable only by a rung that supplies a tyvar-id witness, so an
 # undifferentiated predicate-only reader cannot answer `Debug e` with `Debug a`.
@@ -1099,11 +1105,11 @@ data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
 data MethodPredicateSlot = MethodPredicateSlot {
 data PendingMethodDict = PendingMethodDict {
-registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
+registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
       psArgs = PSArgsKnown argMonos,
       psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
-registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
+registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
 expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
@@ -1116,28 +1122,33 @@ data GivenMatch =
   | GMPredicate
   | GMIdWitnessed
 gGiven : Ref (OrdMap (List GivenEntry)),
-givensHere : Unit -> List GivenEntry
-pushGiven : GivenMatch -> PredicateSlot -> String -> Unit
+givensForScope : ScopeId -> List GivenEntry
+pushGiven : GivenMatch ->
+pushGiven gm provenance slot binder =
 data GivenScope =
   | GSPredicateOnly
   | GSImplRequires
 givenInScope : GivenScope -> GivenEntry -> Bool
-registerFunPredGiven : PredicateSlot -> String -> Unit
-activeFunDictPredOf : PredicateRequest -> String -> Option String
+registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
+activeFunDictPredOf : PredicateRequest ->
+activeFunDictPredOf request _ useScope =
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOfOp : String -> Option PredicateRequest
-activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
-activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
-activeDictVarOfEncl (Some request) m encl =
+activeDictVarOfEncl : Option PredicateRequest ->
+activeDictVarOfEncl None m encl useScope =
+map LegacyScalar (activeDictVarForEncl m encl useScope)
+activeDictVarOfEncl (Some request) m encl useScope =
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
 enclSlotIndex (Some request) target encl =
-implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
+implReqDictVarOf : Option PredicateRequest ->
+implReqDictVarOf (Some request) m encl useScope
 firstPredForEnclAt : GivenScope ->
-entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
-goalMatchesGiven : IfaceRef -> List Mono -> Bool
-anyGivenMatches : PredicateRequest -> List GivenEntry -> Bool
+entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
+goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
+anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
+&& givenVisibleFrom scope (binderScope g.geBinder)
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
 crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
@@ -1155,11 +1166,11 @@ setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
 resolveMethodDicts : List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
-methodPredicateRoutes : String -> List PredicateSlot -> List Route
-methodPredicateRoute : String -> PredicateSlot -> Route
+methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
+methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 realizeRecDictApps : List RecDictApp -> Unit
-recRoutes : String -> Mono -> List PredicateSlot -> List Route
-recRoute : String -> Mono -> PredicateSlot -> Route
+recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
+recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
 scopePredicateSlots : List ((String, String), List PredicateSlot) ->
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
 attributeMethodModulePredicateSlots : String ->'
@@ -1253,9 +1264,9 @@ printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
 done || exit 1
 
 # Deferred operator routes keep their lexical evidence owner through the concrete-head
-# stamper.  The scalar registry is global and uncleared, so an empty owner or an
-# owner-prefix miss must not borrow another method's dict.  The direct in-impl operator
-# bypass remains a separately tracked residual and is pinned independently below.
+# stamper. The scalar registry is graph-lived, so an empty owner or nominal-scope
+# miss must not borrow another method's dict. The direct in-impl operator path
+# retains its legacy scalar classification but now checks the same scope boundary.
 lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
 printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
   echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
@@ -1266,7 +1277,7 @@ printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {
   exit 1
 }
 printf '%s\n' "$lexical_dict_block" | grep -Fq 'firstDictForEncl' || {
-  echo "FAIL: activeDictVarForEncl must reject an owner-prefix miss"
+  echo "FAIL: activeDictVarForEncl must use the scoped binder lookup"
   exit 1
 }
 if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
@@ -1274,10 +1285,11 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
   exit 1
 fi
 
-operator_owner_required='stampOpRouteVal : Bool ->
-argImplDictRoutesForEncl encl dictName tag m goals,
-entailInst name m encl tag (EKOp isBinop _) =
-(stampOpRouteVal isBinop encl name m tag, [])'
+operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
+argImplDictRoutesForEncl encl useScope dictName tag m goals,
+entailInst name m encl useScope tag (EKOp isBinop _) =
+(stampOpRouteVal isBinop encl useScope name m tag, [])
+| eid == id && givenVisibleFrom useScope (binderScope binder) = Some binder'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"
@@ -1290,8 +1302,8 @@ if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_src"; then
 fi
 
 op_dict_block="$(sed -n '/^opDictVarOf :/,/^resolveOpSite :/p' "$predicate_slot_src")"
-printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = activeDictVarOf m' || {
-  echo "FAIL: direct opDictVarOf in-impl residual moved during the lexical cutoff"
+printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDictVarOf m useScope)' || {
+  echo "FAIL: direct opDictVarOf in-impl residual must retain legacy classification and captured scope"
   exit 1
 }
 
@@ -1310,6 +1322,7 @@ if [ "$predicate_relation_uses" -ne 5 ]; then
 fi
 
 predicate_slot_retired='implReqPreds
+givensHere
 implReqPredicateSlot
 implReqPredicateSlots
 implReqPick

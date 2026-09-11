@@ -16,6 +16,7 @@ import types.typecheck.{
   checkModulesDiagsChain,
   checkOneDiags,
   checkProgramDiags,
+  elaborateDict,
   finishAssumptionTrace,
   observeMethodSchemeRowsForTest,
   scopeFrameStats,
@@ -428,3 +429,40 @@ test "legacy attributed-direct Num diagnostics keep their order-sensitive cross-
       ["Type mismatch: String vs Int"],
     )
     (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)
+
+test "Flat unresolved interface givens remain legacy" =
+  let source = joinNl [
+    "data Wrap a = Wrap a",
+    "interface D t where",
+    "  d : t -> Int",
+    "g : D (Wrap a) => a -> Int",
+    "g _ = 5",
+    "h : D (Wrap a) => a -> Int",
+    "h x = g x",
+  ]
+  beginAssumptionTrace ()
+  let _ = elaborateDict [] ["g", "h"] ["g", "h"] (desugar (parse source))
+  let flatKinds = map (entry => entry.atKind) (finishAssumptionTrace ())
+  let resolved = runObserved "resolved_given" source
+  expectEqual
+    (
+      [ATLegacyPredicate],
+      [context ATDirectPredicate "resolved_given" "binding:h"],
+      0,
+    )
+    (flatKinds, withoutBinderIds resolved.rvTrace, resolved.rvErrors)
+
+test "id-witnessed impl givens remain legacy" =
+  let source = joinNl [
+    "interface D t where",
+    "  d : t -> Int",
+    "data Box a = Box a",
+    "interface C t where",
+    "  foo : t -> Int",
+    "impl C (Box a) requires D a where",
+    "  foo (Box x) = d x",
+  ]
+  let observed = runObserved "id_assisted" source
+  expectEqual
+    ([context ATLegacyPredicate "id_assisted" "binding:foo"], 0)
+    (withoutBinderIds observed.rvTrace, observed.rvErrors)

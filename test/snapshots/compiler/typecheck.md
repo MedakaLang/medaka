@@ -1,5 +1,5 @@
 # META
-source_lines=45455
+source_lines=45463
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -33820,20 +33820,28 @@ firstPredForEncl request useScope (g :: rest)
     Some (givenAnswerForRequest request g)
   | otherwise = firstPredForEncl request useScope rest
 
--- Semantic given evidence is issued only when the request supplied and matched a
--- complete argument vector.  Unknown-vector and unresolved-declaration paths
--- retain their historical routing but stay explicitly legacy.
+-- Semantic given evidence requires predicate-only eligibility, complete matched
+-- vectors, and resolved declaration identities.  Id-witnessed, unknown-vector,
+-- and unresolved-declaration paths keep their routing but remain legacy.
 givenAnswerExact : GivenEntry -> AssumAnswer
 givenAnswerExact g = match g.geProvenance
   DirectGiven => SemanticGiven (GivenEvidence g.geBinder)
   LegacySuperclassAlias => LegacySuperAlias g.geBinder
 
 givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
-givenAnswerForRequest request g = match (request.prArgs, g.geSlot.psArgs)
-  (PSArgsKnown _, PSArgsKnown _) => givenAnswerExact g
-  _ => match g.geProvenance
-    DirectGiven => LegacyPredicate g.geBinder
-    LegacySuperclassAlias => LegacySuperAlias g.geBinder
+givenAnswerForRequest request g = match (
+  request.prArgs,
+  g.geSlot.psArgs,
+  g.geMatch,
+)
+  (PSArgsKnown _, PSArgsKnown _, GMPredicate) => match (
+    request.prIface.irOrigin,
+    g.geSlot.psIface.irOrigin,
+  )
+    (OriginUnresolved, _) => givenAnswerResidual g
+    (_, OriginUnresolved) => givenAnswerResidual g
+    _ => givenAnswerExact g
+  _ => givenAnswerResidual g
 
 givenAnswerResidual : GivenEntry -> AssumAnswer
 givenAnswerResidual g = match g.geProvenance
@@ -50569,7 +50577,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "givenAnswerExact" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerExact" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "SemanticGiven") (EApp (EVar "GivenEvidence") (EFieldAccess (EVar "g") "geBinder")))) (arm (PCon "LegacySuperclassAlias") () (EApp (EVar "LegacySuperAlias") (EFieldAccess (EVar "g") "geBinder")))))
 (DTypeSig false "givenAnswerForRequest" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer"))))
-(DFunDef false "givenAnswerForRequest" ((PVar "request") (PVar "g")) (EMatch (ETuple (EFieldAccess (EVar "request") "prArgs") (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psArgs")) (arm (PTuple (PCon "PSArgsKnown" PWild) (PCon "PSArgsKnown" PWild)) () (EApp (EVar "givenAnswerExact") (EVar "g"))) (arm PWild () (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder"))) (arm (PCon "LegacySuperclassAlias") () (EApp (EVar "LegacySuperAlias") (EFieldAccess (EVar "g") "geBinder")))))))
+(DFunDef false "givenAnswerForRequest" ((PVar "request") (PVar "g")) (EMatch (ETuple (EFieldAccess (EVar "request") "prArgs") (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psArgs") (EFieldAccess (EVar "g") "geMatch")) (arm (PTuple (PCon "PSArgsKnown" PWild) (PCon "PSArgsKnown" PWild) (PCon "GMPredicate")) () (EMatch (ETuple (EFieldAccess (EFieldAccess (EVar "request") "prIface") "irOrigin") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psIface") "irOrigin")) (arm (PTuple (PCon "OriginUnresolved") PWild) () (EApp (EVar "givenAnswerResidual") (EVar "g"))) (arm (PTuple PWild (PCon "OriginUnresolved")) () (EApp (EVar "givenAnswerResidual") (EVar "g"))) (arm PWild () (EApp (EVar "givenAnswerExact") (EVar "g"))))) (arm PWild () (EApp (EVar "givenAnswerResidual") (EVar "g")))))
 (DTypeSig false "givenAnswerResidual" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerResidual" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder"))) (arm (PCon "LegacySuperclassAlias") () (EApp (EVar "LegacySuperAlias") (EFieldAccess (EVar "g") "geBinder")))))
 (DTypeSig false "firstPredForEnclAt" (TyFun (TyCon "GivenScope") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))))
@@ -57306,7 +57314,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "givenAnswerExact" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerExact" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "SemanticGiven") (EApp (EVar "GivenEvidence") (EFieldAccess (EVar "g") "geBinder")))) (arm (PCon "LegacySuperclassAlias") () (EApp (EVar "LegacySuperAlias") (EFieldAccess (EVar "g") "geBinder")))))
 (DTypeSig false "givenAnswerForRequest" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer"))))
-(DFunDef false "givenAnswerForRequest" ((PVar "request") (PVar "g")) (EMatch (ETuple (EFieldAccess (EVar "request") "prArgs") (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psArgs")) (arm (PTuple (PCon "PSArgsKnown" PWild) (PCon "PSArgsKnown" PWild)) () (EApp (EVar "givenAnswerExact") (EVar "g"))) (arm PWild () (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder"))) (arm (PCon "LegacySuperclassAlias") () (EApp (EVar "LegacySuperAlias") (EFieldAccess (EVar "g") "geBinder")))))))
+(DFunDef false "givenAnswerForRequest" ((PVar "request") (PVar "g")) (EMatch (ETuple (EFieldAccess (EVar "request") "prArgs") (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psArgs") (EFieldAccess (EVar "g") "geMatch")) (arm (PTuple (PCon "PSArgsKnown" PWild) (PCon "PSArgsKnown" PWild) (PCon "GMPredicate")) () (EMatch (ETuple (EFieldAccess (EFieldAccess (EVar "request") "prIface") "irOrigin") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psIface") "irOrigin")) (arm (PTuple (PCon "OriginUnresolved") PWild) () (EApp (EVar "givenAnswerResidual") (EVar "g"))) (arm (PTuple PWild (PCon "OriginUnresolved")) () (EApp (EVar "givenAnswerResidual") (EVar "g"))) (arm PWild () (EApp (EVar "givenAnswerExact") (EVar "g"))))) (arm PWild () (EApp (EVar "givenAnswerResidual") (EVar "g")))))
 (DTypeSig false "givenAnswerResidual" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerResidual" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder"))) (arm (PCon "LegacySuperclassAlias") () (EApp (EVar "LegacySuperAlias") (EFieldAccess (EVar "g") "geBinder")))))
 (DTypeSig false "firstPredForEnclAt" (TyFun (TyCon "GivenScope") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))))
