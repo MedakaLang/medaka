@@ -1,0 +1,106 @@
+{- | Direct unit coverage for `ReadBuffer`'s capacity arithmetic
+   (`pds/shell/server.mdk`).
+
+   The accumulation buffer's only other exercise is a live 5 MiB upload in
+   `pds/test/serve_e2e.sh` (case 4d), which needs a socket, a server process
+   and several seconds, and reports one bit. The arithmetic itself is pure:
+   `growCapacity` is a function of two integers, and `readBufferAppend`'s two
+   `blit` calls are a function of the live count. That is what this file
+   asserts — every doubling boundary, and that the live bytes after many
+   small appends are exactly the appended bytes in order, with the spare
+   capacity invisible to `readBufferLive`. -}
+
+import array.{fromList}
+import shell.server.{
+  ReadBuffer,
+  growCapacity,
+  readBufferAppend,
+  readBufferBacking,
+  readBufferLen,
+  readBufferLive,
+  readBufferNew,
+}
+import test.{expectEqual}
+
+-- # (a) The doubling function itself
+
+test "growCapacity keeps a capacity that already fits" =
+  expectEqual 4096 (growCapacity 4096 3000)
+
+test "growCapacity of an unallocated store starts doubling from 1" =
+  expectEqual 1 (growCapacity 0 1)
+
+test "growCapacity doubles past the requested size, not to it" =
+  expectEqual 4 (growCapacity 0 3)
+
+test "growCapacity doubles an allocated store" =
+  expectEqual 16 (growCapacity 8 9)
+
+-- A zero-byte append must not allocate: `needed > arrayLength !backing` is
+-- false for a zero-length request against a zero-length store.
+test "growCapacity of nothing into nothing stays nothing" =
+  expectEqual 0 (growCapacity 0 0)
+
+-- # (b) The buffer's own growth
+
+-- How many three-byte chunks `filled` is built from, and the live count that
+-- implies. 1000 chunks cross every doubling boundary from 4 to 4096.
+chunkCount : Int
+chunkCount = 1000
+
+chunkSize : Int
+chunkSize = 3
+
+liveCount : Int
+liveCount = chunkCount * chunkSize
+
+-- Chunk `k` holds the three bytes at offsets `3k`, `3k+1`, `3k+2` of one
+-- ascending byte stream, so a mis-ordered or mis-offset `blit` shows up as a
+-- value mismatch rather than only as a length mismatch.
+chunkAt : Int -> Array Int
+chunkAt k = fromList [
+  (chunkSize * k) % 256,
+  (chunkSize * k + 1) % 256,
+  (chunkSize * k + 2) % 256,
+]
+
+{- | One buffer, appended to `chunkCount` times. A top-level nullary binding
+   is memoized, so every assertion below reads the same filled buffer and the
+   1000 appends run once. -}
+filled : ReadBuffer
+filled =
+  let buf = readBufferNew ()
+  let () =
+    fold (_ k => readBufferAppend (chunkAt k) buf) () [0..=chunkCount - 1]
+  buf
+
+test "a buffer filled in small increments holds every appended byte" =
+  expectEqual liveCount (readBufferLen filled)
+
+test "the live bytes are the appended bytes, in order" =
+  expectEqual
+    (fromList (map (i => i % 256) [0..=liveCount - 1]))
+    (readBufferLive filled)
+
+-- 4096 is the smallest doubling of 1 that holds 3000, so the backing store is
+-- larger than the live count and `readBufferLive` must not expose the excess.
+test "the backing store is the smallest doubling that holds the live bytes" =
+  expectEqual 4096 (arrayLength (readBufferBacking filled))
+
+-- Three appends of three bytes grow the store 0 -> 4 -> 8 -> 16: the second
+-- and third both overflow, so this fails if a single grow is made to serve
+-- more than the append that triggered it.
+thrice : ReadBuffer
+thrice =
+  let buf = readBufferNew ()
+  let () = fold (_ k => readBufferAppend (chunkAt k) buf) () [0..=2]
+  buf
+
+test "each overflowing append grows the store exactly once" =
+  expectEqual 16 (arrayLength (readBufferBacking thrice))
+
+test "a partly-filled store reports only its live bytes" =
+  expectEqual 9 (readBufferLen thrice)
+
+test "a partly-filled store's live bytes carry no spare capacity" =
+  expectEqual (fromList [0, 1, 2, 3, 4, 5, 6, 7, 8]) (readBufferLive thrice)

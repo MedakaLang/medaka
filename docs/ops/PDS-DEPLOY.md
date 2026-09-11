@@ -96,6 +96,74 @@ never sets it against anything but Caddy on the same box.
    curl -sS https://<hostname>/xrpc/com.atproto.server.describeServer
    ```
 
+## Backup and restore
+
+**Consistency, in one sentence:** take a file-level backup with the server
+**stopped** (or from an atomic filesystem/volume snapshot), because
+`applyRequest`'s write serialization (`pds/shell/server.mdk`) is a single
+`liftIO` inside one cooperatively scheduled process and not a lock an external
+`cp` can take, so a copy made while the server is running can capture a torn
+write; the online alternative, if you cannot stop it, is to snapshot the
+repository through the server's own request path — `com.atproto.sync.getRepo`,
+which IS serialized against writes — rather than by copying files.
+
+What has to be in a backup, and why `getRepo` alone is not one: the repository
+blocks (`<data>/blocks`), the blobs (`<data>/blobs` — not in the CAR; a blob is
+not part of the signed block graph), the head pointer (`<data>/head`), the
+account credential (`<data>/credential`), the session-token secret (whichever of
+`--token-secret` or `<data>/session-secret` this deployment uses), and **the
+signing key** (`--key`). Losing the signing key loses the ability to sign any
+future commit for this DID; it is the one file no later work can reconstruct.
+
+**Backup.**
+
+```sh
+systemctl stop pds
+tar -cpf /backup/pds-$(date +%Y%m%dT%H%M%S).tar -C /srv/pds data secrets
+systemctl start pds
+```
+
+`tar -p` (and `cp -a`, if you copy rather than archive) preserves the `0600`
+modes. That matters: `pds serve` refuses to start on a hex secret file any
+other account can read (see the upgrade note below), so a backup that widened
+one restores into a server that will not start.
+
+For an online snapshot of the repository half, with the server running — a
+consistent CAR, and the portable format `#2613` names:
+
+```sh
+curl -sS "http://127.0.0.1:8080/xrpc/com.atproto.sync.getRepo?did=<did>" \
+  > /backup/repo-$(date +%Y%m%dT%H%M%S).car
+```
+
+**Restore.** Restore into a directory of its own, never over a live one, and
+bring the secrets back with it:
+
+```sh
+systemctl stop pds
+mkdir -p /srv/pds-restored
+tar -xpf /backup/pds-<stamp>.tar -C /srv/pds-restored
+chmod 0600 /srv/pds-restored/secrets/key.hex \
+  /srv/pds-restored/secrets/token.hex /srv/pds-restored/data/credential
+```
+
+Then start `pds serve` against the restored paths (`--data`, `--key`,
+`--token-secret`) **without `--init`** — the restored directory already holds a
+repository, and a second genesis against one is refused (`#2481`). Verify the
+restore rather than assuming it:
+
+```sh
+curl -sS "http://127.0.0.1:<port>/xrpc/com.atproto.sync.getRepo?did=<did>" \
+  | cmp - /backup/repo-<stamp>.car       # identical bytes, or the restore is wrong
+curl -sS -D - -o /dev/null "http://127.0.0.1:<port>/xrpc/com.atproto.sync.getBlob?did=<did>&cid=<a known blob CID>"
+```
+
+This procedure is rehearsed by a gate, not only written down: case 33 of
+`pds/test/serve_e2e.sh` takes a backup of a stopped server, restores it into a
+separate `--data` directory, starts a server on the restored copy, and requires
+that server's `getRepo` export to byte-match the original's, both blobs to come
+back under their declared media types, and a new signed write to be accepted.
+
 ## Upgrade note: pre-existing secrets at a wider mode
 
 A secret file written before the KDF-and-keygen slice (`#2659`'s
@@ -107,11 +175,12 @@ world-readable is a leaked secret, not merely a permission bug.
 
 ## What this procedure does not cover, and why
 
-- **`#2613` (backup/restore)** — Phase 6 scope, not this slice's. Nothing
-  here backs up `--data`.
-- **`#2572` (a blocking operation can occupy the scheduler past its
-  budget)** — an open perf/correctness issue, not a deploy-blocking one for
-  a single-operator server.
+- **`#2572` (the block store never collects unreferenced blocks, and a stray
+  non-directory file under the store directory hard-fails startup —
+  `blockFileRead`, `pds/shell/blockfile.mdk`)** — an open issue, not a
+  deploy-blocking one for a single-operator server. The same residue under
+  `<data>/blobs` is skipped rather than fatal (`pds/test/serve_e2e.sh` cases
+  15-18); the block half still refuses.
 - **`#2773`/`#2774` (perf)** — open, tracked separately.
 - **`#2608` (firehose, Phase 5)** — out of scope; this PDS does not publish
   `com.atproto.sync.subscribeRepos`.
