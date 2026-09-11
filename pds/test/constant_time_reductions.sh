@@ -177,23 +177,30 @@ helper_ir_ok() {
 # The only control they may hold is representation dispatch, never anything
 # derived from the limbs.
 #
-# The count fell from two branches to one when the emitter began loading a
-# constructor discriminant directly for a roster it knows is always boxed.  The
-# branch that went was the generic immediate-vs-boxed split: its two arms fetched
-# the same tag word two different ways into a phi, did no different work, and had
-# no failure arm, so nothing that could fail safe was removed with it.  Both
-# accessors moved together and both are at one; measured pre-sprint and post, the
-# blocks that disappear are exactly the discimm/discbox/disccont triple and the
-# surviving conyes/connext pair compares the same constructor tag against the same
-# compile-time constant.  A count alone would now be strictly weaker than the two
-# it replaces, so the surviving comparison is pinned as well: exactly one, against
-# an integer literal.  A comparison on a limb has a register right operand and
-# cannot satisfy that.
+# BRANCH COUNT IS THE PROPERTY; every other count here is its witness.  The
+# branches fell from two to one when the emitter began loading a constructor
+# discriminant directly for a roster it knows is always boxed: what went was the
+# generic immediate-vs-boxed split, whose two arms fetched the same tag word two
+# different ways into a phi.  Both accessors moved together and both are at one,
+# and the surviving conyes/connext pair compares the constructor tag against a
+# compile-time constant.  A branch count alone would be strictly weaker than the
+# two it replaces, so the comparisons are pinned too: each must have an integer
+# literal right operand, which a comparison on a limb (register right operand)
+# cannot satisfy.
+#
+# That direct load carries a pointer guard, so the comparison count is 2, not 1:
+# the second `icmp` tests the scrutinee`s low tag bit and feeds a `select` over
+# the ADDRESS to load from, never a branch.  The guard is therefore branchless by
+# construction and the accessor`s timing is unchanged -- which is what the pinned
+# `select` count below asserts, and what would catch a guard that grew a branch
+# instead.  (Same column-audit discipline as FIX-pds-constant-time-audit,
+# 9b956cb42: move a pinned constant only with the measurement and the reason.)
 raw_accessor_ir_ok() {
   body=$1
   [ "$(grep -c 'br i1' "$body" || true)" -eq 1 ] &&
-    [ "$(grep -E -c '= icmp ' "$body" || true)" -eq 1 ] &&
-    [ "$(grep -E -c '= icmp eq i64 %t[0-9]+, [0-9]+$' "$body" || true)" -eq 1 ] &&
+    [ "$(grep -E -c '= icmp ' "$body" || true)" -eq 2 ] &&
+    [ "$(grep -E -c '= icmp eq i64 %t[0-9]+, [0-9]+$' "$body" || true)" -eq 2 ] &&
+    [ "$(grep -E -c '= select i1 ' "$body" || true)" -eq 1 ] &&
     [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)" -eq 0 ] &&
     [ "$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)" -eq 0 ] &&
     [ "$(grep -E -c 'call i64 @mdk_(impl_Array_index|array__set(InPlace)?|array_make|array_copy)\(' "$body" || true)" -eq 0 ]

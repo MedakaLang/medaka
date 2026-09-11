@@ -227,13 +227,24 @@ pass 'emitted fixed reduction runs its schedule unconditionally'
 # still linked, as are scalarLadder and both complete point operations, so the
 # ladder topology the list exists to prove is unaffected.  Nothing emitter-side
 # steers that decision: the emitted IR carries no inline attributes at all.  Pin
-# the shape here instead, where the definition always exists.  The one surviving
-# branch must be a comparison against a compile-time constructor tag, never
-# against a value: an integer-literal right operand is what makes it so.
+# the shape here instead, where the definition always exists.
+#
+# BRANCH COUNT IS THE PROPERTY; the comparison count is only its witness.  The one
+# surviving branch must be a comparison against a compile-time constructor tag,
+# never against a value: an integer-literal right operand is what makes it so.
+# The comparison count rose 1 -> 2 when the all-boxed discriminant load regained
+# its pointer guard: the second `icmp` tests the scrutinee's low tag bit and feeds
+# a `select` over the ADDRESS to load from, never a branch, so the guard is
+# branchless by construction and this function's timing is unchanged.  The branch
+# assertion below is what would catch a guard that grew a branch instead; it is
+# pinned at 1 and must stay there.  (Same column-audit discipline as
+# FIX-pds-constant-time-audit, 9b956cb42: move a pinned constant only with the
+# measurement and the reason.)
 extract_ir_function secretAffine "$IR" "$WORK/secretAffine.ll"
 [ "$(grep -c 'br i1' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion branches exactly once'
-[ "$(grep -E -c '= icmp ' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion makes exactly one comparison'
-[ "$(grep -E -c '= icmp eq i64 %t[0-9]+, [0-9]+$' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion branches on a constant constructor tag'
+[ "$(grep -E -c '= icmp ' "$WORK/secretAffine.ll" || true)" -eq 2 ] || fail 'secret affine conversion makes exactly two comparisons (one tag test, one branchless pointer guard)'
+[ "$(grep -E -c '= select i1 ' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine pointer guard is a select, not a branch'
+[ "$(grep -E -c '= icmp eq i64 %t[0-9]+, [0-9]+$' "$WORK/secretAffine.ll" || true)" -eq 2 ] || fail 'both secret affine comparisons have a constant right operand (constructor tag, low-bit guard)'
 [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/secretAffine.ll" || true)" -eq 0 ] || fail 'secret affine conversion makes no value comparisons'
 [ "$(grep -F -c 'call i64 @mdk_lib_field__feInverse(' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion runs exactly one inversion'
 [ "$(grep -F -c 'call i64 @mdk_lib_field__feSquare(' "$WORK/secretAffine.ll" || true)" -eq 1 ] || fail 'secret affine conversion runs exactly one squaring'
