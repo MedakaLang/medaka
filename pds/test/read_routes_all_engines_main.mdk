@@ -16,7 +16,8 @@
    well-knowns answer with the right bytes and the right media type, and every
    repository-bearing read refuses cleanly with `RepoNotFound` on an
    unconfigured server rather than answering something. `com.atproto.identity.
-   resolveHandle` needs no repository either, so it is graded here in full.
+   resolveHandle` and `com.atproto.server.describeServer` need no repository
+   either, so both are graded here in full.
 
    No cell may change the `Store`: every one of them asserts the successor is
    still the empty, unconfigured store. -}
@@ -228,6 +229,12 @@ runCells =
       (getRequest (identityRoute ""))
       "400"
       "InvalidRequest"
+  let describeServer =
+    okCell
+      "describe-server"
+      (getRequest (xrpc "com.atproto.server.describeServer"))
+      "application/json"
+      "{\"did\":\"\{accountDidText}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false}"
   let getRecord =
     failCell
       "get-record-unconfigured"
@@ -287,6 +294,7 @@ runCells =
       + resolveUnknown
       + resolveRepeated
       + resolveMissing
+      + describeServer
       + getRecord
       + listRecords
       + describeRepo
@@ -294,8 +302,8 @@ runCells =
       + latestCommit
       + readNeedsGet
       + unregistered
-  let () = println "cells: \{intToString cells}/17 repository-free routes"
-  if cells == 17 then
+  let () = println "cells: \{intToString cells}/18 repository-free routes"
+  if cells == 18 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

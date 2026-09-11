@@ -4,8 +4,9 @@
    applyWrites, uploadBlob}`) are the five that transition the `Store` — the
    first four the repository half under one signed commit apiece (`applyWrites`
    batches the other three), `uploadBlob` the blob half. **Reads** are the
-   eight that cannot:
+   nine that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
+   `com.atproto.server.describeServer`,
    `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs}`, and
    `com.atproto.identity.resolveHandle`. **Sessions** are the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
@@ -21,7 +22,7 @@
    reason, not because it is a repository write.
 
    Every registration carries its own `AuthPolicy`: the five writes and
-   `getSession` are `AuthenticatedRoute`, the eight reads are `PublicRoute`,
+   `getSession` are `AuthenticatedRoute`, the nine reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`, `createSession` is
    `PublicRoute` (it is the login that issues the tokens the other session
    routes require), and the two well-knowns are public by construction
@@ -175,6 +176,9 @@ listRecordsNsid = "com.atproto.repo.listRecords"
 
 describeRepoNsid : String
 describeRepoNsid = "com.atproto.repo.describeRepo"
+
+describeServerNsid : String
+describeServerNsid = "com.atproto.server.describeServer"
 
 getRepoNsid : String
 getRepoNsid = "com.atproto.sync.getRepo"
@@ -1133,8 +1137,9 @@ applyListRecords account store params = do
    admitted both and `resolveHandle` answers from that same pair — so it is
    `true` by construction, not by a resolution this server cannot perform.
 
-   `didDoc` is NOT emitted: the account DID is a `did:key`, and this server has
-   no DID resolver, so any document it printed would be invented. -}
+   `didDoc` is this server's own did:web document (`didWebDocument`, below) —
+   the same one served at `/.well-known/did.json` for this same account, not a
+   second document synthesized here. -}
 applyDescribeRepo : Account -> Store -> List QueryParam -> Result Response Json
 applyDescribeRepo account store params = do
   repo <- requireConfiguredRepo store
@@ -1146,8 +1151,25 @@ applyDescribeRepo account store params = do
     (jObject [
       ("did", JString (accountDid account)),
       ("handle", JString (accountHandle account)),
+      ("didDoc", didWebDocument account),
       ("collections", jArray (map JString collections)),
       ("handleIsCorrect", JBool True),
+    ])
+
+-- ── com.atproto.server.describeServer ───────────────────────────────────────
+
+{- | This is the preflight a relay or a Bluesky client runs before trusting
+   the server at all, so it needs no credential and answers about the server
+   itself, not the hosted account: `availableUserDomains` is empty and
+   `inviteCodeRequired` is `false` because this server is single-account, with
+   no signup surface of its own to describe. -}
+applyDescribeServer : Account -> Result Response Json
+applyDescribeServer account =
+  Ok
+    (jObject [
+      ("did", JString (accountDid account)),
+      ("availableUserDomains", jArray []),
+      ("inviteCodeRequired", JBool False),
     ])
 
 -- ── com.atproto.sync.getRepo ────────────────────────────────────────────────
@@ -1593,6 +1615,7 @@ readHandled account store (QueryCall nsid params)
     Some (finishRead (applyListRecords account store params))
   | nsid == describeRepoNsid =
     Some (finishRead (applyDescribeRepo account store params))
+  | nsid == describeServerNsid = Some (finishRead (applyDescribeServer account))
   | nsid == getRepoNsid =
     Some (collapseResponse (applyGetRepo account store params))
   | nsid == getLatestCommitNsid =
@@ -1608,7 +1631,7 @@ readHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: five record writes, four session routes, eight
+{- | The complete handler: five record writes, four session routes, nine
    reads, two well-knowns. The halves are disjoint by construction — each owns
    a distinct set of NSIDs, and the read half additionally owns the two
    well-knowns — so the order below is a formality rather than a
@@ -1624,7 +1647,7 @@ pdsHandler account context outcome store call =
         Some response => (store, response)
         None => (store, unhandledRoute call)
 
--- | The registry of all seventeen XRPC endpoints. The two well-known paths are
+-- | The registry of all eighteen XRPC endpoints. The two well-known paths are
 -- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -1634,15 +1657,16 @@ pdsRegistry = do
   reads <- readEndpoints
   makeRegistry (concatEndpoints writes (concatEndpoints sessions reads))
 
-{- | The eight read queries, every one of them public.
+{- | The nine read queries, every one of them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,
    `listRecords` and `describeRepo`, and the `com.atproto.sync.*` pair another
    server's relay reads to mirror this repo, are all reachable on a real PDS
    with no credential — and so is `com.atproto.identity.resolveHandle`, which
-   is how a client finds this account before it could have a token at all. A
-   server that closed these would not be a stricter PDS; it would be one no
-   client and no relay can use.
+   is how a client finds this account before it could have a token at all, and
+   `com.atproto.server.describeServer`, which is how a client or relay finds
+   the account before that. A server that closed these would not be a
+   stricter PDS; it would be one no client and no relay can use.
 
    The classification is per route, not per kind: a future public procedure
    would say `PublicRoute` here and be right, and a future private query would
@@ -1652,6 +1676,7 @@ readEndpoints = do
   getRecord <- queryEndpoint getRecordNsid PublicRoute
   listRecords <- queryEndpoint listRecordsNsid PublicRoute
   describeRepo <- queryEndpoint describeRepoNsid PublicRoute
+  describeServer <- queryEndpoint describeServerNsid PublicRoute
   getRepo <- queryEndpoint getRepoNsid PublicRoute
   getLatestCommit <- queryEndpoint getLatestCommitNsid PublicRoute
   getBlob <- queryEndpoint getBlobNsid PublicRoute
@@ -1661,6 +1686,7 @@ readEndpoints = do
     getRecord,
     listRecords,
     describeRepo,
+    describeServer,
     getRepo,
     getLatestCommit,
     getBlob,

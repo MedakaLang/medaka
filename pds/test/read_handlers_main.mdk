@@ -369,7 +369,7 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
     readJson server final "com.atproto.repo.describeRepo?repo=\{did}"
   let describeBody = stringify describe
   let expectedDescribe =
-    "{\"did\":\"\{did}\",\"handle\":\"\{accountHandleText}\",\"collections\":[\"\{collectionText}\"],\"handleIsCorrect\":true}"
+    "{\"did\":\"\{did}\",\"handle\":\"\{accountHandleText}\",\"didDoc\":{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:\{accountHostText}\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://\{accountHostText}\"}]},\"collections\":[\"\{collectionText}\"],\"handleIsCorrect\":true}"
   let cellDescribe =
     check
       "describeRepo"
