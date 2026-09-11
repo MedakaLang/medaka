@@ -794,6 +794,10 @@ both landed — see item 9. #2549 is landed for its first half only — see item
 
 16. **`build`'s second typecheck is NOT redundant — ruling 3's shape (a) is refuted by
    measurement, 2026-09-09** (branch `rearch3-build-child`, off `20869bcc7`; not merged).
+   **SUPERSEDED by item 21, 2026-09-10**: the prerequisite this item names — making the
+   mangled graph's elaboration agree with the unmangled one — landed as #2809 (item 20),
+   and re-running these eight acceptance items on top of it passes all eight. Read item 21
+   before acting on anything below.
    Shape (a) — the `medaka_emitter` child owns the whole verdict, the parent runs resolve
    only — was implemented in full: the child loads with `loadProgramFilesLocatedE`, renders
    its per-module diagnostics through `emitGateDiags` (the same `typecheckDiagsFold` +
@@ -1210,7 +1214,18 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    70.020B (**+12.3%**, the located loader and the diagnostic render). Compiler-side total
    for a `build` **119.557B → 94.785B, -20.7%** — item 16's "about -25%" was the right
    order and slightly optimistic.
-   **The two divergences, and they are the child's REPORT, never its verdict.**
+   **ONE VERDICT DOES FLIP, and the fix round's review is what found it (#2873).** A
+   multi-module program whose `main` is a bare value with no `Display` impl
+   (`import m.{Foo(..)}` / `main = Foo 1`) is `check` 0 on both arms; `build` is 0 on main
+   and **1 on this branch**, with a located `No impl of Display for Foo`. The branch is the
+   more correct arm — main's binary builds and then dies `E-DISPATCH-NO-IMPL` at run time —
+   and the defect underneath is pre-existing and `check`'s: multi-module `check` never runs
+   the auto-print obligation, because `analyzeFinish`'s auto-print half is flat-path only.
+   The child reaches it through `underivedMainDiags`, so shape (a) turns a runtime failure
+   into a compile-time diagnostic. It is still a `check`/`build` verdict divergence a user
+   can hit, so it is named here rather than filed under "report only", and #2873 owns the
+   `check` gap.
+   **The two remaining divergences are the child's REPORT, never its verdict.**
    `error_quality_fixtures/build/main_takes_unit.out` re-blessed: on a FAILING emit the
    child's stderr, warnings included, rides inside the parent's `emitter failed compiling`
    wrap instead of preceding it, so two lines swap. And on the auto-print path a rejecting
@@ -1226,10 +1241,27 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    block; the discriminating `stdout-line` is untouched. **Any shape-(a)-like change must
    re-read every `must_fail` row whose verb is `build`: a process boundary between the
    defect and the exit code can drain a pin that nothing fixed.**
+   **THE GENERAL HAZARD, and the fix round's most useful finding.** Any driver fact the
+   parent publishes to typecheck BEFORE its own pass has to be published in the child too,
+   or the two verdicts differ on exactly that fact's class. `setStdlibOwnership` (#2072) was
+   the one that was missed: `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration
+   rules", so with the gate hard a stdlib-root-owned module carrying a bare `extern` was
+   accepted by `check` and REJECTED by `build`. The child now derives the same fact from the
+   same inputs in `driveModulesGo`, taking the stdlib root as `dirOf coreP` — the CLI shape
+   hands the child the stdlib's own `core.mdk`. The census is DERIVED, not asserted: the
+   exported publishers of driver state in `types/typecheck.mdk` that `driver/medaka_cli.mdk`
+   calls are exactly three — `resetTypeErrorsSticky`, `setLocalPinDisabled`,
+   `setStdlibOwnership` — and the child now calls all three. `setCoherenceUserDecls` reaches
+   the flat arm only and no Module-arm driver calls it; `projectTrustedMods` and
+   `--allow-internal` feed resolve, which stays with the parent by design.
    **What is still NOT converged**, and was not in this unit's scope: `build --json` still
    runs `checkJsonFileParts` in the parent plus the child (`runBuildJsonCmd`), because the
    child has no machine channel and `runCommand` takes no environment — item 16's reading,
-   unchanged. The parent therefore still typechecks on the `--json` route alone.
+   unchanged. The parent therefore still typechecks on the `--json` route alone, and that
+   double render is why the route passes `quietEmitStderr`: the envelope already carries
+   every diagnostic, so forwarding the child's human copy would report one diagnostic twice
+   on two channels, against `docs/ops/CLI-CONFORMANCE.md` §4's exemplar X9. A FAILING emit
+   is unaffected — its text still rides `ppBuildReport` into `cjBuildFailedJson`.
 
 ### SA-11. Artifacts
 

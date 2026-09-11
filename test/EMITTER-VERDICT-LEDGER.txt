@@ -142,6 +142,31 @@
 # emitter verdict inherits #733's own order-dependence, because whether the child
 # rejects is exactly whether that ordering produced a T- code for it to see. Read
 # that as #733 becoming observable one stage later, not as a new order-dependence.
+#
+# ⚠️ THE `1667` DELETION IS CLASS-SCOPED — DO NOT READ IT AS "#1667 IS CLOSED".
+# #1667 is "the emitter accepts a program check/run/build reject". Shape (a) closes
+# its TYPECHECK half and leaves its RESOLVE half wholly open, because the point of
+# shape (a) is that the child does not resolve. That surviving half is exactly what
+# the `1253-record-form-ctor-head-decided-by-import-order` and
+# `control-ambiguous-ctor-reject-invariant` rows below still measure: both are
+# `check=1;emit=0:ir` on the branch as they were on main. The deleted row was the
+# T-TYPE-MISMATCH instance; those two are the R-AMBIGUOUS-CTOR instances of the same
+# claim. The `1667` row in test/MUST-FAIL-NOT-PINNABLE.txt therefore still holds and
+# must NOT be deleted with this one: its "GUARDED INSTEAD by this ledger" is still
+# true, by those two rows and by the now-unledgered `1667` CASE itself.
+#
+# ── WHAT THE EMITTER-VERDICT CELL MEASURES SINCE RULING 3 ─────────────────────
+#
+# It measures a configuration PRODUCTION NEVER REACHES. The arm invokes the raw
+# `./medaka_emitter` on a graph directly; under `medaka build` the parent's
+# `resolveModulesErrorsByFile` returns `Err` on every R-rejecting case here and the
+# child is never spawned at all. So for `1253`, `control-…` and `733` the user-facing
+# verdict is the parent's single R-AMBIGUOUS-CTOR, order-invariant, byte-identical to
+# main's on both arms — the "that bound is what keeps #1667 off the S0 ladder"
+# paragraph above, one process further out. This is still a useful guard: it is the
+# only thing watching what the child alone would do, which is what a future slice
+# that moved resolve into the child would silently change. It is not evidence about
+# what a user sees today.
 
 1253-record-form-ctor-head-decided-by-import-order | DISAGREE | Emitter accepts (exit 0, non-empty IR) an entry that `check`/`run`/`build` reject in EVERY ordering with R-AMBIGUOUS-CTOR (drained from test/IMPORT-ORDER-LEDGER.txt by #1319 unit 1 — that drain closed the ORDER-dependence of the reject, not the emitter's own failure to reject at all). Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
 
