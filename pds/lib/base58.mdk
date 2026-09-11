@@ -83,7 +83,7 @@ charAtA i arr = match get i arr
 -- ── Encode ───────────────────────────────────────────────────────────────
 
 -- Every element of `bytes` inside the documented `0..255` byte domain?
--- Mirrors `pds/lib/sha256.mdk`'s entry-point guard: a tail-recursive index
+-- Mirrors `stdlib/sha256.mdk`'s entry-point guard: a tail-recursive index
 -- scan that allocates nothing.
 byteDomainOk : Array Int -> Int -> Int -> Bool
 byteDomainOk bytes len i =

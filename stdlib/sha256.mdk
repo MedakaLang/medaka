@@ -1,49 +1,36 @@
-{- | Pure-Medaka SHA-256 (FIPS PUB 180-4 §6.2), byte-oriented.
+{- | SHA-256 hashing of a byte array (FIPS 180-4).
 
-   Public surface: `sha256 : Array Int -> Array Int` — bytes 0..255 in, 32
-   bytes out. That input contract is ENFORCED at entry (RUN-PDS0-036 item
-   #2): an element outside `0..255` panics rather than aliasing mod 256,
-   which would otherwise be a silent collision in a content-addressing
-   primitive (`sha256 [|256|] == sha256 [|0|]`). Everything else in this
-   module is private. No
-   incremental/streaming form (#1698 "Scope": nothing calls one yet, so none
-   is built here).
+   A message is an `Array Int` with each element from `0` to `255`, the same
+   form `readFileBytes` and `hex.decode` use. The digest is 32 bytes, most
+   significant byte of each word first.
 
-   ── Arithmetic contract (checked here for every reviewer) ──────────────
-   Every word is an `Int` in `[0, 2^32)`. `mask32 x = bitAnd x 4294967295`.
-   Every `+`, every `shiftLeft`, and every `bitNot` result is immediately
-   followed by `mask32`. `shiftRight` needs no mask: it is LOGICAL/unsigned
-   (`stdlib/runtime.mdk`) and its input is already masked. A sum of up to
-   five 32-bit values is `< 2^35`, well inside the 63-bit fixnum
-   (`stdlib/bits64.mdk`), so no intermediate ever overflows — the mask
-   enforces the *modulus* (wraparound mod 2^32), not fixnum safety.
+   `sha256` panics when any element is outside `0` to `255`. Reducing such an
+   element modulo 256 would map two different messages onto one digest, which
+   a content-addressing caller has no way to detect. `sha256FixedBytes` is
+   the same hash without that scan, for a caller whose bytes are already
+   known to be in range.
 
-   ── Byte order ───────────────────────────────────────────────────────
-   Message words are big-endian (FIPS 180-4 §3.1). The digest is emitted
-   most-significant byte first, in H0..H7 order: 32 bytes total.
+   There is no incremental form. A message is hashed in one call. -}
 
-   ── Where the answer key lives ──────────────────────────────────────
-   Expected digests for this module live under `pds/test/vectors/`, with
-   provenance rows in `pds/test/VECTOR-PROVENANCE.txt` — never as inline
-   literals in this file (G5, `docs/design/ATPROTO-PDS-DESIGN.md` §5).
-
-   ── Shape, not perf ──────────────────────────────────────────────────
-   This module never materializes a padded copy of the whole message: full
-   64-byte blocks are read directly from the input `Array` by offset, and
-   only the final one-or-two blocks (<=128 bytes) are synthesized to hold
-   the 0x80 marker, zero padding, and the 64-bit big-endian bit length. -}
-
--- Writes here are still on `Array.setInPlace` rather than the `arr[i] := v` sugar the
--- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
--- comment is a note to whoever migrates them, not a warning against it.
+-- Arithmetic contract. Every word is an `Int` in [0, 2^32). `mask32 x =
+-- bitAnd x 4294967295`, and every `+`, `shiftLeft` and `bitNot` result is
+-- immediately followed by `mask32`. `shiftRight` needs no mask: it is
+-- logical/unsigned (`stdlib/runtime.mdk`) and its input is already masked. A
+-- sum of up to five 32-bit values is < 2^35, well inside the 63-bit fixnum
+-- (`stdlib/bits64.mdk`), so no intermediate overflows; the mask enforces the
+-- modulus, not fixnum safety.
 --
--- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
--- a direct call, same as `Array.setInPlace`). It was an INLINING asymmetry: `setIndex`'s
--- out-of-bounds branch interpolated a message, which put it past LLVM's inline
--- threshold, so it never inlined into the hot loops where `Array.setInPlace` did --
--- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
--- spellings now inline. Migrating these three modules is mechanical and wanted;
--- re-measure when you do, and delete this comment.
+-- Message words are big-endian (FIPS 180-4 §3.1) and the digest is emitted in
+-- H0..H7 order.
+--
+-- No padded copy of the whole message is ever materialized: full 64-byte
+-- blocks are read directly from the input by offset, and only the final one
+-- or two blocks are synthesized to hold the 0x80 marker, the zero padding and
+-- the 64-bit big-endian bit length.
+--
+-- Writes go through `array.setInPlace` rather than the `arr[i] := v` sugar.
+-- The two now emit and inline identically, so migrating is mechanical;
+-- re-measure the hot loops when you do.
 import array.{get, setInPlace, make, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────
@@ -248,15 +235,13 @@ processTail tail st =
 
 -- ── Public entry point ───────────────────────────────────────────────
 
--- Every element of `msg[0 .. len)` inside the documented `0..255` byte
--- domain? Mirrors `pds/lib/field.mdk`'s `byteRangeGo`: a tail-recursive
--- index scan over safe indexing, allocating nothing.
+-- Is every element of `msg[0 .. len)` inside the `0..255` byte domain? A
+-- tail-recursive index scan over safe indexing, allocating nothing.
 --
--- ⚠️ It MUST stay a FULL-ARITY self tail call. Native lowers that shape to
--- `musttail`; the tree-walking interpreter does not TCO at all, but the
--- native corpus (pds/test/vectors/sha256_worked_examples.txt, `Repeat =
--- 1000000`) hashes a one-megabyte message, so a non-tail rewrite here is a
--- million-frame stack overflow, not a slowdown.
+-- This must stay a full-arity self tail call. Native lowers that shape to
+-- `musttail`, and callers hash messages of a megabyte and more, so a
+-- non-tail rewrite here is a million-frame stack overflow rather than a
+-- slowdown.
 byteDomainOk : Array Int -> Int -> Int -> Bool
 byteDomainOk msg len i =
   if i >= len then
@@ -275,24 +260,28 @@ sha256AssumeByteDomain msg =
   let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
   digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
 
--- | Signing-internal SHA-256 entry. HMAC constructs every input byte from
---   fixed pads, SHA-256 state, canonical scalar bytes, or an admitted digest,
---   so repeating the public byte-domain scan here would introduce a
---   secret-derived early exit into the native signing closure.
+-- This entry exists for `hmac`, whose every input byte comes from a fixed
+-- pad, a SHA-256 digest or caller-canonical scalar bytes. Running the
+-- byte-domain scan over those would put a secret-derived early exit inside
+-- the signing closure.
+{- | The 32-byte SHA-256 digest of `msg`, skipping the byte-domain check.
+
+   Every element of `msg` must still be in `0` to `255`. Nothing here checks
+   that, and an element outside the range silently digests as some other
+   message. Prefer `sha256` unless the bytes come from a source that already
+   guarantees the range. -}
 export
 sha256FixedBytes : Array Int -> Array Int
 sha256FixedBytes msg = sha256AssumeByteDomain msg
 
+{- | The 32-byte SHA-256 digest of `msg`.
+
+   Panics when any element of `msg` is outside `0` to `255`. -}
 export
 sha256 : Array Int -> Array Int
 sha256 msg =
   let len = arrayLength msg
   if not (byteDomainOk msg len 0) then
-    -- Not `Result`-typed, so a violation PANICS rather than aliasing mod
-    -- 256. A loud abort is the point: an aliased element is a hash
-    -- collision, and this is a content-addressing primitive. Same
-    -- reasoning, and same in-family precedent, as
-    -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
     panic "sha256: every element must be a byte in 0..255"
   else
     sha256AssumeByteDomain msg

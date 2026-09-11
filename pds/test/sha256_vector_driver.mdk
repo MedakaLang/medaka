@@ -1,4 +1,4 @@
-{- | Vector-file driver for `pds/lib/sha256.mdk` (S-sha256, #1698).
+{- | Vector-file driver for `stdlib/sha256.mdk` (S-sha256, #1698).
    Grades our SHA-256 against a corpus of NIST/CAVS-style records — never
    against a self-captured golden (G5).
 
@@ -21,7 +21,7 @@
    Exit 1 if any record failed, or if zero records were checked across all
    files (vacuous-green guard). Exit 0 otherwise. -}
 
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import hex.{decode, encode}
 import array.{take, make, blit}
 import string.{toInt, toLower, trim}

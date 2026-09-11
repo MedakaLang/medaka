@@ -1,0 +1,118 @@
+# META
+source_lines=88
+stages=DESUGAR,MARK
+# SOURCE
+{- | HMAC-SHA-256 (RFC 2104) over byte arrays.
+
+   A key and a message are each an `Array Int` with every element from `0` to
+   `255`, and the result is the 32-byte authentication tag. The key may be any
+   length: RFC 2104's schedule hashes a key longer than the 64-byte block down
+   to its digest first, and pads a shorter one with zero bytes on the right.
+
+   `hmacSha256` panics when any element of the key or the message is outside
+   `0` to `255`. `hmacSha256FixedBytes` is the same tag without that check,
+   for a caller whose bytes are already known to be in range. -}
+
+import array.{concat, make, setInPlace}
+import sha256.{sha256, sha256FixedBytes}
+
+-- The SHA-256 block size, which is what the ipad/opad are padded to and the
+-- length above which RFC 2104 §2 hashes the key down.
+blockBytes : Int
+blockBytes = 64
+
+fillKeyPad : Array Int -> Array Int -> Int -> Int -> Unit
+fillKeyPad key out pad i =
+  if i >= arrayLength key then
+    ()
+  else
+    let () = setInPlace i (bitXor key[i] pad) out
+    fillKeyPad key out pad (i + 1)
+
+-- `key` is already normalized to at most `blockBytes`, so the tail of `out`
+-- keeps the raw pad byte: that is the zero-padding of RFC 2104 §2 xored with
+-- the pad, which is the pad itself.
+keyPad : Array Int -> Int -> Array Int
+keyPad key pad =
+  let out = make blockBytes pad
+  let () = fillKeyPad key out pad 0
+  out
+
+-- The two entries below are one key schedule written twice rather than once
+-- over a hash parameter, and the duplication is load-bearing. Passing the
+-- hash as a function value makes every SHA-256 call indirect, and
+-- `pds/test/constant_time_signing.sh` audits the signing closure by walking
+-- direct `call` edges in the emitted IR: under a hash parameter the whole of
+-- SHA-256 drops out of the closure it can see. Keep both bodies direct.
+
+{- | The 32-byte HMAC-SHA-256 tag of `message` under `key`.
+
+   `key` may be any length, including empty. Panics when any element of
+   either argument is outside `0` to `255`. -}
+export
+hmacSha256 : Array Int -> Array Int -> Array Int
+hmacSha256 key message =
+  let normalized = if arrayLength key > blockBytes then sha256 key else key
+  let inner = sha256 (concat [|keyPad normalized 0x36, message|])
+  sha256 (concat [|keyPad normalized 0x5c, inner|])
+
+-- RFC 4231 test case 1, and the same message under the key lengths that
+-- bracket the schedule's two branches: empty, just under and just over the
+-- 32-byte digest width, exactly one block, and one byte past a block (the
+-- first length RFC 2104 hashes down). "Hi There" is 0x48 0x69 0x20 0x54 0x68
+-- 0x65 0x72 0x65.
+-- > hmacSha256 (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == [|0xb0, 0x34, 0x4c, 0x61, 0xd8, 0xdb, 0x38, 0x53, 0x5c, 0xa8, 0xaf, 0xce, 0xaf, 0x0b, 0xf1, 0x2b, 0x88, 0x1d, 0xc2, 0x00, 0xc9, 0x83, 0x3d, 0xa7, 0x26, 0xe9, 0x37, 0x6c, 0x2e, 0x32, 0xcf, 0xf7|]
+-- True
+-- > hmacSha256 [||] [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == [|0xe4, 0x84, 0x11, 0x26, 0x27, 0x15, 0xc8, 0x37, 0x0c, 0xd5, 0xe7, 0xbf, 0x8e, 0x82, 0xbe, 0xf5, 0x3b, 0xd5, 0x37, 0x12, 0xd0, 0x07, 0xf3, 0x42, 0x93, 0x51, 0x84, 0x3b, 0x77, 0xc7, 0xbb, 0x9b|]
+-- True
+-- > hmacSha256 (arrayMake 31 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == [|0x5d, 0x9f, 0xc5, 0x96, 0x13, 0x3a, 0x66, 0x0d, 0xb7, 0x1c, 0x96, 0xf4, 0x67, 0xe0, 0xb8, 0x59, 0xd4, 0xf2, 0x83, 0x7b, 0x51, 0xc5, 0x06, 0x71, 0x41, 0x74, 0xd2, 0x73, 0x2a, 0xf8, 0x1a, 0x26|]
+-- True
+-- > hmacSha256 (arrayMake 32 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == [|0x19, 0x8a, 0x60, 0x7e, 0xb4, 0x4b, 0xfb, 0xc6, 0x99, 0x03, 0xa0, 0xf1, 0xcf, 0x2b, 0xbd, 0xc5, 0xba, 0x0a, 0xa3, 0xf3, 0xd9, 0xae, 0x3c, 0x1c, 0x7a, 0x3b, 0x16, 0x96, 0xa0, 0xb6, 0x8c, 0xf7|]
+-- True
+-- > hmacSha256 (arrayMake 64 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == [|0x21, 0xcd, 0x58, 0x6a, 0xec, 0xa0, 0x57, 0x9d, 0x99, 0xa1, 0xc9, 0x38, 0x12, 0x7c, 0x92, 0x52, 0x5a, 0x37, 0x1f, 0x80, 0x7b, 0xc5, 0xba, 0x6e, 0xb7, 0x8b, 0xc8, 0x25, 0xbd, 0x4f, 0x2b, 0xe3|]
+-- True
+-- > hmacSha256 (arrayMake 65 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == [|0x72, 0x7b, 0x82, 0xfb, 0xa2, 0x64, 0x39, 0x3c, 0x5d, 0x67, 0xfd, 0x6d, 0x6a, 0xd7, 0x83, 0xe9, 0x01, 0x9a, 0x1f, 0xa6, 0xa8, 0x57, 0xfc, 0xcb, 0x70, 0xf5, 0x85, 0x2f, 0x04, 0xbe, 0x5d, 0x5d|]
+-- True
+-- > hmacSha256 (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == hmacSha256FixedBytes (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True
+
+{- | The 32-byte HMAC-SHA-256 tag of `message` under `key`, skipping the
+   byte-domain check.
+
+   Every element of `key` and `message` must still be in `0` to `255`.
+   Nothing here checks that, and an element outside the range silently
+   authenticates some other input. Prefer `hmacSha256` unless the bytes come
+   from a source that already guarantees the range. -}
+export
+hmacSha256FixedBytes : Array Int -> Array Int -> Array Int
+hmacSha256FixedBytes key message =
+  let normalized =
+    if arrayLength key > blockBytes then sha256FixedBytes key else key
+  let inner = sha256FixedBytes (concat [|keyPad normalized 0x36, message|])
+  sha256FixedBytes (concat [|keyPad normalized 0x5c, inner|])
+# DESUGAR
+(DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
+(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256FixedBytes" false))))
+(DTypeSig false "blockBytes" (TyCon "Int"))
+(DFunDef false "blockBytes" () (ELit (LInt 64)))
+(DTypeSig false "fillKeyPad" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
+(DFunDef false "fillKeyPad" ((PVar "key") (PVar "out") (PVar "pad") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "key"))) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "setInPlace") (EVar "i")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "index") (EVar "key")) (EVar "i"))) (EVar "pad"))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EVar "key")) (EVar "out")) (EVar "pad")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DTypeSig false "keyPad" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "keyPad" ((PVar "key") (PVar "pad")) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "make") (EVar "blockBytes")) (EVar "pad"))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EVar "key")) (EVar "out")) (EVar "pad")) (ELit (LInt 0)))) (DoExpr (EVar "out"))))
+(DTypeSig true "hmacSha256" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "hmacSha256" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
+(DTypeSig true "hmacSha256FixedBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "hmacSha256FixedBytes" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256FixedBytes") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
+# MARK
+(DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
+(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256FixedBytes" false))))
+(DTypeSig false "blockBytes" (TyCon "Int"))
+(DFunDef false "blockBytes" () (ELit (LInt 64)))
+(DTypeSig false "fillKeyPad" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
+(DFunDef false "fillKeyPad" ((PVar "key") (PVar "out") (PVar "pad") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "key"))) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "setInPlace") (EVar "i")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EMethodRef "index") (EVar "key")) (EVar "i"))) (EVar "pad"))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EVar "key")) (EVar "out")) (EVar "pad")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DTypeSig false "keyPad" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "keyPad" ((PVar "key") (PVar "pad")) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "make") (EVar "blockBytes")) (EVar "pad"))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EVar "key")) (EVar "out")) (EVar "pad")) (ELit (LInt 0)))) (DoExpr (EVar "out"))))
+(DTypeSig true "hmacSha256" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "hmacSha256" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
+(DTypeSig true "hmacSha256FixedBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "hmacSha256FixedBytes" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256FixedBytes") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))

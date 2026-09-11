@@ -1,5 +1,5 @@
 #!/bin/sh
-# Vector-corpus gate for pds/lib/sha256.mdk (S-sha256, #1698).
+# Vector-corpus gate for stdlib/sha256.mdk (S-sha256, #1698).
 #
 # Grades the pure-Medaka SHA-256 against an externally-sourced NIST/CAVS
 # corpus (pds/test/vectors/*) — never against a self-captured golden (G5,

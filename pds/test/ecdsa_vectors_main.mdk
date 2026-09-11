@@ -20,7 +20,7 @@ import lib.sign.{
   signDigest,
   verifyDigest,
 }
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import array as A
 import hex.{decode, encode}
 import io.{readLines}

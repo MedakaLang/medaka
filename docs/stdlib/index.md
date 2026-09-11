@@ -332,6 +332,13 @@ Hexadecimal encoding and decoding of bytes.
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
 
+## [`hmac`](hmac.md)
+
+HMAC-SHA-256 (RFC 2104) over byte arrays.
+
+- [`hmacSha256`](hmac.md#hmacsha256)
+- [`hmacSha256FixedBytes`](hmac.md#hmacsha256fixedbytes)
+
 ## [`io`](io.md)
 
 Output to standard error, debug printing, and helpers for files and the environment.
@@ -569,6 +576,12 @@ Manipulation of `/`-separated paths as text.
 - [`stripPrefix`](path.md#stripprefix)
 - [`normalize`](path.md#normalize)
 
+## [`pbkdf2`](pbkdf2.md)
+
+PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2), the password-hashing key derivation function.
+
+- [`pbkdf2HmacSha256`](pbkdf2.md#pbkdf2hmacsha256)
+
 ## [`runtime`](runtime.md)
 
 The host primitives.
@@ -726,6 +739,13 @@ An immutable set of distinct elements, ordered by `Ord`.
 - [`difference`](set.md#difference)
 - [`isSubsetOf`](set.md#issubsetof)
 - [`wellFormed`](set.md#wellformed)
+
+## [`sha256`](sha256.md)
+
+SHA-256 hashing of a byte array (FIPS 180-4).
+
+- [`sha256FixedBytes`](sha256.md#sha256fixedbytes)
+- [`sha256`](sha256.md#sha256)
 
 ## [`string`](string.md)
 

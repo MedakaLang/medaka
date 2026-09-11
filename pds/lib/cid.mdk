@@ -14,7 +14,7 @@ import lib.multiformats.{
   uvarintDecode,
   uvarintEncode,
 }
-import lib.sha256.{sha256}
+import sha256.{sha256}
 
 -- | An admitted atproto CID. Its constructor is private to this module.
 export data Cid = Cid Int (Array Int)

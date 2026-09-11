@@ -11,7 +11,7 @@
 --
 --   medaka run pds/test/guard_probes_main.mdk <case>
 
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import lib.base58.{base58btcEncode}
 import lib.multiformats.{uvarintEncode}
 

@@ -18,7 +18,7 @@ import lib.credential.{
   makeCredential,
   saltBytes,
 }
-import lib.sha256.{sha256}
+import sha256.{sha256}
 import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
