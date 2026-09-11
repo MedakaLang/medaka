@@ -1,5 +1,5 @@
 # META
-source_lines=1164
+source_lines=1233
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -26,6 +26,7 @@ import frontend.ast.{
   DTypeAlias,
   DAttrib,
   PropParam,
+  ImplMethod(..),
   Ty(..),
   TyConOrigin,
   sameTyConHead,
@@ -38,7 +39,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasTag, ppValue
 }
 import support.util.{
-  listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains
+  listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains, anyList
 }
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -121,18 +122,35 @@ buildTyDefs (d :: rest) = match d
 public export data GenEnv =
   | GenEnv (List (String, TyDef)) (List ArbImpl) (List (String, TyConOrigin)) (List String)
 
+-- Where a chosen declaration's runtime `arbitrary` value is to be found: the
+-- canonical impl route word its methods are tagged with at install time, this
+-- declaration's position among the same-worded declarations, and how many of
+-- those there are.
+--
+-- The word alone is not an address.  `implRouteKeyWord` renders type arguments
+-- and the declaring module BARE, so `impl Arbitrary Color` in two modules mints
+-- ONE word for two runtime candidates and a filter on the word yields both.
+-- Position is what tells them apart: eval installs impl methods by walking the
+-- same `prelude ++ modules` decl list this module walks (`evalModulesWith`'s
+-- `allDecls` and `implEntries` are built from it in that order), and
+-- `coalesceImpls`' score sort is stable and scores same-worded impls equally
+-- (one word means one type-argument spelling, hence one tyvar count) — so the
+-- Nth same-worded declaration is the Nth same-worded candidate.  The total is
+-- what makes that correspondence CHECKED rather than assumed: see
+-- `drawArbitrary`.
+public export data ArbRoute = ArbRoute String Int Int
+
 -- An argument-free `Arbitrary` instance, recorded as the IDENTITY of the type
 -- it is declared at (`sameTyConHead`'s pair: head name + declaring module) plus
--- the canonical impl route word its methods are tagged with at install time.
+-- the route to its runtime value.
 --
 -- The identity is why this type exists.  A bare head SPELLING is not a type:
 -- two modules may each declare a `Color`, and picking an instance by spelling
--- hands one module's value to a prop declared over the other's.  The route word
--- alone does not fix that either — `implRouteKeyWord` renders type arguments
--- bare — so the spelling-blind half of the decision is made HERE, on the
--- declaration, and the route word is used only to find the matching runtime
--- candidate once a declaration has been chosen.
-public export data ArbImpl = ArbImpl String TyConOrigin String
+-- hands one module's value to a prop declared over the other's.  So the
+-- spelling-blind half of the decision is made HERE, on the declaration, and the
+-- route is used only to reach the matching runtime candidate once a declaration
+-- has been chosen.
+public export data ArbImpl = ArbImpl String TyConOrigin ArbRoute
 
 -- [rootDecls] is the root module's, [allDecls] every loaded module's (prelude
 -- included).
@@ -146,18 +164,55 @@ buildGenEnv rootDecls allDecls =
     (aliasNamesOf allDecls)
 
 arbImplsOf : List Decl -> List ArbImpl
-arbImplsOf decls = filterMap arbImplOf decls
+arbImplsOf decls = arbImplsGo decls [] (filterMap arbCandidateWord decls)
+
+-- [before] is every candidate-minting route word already walked and [words]
+-- every one in the whole decl list, which between them give each eligible
+-- declaration its position and its word's total.  A declaration that mints a
+-- candidate without being eligible itself (constrained, or at an applied head)
+-- still advances the position: eval installs ITS candidate under the same word,
+-- so the runtime list counts it too.
+arbImplsGo : List Decl -> List String -> List String -> List ArbImpl
+arbImplsGo [] _ _ = []
+arbImplsGo (d :: rest) before words = match arbCandidateWord d
+  None => arbImplsGo rest before words
+  Some w => match arbImplOf d
+    None => arbImplsGo rest (w :: before) words
+    Some (n, to) =>
+      let route = ArbRoute w (count (== w) before) (count (== w) words)
+      ArbImpl n to route :: arbImplsGo rest (w :: before) words
+
+-- The route word of the `arbitrary` candidate this declaration installs, if it
+-- installs one.  Every `impl` spelling a method `arbitrary` does, eligible for
+-- the draw or not and whatever interface it belongs to — the word carries the
+-- interface's identity, so another interface's `arbitrary` mints a different
+-- word and never shares a candidate list with this one.  An impl that spells no
+-- `arbitrary` leans on the interface default, which installs untagged and so is
+-- never in a candidate list either.
+arbCandidateWord : Decl -> Option String
+arbCandidateWord (DAttrib _ d) = arbCandidateWord d
+arbCandidateWord (DImpl { iface = ifaceName, tys = tys, implOrigin = o, methods }) =
+  if anyList isArbitraryMethod methods then
+    Some (implRouteKeyWord o ifaceName tys None)
+  else
+    None
+arbCandidateWord _ = None
+
+isArbitraryMethod : ImplMethod -> Bool
+isArbitraryMethod (ImplMethod n _ _) = n == "arbitrary"
 
 -- Only an instance at a BARE head with no `requires` is eligible: a constrained
 -- instance is dict-passed, so `apply c VUnit` would feed VUnit where the leading
 -- dictionary belongs (see `userArbitrary`).
-arbImplOf : Decl -> Option ArbImpl
+arbImplOf : Decl -> Option (String, TyConOrigin)
 arbImplOf (DAttrib _ d) = arbImplOf d
-arbImplOf (DImpl { iface = ifaceName, tys = tys, reqs = reqs, implOrigin = o }) =
-  match (ifaceName, tys, reqs)
-    ("Arbitrary", [TyCon { tyConName = n, tyConOrigin = to }], []) =>
-      Some (ArbImpl n to (implRouteKeyWord o ifaceName tys None))
-    _ => None
+arbImplOf (DImpl { iface = ifaceName, tys = tys, reqs = reqs }) = match (
+  ifaceName,
+  tys,
+  reqs,
+)
+  ("Arbitrary", [TyCon { tyConName = n, tyConOrigin = to }], []) => Some (n, to)
+  _ => None
 arbImplOf _ = None
 
 -- The identities `arbImplOf` turned away: an `Arbitrary` instance that is
@@ -852,45 +907,59 @@ builtinGenHeads = [
 -- spelling filter yields exactly one candidate and it belongs to the other type.
 -- `arbImplKeyFor` therefore asks `sameTyConHead` — name AND declaring module —
 -- of the DECLARED instances first, and only then looks for the runtime value
--- that carries the chosen declaration's route word.
+-- the chosen declaration's `ArbRoute` addresses: its route word, and its
+-- position among the declarations sharing that word when the word alone leaves
+-- more than one candidate.
 userArbitrary : GenEnv -> List (String, Value e) -> Ty -> <e> Option (Value e)
 userArbitrary (GenEnv _ arbs _ _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
   if contains n builtinGenHeads then
     None
   else match arbImplKeyFor arbs n o
-    Some key => match lookupAssoc "arbitrary" evalEnv
-      Some m => userArbitraryAt key (force m)
+    Some route => match lookupAssoc "arbitrary" evalEnv
+      Some m => userArbitraryAt route (force m)
       None => None
     None => None
 userArbitrary _ _ _ = None
 
 -- Two instances answering to one identity is not a choice the runner may make,
 -- so it declines and lets the structural draw (and its report) happen.
-arbImplKeyFor : List ArbImpl -> String -> TyConOrigin -> Option String
+arbImplKeyFor : List ArbImpl -> String -> TyConOrigin -> Option ArbRoute
 arbImplKeyFor arbs n o = match filterList (arbImplAt n o) arbs
-  [ArbImpl _ _ key] => Some key
+  [ArbImpl _ _ route] => Some route
   _ => None
 
 arbImplAt : String -> TyConOrigin -> ArbImpl -> Bool
 arbImplAt n o (ArbImpl n2 o2 _) = sameTyConHead n o n2 o2
 
--- [key] is a route word, and `implRouteKeyWord` always joins on `|`, which no
--- head tag can contain — so `hasTag`'s `t == tag || k == tag` reduces to exact
--- impl-key equality here and never matches a candidate on its head spelling.
---
--- A route word renders its type arguments bare, so it is not itself an
--- identity: two same-spelled types that BOTH carry an instance produce two
--- candidates under one word, and `drawArbitrary` then declines.  The runner
--- reports rather than guesses, which is the same answer it gives for a type it
--- has no instance for at all.
-userArbitraryAt : String -> Value e -> <e> Option (Value e)
-userArbitraryAt key (VMulti vs) = drawArbitrary (filterList (hasTag key) vs)
-userArbitraryAt key v = drawArbitrary (filterList (hasTag key) [v])
+-- The route's word is an impl route word, and `implRouteKeyWord` always joins
+-- on `|`, which no head tag can contain — so `hasTag`'s `t == tag || k == tag`
+-- reduces to exact impl-key equality here and never matches a candidate on its
+-- head spelling.
+userArbitraryAt : ArbRoute -> Value e -> <e> Option (Value e)
+userArbitraryAt (route@(ArbRoute key _ _)) (VMulti vs) =
+  drawArbitrary route (filterList (hasTag key) vs)
+userArbitraryAt (route@(ArbRoute key _ _)) v =
+  drawArbitrary route (filterList (hasTag key) [v])
 
--- Ambiguity falls back to the structural draw rather than picking a candidate.
-drawArbitrary : List (Value e) -> <e> Option (Value e)
-drawArbitrary [c] = Some (force (apply c VUnit))
-drawArbitrary _ = None
+-- Two same-spelled types that BOTH carry an instance produce two candidates
+-- under one route word, so the word is not enough to choose between them; the
+-- position the declaration walk assigned is (#2820, `ArbRoute`).  The total
+-- guards it: a candidate list of a different length is one the decl walk did
+-- not describe, so the correspondence the position rests on does not hold and
+-- the runner reports rather than guesses — the same answer it gives for a type
+-- it has no instance for at all.
+drawArbitrary : ArbRoute -> List (Value e) -> <e> Option (Value e)
+drawArbitrary (ArbRoute _ i total) cands
+  | listLen cands /= total = None
+  | otherwise = map (c => force (apply c VUnit)) (candAt i cands)
+
+-- The [i]th element; the stdlib has no `nth` (`take`/`drop`/`indexed`/
+-- `elemIndex` are its nearest neighbors).
+candAt : Int -> List (Value e) -> Option (Value e)
+candAt _ [] = None
+candAt i (v :: rest)
+  | i <= 0 = Some v
+  | otherwise = candAt (i - 1) rest
 
 printCounterexample : List (String, Value e) -> <IO> Unit
 printCounterexample [] = ()
@@ -1167,10 +1236,10 @@ anyDecl : (Decl -> Bool) -> List Decl -> Bool
 anyDecl _ [] = False
 anyDecl p (d :: rest) = p d || anyDecl p rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DAttrib" false) (mem "PropParam" false) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DAttrib" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -1188,14 +1257,24 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "buildTyDefs" ((PList)) (EListLit))
 (DFunDef false "buildTyDefs" ((PCons (PVar "d") (PVar "rest"))) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EVar "variants"))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm PWild () (EApp (EVar "buildTyDefs") (EVar "rest")))))
 (DData Public "GenEnv" () ((variant "GenEnv" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))) (TyApp (TyCon "List") (TyCon "String"))))) ())
-(DData Public "ArbImpl" () ((variant "ArbImpl" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyCon "String")))) ())
+(DData Public "ArbRoute" () ((variant "ArbRoute" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int")))) ())
+(DData Public "ArbImpl" () ((variant "ArbImpl" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyCon "ArbRoute")))) ())
 (DTypeSig true "buildGenEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "GenEnv"))))
 (DFunDef false "buildGenEnv" ((PVar "rootDecls") (PVar "allDecls")) (EApp (EApp (EApp (EApp (EVar "GenEnv") (EApp (EVar "buildTyDefs") (EVar "rootDecls"))) (EApp (EVar "arbImplsOf") (EVar "allDecls"))) (EApp (EVar "unusableArbsOf") (EVar "allDecls"))) (EApp (EVar "aliasNamesOf") (EVar "allDecls"))))
 (DTypeSig false "arbImplsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ArbImpl"))))
-(DFunDef false "arbImplsOf" ((PVar "decls")) (EApp (EApp (EVar "filterMap") (EVar "arbImplOf")) (EVar "decls")))
-(DTypeSig false "arbImplOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "ArbImpl"))))
+(DFunDef false "arbImplsOf" ((PVar "decls")) (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "decls")) (EListLit)) (EApp (EApp (EVar "filterMap") (EVar "arbCandidateWord")) (EVar "decls"))))
+(DTypeSig false "arbImplsGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ArbImpl"))))))
+(DFunDef false "arbImplsGo" ((PList) PWild PWild) (EListLit))
+(DFunDef false "arbImplsGo" ((PCons (PVar "d") (PVar "rest")) (PVar "before") (PVar "words")) (EMatch (EApp (EVar "arbCandidateWord") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "rest")) (EVar "before")) (EVar "words"))) (arm (PCon "Some" (PVar "w")) () (EMatch (EApp (EVar "arbImplOf") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "rest")) (EBinOp "::" (EVar "w") (EVar "before"))) (EVar "words"))) (arm (PCon "Some" (PTuple (PVar "n") (PVar "to"))) () (EBlock (DoLet false false (PVar "route") (EApp (EApp (EApp (EVar "ArbRoute") (EVar "w")) (EApp (EApp (EVar "count") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "w")))) (EVar "before"))) (EApp (EApp (EVar "count") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "w")))) (EVar "words")))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "ArbImpl") (EVar "n")) (EVar "to")) (EVar "route")) (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "rest")) (EBinOp "::" (EVar "w") (EVar "before"))) (EVar "words"))))))))))
+(DTypeSig false "arbCandidateWord" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "arbCandidateWord" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "arbCandidateWord") (EVar "d")))
+(DFunDef false "arbCandidateWord" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "tys")) (rf "implOrigin" (PVar "o")) (rf "methods" None)) false)) (EIf (EApp (EApp (EVar "anyList") (EVar "isArbitraryMethod")) (EVar "methods")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "tys")) (EVar "None"))) (EVar "None")))
+(DFunDef false "arbCandidateWord" (PWild) (EVar "None"))
+(DTypeSig false "isArbitraryMethod" (TyFun (TyCon "ImplMethod") (TyCon "Bool")))
+(DFunDef false "isArbitraryMethod" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EBinOp "==" (EVar "n") (ELit (LString "arbitrary"))))
+(DTypeSig false "arbImplOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "arbImplOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "arbImplOf") (EVar "d")))
-(DFunDef false "arbImplOf" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "tys")) (rf "reqs" (PVar "reqs")) (rf "implOrigin" (PVar "o"))) false)) (EMatch (ETuple (EVar "ifaceName") (EVar "tys") (EVar "reqs")) (arm (PTuple (PLit (LString "Arbitrary")) (PList (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "to"))) false)) (PList)) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "ArbImpl") (EVar "n")) (EVar "to")) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "tys")) (EVar "None"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "arbImplOf" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "tys")) (rf "reqs" (PVar "reqs"))) false)) (EMatch (ETuple (EVar "ifaceName") (EVar "tys") (EVar "reqs")) (arm (PTuple (PLit (LString "Arbitrary")) (PList (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "to"))) false)) (PList)) () (EApp (EVar "Some") (ETuple (EVar "n") (EVar "to")))) (arm PWild () (EVar "None"))))
 (DFunDef false "arbImplOf" (PWild) (EVar "None"))
 (DTypeSig false "unusableArbsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "unusableArbsOf" ((PVar "decls")) (EApp (EApp (EVar "filterMap") (EVar "unusableArbOf")) (EVar "decls")))
@@ -1366,18 +1445,20 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "builtinGenHeads" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtinGenHeads" () (EListLit (ELit (LString "Int")) (ELit (LString "Bool")) (ELit (LString "Float")) (ELit (LString "Char")) (ELit (LString "String")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Array")) (ELit (LString "Option")) (ELit (LString "Result"))))
 (DTypeSig false "userArbitrary" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "key")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "key")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
+(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "route")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "route")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
 (DFunDef false "userArbitrary" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "arbImplKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "arbImplKeyFor" ((PVar "arbs") (PVar "n") (PVar "o")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "arbImplAt") (EVar "n")) (EVar "o"))) (EVar "arbs")) (arm (PList (PCon "ArbImpl" PWild PWild (PVar "key"))) () (EApp (EVar "Some") (EVar "key"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "arbImplKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "ArbRoute"))))))
+(DFunDef false "arbImplKeyFor" ((PVar "arbs") (PVar "n") (PVar "o")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "arbImplAt") (EVar "n")) (EVar "o"))) (EVar "arbs")) (arm (PList (PCon "ArbImpl" PWild PWild (PVar "route"))) () (EApp (EVar "Some") (EVar "route"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "arbImplAt" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "ArbImpl") (TyCon "Bool")))))
 (DFunDef false "arbImplAt" ((PVar "n") (PVar "o") (PCon "ArbImpl" (PVar "n2") (PVar "o2") PWild)) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")))
-(DTypeSig false "userArbitraryAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "userArbitraryAt" ((PVar "key") (PCon "VMulti" (PVar "vs"))) (EApp (EVar "drawArbitrary") (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EVar "vs"))))
-(DFunDef false "userArbitraryAt" ((PVar "key") (PVar "v")) (EApp (EVar "drawArbitrary") (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EListLit (EVar "v")))))
-(DTypeSig false "drawArbitrary" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "drawArbitrary" ((PList (PVar "c"))) (EApp (EVar "Some") (EApp (EVar "force") (EApp (EApp (EVar "apply") (EVar "c")) (EVar "VUnit")))))
-(DFunDef false "drawArbitrary" (PWild) (EVar "None"))
+(DTypeSig false "userArbitraryAt" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EVar "vs"))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PVar "v")) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EListLit (EVar "v")))))
+(DTypeSig false "drawArbitrary" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "drawArbitrary" ((PCon "ArbRoute" PWild (PVar "i") (PVar "total")) (PVar "cands")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "cands")) (EVar "total")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EVar "force") (EApp (EApp (EVar "apply") (EVar "c")) (EVar "VUnit"))))) (EApp (EApp (EVar "candAt") (EVar "i")) (EVar "cands"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "candAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "candAt" (PWild (PList)) (EVar "None"))
+(DFunDef false "candAt" ((PVar "i") (PCons (PVar "v") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "candAt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "printCounterexample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "printCounterexample" ((PList)) (ELit LUnit))
 (DFunDef false "printCounterexample" ((PCons (PTuple (PVar "x") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "ppValue") (EVar "v")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "printCounterexample") (EVar "rest")))))
@@ -1452,10 +1533,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "anyDecl" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyDecl" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "d")) (EApp (EApp (EVar "anyDecl") (EVar "p")) (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DAttrib" false) (mem "PropParam" false) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DAttrib" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -1473,14 +1554,24 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "buildTyDefs" ((PList)) (EListLit))
 (DFunDef false "buildTyDefs" ((PCons (PVar "d") (PVar "rest"))) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EVar "variants"))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm PWild () (EApp (EVar "buildTyDefs") (EVar "rest")))))
 (DData Public "GenEnv" () ((variant "GenEnv" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))) (TyApp (TyCon "List") (TyCon "String"))))) ())
-(DData Public "ArbImpl" () ((variant "ArbImpl" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyCon "String")))) ())
+(DData Public "ArbRoute" () ((variant "ArbRoute" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int")))) ())
+(DData Public "ArbImpl" () ((variant "ArbImpl" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyCon "ArbRoute")))) ())
 (DTypeSig true "buildGenEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "GenEnv"))))
 (DFunDef false "buildGenEnv" ((PVar "rootDecls") (PVar "allDecls")) (EApp (EApp (EApp (EApp (EVar "GenEnv") (EApp (EVar "buildTyDefs") (EVar "rootDecls"))) (EApp (EVar "arbImplsOf") (EVar "allDecls"))) (EApp (EVar "unusableArbsOf") (EVar "allDecls"))) (EApp (EVar "aliasNamesOf") (EVar "allDecls"))))
 (DTypeSig false "arbImplsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ArbImpl"))))
-(DFunDef false "arbImplsOf" ((PVar "decls")) (EApp (EApp (EMethodRef "filterMap") (EVar "arbImplOf")) (EVar "decls")))
-(DTypeSig false "arbImplOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "ArbImpl"))))
+(DFunDef false "arbImplsOf" ((PVar "decls")) (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "decls")) (EListLit)) (EApp (EApp (EMethodRef "filterMap") (EVar "arbCandidateWord")) (EVar "decls"))))
+(DTypeSig false "arbImplsGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ArbImpl"))))))
+(DFunDef false "arbImplsGo" ((PList) PWild PWild) (EListLit))
+(DFunDef false "arbImplsGo" ((PCons (PVar "d") (PVar "rest")) (PVar "before") (PVar "words")) (EMatch (EApp (EVar "arbCandidateWord") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "rest")) (EVar "before")) (EVar "words"))) (arm (PCon "Some" (PVar "w")) () (EMatch (EApp (EVar "arbImplOf") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "rest")) (EBinOp "::" (EVar "w") (EVar "before"))) (EVar "words"))) (arm (PCon "Some" (PTuple (PVar "n") (PVar "to"))) () (EBlock (DoLet false false (PVar "route") (EApp (EApp (EApp (EVar "ArbRoute") (EVar "w")) (EApp (EApp (EDictApp "count") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "w")))) (EVar "before"))) (EApp (EApp (EDictApp "count") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "w")))) (EVar "words")))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "ArbImpl") (EVar "n")) (EVar "to")) (EVar "route")) (EApp (EApp (EApp (EVar "arbImplsGo") (EVar "rest")) (EBinOp "::" (EVar "w") (EVar "before"))) (EVar "words"))))))))))
+(DTypeSig false "arbCandidateWord" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "arbCandidateWord" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "arbCandidateWord") (EVar "d")))
+(DFunDef false "arbCandidateWord" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "tys")) (rf "implOrigin" (PVar "o")) (rf "methods" None)) false)) (EIf (EApp (EApp (EVar "anyList") (EVar "isArbitraryMethod")) (EVar "methods")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "tys")) (EVar "None"))) (EVar "None")))
+(DFunDef false "arbCandidateWord" (PWild) (EVar "None"))
+(DTypeSig false "isArbitraryMethod" (TyFun (TyCon "ImplMethod") (TyCon "Bool")))
+(DFunDef false "isArbitraryMethod" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EBinOp "==" (EVar "n") (ELit (LString "arbitrary"))))
+(DTypeSig false "arbImplOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "arbImplOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "arbImplOf") (EVar "d")))
-(DFunDef false "arbImplOf" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "tys")) (rf "reqs" (PVar "reqs")) (rf "implOrigin" (PVar "o"))) false)) (EMatch (ETuple (EVar "ifaceName") (EVar "tys") (EVar "reqs")) (arm (PTuple (PLit (LString "Arbitrary")) (PList (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "to"))) false)) (PList)) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "ArbImpl") (EVar "n")) (EVar "to")) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "tys")) (EVar "None"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "arbImplOf" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "tys")) (rf "reqs" (PVar "reqs"))) false)) (EMatch (ETuple (EVar "ifaceName") (EVar "tys") (EVar "reqs")) (arm (PTuple (PLit (LString "Arbitrary")) (PList (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "to"))) false)) (PList)) () (EApp (EVar "Some") (ETuple (EVar "n") (EVar "to")))) (arm PWild () (EVar "None"))))
 (DFunDef false "arbImplOf" (PWild) (EVar "None"))
 (DTypeSig false "unusableArbsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "unusableArbsOf" ((PVar "decls")) (EApp (EApp (EMethodRef "filterMap") (EVar "unusableArbOf")) (EVar "decls")))
@@ -1651,18 +1742,20 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "builtinGenHeads" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtinGenHeads" () (EListLit (ELit (LString "Int")) (ELit (LString "Bool")) (ELit (LString "Float")) (ELit (LString "Char")) (ELit (LString "String")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Array")) (ELit (LString "Option")) (ELit (LString "Result"))))
 (DTypeSig false "userArbitrary" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "key")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "key")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
+(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "route")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "route")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
 (DFunDef false "userArbitrary" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "arbImplKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "arbImplKeyFor" ((PVar "arbs") (PVar "n") (PVar "o")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "arbImplAt") (EVar "n")) (EVar "o"))) (EVar "arbs")) (arm (PList (PCon "ArbImpl" PWild PWild (PVar "key"))) () (EApp (EVar "Some") (EVar "key"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "arbImplKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "ArbRoute"))))))
+(DFunDef false "arbImplKeyFor" ((PVar "arbs") (PVar "n") (PVar "o")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "arbImplAt") (EVar "n")) (EVar "o"))) (EVar "arbs")) (arm (PList (PCon "ArbImpl" PWild PWild (PVar "route"))) () (EApp (EVar "Some") (EVar "route"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "arbImplAt" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "ArbImpl") (TyCon "Bool")))))
 (DFunDef false "arbImplAt" ((PVar "n") (PVar "o") (PCon "ArbImpl" (PVar "n2") (PVar "o2") PWild)) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")))
-(DTypeSig false "userArbitraryAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "userArbitraryAt" ((PVar "key") (PCon "VMulti" (PVar "vs"))) (EApp (EVar "drawArbitrary") (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EVar "vs"))))
-(DFunDef false "userArbitraryAt" ((PVar "key") (PVar "v")) (EApp (EVar "drawArbitrary") (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EListLit (EVar "v")))))
-(DTypeSig false "drawArbitrary" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "drawArbitrary" ((PList (PVar "c"))) (EApp (EVar "Some") (EApp (EVar "force") (EApp (EApp (EVar "apply") (EVar "c")) (EVar "VUnit")))))
-(DFunDef false "drawArbitrary" (PWild) (EVar "None"))
+(DTypeSig false "userArbitraryAt" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EVar "vs"))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PVar "v")) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EListLit (EVar "v")))))
+(DTypeSig false "drawArbitrary" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "drawArbitrary" ((PCon "ArbRoute" PWild (PVar "i") (PVar "total")) (PVar "cands")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "cands")) (EVar "total")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EVar "force") (EApp (EApp (EVar "apply") (EVar "c")) (EVar "VUnit"))))) (EApp (EApp (EVar "candAt") (EVar "i")) (EVar "cands"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "candAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "candAt" (PWild (PList)) (EVar "None"))
+(DFunDef false "candAt" ((PVar "i") (PCons (PVar "v") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "candAt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "printCounterexample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "printCounterexample" ((PList)) (ELit LUnit))
 (DFunDef false "printCounterexample" ((PCons (PTuple (PVar "x") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "ppValue") (EVar "v")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "printCounterexample") (EVar "rest")))))

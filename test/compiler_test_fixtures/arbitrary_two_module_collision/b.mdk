@@ -1,0 +1,11 @@
+-- Module `b`'s `Color`: same spelling as `a`'s, different constructors, its own
+-- `Arbitrary` instance.  See `a.mdk` for why the pair is the point.
+public export data Color = Blue | Yellow
+
+impl Arbitrary Color where
+  arbitrary () = Blue
+
+export
+tag : Color -> String
+tag Blue = "b-blue"
+tag Yellow = "b-yellow"

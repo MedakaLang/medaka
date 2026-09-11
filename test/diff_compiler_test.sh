@@ -337,6 +337,37 @@ else
   fail=$((fail + 1)); printf 'FAIL arbitrary_name_collision: expected the no-generator report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$anc_code" "$anc_out"
 fi
 
+# GH #2820, the OPPOSITE shape to arbitrary_name_collision above: BOTH modules
+# spell a `Color` and BOTH declare an `Arbitrary` instance for their own, so one
+# impl route word carries two runtime candidates (`implRouteKeyWord` renders the
+# head spelling and nothing else). Each prop is over a specific, resolvable
+# module's `Color`, so each must draw from THAT module's instance.
+#
+# Two entries, not one: an alias-qualified name is a parse error in type
+# position, so a single file can name only one of the two `Color`s. They are the
+# SET this arm exists for -- a fix that always takes the first candidate passes
+# main_a and fails main_b, and one arm alone cannot tell the two apart.
+# Asserted on CONTENT: the declining base and a wrong-candidate pick both exit
+# nonzero, and the wrong pick's shape varies (a non-exhaustive match here, a
+# dispatch panic for other constructor arities).
+atmc_dir="$ROOT/test/compiler_test_fixtures/arbitrary_two_module_collision"
+for atmc_entry in main_a main_b; do
+  case "$atmc_entry" in
+    main_a) atmc_want="a's own Arbitrary instance is what a's Color draws from" ;;
+    *)      atmc_want="b's own Arbitrary instance is what b's Color draws from" ;;
+  esac
+  atmc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$atmc_dir/$atmc_entry.mdk" "$atmc_dir" 2>&1 | sed "s#$ROOT/##g")"
+  atmc_code=0
+  run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$atmc_dir/$atmc_entry.mdk" "$atmc_dir" >/dev/null 2>&1 || atmc_code=$?
+  if printf '%s' "$atmc_out" | grep -qF "Testing \"$atmc_want\" ... OK (100 tests)" \
+    && printf '%s' "$atmc_out" | grep -qF "1 passed, 0 failed" \
+    && [ "$atmc_code" -eq 0 ]; then
+    pass=$((pass + 1)); printf 'ok   arbitrary_two_module_collision/%s.mdk (two same-spelled types BOTH carrying an Arbitrary instance still resolve)\n' "$atmc_entry"
+  else
+    fail=$((fail + 1)); printf 'FAIL arbitrary_two_module_collision/%s.mdk: expected the prop to pass from its OWN module instance\n  --- actual (exit %d) ---\n%s\n' "$atmc_entry" "$atmc_code" "$atmc_out"
+  fi
+done
+
 # GH #2813 case 3: an `Arbitrary` instance the runner cannot draw through (it is
 # constrained, or stands at an applied head) must be REPORTED, not silently
 # dropped in favor of the structural draw. Asserted on CONTENT for the same
