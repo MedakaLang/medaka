@@ -28,3 +28,28 @@ Receipts and reusable runners in this workspace:
 - `/tmp/rearch-nominal-perf.py`, candidate `/tmp/rearch-nominal-perf/instructions.log` and `allocation.log`; individual request responses and tool output in their subdirectories.
 
 This scope slice leaves cache policy unchanged and is within the existing approximately 25% soft instruction budget on these workloads. It says nothing about the later return vertical's proposed all-three memo bypass, whose cost must be measured separately before activation.
+
+## Method-row preparation follow-up
+
+The independent Sol reviewer repeated the same instruments on method-row revision
+`cd42e56f4` (running-branch equivalent `ee61c0a35`) against its scope predecessor
+`a4927caaf`. These results isolate that preparation step more narrowly than the
+cumulative table above. Both allocation repetitions were byte-identical; all
+selected request diagnostics were empty and no stale-source warnings occurred.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,249,022 | 305,233,973 | 48,594,048 | 48,577,648 |
+| playground | first warm | 24,952,500 | 24,818,526 | 4,578,784 | 4,566,496 |
+| playground | second warm | 24,945,821 | 24,826,707 | 4,587,056 | 4,570,656 |
+| import-list | cold | 538,578,855 | 538,290,319 | 93,160,864 | 93,135,952 |
+| import-list | first warm | 38,330,580 | 38,146,599 | 6,904,432 | 6,871,904 |
+| import-list | second warm | 38,316,900 | 38,200,952 | 6,907,888 | 6,903,744 |
+
+Every measured delta is negative: instructions range from -0.005% to -0.537%,
+allocation from -0.027% to -0.471%. Raw candidate receipts are in
+`/tmp/rearch-method-rows-review-instructions` and
+`/tmp/rearch-method-rows-review-allocation`; predecessor receipts are the scope
+measurements above. These remain allocation and instruction measurements, not
+retained-live-heap measurements. The later scope classification fix and future
+cache changes are outside this exact comparison.

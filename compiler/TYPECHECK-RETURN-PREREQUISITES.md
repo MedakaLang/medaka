@@ -44,6 +44,10 @@ would not establish declaration-time DICT W2 conformance. Existing owners are
 * Primary return forwarding is role-dependent. Both a direct given and the
   preserved exact legacy-superclass assumption use the historical RDictFwd rung;
   method qualifiers and instance prerequisites use their own dictionary roles.
+* Generic default fallbacks span both argument and return families. Ord.compare
+  is an argument site and does not validate the return-family exception. The
+  [default provenance census](TYPECHECK-DEFAULT-PROVENANCE.md) observes both kinds;
+  only actual return sites belong in the later return compatibility classifier.
 * Qualified instantiation needs an explicit supplied-primary destination plan
   to reuse an AST EvId while minting fresh tail destinations. The existing
   freshDestination service cannot express this by itself. Do not encode it as
