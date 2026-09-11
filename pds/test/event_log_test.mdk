@@ -22,14 +22,15 @@
      back byte for byte after an append, which is the property #2692's
      whole-set rewrite would fail. -}
 
+import array.{drop}
 import fs.{mkdirAll}
-import hex.{encode}
-import list.{take}
+import hex.{decode, encode}
+import list.{lookup, take}
 import string.{toUtf8}
 import test.{Expectation(..), expectEqual, expectTrue}
 import test_process.{scratchDir}
 import lib.cid.{cidToString}
-import lib.dagcbor.{DagCbor(..)}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.event_log_record.{
   EventLogEntry(..),
   eventLogAfterCursor,
@@ -405,6 +406,47 @@ liveFrameHex =
 writtenHead : String
 writtenHead = cidToString (repoCommitCid (repoLatestCommit written))
 
+{- | The `#commit` frame header's own known shape (the sync-frame wire format
+   every message on this endpoint uses), stated here independently of
+   `syncCommitEventFor`/`syncCommitFrame` so its encoded length can split a
+   stored frame into header and body. `dagCborDecode` reports trailing bytes
+   as an error rather than how many it consumed, so the two values cannot be
+   decoded back to back from one call. -}
+frameHeaderValue : DagCbor
+frameHeaderValue = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
+
+mustEncode : DagCbor -> Array Int
+mustEncode value = match dagCborEncode value
+  Ok bytes => bytes
+  Err message => panic "event_log_test: header encode failed: \{message}"
+
+frameHeaderBytes : Array Int
+frameHeaderBytes = mustEncode frameHeaderValue
+
+bodyField : String -> DagCbor -> Option DagCbor
+bodyField name (DcMap fields) = lookup name fields
+bodyField _ _ = None
+
+asInt : Option DagCbor -> Option Int
+asInt (Some (DcInt value)) = Some value
+asInt _ = None
+
+opsOf : DagCbor -> List DagCbor
+opsOf body = match bodyField "ops" body
+  Some (DcArray items) => items
+  _ => []
+
+commitCidOf : DagCbor -> Option String
+commitCidOf body = match bodyField "commit" body
+  Some (DcLink cid) => Some (cidToString cid)
+  _ => None
+
+opShape : DagCbor -> Option (String, String)
+opShape (DcMap fields) = match (lookup "action" fields, lookup "path" fields)
+  (Some (DcString action), Some (DcString path)) => Some (action, path)
+  _ => None
+opShape _ = None
+
 endToEndDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
 endToEndDir =
   let dir = caseDir "end-to-end"
@@ -420,7 +462,14 @@ endToEndDir =
 
 {- | A real write's frame, staged against the real head it announces, recovered
    against that same head, and read back out of the log unchanged. This is the
-   whole path the server takes, less the socket. -}
+   whole path the server takes, less the socket.
+
+   The stored frame's body is decoded back out of its bytes and graded
+   against facts known independently of `syncCommitEventFor`/`syncCommitFrame`
+   themselves: the sequence number passed in, the single write's own path and
+   action, and the commit CID `written` actually produced — not against
+   `liveFrameHex`, which is the same value staged into the log and so proves
+   only storage fidelity, never frame correctness. -}
 test "a real commit's frame is stored and read back byte for byte" =
   let dir = endToEndDir
   match (eventLogRecover
@@ -431,9 +480,31 @@ test "a real commit's frame is stored and read back byte for byte" =
     Err message => Fail message "the frame" "an error"
     Ok () => match eventLogRead dir 0
       Err message => Fail message "the frame" "an error"
-      Ok [stored] =>
-        expectTrue
-          (stored.frameHex == liveFrameHex && stored.commitCid == writtenHead)
+      Ok [stored] => match decode stored.frameHex
+        Err message => Fail message "hex-decodable frame bytes" "an error"
+        Ok frameBytes =>
+          match dagCborDecode (drop (arrayLength frameHeaderBytes) frameBytes)
+            Err message => Fail message "a decodable #commit body" "an error"
+            Ok body => match (
+              asInt (bodyField "seq" body),
+              opsOf body,
+              commitCidOf body,
+            )
+              (Some 1, [op], Some bodyCommitCid) => match opShape op
+                Some ("create", "app.bsky.feed.post/self") =>
+                  expectTrue
+                    (stored.commitCid == writtenHead
+                      && bodyCommitCid == writtenHead)
+                _ =>
+                  Fail
+                    "the op naming app.bsky.feed.post/self with action create"
+                    "that op"
+                    "a different op"
+              _ =>
+                Fail
+                  "seq 1, exactly one op, and a decodable commit CID"
+                  "that shape"
+                  "a different shape"
       Ok entries =>
         Fail
           "expected exactly one stored entry"
