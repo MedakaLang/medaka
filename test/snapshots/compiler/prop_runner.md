@@ -1,5 +1,5 @@
 # META
-source_lines=1159
+source_lines=1164
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -649,6 +649,11 @@ nthList (_ :: xs) n = nthList xs (n - 1)
 nthList [] _ = panic "nthList: index out of range"
 
 -- ── shrinking (native) ──────────────────────────────────────────────────────
+-- The runner's own shrink strategy, keyed on shape — unrelated to the
+-- `Arbitrary` interface's `shrink` method (stdlib/core.mdk), which the
+-- runner never calls for any type. A tag with no arm here (a user ADT,
+-- `VCon` in the wildcard) gets no shrinking at all; that user's own `shrink`
+-- impl, if any, is not consulted.
 
 shrinkValue : Ty -> Value e -> List (Value e)
 shrinkValue ty v = match (ty, v)

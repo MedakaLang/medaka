@@ -1715,20 +1715,25 @@ apply f a = f a
 {- | Types that can generate random values for property tests.
 
    `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
-   candidates, tried in order to reduce a failing example; it defaults to
-   none.
+   candidates, tried in order to reduce a failing example for code that
+   shrinks by hand; it defaults to none.
 
    `medaka test` draws each `prop` parameter from its declared type. A
    user-defined type that takes no type arguments is drawn through its
    `Arbitrary` instance when one is in scope, and built from its constructors
-   otherwise. That applies to the parameter's own type only: a user type
-   reached as a field of another type is always built from its constructors,
-   whether or not it has an instance. Every other parameter type the runner
-   builds itself: `Int`,
+   otherwise — wherever it appears, as the parameter's own type or as a field
+   of another type. An instance the runner cannot draw through, because it is
+   constrained (`requires`) or stands at an applied head, is reported rather
+   than ignored. Every other parameter type the runner builds itself: `Int`,
    `Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
    `Result`, tuples, and any type applied to arguments, so an instance at one
-   of those is not consulted. Counterexamples are shrunk by the runner, so
-   `shrink` serves hand-written generators. -}
+   of those is not consulted for drawing either.
+
+   A failing counterexample is shrunk by the runner's own built-in strategy,
+   never by calling `shrink` — for any type, built-in or user-defined.
+   `shrink` is for property code that shrinks values by hand, outside the
+   runner; an instance's `shrink` has no effect on what `medaka test`
+   reports. -}
 export interface Arbitrary a where
   arbitrary : Unit -> <Rand> a
   shrink : a -> List a
