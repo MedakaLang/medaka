@@ -30,13 +30,19 @@ sh "$ROOT/pds/test/vector_provenance.sh" --files-for P1-B-MST > "$WORK/vector-fi
 CORPUS_REL=$(sed -n '1p' "$WORK/vector-files")
 CORPUS="$ROOT/$CORPUS_REL"
 
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$DRIVER" "$CORPUS" > "$WORK/eval.out" 2> "$WORK/eval.err"; then
+sh "$ROOT/pds/test/vector_provenance.sh" --files-for P1-B-MST-PROOF > "$WORK/proof-files"
+[ "$(wc -l < "$WORK/proof-files" | tr -d ' ')" = 1 ] || fail 'expected exactly one ledger-owned covering-proof corpus'
+PROOF_CORPUS="$ROOT/$(sed -n '1p' "$WORK/proof-files")"
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$DRIVER" "$CORPUS" "$PROOF_CORPUS" > "$WORK/eval.out" 2> "$WORK/eval.err"; then
   cat "$WORK/eval.out" >&2
   cat "$WORK/eval.err" >&2
   fail 'eval driver failed'
 fi
 require_empty "$WORK/eval.err" eval
 grep -F -q 'external: 11/11 official-reference cases' "$WORK/eval.out" || fail 'eval did not grade all external cases'
+grep -F -q 'covering proofs: 17/17 official-reference rows' "$WORK/eval.out" || fail 'eval did not grade all covering-proof rows'
+grep -F -q 'narrower than the whole tree: 13/17 proof rows' "$WORK/eval.out" || fail 'covering proofs did not stay narrower than the full node set'
 grep -F -q 'hostile: 14/14 rejected on named routes' "$WORK/eval.out" || fail 'eval hostile route count is incomplete'
 grep -F -q 'controls: 3/3 valid lexical neighbors' "$WORK/eval.out" || fail 'eval lexical controls are incomplete'
 [ "$(tail -1 "$WORK/eval.out")" = 'TOTAL: PASS' ] || fail 'eval did not end in TOTAL: PASS'
@@ -56,6 +62,11 @@ do
   grep -F -q "HOSTILE $label PASS route=" "$WORK/eval.out" || fail "eval missed exceptional route $label"
 done
 
+for name in proof-single-node proof-two-layer proof-three-layer
+do
+  grep -F -q "PROOFCASE $name " "$WORK/eval.out" || fail "eval missed covering-proof case $name"
+done
+
 for label in left-neighbor between-neighbor right-neighbor
 do
   grep -F -q "MST CONTROL $label PASS" "$WORK/eval.out" || fail "eval missed lexical control $label"
@@ -65,7 +76,7 @@ if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$DRIVER" -o "$WORK/nat
   cat "$WORK/native-build.log" >&2
   fail 'native driver build failed'
 fi
-"$WORK/native" "$CORPUS" > "$WORK/native.out" 2> "$WORK/native.err"
+"$WORK/native" "$CORPUS" "$PROOF_CORPUS" > "$WORK/native.out" 2> "$WORK/native.err"
 require_empty "$WORK/native.err" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native normalized output differ'
 
@@ -77,7 +88,7 @@ else
     cat "$WORK/wasm-build.log" >&2
     fail 'Wasm driver build failed'
   fi
-  MDK_ARGS="$CORPUS" node "$ROOT/test/wasm/run.js" "$WORK/driver.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
+  MDK_ARGS="$CORPUS $PROOF_CORPUS" node "$ROOT/test/wasm/run.js" "$WORK/driver.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
   require_empty "$WORK/wasm.err" wasm
   # A Unit main prints nothing on Wasm (the trailing `0` this once expected was
   # #2424): the runner's stdout is the program's output, byte for byte.
@@ -111,4 +122,4 @@ if ! awk -v small="$MST_SMALL" -v large="$MST_LARGE" 'BEGIN {
 fi
 echo "MST scaling: 1000=$MST_SMALL s 2000=$MST_LARGE s"
 
-echo "PASS: MST — 11 official-reference cases; 14 hostile routes; 3 lexical controls; $ENGINE_GRADE"
+echo "PASS: MST — 11 official-reference cases; 17 covering-proof rows (13 narrower than the whole tree); 14 hostile routes; 3 lexical controls; $ENGINE_GRADE"

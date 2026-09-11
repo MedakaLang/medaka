@@ -3,11 +3,13 @@
 import array.{drop}
 import hex.{decode}
 import io.{readLines}
-import string.{contains, split, startsWith, toInt, toUtf8}
+import list.{reverse, sortBy}
+import string.{contains, join, split, startsWith, toInt, toUtf8}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{
   Mst,
+  mstCoveringProofBlocks,
   mstDelete,
   mstEmpty,
   mstFromEntries,
@@ -22,6 +24,10 @@ import lib.mst.{
 }
 
 data CaseState = CaseState String Mst (Option Cid) (List (Cid, Array Int))
+
+data ProofRow = ProofRow (List (Array Int)) (List String)
+
+data ProofCase = ProofCase String Mst (Option Cid) Int (List ProofRow)
 
 mustHex : String -> Array Int
 mustHex text = match decode text
@@ -349,24 +355,189 @@ runControls =
       ]),
   ]
 
+proofCids : List (Cid, Array Int) -> List String
+proofCids blocks = sortBy compare (map ((cid, _) => cidToString cid) blocks)
+
+gradeProofRow : String ->
+  Mst ->
+  List (Cid, Array Int) ->
+  ProofRow ->
+  <IO> (Int, Int)
+gradeProofRow name tree nodes (ProofRow keys expected) =
+  match mstCoveringProofBlocks keys tree
+    Err message =>
+      let () = println "PROOF \{name} FAIL error=\{message}"
+      (0, 0)
+    Ok blocks =>
+      -- Every returned block must also be one of this tree's own node blocks,
+      -- bytes included: a proof that names a block the tree does not contain
+      -- would match the reference CID list and still be unverifiable.
+      let bound = all (block => blockPresent block nodes) blocks
+      if proofCids blocks == expected && bound then
+        let narrower = if length blocks < length nodes then 1 else 0
+        let () =
+          println
+            "PROOF \{name} PASS keys=\{intToString (length keys)} blocks=\{intToString (length blocks)}/\{intToString (length nodes)}"
+        (1, narrower)
+      else
+        let () =
+          println
+            "PROOF \{name} FAIL keys=\{intToString (length keys)} bound=\{debug bound} got=\{join "," (proofCids blocks)} want=\{join "," expected}"
+        (0, 0)
+
+gradeProofRows : String ->
+  Mst ->
+  List (Cid, Array Int) ->
+  List ProofRow ->
+  (Int, Int) ->
+  <IO> (Int, Int)
+gradeProofRows _ _ _ [] totals = totals
+gradeProofRows name tree nodes (row :: rest) (passed, narrower) =
+  let (rowPassed, rowNarrower) = gradeProofRow name tree nodes row
+  gradeProofRows name tree nodes rest (
+    passed + rowPassed,
+    narrower + rowNarrower,
+  )
+
+gradeProofCase : ProofCase -> <IO> (Int, Int, Int)
+gradeProofCase (ProofCase name tree expectedRoot expectedNodes rows) =
+  match expectedRoot
+    None => panic "mst_vectors: proof case \{name} has no ROOT row"
+    Some root =>
+      let nodes = mstNodeBlocks tree
+      if not (cidEqual root (mstRootCid tree)) then
+        let () =
+          println
+            "PROOFCASE \{name} FAIL root=\{cidToString (mstRootCid tree)} expected=\{cidToString root}"
+        (0, length rows, 0)
+      else if length nodes /= expectedNodes then
+        let () =
+          println
+            "PROOFCASE \{name} FAIL nodes=\{intToString (length nodes)} expected=\{intToString expectedNodes}"
+        (0, length rows, 0)
+      else
+        let ordered = reverse rows
+        let (passed, narrower) = gradeProofRows name tree nodes ordered (0, 0)
+        let () =
+          println
+            "PROOFCASE \{name} root=\{cidToString root} nodes=\{intToString (length nodes)} rows=\{intToString passed}/\{intToString (length rows)} narrower=\{intToString narrower}"
+        (passed, length rows, narrower)
+
+parseProofRow : String -> String -> ProofRow
+parseProofRow keysField cidsField =
+  ProofRow
+    (map mustHex (split "," keysField))
+    (sortBy compare (split "," cidsField))
+
+runProofCorpus : List String ->
+  Option ProofCase ->
+  (Int, Int, Int) ->
+  <IO> (Int, Int, Int)
+runProofCorpus [] None totals = totals
+runProofCorpus [] (Some _) _ = panic "mst_vectors: unterminated proof CASE"
+runProofCorpus (line :: rest) current totals =
+  if line == "" || startsWith "#" line then
+    runProofCorpus rest current totals
+  else match split "\t" line
+    ["CASE", name] => match current
+      Some _ => panic "mst_vectors: nested proof CASE"
+      None =>
+        runProofCorpus rest (Some (ProofCase name mstEmpty None 0 [])) totals
+    ["PUT", keyHex, depthText, valueText] => match current
+      None => panic "mst_vectors: proof PUT outside CASE"
+      Some (ProofCase name tree root nodes rows) =>
+        let key = mustHex keyHex
+        let expectedDepth = match toInt depthText
+          Some depth => depth
+          None => panic "mst_vectors: invalid proof fixture depth"
+        if mstKeyDepth key /= Ok expectedDepth then
+          panic "mst_vectors: proof fixture depth disagreement"
+        else
+          runProofCorpus
+            rest
+            (Some
+              (ProofCase
+                name
+                (mustTree (mstInsert key (mustCid valueText) tree))
+                root
+                nodes
+                rows))
+            totals
+    ["ROOT", cidText] => match current
+      None => panic "mst_vectors: proof ROOT outside CASE"
+      Some (ProofCase name tree _ nodes rows) =>
+        runProofCorpus
+          rest
+          (Some (ProofCase name tree (Some (mustCid cidText)) nodes rows))
+          totals
+    ["NODES", countText] => match current
+      None => panic "mst_vectors: NODES outside CASE"
+      Some (ProofCase name tree root _ rows) =>
+        let count = match toInt countText
+          Some value => value
+          None => panic "mst_vectors: invalid proof node count"
+        runProofCorpus rest (Some (ProofCase name tree root count rows)) totals
+    ["PROOF", keysField, cidsField] => match current
+      None => panic "mst_vectors: PROOF outside CASE"
+      Some (ProofCase name tree root nodes rows) =>
+        runProofCorpus
+          rest
+          (Some
+            (ProofCase
+              name
+              tree
+              root
+              nodes
+              (parseProofRow keysField cidsField :: rows)))
+          totals
+    ["END"] => match current
+      None => panic "mst_vectors: proof END outside CASE"
+      Some state =>
+        let (passed, rows, narrower) = gradeProofCase state
+        let (allPassed, allRows, allNarrower) = totals
+        runProofCorpus rest None (
+          allPassed + passed,
+          allRows + rows,
+          allNarrower + narrower,
+        )
+    _ => panic "mst_vectors: malformed proof corpus row: \{line}"
+
 main : <IO, Env, FileRead "_"> Unit
 main = match args ()
-  [corpusPath] => match readLines corpusPath
-    Err message => panic "mst_vectors: cannot read corpus: \{message}"
-    Ok rows =>
+  [corpusPath, proofPath] => match (readLines corpusPath, readLines proofPath)
+    (Err message, _) => panic "mst_vectors: cannot read corpus: \{message}"
+    (_, Err message) =>
+      panic "mst_vectors: cannot read proof corpus: \{message}"
+    (Ok rows, Ok proofRows) =>
       let (external, total) = runCorpus rows None 0 0
+      let (proofs, proofTotal, narrower) =
+        runProofCorpus proofRows None (0, 0, 0)
       let hostile = runHostile
       let controls = runControls
       let () =
         println
           "external: \{intToString external}/\{intToString total} official-reference cases"
       let () =
+        println
+          "covering proofs: \{intToString proofs}/\{intToString proofTotal} official-reference rows"
+      let () =
+        println
+          "narrower than the whole tree: \{intToString narrower}/\{intToString proofTotal} proof rows"
+      let () =
         println "hostile: \{intToString hostile}/14 rejected on named routes"
       let () =
         println "controls: \{intToString controls}/3 valid lexical neighbors"
-      if external == 11 && total == 11 && hostile == 14 && controls == 3 then
+      if external == 11
+        && total == 11
+        && proofs == 17
+        && proofTotal == 17
+        && narrower == 13
+        && hostile == 14
+        && controls == 3 then
         println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1
-  _ => panic "usage: mst_vectors_main <ledger-owned-corpus>"
+  _ =>
+    panic
+      "usage: mst_vectors_main <ledger-owned-corpus> <ledger-owned-proof-corpus>"

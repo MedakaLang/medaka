@@ -461,6 +461,17 @@ consumer:      P1-B-MST (#2136 deterministic atproto Merkle Search Tree)
 notes:         11 cases cover empty, 0/2/4/6 leading-zero-bit layer boundaries, per-node shared-prefix compression, forward/reverse insertion permutations, replacement, deletion, and delete-to-empty. Schema and edge behavior were confirmed first-hand on 2026-08-28 against https://atproto.com/specs/repository (fields l/e and p/k/v/t; lexical order; mandatory prefix compression; SHA-256 depth; empty root) and the pinned reference source. The official CC0 interop fixtures at bluesky-social/atproto-interop-tests commit 056e5741bb330757205d6b16db5266fffcae937b independently corroborated key-height and common-prefix rules; expected root/node bytes come only from @atproto/repo, never Medaka.
 
 [vector]
+file:          pds/test/vectors/mst_covering_proof_corpus.txt
+local-sha256:  13e3afdee41ed500af0d814b22e6561ee60ca7c2272d4daaf45db08ef113bebf
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_mst_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/repo@0.10.12, and runs gen_mst_corpus.mjs, which writes this file as its second output. Each case builds a tree with MST.create/add, records the root and the complete node count from getUnstoredBlocks, and then records MST.getCoveringProof for each probe key (unioned, for the multi-key rows) as a sorted CID list. The generator refuses to emit a proof naming a CID that is not one of that tree's own nodes.
+retrieved:     2026-09-11
+consumer:      P1-B-MST-PROOF (#2891 relay-readable covering proofs)
+notes:         3 cases climb from a one-node tree to a three-layer, seven-node tree; 17 proof rows cover every present key, absent keys below/between/above the stored range, and one multi-key union of the shape a batched commit uses. 13 of the 17 name strictly fewer blocks than the whole tree, which is what separates a covering proof from the full node set. The two that tie on the one-node tree do so because a one-node tree has no narrower answer, and the multi-key union on the three-layer tree reaches every node by covering three widely separated keys. Expected CID sets come only from @atproto/repo's MST.getCoveringProof, never Medaka. This file is NOT part of pds/tools/check_pds_phase1_image.sh's byte-comparison: the pinned official PDS image carries @atproto/repo 0.10.10, a different version from the 0.10.12 pinned here.
+
+[vector]
 file:          pds/test/vectors/car_reference_corpus.txt
 local-sha256:  ae2d6e68122ce3ddf0dea8f85b633534fe10ce95e3f88f24e457b8061d8d35e9
 kind:          reference-impl
