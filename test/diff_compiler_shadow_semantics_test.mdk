@@ -842,6 +842,36 @@ table = [
     pinned = "99\n",
   },
   Row {
+    entry = "i29_importer_wildcard_binds_method_name/main.mdk",
+    label =
+      "I29 (#2809) S1`s STANDALONE operand at a WILDCARD import, and THE CORPUS CONTAINED NO WILDCARD IMPORT AT ALL before this cell (derive it with a grep for a wildcard import over test/shadow_fixtures/ -- it returned 0 files). `main` writes `import list.*`, which binds every name `list` exports; `length` is not among them, and the standalone `length` that does exist is `own`s, imported here only for `ol`. So `length` is not a shadow in `main` and the occurrence DISPATCHES: 3. The admission filter used to answer a wildcard `binds every name`, unconditionally -- inert while the shadow row carried `<owner>__length` (a define that always existed) and a LINK ERROR once the row carried the bare `length`: `use of undefined value @mdk_length`, `build` exit 1 on a program `check` and `run` both accept and get right. `ol` is printed first so the cell also pins that `own`s own definer shadow still resolves to its standalone: 2",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n3\n",
+  },
+  Row {
+    entry = "i30_importer_iface_member_standalone_elsewhere/main.mdk",
+    label =
+      "I30 (#2809) the MEMBER-LIST half of the same rule, and the one that shows binding the name is not the same fact as importing the standalone: `import ifc.{Sizeable, size}` binds `size` to the interface METHOD, while the standalone `size` belongs to `sh`, from which `main` imports only the constructor. Neither defined in nor imported into `main`, so it dispatches to `impl Sizeable BoxS`: 20. Graded by VALUE, not by exit code -- the regression this pins replaced a dispatch (`@mdk_impl_BoxS_size`) with a DIRECT call (`@mdk_size`) at a call site where that symbol is not in scope, so the failure mode is a link error on this graph and a wrong value on any graph where the symbol happens to resolve",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "20\n",
+  },
+  Row {
+    entry = "i31_importer_iface_wildcard_standalone_elsewhere/main.mdk",
+    label =
+      "I31 (#2809) the CONTROL for the row above, graded as its own row: byte-identical but for `import ifc.*` in place of the member list. The two import forms take DIFFERENT arms of the admission filter, so a fix that closes only one leaves the other open -- which is exactly the shape the wildcard`s fail-open arm had. Whatever the answer is, the two rows must agree",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "20\n",
+  },
+  Row {
     entry = "x9_prelude_numlit_iface_method_own_impl.mdk",
     label =
       "X9 (#2157, S0) THE NUMERIC-LITERAL CELL of the prelude-method collision, and the corpus had none: x1-x8 all collide with a prelude name written as an IDENTIFIER, so every one of them grades what a bare occurrence denotes -- and a numeric literal mentions no identifier at all, which is precisely why no row could see this. `fromInt` is the PRELUDE `Num`s own method; declaring a user interface method of that name put a second row under the bare key `\"fromInt\"` in `methodIfaceParamsRef`, and `recordImplObligation`s `omLookup` (bare NAME, no interface identity, last-write-wins) then recorded EVERY numeric literals impl obligation against the USERs interface. #259 had already fixed the literals TYPE by identity (`seedNumLitFromIntScheme`); the OBLIGATION half still went through the spelling. MEASURED ON THE BASE BINARY (d5d71833, cold-built in this worktree, MEDAKA_STRICT=1): `medaka check` exit 1, `No impl of Buildable for Int` pointed at the literal `1000` -- three lines under an `impl Buildable Tag` that plainly exists. Both denotations are pinned by value so a fix that over-corrects is visible too: the ANNOTATED `fromInt 5` must still take `Buildable` (1005 = Tag (5 + 1000) unwrapped) while the bare literals take `Num` (3 = 1 + 2). Values hand-derived from the sources, not captured",
@@ -914,12 +944,12 @@ table = [
   Row {
     entry = "x16_autoprint_wrap_putstrln_pin.mdk",
     label =
-      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exits 1, `E-PANIC: no impl of method putStrLn for type Unit`, byte-identical to this row. Graded ACCEPT REJECT REJECT NONE to pin the CURRENT state incl. the check-ACCEPTs/build-panics split; SELF-DRAINING -- when the prelude body stops being capturable this row goes RED and must be re-graded to BUILD_EXACT against the value 7. S1 (loud panic at exit 1), not S0",
+      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exited 1, `E-PANIC: no impl of method putStrLn for type Unit`. DRAINED 2026-09-10 and RE-GRADED to BUILD_EXACT against 7, exactly as the row above it instructed: the prelude body stopped being capturable when `moduleMarkCtx`s CORE arm began applying S1`s nameable-in-M filter to its rp/arg sets. It could not before -- core`s own references were mangled `core__putStrLn` by the time the mark pass saw them, so no bare method name could match one, and that premise died when #2809 moved mangling after elaboration. Same rule, same commit, that returns four `prelude_shadow_census` ledger rows (identity, otherwise, arbitraryList, arbitraryString) from FAIL_BUILD to PASS. `run` still REJECTs: a non-Unit `main` is refused by `run` on its own account, which is a different rule and is not what drained",
     expCheck = "ACCEPT",
     expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
+    expBuild = "ACCEPT",
+    mode = BuildExact,
+    pinned = "7\n",
   },
   Row {
     entry = "x17_autoprint_wrap_display_pin_xmod/main.mdk",

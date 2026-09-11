@@ -16,6 +16,12 @@
 #   sig_mismatch.mdk  — signature mismatch (Int → String body)
 #   parse_error.mdk / resolve_* — diagnostics surfaced by the native front end
 #
+# Also: two fixtures read from test/run_check_agreement_fixtures/, whose goldens
+# live in this directory under the fixture's own name. That corpus grades a
+# REJECT fixture's verdict and rules out a panic; it has no column for a code or
+# a range, so SHADOW-SEMANTICS.md clause S9's two specified answers are pinned
+# here instead. See the loop below for which two and why.
+#
 # Also: test/check_json_fixtures/projects/<name>/ — MULTI-MODULE project fixtures
 # (medaka.toml + main.mdk entry importing a sibling), run through the multi-module
 # `check --json` path and diffed against <name>/check_json.golden.  These lock in
@@ -140,6 +146,60 @@ if [ -d "$PROJDIR" ]; then
     esac
   done
 fi
+
+# ── SHADOW-SEMANTICS clause S9's two reject answers, pinned positively ──────
+# test/run_check_agreement_fixtures/ grades a REJECT fixture on its VERDICT and
+# on "rejected by a diagnostic, never a panic". Its grammar has no column for
+# the diagnostic CODE or its RANGE, so S9's two specified answers were carried
+# only by a report's two-arm sweep — a caret could move with every gate green.
+# These rows pin them. The fixture is read where it lives rather than copied
+# here, so the program these goldens describe is the same one that corpus
+# grades and the two cannot drift apart.
+#   s1_constrained_shadow_dispatch        — standalone-wins over a live-impl
+#     receiver (S2's rule now, S9's dicts): located `No impl of Num for Box`.
+#   s1_constrained_shadow_domain_mismatch — S9's reject direction, `size "hi"`:
+#     located `No impl of Num for String`.
+# Both goldens live beside the other check_json goldens, under the fixture's
+# own name.  Regenerate:  CAPTURE=1 sh test/diff_compiler_check_json.sh
+for extname in s1_constrained_shadow_dispatch s1_constrained_shadow_domain_mismatch; do
+  name="s9/$extname"
+  mdk="$ROOT/test/run_check_agreement_fixtures/$extname.mdk"
+  golden="$FIXDIR/$extname.check_json.golden"
+  if [ ! -f "$mdk" ]; then
+    fail=$((fail+1)); printf 'FAIL %s (missing fixture %s)\n' "$name" "$mdk"; continue
+  fi
+  tmpout="$(mktemp)"
+  perl -e 'alarm 60; exec @ARGV' "$NATIVE" check --json "$mdk" > "$tmpout" 2>&1
+  # Diagnostic `file` paths are normalized to project-root-relative (#298), so
+  # placeholder both the absolute path and its $ROOT-relative form.
+  rel_mdk="${mdk#$ROOT/}"
+  native_out="$(sed -e "s|$mdk|<fixture>|g" -e "s|$rel_mdk|<fixture>|g" "$tmpout")"
+  rm -f "$tmpout"
+  if [ "${CAPTURE:-0}" = "1" ]; then
+    # #528: same stale-warning hazard as the loops above — refuse.
+    if mdk_is_stale "$native_out"; then
+      printf 'REFUSING to capture %s: ./medaka reports itself stale — run '\''make medaka'\'' and retry (else the stale-binary warning is baked into the golden). #528\n' "$name" >&2
+      exit 2
+    fi
+    printf '%s\n' "$native_out" > "$golden"
+    printf 'CAPTURE %s\n' "$golden"; continue
+  fi
+  if [ ! -f "$golden" ]; then
+    fail=$((fail+1)); printf 'FAIL %s (missing golden %s)\n' "$name" "$golden"; continue
+  fi
+  ref_out="$(cat "$golden")"
+  cls="$(mdk_classify_diff "$native_out" "$ref_out")"
+  case "$cls" in
+    MATCH) pass=$((pass+1)); printf 'ok   %s\n' "$name" ;;
+    STALE_ONLY) fail=$((fail+1)); mdk_stale_fail_line "$name" ;;
+    *)
+      fail=$((fail+1)); printf 'FAIL %s\n' "$name"
+      [ "$cls" = "STALE_PLUS_DIFF" ] && mdk_stale_note
+      printf '  native: %s\n' "$native_out"
+      printf '  golden: %s\n' "$ref_out"
+      ;;
+  esac
+done
 
 # ── #333 regression: a NONEXISTENT path must report file-not-found, not ────
 # R-MODULE-LOAD. There is deliberately no fixture file here — the missing path

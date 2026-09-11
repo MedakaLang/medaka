@@ -1,0 +1,7 @@
+-- The member-list spelling: `import ifc.{Sizeable, size}` binds `size` to the
+-- interface METHOD, not to a standalone, so `sh`'s standalone `size` is neither
+-- defined in nor imported into `main` and `size (BoxS 4)` must DISPATCH: 20.
+import ifc.{Sizeable, size}
+import sh.{BoxS(..)}
+
+main = println (size (BoxS 4))

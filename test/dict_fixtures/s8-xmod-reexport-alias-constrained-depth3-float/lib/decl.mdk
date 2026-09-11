@@ -1,0 +1,5 @@
+-- `x + x`, not `x + 1`: an `Int`-shaped literal cannot creep into the answer,
+-- so the printed value is decided entirely by which `Num` dictionary arrives.
+export
+f : Num a => a -> a
+f x = x + x
