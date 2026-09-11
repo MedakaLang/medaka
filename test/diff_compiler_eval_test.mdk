@@ -1,0 +1,421 @@
+{- | The untyped eval and Core IR value sweeps over the four prelude-free
+   fixture corpora, as one runner over a table of rows.
+
+   Twelve shell gates used to do this, one script per (oracle, corpus) pair,
+   each a near-copy of the same loop: spawn an oracle over every fixture in a
+   corpus, strip the native runtime's trailing `()`, and diff the result
+   against a committed golden. The pairs are the data; the loop is not. The
+   rows here name them:
+
+   | oracle | corpus | what it proves |
+   |---|---|---|
+   | `eval_main` | `eval_fixtures` | the AST tree-walker on the engine core |
+   | `core_ir_main` | `eval_fixtures` | Core IR evaluates as the AST does |
+   | `core_ir_roundtrip_main` | `eval_fixtures` | S-expr serialization is lossless |
+   | `eval_prelude_main` | `eval_list_fixtures` | List combinators + comprehensions |
+   | `eval_list_batch` | `eval_list_fixtures` | batched == per-process |
+   | `core_ir_prelude_main` | `eval_list_fixtures` | the same through Core IR |
+   | `eval_prelude_main` | `eval_prelude_fixtures` | `core.mdk` dispatch |
+   | `eval_prelude_batch` | `eval_prelude_fixtures` | batched == per-process |
+   | `core_ir_prelude_main` | `eval_prelude_fixtures` | the same through Core IR |
+   | `eval_run_main` | `diff_fixtures` | the shared `medaka run` corpus |
+   | `eval_run_batch` | `diff_fixtures` | batched == per-process |
+   | `core_ir_run_main` | `diff_fixtures` | the same through Core IR |
+
+   A `_batch` row is NOT a duplicate of the per-fixture row above it. It
+   spawns ONE process over the whole corpus and cuts the delimited stdout
+   back apart, so it is the only thing asserting that a cached prelude and a
+   shared heap leave no trace between fixtures. Deduplicating the table on
+   (corpus, golden) would silently delete that property, so the two stay
+   separate rows with separate spawns.
+
+   Three things this runner does that the twelve scripts did not:
+
+   - It reads the oracle's EXIT CODE and STDERR, not stdout alone. The
+     scripts piped stderr to `/dev/null` and never looked at `$?`, which is
+     how `eval_prelude_fixtures/string_interp.mdk` sat green for a year while
+     its oracle panicked (`expectedPanics` below).
+   - It asserts each corpus still holds the number of fixtures it held when
+     the rows were written, so a corpus that silently shrinks reds rather
+     than passing over fewer rows.
+   - It grades every row in one process, so a red run names every failing
+     (gate, fixture) pair at once instead of the first script to exit 1.
+
+   `test/eval_fixtures`, `test/eval_list_fixtures` and
+   `test/eval_prelude_fixtures` are FROZEN dev-probe corpora (#1241):
+   `test/capture_goldens.sh` is a no-op for them and there is no regeneration
+   script, so a missing or wrong golden is hand-derived from the fixture's
+   semantics, never captured from whatever an oracle prints today.
+
+   None of these corpora reach the type checker — the entry points behind
+   these oracles (`compiler/entries/eval_main.mdk`,
+   `compiler/entries/core_ir_main.mdk`,
+   `compiler/entries/core_ir_roundtrip_main.mdk`) import no
+   `types.typecheck`, so the pipeline is parse → desugar → [annotate → lower]
+   → eval and no `Mono` is ever built. A type-level assertion belongs in
+   `test/typecheck_error_fixtures/`, not here.
+
+   Runs under `medaka test --native`: it spawns oracle binaries and reads the
+   corpora, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  batchSection, chompNewlines, stripUnitAutoPrint, sweepUnits
+}
+import fs.{fixtureFiles}
+import list.{dropWhile, somes, sort}
+import path.{dirname, stem}
+import string.{contains, endsWith, lines, startsWith, unlines}
+import test.{Expectation, fail, pass}
+import test_process.{boundedVerb, medakaRoot}
+
+{- | Where a row's expected value lives: a sibling `<stem>.eval.golden`
+   holding the whole value, or the `=== EVAL ===` section of a sibling
+   `<stem>.golden` — the multi-stage golden `test/diff_fixtures` shares with
+   the parse, lex and typecheck gates. -}
+data Goldens = EvalSuffix | EvalSection
+
+{- | One retired gate: an oracle, a corpus, and how to read the two apart.
+
+   `oracle` and `prelude` are spelled repo-relative and interpolated onto
+   `medakaRoot` at spawn time. The `test/bin/<name>` spelling is load-bearing
+   beyond readability: `test/build_oracles.sh --for` derives which oracles a
+   gate needs by grepping the gate's own source for that literal, so an
+   oracle assembled from fragments would be invisible to it and the gate
+   would run against a stale or missing binary. -}
+data Row = Row {
+  gate : String,
+  oracle : String,
+  corpus : String,
+  prelude : List String,
+  goldens : Goldens,
+  batched : Bool,
+  fixtures : Int,
+}
+
+coreMod : String
+coreMod = "stdlib/core.mdk"
+
+listMod : String
+listMod = "stdlib/list.mdk"
+
+rows : List Row
+rows = [
+  Row {
+    gate = "diff_compiler_eval",
+    oracle = "test/bin/eval_main",
+    corpus = "test/eval_fixtures",
+    prelude = [],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 24,
+  },
+  Row {
+    gate = "diff_compiler_core_ir",
+    oracle = "test/bin/core_ir_main",
+    corpus = "test/eval_fixtures",
+    prelude = [],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 24,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_roundtrip",
+    oracle = "test/bin/core_ir_roundtrip_main",
+    corpus = "test/eval_fixtures",
+    prelude = [],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 24,
+  },
+  Row {
+    gate = "diff_compiler_eval_list",
+    oracle = "test/bin/eval_prelude_main",
+    corpus = "test/eval_list_fixtures",
+    prelude = [coreMod, listMod],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 1,
+  },
+  Row {
+    gate = "diff_compiler_eval_list_batch",
+    oracle = "test/bin/eval_list_batch",
+    corpus = "test/eval_list_fixtures",
+    prelude = [coreMod, listMod],
+    goldens = EvalSuffix,
+    batched = True,
+    fixtures = 1,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_list",
+    oracle = "test/bin/core_ir_prelude_main",
+    corpus = "test/eval_list_fixtures",
+    prelude = [coreMod, listMod],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 1,
+  },
+  Row {
+    gate = "diff_compiler_eval_prelude",
+    oracle = "test/bin/eval_prelude_main",
+    corpus = "test/eval_prelude_fixtures",
+    prelude = [coreMod],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_eval_prelude_batch",
+    oracle = "test/bin/eval_prelude_batch",
+    corpus = "test/eval_prelude_fixtures",
+    prelude = [coreMod],
+    goldens = EvalSuffix,
+    batched = True,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_prelude",
+    oracle = "test/bin/core_ir_prelude_main",
+    corpus = "test/eval_prelude_fixtures",
+    prelude = [coreMod],
+    goldens = EvalSuffix,
+    batched = False,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_eval_run",
+    oracle = "test/bin/eval_run_main",
+    corpus = "test/diff_fixtures",
+    prelude = [coreMod, listMod],
+    goldens = EvalSection,
+    batched = False,
+    fixtures = 54,
+  },
+  Row {
+    gate = "diff_compiler_eval_run_batch",
+    oracle = "test/bin/eval_run_batch",
+    corpus = "test/diff_fixtures",
+    prelude = [coreMod, listMod],
+    goldens = EvalSection,
+    batched = True,
+    fixtures = 54,
+  },
+  Row {
+    gate = "diff_compiler_core_ir_run",
+    oracle = "test/bin/core_ir_run_main",
+    corpus = "test/diff_fixtures",
+    prelude = [coreMod, listMod],
+    goldens = EvalSection,
+    batched = False,
+    fixtures = 54,
+  },
+]
+
+-- # The corpus
+
+{- | A row's fixtures, sorted, as absolute paths.
+
+   `fixtureFiles` walks recursively and carries the anti-vacuity floor, so a
+   corpus that reads cleanly but holds nothing is an `Err` rather than a
+   green run over zero rows. Only the corpus root holds fixtures.
+
+   `test/diff_fixtures`' `numlit_*` fixtures are excluded: they need the
+   typed `fromInt` elaboration that no entry behind these oracles performs,
+   and the typed gates cover them. -}
+entriesOf : Row -> <FileRead "_", IO> Result String (List String)
+entriesOf r =
+  let dir = "\{medakaRoot}/\{r.corpus}"
+  match fixtureFiles dir
+    Err e => Err e
+    Ok paths =>
+      let own = p => endsWith ".mdk" p && dirname p == dir && isGraded r p
+      match sort (filter own paths)
+        [] => Err "no top-level .mdk fixtures"
+        fixtures => Ok fixtures
+
+isGraded : Row -> String -> Bool
+isGraded r p = match r.goldens
+  EvalSuffix => True
+  EvalSection => not (startsWith "numlit_" (stem p))
+
+-- | The expected value for one fixture, read from its committed golden.
+goldenOf : Row -> String -> <FileRead "_", IO> Result String String
+goldenOf r path =
+  let sibling = "\{dirname path}/\{stem path}"
+  match r.goldens
+    EvalSuffix => map chompNewlines (readFile "\{sibling}.eval.golden")
+    EvalSection => map evalSection (readFile "\{sibling}.golden")
+
+{- | Everything after a multi-stage golden's `=== EVAL ===` banner. `""` when
+   there is no banner, which grades as a mismatch against any oracle that
+   printed something. -}
+evalSection : String -> String
+evalSection raw =
+  match dropWhile (l => not (contains "=== EVAL ===" l)) (lines raw)
+    [] => ""
+    _ :: rest => chompNewlines (unlines rest)
+
+-- # Grading a spawn
+
+{- | The (oracle, unit) pairs known to exit nonzero or panic today, each with
+   the reason. A pair listed here is REQUIRED to misbehave: one that runs
+   clean fails the gate and is removed in the same commit that fixed it, so
+   this roster drains itself instead of outliving its subject.
+
+   The unit is a fixture path for a per-fixture row and the corpus path for
+   a batch row, whose one process carries the whole corpus's behavior.
+
+   `test/eval_prelude_fixtures/string_interp.mdk` panics with
+   `intToString: not an Int` under both prelude oracles, printing nothing —
+   and its committed golden is zero bytes, so the three shell gates that
+   graded it compared "" against "" and reported `ok`. Neither the panic nor
+   the empty pin is fixed here: this runner's job was to make them visible,
+   and they are now two named rows rather than three silent passes. -}
+expectedPanics : List (String, String)
+expectedPanics = [
+  (
+    "test/bin/eval_prelude_main",
+    "test/eval_prelude_fixtures/string_interp.mdk",
+  ),
+  (
+    "test/bin/core_ir_prelude_main",
+    "test/eval_prelude_fixtures/string_interp.mdk",
+  ),
+  ("test/bin/eval_prelude_batch", "test/eval_prelude_fixtures"),
+]
+
+{- | Fixtures that ship no `=== EVAL ===` golden, so this gate spawns them
+   but has no value to hold them to. Each is still graded on its exit code
+   and stderr, and one that GAINS a golden fails until it is taken off this
+   list.
+
+   The four below are `medaka run`'s binding-identity fixtures: their pinned
+   observable is the lexer's `<stem>.boot_lex.golden`, which the lex gate
+   reads. The retired shell rows never saw them at all — they iterated
+   `*.golden` and so could not distinguish "no value is owed here" from "a
+   value is owed and is missing". -}
+noEvalGolden : List String
+noEvalGolden = [
+  "test/diff_fixtures/bindingid_default_where.mdk",
+  "test/diff_fixtures/bindingid_impl_where.mdk",
+  "test/diff_fixtures/bindingid_method_where.mdk",
+  "test/diff_fixtures/bindingid_topvar.mdk",
+]
+
+{- | How a spawn's exit code and stderr graded, or `None` when they graded
+   clean and were expected to.
+
+   `code == 0` with no `E-PANIC` on stderr is the same shape
+   `binaryRanClean` asserts of a built binary: a process that printed the
+   right bytes on its way out of a panic has not passed. -}
+processFailure : String -> String -> Int -> String -> Option String
+processFailure oracle unit code err =
+  let clean = code == 0 && not (contains "E-PANIC" err)
+  let pinned = elem (oracle, unit) expectedPanics
+  if clean && pinned then
+    Some "\{unit}: runs clean now — drop it from `expectedPanics` in this file"
+  else if clean || pinned then
+    None
+  else
+    Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
+
+stderrTail : String -> String
+stderrTail "" = ""
+stderrTail err = match lines (chompNewlines err)
+  [] => ""
+  l :: _ => " — \{debug l}"
+
+-- # Grading a row
+
+{- | One row's outcome. `failures` is the whole list rather than the first,
+   since the vehicle absorbs anything a test body prints and a red run has
+   to name every disagreement in its message. -}
+data Outcome = Outcome { gate : String, graded : Int, failures : List String }
+
+structural : Row -> String -> Outcome
+structural r note = Outcome {
+  gate = r.gate,
+  graded = 0,
+  failures = ["\{r.corpus}: \{note}"],
+}
+
+valueFailure : Row -> String -> String -> <FileRead "_", IO> Option String
+valueFailure r path actual =
+  let exempt = elem "\{r.corpus}/\{stem path}.mdk" noEvalGolden
+  match goldenOf r path
+    Err e =>
+      if exempt then None else Some "\{stem path}: no readable golden: \{e}"
+    Ok expected =>
+      if exempt then
+        Some "\{stem path}: has a golden now — drop it from `noEvalGolden`"
+      else if expected == actual then
+        None
+      else
+        Some "\{stem path}: expected \{debug expected}, got \{debug actual}"
+
+{- | A row that spawns the oracle once per fixture: the shape eleven of the
+   twelve retired scripts had, and the reference the `_batch` rows are
+   compared against. -}
+perFixture : Row -> List String -> <Exec "_", FileRead "_", IO> List String
+perFixture r paths = somes (map (oneFixture r) paths)
+
+oneFixture : Row -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture r path =
+  match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r path)
+    Err e => Some "\{stem path}: could not spawn \{r.oracle}: \{e}"
+    Ok (code, out, err) =>
+      let unit = "\{r.corpus}/\{stem path}.mdk"
+      match processFailure r.oracle unit code err
+        Some m => Some m
+        None => valueFailure r path (chompNewlines (stripUnitAutoPrint out))
+
+argsFor : Row -> String -> <IO> List String
+argsFor r path = map (p => "\{medakaRoot}/\{p}") r.prelude ++ [path]
+
+{- | A row that spawns the oracle ONCE over the whole corpus and cuts its
+   delimited stdout back apart — the property no per-fixture row can state,
+   since a leak between two fixtures needs both of them in one heap. -}
+batchedRow : Row -> List String -> <Exec "_", FileRead "_", IO> List String
+batchedRow r paths =
+  let args = map (p => "\{medakaRoot}/\{p}") r.prelude ++ paths
+  match boundedVerb "\{medakaRoot}/\{r.oracle}" args
+    Err e => ["\{r.corpus}: could not spawn \{r.oracle}: \{e}"]
+    Ok (code, out, err) =>
+      let all = chompNewlines (stripUnitAutoPrint out)
+      let section =
+        p => chompNewlines (batchSection "===SELFHOST-FIX=== " p all)
+      let values = somes (map (p => valueFailure r p (section p)) paths)
+      match processFailure r.oracle r.corpus code err
+        Some m => m :: values
+        None => values
+
+gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow _ r = match entriesOf r
+  Err e => structural r e
+  Ok paths =>
+    let found = length paths
+    let counted =
+      if found == r.fixtures then
+        []
+      else
+        [
+          "expected \{intToString r.fixtures} fixtures, found \{intToString found} — see this row's `fixtures` field",
+        ]
+    let values = if r.batched then batchedRow r paths else perFixture r paths
+    Outcome { gate = r.gate, graded = found, failures = counted ++ values }
+
+rowFailure : Outcome -> Option String
+rowFailure o = match o.failures
+  [] => None
+  fs =>
+    let body = unlines (map (f => "    \{f}") fs)
+    Some
+      "  \{o.gate} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
+
+summarize : Int -> List String -> Expectation
+summarize _ [] = pass
+summarize graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} gate rows failed:\n\{unlines failures}"
+
+test "every eval and Core IR oracle reproduces its corpus's goldens" =
+  sweepUnits rows gradeRow rowFailure summarize

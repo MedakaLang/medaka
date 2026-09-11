@@ -126,20 +126,19 @@ sh test/diff_compiler_check_match.sh          # type-aware non-exhaustive-match 
 sh test/diff_compiler_snapshot_eval_errors.sh # eval runtime-error messages, in-process # CRASH snapshot (~1s)
 sh test/diff_compiler_typecheck_errors.sh     # typecheck TYPE ERROR accumulation (3 fixtures × 2 drivers, ~1s)
 sh test/diff_compiler_selfproc.sh             # the bootstrap (#3) self-processing gate (4 legs, ~18s)
-sh test/diff_compiler_core_ir.sh              # Stage 2 §2.1 Core IR equivalence gate — engine corpus (19, incl. §2.3 item 3 effect_poly)
-sh test/diff_compiler_core_ir_prelude.sh      #   …with core.mdk prelude dispatch (5)
-sh test/diff_compiler_core_ir_list.sh         #   …with core.mdk + list.mdk (2)
+./medaka gate run diff_compiler_eval          # Stage 2 §2.1 Core IR equivalence + the tree-walker value
+                                              #   sweeps, as one native runner over 12 (oracle, corpus) rows:
+                                              #   engine corpus, core.mdk prelude dispatch, core.mdk + list.mdk,
+                                              #   true-execution stdout / === EVAL === goldens, and the batched
+                                              #   variants (test/diff_compiler_eval_test.mdk)
 sh test/diff_compiler_core_ir_typed.sh        #   …typed return-position dispatch / CMethod (2)
-sh test/diff_compiler_core_ir_run.sh          #   …true-execution stdout / === EVAL === goldens (18)
 sh test/diff_compiler_core_ir_modules.sh      #   …loader-driven per-module frames (4)
 sh test/diff_compiler_snapshot_core_ir.sh         #   …serializer snapshot gate / cprogramToSexp goldens (18)
-sh test/diff_compiler_core_ir_roundtrip.sh    #   …round-trip: lower→sexp→parse→eval == oracle (18, proves lossless)
 # §2.2 bytecode VM gates REMOVED 2026-06-10 (bytecode.mdk removed — off canonical path):
 #   diff_compiler_eval_bytecode.sh, diff_compiler_eval_bytecode_modules.sh,
 #   diff_compiler_eval_bytecode_typed.sh, diff_compiler_eval_bytecode_run.sh,
 #   diff_compiler_bytecode_selfproc.sh, diff_compiler_bytecode_eval_dict.sh
 sh test/diff_compiler_eval_dict.sh            #   §2.3 item 2: dict-passing corpus through typed tree-walker (17/17 ok)
-sh test/diff_compiler_eval.sh                 #   §2.3 item 3: effect-poly erasure (effect_poly) + full engine corpus via tree-walker (19 ok)
 sh test/diff_compiler_llvm.sh                 # Stage 2 §2.4 LLVM spike — emit→clang→link→run→diff, scalar + function + Bool/Float + ADT/match + closure/HOF + records/tuples/refs + list/tuple-match/rec-closure + arrays/ranges + lists (43/43; needs clang)
 sh test/diff_compiler_llvm_typed.sh           # Stage 2 §2.4 LLVM spike slices 6–7 — TYPED dispatch (return-pos CMethod RKey/RDict + arg-pos bare-CVar arg-tag); oracle = typed Core-IR tree-walker (6/6; needs clang)
 

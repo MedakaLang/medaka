@@ -1,6 +1,7 @@
 #!/bin/sh
 # Multi-module equivalence gate for the Core IR (STAGE2-DESIGN §2.1) — the
-# loader-driven analog of test/diff_compiler_core_ir.sh, broadening the §2.1
+# loader-driven analog of the `core_ir_main` row in
+# test/diff_compiler_eval_test.mdk, broadening the §2.1
 # equivalence proof to the eval_modules corpus (per-module Core-IR frames).
 #
 # Self-host: core_ir_modules_main.mdk loads <entry> + its transitive imports,
