@@ -506,6 +506,29 @@ consumer:      P1-E-BATCH (#2605 applyWrites batch and blobs)
 notes:         The answer key for com.atproto.repo.applyWrites. It is a SEPARATE file rather than rows appended to repo_reference_corpus.txt because pds/test/repo_vectors_main.mdk and pds/test/record_handlers_main.mdk both match that corpus by exact positional row shape. The batch is generated as four tree edits and one signature, which is the property under test: a batch of N operations must land as one signed commit at one revision, so an answer key built by replaying N single-write commits would grade the wrong thing. No live PDS service or account was used.
 
 [vector]
+file:          pds/test/vectors/com_atproto_sync_subscribeRepos.json
+local-sha256:  bfc3e22bfeae701736fbbbd68a56f0b4b8b66ef4e0e10f1c281b2de61c3328ae
+kind:          published-artifact
+source:        atproto lexicon com.atproto.sync.subscribeRepos, lexicons/com/atproto/sync/subscribeRepos.json at bluesky-social/atproto commit 1f2604f0546754aef1cf93b7ac3855cf31751b1c (the peeled commit of the annotated tag @atproto/api@0.20.44; tag object 85484cf1072bb050734f021b93b0c42415eaf4d1)
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/1f2604f0546754aef1cf93b7ac3855cf31751b1c/lexicons/com/atproto/sync/subscribeRepos.json
+source-sha256: bfc3e22bfeae701736fbbbd68a56f0b4b8b66ef4e0e10f1c281b2de61c3328ae
+extraction:    fetched verbatim, byte for byte; nothing was reformatted, so local-sha256 and source-sha256 are the same digest by construction.
+retrieved:     2026-09-11
+consumer:      P1-F-COMMIT-LEXICON (#2891 relay-readable commit events)
+notes:         The SCHEMA half of the #commit answer key, pinned so the field set is an attributed external claim rather than a paraphrase. pds/tools/gen_repo_corpus.mjs reads it and refuses to emit a corpus whose assembled event omits a required key, invents an undeclared one, or writes null into a field the schema does not declare nullable — which is what catches a field-name typo that would otherwise encode cleanly and be graded against itself. Two shapes it fixes and this project would otherwise have guessed: `since` is required AND nullable, so it is always present; `repoOp.prev` is optional, so it is ABSENT ENTIRELY on a create rather than null. This is the sync-stream schema, not the repository commit object, and the two disagree about what `rev` and `data` mean.
+
+[vector]
+file:          pds/test/vectors/commit_event_corpus.txt
+local-sha256:  605ee0caac2f63cb9674ed88145bb054b9bd1e64ebe4372b4a7ed8a4128423a1
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_repo_corpus.sh, third output file. Same pinned npm graph, key and DID as repo_reference_corpus.txt. Each step drives MST.add/update/delete, DataDiff.of, MST.getCoveringProof over the POST-write tree, signCommit and blocksToCarFile from the pinned @atproto/repo, and @atproto/lex-cbor for every encoding; re-running must reproduce this file byte-for-byte.
+retrieved:     2026-09-11
+consumer:      P1-F-COMMIT-EVENT (#2891 relay-readable commit events)
+notes:         Seven signed commits over a tree that climbs to three MST layers: four creates, an update, a delete and a three-operation batch, so create/update/delete each appear and `ops` is plural at least once. G5 CAVEAT, stated rather than hidden: no package on the pinned graph ASSEMBLES a #commit event — @atproto/pds is the only one that does and it needs @atproto/repo ^0.10.14 plus a database and a web server — so the assembly (which fields, from where) is hand-derived against com_atproto_sync_subscribeRepos.json and the published sequencer source (@atproto/pds 0.5.34 dist/sequencer/events.js formatSeqCommit, dist/actor-store/repo/transactor.js formatCommit), while every VALUE assembled comes from the pinned official packages. Each step pins the event TWICE: EVENT carries the CAR blocks in @atproto/repo's own BlockMap insertion order, EVENTSORTED the same event with them sorted by CID. The lexicon and the sync spec constrain only the CAR roots list, not block order, so the sorted order is this project's choice and is labelled as such; the driver grades both rows byte-for-byte, the first by feeding our encoder the reference's own CAR bytes. BLOCKS additionally pins the block set as CIDs. Three of the seven steps ship an MST node the write did not change, which is what separates a covering proof from a tree diff. No live PDS service or account was used.
+
+[vector]
 file:          pds/test/vectors/interop_aturi_valid.txt
 local-sha256:  ec268ffc5f5c006c87dfa46fe2be6835b65ab941b24b4a9b0d28d249a7459c80
 kind:          reference-impl
