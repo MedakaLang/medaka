@@ -1051,6 +1051,39 @@ subclient ceiling "$PORTSUB" 32 "$DID" \
 subclient hold "$PORTSUB" 70 "$SUBACCESS" "$DID" "$COLLECTION" subhold \
   || fail 'case 39: a long-held subscriber was reaped'
 
+# 40. RFC 6455 §5.4: a data message split across continuation frames is
+#    REASSEMBLED. A completed message is still ignored — a subscriber has
+#    nothing this lexicon can read — so the observable is that the connection
+#    is neither closed nor wedged behind the fragments, which the ping after
+#    them grades.
+subclient fragment "$PORTSUB" \
+  || fail 'case 40: a fragmented client message was not reassembled'
+
+# 41. §5.4's two orderings that are protocol VIOLATIONS, each 1002. They are
+#    invisible to a reader that handles one frame at a time and forgets it,
+#    which is what makes them the discriminator for case 40's state: a server
+#    that merely ignored every data frame would pass case 40 and neither of
+#    these.
+subclient stray-continuation "$PORTSUB" \
+  || fail 'case 41a: a continuation frame with nothing open was not refused'
+subclient overlapped-message "$PORTSUB" \
+  || fail 'case 41b: a data frame inside an open message was not refused'
+
+# 42. The ceiling reassembly needs and a per-FRAME bound cannot supply: every
+#    frame here is inside `maxClientFrameBytes` and the message they build is
+#    not, which is the shape that grows a buffer without bound. 1009.
+subclient oversize-message "$PORTSUB" \
+  || fail 'case 42: an unbounded reassembled message was not refused'
+
+# 43. §5.5.1's close handshake: the code the peer sent is the code it is
+#    answered with (3000, an application code the wire permits), and a close
+#    payload that does not parse is 1002 — not a normal close, and not the
+#    unparsable value echoed back.
+subclient close-echo "$PORTSUB" 3000 \
+  || fail 'case 43a: the client close code was not echoed'
+subclient close-malformed "$PORTSUB" \
+  || fail 'case 43b: a malformed close payload was not answered 1002'
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""

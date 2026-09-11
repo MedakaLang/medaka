@@ -19,7 +19,7 @@
    (`pds/test/serve_client_main.mdk`'s convention); the shell gate reads that
    line and nothing else. -}
 
-import array.{concat, sliceClamped}
+import array.{concat, make, sliceClamped}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
 import lib.websocket.{
   DecodeResult(..),
@@ -30,6 +30,7 @@ import lib.websocket.{
   decodeFrame,
   encodeClientFrame,
   handshakeAccept,
+  parseClosePayload,
 }
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
@@ -591,6 +592,131 @@ runHold port hold token did collection rkey =
   let () = sayGoodbye conn
   ignoreResult (close conn)
 
+-- # Frame-level cases: RFC 6455 §5.4 fragmentation and §5.5.1 close
+
+-- | One client frame on the wire, masked the way §5.1 requires of a client.
+sendFrame : Connection -> Frame -> <Net "_"> Unit
+sendFrame conn frame = mustSend conn (encodeClientFrame maskKey frame)
+
+sendFrames : Connection -> List Frame -> <Net "_"> Unit
+sendFrames _ [] = ()
+sendFrames conn (frame :: rest) =
+  let () = sendFrame conn frame
+  sendFrames conn rest
+
+{- | The status code of the next Close frame the server sends, skipping
+   whatever it sends before one.
+
+   `None` is the server dropping the TCP connection without a Close frame,
+   and `Some 0` is a Close frame carrying no status code at all. Both are
+   distinct answers from any code, and a case that folded them into one would
+   accept a server that said nothing where a code was owed. -}
+serverCloseCode : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Option Int)
+serverCloseCode conn buffered = match readFrame conn buffered
+  Err message => Err message
+  Ok None => Ok None
+  Ok (Some (Frame _ Close payload, _)) => match parseClosePayload payload
+    Err message => Err "serve_subscribe: server close payload: \{message}"
+    Ok None => Ok (Some 0)
+    Ok (Some (code, _)) => Ok (Some code)
+  Ok (Some (_, rest)) => serverCloseCode conn rest
+
+codeText : Option Int -> String
+codeText None = "the connection was dropped with no Close frame"
+codeText (Some 0) = "a Close frame carrying no status code"
+codeText (Some code) = "close code \{intToString code}"
+
+isCode : Option Int -> Int -> Bool
+isCode None _ = False
+isCode (Some got) wanted = got == wanted
+
+{- | Send `frames` on a fresh subscription and grade the status code the
+   server closes with. Every case below is that shape: the frames are the
+   whole input and a close code is the whole answer. -}
+runClosingCase : Int -> String -> Int -> List Frame -> <IO, Net "_"> Unit
+runClosingCase port label wanted frames =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let () = sendFrames conn frames
+  let () = match serverCloseCode conn rest
+    Err message => report label False message
+    Ok got =>
+      report
+        label
+        (isCode got wanted)
+        "\{codeText got} (wanted \{intToString wanted})"
+  ignoreResult (close conn)
+
+{- | A data message split across continuation frames is REASSEMBLED, and the
+   connection is still serving afterwards.
+
+   The ping is what makes this a test rather than a wait: a completed message
+   is ignored by design — a subscriber has nothing this server's lexicon can
+   read — so the only thing observable about the message having been handled
+   correctly is that the connection is neither closed nor wedged behind it. -}
+runFragment : Int -> <IO, Net "_"> Unit
+runFragment port =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let () = sendFrame conn (Frame False Text (toUtf8 "frag"))
+  let () = sendFrame conn (Frame False Continuation (toUtf8 "ment"))
+  let () = sendFrame conn (Frame True Continuation (toUtf8 "ed"))
+  let () = sendFrame conn (Frame True Ping (toUtf8 "alive"))
+  let () = match nextPong conn rest
+    Err message => report "SUBFRAG" False message
+    Ok None =>
+      report "SUBFRAG" False "the stream ended instead of answering the ping"
+    Ok (Some text) =>
+      report
+        "SUBFRAG"
+        (text == "alive")
+        "pong '\{text}' after a three-frame message"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+nextPong : Connection -> Array Int -> <Net "_"> Result String (Option String)
+nextPong conn buffered = match readFrame conn buffered
+  Err message => Err message
+  Ok None => Ok None
+  Ok (Some (Frame _ Pong payload, _)) => Ok (Some (fromUtf8 payload))
+  Ok (Some (Frame _ Close _, _)) => Ok None
+  Ok (Some (_, rest)) => nextPong conn rest
+
+-- | A continuation frame with no fragmented message open (RFC 6455 §5.4).
+strayFrames : List Frame
+strayFrames = [Frame True Continuation (toUtf8 "orphan")]
+
+-- | A new data frame arriving while a fragmented message is still open
+-- (RFC 6455 §5.4), which is the same violation read from the other side.
+overlapFrames : List Frame
+overlapFrames = [
+  Frame False Text (toUtf8 "one"),
+  Frame True Text (toUtf8 "two"),
+]
+
+{- | Enough never-final fragments to pass the server's reassembly ceiling
+   while every individual frame stays inside the per-frame one — which is
+   exactly the shape a per-frame bound cannot see. -}
+oversizeFrames : List Frame
+oversizeFrames = Frame False Text fragmentPayload :: moreFragments 8
+
+fragmentPayload : Array Int
+fragmentPayload = make 1000 65
+
+moreFragments : Int -> List Frame
+moreFragments 0 = []
+moreFragments n =
+  Frame False Continuation fragmentPayload :: moreFragments (n - 1)
+
+-- | A close payload of one byte: RFC 6455 §5.5.1 has no such thing, and the
+-- one byte is not half of a status code the server may read.
+malformedCloseFrames : List Frame
+malformedCloseFrames = [Frame True Close [|3|]]
+
 mustPort : String -> Int
 mustPort text = match toInt text
   Some n => n
@@ -603,7 +729,7 @@ mustCount text = match toInt text
 
 usage : String
 usage =
-  "usage: serve_subscribe <live|future-cursor|outdated-cursor|exact-cursor|ceiling|hold> ..."
+  "usage: serve_subscribe <live|future-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -617,4 +743,17 @@ main = match args ()
     runCeiling (mustPort port) (mustCount ceiling) did
   ["hold", port, hold, token, did, collection, rkey] =>
     runHold (mustPort port) (mustCount hold) token did collection rkey
+  ["fragment", port] => runFragment (mustPort port)
+  ["stray-continuation", port] =>
+    runClosingCase (mustPort port) "SUBSTRAY" 1002 strayFrames
+  ["overlapped-message", port] =>
+    runClosingCase (mustPort port) "SUBOVERLAP" 1002 overlapFrames
+  ["oversize-message", port] =>
+    runClosingCase (mustPort port) "SUBOVERSIZE" 1009 oversizeFrames
+  ["close-echo", port, code] => runClosingCase (mustPort
+    port) "SUBCLOSEECHO" (mustCount code) [
+    closeFrame (mustCount code) "bye",
+  ]
+  ["close-malformed", port] =>
+    runClosingCase (mustPort port) "SUBCLOSEBAD" 1002 malformedCloseFrames
   _ => panic usage
