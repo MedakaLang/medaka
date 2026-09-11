@@ -50,7 +50,7 @@
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
-import frontend.ast.{Decl, DData, DInterface, DProp, Expr(..), Loc(..)}
+import frontend.ast.{Decl, DData, DInterface, DProp, Expr}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
@@ -115,7 +115,9 @@ import tools.prop_runner.{
   propResultPassed,
   propResultDetail,
 }
-import tools.test_runner.{collectTests, runOneTest, hasTests, uncapableExterns}
+import tools.test_runner.{
+  collectTests, exprLine, runOneTest, hasTests, uncapableExterns
+}
 import driver.diagnostics.{
   analyzeLocated,
   projectDiagsFromTc,
@@ -1101,24 +1103,8 @@ propLineTests tsrc = collectPropLines (desugar (parseLocated tsrc))
 collectPropLines : List Decl -> List (String, Int)
 collectPropLines [] = []
 collectPropLines ((DProp _ name _ body) :: rest) =
-  (name, exprLineLocal body) :: collectPropLines rest
+  (name, exprLine body) :: collectPropLines rest
 collectPropLines (_ :: rest) = collectPropLines rest
-
--- Peel a transparent ELoc wrapper to recover a body's source line. Intentional
--- cross-file duplicate of `test_runner.mdk`'s private (unexported) `exprLine`
--- — tiny helper, not worth exporting across a module boundary for one caller.
--- An `EBinOp` is never itself `ELoc`-wrapped (parser.mdk, `stripLoc1`'s
--- comment: "binop levels stay unwrapped") — its left operand's own location
--- recovers the decl's line instead, since both operands of a same-line
--- binop share it.
--- lint-disable-next-line rule-duplicate-body
-exprLineLocal : Expr -> Int
-exprLineLocal (ELoc (Loc _ l _ _ _) _) = l
-exprLineLocal (EApp f _) = exprLineLocal f
-exprLineLocal (EAnnot e _) = exprLineLocal e
-exprLineLocal (EHeadAnnot e _) = exprLineLocal e
-exprLineLocal (EBinOp _ a _ _) = exprLineLocal a
-exprLineLocal _ = 0
 
 -- ── #1292: elaborate, then rename cross-unit-colliding constructors ──────────
 -- `eval.evalModulesRootEnvWith` / `evalModulesWith` apply this rename themselves,

@@ -42,8 +42,8 @@ running doctests in stdlib/args.mdk
   ok   stdlib/args.mdk:599: map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
 
 stdlib/args.mdk: 41/41 passed
-Testing "Eq Args discriminates every field" ... OK (100 tests)
-Testing "Eq ArgSpec reaches through FlagSpec and Arity" ... OK (100 tests)
-Testing "Debug ArgSpec agrees with Eq" ... OK (100 tests)
+stdlib/args.mdk:620: Testing "Eq Args discriminates every field" ... OK (100 tests)
+stdlib/args.mdk:632: Testing "Eq ArgSpec reaches through FlagSpec and Arity" ... OK (100 tests)
+stdlib/args.mdk:644: Testing "Debug ArgSpec agrees with Eq" ... OK (100 tests)
 
 3 passed, 0 failed

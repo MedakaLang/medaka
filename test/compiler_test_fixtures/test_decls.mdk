@@ -8,3 +8,10 @@ import test.{expectEqual, fail}
 test "passing assertion" = expectEqual 42 42
 test "failing assertion" = expectEqual 1 2
 test "explicit fail" = fail "boom"
+
+-- A body written as a layout block carries no `ELoc` of its own, so its
+-- reported line has to come from the first located statement inside it.  Keep
+-- this decl LAST: the three above are pinned at lines 8-10 by the gate.
+test "block body" =
+  let expected = 42
+  expectEqual expected 42

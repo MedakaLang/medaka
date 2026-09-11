@@ -124,9 +124,12 @@ filterOutNamesIn : List String -> (ResError -> String) -> List ResError -> List 
 findDups : List String -> List String -> List String
 findDupsGo : Map String Unit -> List String -> List String
 findExports : String -> Map String ModuleExports -> Option ModuleExports
+firstBindLoc : List LetBind -> Option Loc
+firstClauseLoc : List FunClause -> Option Loc
 firstExprLoc : Expr -> Option Loc
 firstLocList : List Expr -> Option Loc
 firstOr : String -> List String -> String
+firstStmtLoc : List DoStmt -> Option Loc
 flatTyOriginScope : List Decl -> Map String TyConOrigin
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
@@ -329,6 +332,7 @@ stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)
 stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
+stmtLoc : DoStmt -> Option Loc
 stubOrUnknown : Map String ModuleExports -> UsePath -> String -> Loc -> ImportAdds
 sugCandOf : String -> SugCand
 sugPoolOf : List String -> List SugCand

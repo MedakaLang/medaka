@@ -1984,12 +1984,17 @@ declLoc _ = None
 
 -- First ELoc span in a pre-order traversal of an expr (None if the subtree has
 -- no ELoc wrapper).  Pre-order so it matches map_expr's outermost-first order.
+-- Exported for `tools/test_runner.mdk`'s `exprLine`, which needs exactly this
+-- deep-pre-order judgment to locate a `test "…"`/`prop "…"` body whose head is
+-- a `let`/`match`/lambda and therefore carries no `ELoc` of its own.
+export
 firstExprLoc : Expr -> Option Loc
 firstExprLoc (ELoc l _) = Some l
 firstExprLoc (EApp f x) = orElseLoc (firstExprLoc f) (firstExprLoc x)
 firstExprLoc (ELam _ body) = firstExprLoc body
 firstExprLoc (ELet _ _ _ e1 e2) = orElseLoc (firstExprLoc e1) (firstExprLoc e2)
-firstExprLoc (ELetGroup _ body) = firstExprLoc body
+firstExprLoc (ELetGroup binds body) =
+  orElseLoc (firstBindLoc binds) (firstExprLoc body)
 firstExprLoc (EMatch e0 _) = firstExprLoc e0
 firstExprLoc (EIf c t el) =
   orElseLoc (firstExprLoc c) (orElseLoc (firstExprLoc t) (firstExprLoc el))
@@ -2009,12 +2014,43 @@ firstExprLoc (ERangeArray lo hi _) =
 firstExprLoc (EIndex e0 i _) = orElseLoc (firstExprLoc e0) (firstExprLoc i)
 firstExprLoc (ESlice e0 lo hi _ _) =
   orElseLoc (firstExprLoc e0) (orElseLoc (firstExprLoc lo) (firstExprLoc hi))
+firstExprLoc (EBlock stmts) = firstStmtLoc stmts
+firstExprLoc (EDo _ stmts) = firstStmtLoc stmts
 firstExprLoc (EDoOrigin _ e) = firstExprLoc e
 firstExprLoc _ = None
 
 firstLocList : List Expr -> Option Loc
 firstLocList [] = None
 firstLocList (e :: rest) = orElseLoc (firstExprLoc e) (firstLocList rest)
+
+-- A let-group's BOUND expressions, left to right.  Pre-order means the binds
+-- come before the body: `let c = f x` on the line after a `prop`'s `=` is the
+-- only located sub-expression that decl has, and skipping it left the whole
+-- group unlocated.
+firstBindLoc : List LetBind -> Option Loc
+firstBindLoc [] = None
+firstBindLoc ((LetBind _ clauses) :: rest) =
+  orElseLoc (firstClauseLoc clauses) (firstBindLoc rest)
+
+firstClauseLoc : List FunClause -> Option Loc
+firstClauseLoc [] = None
+firstClauseLoc ((FunClause _ body) :: rest) =
+  orElseLoc (firstExprLoc body) (firstClauseLoc rest)
+
+-- A statement block's own expressions, in order.  A layout block headed by a
+-- `let` statement parses as `EBlock`, which carries no `ELoc` of its own — so
+-- without this arm a `test`/`prop`/function body written that way had no
+-- recoverable line at all.
+firstStmtLoc : List DoStmt -> Option Loc
+firstStmtLoc [] = None
+firstStmtLoc (s :: rest) = orElseLoc (stmtLoc s) (firstStmtLoc rest)
+
+stmtLoc : DoStmt -> Option Loc
+stmtLoc (DoExpr e) = firstExprLoc e
+stmtLoc (DoBind _ e) = firstExprLoc e
+stmtLoc (DoLet _ _ _ e) = firstExprLoc e
+stmtLoc (DoAssign _ e) = firstExprLoc e
+stmtLoc (DoFieldAssign _ _ e) = firstExprLoc e
 
 unionStr : List String -> List String -> List String
 unionStr acc [] = acc
