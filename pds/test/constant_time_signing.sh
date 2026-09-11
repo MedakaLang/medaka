@@ -58,7 +58,7 @@ expected_internal_source_manifest() {
   cat <<'EOF'
 3840689225 26477  pds/lib/field.mdk
 771369044 31975  pds/lib/scalar.mdk
-619060746 11569  stdlib/sha256.mdk
+1728882051 12086  stdlib/sha256.mdk
 4205512882 5228  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
@@ -70,7 +70,7 @@ expected_public_source_manifest() {
   cat <<'EOF'
 3840689225 26477  pds/lib/field.mdk
 771369044 31975  pds/lib/scalar.mdk
-619060746 11569  stdlib/sha256.mdk
+1728882051 12086  stdlib/sha256.mdk
 4205512882 5228  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
