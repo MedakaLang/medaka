@@ -1,0 +1,22 @@
+-- Two records in ONE module, one of whose SOURCE names already carries this module's
+-- own mangle prefix.  That is the shape that makes an owner-qualification applied twice
+-- collide: `Cfg` qualifies to `Mm__Cfg`, and a second application of the same
+-- qualification to the sibling's already-prefixed `Mm__Cfg` leaves it unchanged, so the
+-- two records land on ONE emitted head and the emitter picks one layout for both.
+--
+-- ⚠️ THE MODULE ID MUST START WITH AN UPPER-CASE LETTER, and that is load-bearing:
+-- constructors are upper-case, so `lib.sub`'s prefix (`lib_sub__`) is unspellable as a
+-- record name and only a module id like `Mm` can be written into one.  Renaming this
+-- file silently stops the cell testing anything.
+--
+-- The field ORDERS are deliberately opposite, so a wrong head is a wrong VALUE rather
+-- than merely a wrong name: read through `Cfg`'s layout, `mkB.a` and `mkB.b` swap.
+public export data Cfg = { a : Int, b : Int }
+
+public export data Mm__Cfg = { b : Int, a : Int }
+
+export mkA : Cfg
+mkA = Cfg { a = 11, b = 22 }
+
+export mkB : Mm__Cfg
+mkB = Mm__Cfg { b = 33, a = 44 }

@@ -37,9 +37,9 @@ aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List Str
 aliasDfsVisitAll : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
 aliasDfsVisitNeighbors : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
 aliasDictNames : List String -> List (String, List Decl) -> List (String, List Decl) -> List String
-aliasDictNamesOfDecl : List String -> List (String, List Decl) -> Decl -> List String
-aliasDictNamesOfPath : List String -> List (String, List Decl) -> String -> UsePath -> List String
-aliasDictNamesOfUnit : List String -> List (String, List Decl) -> List Decl -> List String
+aliasDictNamesOfDecl : Map String Unit -> List (String, List Decl) -> Decl -> List String
+aliasDictNamesOfPath : Map String Unit -> List (String, List Decl) -> String -> UsePath -> List String
+aliasDictNamesOfUnit : Map String Unit -> List (String, List Decl) -> List Decl -> List String
 aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
 aliasFixtureAttribCore : Decl
 aliasFixtureEnv : DataEnv
@@ -175,6 +175,7 @@ augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String,
 axisSub : List (String, Param) -> (String, Param) -> Bool
 bangOnBoolHelp : String
 bangOnBoolMsg : String
+bareLocalBound : BareLocals -> String -> Bool
 beginModuleMarking : String -> List Decl -> Map String Int -> Unit
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindEach : List (Ref Effvar) -> EffRow -> Unit
@@ -211,7 +212,7 @@ buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
 buildImplUniverse : List Decl -> ImplUniverse
-buildStandaloneShadowsGraph : List Decl -> List Decl -> List String
+buildStandaloneShadowsGraph : List (String, String) -> List Decl -> List Decl -> List String
 buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
 builtinClassName : BuiltinClass -> String
 builtinClassOrigin : BuiltinClass -> TyConOrigin
@@ -569,6 +570,7 @@ deSeedChainProbe : DeclEnvSeedAcc
 deSeedChainProbeZero : DeclEnvSeedAcc
 deSeedNameParity : String -> Bool
 deSeedRowN : DeclEnvModule
+declBareLocals : List Decl -> BareLocals -> BareLocals
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
 declCtorIdents : List Decl -> List (String, String, Ident)
@@ -639,7 +641,6 @@ declaredPairsFor : String -> List (String, List (IfaceRef, List Mono), List (Lis
 declaredSchemeOblsFor : List (String, Ty, List (String, Mono)) -> String -> List Int -> List VecObl
 declaresCtorNamed : List Decl -> String -> Bool
 declaresStandalone : String -> List Decl -> Bool
-declsBindBareLocal : List Decl -> String -> Bool
 declsNonEmpty : List Decl -> Bool
 decodeAxis : String -> (String, Param)
 decodeAxisVal : String -> Param
@@ -674,6 +675,8 @@ definerShadowsFromSet : Map String Unit -> List Decl -> List String
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
 depExportsCtorIdent : String -> String -> Ident -> Bool
 depExportsMethodIdent : String -> String -> Ident -> Bool
+depExportsStandalone : String -> String -> Bool
+depExportsUnknown : String -> Bool
 depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derefOp : Mono -> Mono
@@ -923,6 +926,7 @@ foldModules : Bool -> Bool -> (String -> List (String, Scheme) -> List Decl -> L
 foldRowSlotArgs : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldrFun : List Mono -> Mono -> Mono
 foreachUnit : (a -> Unit) -> List a -> Unit
+formBareLocals : UsePath -> BareLocals -> BareLocals
 forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
 freeEffvars : Mono -> List Int
 freeGenVars : Int -> Mono -> List Int
@@ -1170,7 +1174,6 @@ implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, (String, String))
-importFormBindsBare : UsePath -> String -> Bool
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
@@ -1479,7 +1482,7 @@ memberBinding : UseMember -> (String, String)
 memberBindsCtorName : String -> String -> UseMember -> Bool
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberDefinerRow : String -> List (String, (String, String)) -> (String, String) -> List (String, (String, String))
-memberDictName : List String -> UseMember -> List String
+memberDictName : Map String Unit -> UseMember -> List String
 memberMethodRename : List String -> UseMember -> List (String, String)
 memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
@@ -1543,7 +1546,7 @@ moduleDictNames : List (String, List String) -> List String -> List (String, Lis
 moduleMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 moduleRefNameSet : List Decl -> Map String Unit
-moduleSpellsShadowBare : List Decl -> String -> String -> Bool
+moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
 moduleStampOrder : List StampStep
 moduleUserFnNames : List (String, List Decl) -> List String
 moduleWindow : Int -> Int -> List a -> List a
@@ -1635,7 +1638,7 @@ oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
-occurrenceCarriesMangledShadowSym : Ref Route -> Bool
+occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
@@ -1664,6 +1667,7 @@ overrideScopedMethods : List Decl -> Map String (List (Ident, (IfaceRef, List St
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
 ownerCandidates : List String -> List (String, RecordInfo)
+ownerQualifiedHead : String -> String -> String
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
 pairIface : String -> Int -> List (IfaceRef, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
@@ -1868,6 +1872,7 @@ recordNumLitImplObligation : Mono -> Mono
 recordNumLitObligationGuarded : TcEnv -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordOwnerModule : RecordInfo -> Option String
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit
 recordParamRowAtoms : TyConOrigin -> String -> List (List Atom) -> Unit
@@ -1883,6 +1888,7 @@ recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordStandaloneSigObligationsSp : String -> String -> List Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
+recoveredShadowSym : String -> Ref Route -> String
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
 reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
@@ -2115,7 +2121,7 @@ shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowD
 shadowStandaloneDictsWithSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
 shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref Route), Expr, List Expr)
-shadowSymSpelledBare : List Decl -> List (String, String) -> String -> Bool
+shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
 sigCollapsedWith : Int -> List (String, Int) -> Option String
@@ -2143,6 +2149,7 @@ sitesFor : String -> Map String (List a) -> List a
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
+spellCtxOf : List Decl -> SpellCtx
 spineFirstArg : Expr -> Option Expr
 spineHeadIsApp : Expr -> Bool
 spineHeadMono : Mono -> Mono
@@ -2159,6 +2166,7 @@ stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
 stampTailDecl : Map String Int -> Decl -> Decl
 stampTailDecls : Map String Int -> List Decl -> List Decl
+stampedRecordHead : String -> RecordInfo -> String
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneShadowDomainAt : String -> Int -> Option Mono
 standaloneShadowScheme : String -> Option Mono

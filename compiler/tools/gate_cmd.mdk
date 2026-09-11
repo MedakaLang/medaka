@@ -1840,9 +1840,20 @@ corpusMatches path (c :: cs)
   | underDir c path = "corpus:\{c}" :: corpusMatches path cs
   | otherwise = corpusMatches path cs
 
+-- A gate's own `run` module is an implicit source: editing it is editing what
+-- the gate most directly asserts, whether or not any `sources` glob happens
+-- to also cover it (#2822) — a `sources` coincidence is not a design. Scoped
+-- to `kind = "native"`: for a `kind = "exec"` gate, `run` names a shell
+-- script, not the `*_test.mdk` module the gate's own assertions live in.
+runMatches : String -> Gate -> List String
+runMatches path g =
+  if g.kind == "native" && path == g.run then ["run:\{g.run}"] else []
+
 targetedReasons : String -> Gate -> List String
 targetedReasons path g =
-  sourceMatches path g.sources ++ corpusMatches path g.corpus
+  sourceMatches path g.sources
+    ++ corpusMatches path g.corpus
+    ++ runMatches path g
 
 explainPathHits : String -> List Gate -> List (Gate, List String)
 explainPathHits _ [] = []

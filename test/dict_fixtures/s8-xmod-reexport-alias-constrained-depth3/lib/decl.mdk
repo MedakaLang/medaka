@@ -1,0 +1,5 @@
+-- DEFINES the constrained callee.  Nothing else in this chain declares a
+-- top-level function, which is the point: every hop is a pure re-exporter.
+export
+f : Num a => a -> a
+f x = x + 1

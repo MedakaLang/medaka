@@ -25,7 +25,7 @@ import types.typecheck.{
 import driver.diagnostics.{renderTcDiags}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{loadProgram, unknownModuleIdOf}
-import backend.private_mangle.{mangleUnits}
+import backend.private_mangle.{mangleUnitsEv}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
@@ -264,9 +264,16 @@ runEmitWith : String ->
   <IO> Unit
 runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
-  let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, residual, _) =
-    elaborateModules runtimeDecls coreMangled modulesMangled
+  -- #2809: ELABORATE THE PROGRAM THE USER WROTE, then mangle its elaborated trees.
+  -- Elaboration reads the import structure (`DUse` member spellings, alias locals) and
+  -- groups denotations by name, and the mangler rewrites definitions and references but
+  -- never a `DUse` — so elaborating a mangled graph made every import-keyed table miss
+  -- and gave two mangled denotations two distinct names.  This order makes the child's
+  -- verdict equal `check`'s by construction; `mangleUnitsEv` then renames the elaborated
+  -- trees AND the evidence table's `RLocal` routes.  Each branch below mangles exactly
+  -- once, after its own elaboration.
+  let (coreE, modulesE, _, residual, _) =
+    elaborateModules runtimeDecls coreDecls modules
   let _ = emitElaborationGate residual
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
@@ -289,9 +296,10 @@ runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
           d :: _ => failWith (tcMsg d)
           [] => emitModulesWith emitTail runtimeDecls coreDecls modulesW
       else
+        let (coreD, modules2) = mangleUnitsEv coreE modulesE
         emitTail runtimeDecls coreD modules2
 
--- Mangle + elaborate + emit a (possibly wrapped) module list from scratch.
+-- Elaborate + mangle + emit a (possibly wrapped) module list from scratch.
 export
 emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List Decl ->
@@ -300,10 +308,11 @@ emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Un
   <IO> Unit
 emitModulesWith emitTail runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
-  let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, residual, _) =
-    elaborateModules runtimeDecls coreMangled modulesMangled
+  -- Elaborate first, mangle after — see `runEmitWith` (#2809).
+  let (coreE, modulesE, _, residual, _) =
+    elaborateModules runtimeDecls coreDecls modules
   let _ = emitElaborationGate residual
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
   emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────

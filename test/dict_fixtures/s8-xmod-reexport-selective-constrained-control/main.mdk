@@ -14,21 +14,21 @@
 --      residue was the #1369/#1425 dict-arity seam rather than anything about
 --      the ALIAS spelling.
 --
--- 🚨 THE TWO SPELLINGS NOW DIVERGE, AND THE DIVERGENCE IS THE ASSERTION.
--- RUN-XMOD-062 made the dict-arity seam's definer rows carry the TRUE DEFINER of
--- a re-exported name (`lib.decl`) instead of the module the importer SPELLS
--- (`lib.rsel`), derived through the one admission predicate. That repairs THIS
--- (selective) spelling: `run` now exits 0 printing `2`, cell-for-cell agreeing
--- with `build`. The ALIAS sibling still panics identically to before, because an
--- alias route is not built from these rows at all -- `aliasEntriesFor` copies
--- qual entries whose definer is `usePathModuleId path`, i.e. the SPELLED module,
--- so a re-exporter alias matches nothing. MEASURED on both binaries: at b313d767
--- both spellings panic; at the repair this file prints `2` at exit 0 and the
--- alias sibling is byte-identically unchanged.
+-- THE TWO SPELLINGS AGREE AGAIN, AND THAT IDENTITY IS THE ASSERTION -- but only
+-- after a detour worth recording. RUN-XMOD-062 made the dict-arity seam's
+-- definer rows carry the TRUE DEFINER of a re-exported name (`lib.decl`) rather
+-- than the module the importer SPELLS (`lib.rsel`), which repaired THIS
+-- spelling while the alias sibling went on panicking. The paragraph that stood
+-- here then attributed the survivor to `aliasEntriesFor` copying qual entries
+-- keyed on the spelled module. #2840 instrumented that claim and REFUTED it:
+-- `aliasEntriesFor` had already been resolving through `graphPubDefiners`, and
+-- what the alias route was actually missing was its entry in the DICT-NAME set
+-- (`aliasDictNamesOfPath`), which asked what the spelled module DEFINES -- and a
+-- pure re-exporter defines nothing. With that arm reading the graph too, both
+-- spellings print `2` at exit 0 on every verb.
 --
--- ⇒ The residue #1427 is still waiting on IS now alias-specific, which is the
--- opposite of what this pair established before. Do not re-derive that from the
--- old prose: run both files.
+-- ⇒ Read this pair by WHICH MEMBER REDS: this row alone means the named-form
+-- definer resolution regressed; both means the shared route did.
 import lib.rsel.{f}
 
 main = println (f 1)

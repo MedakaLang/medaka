@@ -18,6 +18,9 @@
 #                     itself `import list.{reverse, sort}` from stdlib).
 #   consumer/       — declares `minilib = "../minilib"` and
 #                     `import minilib.lib.minilib.{revSorted, double}`.
+#   consumer/probe_test.mdk
+#                   — the same import behind a doctest and a `test "…"` decl, so
+#                     both native `medaka test` probe engines are covered too.
 #
 # Asserts native `medaka check` / `run` / `build`+exec all resolve the
 # cross-project import and produce the expected output.  Goldens strip any
@@ -96,6 +99,41 @@ if [ "$rc" -eq 1 ] \
 else
   fail=$((fail + 1))
   echo "FAIL samesrc_check_json: expected exit 1 with R-PRIVATE-NAME on depdir/user.mdk, got exit $rc"
+  printf '%s\n' "$got" | sed 's/^/  /' | head -20
+fi
+
+# ── native `medaka test` probes span the dep, from a RELATIVE target ─────────
+# Both native engines compile their probe inside a synthesized scratch project
+# (`scratchProjectManifest`, compiler/driver/build_cmd.mdk).  A scratch manifest
+# without the target project's own [dependencies] cannot resolve
+# `minilib.lib.minilib` however many search roots the emitter is handed, so the
+# probe fails to build while the interpreter arm passes (#2749).
+#
+# The target is named RELATIVELY on purpose: dep paths are joined onto the
+# project root literally, so a relative root yields a relative dep path that is
+# re-resolved against the scratch dir.  An absolute invocation passes vacuously.
+PROBE_REL="test/cross_project_fixtures/consumer/probe_test.mdk"
+got=$(cd "$ROOT" && MEDAKA_STRICT=1 bound "$MEDAKA" test --native "$PROBE_REL" 2>&1)
+rc=$?
+# One "1/1 passed" from the doctest engine, one from the test-decl engine.
+n_ok=$(printf '%s\n' "$got" | grep -c '1/1 passed')
+if [ "$rc" -eq 0 ] && [ "$n_ok" -eq 2 ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL native_test_relative: expected exit 0 and two '1/1 passed', got exit $rc ($n_ok)"
+  printf '%s\n' "$got" | sed 's/^/  /' | head -20
+fi
+
+# The interpreter arm is the floor the native arm is differenced against.
+got=$(cd "$ROOT" && MEDAKA_STRICT=1 bound "$MEDAKA" test "$PROBE_REL" 2>&1)
+rc=$?
+n_ok=$(printf '%s\n' "$got" | grep -c '1/1 passed')
+if [ "$rc" -eq 0 ] && [ "$n_ok" -eq 2 ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "FAIL eval_test_relative: expected exit 0 and two '1/1 passed', got exit $rc ($n_ok)"
   printf '%s\n' "$got" | sed 's/^/  /' | head -20
 fi
 

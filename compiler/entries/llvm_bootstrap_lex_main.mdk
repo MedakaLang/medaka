@@ -46,7 +46,7 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
-import backend.private_mangle.{mangleUnits}
+import backend.private_mangle.{mangleUnitsEv}
 import entries.entry_support.{driveModules}
 
 main : <IO> Unit
@@ -54,9 +54,10 @@ main = driveModules runEmit
 
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
-  let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2, _, _, _) =
-    elaborateModules runtimeDecls coreMangled modulesMangled
+  -- #2809: elaborate the program as written, then mangle its elaborated trees.
+  let (coreE, modulesE, _, _, _) =
+    elaborateModules runtimeDecls coreDecls modules
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
@@ -83,9 +84,10 @@ runEmit runtimeDecls coreDecls modules =
     emitProgramRecord input (lowerProgramEmit TargetNative allDecls)
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
--- across units, BEFORE elaborateModules flattens the boundaries away.  Without
--- this, two modules' same-named privates (e.g. lex_main.emit vs lexer.emit) both
--- mangle to @mdk_emit and only one survives → @main calls the wrong arity.
+-- across units, on the trees `elaborateModules` has already produced (#2809 put the
+-- rename after the elaboration, not before it).  Without this, two modules'
+-- same-named privates (e.g. lex_main.emit vs lexer.emit) both mangle to @mdk_emit
+-- and only one survives → @main calls the wrong arity.
 
 -- gap-TOLERANT: unreachable dead-code gaps in core.mdk become "0" placeholders
 -- instead of aborting.  The harness byte-diff is the safety net.
