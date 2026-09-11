@@ -1,0 +1,37 @@
+-- #2848: a type with EXACTLY TWO constructors, one nullary and one carrying
+-- fields -- the List/Option/Result shape.  A value is immediate iff it is the
+-- nullary one, so the low tag bit ALONE names the constructor and the switch
+-- needs neither a tag word nor a phi (DiscRep RepTwoSplit).  Both arms of each
+-- type are reached, and each scrutinee is immediate at one call site and boxed at
+-- another, so a low-bit test with its polarity backwards changes the answer.
+data Box = Empty | Full Int
+
+unbox : Box -> Int
+unbox Empty = 0
+unbox (Full n) = n
+
+data Option a = None | Some a
+
+optOr : Option Int -> Int
+optOr None = 0
+optOr (Some n) = n
+
+data Result e a = Err e | Ok a
+
+resOr : Result Int Int -> Int
+resOr (Ok n) = n
+resOr (Err n) = n + 20
+
+sumL : List Int -> Int
+sumL [] = 0
+sumL (x :: rest) = x + sumL rest
+
+main =
+  unbox Empty
+    + unbox (Full 7) * 10
+    + optOr None
+    + optOr (Some 3) * 100
+    + sumL []
+    + sumL [1, 2, 4] * 1000
+    + resOr (Ok 5) * 100000
+    + resOr (Err 2) * 1000000

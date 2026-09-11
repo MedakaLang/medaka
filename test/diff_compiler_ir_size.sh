@@ -42,8 +42,14 @@
 # with live program size" — see the MEASURED note by IR_SIZE_N.
 #
 # MEASURED (this box, deterministic, N=300/600/1200): per-decl IR is a flat 12 lines/decl
-# (lines(N) = 12320 + 12*N exactly), so delta(N->2N)=3600, delta(2N->4N)=7200, ratio 2.00.
-# The tiny program emits 12,332 lines; the ceiling below is set with ~30% headroom over it.
+# (lines(N) = 11468 + 12*N exactly), so delta(N->2N)=3600, delta(2N->4N)=7200, ratio 2.00.
+# The tiny program emits 11,480 lines; the ceiling below is set with ~30% headroom over it.
+#
+# RE-DERIVED (S-hold-the-gains, #2848, sprint/emit-less-ir base 7dee7cd49): the sprint's
+# two prior slices shrank the prelude every program pays, so both figures moved down.
+# tiny program now emits 11,480 IR lines (was 12,332); the fixed constant fell to 11,468
+# (was 12,320) while the flat 12 lines/decl slope is unchanged — same method, same box.
+# The ceiling is re-set with the same ~30% headroom over the new tiny-program figure.
 #
 # The probe programs are written into a temp dir, NOT a fixture corpus — a fixture
 # directory is a shared corpus and adding to one silently enrols you in gates you never
@@ -68,12 +74,13 @@ EMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}"
 export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
-# CEILING for arm A. Current tiny-program IR is 12,332 lines; 16,000 is ~30% headroom.
-# This is DELIBERATELY not tight: it exists to catch the 2-3x prelude-bloat class (the
-# 32,896-line regression), not to police a handful of lines. If a legitimate prelude
-# change lifts the tiny program's IR, re-measure and raise this WITH a comment — do not
-# quietly bump it (a ceiling that tracks the value it bounds guards nothing).
-CEIL="${IR_SIZE_CEIL:-16000}"
+# CEILING for arm A. Current tiny-program IR is 11,480 lines; 15,000 is ~30% headroom
+# (11,480 x 1.3 = 14,924, rounded up). This is DELIBERATELY not tight: it exists to catch
+# the 2-3x prelude-bloat class (the 32,896-line regression), not to police a handful of
+# lines. If a legitimate prelude change lifts the tiny program's IR, re-measure and raise
+# this WITH a comment — do not quietly bump it (a ceiling that tracks the value it bounds
+# guards nothing).
+CEIL="${IR_SIZE_CEIL:-15000}"
 
 # Base size N for arm B. Sampled at N / 2N / 4N. Growth is deterministic so no floor /
 # min-of-K / heap-pin is needed (unlike the TIME arm of perf_scaling) — one build each.

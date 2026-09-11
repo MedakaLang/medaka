@@ -506,12 +506,20 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-# Re-derived alongside the closure grade above. Measured column-wise against the
-# previous manifest over all 170 shared symbols: not one branch, index, write,
-# make or copy count moved. The comparison column fell to zero in 61 rows and
-# rose in none, and the call total fell in 141 rows and rose in none -- the two
-# columns that count opaque runtime calls, which the emitter now lowers inline.
-[ "$control_grade" = '3921028684 7306' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived when the emitter began loading a constructor discriminant directly
+# for a roster it knows is always boxed, instead of the generic test-tag-bit /
+# shift-or-load / phi sequence. Measured column-wise against the previous
+# manifest over the same 170 symbols, in the same order, with no symbol entering
+# or leaving: the comparison, index, write, make, copy and call-total columns did
+# not move in a single row, in either direction. The branch column fell in 14
+# rows and rose in none. In every one of those 14 the only basic blocks that
+# disappeared are the discimm/discbox/disccont triple -- the two ways of fetching
+# the tag word, joined by a phi, neither of which did any secret work and neither
+# of which was a failure arm. Every conyes/connext pair survives, comparing the
+# same constructor tag against the same compile-time constant, and no function in
+# the closure holds a comparison with a non-constant right operand, before or
+# after.
+[ "$control_grade" = '1930568706 7306' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -624,11 +632,18 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-# Re-derived with the two secret-side grades above, and measured the same way:
-# over the 170 symbols shared with the previous manifest, no branch, index,
-# write, make or copy count moved, and the sole symbol difference is the removed
-# identity mdk_impl_Int_fromInt.
-if [ "$public_closure_grade" != '1809078386 5029' ] || [ "$public_control_grade" != '1052493002 7481' ]; then
+# The closure grade did not move: the public union reaches the same symbols it
+# did before. Only the control grade was re-derived, alongside the secret-side one
+# above and by the same mechanism -- a directly loaded constructor discriminant
+# for an always-boxed roster. Measured column-wise over all 174 rows, identical
+# set and identical order: comparisons, indices, writes, makes, copies and the
+# call total did not move in a single row, in either direction. Branches fell in
+# 16 rows and rose in none -- the 14 shared with the secret-side manifest, plus
+# publicKeyForSecret (2->1) and signDigest (5->4), which are public wrappers
+# outside the secret closure. In every one of the 16 the only basic blocks that
+# disappeared are the discimm/discbox/disccont triple, and no function in the
+# union holds a comparison with a non-constant right operand, before or after.
+if [ "$public_closure_grade" != '1809078386 5029' ] || [ "$public_control_grade" != '794568868 7481' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

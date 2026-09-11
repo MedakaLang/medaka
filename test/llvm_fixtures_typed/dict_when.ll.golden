@@ -181,18 +181,13 @@ entry:
   %t2 = ptrtoint ptr %t0 to i64
   %t3 = call i64 @mdk_when(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 3, i64 %t2)
   %t4 = alloca i64
+  %t6 = icmp eq i64 %t3, 562958543355907
   %t7 = and i64 %t3, 1
-  %t8 = icmp eq i64 %t7, 1
-  br i1 %t8, label %discimm6, label %discbox6
-discimm6:
-  %t9 = ashr i64 %t3, 1
-  br label %disccont6
-discbox6:
-  %t10 = inttoptr i64 %t3 to ptr
+  %t8 = icmp eq i64 %t7, 0
+  %t9 = inttoptr i64 %t3 to ptr
+  %t10 = select i1 %t8, ptr %t9, ptr @mdk_disc_none
   %t11 = load i64, ptr %t10
-  br label %disccont6
-disccont6:
-  %t12 = phi i64 [ %t9, %discimm6 ], [ %t11, %discbox6 ]
+  %t12 = select i1 %t6, i64 281479271677953, i64 %t11
   %t13 = icmp eq i64 %t12, 281479271677952
   br i1 %t13, label %conyes14, label %connext14
 conyes14:
@@ -247,18 +242,13 @@ entry:
 define i64 @mdk_impl_Option_andThen(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
+  %t3 = icmp eq i64 %arg0, 562958543355907
   %t4 = and i64 %arg0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %arg0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %arg0 to ptr
+  %t5 = icmp eq i64 %t4, 0
+  %t6 = inttoptr i64 %arg0 to ptr
+  %t7 = select i1 %t5, ptr %t6, ptr @mdk_disc_none
   %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
+  %t9 = select i1 %t3, i64 281479271677953, i64 %t8
   %t10 = icmp eq i64 %t9, 281479271677953
   br i1 %t10, label %conyes11, label %connext11
 conyes11:
@@ -267,18 +257,13 @@ conyes11:
 connext11:
   br label %clause2
 clause2:
+  %t12 = icmp eq i64 %arg0, 562958543355907
   %t13 = and i64 %arg0, 1
-  %t14 = icmp eq i64 %t13, 1
-  br i1 %t14, label %discimm12, label %discbox12
-discimm12:
-  %t15 = ashr i64 %arg0, 1
-  br label %disccont12
-discbox12:
-  %t16 = inttoptr i64 %arg0 to ptr
+  %t14 = icmp eq i64 %t13, 0
+  %t15 = inttoptr i64 %arg0 to ptr
+  %t16 = select i1 %t14, ptr %t15, ptr @mdk_disc_none
   %t17 = load i64, ptr %t16
-  br label %disccont12
-disccont12:
-  %t18 = phi i64 [ %t15, %discimm12 ], [ %t17, %discbox12 ]
+  %t18 = select i1 %t12, i64 281479271677953, i64 %t17
   %t19 = icmp eq i64 %t18, 281479271677952
   br i1 %t19, label %conyes20, label %connext20
 conyes20:
@@ -320,5 +305,7 @@ decend1:
   ret i64 %t41
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 6952617947198]

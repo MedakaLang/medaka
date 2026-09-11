@@ -344,3 +344,6 @@ entry:
   %t13 = fadd double %t12, %t11
   ret double %t13
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
