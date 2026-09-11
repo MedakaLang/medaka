@@ -1,0 +1,492 @@
+{- | The server side of the WebSocket wire protocol (RFC 6455): the opening
+   handshake's `Sec-WebSocket-Accept` computation, and the frame codec.
+
+   Bytes in, bytes out. Nothing here opens a socket, reads a request or keeps
+   a connection: a caller hands over the bytes it has read so far and gets
+   back either a decoded frame and how many bytes it consumed, a "read more"
+   answer, or a rejection carrying the close status code the connection
+   should die with. Fragmentation reassembly is the same shape — a pure step
+   over one frame at a time, with the partial message as an explicit value.
+
+   Two rules of RFC 6455 §5.1 are DIRECTIONAL and are the reason `Direction`
+   exists: a client-to-server frame MUST be masked, and a server-to-client
+   frame MUST NOT be. Neither is tolerated input — an unmasked client frame
+   is a protocol violation the receiver must fail the connection over, not a
+   frame to read anyway.
+
+   No allocation is ever sized by a length an attacker declared before that
+   length has been checked against both the bytes actually in hand and the
+   caller's own maximum: a 64-bit length field is 8 bytes to write and a
+   terabyte to believe. -}
+
+import array.{blit, get, make, setInPlace}
+import base64.{decode, encode}
+import list.{reverse}
+import string.{toUtf8}
+import lib.sha1.{sha1FixedBytes}
+
+-- ── The opening handshake ────────────────────────────────────────────
+
+-- RFC 6455 §1.3: the fixed GUID concatenated with the client's key before
+-- hashing. It is a protocol constant, not a secret; it exists so that a
+-- cache or a proxy cannot be tricked into completing the handshake.
+handshakeGuid : String
+handshakeGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+-- RFC 6455 §4.1: the client's `Sec-WebSocket-Key` is base64 of a 16-byte
+-- nonce. A key that is not is a malformed request, not a key to hash anyway.
+keyNonceBytes : Int
+keyNonceBytes = 16
+
+{- | The `Sec-WebSocket-Accept` header value answering `key`, or the reason
+   `key` is not a well-formed `Sec-WebSocket-Key`.
+
+   RFC 6455 §4.2.2 step 5.4: base64 of the SHA-1 of the key's own characters
+   concatenated with the protocol GUID — the key is NOT decoded first. -}
+export
+handshakeAccept : String -> Result String String
+handshakeAccept key = match decode key
+  Err e => Err "Sec-WebSocket-Key is not base64: \{e}"
+  Ok nonce =>
+    if arrayLength nonce /= keyNonceBytes then
+      Err
+        "Sec-WebSocket-Key decodes to \{intToString (arrayLength nonce)} bytes, expected \{intToString keyNonceBytes}"
+    else
+      Ok (encode (sha1FixedBytes (toUtf8 "\{key}\{handshakeGuid}")))
+
+-- ── Frames ───────────────────────────────────────────────────────────
+
+{- | A frame's opcode (RFC 6455 §5.2). The three control opcodes are
+   `Close`, `Ping` and `Pong`; the rest carry application data.
+
+   The reserved opcode ranges (0x3-0x7, 0xB-0xF) have no constructor on
+   purpose: a frame carrying one is refused by `decodeFrame`, and a
+   constructor for it would be a value no correct caller could produce. -}
+public export data Opcode =
+  | Continuation
+  | Text
+  | Binary
+  | Close
+  | Ping
+  | Pong
+  deriving (Eq, Debug)
+
+{- | One frame: its FIN bit, its opcode, and its unmasked payload.
+
+   Masking is not a field. It is a property of the direction a frame travels
+   in, fixed by RFC 6455 §5.1 rather than chosen per frame, so it is an
+   argument to the codec and never part of the decoded value — a decoded
+   payload has already been unmasked. -}
+public export data Frame = Frame {
+  fin : Bool,
+  opcode : Opcode,
+  payload : Array Int,
+}
+
+{- | Which way a frame is travelling, which is what decides whether masking
+   is required or forbidden (RFC 6455 §5.1). -}
+public export data Direction = FromClient | FromServer
+
+{- | What a decode attempt found.
+
+   `NeedMore` and `Rejected` are deliberately different answers: the first
+   says the bytes so far are a PREFIX of a frame and the caller should read
+   again, the second says no continuation of these bytes can be a valid
+   frame and the connection must be closed with the carried status code.
+   Collapsing the two would leave a peer that sent a protocol violation
+   waiting for a reply that will never come. -}
+public export data DecodeResult =
+  | Decoded Frame Int
+  | NeedMore
+  | Rejected Int String
+
+-- RFC 6455 §7.4.1 status codes this module produces.
+protocolErrorCode : Int
+protocolErrorCode = 1002
+
+messageTooBigCode : Int
+messageTooBigCode = 1009
+
+-- RFC 6455 §5.5: a control frame's payload is at most 125 bytes and it may
+-- not be fragmented, so a control frame never needs an extended length.
+maxControlPayload : Int
+maxControlPayload = 125
+
+byteAt : Array Int -> Int -> Int
+byteAt arr i = match get i arr
+  Some b => b
+  None => panic "websocket: byte index out of bounds"
+
+opcodeBits : Opcode -> Int
+opcodeBits Continuation = 0x0
+opcodeBits Text = 0x1
+opcodeBits Binary = 0x2
+opcodeBits Close = 0x8
+opcodeBits Ping = 0x9
+opcodeBits Pong = 0xa
+
+opcodeOf : Int -> Option Opcode
+opcodeOf 0 = Some Continuation
+opcodeOf 1 = Some Text
+opcodeOf 2 = Some Binary
+opcodeOf 8 = Some Close
+opcodeOf 9 = Some Ping
+opcodeOf 10 = Some Pong
+opcodeOf _ = None
+
+{- | Is this a control frame (RFC 6455 §5.5)? -}
+export
+isControl : Opcode -> Bool
+isControl Close = True
+isControl Ping = True
+isControl Pong = True
+isControl Continuation = False
+isControl Text = False
+isControl Binary = False
+
+-- ── Decoding ─────────────────────────────────────────────────────────
+
+-- A big-endian unsigned integer of `n` bytes starting at `off`.
+readBigEndian : Array Int -> Int -> Int -> Int -> Int
+readBigEndian bytes off n acc =
+  if n <= 0 then
+    acc
+  else
+    readBigEndian bytes (off + 1) (n - 1) (acc * 256 + byteAt bytes off)
+
+-- The payload, copied out of the read buffer and unmasked in place. Reached
+-- only after the declared length has been checked against both the caller's
+-- maximum and the bytes actually available, so this is the first and only
+-- allocation the declared length sizes.
+copyPayload : Array Int -> Int -> Int -> Option (Array Int) -> Array Int
+copyPayload bytes off len maskKey =
+  let out = make len 0
+  blit bytes off out 0 len
+  match maskKey
+    None => out
+    Some key =>
+      unmask out len key 0
+      out
+
+unmask : Array Int -> Int -> Array Int -> Int -> Unit
+unmask out len key i =
+  if i >= len then
+    ()
+  else
+    setInPlace i (bitXor (byteAt out i) (byteAt key (i % 4))) out
+    unmask out len key (i + 1)
+
+-- RFC 6455 §5.2: "the minimal number of bytes MUST be used to encode the
+-- length". A 64-bit field holding 5 is a distinct encoding of a frame that
+-- has a shorter spelling, and accepting both would let two byte strings
+-- mean one frame.
+minimalLengthOk : Int -> Int -> Bool
+minimalLengthOk lenField payloadLen =
+  if lenField == 126 then payloadLen >= 126 else payloadLen >= 65536
+
+maskRuleViolation : Direction -> Bool -> Option String
+maskRuleViolation FromClient False =
+  Some "client-to-server frame is not masked (RFC 6455 §5.1)"
+maskRuleViolation FromServer True =
+  Some "server-to-client frame is masked (RFC 6455 §5.1)"
+maskRuleViolation _ _ = None
+
+{- | Decodes the frame beginning at `offset` in `bytes`.
+
+   `maxPayload` is the largest payload this caller will allocate for; a
+   frame declaring more is `Rejected` with 1009 before anything is
+   allocated, as is a frame whose declared length exceeds the bytes in hand
+   (that one answers `NeedMore` instead).
+
+   `Decoded frame consumed` reports how many bytes of `bytes` the frame
+   occupied, starting at `offset`, so a caller holding several frames in one
+   read can step through them. -}
+export
+decodeFrame : Direction -> Int -> Array Int -> Int -> DecodeResult
+decodeFrame direction maxPayload bytes offset =
+  let available = arrayLength bytes - offset
+  if available < 2 then
+    NeedMore
+  else
+    let b0 = byteAt bytes offset
+    let b1 = byteAt bytes (offset + 1)
+    let fin = bitAnd b0 0x80 /= 0
+    let rsv = bitAnd b0 0x70
+    let masked = bitAnd b1 0x80 /= 0
+    let lenField = bitAnd b1 0x7f
+    if rsv /= 0 then
+      Rejected
+        protocolErrorCode
+        "RSV bit set with no negotiated extension (RFC 6455 §5.2)"
+    else match opcodeOf (bitAnd b0 0x0f)
+      None =>
+        Rejected
+          protocolErrorCode
+          "reserved opcode \{intToString (bitAnd b0 0x0f)} (RFC 6455 §5.2)"
+      Some opcode => match maskRuleViolation direction masked
+        Some why => Rejected protocolErrorCode why
+        None =>
+          decodeChecked
+            fin
+            opcode
+            masked
+            lenField
+            maxPayload
+            bytes
+            offset
+            available
+
+-- The opcode-and-mask-dependent half, once the first two bytes have been
+-- read and the direction's masking rule has held.
+decodeChecked : Bool ->
+  Opcode ->
+  Bool ->
+  Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  DecodeResult
+decodeChecked fin opcode masked lenField maxPayload bytes offset available =
+  let extLenBytes =
+    if lenField == 127 then 8 else if lenField == 126 then 2 else 0
+  if isControl opcode && lenField > maxControlPayload then
+    Rejected
+      protocolErrorCode
+      "control frame declares a payload over \{intToString maxControlPayload} bytes (RFC 6455 §5.5)"
+  else if isControl opcode && not fin then
+    Rejected protocolErrorCode "control frame is fragmented (RFC 6455 §5.5)"
+  else if available < 2 + extLenBytes then
+    NeedMore
+  else if lenField == 127 && byteAt bytes (offset + 2) >= 0x80 then
+    Rejected
+      protocolErrorCode
+      "64-bit payload length has its most significant bit set (RFC 6455 §5.2)"
+  else
+    let payloadLen =
+      if extLenBytes == 0 then
+        lenField
+      else
+        readBigEndian bytes (offset + 2) extLenBytes 0
+    let headerLen = 2 + extLenBytes + (if masked then 4 else 0)
+    if extLenBytes /= 0 && not (minimalLengthOk lenField payloadLen) then
+      Rejected
+        protocolErrorCode
+        "payload length \{intToString payloadLen} is not minimally encoded (RFC 6455 §5.2)"
+    else if payloadLen > maxPayload then
+      Rejected
+        messageTooBigCode
+        "declared payload of \{intToString payloadLen} bytes exceeds the \{intToString maxPayload}-byte maximum"
+    else if available < headerLen + payloadLen then
+      NeedMore
+    else
+      let maskKey =
+        if masked then
+          Some (copyPayload bytes (offset + headerLen - 4) 4 None)
+        else
+          None
+      let payload = copyPayload bytes (offset + headerLen) payloadLen maskKey
+      Decoded (Frame fin opcode payload) (headerLen + payloadLen)
+
+-- ── Encoding ─────────────────────────────────────────────────────────
+
+writeBigEndian : Array Int -> Int -> Int -> Int -> Unit
+writeBigEndian out off n value =
+  if n <= 0 then
+    ()
+  else
+    setInPlace off (bitAnd (shiftRight value ((n - 1) * 8)) 255) out
+    writeBigEndian out (off + 1) (n - 1) value
+
+maskInto : Array Int -> Int -> Array Int -> Int -> Array Int -> Unit
+maskInto out off src i key =
+  if i >= arrayLength src then
+    ()
+  else
+    setInPlace (off + i) (bitXor (byteAt src i) (byteAt key (i % 4))) out
+    maskInto out off src (i + 1) key
+
+encodeWith : Option (Array Int) -> Frame -> Array Int
+encodeWith maskKey (Frame fin opcode payload) =
+  let payloadLen = arrayLength payload
+  if isControl opcode && payloadLen > maxControlPayload then
+    panic
+      "websocket: a control frame payload is at most \{intToString maxControlPayload} bytes"
+  else if isControl opcode && not fin then
+    panic "websocket: a control frame cannot be fragmented"
+  else
+    let extLenBytes =
+      if payloadLen < 126 then 0 else if payloadLen <= 65535 then 2 else 8
+    let lenField =
+      if extLenBytes == 0 then
+        payloadLen
+      else if extLenBytes == 2 then
+        126
+      else
+        127
+    let maskBytes = match maskKey
+      None => 0
+      Some _ => 4
+    let headerLen = 2 + extLenBytes + maskBytes
+    let out = make (headerLen + payloadLen) 0
+    setInPlace 0 (bitOr (if fin then 0x80 else 0) (opcodeBits opcode)) out
+    setInPlace 1 (bitOr (if maskBytes == 0 then 0 else 0x80) lenField) out
+    writeBigEndian out 2 extLenBytes payloadLen
+    match maskKey
+      None => blit payload 0 out headerLen payloadLen
+      Some key =>
+        if arrayLength key /= 4 then
+          panic "websocket: a masking key is exactly 4 bytes"
+        else
+          blit key 0 out (2 + extLenBytes) 4
+          maskInto out headerLen payload 0 key
+    out
+
+{- | `frame` on the wire as a server sends it: unmasked, per RFC 6455 §5.1.
+
+   Panics on a frame no correct server could send — a control frame with a
+   payload over 125 bytes, or a fragmented control frame. Those are
+   programming errors in the caller, not peer input. -}
+export
+encodeServerFrame : Frame -> Array Int
+encodeServerFrame frame = encodeWith None frame
+
+{- | `frame` on the wire as a client sends it: masked with `maskKey`, which
+   must be exactly 4 bytes.
+
+   A server does not send masked frames. This exists so a test or a client
+   probe can produce the bytes this module's own decoder must accept. -}
+export
+encodeClientFrame : Array Int -> Frame -> Array Int
+encodeClientFrame maskKey frame = encodeWith (Some maskKey) frame
+
+-- ── The close handshake ──────────────────────────────────────────────
+
+{- | Is `code` a status code RFC 6455 §7.4 allows on the wire?
+
+   1005, 1006 and 1015 are reserved for an application to report a close
+   that carried no code at all, so they are exactly the codes that may never
+   appear IN one. -}
+export
+closeCodeOnWire : Int -> Bool
+closeCodeOnWire code =
+  if code >= 3000 && code <= 4999 then
+    True
+  else
+    code >= 1000 && code <= 1014 && code /= 1004 && code /= 1005 && code /= 1006
+
+{- | A Close frame carrying `code` and `reason` (RFC 6455 §5.5.1): the
+   status code as two big-endian bytes, then the reason's UTF-8. -}
+export
+closeFrame : Int -> String -> Frame
+closeFrame code reason =
+  let reasonBytes = toUtf8 reason
+  let out = make (2 + arrayLength reasonBytes) 0
+  writeBigEndian out 0 2 code
+  blit reasonBytes 0 out 2 (arrayLength reasonBytes)
+  Frame True Close out
+
+{- | The status code and reason bytes a Close frame's payload carries, or
+   `None` for the empty payload RFC 6455 §5.5.1 permits, or the reason the
+   payload is malformed.
+
+   A one-byte payload is a violation, not a code: there is no second byte to
+   read, and reading the one byte as a code would invent a status the peer
+   never sent. -}
+export
+parseClosePayload : Array Int -> Result String (Option (Int, Array Int))
+parseClosePayload payload =
+  let len = arrayLength payload
+  if len == 0 then
+    Ok None
+  else if len == 1 then
+    Err "close payload is 1 byte; a status code is 2 (RFC 6455 §5.5.1)"
+  else
+    let code = readBigEndian payload 0 2 0
+    if not (closeCodeOnWire code) then
+      Err
+        "close status code \{intToString code} may not appear on the wire (RFC 6455 §7.4)"
+    else
+      Ok (Some (code, copyPayload payload 2 (len - 2) None))
+
+-- ── Fragmentation ────────────────────────────────────────────────────
+
+{- | A data message being reassembled across continuation frames: the
+   opcode the first fragment declared, and the fragments seen so far in
+   reverse order.
+
+   The constructor is not exported because a caller never builds one — it
+   starts from `None` and threads whatever `assembleFrame` hands back. -}
+export data Assembly = Assembly Opcode (List (Array Int))
+
+{- | What one frame meant to a stream reassembler. -}
+public export data AssembleEvent =
+  | EventPartial
+  | EventMessage Opcode (Array Int)
+  | EventControl Frame
+  | EventRejected Int String
+
+concatChunks : List (Array Int) -> Array Int
+concatChunks chunks =
+  let total = sum (map arrayLength chunks)
+  let out = make total 0
+  blitChunks out 0 chunks
+  out
+
+blitChunks : Array Int -> Int -> List (Array Int) -> Unit
+blitChunks _ _ [] = ()
+blitChunks out off (chunk :: rest) =
+  blit chunk 0 out off (arrayLength chunk)
+  blitChunks out (off + arrayLength chunk) rest
+
+{- | Folds one decoded frame into a reassembly state (RFC 6455 §5.4).
+
+   Returns the state to carry to the next frame and what this frame meant.
+   A control frame may be interleaved inside a fragmented message and does
+   not disturb it, which is why the state travels through unchanged rather
+   than being reset.
+
+   Two orderings are protocol violations rather than recoverable states: a
+   Text or Binary frame arriving while a fragmented message is still open,
+   and a Continuation frame arriving while none is. -}
+export
+assembleFrame : Option Assembly -> Frame -> (Option Assembly, AssembleEvent)
+assembleFrame pending (Frame fin opcode payload) =
+  if isControl opcode then
+    (pending, EventControl (Frame fin opcode payload))
+  else match (pending, opcode)
+    (Some _, Continuation) => continueMessage pending fin payload
+    (Some _, _) => (
+      None,
+      EventRejected
+        protocolErrorCode
+        "a new data frame arrived while a fragmented message was open (RFC 6455 §5.4)",
+    )
+    (None, Continuation) => (
+      None,
+      EventRejected
+        protocolErrorCode
+        "continuation frame with no fragmented message open (RFC 6455 §5.4)",
+    )
+    (None, _) =>
+      if fin then
+        (None, EventMessage opcode payload)
+      else
+        (Some (Assembly opcode [payload]), EventPartial)
+
+continueMessage : Option Assembly ->
+  Bool ->
+  Array Int ->
+  (Option Assembly, AssembleEvent)
+continueMessage None _ _ = (
+  None,
+  EventRejected
+    protocolErrorCode
+    "continuation frame with no fragmented message open (RFC 6455 §5.4)",
+)
+continueMessage (Some (Assembly opcode chunks)) fin payload =
+  let grown = payload :: chunks
+  if fin then
+    (None, EventMessage opcode (concatChunks (reverse grown)))
+  else
+    (Some (Assembly opcode grown), EventPartial)

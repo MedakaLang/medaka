@@ -718,3 +718,27 @@ source-url:    https://registry.npmjs.org/@atproto/lex-data/-/lex-data-0.1.7.tgz
 extraction:    pds/tools/gen_blob_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/lex-data@0.1.7 and @atproto/lex-json@0.1.6, and runs gen_blob_corpus.mjs. The generator content-addresses three representative payloads (empty, a short text blob, and an image-shaped-MIME payload — none of them real image bytes, since this corpus exercises content addressing and the blob ref shape, not image format sniffing) with @atproto/lex-data's raw-codec cidForRawBytes, assembles the official TypedBlobRef shape ($type/ref/mimeType/size), and renders it with @atproto/lex-json's lexStringify. Each row self-verifies that lex-data's own isTypedBlobRef accepts the round-tripped JSON before it is emitted.
 retrieved:     2026-09-04
 consumer:      S-blob-core (#2605 model half, blob CID and blob ref shape)
+
+[vector]
+file:          pds/test/vectors/rfc3174_sha1.txt
+local-sha256:  f568ea6c72d0a8402530a302e34c11e448e6a221b29d355c6956eedb9a232ef5
+kind:          published-artifact
+source:        RFC 3174, "US Secure Hash Algorithm 1 (SHA1)", §7.3 "Test Driver" — testarray / repeatcount / resultarray
+source-url:    https://www.rfc-editor.org/rfc/rfc3174.txt
+source-sha256: aa0ca4ef21609e64897980488c5555109266c29cd814fe97680c916566d29332
+extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc3174.txt | sed -n '/^7.3/,/^8/p' — the four message/repeat/digest triples transcribed from the test driver's own literals into the record form of this file; the digest literals in pds/test/websocket_test.mdk were read back against it
+retrieved:     2026-09-11
+consumer:      S-ws-transport (#2608 subscribeRepos inbound surface, SHA-1 half)
+notes:         SHA-1 is used here only for RFC 6455 §4.2.2's handshake constant, never for content addressing or signing
+
+[vector]
+file:          pds/test/vectors/rfc6455_handshake_frames.txt
+local-sha256:  1cc9c877e7159ba965a8cd8746ed507d501813e9752d6c5940fe4a89aa57d039
+kind:          published-artifact
+source:        RFC 6455, "The WebSocket Protocol", §1.3 opening-handshake example and §5.7 "Examples" frame byte strings
+source-url:    https://www.rfc-editor.org/rfc/rfc6455.txt
+source-sha256: 765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b
+extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc6455.txt | sed -n '/^5.7.  Examples/,/^5.8/p' for the frame examples, plus the Sec-WebSocket-Key / Sec-WebSocket-Accept pair from §1.3; both copied byte-verbatim into the record form of this file, and the literals in pds/test/websocket_test.mdk were read back against it
+retrieved:     2026-09-11
+consumer:      S-ws-transport (#2608 subscribeRepos inbound surface, frame codec half)
+notes:         §5.7's two extended-length examples state only the frame header; the RFC leaves their payload bytes unspecified, so the consumer grades the header and supplies its own payload
