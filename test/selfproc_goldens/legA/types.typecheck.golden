@@ -655,6 +655,8 @@ dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
 dedupVecObls : List VecObl -> List VecObl
 defaultAmbiguousNum : List UObligation -> Mono -> Unit
 defaultBodyLocalNum : List UObligation -> Mono -> Unit
+defaultClosedBodyNum : Int -> Int -> Int -> Unit
+defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
 defaultEachMember : List UObligation -> List (String, Mono) -> Unit
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNum : List UObligation -> List Mono -> Unit

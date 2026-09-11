@@ -1,5 +1,5 @@
 # META
-source_lines=44449
+source_lines=44489
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -29523,7 +29523,13 @@ inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferPropBodiesGo _ [] = ()
 inferPropBodiesGo env ((DProp _ _ params body) :: rest) =
   let local = extendPropParams env params
+  let _ = enterLevel ()
+  let oblMark = wMark perRun.value.implObls
+  let callMark = wMark perRun.value.obls
+  let dictMark = goalsMark ()
   let _ = infer local body
+  let _ = exitLevel ()
+  let _ = defaultClosedBodyNum oblMark callMark dictMark
   inferPropBodiesGo env rest
 inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 
@@ -29536,6 +29542,10 @@ inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferTestBodies _ [] = ()
 inferTestBodies env ((DTest _ _ body) :: rest) =
+  let _ = enterLevel ()
+  let oblMark = wMark perRun.value.implObls
+  let callMark = wMark perRun.value.obls
+  let dictMark = goalsMark ()
   -- #1110: `Expectation` is declared by `stdlib/test.mdk`, a USER-SPACE module —
   -- the checker fabricates this head from a literal and has no decl in view, so
   -- there is no identity to acquire.  `tconUnresolved`, not `tconBuiltin`: the
@@ -29543,8 +29553,38 @@ inferTestBodies env ((DTest _ _ body) :: rest) =
   -- program-global identity for a type some module declares would be a lie the
   -- shared carrier type cannot object to.
   let _ = unify (infer env body) (tconUnresolved "Expectation")
+  let _ = exitLevel ()
+  let _ = defaultClosedBodyNum oblMark callMark dictMark
   inferTestBodies env rest
 inferTestBodies env (_ :: rest) = inferTestBodies env rest
+
+-- Test/property bodies publish no polymorphic result. Their own numeric variables
+-- have no later determination channel, so D1 defaults them before the module's
+-- obligation checks. D4 excludes outer variables and deeper generalized locals;
+-- property parameters are allocated before the body enters its level.
+defaultClosedBodyNum : Int -> Int -> Int -> Unit
+defaultClosedBodyNum oblMark callMark dictMark =
+  let obls =
+    wWindow perRun.value.implObls oblMark
+      ++ wWindow perRun.value.obls callMark
+      ++ numDictObls (dictAppsSince dictMark)
+  defaultClosedBodyNumGo
+    (perRun.value.currentLevel.value + 1)
+    (builtinIfaceRef BNum)
+    obls
+
+defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
+defaultClosedBodyNumGo _ _ [] = ()
+defaultClosedBodyNumGo level num (o :: rest) =
+  let _ =
+    if sameIfaceDecl num o.pred.iface then match uOblArgs o
+      [m] => match normalize m
+        TVar r => match r.value
+          Unbound _ owner => if owner == level then unify m (tconBuiltin "Int")
+          _ => ()
+        _ => ()
+      _ => ()
+  defaultClosedBodyNumGo level num rest
 
 -- bind each prop param `x : ty` as a monomorphic scheme in the env (fresh tyvars
 -- for any free type variable in ty; props are normally concrete, e.g. `List Int`).
@@ -48986,12 +49026,17 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferPropBodies" ((PVar "env") (PVar "prog")) (EBlock (DoLet false false (PVar "mark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "dropGoalsSince") (EVar "mark")) (EListLit (EVar "GKBinopSite") (EVar "GKUnopSite") (EVar "GKArithSite"))))))
 (DTypeSig false "inferPropBodiesGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferPropBodiesGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "inferPropBodiesGo" ((PVar "env") (PCons (PCon "DProp" PWild PWild (PVar "params") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "local") (EApp (EApp (EVar "extendPropParams") (EVar "env")) (EVar "params"))) (DoLet false false PWild (EApp (EApp (EVar "infer") (EVar "local")) (EVar "body"))) (DoExpr (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "rest")))))
+(DFunDef false "inferPropBodiesGo" ((PVar "env") (PCons (PCon "DProp" PWild PWild (PVar "params") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "local") (EApp (EApp (EVar "extendPropParams") (EVar "env")) (EVar "params"))) (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictMark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "infer") (EVar "local")) (EVar "body"))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultClosedBodyNum") (EVar "oblMark")) (EVar "callMark")) (EVar "dictMark"))) (DoExpr (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferPropBodiesGo" ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "rest")))
 (DTypeSig false "inferTestBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferTestBodies" (PWild (PList)) (ELit LUnit))
-(DFunDef false "inferTestBodies" ((PVar "env") (PCons (PCon "DTest" PWild PWild (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "body"))) (EApp (EVar "tconUnresolved") (ELit (LString "Expectation"))))) (DoExpr (EApp (EApp (EVar "inferTestBodies") (EVar "env")) (EVar "rest")))))
+(DFunDef false "inferTestBodies" ((PVar "env") (PCons (PCon "DTest" PWild PWild (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictMark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "body"))) (EApp (EVar "tconUnresolved") (ELit (LString "Expectation"))))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultClosedBodyNum") (EVar "oblMark")) (EVar "callMark")) (EVar "dictMark"))) (DoExpr (EApp (EApp (EVar "inferTestBodies") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferTestBodies" ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "inferTestBodies") (EVar "env")) (EVar "rest")))
+(DTypeSig false "defaultClosedBodyNum" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
+(DFunDef false "defaultClosedBodyNum" ((PVar "oblMark") (PVar "callMark") (PVar "dictMark")) (EBlock (DoLet false false (PVar "obls") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblMark")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls")) (EVar "callMark"))) (EApp (EVar "numDictObls") (EApp (EVar "dictAppsSince") (EVar "dictMark"))))) (DoExpr (EApp (EApp (EApp (EVar "defaultClosedBodyNumGo") (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value") (ELit (LInt 1)))) (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EVar "obls")))))
+(DTypeSig false "defaultClosedBodyNumGo" (TyFun (TyCon "Int") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
+(DFunDef false "defaultClosedBodyNumGo" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "defaultClosedBodyNumGo" ((PVar "level") (PVar "num") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "sameIfaceDecl") (EVar "num")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EMatch (EApp (EVar "uOblArgs") (EVar "o")) (arm (PList (PVar "m")) () (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "r")) () (EMatch (EFieldAccess (EVar "r") "value") (arm (PCon "Unbound" PWild (PVar "owner")) () (EIf (EBinOp "==" (EVar "owner") (EVar "level")) (EApp (EApp (EVar "unify") (EVar "m")) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (ELit LUnit))) (arm PWild () (ELit LUnit)))) (arm PWild () (ELit LUnit)))) (arm PWild () (ELit LUnit))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "defaultClosedBodyNumGo") (EVar "level")) (EVar "num")) (EVar "rest")))))
 (DTypeSig false "extendPropParams" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "TcEnv"))))
 (DFunDef false "extendPropParams" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendPropParams" ((PVar "env") (PCons (PCon "PropParam" (PVar "x") PWild (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false (PVar "scheme") (EApp (EVar "monoScheme") (EApp (EApp (EVar "fromAstType") (EApp (EVar "freshTvMap") (EApp (EVar "dedup") (EApp (EVar "tyVarNames") (EVar "ty"))))) (EVar "ty")))) (DoExpr (EApp (EApp (EVar "extendPropParams") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EVar "scheme"))) (EVar "rest")))))
@@ -55585,12 +55630,17 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferPropBodies" ((PVar "env") (PVar "prog")) (EBlock (DoLet false false (PVar "mark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "dropGoalsSince") (EVar "mark")) (EListLit (EVar "GKBinopSite") (EVar "GKUnopSite") (EVar "GKArithSite"))))))
 (DTypeSig false "inferPropBodiesGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferPropBodiesGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "inferPropBodiesGo" ((PVar "env") (PCons (PCon "DProp" PWild PWild (PVar "params") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "local") (EApp (EApp (EVar "extendPropParams") (EVar "env")) (EVar "params"))) (DoLet false false PWild (EApp (EApp (EVar "infer") (EVar "local")) (EVar "body"))) (DoExpr (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "rest")))))
+(DFunDef false "inferPropBodiesGo" ((PVar "env") (PCons (PCon "DProp" PWild PWild (PVar "params") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "local") (EApp (EApp (EVar "extendPropParams") (EVar "env")) (EVar "params"))) (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictMark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "infer") (EVar "local")) (EVar "body"))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultClosedBodyNum") (EVar "oblMark")) (EVar "callMark")) (EVar "dictMark"))) (DoExpr (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferPropBodiesGo" ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "rest")))
 (DTypeSig false "inferTestBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferTestBodies" (PWild (PList)) (ELit LUnit))
-(DFunDef false "inferTestBodies" ((PVar "env") (PCons (PCon "DTest" PWild PWild (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "body"))) (EApp (EVar "tconUnresolved") (ELit (LString "Expectation"))))) (DoExpr (EApp (EApp (EVar "inferTestBodies") (EVar "env")) (EVar "rest")))))
+(DFunDef false "inferTestBodies" ((PVar "env") (PCons (PCon "DTest" PWild PWild (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callMark") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictMark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "body"))) (EApp (EVar "tconUnresolved") (ELit (LString "Expectation"))))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultClosedBodyNum") (EVar "oblMark")) (EVar "callMark")) (EVar "dictMark"))) (DoExpr (EApp (EApp (EVar "inferTestBodies") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferTestBodies" ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "inferTestBodies") (EVar "env")) (EVar "rest")))
+(DTypeSig false "defaultClosedBodyNum" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
+(DFunDef false "defaultClosedBodyNum" ((PVar "oblMark") (PVar "callMark") (PVar "dictMark")) (EBlock (DoLet false false (PVar "obls") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblMark")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls")) (EVar "callMark"))) (EApp (EVar "numDictObls") (EApp (EVar "dictAppsSince") (EVar "dictMark"))))) (DoExpr (EApp (EApp (EApp (EVar "defaultClosedBodyNumGo") (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value") (ELit (LInt 1)))) (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EVar "obls")))))
+(DTypeSig false "defaultClosedBodyNumGo" (TyFun (TyCon "Int") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
+(DFunDef false "defaultClosedBodyNumGo" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "defaultClosedBodyNumGo" ((PVar "level") (PVar "num") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "sameIfaceDecl") (EVar "num")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EMatch (EApp (EVar "uOblArgs") (EVar "o")) (arm (PList (PVar "m")) () (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "r")) () (EMatch (EFieldAccess (EVar "r") "value") (arm (PCon "Unbound" PWild (PVar "owner")) () (EIf (EBinOp "==" (EVar "owner") (EVar "level")) (EApp (EApp (EVar "unify") (EVar "m")) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (ELit LUnit))) (arm PWild () (ELit LUnit)))) (arm PWild () (ELit LUnit)))) (arm PWild () (ELit LUnit))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "defaultClosedBodyNumGo") (EVar "level")) (EVar "num")) (EVar "rest")))))
 (DTypeSig false "extendPropParams" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "TcEnv"))))
 (DFunDef false "extendPropParams" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendPropParams" ((PVar "env") (PCons (PCon "PropParam" (PVar "x") PWild (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false (PVar "scheme") (EApp (EVar "monoScheme") (EApp (EApp (EVar "fromAstType") (EApp (EVar "freshTvMap") (EApp (EVar "dedup") (EApp (EVar "tyVarNames") (EVar "ty"))))) (EVar "ty")))) (DoExpr (EApp (EApp (EVar "extendPropParams") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EVar "scheme"))) (EVar "rest")))))

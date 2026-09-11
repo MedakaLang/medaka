@@ -29519,7 +29519,13 @@ inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferPropBodiesGo _ [] = ()
 inferPropBodiesGo env ((DProp _ _ params body) :: rest) =
   let local = extendPropParams env params
+  let _ = enterLevel ()
+  let oblMark = wMark perRun.value.implObls
+  let callMark = wMark perRun.value.obls
+  let dictMark = goalsMark ()
   let _ = infer local body
+  let _ = exitLevel ()
+  let _ = defaultClosedBodyNum oblMark callMark dictMark
   inferPropBodiesGo env rest
 inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 
@@ -29532,6 +29538,10 @@ inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferTestBodies _ [] = ()
 inferTestBodies env ((DTest _ _ body) :: rest) =
+  let _ = enterLevel ()
+  let oblMark = wMark perRun.value.implObls
+  let callMark = wMark perRun.value.obls
+  let dictMark = goalsMark ()
   -- #1110: `Expectation` is declared by `stdlib/test.mdk`, a USER-SPACE module —
   -- the checker fabricates this head from a literal and has no decl in view, so
   -- there is no identity to acquire.  `tconUnresolved`, not `tconBuiltin`: the
@@ -29539,8 +29549,38 @@ inferTestBodies env ((DTest _ _ body) :: rest) =
   -- program-global identity for a type some module declares would be a lie the
   -- shared carrier type cannot object to.
   let _ = unify (infer env body) (tconUnresolved "Expectation")
+  let _ = exitLevel ()
+  let _ = defaultClosedBodyNum oblMark callMark dictMark
   inferTestBodies env rest
 inferTestBodies env (_ :: rest) = inferTestBodies env rest
+
+-- Test/property bodies publish no polymorphic result. Their own numeric variables
+-- have no later determination channel, so D1 defaults them before the module's
+-- obligation checks. D4 excludes outer variables and deeper generalized locals;
+-- property parameters are allocated before the body enters its level.
+defaultClosedBodyNum : Int -> Int -> Int -> Unit
+defaultClosedBodyNum oblMark callMark dictMark =
+  let obls =
+    wWindow perRun.value.implObls oblMark
+      ++ wWindow perRun.value.obls callMark
+      ++ numDictObls (dictAppsSince dictMark)
+  defaultClosedBodyNumGo
+    (perRun.value.currentLevel.value + 1)
+    (builtinIfaceRef BNum)
+    obls
+
+defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
+defaultClosedBodyNumGo _ _ [] = ()
+defaultClosedBodyNumGo level num (o :: rest) =
+  let _ =
+    if sameIfaceDecl num o.pred.iface then match uOblArgs o
+      [m] => match normalize m
+        TVar r => match r.value
+          Unbound _ owner => if owner == level then unify m (tconBuiltin "Int")
+          _ => ()
+        _ => ()
+      _ => ()
+  defaultClosedBodyNumGo level num rest
 
 -- bind each prop param `x : ty` as a monomorphic scheme in the env (fresh tyvars
 -- for any free type variable in ty; props are normally concrete, e.g. `List Int`).

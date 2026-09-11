@@ -1,0 +1,13 @@
+-- D2: defaulting substitutes Int; the independent Need Int predicate still fails.
+import test.{expectEqual}
+
+interface Need a where
+  need : a -> Bool
+
+needs : Need a => a -> Bool
+needs x = need x
+
+test "defaulting does not discharge another predicate" =
+  expectEqual True (needs 1)
+
+main = println 0

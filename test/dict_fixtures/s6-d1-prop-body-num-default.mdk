@@ -1,0 +1,14 @@
+-- D1/D4: the property's caller chooses Float; only the body's separate literal
+-- defaults. The local generalized function must also remain usable at Float.
+chooseNum : Num a => a -> a
+chooseNum x = x
+
+prop "closed property body defaults Num" (x : Float) = 1 == 1
+
+prop "property parameter remains Float" (x : Float) = x + 1.0 == x + 1
+
+prop "inner generalized Num remains caller selected" (x : Float) =
+  let choose = y => chooseNum y
+  choose x == x
+
+main = println 0

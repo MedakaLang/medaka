@@ -514,6 +514,9 @@ trap 'rm -rf "$TMP"' EXIT
 #     (the #1155 closedness pair); without it that pair is inert.
 TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
+s6-d1-test-body-num-default/main.mdk|§6.3 D1/D4: closed test-body Num defaults before Eq/Debug checking; explicit Float and generalized local variables retain their determination channels|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|0|!T-AMBIGUOUS-INSTANCE
+s6-d1-prop-body-num-default.mdk|§6.3 D1/D4: property-body Num defaults, while a Float parameter and generalized local function remain caller selected|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|0|!T-AMBIGUOUS-INSTANCE
+s6-d2-test-body-num-unsatisfied.mdk|§6.3 D2: substituting Int leaves Need Int unsatisfied and must reject before execution|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|
 s3-nary-requires-goal-vector.mdk|§1/§3 `match(IE,C τ̄)` is ONE φ against the WHOLE vector: a nested `requires Ix a Char` at `Sh (Box Int)` has the SINGLETON matching set {`Ix Int Char`}, so `Ix Int Bool` never reaches the selector at all (#1154 regression pin -- the arg-0-only fallback made both match, they were incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it too. ⚠️ SINGLE-entry `requires`, the arity at which route order and dict-slot order cannot disagree -- the multi-entry row below raises it. ⚠️ Pins the `requires` leg ONLY; the `=>`-constrained-signature leg of the same defect is #1161, whose ROUTING half F-3a-ii fixed and whose row is s3-nary-sig-constraint-goal-vector below|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|222|
 s3-nary-requires-multi-entry.mdk|§1/§3 the same judgement at a TWO-ENTRY `requires Dbg2 a, Ix a Char`: the second obligation grounds to `Ix Int Char` and its matching set is again the singleton, so 222+5=227 (pre-fix this printed 116). ⚠️ THE MULTI-PARAMETER PREDICATE IS LAST HERE, WHICH IS WHY THIS ROW WAS GREEN WHILE ITS SIBLING WAS NOT -- an impl-`requires` body read whichever slot was registered LAST, so the last entry came out right by accident. Keep the clause as written; the OTHER ordering is now graded beside it|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|227|
@@ -1591,6 +1594,18 @@ printf '%s\n' "$SPANS" | while IFS='|' read -r entry label want; do
     echo "FAIL" >>"$TMP/v6"
   fi
 done
+
+# The entry above checks test bodies but does not execute them. Native execution
+# also observes literal representation and the generalized local's Float use.
+if bound "$MEDAKA" test --native "$FIXDIR/s6-d1-test-body-num-default/cases.mdk" >"$TMP/body-tests.out" 2>&1 &&
+   grep -q '3/3 passed$' "$TMP/body-tests.out"; then
+  echo 'ok   native closed test-body defaulting and Float controls'
+  echo PASS >>"$TMP/v1"
+else
+  echo 'FAIL native closed test-body defaulting and Float controls'
+  cat "$TMP/body-tests.out"
+  echo FAIL >>"$TMP/v1"
+fi
 
 # ── Tally ────────────────────────────────────────────────────────────────────
 # The `printf | while read` loops above run in a SUBSHELL under dash/ash (POSIX
