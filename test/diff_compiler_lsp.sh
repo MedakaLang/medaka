@@ -1,4 +1,5 @@
 #!/bin/sh
+# shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # test/diff_compiler_lsp.sh — differential gate for the self-hosted LSP
 # (Stage 4 Phase B.10, slices B.10.0 + B.10.1).
 #
