@@ -18,6 +18,38 @@ made so a future reader does not relitigate them.
 
 ---
 
+## Current extracted boundaries
+
+The module boundaries below reflect the scoped-contract and ownership changes;
+the inventories in the numbered sections retain their dated derivation. The
+[destination contracts](TYPECHECK-CONTRACTS.md) define the target. Implementation
+plans and remaining work belong to [#2549](https://github.com/MedakaLang/medaka/issues/2549)
+and [#2586](https://github.com/MedakaLang/medaka/issues/2586).
+
+| Module | Responsibility |
+|---|---|
+| [repr.mdk](types/repr.mdk) | Type representation, normalization, row algebra and rendering; reads no typechecker state. |
+| [evidence.mdk](types/evidence.mdk) | Nominal scope, binder, goal and request-instance identities, plus request-owned evidence data. |
+| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. These contracts do not yet replace production solving. |
+| [scopes.mdk](types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
+| [typecheck.mdk](types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
+
+GraphRun owns the scope store; PerRun owns the current lexical cursor. A graph
+copy detaches the frame array and counter. Raw scope IDs are meaningful only with
+their store. A given is visible in its owning scope and descendants; generated
+dictionary names and owner labels are not identity keys.
+
+Generic default owners retain the full interface origin and method name. The
+optional provenance trace distinguishes argument and return sites whose routes
+were and remain RNone inside such an owner. It is an observation of the existing
+compatibility path, not semantic evidence, and is excluded from memo replay.
+
+Numeric defaulting in closed test/property bodies uses body-owned variables and
+preserves enclosing or caller-determined variables. Whole-graph defaulting and
+finalized scheme queries remain tracked by
+[#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
+[performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
+
 ## 0. How this was derived, and how to re-derive it
 
 Three mechanical passes over the source, then verification by reading:
@@ -468,8 +500,7 @@ one allocation. Flat retains its second row construction for `methodNames` and
 the first-write slot registry; Module constructs visible rows from `implDecls`
 for admitted lookup and Num seeding. Those rows remain setup-local. The numeric
 scheme and optional legacy declaration parameters share `LegacyNumLiteralAnchor`;
-this is preparation for qualified schemes, not a shared solving judgment. See
-[TYPECHECK-METHOD-ROWS.md](TYPECHECK-METHOD-ROWS.md).
+this is preparation for qualified schemes, not a shared solving judgment.
 
 This sequence runs ONCE per module on the Module arm: marking happens inside it, per
 binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's

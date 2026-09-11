@@ -576,7 +576,6 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:9334 | Ref (List | `dataParamRowAtomsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9335 | Ref (List | `aliasTableRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9336 | Ref (List | `shadowStandaloneSchemesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9337 | Ref (List | `ifaceMethodSchemesByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9340 | Ref (List | `definerShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9341 | Ref (List | `definerShadowSigsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9348 | Ref (List | `poisonedVars` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
