@@ -14,6 +14,7 @@
 
 import test.{expectTrue}
 import tools.prop_runner.{seedPropRng, randBoolL}
+import list.{nub}
 
 drawBools : Int -> List Bool
 drawBools 0 = []
@@ -37,3 +38,24 @@ test "a run of Bool draws hits both values and is not a fixed alternation" =
   let _ = seedPropRng 123456789
   let draws = drawBools 100
   expectTrue (hasTrue draws && hasFalse draws && not (strictlyAlternates draws))
+
+-- Bit-window periodicity regression (#2344 slice 1 residual): a shift/
+-- truncate fix (`s / 256`) still leaves every contiguous bit-window of the
+-- LCG state with a short period at its own low end, so an 8-tuple of
+-- consecutive draws only ever reaches a small fraction of the 256 possible
+-- assignments no matter how many are drawn. Encode each run of 8 draws as
+-- an 8-bit Int and count distinct values directly, rather than relying on a
+-- `prop`'s shrinking to expose it.
+boolsToBits : List Bool -> Int
+boolsToBits [] = 0
+boolsToBits (True :: rest) = 2 * boolsToBits rest + 1
+boolsToBits (False :: rest) = 2 * boolsToBits rest
+
+drawTuples : Int -> List Int
+drawTuples 0 = []
+drawTuples n = boolsToBits (drawBools 8) :: drawTuples (n - 1)
+
+test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
+  let _ = seedPropRng 123456789
+  let tuples = drawTuples 625  -- 625 * 8 = 5000 raw draws
+  expectTrue (length (nub tuples) >= 200)

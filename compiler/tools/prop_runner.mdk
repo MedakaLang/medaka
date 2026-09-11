@@ -72,17 +72,27 @@ seedPropRng : Int -> Unit
 seedPropRng n = propRngStateRef := n
 
 rngNextLocal : Unit -> Int
--- Odd multiplier and odd increment make the low bit of consecutive `s` values
--- strictly alternate (Knuth: an LCG's low k bits have period <= 2^(k+1)), so
--- callers extracting a small modulus straight from `s` would see a fixed
--- pattern instead of a sample.  Discard the low 8 bits (period <= 512, well
--- past the ~100 draws a property actually runs) and read from higher up the
--- 31-bit state instead; state advancement is unchanged, so `--seed`
--- reproducibility is unaffected.
+-- Odd multiplier and odd increment make bit `i` of consecutive `s` values
+-- have period <= 2^(i+1) (Knuth), so ANY contiguous bit-window read straight
+-- off `s` — including a shifted/truncated one — inherits a short period at
+-- its own low end. A caller drawing many values (an 8-parameter prop can
+-- draw hundreds) can exhaust a short-period window's whole range and still
+-- silently miss most of the assignment space.
+--
+-- Run the raw state through a Murmur3-style `fmix32` finalizer instead: two
+-- multiply/xor-shift rounds so every output bit depends nonlinearly on many
+-- state bits (full avalanche), leaving no short-period window for a caller
+-- to extract. Each multiply is masked to 32 bits (`bitAnd … 4294967295`)
+-- since Int is wider than 32 bits and wraps. State advancement is
+-- unchanged, so `--seed` reproducibility is unaffected.
 rngNextLocal _ =
   let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
   propRngStateRef := s
-  s / 256
+  let h1 = bitXor s (shiftRight s 16)
+  let h2 = bitAnd (h1 * 2246822507) 4294967295
+  let h3 = bitXor h2 (shiftRight h2 13)
+  let h4 = bitAnd (h3 * 3266489909) 4294967295
+  bitXor h4 (shiftRight h4 16)
 
 randIntRange : Int -> Int -> Int
 randIntRange lo hi =
