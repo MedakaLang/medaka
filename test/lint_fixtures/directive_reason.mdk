@@ -1,0 +1,29 @@
+-- Fixture for rule-directive-reason (#2862): a `-- lint-disable-*` directive
+-- must carry a comment stating the constraint that forced it -- an issue
+-- number alone is not a reason, and neither is nothing at all. Each case is
+-- separated from its own doc comment by a blank line, so the doc comment
+-- itself never counts as the case's reason.
+
+-- FIRES: bare directive, nothing precedes it even across the declaration gap.
+
+export bareTarget : Int
+-- lint-disable-next-line rule-missing-signature
+bareTarget = 1
+
+-- FIRES: an issue number alone is not a reason.
+
+-- see #1234
+export issueOnlyTarget : Int
+-- lint-disable-next-line rule-missing-signature
+issueOnlyTarget = 2
+
+-- silent: a real stated constraint, reached across the same declaration gap.
+
+-- Mirrors a fixture elsewhere in this corpus; consolidating would remove this
+-- file's own regression coverage for the rule.
+export reasonedTarget : Int
+-- lint-disable-next-line rule-missing-signature
+reasonedTarget = 3
+
+export useAll : Int
+useAll = bareTarget + issueOnlyTarget + reasonedTarget

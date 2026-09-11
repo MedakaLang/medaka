@@ -105,6 +105,9 @@ corpus = [
   "t.x * (t.y + 2) <= 100 OR t.z IS NOT NULL",
 ]
 
+-- The probe's own PASS/FAIL report line, not a `Result` the caller unwraps --
+-- `RtFail` already carries its own rendered message, so an `E`/`A` split buys
+-- this probe nothing.
 -- lint-disable-next-line rule-clone-type
 data RT = RtOk | RtFail String
 

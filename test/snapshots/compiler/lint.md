@@ -1,5 +1,5 @@
 # META
-source_lines=6253
+source_lines=6405
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -101,7 +101,7 @@ import hash_map.{
   findWithDefault,
 }
 import list.{take, drop}
-import string.{drop as strDrop}
+import string.{drop as strDrop, isAlpha}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
@@ -241,6 +241,9 @@ ruleNameCloneType = "rule-clone-type"
 
 ruleNameClauseMap : String
 ruleNameClauseMap = "rule-clause-map"
+
+ruleNameDirectiveReason : String
+ruleNameDirectiveReason = "rule-directive-reason"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -521,6 +524,17 @@ clauseMapRule = Rule {
   fix = None,
 }
 
+directiveReasonRule : Rule
+directiveReasonRule = Rule {
+  name = ruleNameDirectiveReason,
+  descr =
+    "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDirectiveReason,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -550,6 +564,7 @@ allRules = [
   cloneTypeRule,
   clauseMapRule,
   duplicateBodySameFileRule,
+  directiveReasonRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -6255,6 +6270,143 @@ duplicateBodySameFileRule = Rule {
   check = ruleDuplicateBodySameFile,
   fix = None,
 }
+
+-- ── rule: directive-reason (#2862) ────────────────────────────────────────────
+-- A `-- lint-disable-*` directive with no comment stating the constraint that
+-- forced it is itself a finding: the same failure mode the-baseline-goes-down
+-- sprint found only by hand.
+--
+-- The reason must live in the SAME contiguous comment block as the directive
+-- (`commentBlocks`/`codePortions`, rule-promissory-reader's helpers, reused
+-- unmodified above) — above it, below it, or beside another directive in the
+-- same block. Several existing file-scope directives sit on line 1, where
+-- nothing can precede them, and state their reason in the lines that follow
+-- instead (`compiler/tools/lsp.mdk`, `compiler/backend/wasm_emit.mdk`); the
+-- same-block rule (rather than "immediately above only") is what keeps this
+-- rule silent on those.
+--
+-- A `lint-disable-line`/`lint-disable-next-line` directive whose own block
+-- has no reason gets ONE fallback: `export\n<name> : <type>` (or a bare
+-- signature line alone) can sit between a leading doc comment and the
+-- directive, breaking block contiguity even though a reader plainly reads
+-- that comment as the declaration's reason (`compiler/tools/lint.mdk`'s own
+-- `trimWs`, `compiler/entries/entry_support.mdk`'s `failWith`). The parsed
+-- AST already threads `Positions` into every rule, so instead of guessing
+-- what a "signature-only" line looks like, find the `DeclPos` the directive's
+-- target line falls inside and check the comment block ending immediately
+-- before THAT declaration starts.
+--
+-- A block counts as reasoned when some OTHER comment in it (not a directive
+-- line itself) has a "substantive word": a run of at least 4 alphabetic
+-- characters. Digits and `#` never contribute, so a bare issue reference
+-- (`#1234`) is never one; short connector words ("see", "cf", "ref") aren't
+-- either, so `-- see #1234` does not count as a reason.
+ruleDirectiveReason : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleDirectiveReason _ _ src pos prog =
+  let comments = collectComments src
+  let ls = splitNl src
+  let codeLines = arrayFromList (codePortions ls comments 1)
+  let blocks = commentBlocks comments codeLines
+  let dps = positionsDecls pos
+  let dirCmts = filterList (c => isSome (parseDirective c)) comments
+  flatMap (directiveReasonCheck comments blocks dps) dirCmts
+
+directiveReasonCheck : List Comment ->
+  List CommentBlock ->
+  List DeclPos ->
+  Comment ->
+  List Finding
+directiveReasonCheck comments blocks dps c =
+  if directiveReasoned comments blocks dps c then
+    []
+  else
+    [directiveReasonFinding c]
+
+directiveReasoned : List Comment ->
+  List CommentBlock ->
+  List DeclPos ->
+  Comment ->
+  Bool
+directiveReasoned comments blocks dps c =
+  let ownReasoned = match find (commentBlockContainsLine (commentLine c)) blocks
+    Some b => blockHasReason comments b
+    None => False
+  if ownReasoned then
+    True
+  else match parseDirective c
+    Some (Directive (DScopeLine _) _) =>
+      declGapReasoned comments blocks dps (commentLine c)
+    Some (Directive DScopeFile _) => False
+    None => False
+
+-- Walk backward from `line` through a CHAIN of declarations that abut it
+-- exactly (no blank line between): a signature-only `DTypeSig` (alone or
+-- `export`-prefixed) between a leading doc comment and the directive it
+-- explains — `compiler/tools/lint.mdk`'s own `trimWs` a few hundred lines
+-- above this rule, `compiler/entries/entry_support.mdk`'s `failWith` — or a
+-- one-line-per-clause function whose OWN signature sits one hop further back
+-- (`compiler/types/route_key.mdk`'s `rkEffAtom`: directive between its two
+-- clauses, reason above the signature two hops up). Each hop requires the
+-- PRECEDING declaration to end on the exact line before, so a real blank
+-- line — the boundary a reader also uses — stops the walk rather than
+-- reaching into an unrelated earlier declaration.
+declGapReasoned : List Comment ->
+  List CommentBlock ->
+  List DeclPos ->
+  Int ->
+  Bool
+declGapReasoned comments blocks dps line =
+  match find (commentBlockEndsAt (line - 1)) blocks
+    Some b => blockHasReason comments b
+    None => match find (declPosEndsAt (line - 1)) dps
+      Some dp => declGapReasoned comments blocks dps (declPosLine dp)
+      None => False
+
+commentBlockContainsLine : Int -> CommentBlock -> Bool
+commentBlockContainsLine line (CommentBlock first last _ _) =
+  line >= first && line <= last
+
+commentBlockEndsAt : Int -> CommentBlock -> Bool
+commentBlockEndsAt line (CommentBlock _ last _ _) = last == line
+
+declPosEndsAt : Int -> DeclPos -> Bool
+declPosEndsAt line dp = declPosEndLine dp == line
+
+blockHasReason : List Comment -> CommentBlock -> Bool
+blockHasReason comments (CommentBlock first last _ _) =
+  let inBlock =
+    filterList (c => commentLine c >= first && commentLine c <= last) comments
+  let reasonCmts = filterList (c => isNone (parseDirective c)) inBlock
+  anyList directiveReasonHasProse reasonCmts
+
+directiveReasonHasProse : Comment -> Bool
+directiveReasonHasProse c = hasSubstantiveWord (commentText c)
+
+hasSubstantiveWord : String -> Bool
+hasSubstantiveWord s =
+  hasSubstantiveWordGo (stringToChars s) 0 (stringLength s) 0
+
+hasSubstantiveWordGo : Array Char -> Int -> Int -> Int -> Bool
+hasSubstantiveWordGo chars i n run
+  | run >= 4 = True
+  | i >= n = False
+  | isAlpha (arrayGetUnsafe i chars) =
+    hasSubstantiveWordGo chars (i + 1) n (run + 1)
+  | otherwise = hasSubstantiveWordGo chars (i + 1) n 0
+
+directiveReasonFinding : Comment -> Finding
+directiveReasonFinding c = Finding {
+  rule = ruleNameDirectiveReason,
+  message =
+    "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
+  severity = SevWarning,
+  loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
+}
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
@@ -6262,7 +6414,7 @@ duplicateBodySameFileRule = Rule {
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
-(DUse false (UseGroup ("string") ((mem "drop" false "strDrop"))))
+(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "isAlpha" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "modIdOf" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
@@ -6324,6 +6476,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "ruleNameCloneType" () (ELit (LString "rule-clone-type")))
 (DTypeSig false "ruleNameClauseMap" (TyCon "String"))
 (DFunDef false "ruleNameClauseMap" () (ELit (LString "rule-clause-map")))
+(DTypeSig false "ruleNameDirectiveReason" (TyCon "String"))
+(DFunDef false "ruleNameDirectiveReason" () (ELit (LString "rule-directive-reason")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -6374,8 +6528,10 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "cloneTypeRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameCloneType")) (fa "descr" (ELit (LString "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleCloneType")) (fa "fix" (EVar "None")))))
 (DTypeSig false "clauseMapRule" (TyCon "Rule"))
 (DFunDef false "clauseMapRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameClauseMap")) (fa "descr" (ELit (LString "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleClauseMap")) (fa "fix" (EVar "None")))))
+(DTypeSig false "directiveReasonRule" (TyCon "Rule"))
+(DFunDef false "directiveReasonRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "descr" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDirectiveReason")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -8121,6 +8277,30 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
+(DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "src") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "dps") (EApp (EVar "positionsDecls") (EVar "pos"))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "dps"))) (EVar "dirCmts")))))
+(DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "directiveReasonCheck" ((PVar "comments") (PVar "blocks") (PVar "dps") (PVar "c")) (EIf (EApp (EApp (EApp (EApp (EVar "directiveReasoned") (EVar "comments")) (EVar "blocks")) (EVar "dps")) (EVar "c")) (EListLit) (EListLit (EApp (EVar "directiveReasonFinding") (EVar "c")))))
+(DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
+(DFunDef false "directiveReasoned" ((PVar "comments") (PVar "blocks") (PVar "dps") (PVar "c")) (EBlock (DoLet false false (PVar "ownReasoned") (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockContainsLine") (EApp (EVar "commentLine") (EVar "c")))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "ownReasoned") (EVar "True") (EMatch (EApp (EVar "parseDirective") (EVar "c")) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeLine" PWild) PWild)) () (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "dps")) (EApp (EVar "commentLine") (EVar "c")))) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeFile") PWild)) () (EVar "False")) (arm (PCon "None") () (EVar "False")))))))
+(DTypeSig false "declGapReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "dps") (PVar "line")) (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EApp (EVar "declPosEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "dps")) (arm (PCon "Some" (PVar "dp")) () (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "dps")) (EApp (EVar "declPosLine") (EVar "dp")))) (arm (PCon "None") () (EVar "False"))))))
+(DTypeSig false "commentBlockContainsLine" (TyFun (TyCon "Int") (TyFun (TyCon "CommentBlock") (TyCon "Bool"))))
+(DFunDef false "commentBlockContainsLine" ((PVar "line") (PCon "CommentBlock" (PVar "first") (PVar "last") PWild PWild)) (EBinOp "&&" (EBinOp ">=" (EVar "line") (EVar "first")) (EBinOp "<=" (EVar "line") (EVar "last"))))
+(DTypeSig false "commentBlockEndsAt" (TyFun (TyCon "Int") (TyFun (TyCon "CommentBlock") (TyCon "Bool"))))
+(DFunDef false "commentBlockEndsAt" ((PVar "line") (PCon "CommentBlock" PWild (PVar "last") PWild PWild)) (EBinOp "==" (EVar "last") (EVar "line")))
+(DTypeSig false "declPosEndsAt" (TyFun (TyCon "Int") (TyFun (TyCon "DeclPos") (TyCon "Bool"))))
+(DFunDef false "declPosEndsAt" ((PVar "line") (PVar "dp")) (EBinOp "==" (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "line")))
+(DTypeSig false "blockHasReason" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "CommentBlock") (TyCon "Bool"))))
+(DFunDef false "blockHasReason" ((PVar "comments") (PCon "CommentBlock" (PVar "first") (PVar "last") PWild PWild)) (EBlock (DoLet false false (PVar "inBlock") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "commentLine") (EVar "c")) (EVar "first")) (EBinOp "<=" (EApp (EVar "commentLine") (EVar "c")) (EVar "last"))))) (EVar "comments"))) (DoLet false false (PVar "reasonCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isNone") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "inBlock"))) (DoExpr (EApp (EApp (EVar "anyList") (EVar "directiveReasonHasProse")) (EVar "reasonCmts")))))
+(DTypeSig false "directiveReasonHasProse" (TyFun (TyCon "Comment") (TyCon "Bool")))
+(DFunDef false "directiveReasonHasProse" ((PVar "c")) (EApp (EVar "hasSubstantiveWord") (EApp (EVar "commentText") (EVar "c"))))
+(DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))))
+(DTypeSig false "hasSubstantiveWordGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "hasSubstantiveWordGo" ((PVar "chars") (PVar "i") (PVar "n") (PVar "run")) (EIf (EBinOp ">=" (EVar "run") (ELit (LInt 4))) (EVar "True") (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EApp (EVar "isAlpha") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EVar "run") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
+(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
@@ -8128,7 +8308,7 @@ duplicateBodySameFileRule = Rule {
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
-(DUse false (UseGroup ("string") ((mem "drop" false "strDrop"))))
+(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "isAlpha" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "modIdOf" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
@@ -8190,6 +8370,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "ruleNameCloneType" () (ELit (LString "rule-clone-type")))
 (DTypeSig false "ruleNameClauseMap" (TyCon "String"))
 (DFunDef false "ruleNameClauseMap" () (ELit (LString "rule-clause-map")))
+(DTypeSig false "ruleNameDirectiveReason" (TyCon "String"))
+(DFunDef false "ruleNameDirectiveReason" () (ELit (LString "rule-directive-reason")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -8240,8 +8422,10 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "cloneTypeRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameCloneType")) (fa "descr" (ELit (LString "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleCloneType")) (fa "fix" (EVar "None")))))
 (DTypeSig false "clauseMapRule" (TyCon "Rule"))
 (DFunDef false "clauseMapRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameClauseMap")) (fa "descr" (ELit (LString "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleClauseMap")) (fa "fix" (EVar "None")))))
+(DTypeSig false "directiveReasonRule" (TyCon "Rule"))
+(DFunDef false "directiveReasonRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "descr" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDirectiveReason")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -9987,3 +10171,27 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
+(DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "src") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "dps") (EApp (EVar "positionsDecls") (EVar "pos"))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "dps"))) (EVar "dirCmts")))))
+(DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "directiveReasonCheck" ((PVar "comments") (PVar "blocks") (PVar "dps") (PVar "c")) (EIf (EApp (EApp (EApp (EApp (EVar "directiveReasoned") (EVar "comments")) (EVar "blocks")) (EVar "dps")) (EVar "c")) (EListLit) (EListLit (EApp (EVar "directiveReasonFinding") (EVar "c")))))
+(DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
+(DFunDef false "directiveReasoned" ((PVar "comments") (PVar "blocks") (PVar "dps") (PVar "c")) (EBlock (DoLet false false (PVar "ownReasoned") (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockContainsLine") (EApp (EVar "commentLine") (EVar "c")))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "ownReasoned") (EVar "True") (EMatch (EApp (EVar "parseDirective") (EVar "c")) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeLine" PWild) PWild)) () (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "dps")) (EApp (EVar "commentLine") (EVar "c")))) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeFile") PWild)) () (EVar "False")) (arm (PCon "None") () (EVar "False")))))))
+(DTypeSig false "declGapReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "dps") (PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "declPosEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "dps")) (arm (PCon "Some" (PVar "dp")) () (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "dps")) (EApp (EVar "declPosLine") (EVar "dp")))) (arm (PCon "None") () (EVar "False"))))))
+(DTypeSig false "commentBlockContainsLine" (TyFun (TyCon "Int") (TyFun (TyCon "CommentBlock") (TyCon "Bool"))))
+(DFunDef false "commentBlockContainsLine" ((PVar "line") (PCon "CommentBlock" (PVar "first") (PVar "last") PWild PWild)) (EBinOp "&&" (EBinOp ">=" (EVar "line") (EVar "first")) (EBinOp "<=" (EVar "line") (EVar "last"))))
+(DTypeSig false "commentBlockEndsAt" (TyFun (TyCon "Int") (TyFun (TyCon "CommentBlock") (TyCon "Bool"))))
+(DFunDef false "commentBlockEndsAt" ((PVar "line") (PCon "CommentBlock" PWild (PVar "last") PWild PWild)) (EBinOp "==" (EVar "last") (EVar "line")))
+(DTypeSig false "declPosEndsAt" (TyFun (TyCon "Int") (TyFun (TyCon "DeclPos") (TyCon "Bool"))))
+(DFunDef false "declPosEndsAt" ((PVar "line") (PVar "dp")) (EBinOp "==" (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "line")))
+(DTypeSig false "blockHasReason" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "CommentBlock") (TyCon "Bool"))))
+(DFunDef false "blockHasReason" ((PVar "comments") (PCon "CommentBlock" (PVar "first") (PVar "last") PWild PWild)) (EBlock (DoLet false false (PVar "inBlock") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "commentLine") (EVar "c")) (EVar "first")) (EBinOp "<=" (EApp (EVar "commentLine") (EVar "c")) (EVar "last"))))) (EVar "comments"))) (DoLet false false (PVar "reasonCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isNone") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "inBlock"))) (DoExpr (EApp (EApp (EVar "anyList") (EVar "directiveReasonHasProse")) (EVar "reasonCmts")))))
+(DTypeSig false "directiveReasonHasProse" (TyFun (TyCon "Comment") (TyCon "Bool")))
+(DFunDef false "directiveReasonHasProse" ((PVar "c")) (EApp (EVar "hasSubstantiveWord") (EApp (EVar "commentText") (EVar "c"))))
+(DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))))
+(DTypeSig false "hasSubstantiveWordGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "hasSubstantiveWordGo" ((PVar "chars") (PVar "i") (PVar "n") (PVar "run")) (EIf (EBinOp ">=" (EVar "run") (ELit (LInt 4))) (EVar "True") (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EApp (EVar "isAlpha") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EVar "run") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
+(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))))))
