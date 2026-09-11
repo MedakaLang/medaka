@@ -290,11 +290,27 @@ readRows dir ((seq, timeSeconds, name) :: rest) acc =
 
    Each entry's file name is checked against its contents rather than trusted:
    the name decides which files are read, so a name and a body that disagree
-   would silently answer a cursor with the wrong events. -}
+   would silently answer a cursor with the wrong events.
+
+   The cursor is applied to the NAMES before any file is opened, and that is
+   what makes this usable by a connected subscriber rather than only by a
+   fresh one: a sequence number is in every entry's file name, so answering
+   "what is new since 4000" costs one directory listing plus the entries that
+   are actually new, not one file read per entry the window still holds. A
+   subscriber polling a three-day log would otherwise re-read the whole of it
+   on every tick, once per subscriber. The answer is unchanged either way —
+   `eventLogAfterCursor` still fixes what a cursor MEANS, and it is applied to
+   the decoded entries as before. -}
 export
 eventLogRead : String ->
   Int ->
   <FileRead "_"> Result String (List EventLogEntry)
 eventLogRead dir cursor = match listEntryRows dir
   Err message => Err message
-  Ok rows => map (eventLogAfterCursor cursor) (readRows dir rows [])
+  Ok rows =>
+    map
+      (eventLogAfterCursor cursor)
+      (readRows dir (filter (row => rowSeq row > cursor) rows) [])
+
+rowSeq : (Int, Int, String) -> Int
+rowSeq (seq, _, _) = seq

@@ -146,6 +146,7 @@ import lib.xrpc.{
   makeRegistry,
   procedureEndpoint,
   queryEndpoint,
+  subscriptionEndpoint,
   wellKnownPath,
   xrpcErrorResponse,
 }
@@ -194,6 +195,9 @@ getBlobNsid = "com.atproto.sync.getBlob"
 
 listBlobsNsid : String
 listBlobsNsid = "com.atproto.sync.listBlobs"
+
+subscribeReposNsid : String
+subscribeReposNsid = "com.atproto.sync.subscribeRepos"
 
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
@@ -1647,7 +1651,7 @@ pdsHandler account context outcome store call =
         Some response => (store, response)
         None => (store, unhandledRoute call)
 
--- | The registry of all eighteen XRPC endpoints. The two well-known paths are
+-- | The registry of all nineteen XRPC endpoints. The two well-known paths are
 -- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -1657,7 +1661,8 @@ pdsRegistry = do
   reads <- readEndpoints
   makeRegistry (concatEndpoints writes (concatEndpoints sessions reads))
 
-{- | The nine read queries, every one of them public.
+{- | The nine read queries and the one event-stream subscription, every one of
+   them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,
    `listRecords` and `describeRepo`, and the `com.atproto.sync.*` pair another
@@ -1667,6 +1672,10 @@ pdsRegistry = do
    `com.atproto.server.describeServer`, which is how a client or relay finds
    the account before that. A server that closed these would not be a
    stricter PDS; it would be one no client and no relay can use.
+
+   `com.atproto.sync.subscribeRepos` is public on the same grounds and for the
+   same reader: it is the live half of what `getRepo` answers once, and a
+   relay that may read the repository may watch it change.
 
    The classification is per route, not per kind: a future public procedure
    would say `PublicRoute` here and be right, and a future private query would
@@ -1682,6 +1691,7 @@ readEndpoints = do
   getBlob <- queryEndpoint getBlobNsid PublicRoute
   listBlobs <- queryEndpoint listBlobsNsid PublicRoute
   resolveHandle <- queryEndpoint resolveHandleNsid PublicRoute
+  subscribeRepos <- subscriptionEndpoint subscribeReposNsid PublicRoute
   Ok [
     getRecord,
     listRecords,
@@ -1692,6 +1702,7 @@ readEndpoints = do
     getBlob,
     listBlobs,
     resolveHandle,
+    subscribeRepos,
   ]
 
 concatEndpoints : List Endpoint -> List Endpoint -> List Endpoint

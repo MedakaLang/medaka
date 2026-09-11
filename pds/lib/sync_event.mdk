@@ -223,6 +223,37 @@ syncCommitFrame event = do
   body <- dagCborEncode (syncCommitBody event)
   Ok (header ++ body)
 
+{- | An `#info` frame: the same two-object shape as `#commit`, carrying an
+   advisory the subscriber acts on rather than an event it mirrors.
+
+   The one this server sends is `OutdatedCursor`, which says the stream
+   resumed later than the cursor asked for because the entries in between had
+   already left the retention window. It is deliberately not an error: the
+   connection stays open and the replay continues from the oldest entry the
+   log still holds, so a relay learns it has a gap instead of silently
+   believing it has none. -}
+export
+syncInfoFrame : String -> String -> Result String (Array Int)
+syncInfoFrame name message =
+  let bodyValue = DcMap [("name", DcString name), ("message", DcString message)]
+  do
+    header <- dagCborEncode (DcMap [("op", DcInt 1), ("t", DcString "#info")])
+    body <- dagCborEncode bodyValue
+    Ok (header ++ body)
+
+{- | An error frame: header `op` of -1 and no `t`, then a body naming the
+   error. It is the last frame a stream sends — the connection closes behind
+   it, so a subscriber never has to decide whether more is coming. -}
+export
+syncErrorFrame : String -> String -> Result String (Array Int)
+syncErrorFrame error message =
+  let bodyValue =
+    DcMap [("error", DcString error), ("message", DcString message)]
+  do
+    header <- dagCborEncode (DcMap [("op", DcInt (0 - 1))])
+    body <- dagCborEncode bodyValue
+    Ok (header ++ body)
+
 indexEntries : List (Array Int, Cid) -> Map String Cid -> Map String Cid
 indexEntries [] index = index
 indexEntries ((path, cid) :: rest) index =

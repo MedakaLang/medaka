@@ -511,6 +511,7 @@ test "every read, sync and identity query is public, and so is createSession" = 
     "com.atproto.sync.getLatestCommit",
     "com.atproto.sync.getRepo",
     "com.atproto.sync.listBlobs",
+    "com.atproto.sync.subscribeRepos",
   ]
 
 {- | Refreshing and logging out are authenticated by the REFRESH token, which

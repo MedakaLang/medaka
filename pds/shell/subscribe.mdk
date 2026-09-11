@@ -1,0 +1,387 @@
+{- | The `com.atproto.sync.subscribeRepos` event stream: one connection that
+   has left the HTTP request/response lifecycle for good.
+
+   Everything else this server does is a request and a complete answer, and
+   `pds/shell/server.mdk`'s whole shape rests on that — `applyRequest` returns
+   an `Array Int` and nothing downstream of it can express "more later". A
+   subscription is the one shape that cannot be expressed that way, so it does
+   not try: the socket shell hands the connection over HERE, at the last point
+   the parsed request and the live socket coexist, and it never comes back.
+   `serveConnection` still owns the close and the census retirement, because
+   those are the continuation of the connection and not of the request.
+
+   The loop is a poll rather than a notification because the event log is a
+   directory of files (`pds/shell/eventlog.mdk`) and this process holds no
+   in-memory index of it: an event appended by one connection's write is
+   visible to another connection's subscriber only through the filesystem.
+   Each tick costs ONE small file read — the log's last-sequence pointer — and
+   the log itself is read only when that pointer has actually moved, so an
+   idle subscriber costs a constant, and a busy one costs the entries that are
+   new rather than the entries the window still holds.
+
+   This module holds no protocol state and encodes no protocol value: the
+   frames it sends are `lib.sync_event`'s bytes, wrapped by `lib.websocket`'s
+   codec. What lives here is when to send them. -}
+
+import array.{sliceClamped}
+import async.{Async, liftIO}
+import hex as Hex
+import lib.event_log_record.{EventLogEntry(..)}
+import lib.sync_event.{syncErrorFrame, syncInfoFrame}
+import lib.websocket.{
+  DecodeResult(..),
+  Direction(..),
+  Frame(..),
+  Opcode(..),
+  closeFrame,
+  decodeFrame,
+  encodeServerFrame,
+  handshakeResponseBytes,
+}
+import net.{Connection}
+import net_async as A
+import shell.eventlog.{eventLogLast, eventLogRead}
+import time.{Duration, millis}
+
+{- | How long a subscriber's socket may be silent before the log is polled.
+
+   It is BOTH the poll period and the read budget, which is one question asked
+   once: `recvWithin` parks until either the client says something or the
+   budget passes, so a tick that delivers no client bytes has consumed exactly
+   the interval and a tick that does delivers them immediately. A quarter of a
+   second bounds how far behind the wire a firehose event can be while leaving
+   an idle subscriber at four small file reads a second. -}
+subscriptionPollInterval : Duration
+subscriptionPollInterval = millis 250
+
+{- | The largest frame this server will accept FROM a subscriber.
+
+   A subscriber sends nothing but control frames — RFC 6455's close, ping and
+   pong, each capped at 125 payload bytes by §5.5. The allowance above that is
+   for a client that sends a data frame anyway, which is ignored rather than
+   refused; a peer declaring more than this is closed with 1009 by
+   `decodeFrame` before anything is allocated for it. -}
+maxClientFrameBytes : Int
+maxClientFrameBytes = 1024
+
+-- | Bytes asked for per read from a subscriber. Its traffic is control frames,
+-- so this is a ceiling that is never reached, not a buffer that is filled.
+clientReadChunkBytes : Int
+clientReadChunkBytes = 4096
+
+{- | `recvWithin`'s answer when the budget passed with no bytes, which is a
+   poll tick and not a failure.
+
+   It is discriminated by this exact string because that is what
+   `stdlib/net_async.mdk` produces (`recvUntilStep`), and a genuine socket
+   error arrives as an `Err` too. A loop treating every `Err` as "carry on"
+   would never notice a peer that died, and would hold a subscription slot
+   against a socket nothing is reading. -}
+pollTimedOut : String
+pollTimedOut = "timed out"
+
+-- RFC 6455 §7.4.1: a normal close, and the code for a peer that broke the
+-- protocol. The reason is a fixed string, never text derived from what the
+-- peer sent: a close frame's whole payload is capped at 125 bytes and
+-- `encodeServerFrame` panics above that, so a reason built out of peer input
+-- would make the peer choose whether this server aborts.
+normalCloseCode : Int
+normalCloseCode = 1000
+
+protocolCloseCode : Int
+protocolCloseCode = 1002
+
+{- | Serve one admitted subscription until the peer closes, a write fails, or
+   the log cannot be read.
+
+   `pending` is what the client had already sent past its own handshake — a
+   pipelined client's first frames. They are the start of the WebSocket
+   stream, not of another HTTP request, so they are carried in rather than
+   dropped.
+
+   `budget` is the per-write timeout the socket shell uses for every other
+   response (`writeTimeout`, `pds/shell/server.mdk`), threaded in rather than
+   restated: a subscriber's total lifetime is deliberately unbounded, and this
+   is the one bound that still applies to it. A reader that stops reading
+   stalls exactly one write and is then closed. -}
+export
+runSubscription : String ->
+  Duration ->
+  Connection ->
+  String ->
+  Option Int ->
+  Array Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+runSubscription dir budget conn accept cursor pending = defer
+  opened <- A.sendAllWithin budget conn (handshakeResponseBytes accept)
+  match opened
+    Err message => deferPure (Err message)
+    Ok () => openStream dir budget conn cursor pending
+
+-- The newest sequence number the log has ever promoted, which is what a
+-- cursor is graded against. A log that has promoted nothing answers 0, the
+-- value `lib.event_log_record` reserves for "before everything".
+newestSeq : Option (Int, String) -> Int
+newestSeq None = 0
+newestSeq (Some (seq, _)) = seq
+
+openStream : String ->
+  Duration ->
+  Connection ->
+  Option Int ->
+  Array Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+openStream dir budget conn cursor pending = defer
+  last <- liftIO (u => eventLogLast dir)
+  match last
+    Err message => deferPure (Err message)
+    Ok promoted =>
+      gradeCursor dir budget conn cursor pending (newestSeq promoted)
+
+{- | What the client's cursor asks for, against what the log can answer.
+
+   Three outcomes, and the middle one is the reason this is not simply a read:
+   a cursor past the newest event names an event this server has not emitted,
+   which no replay can satisfy and which silence would answer wrongly; a
+   cursor whose next event has already left the retention window is answerable
+   but with a GAP, which the subscriber is told about (`#info`
+   `OutdatedCursor`) rather than left to infer; and a cursor the log can
+   satisfy exactly is replayed.
+
+   A client that sent no cursor at all asks for the live tail and gets it: no
+   replay, no gap, nothing to announce. -}
+gradeCursor : String ->
+  Duration ->
+  Connection ->
+  Option Int ->
+  Array Int ->
+  Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+gradeCursor dir budget conn None pending newest =
+  tailFrom dir budget conn newest pending
+gradeCursor dir budget conn (Some wanted) pending newest =
+  if wanted > newest then
+    refuseFuture budget conn wanted newest
+  else defer
+    entries <- liftIO (u => eventLogRead dir wanted)
+    match entries
+      Err message => deferPure (Err message)
+      Ok replay =>
+        if outdated wanted newest replay then
+          announceOutdated dir budget conn wanted pending replay
+        else
+          replayThenTail dir budget conn wanted pending replay
+
+{- | Whether the entries between the cursor and what the log still holds have
+   been swept.
+
+   Two shapes of the same gap: the oldest entry the log can replay is later
+   than the one the cursor asked for next, or the log can replay nothing at
+   all while the cursor sits behind an event that was promoted. -}
+outdated : Int -> Int -> List EventLogEntry -> Bool
+outdated wanted newest [] = wanted < newest
+outdated wanted _ (first :: _) = first.seq > wanted + 1
+
+refuseFuture : Duration ->
+  Connection ->
+  Int ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Unit)
+refuseFuture budget conn wanted newest =
+  let framed =
+    syncErrorFrame
+      "FutureCursor"
+      "cursor \{intToString wanted} is ahead of this repository's newest event \{intToString newest}"
+  match framed
+    Err message => deferPure (Err message)
+    Ok payload => sendPayloadThenClose budget conn payload
+
+announceOutdated : String ->
+  Duration ->
+  Connection ->
+  Int ->
+  Array Int ->
+  List EventLogEntry ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+announceOutdated dir budget conn wanted pending replay =
+  let framed =
+    syncInfoFrame
+      "OutdatedCursor"
+      "cursor \{intToString wanted} is older than this repository's retained event window"
+  match framed
+    Err message => deferPure (Err message)
+    Ok payload => defer
+      sent <- sendPayload budget conn payload
+      match sent
+        Err message => deferPure (Err message)
+        Ok () => replayThenTail dir budget conn wanted pending replay
+
+replayThenTail : String ->
+  Duration ->
+  Connection ->
+  Int ->
+  Array Int ->
+  List EventLogEntry ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+replayThenTail dir budget conn wanted pending replay = defer
+  delivered <- sendEntries budget conn wanted replay
+  match delivered
+    Err message => deferPure (Err message)
+    Ok lastSeq => tailFrom dir budget conn lastSeq pending
+
+{- | Send each entry's stored frame and answer the sequence number the
+   subscriber has now been delivered.
+
+   The stored bytes are the `#commit` message `lib.sync_event` produced, hex
+   encoded because the log is a text file (`lib.event_log_record`). They are
+   decoded and framed, never re-encoded: a relay verifies the commit signature
+   over exactly these bytes, so a byte this server rewrote is a signature this
+   server broke. -}
+sendEntries : Duration ->
+  Connection ->
+  Int ->
+  List EventLogEntry ->
+  Async <Clock, Net "_" | e> (Result String Int)
+sendEntries _ _ delivered [] = deferPure (Ok delivered)
+sendEntries budget conn delivered (entry :: rest) =
+  match Hex.decode entry.frameHex
+    Err message =>
+      deferPure
+        (Err "subscribe: event \{intToString entry.seq} is not hex: \{message}")
+    Ok payload => defer
+      sent <- sendPayload budget conn payload
+      match sent
+        Err message => deferPure (Err message)
+        Ok () => sendEntries budget conn entry.seq rest
+
+-- One atproto event-stream message, as one unfragmented binary WebSocket
+-- frame. The payload is two concatenated CBOR objects and the reader decodes
+-- both from the one message, so it may not be split across frames.
+sendPayload : Duration ->
+  Connection ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String Unit)
+sendPayload budget conn payload =
+  A.sendAllWithin budget conn (encodeServerFrame (Frame True Binary payload))
+
+sendPayloadThenClose : Duration ->
+  Connection ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String Unit)
+sendPayloadThenClose budget conn payload = defer
+  sent <- sendPayload budget conn payload
+  match sent
+    Err message => deferPure (Err message)
+    Ok () => sendClose budget conn normalCloseCode
+
+sendClose : Duration ->
+  Connection ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Unit)
+sendClose budget conn code = defer
+  _ <- A.sendAllWithin budget conn (encodeServerFrame (closeFrame code ""))
+  deferPure (Ok ())
+
+{- | The steady state: wait a poll interval for the client to say something,
+   and when it does not, ask the log whether anything is new.
+
+   `lastSeq` is THIS subscriber's own high-water mark, and it is what keeps
+   the poll cheap: the log is read from it, not from the connection's opening
+   cursor, so a long-lived subscriber never re-reads what it has already been
+   sent. -}
+tailFrom : String ->
+  Duration ->
+  Connection ->
+  Int ->
+  Array Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+tailFrom dir budget conn lastSeq buffered = match clientStep buffered
+  ClientFailed code => sendClose budget conn code
+  ClientClosed => sendClose budget conn normalCloseCode
+  ClientReply reply rest => defer
+    sent <- A.sendAllWithin budget conn reply
+    match sent
+      Err message => deferPure (Err message)
+      Ok () => tailFrom dir budget conn lastSeq rest
+  ClientNeedMore rest => defer
+    received <- A.recvWithin subscriptionPollInterval conn clientReadChunkBytes
+    match received
+      Ok bytes =>
+        if arrayLength bytes == 0 then
+          deferPure (Ok ())
+        else
+          tailFrom dir budget conn lastSeq (rest ++ bytes)
+      Err message =>
+        if message == pollTimedOut then
+          pollLog dir budget conn lastSeq rest
+        else
+          deferPure (Err message)
+
+pollLog : String ->
+  Duration ->
+  Connection ->
+  Int ->
+  Array Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+pollLog dir budget conn lastSeq buffered = defer
+  last <- liftIO (u => eventLogLast dir)
+  match last
+    Err message => deferPure (Err message)
+    Ok promoted =>
+      if newestSeq promoted <= lastSeq then
+        tailFrom dir budget conn lastSeq buffered
+      else
+        deliverNew dir budget conn lastSeq buffered
+
+deliverNew : String ->
+  Duration ->
+  Connection ->
+  Int ->
+  Array Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+deliverNew dir budget conn lastSeq buffered = defer
+  fresh <- liftIO (u => eventLogRead dir lastSeq)
+  match fresh
+    Err message => deferPure (Err message)
+    Ok entries => defer
+      delivered <- sendEntries budget conn lastSeq entries
+      match delivered
+        Err message => deferPure (Err message)
+        Ok nextSeq => tailFrom dir budget conn nextSeq buffered
+
+{- | What the bytes a subscriber has sent so far mean, one frame at a time.
+
+   Pure, and deliberately separate from the loop above: deciding what a frame
+   is has nothing to do with when a socket is ready, and `lib.websocket` has
+   already decided it. A subscriber's data frames are IGNORED rather than
+   refused — the lexicon gives a subscriber nothing to say, and closing a
+   connection over a frame that means nothing would be this server inventing a
+   rule RFC 6455 does not state. -}
+data ClientStep =
+  | ClientNeedMore (Array Int)
+  | ClientReply (Array Int) (Array Int)
+  | ClientClosed
+  | ClientFailed Int
+
+clientStep : Array Int -> ClientStep
+clientStep buffered =
+  match decodeFrame FromClient maxClientFrameBytes buffered 0
+    NeedMore => ClientNeedMore buffered
+    Rejected code _ => ClientFailed (asCloseCode code)
+    Decoded (Frame _ Close _) _ => ClientClosed
+    Decoded (Frame _ Ping payload) consumed =>
+      ClientReply
+        (encodeServerFrame (Frame True Pong payload))
+        (afterFrame buffered consumed)
+    Decoded _ consumed => clientStep (afterFrame buffered consumed)
+
+-- `decodeFrame` reports a status code for every rejection; this is the
+-- residual guard for one it could not have produced, so a code that may not
+-- appear on the wire never reaches a close frame.
+asCloseCode : Int -> Int
+asCloseCode code =
+  if code >= 1000 && code <= 1015 then code else protocolCloseCode
+
+afterFrame : Array Int -> Int -> Array Int
+afterFrame buffered consumed =
+  sliceClamped consumed (arrayLength buffered) buffered

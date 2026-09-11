@@ -54,6 +54,23 @@ handshakeAccept key = match decode key
     else
       Ok (encode (sha1FixedBytes (toUtf8 "\{key}\{handshakeGuid}")))
 
+{- | The complete bytes of the opening handshake's `101 Switching Protocols`
+   response, answering a client whose `Sec-WebSocket-Key` computed `accept`
+   (RFC 6455 §4.2.2 step 5).
+
+   Assembled here rather than through `http`'s `Response`: `serializeResponse`
+   appends exactly one computed `content-length` to every response it emits,
+   and a 1xx response may not carry one at all (RFC 9110 §15.2) — a 101
+   declaring `content-length: 0` tells the peer the upgraded stream begins
+   after a body that does not exist. The three fields are the only ones RFC
+   6455 §4.2.2 requires, and the only client-derived text among them is
+   `accept`, which `handshakeAccept` produced as base64. -}
+export
+handshakeResponseBytes : String -> Array Int
+handshakeResponseBytes accept =
+  toUtf8
+    "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: \{accept}\r\n\r\n"
+
 -- ── Frames ───────────────────────────────────────────────────────────
 
 {- | A frame's opcode (RFC 6455 §5.2). The three control opcodes are
