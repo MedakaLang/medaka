@@ -297,12 +297,14 @@ compiler/frontend/parser.mdk"
 # same sprint. A filename entry granted on "nothing calls this file" cannot survive
 # the file acquiring callers, so the exemption is pinned to its four actual lines
 # the way `typecheck.mdk`'s is.
-# typecheck_test.mdk observes an unresolved default-owner origin in a total match.
-# Its sole eliminator line is pinned below; this grants no new constructor mint.
+# The scope and typecheck sibling tests observe unresolved default-owner origins
+# in total matches. Their sole eliminator lines are pinned below; this grants no
+# new constructor mint.
 originun_allowed="compiler/entries/origin_agreement_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/types/route_key.mdk
+compiler/types/scopes_test.mdk
 compiler/types/typecheck.mdk
 compiler/types/typecheck_test.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
@@ -439,6 +441,20 @@ if [ "$tctest_originun_actual" != "$tctest_originun_allowed" ]; then
   exit 1
 fi
 echo "  ok: typecheck_test.mdk only observes OriginUnresolved"
+
+# The extracted scope service has its own total default-origin observer.
+scopetest_originun_allowed='OriginUnresolved =>'
+scopetest_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/scopes_test.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$scopetest_originun_actual" != "$scopetest_originun_allowed" ]; then
+  echo "FAIL: the OriginUnresolved lines of compiler/types/scopes_test.mdk changed."
+  echo "  Only the default-origin observer's pattern is allowed; no sentinel mint."
+  printf '%s\n' "$scopetest_originun_actual" | sed 's/^/    /'
+  exit 1
+fi
+echo "  ok: scopes_test.mdk only observes OriginUnresolved"
 
 # The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
 # filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one
