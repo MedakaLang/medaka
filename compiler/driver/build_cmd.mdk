@@ -24,11 +24,13 @@
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
-import support.util.{stringTrim, joinWith}
+import support.util.{stringTrim, joinWith, joinNl}
 import string.{words}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
-import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
+import driver.loader.{
+  entrySearchRoots, findProjectRootOrSelf, readDeps, readForeignLibs
+}
 import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
@@ -245,6 +247,37 @@ makeTempDir _ = match runCommandOk "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
   Ok (out, _) =>
     let dir = stringTrim out
     if dir == "" then Err "mktemp -d printed no path" else Ok dir
+
+-- The manifest a scratch project gets when a probe for `target` is compiled
+-- outside the target's own tree.  It carries the target project's own
+-- `[dependencies]`, because dependency names are resolved from the ENTRY's
+-- manifest, never from the module search roots (`loader.mdk`'s `readDeps` ->
+-- `resolveModulePath`): a scratch manifest with no `[dependencies]` makes every
+-- cross-project import of the target unresolvable in the probe, however many
+-- roots the emitter is handed.
+--
+-- Every dep path is absolutized by canonicalizing the project root FIRST.
+-- `readDeps` joins each declared path onto the root literally, so a relatively
+-- named target yields a relatively named dep (`sqlite/../parsec`) that would be
+-- re-resolved against the scratch dir — a wrong path, and silently so.
+export
+scratchProjectManifest : String -> String -> <IO> String
+scratchProjectManifest projectName target =
+  let root = canonicalizePath (findProjectRootOrSelf (dirOf target))
+  stringConcat [
+    "[project]\nname = \"",
+    projectName,
+    "\"\n",
+    renderScratchDeps (readDeps root),
+  ]
+
+renderScratchDeps : List (String, String) -> String
+renderScratchDeps [] = ""
+renderScratchDeps deps =
+  stringConcat ["\n[dependencies]\n", joinNl (map renderScratchDep deps), "\n"]
+
+renderScratchDep : (String, String) -> String
+renderScratchDep (name, path) = stringConcat [name, " = \"", path, "\""]
 
 -- Best-effort unlink of every entry the build staged in the scratch dir.  The
 -- driver only ever writes flat files there, so removeFile suffices.

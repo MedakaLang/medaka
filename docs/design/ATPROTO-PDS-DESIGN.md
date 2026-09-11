@@ -11,10 +11,15 @@ non-loopback bind is refused unless `--trusted-proxy` is also set (`#2757`,
 accepted-risk plus this refusal — a peer-address extern was proposed and
 declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
 carry the deploy procedure — but no live deploy has happened: pointing a real
-domain at a real key is a manual, deliberate act still to be taken. Still
-open, tracked separately rather than blocking that act: `#2613` (backup/
-restore, Phase 6), `#2572` (a block operation can occupy the scheduler
-past its budget), `#2773`/`#2774` (perf), `#2608` (firehose, Phase 5), and
+domain at a real key is a manual, deliberate act still to be taken. Backup and
+restore are now rehearsed rather than merely described (`#2613`): §3.1 below
+states the procedure's consistency rule and `docs/ops/PDS-DEPLOY.md`
+§ "Backup and restore" carries the steps, with case 33 of
+`pds/test/serve_e2e.sh` restoring a backup into a separate `--data` directory
+and grading the server that starts on it. Still open, tracked separately rather
+than blocking that act: `#2572` (the block store never collects unreferenced
+blocks, and a stray non-directory file under the store directory hard-fails
+startup), `#2773`/`#2774` (perf), `#2608` (firehose, Phase 5), and
 `#1962` (the signing-parity oracle is nightly-only — confirm it green
 immediately before a deploy). Multi-repository support stays out of scope
 through 0.1.0 by design (§0, P14).
@@ -135,6 +140,29 @@ What it buys: the correctness-critical code is gradeable by golden diff with no 
 and no filesystem; it runs under `medaka run` and wasm, so doctests reach it; and Phase
 3 shrinks to wiring — an accept loop, a request lifecycle, and persistence of the
 explicit successor `Store`.
+
+### 3.1 Backup, restore, and the torn-copy hazard
+
+**A file-level backup of `--data` must be taken with the server stopped (or from
+an atomic filesystem or volume snapshot); the online alternative is to snapshot
+the repository through the server's own request path
+(`com.atproto.sync.getRepo`), which is serialized with writes and therefore
+cannot observe a torn state** — because `applyRequest`'s indivisibility
+(`pds/shell/server.mdk`) comes from routing every write through a single
+`liftIO` in a cooperatively scheduled process, which is not a lock an external
+`cp` can take.
+
+The repository's CAR export is portable and consistent, and it is also *not a
+complete backup*: blobs live beside the signed block graph rather than inside
+it, and the three secrets (`--key`, `--token-secret`, `<data>/credential`) are
+not in it either. So the procedure `docs/ops/PDS-DEPLOY.md` § "Backup and
+restore" documents is the stopped-server file copy, with the CAR export as the
+consistent online snapshot of the repository half and as the format a restore
+into a different implementation would use. Case 33 of `pds/test/serve_e2e.sh`
+rehearses the documented procedure end to end: a backup, a restore into a
+SEPARATE `--data` directory, and a server started on the restored copy whose
+`getRepo` export byte-matches the original's, serves both blobs under their
+declared media types, and accepts a new signed write.
 
 The dedicated `pds/test/protocol_all_engines.sh` gate grades fixed query routing,
 chunked state update, malformed framing, unknown routing, and resource rejection on
@@ -589,7 +617,8 @@ current tree. All-engine and doctestable with no sockets or files.*
 
 **Phase 3 — the socket shell.** *Complete in the current tree.* `pds/shell/server.mdk`
 is an accept loop over the async net surface (`stdlib/net_async`) around the pure
-Phase 2 core: request framing via `scanRequestBoundary`, `idleTimeout`/`requestTimeout`/
+Phase 2 core: request framing via `scanRequestBoundary`, `headerTimeout`/
+`bodyProgressTimeout`/`requestTimeout`/
 `writeTimeout`, keep-alive and pipelined-request reuse, a `maxConcurrentConnections`
 ceiling, and the shared `Ref Store` publish/persist sequence
 (`pds/shell/server.mdk`'s `applyRequest`) that keeps two concurrent connections from
@@ -716,6 +745,41 @@ every class entirely: a connection that never completes a request is
 accepted, occupies a slot against `maxConcurrentConnections`, and is charged
 nothing — enough of them deny service to every other caller (#2772), which
 is why a read deadline, not a counter, is what closes that shape.
+
+**The availability target the connection ceilings answer to (#2816).** Under a
+flood from one unidentifiable source, **64 concurrent legitimate callers must
+still be answered within 15 seconds**. That sentence is the design intent both
+ceilings are derived from, and it is what to re-derive them from: raising the
+caller count or lowering the time bound is a change to these two numbers and to
+no other constant here. `headerTimeout` (5 s) and `bodyProgressTimeout` (5 s)
+are the turnover half of it — a slot an attacker holds is released within one
+of them, whichever phase it is stalling in, both inside the target's 15 s even
+when a legitimate caller has to wait out one turnover.
+
+**The target is NOT currently met, and `maxUnframedConnections` is why.**
+`maxUnframedConnections` (64) is not a carved-out share of
+`maxConcurrentConnections` (256): it is an independent ADMISSION GATE ahead of
+it. `acceptStep` (`pds/shell/server.mdk`) charges every accepted connection to
+the un-framed census before it has been read from, and refuses admission when
+EITHER ceiling is full — the two are disjoined, not summed. So once 64
+connections sit in the un-framed state, the 65th connection is closed without a
+read no matter how much of the 256 is free, and it makes no difference whether
+that 65th caller is legitimate. An un-framed connection carries no identity, so
+it reaches no rate-limit class and the attacker pays nothing to hold the gate;
+because the released slot is immediately re-takeable, a single source that
+reconnects as its connections time out can hold the gate shut indefinitely.
+Measured: ~70 header-stalled sockets from one source (just over the 64 cap) cut
+a legitimate prober to 1 answered request against 229 connection resets; at 280
+stalled sockets, none succeeded. The cheaper cap is therefore the denial, which
+is #2816's own open scope — the remaining work there is a ceiling that
+distinguishes sources (e.g. a per-source cap on un-framed connections) so that
+one source cannot spend the whole census.
+
+The body-phase half of this IS fixed: a connection that terminates its headers
+and then stalls over a body that never arrives is closed by
+`bodyProgressTimeout`, so a mixed or pure body-stall flood does not hold
+capacity. That fix does not close #2816, because the admission gate is reached
+before any of it runs.
 
 One fixed window per identity also bounds the AVERAGE rate over a window,
 not the instantaneous one: because the window index is derived from the

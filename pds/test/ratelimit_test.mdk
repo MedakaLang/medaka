@@ -261,7 +261,51 @@ test "a truncated IPv4-mapped last hop is still rejected" =
     (identityLabel (identifyClient (TrustedProxy True) headers))
     "direct"
 
--- (g) the whole-repository export ceiling is a CLASS of its own, not a lower
+-- (g) #2774 second half: a decision's cost must not scale with how many
+-- OTHER identities are active. `RateLimitState` is opaque, so this is the
+-- only place that scaling is observable from outside the module.
+--
+-- `allocBytes` (already used the same way by `test/closure_alloc_fixtures/`
+-- and `compiler/support/timer.mdk`'s `allocSnap`) is the counted-work
+-- metric: it is a monotonic byte count, not a wall-clock reading, so it is
+-- immune to box load. A single `step` for `directIdentity` allocates through
+-- one `tablesInView` branch plus two O(log table size) `Map` operations
+-- regardless of how many OTHER identities are in the tables — the two
+-- populated states below differ by 100x in that count (10 vs 1,000), so an
+-- O(other identities) sweep would blow the ratio far past what balanced-tree
+-- growth alone can explain.
+addressFor : Int -> String
+addressFor n = "10.0.\{intToString (n / 256)}.\{intToString (n % 256)}"
+
+otherIdentity : Int -> ClientIdentity
+otherIdentity n = identifyClient (TrustedProxy True) [xffHeader (addressFor n)]
+
+-- | `state` with `n` distinct OTHER identities each having made one
+-- `RequestsClass` decision at `now` — never `directIdentity`, so the target
+-- identity measured afterward is untouched by this setup.
+populateOthers : RateLimitState -> Int -> Int -> RateLimitState
+populateOthers state 0 _ = state
+populateOthers state n now =
+  let (next, _) = step state (otherIdentity (n - 1)) RequestsClass now
+  populateOthers next (n - 1) now
+
+-- | Bytes allocated by exactly one `directIdentity` decision against
+-- `state`, isolated from whatever `state` cost to build.
+marginalAllocForStep : RateLimitState -> <IO> Float
+marginalAllocForStep state =
+  let before = allocBytes ()
+  let (_, _) = step state directIdentity RequestsClass 0
+  let after = allocBytes ()
+  after - before
+
+test "a decision's allocation cost does not scale 100x with other active identities" =
+  let fewOthers = populateOthers initRateLimitState 10 0
+  let manyOthers = populateOthers initRateLimitState 1000 0
+  let fewCost = marginalAllocForStep fewOthers
+  let manyCost = marginalAllocForStep manyOthers
+  expectTrue (manyCost <= fewCost * 15.0)
+
+-- (h) the whole-repository export ceiling is a CLASS of its own, not a lower
 -- shared number: `maxRequestsPerWindow` bounds a count of requests, while one
 -- export's response is bounded only by `maxCarBytes`.
 test "the repo-export ceiling is its own, not the shared request ceiling" =

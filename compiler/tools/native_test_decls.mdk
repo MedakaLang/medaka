@@ -44,6 +44,7 @@ import frontend.ast.{Decl, DFunDef, Expr, PWild}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
+  scratchProjectManifest,
   cleanupTempDir,
   runBuildNativeRoots,
   envOr,
@@ -170,9 +171,12 @@ nativeRendered target tsrc userDecls tests =
 -- ── the scratch project ─────────────────────────────────────────────────────
 -- The manifest is what carries trusted-root status to the copy, so a module
 -- whose tests use internal-only externs still builds; `native_doctest.mdk`
--- documents the measurement behind that rule.
-scratchManifest : String
-scratchManifest = "[project]\nname = \"medaka_native_test\"\n"
+-- documents the measurement behind that rule.  It also carries the target
+-- project's own `[dependencies]`, without which the probe cannot resolve a
+-- cross-project import the interpreter arm resolves fine — see
+-- `scratchProjectManifest`.
+scratchManifest : String -> <IO> String
+scratchManifest target = scratchProjectManifest "medaka_native_test" target
 
 -- Named `ts_<basename>` so the copy cannot claim the same module id as the
 -- original (which the loader would then have to choose between).
@@ -188,7 +192,7 @@ runInTmp : String ->
 runInTmp target tsrc tests tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "ts_probe"
-  let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
+  let _ = writeFile (joinPath tmpDir "medaka.toml") (scratchManifest target)
   match writeFile entryPath (probeSource nonce tsrc tests)
     Err e => Err "native test runner: could not write the probe source: \{e}"
     Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce

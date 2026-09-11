@@ -18,13 +18,29 @@
 #      http(s):// / mailto: / bare "#anchor" targets are ignored (nothing to
 #      resolve on disk). A trailing ":NNN" pseudo-anchor (this repo's
 #      informal "see file.mdk:1175" convention, e.g. compiler/STAGE2-DESIGN.md)
-#      is stripped like a fragment before checking.
-#   2. Bare cited source paths in prose/backticks: compiler/… stdlib/… test/…
-#      runtime/… playground/… pds/… with a real extension (.mdk .sh .c .md
-#      .txt .toml .yml). These are cited ROOT-relative by convention
-#      throughout this repo (verified by inspection — e.g. AGENTS.md cites
-#      "compiler/backend/llvm_emit.mdk" from the repo root regardless of
-#      which doc is doing the citing).
+#      is stripped like a fragment before checking. Markdown-link syntax is
+#      only meaningful in markdown, so tier 1 runs over the .md corpus alone —
+#      a `](` span in a shell or Medaka source file is a regex or an
+#      expression, not a link, and resolving it dir-relative would invent
+#      references nobody wrote.
+#   2. Bare cited source paths in prose/backticks/comments: compiler/… stdlib/…
+#      test/… runtime/… playground/… plus one root per manifest-bearing
+#      project, with a real extension (.mdk .sh .c .md .txt .toml .yml). These
+#      are cited ROOT-relative by convention throughout this repo (verified by
+#      inspection — e.g. AGENTS.md cites "compiler/backend/llvm_emit.mdk" from
+#      the repo root regardless of which doc is doing the citing).
+#      The project half of that prefix set is DERIVED from the tracked
+#      medaka.toml manifests, by the same rule test/preflight.sh's generic arm
+#      and test/diff_compiler_project_enrolment.sh use ([W-PROJECT-BY-MANIFEST]
+#      in AGENTS.md) — a hand-typed alternation went stale the moment a new
+#      project landed, which is how sqlite/, parsec/, mq/, gzip/ and
+#      byteparser/ citations went unchecked (#2750).
+#
+# WHOSE CITATIONS ARE CHECKED: tier 2 reads .md, .sh, .mdk and .txt files, not
+# markdown alone (#2824). A relocation pointer left in a shell gate or a
+# Medaka source comment rots exactly like one in a doc — AGENTS.md's
+# [T-COMMENT-REGISTER] demands such a pointer name a repo-relative path, and
+# before this widening nothing checked that it still resolved.
 #
 # Both checks are text-only against the CURRENT source tree — a dead
 # reference means the file genuinely does not exist on disk right now.
@@ -98,10 +114,10 @@ cd "$ROOT" || exit 1
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-command -v git >/dev/null 2>&1 || { echo "FAIL: git not found (needed to enumerate tracked markdown files)"; exit 2; }
+command -v git >/dev/null 2>&1 || { echo "FAIL: git not found (needed to enumerate the tracked citing corpus)"; exit 2; }
 command -v awk >/dev/null 2>&1 || { echo "FAIL: awk not found"; exit 2; }
 
-# ── 1. Enumerate every tracked markdown file. ───────────────────────────────
+# ── 1. Enumerate every tracked citing file. ─────────────────────────────────
 # git ls-files (not `find`) so gitignored/generated trees (playground/dist,
 # node_modules, …) never enter the corpus, and so a filename containing
 # spaces comes through as a whole line, not word-split. No tracked markdown
@@ -116,20 +132,59 @@ command -v awk >/dev/null 2>&1 || { echo "FAIL: awk not found"; exit 2; }
 # lines up to 15KB, at repo-wide-source-code density of `[`/`]`/`(`/`)`, which
 # turned the tier-1/tier-2 extraction loops' substr-and-continue scan
 # quadratic on THAT corpus alone (2+ CPU-minutes measured, still climbing,
-# on a single 15KB line) — a real, reproduced hang, not a hypothetical.
-git ls-files '*.md' ':!:test/snapshots/**' > "$WORK/md_files.txt"
+# on a single 15KB line) — a real, reproduced hang, not a hypothetical. That
+# corpus is 100% .md (derive: `git ls-files 'test/snapshots/*' | sed
+# 's/.*\.//' | sort -u`), so this one exclusion still covers it now that .sh,
+# .mdk and .txt are in the corpus too; the widened extensions carry no
+# comparable corpus (the densest single line among them is
+# test/parse_error_loc_fixtures/deep_bracket_nesting_cap.mdk's 40KB of `[`,
+# which matches NEITHER tier and so costs one linear regex scan, not a
+# retry loop).
+#
+# The two dead-path LEDGERS are excluded for a different reason: their whole
+# content is, by construction, a list of paths that do NOT exist — this gate's
+# own test/DOC-LINK-EXCEPTIONS.txt and its sibling's
+# test/AGENT-DOC-SYMBOL-EXCEPTIONS.txt. Scanning them would make every
+# exception cite its own excused path, and each new REF line would need a
+# second REF line to excuse the first. Neither file is documentation citing a
+# path; both are inventories of paths already known dead.
+git ls-files '*.md' '*.sh' '*.mdk' '*.txt' \
+  ':!:test/snapshots/**' \
+  ':!:test/DOC-LINK-EXCEPTIONS.txt' \
+  ':!:test/AGENT-DOC-SYMBOL-EXCEPTIONS.txt' > "$WORK/citing_files.txt"
 
-if [ ! -s "$WORK/md_files.txt" ]; then
-  echo "FAIL: git ls-files '*.md' found NOTHING (harness bug — wrong cwd, or repo has no markdown)"
+if [ ! -s "$WORK/citing_files.txt" ]; then
+  echo "FAIL: git ls-files found NOTHING to scan (harness bug — wrong cwd, or repo has no docs/sources)"
+  exit 1
+fi
+
+# ── 1b. Derive the tier-2 prefix set. ───────────────────────────────────────
+# Two halves. The fixed half is the roots that are NOT projects: the compiler
+# itself, the stdlib, the test harness, the C runtime, the playground. The
+# derived half is every manifest-bearing project, by the SAME rule
+# test/diff_compiler_project_enrolment.sh:84 and test/preflight.sh's generic
+# arm use — `test/` and `compiler/` manifests are fixtures and the compiler's
+# own project file, not separate projects. awk cannot run `git ls-files`
+# mid-program cleanly, so the alternation is built here and passed in with -v.
+PROJECT_ROOTS="$(git ls-files '*medaka.toml' 2>/dev/null \
+  | grep -v '^test/' | grep -v '^compiler/' \
+  | sed 's|/medaka\.toml$||' | sort -u)"
+
+PREFIX_ALT="$(printf 'compiler\nstdlib\ntest\nruntime\nplayground\n%s\n' "$PROJECT_ROOTS" \
+  | grep -v '^$' | sort -u | tr '\n' '|' | sed 's/|$//')"
+
+if [ -z "$PREFIX_ALT" ]; then
+  echo "FAIL: derived an EMPTY tier-2 prefix set (harness bug — git ls-files failed?)"
   exit 1
 fi
 
 # ── 2. Extract every reference (link + bare cited path) from every file. ────
-# One pass, in awk, reading filenames from md_files.txt via getline (NOT as
+# One pass, in awk, reading filenames from citing_files.txt via getline (NOT as
 # ARGV — filenames with spaces would word-split there). Output TSV:
 #   citing_file <TAB> line <TAB> kind <TAB> raw_target <TAB> resolved_path
 # resolved_path is always relative to $ROOT, normalized (./ and ../ collapsed).
-awk -v LISTFILE="$WORK/md_files.txt" '
+awk -v LISTFILE="$WORK/citing_files.txt" -v PREFIX_ALT="$PREFIX_ALT" \
+    -v PROJECT_ROOTS_S="$(printf '%s' "$PROJECT_ROOTS" | tr '\n' ' ')" '
 function dirnameOf(p,    n, parts, i, res) {
   n = split(p, parts, "/")
   if (n <= 1) return "."
@@ -154,8 +209,25 @@ function normalize(p,    n, parts, out, oi, i, res) {
   return res
 }
 
-function emit(fname, lineno, kind, target, resolved) {
-  printf "%s\t%d\t%s\t%s\t%s\n", fname, lineno, kind, target, normalize(resolved)
+function emit(fname, lineno, kind, target, resolved, alt) {
+  printf "%s\t%d\t%s\t%s\t%s\t%s\n", fname, lineno, kind, target, normalize(resolved),
+         (alt == "" ? "" : normalize(alt))
+}
+
+# The root-relative citation convention is a REPO-ROOT convention, and it stops
+# holding one directory down: inside sqlite/, a comment naming a script under
+# its own "test/" directory means sqlite/test/sql_oracle.sh, not a script at
+# the repo root — 17 such citations across sqlite/ alone. So a citation in a file that
+# lives inside a manifest-bearing project gets a SECOND acceptable resolution,
+# relative to that project root, and counts as live if either resolves. This is
+# deliberately permissive: the text alone cannot say which convention its author
+# meant, and inventing a dead reference is worse than missing one.
+function projectRootOf(fname,    i, r) {
+  for (i = 1; i <= N_PROJ; i++) {
+    r = PROJ[i]
+    if (substr(fname, 1, length(r) + 1) == r "/") return r
+  }
+  return ""
 }
 
 function handleLink(fname, lineno, target,    frag, dir) {
@@ -189,13 +261,72 @@ function handleLink(fname, lineno, target,    frag, dir) {
   }
 }
 
-function handleBare(fname, lineno, target) {
+function handleBare(fname, lineno, target,    proj) {
   # Same ellipsis rule as handleLink: "compiler/.../resolve.mdk" is prose.
   if (target ~ /\.\.\./) return
-  emit(fname, lineno, "BARE", target, target)
+  proj = projectRootOf(fname)
+  emit(fname, lineno, "BARE", target, target, (proj == "" ? "" : proj "/" target))
 }
 
-function processLine(fname, lineno, line,    work, target, scrub, work2, mstart, mlen) {
+# PROSE, in a source file, lives in comments. A repo-relative path appearing in
+# EXECUTABLE text is not a citation of that path — it is an argument, and if it
+# is wrong the script or program fails on its own. Worse, a gate self-test
+# routinely builds a SYNTHETIC tree mirroring the repo layout
+# ("$t1/pds/test/lonely.txt" in pds/test/vector_provenance.sh — 26 such
+# occurrences), and none of those paths is meant to exist here. So for a source
+# file this returns only the comment tail: after the first `#` for shell. A
+# .txt file is prose end to end and a .md file is handled by its own rules, so
+# both keep the whole line.
+#
+# Medaka has TWO comment forms: the line comment `--` handled below, and the
+# block comment `{- ... -}` (the doc-comment register — every compiler module
+# header uses `{- | ... -}`). A block comment can span lines, so MDK_IN_BLOCK
+# is a global carried across calls, reset per citing file at the file-loop
+# start below. Nesting is not a concern (Medaka block comments do not nest),
+# and the doc-comment `|` marker needs no special handling — it is just text
+# to the tier-2 path scanner that consumes this functions return value.
+# (NOTE: this comment lives inside a single-quoted awk program; an apostrophe
+# here ENDS that quote and breaks the script.)
+function proseOf(mode, line,    at, rest, out, openAt, closeAt, dashAt) {
+  if (mode == "sh") {
+    at = index(line, "#")
+    return (at == 0) ? "" : substr(line, at + 1)
+  }
+  if (mode == "mdk") {
+    out = ""
+    rest = line
+    while (length(rest) > 0) {
+      if (MDK_IN_BLOCK) {
+        closeAt = index(rest, "-}")
+        if (closeAt == 0) {
+          out = out " " rest
+          rest = ""
+        } else {
+          out = out " " substr(rest, 1, closeAt - 1)
+          rest = substr(rest, closeAt + 2)
+          MDK_IN_BLOCK = 0
+        }
+        continue
+      }
+      openAt = index(rest, "{-")
+      dashAt = index(rest, "--")
+      if (openAt > 0 && (dashAt == 0 || openAt < dashAt)) {
+        rest = substr(rest, openAt + 2)
+        MDK_IN_BLOCK = 1
+        continue
+      }
+      if (dashAt > 0) {
+        out = out " " substr(rest, dashAt + 2)
+      }
+      rest = ""
+    }
+    return out
+  }
+  return line
+}
+
+function processLine(fname, lineno, line, mode,    isMarkdown, work, target, scrub, work2, mstart, mlen) {
+  isMarkdown = (mode == "md")
   # ---- tier 1: relative markdown links ----
   # RSTART/RLENGTH are GLOBAL awk specials, clobbered by ANY nested match()
   # call — and handleLink() below makes one (for the trailing ":NNN" strip).
@@ -205,12 +336,14 @@ function processLine(fname, lineno, line,    work, target, scrub, work2, mstart,
   # RSTART=0/RLENGTH=-1, so `work` never shrinks and this spins forever.
   # (Reproduced: 99%-CPU infinite loop, millions of duplicate rows, on the
   # very first file with 2+ markdown links across different lines.)
-  work = line
-  while (match(work, /\]\([^)]+\)/)) {
-    mstart = RSTART; mlen = RLENGTH
-    target = substr(work, mstart + 2, mlen - 3)
-    handleLink(fname, lineno, target)
-    work = substr(work, mstart + mlen)
+  if (isMarkdown) {
+    work = line
+    while (match(work, /\]\([^)]+\)/)) {
+      mstart = RSTART; mlen = RLENGTH
+      target = substr(work, mstart + 2, mlen - 3)
+      handleLink(fname, lineno, target)
+      work = substr(work, mstart + mlen)
+    }
   }
 
   # ---- tier 2: bare cited source paths ----
@@ -219,21 +352,37 @@ function processLine(fname, lineno, line,    work, target, scrub, work2, mstart,
   # here would apply the wrong resolution and could double-report) and full
   # URLs (a github.com/.../compiler/foo.mdk fragment inside an http(s) link
   # is not a citation of OUR compiler/foo.mdk).
-  scrub = line
-  gsub(/\]\([^)]*\)/, "]", scrub)
+  scrub = proseOf(mode, line)
+  if (scrub == "") return
+  if (isMarkdown) gsub(/\]\([^)]*\)/, "]", scrub)
   gsub(/https?:\/\/[^ \t)]+/, "", scrub)
 
   # Require a non-path char (or start-of-string) immediately before the
-  # match, or "sqlite/test/overflow_oracle.sh" mis-truncates into a false
-  # match on "test/overflow_oracle.sh" (a DIFFERENT, real path) since
-  # "sqlite" is not one of our six tracked prefixes — reproduced against
-  # sqlite/findings/overflow-write.md. On a bad boundary, retry one
-  # character later (work2 still strictly shrinks every iteration, so this
-  # cannot loop forever).
+  # match, or a longer path whose TAIL happens to start with a tracked prefix
+  # mis-truncates into a false match on a DIFFERENT, real path — e.g.
+  # "docs/stdlib/index.md" would report as a citation of a nonexistent
+  # index.md directly under stdlib/, and ".claude/dossier/…" style paths do
+  # the same to any nested "test/".
+  # Widening the prefix set makes this MORE load-bearing, not less: "sqlite"
+  # is now a first-class prefix, so "sqlite/test/overflow_oracle.sh" is
+  # matched whole at its own start (leftmost match wins) — but the same file
+  # is what originally proved the truncation, and every non-prefix directory
+  # containing one of these names still needs the guard. On a bad boundary,
+  # retry one character later (work2 still strictly shrinks every iteration,
+  # so this cannot loop forever).
   work2 = scrub
-  while (length(work2) > 0 && match(work2, /(compiler|stdlib|test|runtime|playground|pds)\/[A-Za-z0-9_.\/-]+\.(mdk|sh|c|md|txt|toml|yml)/)) {
+  while (length(work2) > 0 && match(work2, "(" PREFIX_ALT ")/[A-Za-z0-9_./-]+\\.(mdk|sh|c|md|txt|toml|yml)")) {
     mstart = RSTART; mlen = RLENGTH
     if (mstart > 1 && substr(work2, mstart - 1, 1) ~ /[A-Za-z0-9_.\/-]/) {
+      work2 = substr(work2, mstart + 1)
+      continue
+    }
+    # The SAME rule at the other end. The extension alternation has no trailing
+    # anchor, so a citation of "stdlib/guide.css" matched only through its
+    # ".c" and was reported as a dead C file; three pds/test/vectors/*.csv
+    # rows reported the same way. A word character after the extension means
+    # the extension is not where the path ended.
+    if (substr(work2, mstart + mlen, 1) ~ /[A-Za-z0-9_]/) {
       work2 = substr(work2, mstart + 1)
       continue
     }
@@ -244,11 +393,17 @@ function processLine(fname, lineno, line,    work, target, scrub, work2, mstart,
 }
 
 BEGIN {
+  N_PROJ = split(PROJECT_ROOTS_S, PROJ, " ")
   while ((getline fname < LISTFILE) > 0) {
+    mode = "txt"
+    if (fname ~ /\.md$/)  mode = "md"
+    if (fname ~ /\.sh$/)  mode = "sh"
+    if (fname ~ /\.mdk$/) mode = "mdk"
+    MDK_IN_BLOCK = 0
     lineno = 0
     while ((getline line < fname) > 0) {
       lineno++
-      processLine(fname, lineno, line)
+      processLine(fname, lineno, line, mode)
     }
     close(fname)
   }
@@ -256,10 +411,10 @@ BEGIN {
 ' > "$WORK/refs.tsv"
 
 TOTAL_REFS="$(wc -l < "$WORK/refs.tsv" | tr -d ' ')"
-TOTAL_FILES="$(wc -l < "$WORK/md_files.txt" | tr -d ' ')"
+TOTAL_FILES="$(wc -l < "$WORK/citing_files.txt" | tr -d ' ')"
 
 if [ "$TOTAL_REFS" -eq 0 ]; then
-  echo "FAIL: checked ZERO references across $TOTAL_FILES markdown files — this is a HARNESS failure"
+  echo "FAIL: checked ZERO references across $TOTAL_FILES citing files — this is a HARNESS failure"
   echo "      (extraction found nothing at all; a fresh clone must never report 0 checked as a pass)."
   exit 1
 fi
@@ -325,8 +480,13 @@ LIVE=0
 EXCUSED_HISTORY=0
 EXCUSED_TODO=0
 
-while IFS="$(printf '\t')" read -r fname lineno kind target resolved; do
+while IFS="$(printf '\t')" read -r fname lineno kind target resolved alt; do
   if [ -e "$resolved" ]; then
+    LIVE=$((LIVE + 1))
+    continue
+  fi
+  # The project-relative second chance (see projectRootOf in the awk above).
+  if [ -n "${alt:-}" ] && [ -e "$alt" ]; then
     LIVE=$((LIVE + 1))
     continue
   fi
@@ -435,7 +595,7 @@ fi
 
 # ── 6. Report. ────────────────────────────────────────────────────────────
 echo
-echo "checked $TOTAL_REFS references across $TOTAL_FILES markdown files"
+echo "checked $TOTAL_REFS references across $TOTAL_FILES citing files (.md .sh .mdk .txt)"
 echo "  live:    $LIVE"
 echo "  excused: $((EXCUSED_HISTORY + EXCUSED_TODO))  ($EXCUSED_HISTORY legitimate history, $EXCUSED_TODO TODO(docs-cleanup) stale paths)"
 echo "  dead:    $DEAD"

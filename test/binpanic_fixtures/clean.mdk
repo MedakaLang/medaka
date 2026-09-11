@@ -1,0 +1,4 @@
+-- The clean counterpart of panics.mdk in this directory: same stdout, no
+-- panic, for `binaryRanClean`'s True branch.
+main : <IO> Unit
+main = println (7 : Int)

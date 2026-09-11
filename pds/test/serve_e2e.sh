@@ -91,6 +91,11 @@ BLOB_MIME='text/plain'
 # of the first be found on disk by content rather than by CID-hex file name.
 BLOB2_TEXT='pds serve_e2e gate fixture blob bytes, the second'
 BLOB2_MIME='application/x-e2e-second'
+# A THIRD declared type, for case 4d's dribbled blob. It must differ from the
+# first two for the same reason they differ from each other: `blob1_sidecar`
+# finds a sidecar on disk by its declared type, and two blobs sharing one type
+# would make that lookup pick either of them.
+SLOW_MIME='application/x-e2e-slow'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
@@ -216,6 +221,19 @@ BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
 [ "$BLOB2_CID" != "$BLOB_CID" ] \
   || fail 'case 4c: the two blob fixtures content-addressed to one CID'
 
+# 4d. a legitimately SLOW but progressing 5 MB upload still completes (#2815).
+#    Case 7 (over-cap body) proves an over-cap body is REJECTED, which is a
+#    different claim: this body is under every size cap, and it arrives over
+#    several times the body phase's no-progress budget in pieces whose gaps each
+#    stay inside it. So it fails against a body-phase bound that is a fixed
+#    deadline rather than a progress budget, and it is what stops case 8c's
+#    defense from being bought by narrowing what an upload is allowed to do.
+#    The client grades the CID itself, against the bytes it meant to send, so a
+#    body truncated at one of the gaps cannot pass by answering 200 to a shorter
+#    blob. Costs real wall time: the gaps are the point.
+client slow-upload "$PORT1" "$TOKEN" "$SLOW_MIME" \
+  || fail 'case 4d: a slow but progressing upload did not complete'
+
 # 5. every remaining route: the six XRPC NSIDs no other case drives, plus
 #    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
 #    both well-knowns proven by this gate rather than by reading the registry.
@@ -291,23 +309,18 @@ client idle "$PORT1" || fail 'case 8: idle timeout'
 client unframed-flood "$PORT1" 300 15 \
   || fail 'case 8b: an unrelated caller went unanswered under an un-framed flood'
 
-# 8c. THIS CELL PINS A LIVE DEFECT AND ASSERTS THE WRONG BEHAVIOR ON PURPOSE.
-#    #2772 is OPEN. Case 8b proves its HEADER half is fixed; its BODY half is
-#    not. A connection that TERMINATES its headers and declares a large
-#    Content-Length leaves the un-framed census entirely, and then holds one
-#    of maxConcurrentConnections (256) for the whole of requestTimeout (60 s)
-#    while sending nothing. So this reports PASS when the unrelated caller is
-#    DENIED, and goes RED when it starts being answered — which is exactly
-#    what a fix to #2772's body half will do, forcing whoever lands it to
-#    rewrite this into the positive assertion 8b already makes. Do not
-#    "repair" a red here by loosening it.
-#    The 12 s budget is the discriminator: far below the 60 s the denial
-#    lasts today, and above any body-phase budget a fix would plausibly
-#    impose (it must be under idleTimeout, 30 s). Note that the stall needs
-#    no dribbled byte — past the header section the silence budget is
-#    idleTimeout, so 12 s of pure silence holds the slot outright.
+# 8c. #2815: the same claim as 8b one phase further on. 300 connections that
+#    TERMINATE their headers and declare a large Content-Length leave the
+#    un-framed census entirely, so the census 8b exercises defends nothing
+#    here; what frees their slots is bodyProgressTimeout (5 s), the body
+#    phase's no-progress budget. An unrelated caller must still be ANSWERED.
+#    The 12 s budget is the discriminator: above the body progress budget and
+#    far below the requestTimeout (60 s) a declared-but-unsent body used to be
+#    granted, so a server that bounds the body phase only by the whole
+#    request's budget cannot pass it. Case 4d is the other half — the same
+#    budget must not close a body that keeps arriving.
 client body-stall-flood "$PORT1" 300 12 \
-  || fail 'case 8c: #2772 body-phase pin — see the comment above, this cell asserts the CURRENT BAD behavior; a failure here most likely means the hole is FIXED and the pin must be rewritten as a positive assertion'
+  || fail 'case 8c: an unrelated caller went unanswered under a stalled-body flood'
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
@@ -339,6 +352,15 @@ client get-blob "$PORT2" "$DID" "$BLOB2_CID" "$BLOB2_MIME" "$BLOB2_TEXT" \
 # is not part of the signed block graph and must never reach `repoFromBlocks`.
 [ -d "$DATA/blobs" ] || fail 'case 14: no blobs directory beneath --data'
 
+# 33a. the ONLINE half of the backup/restore rehearsal (#2613), taken while this
+#    server is still up: the repository serialized through the server's own
+#    request path, which IS the path every write is serialized against. The
+#    digest recorded here is what the restored copy below has to reproduce.
+ORIGINAL_REPO=$(client repo-digest "$PORT2" "$DID") \
+  || fail 'case 33: sync.getRepo against the original server'
+[ -n "$ORIGINAL_REPO" ] \
+  || fail 'case 33: the original server exported an empty getRepo digest'
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
@@ -356,13 +378,21 @@ blob1_sidecar() {
   grep -l -F -x "$BLOB_MIME" "$1"/blobs/*/*.mime 2>/dev/null | head -1
 }
 
-start_resume_at() {
+# start_resume_with <data> <key file> <token-secret file> <out> <err>: a resumed
+# run (no --init) over that data directory, on those two secret files. Case 33
+# runs one on RESTORED copies of all three, so neither secret can be the
+# original by default.
+start_resume_with() {
   "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+    --key "$2" --token-secret "$3" \
     --data "$1" --port 0 \
-    >"$2" 2>"$3" &
+    >"$4" 2>"$5" &
   SERVER_PID=$!
+}
+
+start_resume_at() {
+  start_resume_with "$1" "$WORK/key.hex" "$WORK/token.hex" "$2" "$3"
 }
 
 # residue_case <label> <data dir> <served|skipped>: start over that directory,
@@ -436,6 +466,95 @@ SIDECAR18=$(blob1_sidecar "$DATA18")
 [ -n "$SIDECAR18" ] || fail 'case 18: could not find the first blob sidecar'
 rm "${SIDECAR18%.mime}"
 residue_case case18 "$DATA18" skipped
+
+# ── a RESTORED --data dir: the backup/restore rehearsal (#2613) ────────────
+# 33. A backup is taken, a SEPARATE data directory is restored from it, and a
+#    server is started on the restored copy. What that server exports from
+#    `com.atproto.sync.getRepo` must byte-match what the original exported
+#    (33a, captured above while the original was still running), both blobs
+#    must come back under their declared types, and the restored copy must be
+#    a LIVE server rather than a readable museum piece.
+#
+#    The copy is taken with the process DOWN, which is the procedure
+#    `docs/ops/PDS-DEPLOY.md` § "Backup and restore" documents and the answer
+#    this tree gives to the torn-copy question: `applyRequest`'s write
+#    serialization is a single `liftIO` in a cooperatively scheduled process,
+#    not a lock an external `cp` can take.
+BACKUP="$WORK/backup"
+mkdir -p "$BACKUP"
+cp -R "$DATA" "$BACKUP/data"
+cp "$WORK/key.hex" "$BACKUP/key.hex"
+cp "$WORK/token.hex" "$BACKUP/token.hex"
+
+# The restore is a THIRD location, not the backup read in place: restoring over
+# the backup would leave the rehearsal with nothing to fall back to, and it is
+# the restored copy's own files this case grades.
+RESTORED="$WORK/restored"
+RESTORED_KEY="$WORK/restored-key.hex"
+RESTORED_TOKEN="$WORK/restored-token.hex"
+cp -R "$BACKUP/data" "$RESTORED"
+cp "$BACKUP/key.hex" "$RESTORED_KEY"
+cp "$BACKUP/token.hex" "$RESTORED_TOKEN"
+# A restore has to reproduce the MODES as well as the bytes: `pds serve` refuses
+# a hex secret file any other account can read, so a restore that widened one
+# does not start at all. `cp -R` is not `cp -a`; the procedure in the ops doc
+# preserves modes, and this re-asserts them rather than assuming the copy did.
+chmod 600 "$RESTORED_KEY" "$RESTORED_TOKEN"
+if [ -f "$RESTORED/credential" ]; then
+  chmod 600 "$RESTORED/credential"
+fi
+if [ -f "$RESTORED/session-secret" ]; then
+  chmod 600 "$RESTORED/session-secret"
+fi
+
+# The original directory must come out of this untouched — the restored server
+# is a second server over its own files, not a second handle on these.
+ORIGINAL_HEAD=$(cksum "$DATA/head")
+
+start_resume_with "$RESTORED" "$RESTORED_KEY" "$RESTORED_TOKEN" \
+  "$WORK/serve33.out" "$WORK/serve33.err"
+PORT33=$(wait_for_port "$WORK/serve33.out") || {
+  cat "$WORK/serve33.err" >&2
+  fail 'case 33: the restored server did not report readiness'
+}
+require_empty "$WORK/serve33.err" 'case 33 restored server startup'
+
+RESTORED_REPO=$(client repo-digest "$PORT33" "$DID") \
+  || fail 'case 33: sync.getRepo against the restored server'
+[ "$RESTORED_REPO" = "$ORIGINAL_REPO" ] \
+  || fail "case 33: the restored server's getRepo export is '$RESTORED_REPO', the original's was '$ORIGINAL_REPO'"
+
+# Blobs are not in the CAR — they live beside the block graph — so the export
+# match above says nothing about them. Both, byte for byte, under their
+# DECLARED types, from the restored copy.
+client get-blob "$PORT33" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
+  || fail 'case 33: the first blob did not survive the restore'
+client get-blob "$PORT33" "$DID" "$BLOB2_CID" "$BLOB2_MIME" "$BLOB2_TEXT" \
+  || fail 'case 33: the second blob did not survive the restore'
+
+# The restored copy is a working server, not just a readable one: the account
+# password still logs in (the credential was part of the backup) and a new
+# signed commit is accepted on the restored signing key. That write also makes
+# the digest comparison above non-vacuous — the export is a function of the
+# repository's contents, so it MUST move when a record is added.
+RESTORED_LOGIN=$(client login "$PORT33" "$HANDLE" "$PASSWORD") \
+  || fail 'case 33: the account password does not log in against the restored copy'
+RESTORED_ACCESS=${RESTORED_LOGIN%% *}
+client write "$PORT33" "$RESTORED_ACCESS" "$DID" "$COLLECTION" 'restored-1' 200 \
+  || fail 'case 33: the restored copy refused a new write'
+AFTER_WRITE_REPO=$(client repo-digest "$PORT33" "$DID") \
+  || fail 'case 33: sync.getRepo after the write to the restored copy'
+[ "$AFTER_WRITE_REPO" != "$RESTORED_REPO" ] \
+  || fail 'case 33: a new record did not change the export digest (the match above proves nothing)'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve33.err" 'case 33 restored server (post-run)'
+
+[ "$(cksum "$DATA/head")" = "$ORIGINAL_HEAD" ] \
+  || fail 'case 33: the restored server wrote into the ORIGINAL data directory'
+echo "case 33: restored from backup, getRepo export byte-identical ($RESTORED_REPO), both blobs intact, restored copy writable"
 
 # ── third, independent --data dir: --init overwrite refusal (#2481) ────────
 
@@ -955,4 +1074,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'

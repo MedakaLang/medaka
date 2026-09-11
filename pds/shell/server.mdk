@@ -2,7 +2,7 @@
    HTTP/1.1 lifecycle around the pure protocol core.
 
    Nothing here knows what a request means. Bytes arrive from a socket, are
-   framed by `lib.http`'s `scanRequestBoundaryFrom` and by nothing else, are
+   framed by `lib.http`'s `scanRequestBoundaryWithin` and by nothing else, are
    handed whole to `lib.server_core`'s `handleBytes`, and the response bytes it
    returns go back out. The successor `Store` is persisted through `shell.persist`
    and `shell.blobfile` and then published into the one `Ref Store` every
@@ -16,11 +16,11 @@
    Every per-connection bound lives here rather than in `lib.resource_limits`
    because each is a `Duration` or a socket-scheduling count, neither of which
    the pure core can express. The one bound this module does NOT own is the
-   per-request byte ceiling: `scanRequestBoundaryFrom` already refuses a buffer
+   per-request byte ceiling: `scanRequestBoundaryWithin` already refuses a buffer
    past `maxHttpRequestBytes`, so re-checking it here would be a second,
    divergent answer to a question `lib.http` has already settled. -}
 
-import array.{sliceClamped}
+import array.{blit, sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
 import lib.credential.{
@@ -42,7 +42,7 @@ import lib.http.{
   requestHeaders,
   requestKeepAlive,
   Response,
-  scanRequestBoundaryFrom,
+  scanRequestBoundaryWithin,
   serializeResponse,
 }
 import lib.ratelimit.{
@@ -86,9 +86,29 @@ import shell.persist.{persistCredential, persistSave}
 import string.{toUtf8}
 import time.{Duration, now, seconds}
 
--- | How long one connection may stay silent between reads before it is closed.
-idleTimeout : Duration
-idleTimeout = seconds 30
+{- | How long a connection in the BODY phase may go without delivering a new
+   byte before it is closed (#2815).
+
+   A PROGRESS budget, not a phase deadline: every read that delivers bytes
+   starts it again, so an upload that keeps arriving is never closed on it
+   however long it takes in total — `requestTimeout` is what bounds that. What
+   it does close is the one shape nothing else bounded: a peer that terminates
+   its headers, declares a `Content-Length`, and then sends nothing. That peer
+   has left the un-framed census (`maxUnframedConnections`) behind, so the only
+   budget left over it was the whole request's, and it held one of
+   `maxConcurrentConnections` for the whole of that while delivering nothing.
+
+   It is the body phase's per-read silence bound as well as its progress bound,
+   and those are one question asked once rather than two: `recvWithin` parks
+   until either bytes arrive or the budget passes, so a read that returns bytes
+   restarts the budget and a read that returns nothing has consumed all of it.
+
+   Deliberately its own constant rather than `headerTimeout`, whose value it
+   coincides with: a header section is capped at `maxHttpHeaderBytes` while a
+   body may carry megabytes, so the two answer different questions and diverge
+   the moment either is tuned. -}
+bodyProgressTimeout : Duration
+bodyProgressTimeout = seconds 5
 
 -- | How long one request may take to arrive in full, however many reads it
 -- takes. Reset for each request on a kept-alive connection.
@@ -136,8 +156,16 @@ maxConcurrentConnections = 256
    for the whole of that. So this ceiling is deliberately a small fraction of
    that one. The un-framed state is not where a healthy connection spends any
    measurable time — a client that has sent a request has sent its headers
-   with it — so a fraction bounds an attacker without bounding legitimate
-   concurrency.
+   with it.
+
+   This ceiling does NOT bound an attacker without bounding legitimate
+   concurrency (#2816): it is an admission gate ahead of
+   `maxConcurrentConnections`, not a carved-out share of it, so once 64
+   connections sit un-framed the 65th is refused regardless of how much of
+   the 256 is free — legitimate callers included. An un-framed connection
+   reaches no rate-limit class, so a single reconnecting source can hold the
+   gate shut indefinitely at no cost to itself. Closing that gap needs a
+   ceiling that distinguishes sources, which this one does not; see #2816.
 
    The charge is global rather than per-caller because no peer identity
    exists before headers: `accept` yields a `Connection` and the runtime has
@@ -158,8 +186,8 @@ maxUnframedConnections = 64
    as the deadline `frameLoop` tests, so that a caller trickling one byte at a
    time is closed on total elapsed time; and as the per-read timeout
    `readMore` uses while the headers are unterminated, so that a caller
-   sending nothing at all is closed on it rather than sitting out the whole of
-   `idleTimeout` before any deadline is looked at. -}
+   sending nothing at all is closed on it rather than sitting out a whole body
+   budget before any deadline is looked at. -}
 headerTimeout : Duration
 headerTimeout = seconds 5
 
@@ -465,7 +493,8 @@ releaseUnframed (UnframedSlot unframed held) =
 
 -- | Retire it as soon as the scan leaves the header section, whether or not a
 -- whole request has framed yet: the body that may follow is bounded by
--- `requestTimeout` and by `maxHttpRequestBytes`, not by this census.
+-- `bodyProgressTimeout`, `requestTimeout` and `maxHttpRequestBytes`, not by
+-- this census.
 releaseWhenHeadersDone : UnframedSlot -> HttpScan -> Unit
 releaseWhenHeadersDone slot scan =
   if httpScanInHeaders scan then () else releaseUnframed slot
@@ -476,6 +505,89 @@ retireConnection : Ref Int -> UnframedSlot -> Unit
 retireConnection active slot =
   let () = releaseUnframed slot
   active := !active - 1
+
+{- | A connection's accumulated read bytes: a backing array with spare
+   capacity, and how many of its bytes are live. Appending a chunk
+   (`readBufferAppend`) copies only the chunk, doubling the backing store
+   when it doesn't fit — a request delivered in K reads costs O(bytes), not
+   O(bytes × K), which `buf ++ bytes` on a plain `Array Int` would cost
+   because `++` copies its whole left operand on every call.
+
+   The live count is exactly what `scanRequestBoundaryWithin` calls `avail`:
+   the backing array's own length is spare capacity, never received bytes,
+   so nothing may read past it.
+
+   Exported abstractly, with the six operations below, for
+   `pds/test/read_buffer_test.mdk`: the growth arithmetic is the one part of
+   this module that is pure arithmetic over a mutable cell and so can be
+   asserted without a socket. The representation stays private — a caller
+   outside this module cannot reach either `Ref`. -}
+export data ReadBuffer = ReadBuffer (Ref (Array Int)) (Ref Int)
+
+-- | An empty buffer; the backing store is allocated on the first append.
+export
+readBufferNew : Unit -> ReadBuffer
+readBufferNew _ = ReadBuffer (Ref [||]) (Ref 0)
+
+-- | How many bytes are live, in O(1): a `Ref Int` deref, never a traversal of
+-- the backing store.
+export
+readBufferLen : ReadBuffer -> Int
+readBufferLen (ReadBuffer _ len) = !len
+
+readBufferIsEmpty : ReadBuffer -> Bool
+readBufferIsEmpty buf = readBufferLen buf == 0
+
+-- | The backing array, for a caller (`scanRequestBoundaryWithin`,
+-- `parseRequestAt`) that is handed the live count separately and must never
+-- read past it on its own.
+export
+readBufferBacking : ReadBuffer -> Array Int
+readBufferBacking (ReadBuffer backing _) = !backing
+
+-- | The smallest doubling of `cap` that is at least `needed`; an empty
+-- backing store starts doubling from 1 rather than from 0.
+export
+growCapacity : Int -> Int -> Int
+growCapacity cap needed =
+  if cap >= needed then
+    cap
+  else
+    growCapacity (if cap == 0 then 1 else cap * 2) needed
+
+{- | Appends `bytes` in place. When the backing store doesn't fit them, it is
+   replaced by a doubled one first, copying the live prefix once (`blit`);
+   the append itself is one more `blit`, of exactly `arrayLength bytes`
+   elements. Neither copy is proportional to bytes already buffered from
+   earlier reads. -}
+export
+readBufferAppend : Array Int -> ReadBuffer -> Unit
+readBufferAppend bytes (ReadBuffer backing len) =
+  let n = arrayLength bytes
+  let needed = !len + n
+  let () =
+    if needed > arrayLength !backing then
+      let grown = arrayMake (growCapacity (arrayLength !backing) needed) 0
+      let () = blit !backing 0 grown 0 !len
+      backing := grown
+  let () = blit bytes 0 !backing !len n
+  len := needed
+
+{- | A fresh buffer holding the live bytes from `from` to the end — the
+   leftover a finished request carries into the next one
+   (`respondAt`'s `rest`). Copies the leftover once, the same single copy
+   `sliceClamped` performed on the old `Array Int` representation. -}
+readBufferFrom : Int -> ReadBuffer -> ReadBuffer
+readBufferFrom from buf =
+  let sliced = sliceClamped from (readBufferLen buf) (readBufferBacking buf)
+  ReadBuffer (Ref sliced) (Ref (arrayLength sliced))
+
+-- | The live bytes as an ordinary array, for the one caller
+-- (`rejectBufferAt`) that hands the whole buffer to `applyRequest` rather
+-- than a scanned `[0, boundary)` prefix.
+export
+readBufferLive : ReadBuffer -> Array Int
+readBufferLive buf = sliceClamped 0 (readBufferLen buf) (readBufferBacking buf)
 
 {- | Accept connections until the listener fails or is closed, running each on
    its own task, never more than `maxConcurrentConnections` at a time.
@@ -580,7 +692,7 @@ serveConnection server dir storeRef limiterRef trustedProxy conn active unframed
       trustedProxy
       conn
       (UnframedSlot unframed held)
-      [||]
+      (readBufferNew ())
       True
     _ <- A.close conn
     liftIO (u => retireConnection active (UnframedSlot unframed held))
@@ -602,7 +714,7 @@ connectionLoop : Server ->
   TrustedProxy ->
   Connection ->
   UnframedSlot ->
-  Array Int ->
+  ReadBuffer ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 connectionLoop server dir storeRef limiterRef trustedProxy conn slot pending firstRequest =
@@ -622,7 +734,7 @@ connectionLoop server dir storeRef limiterRef trustedProxy conn slot pending fir
       httpScanStart
       firstRequest
 
--- `scanRequestBoundaryFrom` is the ONLY notion of a complete request in this
+-- `scanRequestBoundaryWithin` is the ONLY notion of a complete request in this
 -- module: nothing here inspects a byte of the buffer on its own. The `HttpScan`
 -- it hands back is carried to the next read so that a trickling client costs
 -- what it sent rather than what it has sent so far; it is opaque here, and a
@@ -636,12 +748,14 @@ frameLoop : Server ->
   Connection ->
   UnframedSlot ->
   Deadlines ->
-  Array Int ->
+  ReadBuffer ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 frameLoop server dir storeRef limiterRef trustedProxy conn slot deadlines buf scan firstRequest =
-  match scanRequestBoundaryFrom buf 0 scan
+  let scanned =
+    scanRequestBoundaryWithin (readBufferBacking buf) (readBufferLen buf) 0 scan
+  match scanned
     (HttpFramedAt boundary, _) =>
       let () = releaseUnframed slot
       respond
@@ -686,7 +800,7 @@ framePending : Server ->
   Connection ->
   UnframedSlot ->
   Deadlines ->
-  Array Int ->
+  ReadBuffer ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
@@ -721,7 +835,7 @@ readMore : Server ->
   Connection ->
   UnframedSlot ->
   Deadlines ->
-  Array Int ->
+  ReadBuffer ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
@@ -734,6 +848,7 @@ readMore server dir storeRef limiterRef trustedProxy conn slot deadlines buf sca
         if arrayLength bytes == 0 then
           deferPure (endOfStream buf)
         else
+          let () = readBufferAppend bytes buf
           frameLoop
             server
             dir
@@ -743,24 +858,23 @@ readMore server dir storeRef limiterRef trustedProxy conn slot deadlines buf sca
             conn
             slot
             deadlines
-            (buf ++ bytes)
+            buf
             scan
             firstRequest
 
--- | How long this read may find nothing. A peer that has not terminated its
--- headers gets the header budget rather than the idle one: the deadline in
--- `framePending` is only consulted between reads, so a peer that sends
--- nothing at all would otherwise sit out the whole of `idleTimeout` before
--- anything looked at its header budget.
+-- | How long this read may find nothing: whichever phase's budget the scan is
+-- in. The deadline in `framePending` is only consulted between reads, so a peer
+-- that sends nothing at all would otherwise sit out a read budget belonging to
+-- some other phase before anything looked at the one it is actually in.
 silenceBudget : HttpScan -> Duration
 silenceBudget scan =
-  if httpScanInHeaders scan then headerTimeout else idleTimeout
+  if httpScanInHeaders scan then headerTimeout else bodyProgressTimeout
 
 -- A peer that closes between requests has finished; one that closes part way
 -- through a request has not.
-endOfStream : Array Int -> Result String Unit
+endOfStream : ReadBuffer -> Result String Unit
 endOfStream buf =
-  if arrayLength buf == 0 then Ok () else Err "connection closed mid-request"
+  if readBufferIsEmpty buf then Ok () else Err "connection closed mid-request"
 
 -- The rate-limit decision is taken here, once per framed request, because
 -- this is the one place that holds both the parsed `Request` (headers, for
@@ -774,7 +888,7 @@ respond : Server ->
   TrustedProxy ->
   Connection ->
   UnframedSlot ->
-  Array Int ->
+  ReadBuffer ->
   Int ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
@@ -801,17 +915,17 @@ respondAt : Server ->
   TrustedProxy ->
   Connection ->
   UnframedSlot ->
-  Array Int ->
+  ReadBuffer ->
   Int ->
   Bool ->
   Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 respondAt server dir storeRef limiterRef trustedProxy conn slot buf boundary firstRequest nowSeconds =
-  let parsed = parseRequestAt buf 0 boundary
+  let parsed = parseRequestAt (readBufferBacking buf) 0 boundary
   let keepAlive = match parsed
     Ok request => requestKeepAlive request
     Err _ => False
-  let rest = sliceClamped boundary (arrayLength buf) buf
+  let rest = readBufferFrom boundary buf
   let charged =
     applyRateLimit
       limiterRef
@@ -833,7 +947,11 @@ respondAt server dir storeRef limiterRef trustedProxy conn slot buf boundary fir
         (serializeResponse refusal)
     None => defer
       response <- liftIO (u =>
-        applyRequest server dir storeRef (sliceClamped 0 boundary buf))
+        applyRequest
+          server
+          dir
+          storeRef
+          (sliceClamped 0 boundary (readBufferBacking buf)))
       sendAndContinue
         server
         dir
@@ -853,7 +971,7 @@ sendAndContinue : Server ->
   TrustedProxy ->
   Connection ->
   UnframedSlot ->
-  Array Int ->
+  ReadBuffer ->
   Bool ->
   Array Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
@@ -890,7 +1008,7 @@ rejectBuffer : Server ->
   Ref Store ->
   Ref RateLimitState ->
   Connection ->
-  Array Int ->
+  ReadBuffer ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
@@ -902,7 +1020,7 @@ rejectBufferAt : Server ->
   Ref Store ->
   Ref RateLimitState ->
   Connection ->
-  Array Int ->
+  ReadBuffer ->
   Bool ->
   Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
@@ -917,5 +1035,6 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds =
     Some refusal =>
       A.sendAllWithin writeTimeout conn (serializeResponse refusal)
     None => defer
-      response <- liftIO (u => applyRequest server dir storeRef buf)
+      response <- liftIO (u =>
+        applyRequest server dir storeRef (readBufferLive buf))
       A.sendAllWithin writeTimeout conn response

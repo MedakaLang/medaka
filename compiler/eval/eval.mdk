@@ -553,11 +553,9 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 --     the first value param.  That is #413.
 --   * None  = "this impl does not define the method at all" ⇒ it inherits the
 --     interface DEFAULT, and dispatch will land on the generic default body.
--- #315 CORRECTION: this comment used to justify None's old "apply the dicts anyway"
--- arm with "collapsing the two would strip the dicts a default method's LIFTED body
--- needs".  That reasoning is wrong, and it is why the None arm looked deliberate: a
--- lifted default is one desugar's fillImplDefaults specialised INTO the impl, which
--- makes it an ordinary ImplMethod — so it HAS an entry and returns Some, never None.
+-- #315: a lifted default is one desugar's fillImplDefaults specialised INTO the
+-- impl, which makes it an ordinary ImplMethod — so it HAS an entry and returns
+-- Some, never None.
 -- The only body None ever reaches is the interface's own GENERIC default, shared by
 -- every impl, which declares no impl-dict params at all.  Applying them there bound
 -- the dict to `lt`'s first value param → "applied non-function: false" (#315).  The
@@ -674,8 +672,7 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 --     `medaka build` exits 1 with no binary.  In-tree records: the #1617 row and
 --     the arm-set ledger in `test/diff_compiler_dict_semantics.sh` (both cells),
 --     that fixture's own header, and `PLAN.md`'s slice-7 entry for the build
---     cell.  An earlier revision of THIS paragraph said #1617 "builds and
---     E-PANICs"; there was never a binary to run.
+--     cell.
 --
 -- 🚨 #1630 IS ALSO THE CASE AGAINST BOUNDING A CLASS FROM ONE EXAMPLE.  This
 -- paragraph declared `TyConstrained` "measured benign … peeling it yields a
@@ -3034,11 +3031,8 @@ runtimePanic code msg = match !currentEvalLoc
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
--- `\u{01}` (SOH), written as an ESCAPE, not as a raw 0x01 byte. It used to be raw --
--- `medaka fmt`'s string escaper passed control chars through untouched, so the byte
--- survived every reformat. The same defect put a literal NUL in printer.mdk, which
--- made that file BINARY to grep (see printer.mdk's escStringLit note). The escaper
--- now emits \0 and \u{XX}, so this escape round-trips instead of being lowered back.
+-- `\u{01}` (SOH), written as an ESCAPE, not as a raw 0x01 byte.
+-- History: `.claude/dossier/tooling.md` § `fmtSentinel`'s `\u{01}` escape.
 fmtSentinel : String
 fmtSentinel = "\u{01}"
 

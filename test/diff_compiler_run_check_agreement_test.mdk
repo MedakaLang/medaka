@@ -43,14 +43,15 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads the
    corpus, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{Agreement(..), checkRunBuild, verdictOf}
+import compiler_cli_test_support.{
+  Agreement(..), binaryRanClean, checkRunBuild, sweepUnits, verdictOf
+}
 import fs.{expectUnitCount, fixtureFiles}
-import io.{runVerb}
 import list.{somes, sort}
 import path.{dirname, stem}
 import string.{contains, endsWith, padRight, trim, unlines}
 import test.{Expectation, fail, pass}
-import test_process.{medakaRoot, scratchDir}
+import test_process.{medakaRoot}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -75,7 +76,7 @@ data Row = Row {
 -- The value grades that are failures. A row also fails on any verdict
 -- disagreement; these are the ones the verdict columns cannot express.
 badValues : List String
-badValues = ["DIFF", "WRONG", "NOPIN", "RANPANIC", "EMITPANIC"]
+badValues = ["DIFF", "WRONG", "NOPIN", "RANPANIC", "EMITPANIC", "BINPANIC"]
 
 -- The third argument is the `<name>.out` file's contents, `Err` when it is
 -- absent.
@@ -95,6 +96,8 @@ valueColumn "ACCEPT" a (Ok want) =
     "DIFF"
   else if want /= a.runOut then
     "WRONG"
+  else if not (binaryRanClean a) then
+    "BINPANIC"
   else
     "ok"
 valueColumn _ _ _ = "-"
@@ -158,16 +161,12 @@ summarize what graded failures =
     "\{intToString (length failures)} of \{intToString graded} fixtures \{what}:\n\{unlines failures}"
 
 sweep : List String -> <Exec "_", FileRead "_", IO> Expectation
-sweep entries = match scratchDir
-  Err e => fail "could not make a scratch directory: \{e}"
-  Ok scratch =>
-    let rows = map (gradeOne scratch) entries
-    let failures = somes (map rowFailure rows)
-    let _ = runVerb "rm" ["-rf", scratch]
-    summarize
-      "disagree with their pinned verdict or value"
-      (length rows)
-      failures
+sweep entries =
+  sweepUnits
+    entries
+    gradeOne
+    rowFailure
+    (summarize "disagree with their pinned verdict or value")
 
 {- | The corpus's fixtures: its top-level `.mdk` files. `fixtureFiles`
    carries the anti-vacuity floor, so a corpus that reads cleanly but holds

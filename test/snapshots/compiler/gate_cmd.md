@@ -1,5 +1,5 @@
 # META
-source_lines=2816
+source_lines=2819
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -99,6 +99,10 @@ import support.util.{
   startsWith,
   stringTrim,
 }
+
+-- `withStrictDash` (`args`): every `ArgSpec` in this file wraps its spec with
+-- it so an undeclared `-x`-shaped token is rejected as an unknown flag rather
+-- than silently accepted as a positional argument.
 
 -- ── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -237,9 +241,7 @@ missingValueOverride sp ((flg, custom) :: rest) msg =
   else
     missingValueOverride sp rest msg
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 listArgSpec : ArgSpec
 listArgSpec =
   withStrictDash
@@ -928,9 +930,7 @@ data RunArgs = RunArgs {
   noStaleCheck : Bool,
 }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 runArgSpec : ArgSpec
 runArgSpec =
   withStrictDash
@@ -1680,9 +1680,7 @@ verifyOutput root gates shs = match verifyClasses root gates shs
 -- "print to stderr and exit 1" path is exactly what we want here too.
 data VerifyArgs = VerifyArgs { registry : Option String }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 verifyArgSpec : ArgSpec
 verifyArgSpec =
   withStrictDash
@@ -1846,9 +1844,20 @@ corpusMatches path (c :: cs)
   | underDir c path = "corpus:\{c}" :: corpusMatches path cs
   | otherwise = corpusMatches path cs
 
+-- A gate's own `run` module is an implicit source: editing it is editing what
+-- the gate most directly asserts, whether or not any `sources` glob happens
+-- to also cover it (#2822) — a `sources` coincidence is not a design. Scoped
+-- to `kind = "native"`: for a `kind = "exec"` gate, `run` names a shell
+-- script, not the `*_test.mdk` module the gate's own assertions live in.
+runMatches : String -> Gate -> List String
+runMatches path g =
+  if g.kind == "native" && path == g.run then ["run:\{g.run}"] else []
+
 targetedReasons : String -> Gate -> List String
 targetedReasons path g =
-  sourceMatches path g.sources ++ corpusMatches path g.corpus
+  sourceMatches path g.sources
+    ++ corpusMatches path g.corpus
+    ++ runMatches path g
 
 explainPathHits : String -> List Gate -> List (Gate, List String)
 explainPathHits _ [] = []
@@ -1963,9 +1972,7 @@ data ExplainArgs = ExplainArgs {
   prose : Bool,
 }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 explainArgSpec : ArgSpec
 explainArgSpec =
   withStrictDash
@@ -2269,9 +2276,7 @@ data ReachArgs = ReachArgs {
 -- promise would be worth nothing if a leading `-` could turn it into exit 1.
 -- `args.mdk`'s `TrailingAfterSeparator` is exactly this policy: it consumes
 -- the first bare `--` and hands everything after it back verbatim in `rest`.
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob. Composes with
+-- withStrictDash: see the note near the imports above. Composes with
 -- `withTrailing` below — the `--` escape hatch still hands anything after it
 -- to `rest` verbatim, dash-shaped or not; strictDash only governs tokens
 -- BEFORE the separator.
@@ -2763,9 +2768,7 @@ data BudgetArgs = BudgetArgs {
   commitMessage : String,
 }
 
--- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
--- fall through as a positional pre-migration; base rejected any leading-`-`
--- token here, so this restores that floor via the S-5 knob.
+-- withStrictDash: see the note near the imports above.
 budgetArgSpec : ArgSpec
 budgetArgSpec =
   withStrictDash
@@ -3178,8 +3181,10 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "corpusMatches" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "corpusMatches" (PWild (PList)) (EListLit))
 (DFunDef false "corpusMatches" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "underDir") (EVar "c")) (EVar "path")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "corpus:")) (EApp (EVar "display") (EVar "c"))) (ELit (LString ""))) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "runMatches" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "runMatches" ((PVar "path") (PVar "g")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EBinOp "==" (EVar "path") (EFieldAccess (EVar "g") "run"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "run:")) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EListLit)))
 (DTypeSig false "targetedReasons" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "targetedReasons" ((PVar "path") (PVar "g")) (EBinOp "++" (EApp (EApp (EVar "sourceMatches") (EVar "path")) (EFieldAccess (EVar "g") "sources")) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EFieldAccess (EVar "g") "corpus"))))
+(DFunDef false "targetedReasons" ((PVar "path") (PVar "g")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "sourceMatches") (EVar "path")) (EFieldAccess (EVar "g") "sources")) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EFieldAccess (EVar "g") "corpus"))) (EApp (EApp (EVar "runMatches") (EVar "path")) (EVar "g"))))
 (DTypeSig false "explainPathHits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "explainPathHits" (PWild (PList)) (EListLit))
 (DFunDef false "explainPathHits" ((PVar "path") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rs") (EApp (EApp (EVar "targetedReasons") (EVar "path")) (EVar "g"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "explainPathHits") (EVar "path")) (EVar "gs"))) (DoExpr (EIf (EApp (EVar "isEmptyStrs") (EVar "rs")) (EVar "rest") (EBinOp "::" (ETuple (EVar "g") (EVar "rs")) (EVar "rest"))))))
@@ -3758,8 +3763,10 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "corpusMatches" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "corpusMatches" (PWild (PList)) (EListLit))
 (DFunDef false "corpusMatches" ((PVar "path") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "underDir") (EVar "c")) (EVar "path")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "corpus:")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ""))) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "runMatches" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "runMatches" ((PVar "path") (PVar "g")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EBinOp "==" (EVar "path") (EFieldAccess (EVar "g") "run"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "run:")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EListLit)))
 (DTypeSig false "targetedReasons" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "targetedReasons" ((PVar "path") (PVar "g")) (EBinOp "++" (EApp (EApp (EVar "sourceMatches") (EVar "path")) (EFieldAccess (EVar "g") "sources")) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EFieldAccess (EVar "g") "corpus"))))
+(DFunDef false "targetedReasons" ((PVar "path") (PVar "g")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "sourceMatches") (EVar "path")) (EFieldAccess (EVar "g") "sources")) (EApp (EApp (EVar "corpusMatches") (EVar "path")) (EFieldAccess (EVar "g") "corpus"))) (EApp (EApp (EVar "runMatches") (EVar "path")) (EVar "g"))))
 (DTypeSig false "explainPathHits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "explainPathHits" (PWild (PList)) (EListLit))
 (DFunDef false "explainPathHits" ((PVar "path") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rs") (EApp (EApp (EVar "targetedReasons") (EVar "path")) (EVar "g"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "explainPathHits") (EVar "path")) (EVar "gs"))) (DoExpr (EIf (EApp (EVar "isEmptyStrs") (EVar "rs")) (EVar "rest") (EBinOp "::" (ETuple (EVar "g") (EVar "rs")) (EVar "rest"))))))
