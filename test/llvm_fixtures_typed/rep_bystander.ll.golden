@@ -218,51 +218,53 @@ entry:
 define i64 @mdk_flagBit(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = ashr i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 0
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg0, 1
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t0
   br label %decend1
-connext5:
+connext4:
   br label %clause2
 clause2:
-  %t6 = ashr i64 %arg0, 1
-  %t7 = icmp eq i64 %t6, 1
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
+  %t5 = icmp eq i64 %arg0, 3
+  br i1 %t5, label %conyes6, label %connext6
+conyes6:
   store i64 1, ptr %t0
   br label %decend1
-connext8:
+connext6:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t9 = load i64, ptr %t0
-  ret i64 %t9
+  %t7 = load i64, ptr %t0
+  ret i64 %t7
 }
 
 ; mdk-module program
 define i64 @mdk_unwrap(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t2 = inttoptr i64 %arg0 to ptr
-  %t3 = load i64, ptr %t2
-  %t4 = icmp eq i64 %t3, 4294967296
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
-  %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = getelementptr i8, ptr %t6, i64 8
-  %t8 = load i64, ptr %t7
+  %t2 = and i64 %arg0, 1
+  %t3 = icmp eq i64 %t2, 0
+  %t4 = inttoptr i64 %arg0 to ptr
+  %t5 = select i1 %t3, ptr %t4, ptr @mdk_disc_none
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 4294967296
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
   %t9 = inttoptr i64 %arg0 to ptr
   %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
-  store i64 %t11, ptr %t0
+  %t12 = inttoptr i64 %arg0 to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t14 = load i64, ptr %t13
+  store i64 %t14, ptr %t0
   br label %decend1
-connext5:
+connext8:
+  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t12 = load i64, ptr %t0
-  ret i64 %t12
+  %t15 = load i64, ptr %t0
+  ret i64 %t15
 }
 
 ; mdk-module program
@@ -409,3 +411,6 @@ else6:
   %t17 = or i64 %t16, 1
   ret i64 %t17
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1

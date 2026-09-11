@@ -288,6 +288,8 @@ entry:
 }
 
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr

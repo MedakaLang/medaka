@@ -214,27 +214,33 @@ entry:
 define i64 @mdk_impl_Box_display(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t2 = inttoptr i64 %arg0 to ptr
-  %t3 = load i64, ptr %t2
-  %t4 = icmp eq i64 %t3, 0
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
-  %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = getelementptr i8, ptr %t6, i64 8
-  %t8 = load i64, ptr %t7
+  %t2 = and i64 %arg0, 1
+  %t3 = icmp eq i64 %t2, 0
+  %t4 = inttoptr i64 %arg0 to ptr
+  %t5 = select i1 %t3, ptr %t4, ptr @mdk_disc_none
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 0
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
   %t9 = inttoptr i64 %arg0 to ptr
   %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk_impl_String_display(i64 %t11)
-  store i64 %t12, ptr %t0
+  %t12 = inttoptr i64 %arg0 to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t14 = load i64, ptr %t13
+  %t15 = call i64 @mdk_impl_String_display(i64 %t14)
+  store i64 %t15, ptr %t0
   br label %decend1
-connext5:
+connext8:
+  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t13 = load i64, ptr %t0
-  ret i64 %t13
+  %t16 = load i64, ptr %t0
+  ret i64 %t16
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [7 x i8] } { i64 1, i64 6, i64 6, [7 x i8] c"\68\65\6C\6C\6F\20\00" }
 ; mdk-module program

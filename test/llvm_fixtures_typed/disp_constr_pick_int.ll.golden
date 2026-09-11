@@ -184,18 +184,17 @@ define i64 @mdk_pick(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = call i64 @mdk_impl_Int_compare(i64 %arg1, i64 %arg2)
   %t1 = alloca i64
-  %t3 = ashr i64 %t0, 1
-  %t4 = icmp eq i64 %t3, 0
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %t0, 1
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 %arg2, ptr %t1
   br label %decend2
-connext5:
+connext4:
   store i64 %arg1, ptr %t1
   br label %decend2
 decend2:
-  %t6 = load i64, ptr %t1
-  ret i64 %t6
+  %t5 = load i64, ptr %t1
+  ret i64 %t5
 }
 
 ; mdk-module impl:Int_compare
@@ -224,5 +223,7 @@ else13:
   ret i64 3
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]

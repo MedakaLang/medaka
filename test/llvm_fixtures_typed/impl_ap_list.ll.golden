@@ -184,41 +184,53 @@ entry:
 define i64 @mdk_sumList(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg0, 562949953421315
+  %t4 = and i64 %arg0, 1
+  %t5 = icmp eq i64 %t4, 0
+  %t6 = inttoptr i64 %arg0 to ptr
+  %t7 = select i1 %t5, ptr %t6, ptr @mdk_disc_none
+  %t8 = load i64, ptr %t7
+  %t9 = select i1 %t3, i64 281474976710657, i64 %t8
+  %t10 = icmp eq i64 %t9, 281474976710657
+  br i1 %t10, label %conyes11, label %connext11
+conyes11:
   store i64 1, ptr %t0
   br label %decend1
-connext5:
+connext11:
   br label %clause2
 clause2:
-  %t6 = and i64 %arg0, 1
-  %t7 = icmp eq i64 %t6, 0
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
-  %t9 = inttoptr i64 %arg0 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = inttoptr i64 %arg0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 16
-  %t14 = load i64, ptr %t13
+  %t12 = icmp eq i64 %arg0, 562949953421315
+  %t13 = and i64 %arg0, 1
+  %t14 = icmp eq i64 %t13, 0
   %t15 = inttoptr i64 %arg0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 8
+  %t16 = select i1 %t14, ptr %t15, ptr @mdk_disc_none
   %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %arg0 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 16
-  %t20 = load i64, ptr %t19
-  %t21 = call i64 @mdk_sumList(i64 %t20)
-  %t22 = call i64 @mdk_num_add(i64 %t17, i64 %t21)
-  store i64 %t22, ptr %t0
+  %t18 = select i1 %t12, i64 281474976710657, i64 %t17
+  %t19 = icmp eq i64 %t18, 281474976710656
+  br i1 %t19, label %conyes20, label %connext20
+conyes20:
+  %t21 = inttoptr i64 %arg0 to ptr
+  %t22 = getelementptr i8, ptr %t21, i64 8
+  %t23 = load i64, ptr %t22
+  %t24 = inttoptr i64 %arg0 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 16
+  %t26 = load i64, ptr %t25
+  %t27 = inttoptr i64 %arg0 to ptr
+  %t28 = getelementptr i8, ptr %t27, i64 8
+  %t29 = load i64, ptr %t28
+  %t30 = inttoptr i64 %arg0 to ptr
+  %t31 = getelementptr i8, ptr %t30, i64 16
+  %t32 = load i64, ptr %t31
+  %t33 = call i64 @mdk_sumList(i64 %t32)
+  %t34 = call i64 @mdk_num_add(i64 %t29, i64 %t33)
+  store i64 %t34, ptr %t0
   br label %decend1
-connext8:
+connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t23 = load i64, ptr %t0
-  ret i64 %t23
+  %t35 = load i64, ptr %t0
+  ret i64 %t35
 }
 
 ; tmc: impl_List_fmap trmc
@@ -237,119 +249,145 @@ trmcloop4:
   %t6 = load i64, ptr %t2
   %t7 = load i64, ptr %t3
   %t8 = alloca i64
-  %t11 = and i64 %t7, 1
-  %t12 = icmp eq i64 %t11, 1
-  br i1 %t12, label %conyes13, label %connext13
-conyes13:
-  %t14 = load ptr, ptr %t1
-  store i64 562949953421315, ptr %t14
+  %t11 = icmp eq i64 %t7, 562949953421315
+  %t12 = and i64 %t7, 1
+  %t13 = icmp eq i64 %t12, 0
+  %t14 = inttoptr i64 %t7 to ptr
+  %t15 = select i1 %t13, ptr %t14, ptr @mdk_disc_none
+  %t16 = load i64, ptr %t15
+  %t17 = select i1 %t11, i64 281474976710657, i64 %t16
+  %t18 = icmp eq i64 %t17, 281474976710657
+  br i1 %t18, label %conyes19, label %connext19
+conyes19:
+  %t20 = load ptr, ptr %t1
+  store i64 562949953421315, ptr %t20
   br label %trmcexit5
-connext13:
+connext19:
   br label %clause10
 clause10:
-  %t15 = and i64 %t7, 1
-  %t16 = icmp eq i64 %t15, 0
-  br i1 %t16, label %conyes17, label %connext17
-conyes17:
-  %t18 = inttoptr i64 %t7 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 8
-  %t20 = load i64, ptr %t19
-  %t21 = inttoptr i64 %t7 to ptr
-  %t22 = getelementptr i8, ptr %t21, i64 16
-  %t23 = load i64, ptr %t22
+  %t21 = icmp eq i64 %t7, 562949953421315
+  %t22 = and i64 %t7, 1
+  %t23 = icmp eq i64 %t22, 0
   %t24 = inttoptr i64 %t7 to ptr
-  %t25 = getelementptr i8, ptr %t24, i64 8
+  %t25 = select i1 %t23, ptr %t24, ptr @mdk_disc_none
   %t26 = load i64, ptr %t25
-  %t27 = inttoptr i64 %t7 to ptr
-  %t28 = getelementptr i8, ptr %t27, i64 16
-  %t29 = load i64, ptr %t28
-  %t30 = inttoptr i64 %t6 to ptr
-  %t31 = load i64, ptr %t30
-  %t32 = icmp eq i64 %t31, 1
-  %t34 = alloca i64
-  br i1 %t32, label %apfast33, label %apslow33
-apfast33:
-  %t35 = inttoptr i64 %t6 to ptr
-  %t36 = getelementptr i8, ptr %t35, i64 8
-  %t37 = load i64, ptr %t36
-  %t38 = inttoptr i64 %t37 to ptr
-  %t39 = call i64 %t38(i64 %t6, i64 %t26)
-  store i64 %t39, ptr %t34
-  br label %apend33
-apslow33:
-  %t40 = alloca i64, i64 1
-  %t41 = getelementptr i64, ptr %t40, i64 0
-  store i64 %t26, ptr %t41
-  %t42 = call i64 @__mdk_apply(i64 %t6, i64 1, ptr %t40)
-  store i64 %t42, ptr %t34
-  br label %apend33
-apend33:
-  %t43 = load i64, ptr %t34
-  %t44 = call ptr @mdk_alloc(i64 24)
-  store i64 281474976710656, ptr %t44
-  %t45 = getelementptr i8, ptr %t44, i64 8
-  store i64 %t43, ptr %t45
-  %t46 = ptrtoint ptr %t44 to i64
-  %t47 = load ptr, ptr %t1
-  store i64 %t46, ptr %t47
-  %t48 = getelementptr i8, ptr %t44, i64 16
-  store ptr %t48, ptr %t1
+  %t27 = select i1 %t21, i64 281474976710657, i64 %t26
+  %t28 = icmp eq i64 %t27, 281474976710656
+  br i1 %t28, label %conyes29, label %connext29
+conyes29:
+  %t30 = inttoptr i64 %t7 to ptr
+  %t31 = getelementptr i8, ptr %t30, i64 8
+  %t32 = load i64, ptr %t31
+  %t33 = inttoptr i64 %t7 to ptr
+  %t34 = getelementptr i8, ptr %t33, i64 16
+  %t35 = load i64, ptr %t34
+  %t36 = inttoptr i64 %t7 to ptr
+  %t37 = getelementptr i8, ptr %t36, i64 8
+  %t38 = load i64, ptr %t37
+  %t39 = inttoptr i64 %t7 to ptr
+  %t40 = getelementptr i8, ptr %t39, i64 16
+  %t41 = load i64, ptr %t40
+  %t42 = inttoptr i64 %t6 to ptr
+  %t43 = load i64, ptr %t42
+  %t44 = icmp eq i64 %t43, 1
+  %t46 = alloca i64
+  br i1 %t44, label %apfast45, label %apslow45
+apfast45:
+  %t47 = inttoptr i64 %t6 to ptr
+  %t48 = getelementptr i8, ptr %t47, i64 8
+  %t49 = load i64, ptr %t48
+  %t50 = inttoptr i64 %t49 to ptr
+  %t51 = call i64 %t50(i64 %t6, i64 %t38)
+  store i64 %t51, ptr %t46
+  br label %apend45
+apslow45:
+  %t52 = alloca i64, i64 1
+  %t53 = getelementptr i64, ptr %t52, i64 0
+  store i64 %t38, ptr %t53
+  %t54 = call i64 @__mdk_apply(i64 %t6, i64 1, ptr %t52)
+  store i64 %t54, ptr %t46
+  br label %apend45
+apend45:
+  %t55 = load i64, ptr %t46
+  %t56 = call ptr @mdk_alloc(i64 24)
+  store i64 281474976710656, ptr %t56
+  %t57 = getelementptr i8, ptr %t56, i64 8
+  store i64 %t55, ptr %t57
+  %t58 = ptrtoint ptr %t56 to i64
+  %t59 = load ptr, ptr %t1
+  store i64 %t58, ptr %t59
+  %t60 = getelementptr i8, ptr %t56, i64 16
+  store ptr %t60, ptr %t1
   store i64 %t6, ptr %t2
-  store i64 %t29, ptr %t3
+  store i64 %t41, ptr %t3
   br label %trmcloop4
-connext17:
+connext29:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend9:
-  %t49 = load i64, ptr %t8
-  ret i64 %t49
+  %t61 = load i64, ptr %t8
+  ret i64 %t61
 trmcexit5:
-  %t50 = load i64, ptr %t0
-  ret i64 %t50
+  %t62 = load i64, ptr %t0
+  ret i64 %t62
 }
 
 ; mdk-module impl:List_ap
 define i64 @mdk_impl_List_ap(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg0, 562949953421315
+  %t4 = and i64 %arg0, 1
+  %t5 = icmp eq i64 %t4, 0
+  %t6 = inttoptr i64 %arg0 to ptr
+  %t7 = select i1 %t5, ptr %t6, ptr @mdk_disc_none
+  %t8 = load i64, ptr %t7
+  %t9 = select i1 %t3, i64 281474976710657, i64 %t8
+  %t10 = icmp eq i64 %t9, 281474976710657
+  br i1 %t10, label %conyes11, label %connext11
+conyes11:
   store i64 562949953421315, ptr %t0
   br label %decend1
-connext5:
+connext11:
   br label %clause2
 clause2:
-  %t6 = and i64 %arg0, 1
-  %t7 = icmp eq i64 %t6, 0
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
-  %t9 = inttoptr i64 %arg0 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = inttoptr i64 %arg0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 16
-  %t14 = load i64, ptr %t13
+  %t12 = icmp eq i64 %arg0, 562949953421315
+  %t13 = and i64 %arg0, 1
+  %t14 = icmp eq i64 %t13, 0
   %t15 = inttoptr i64 %arg0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 8
+  %t16 = select i1 %t14, ptr %t15, ptr @mdk_disc_none
   %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %arg0 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 16
-  %t20 = load i64, ptr %t19
-  %t21 = call i64 @mdk_impl_List_fmap(i64 %t17, i64 %arg1)
-  %t22 = call i64 @mdk_impl_List_ap(i64 %t20, i64 %arg1)
-  %t23 = call i64 @mdk_list_append(i64 %t21, i64 %t22)
-  store i64 %t23, ptr %t0
+  %t18 = select i1 %t12, i64 281474976710657, i64 %t17
+  %t19 = icmp eq i64 %t18, 281474976710656
+  br i1 %t19, label %conyes20, label %connext20
+conyes20:
+  %t21 = inttoptr i64 %arg0 to ptr
+  %t22 = getelementptr i8, ptr %t21, i64 8
+  %t23 = load i64, ptr %t22
+  %t24 = inttoptr i64 %arg0 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 16
+  %t26 = load i64, ptr %t25
+  %t27 = inttoptr i64 %arg0 to ptr
+  %t28 = getelementptr i8, ptr %t27, i64 8
+  %t29 = load i64, ptr %t28
+  %t30 = inttoptr i64 %arg0 to ptr
+  %t31 = getelementptr i8, ptr %t30, i64 16
+  %t32 = load i64, ptr %t31
+  %t33 = call i64 @mdk_impl_List_fmap(i64 %t29, i64 %arg1)
+  %t34 = call i64 @mdk_impl_List_ap(i64 %t32, i64 %arg1)
+  %t35 = call i64 @mdk_list_append(i64 %t33, i64 %t34)
+  store i64 %t35, ptr %t0
   br label %decend1
-connext8:
+connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t24 = load i64, ptr %t0
-  ret i64 %t24
+  %t36 = load i64, ptr %t0
+  ret i64 %t36
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
 entry:

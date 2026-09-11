@@ -189,25 +189,26 @@ entry:
 define i64 @mdk_impl_Animal_code(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = ashr i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 0
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg0, 1
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t0
   br label %decend1
-connext5:
+connext4:
   br label %clause2
 clause2:
-  %t6 = ashr i64 %arg0, 1
-  %t7 = icmp eq i64 %t6, 1
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
+  %t5 = icmp eq i64 %arg0, 3
+  br i1 %t5, label %conyes6, label %connext6
+conyes6:
   store i64 5, ptr %t0
   br label %decend1
-connext8:
+connext6:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t9 = load i64, ptr %t0
-  ret i64 %t9
+  %t7 = load i64, ptr %t0
+  ret i64 %t7
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1

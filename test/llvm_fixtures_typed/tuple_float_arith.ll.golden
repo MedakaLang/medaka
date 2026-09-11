@@ -255,92 +255,100 @@ entry:
 define i64 @mdk_addP(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t2 = inttoptr i64 %arg0 to ptr
-  %t3 = load i64, ptr %t2
-  %t4 = icmp eq i64 %t3, 6950939912435
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
-  %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = getelementptr i8, ptr %t6, i64 8
-  %t8 = load i64, ptr %t7
+  %t2 = and i64 %arg0, 1
+  %t3 = icmp eq i64 %t2, 0
+  %t4 = inttoptr i64 %arg0 to ptr
+  %t5 = select i1 %t3, ptr %t4, ptr @mdk_disc_none
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 6950939912435
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
   %t9 = inttoptr i64 %arg0 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 16
+  %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
   %t12 = inttoptr i64 %arg0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t13 = getelementptr i8, ptr %t12, i64 16
   %t14 = load i64, ptr %t13
   %t15 = inttoptr i64 %arg0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 16
+  %t16 = getelementptr i8, ptr %t15, i64 8
   %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %t14 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 8
-  %t20 = load double, ptr %t19
+  %t18 = inttoptr i64 %arg0 to ptr
+  %t19 = getelementptr i8, ptr %t18, i64 16
+  %t20 = load i64, ptr %t19
   %t21 = inttoptr i64 %t17 to ptr
   %t22 = getelementptr i8, ptr %t21, i64 8
   %t23 = load double, ptr %t22
-  %t24 = call double @llvm.arithmetic.fence.f64(double %t20)
-  %t25 = fadd double %t24, %t23
-  %t26 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t26
-  %t27 = getelementptr i8, ptr %t26, i64 8
-  store double %t25, ptr %t27
-  %t28 = ptrtoint ptr %t26 to i64
-  store i64 %t28, ptr %t0
+  %t24 = inttoptr i64 %t20 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 8
+  %t26 = load double, ptr %t25
+  %t27 = call double @llvm.arithmetic.fence.f64(double %t23)
+  %t28 = fadd double %t27, %t26
+  %t29 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t29
+  %t30 = getelementptr i8, ptr %t29, i64 8
+  store double %t28, ptr %t30
+  %t31 = ptrtoint ptr %t29 to i64
+  store i64 %t31, ptr %t0
   br label %decend1
-connext5:
+connext8:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t29 = load i64, ptr %t0
-  ret i64 %t29
+  %t32 = load i64, ptr %t0
+  ret i64 %t32
 }
 
 ; mdk-module program
 define double @mdk_addP__fw(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t2 = inttoptr i64 %arg0 to ptr
-  %t3 = load i64, ptr %t2
-  %t4 = icmp eq i64 %t3, 6950939912435
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
-  %t6 = inttoptr i64 %arg0 to ptr
-  %t7 = getelementptr i8, ptr %t6, i64 8
-  %t8 = load i64, ptr %t7
+  %t2 = and i64 %arg0, 1
+  %t3 = icmp eq i64 %t2, 0
+  %t4 = inttoptr i64 %arg0 to ptr
+  %t5 = select i1 %t3, ptr %t4, ptr @mdk_disc_none
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 6950939912435
+  br i1 %t7, label %conyes8, label %connext8
+conyes8:
   %t9 = inttoptr i64 %arg0 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 16
+  %t10 = getelementptr i8, ptr %t9, i64 8
   %t11 = load i64, ptr %t10
   %t12 = inttoptr i64 %arg0 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t13 = getelementptr i8, ptr %t12, i64 16
   %t14 = load i64, ptr %t13
   %t15 = inttoptr i64 %arg0 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 16
+  %t16 = getelementptr i8, ptr %t15, i64 8
   %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %t14 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 8
-  %t20 = load double, ptr %t19
+  %t18 = inttoptr i64 %arg0 to ptr
+  %t19 = getelementptr i8, ptr %t18, i64 16
+  %t20 = load i64, ptr %t19
   %t21 = inttoptr i64 %t17 to ptr
   %t22 = getelementptr i8, ptr %t21, i64 8
   %t23 = load double, ptr %t22
-  %t24 = call double @llvm.arithmetic.fence.f64(double %t20)
-  %t25 = fadd double %t24, %t23
-  %t26 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t26
-  %t27 = getelementptr i8, ptr %t26, i64 8
-  store double %t25, ptr %t27
-  %t28 = ptrtoint ptr %t26 to i64
-  store i64 %t28, ptr %t0
+  %t24 = inttoptr i64 %t20 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 8
+  %t26 = load double, ptr %t25
+  %t27 = call double @llvm.arithmetic.fence.f64(double %t23)
+  %t28 = fadd double %t27, %t26
+  %t29 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t29
+  %t30 = getelementptr i8, ptr %t29, i64 8
+  store double %t28, ptr %t30
+  %t31 = ptrtoint ptr %t29 to i64
+  store i64 %t31, ptr %t0
   br label %decend1
-connext5:
+connext8:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t29 = load i64, ptr %t0
-  %t30 = inttoptr i64 %t29 to ptr
-  %t31 = getelementptr i8, ptr %t30, i64 8
-  %t32 = load double, ptr %t31
-  ret double %t32
+  %t32 = load i64, ptr %t0
+  %t33 = inttoptr i64 %t32 to ptr
+  %t34 = getelementptr i8, ptr %t33, i64 8
+  %t35 = load double, ptr %t34
+  ret double %t35
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_g_letDes = global i64 0

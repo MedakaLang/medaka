@@ -176,25 +176,25 @@ entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_force_flagZero()
   %t1 = alloca i64
-  %t3 = ashr i64 %t0, 1
-  %t4 = icmp eq i64 %t3, 0
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
-  %t6 = call i64 @mdk_force_intZero()
-  store i64 %t6, ptr %t1
+  %t3 = icmp eq i64 %t0, 1
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
+  %t5 = call i64 @mdk_force_intZero()
+  store i64 %t5, ptr %t1
   br label %decend2
-connext5:
-  %t7 = icmp eq i64 %t3, 1
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
+connext4:
+  %t6 = icmp eq i64 %t0, 3
+  br i1 %t6, label %conyes7, label %connext7
+conyes7:
   store i64 199, ptr %t1
   br label %decend2
-connext8:
+connext7:
+  call void @mdk_nonexhaustive_match()
   unreachable
 decend2:
-  %t9 = load i64, ptr %t1
-  %t10 = ashr i64 %t9, 1
-  call void @mdk_print_int(i64 %t10)
+  %t8 = load i64, ptr %t1
+  %t9 = ashr i64 %t8, 1
+  call void @mdk_print_int(i64 %t9)
   ret i32 0
 }
 ; mdk-module program
@@ -281,6 +281,8 @@ entry:
   ret i64 1
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_g_$memo_Int_zero = global i64 0
 ; mdk-module program

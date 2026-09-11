@@ -377,6 +377,7 @@ conyes36:
   store i64 %t47, ptr %t0
   br label %decend1
 connext36:
+  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t48 = load i64, ptr %t0
@@ -450,8 +451,12 @@ conyes36:
   store i64 %t47, ptr %t0
   br label %decend1
 connext36:
+  call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
   %t48 = load i64, ptr %t0
   ret i64 %t48
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1

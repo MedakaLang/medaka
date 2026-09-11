@@ -238,70 +238,67 @@ entry:
 define i64 @mdk_shade(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = ashr i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 0
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg0, 1
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t0
   br label %decend1
-connext5:
+connext4:
   br label %clause2
 clause2:
-  %t7 = ashr i64 %arg0, 1
-  %t8 = icmp eq i64 %t7, 1
-  br i1 %t8, label %conyes9, label %connext9
-conyes9:
+  %t6 = icmp eq i64 %arg0, 3
+  br i1 %t6, label %conyes7, label %connext7
+conyes7:
   store i64 5, ptr %t0
   br label %decend1
-connext9:
-  br label %clause6
-clause6:
-  %t10 = ashr i64 %arg0, 1
-  %t11 = icmp eq i64 %t10, 2
-  br i1 %t11, label %conyes12, label %connext12
-conyes12:
+connext7:
+  br label %clause5
+clause5:
+  %t8 = icmp eq i64 %arg0, 5
+  br i1 %t8, label %conyes9, label %connext9
+conyes9:
   store i64 7, ptr %t0
   br label %decend1
-connext12:
+connext9:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t13 = load i64, ptr %t0
-  ret i64 %t13
+  %t10 = load i64, ptr %t0
+  ret i64 %t10
 }
 
 ; mdk-module program
 define i64 @mdk_rank(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = ashr i64 %arg0, 1
-  %t4 = icmp eq i64 %t3, 281487861612544
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg0, 562975723225089
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t0
   br label %decend1
-connext5:
+connext4:
   br label %clause2
 clause2:
-  %t7 = ashr i64 %arg0, 1
-  %t8 = icmp eq i64 %t7, 281487861612545
-  br i1 %t8, label %conyes9, label %connext9
-conyes9:
+  %t6 = icmp eq i64 %arg0, 562975723225091
+  br i1 %t6, label %conyes7, label %connext7
+conyes7:
   store i64 5, ptr %t0
   br label %decend1
-connext9:
-  br label %clause6
-clause6:
-  %t10 = ashr i64 %arg0, 1
-  %t11 = icmp eq i64 %t10, 281487861612546
-  br i1 %t11, label %conyes12, label %connext12
-conyes12:
+connext7:
+  br label %clause5
+clause5:
+  %t8 = icmp eq i64 %arg0, 562975723225093
+  br i1 %t8, label %conyes9, label %connext9
+conyes9:
   store i64 7, ptr %t0
   br label %decend1
-connext12:
+connext9:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t13 = load i64, ptr %t0
-  ret i64 %t13
+  %t10 = load i64, ptr %t0
+  ret i64 %t10
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1

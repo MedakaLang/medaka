@@ -196,4 +196,6 @@ entry:
   ret i32 0
 }
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 @mdk_g_arr = global i64 0

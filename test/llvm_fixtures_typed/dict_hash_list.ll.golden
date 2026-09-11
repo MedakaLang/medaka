@@ -204,51 +204,63 @@ entry:
 define i64 @mdk_hashListItems(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
-  %t3 = and i64 %arg2, 1
-  %t4 = icmp eq i64 %t3, 1
-  br i1 %t4, label %conyes5, label %connext5
-conyes5:
+  %t3 = icmp eq i64 %arg2, 562949953421315
+  %t4 = and i64 %arg2, 1
+  %t5 = icmp eq i64 %t4, 0
+  %t6 = inttoptr i64 %arg2 to ptr
+  %t7 = select i1 %t5, ptr %t6, ptr @mdk_disc_none
+  %t8 = load i64, ptr %t7
+  %t9 = select i1 %t3, i64 281474976710657, i64 %t8
+  %t10 = icmp eq i64 %t9, 281474976710657
+  br i1 %t10, label %conyes11, label %connext11
+conyes11:
   store i64 %arg1, ptr %t0
   br label %decend1
-connext5:
+connext11:
   br label %clause2
 clause2:
-  %t6 = and i64 %arg2, 1
-  %t7 = icmp eq i64 %t6, 0
-  br i1 %t7, label %conyes8, label %connext8
-conyes8:
-  %t9 = inttoptr i64 %arg2 to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = inttoptr i64 %arg2 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 16
-  %t14 = load i64, ptr %t13
+  %t12 = icmp eq i64 %arg2, 562949953421315
+  %t13 = and i64 %arg2, 1
+  %t14 = icmp eq i64 %t13, 0
   %t15 = inttoptr i64 %arg2 to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 8
+  %t16 = select i1 %t14, ptr %t15, ptr @mdk_disc_none
   %t17 = load i64, ptr %t16
-  %t18 = inttoptr i64 %arg2 to ptr
-  %t19 = getelementptr i8, ptr %t18, i64 16
-  %t20 = load i64, ptr %t19
-  %t21 = ashr i64 %arg1, 1
-  %t22 = ashr i64 63, 1
-  %t23 = mul i64 %t21, %t22
-  %t24 = shl i64 %t23, 1
-  %t25 = or i64 %t24, 1
-  %t26 = call i64 @mdk_disp_hash_0_1(i64 %arg0, i64 %t17)
-  %t27 = ashr i64 %t25, 1
-  %t28 = ashr i64 %t26, 1
-  %t29 = add i64 %t27, %t28
-  %t30 = shl i64 %t29, 1
-  %t31 = or i64 %t30, 1
-  %t32 = call i64 @mdk_hashListItems(i64 %arg0, i64 %t31, i64 %t20)
-  store i64 %t32, ptr %t0
+  %t18 = select i1 %t12, i64 281474976710657, i64 %t17
+  %t19 = icmp eq i64 %t18, 281474976710656
+  br i1 %t19, label %conyes20, label %connext20
+conyes20:
+  %t21 = inttoptr i64 %arg2 to ptr
+  %t22 = getelementptr i8, ptr %t21, i64 8
+  %t23 = load i64, ptr %t22
+  %t24 = inttoptr i64 %arg2 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 16
+  %t26 = load i64, ptr %t25
+  %t27 = inttoptr i64 %arg2 to ptr
+  %t28 = getelementptr i8, ptr %t27, i64 8
+  %t29 = load i64, ptr %t28
+  %t30 = inttoptr i64 %arg2 to ptr
+  %t31 = getelementptr i8, ptr %t30, i64 16
+  %t32 = load i64, ptr %t31
+  %t33 = ashr i64 %arg1, 1
+  %t34 = ashr i64 63, 1
+  %t35 = mul i64 %t33, %t34
+  %t36 = shl i64 %t35, 1
+  %t37 = or i64 %t36, 1
+  %t38 = call i64 @mdk_disp_hash_0_1(i64 %arg0, i64 %t29)
+  %t39 = ashr i64 %t37, 1
+  %t40 = ashr i64 %t38, 1
+  %t41 = add i64 %t39, %t40
+  %t42 = shl i64 %t41, 1
+  %t43 = or i64 %t42, 1
+  %t44 = call i64 @mdk_hashListItems(i64 %arg0, i64 %t43, i64 %t32)
+  store i64 %t44, ptr %t0
   br label %decend1
-connext8:
+connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t33 = load i64, ptr %t0
-  ret i64 %t33
+  %t45 = load i64, ptr %t0
+  ret i64 %t45
 }
 
 ; mdk-module impl:Int_hash
@@ -264,6 +276,8 @@ entry:
   ret i64 %t0
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]
 ; mdk-module program
