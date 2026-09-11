@@ -19,16 +19,30 @@
 #      that exists in the linter but is enforced by NOTHING was previously
 #      silent -- not gated, not baselined, not even warned about in CI.
 #   2. THE MAX-RATCHET CI TWIN: the SAME `medaka lint --baseline` invocation
-#      that checks the baselined rules ALSO covers every gated and cross-file
-#      rule. Those have no row in test/lint_baseline.toml, so the baseline's
-#      own invariant ("a file that HAS findings for a rule but no row is a
-#      violation") makes ANY finding under a gated/cross-file rule fail here
-#      too -- folded into one pass rather than a second full-tree lint run.
+#      that checks the baselined rules ALSO covers every gated PER-FILE rule.
+#      Those have no row in test/lint_baseline.toml, so the baseline's own
+#      invariant ("a file that HAS findings for a rule but no row is a
+#      violation") makes ANY finding under a gated rule fail here too --
+#      folded into one pass rather than a second full-tree lint run.
+#   3. THE CROSS-FILE MAX RATCHET: a separate `--deny` pass over the same
+#      roots for GATED_CROSSFILE_RULES. It is separate because it has to be:
+#      `--baseline` promotes PER-FILE findings, and a cross-file rule's
+#      findings come from a whole-target-set tier the baseline never sees, so
+#      assertion 2 was silently blind to them (#2861). See the block at the
+#      bottom of this file for the measurement.
 #
 # WHAT IT PROVES: (1) a lint rule cannot exist while enforced by nothing;
-# (2) no baselined-rule count exceeds its pinned row, and no gated/cross-file
-# rule has ANY finding, anywhere under the lint roots. A count that FELL is
-# fine and is not a failure here -- the baseline is a ceiling, not an equality.
+# (2) no baselined-rule count exceeds its pinned row, and no gated per-file
+# rule has ANY finding, anywhere under the lint roots; (3) no cross-file rule
+# has ANY finding either. A count that FELL is fine and is not a failure here
+# -- the baseline is a ceiling, not an equality.
+#
+# WHAT IT DOES NOT PROVE, and the reason `make dup-census` exists: a cross-file
+# rule reporting zero is not the same as the tree having no duplicates. The
+# zero can be manufactured entirely by inline suppressions, and for
+# rule-duplicate-body it currently is. The count those suppressions hide is
+# reported by test/dup_suppression_census.sh, which this gate deliberately does
+# NOT assert on -- it is a debt ledger, not a floor.
 #
 # WHAT IT DOES NOT PROVE: that a rule itself is right, or that the pinned
 # counts are ones anyone wants. They are a debt ledger, drained by fixing the
@@ -163,9 +177,16 @@ fi
 
 # ── assertion 2: count-baseline ratchet + the max-ratchet CI twin ───────────
 # One invocation, --only widened to GATED + CROSSFILE + BASELINED: a
-# gated/cross-file rule has no row in the baseline at all, so any finding
+# gated rule has no row in test/lint_baseline.toml at all, so any finding
 # under one is "a file that HAS findings but no row" -- a violation, by the
 # same invariant that already governs the baselined rules.
+#
+# CROSS-FILE rules are named here but are NOT covered by this invocation --
+# assertion 3 below is what covers them. The baseline promotion runs per file,
+# over the per-file rule tier only; a cross-file finding never reaches it, so a
+# cross-file rule listed in --only here contributes exactly nothing. Keeping
+# the name in ALL_RULES is harmless and keeps the one --only list readable as
+# "everything the hook enrols"; it is assertion 3, not this, that enforces it.
 ALL_RULES="$GATED,$CROSSFILE,$RULES"
 log="$(mktemp)"
 # shellcheck disable=SC2086
@@ -188,7 +209,40 @@ if [ "$status" -ne 0 ]; then
   exit 1
 fi
 
+# ── assertion 3: the CROSS-FILE max ratchet ─────────────────────────────────
+# A cross-file rule compares a body against OTHER files, so its findings are
+# produced by a tier that runs once over the whole target set rather than per
+# file. That tier is not reached by `--baseline` (which promotes per-file
+# findings only) and its findings are WARNINGS, which exit 0. Consequence,
+# measured: before this assertion existed, a brand-new undirectived duplicate
+# under the lint roots passed this gate green while the pre-commit hook's own
+# check 3 rejected it -- i.e. the one enforcement path was the bypassable one
+# (`--no-verify`, or a clone with no hook installed), which is precisely the
+# hole this gate was written to close.
+#
+# `--deny` is the promotion channel that DOES reach the cross-file tier, and it
+# is the same channel the hook's check 3 uses, so the two agree by construction
+# rather than by anyone keeping them in step.
+crosslog="$(mktemp)"
+# shellcheck disable=SC2086
+"$MEDAKA" lint --only="$CROSSFILE" --deny="$CROSSFILE" $targets >"$crosslog" 2>&1
+crossstatus=$?
+
+if [ "$crossstatus" -ne 0 ]; then
+  echo "FAIL: cross-file lint rule(s) fired ($CROSSFILE)"
+  echo ""
+  grep '\[rule-' "$crosslog" || cat "$crosslog"
+  echo ""
+  echo "  A cross-file rule may never fire at all. Remove the duplicate, or --"
+  echo "  if the duplication is deliberate -- silence it at the site with"
+  echo "  '-- lint-disable-next-line <rule>' AND a comment stating the"
+  echo "  constraint that forced it. An issue number is not a reason."
+  echo "  What the suppressions currently hide: make dup-census"
+  rm -f "$log" "$crosslog"
+  exit 1
+fi
+
 rows="$(grep -c '^\[\[entry\]\]' "$BASELINE")"
-rm -f "$log"
-echo "-- lint enforcement floor: ok (enrolment complete, $rows pinned baseline row(s), roots:$targets)"
+rm -f "$log" "$crosslog"
+echo "-- lint enforcement floor: ok (enrolment complete, $rows pinned baseline row(s), cross-file clean, roots:$targets)"
 exit 0

@@ -130,8 +130,28 @@ GATED_LINT_RULES="rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-
 BASELINED_LINT_RULES="rule-stdlib-reimpl,rule-orelse-staircase,rule-clone-type,rule-clause-map"
 LINT_BASELINE_FILE="test/lint_baseline.toml"
 # Cross-file rules, checked project-wide (not per staged file).
+#
+# rule-duplicate-body stays a MAX RATCHET rather than moving to the count
+# baseline above, and the reason is mechanical, not a preference (#2861): the
+# baseline promotes PER-FILE findings, and a cross-file rule's findings come
+# from a whole-target-set tier that `--baseline` and `--write-baseline` never
+# reach. Measured at e2daea65b: with the rule moved into
+# BASELINED_LINT_RULES, `--write-baseline` pins ZERO rows for it (so the count
+# is not published), and a brand-new undirectived duplicate passes
+# test/diff_compiler_lint_baseline.sh green (so nothing is enforced). Moving it
+# would have been a strict loss on both counts.
+#
+# The consequence of keeping the max ratchet is that a deliberate duplicate can
+# only be expressed as an inline suppression, so a suppression carries a real
+# obligation: state the CONSTRAINT that forced it, in words, at the site. An
+# issue number is not a reason. What the current suppressions hide is published
+# by `make dup-census`, deliberately as a report and not as a floor.
 GATED_CROSSFILE_RULES="rule-duplicate-body"
 # Source roots scanned for the cross-file check (dirs that exist are used).
+# ⚠️ `pds/` is a project under its own medaka.toml and is NOT in this list, so
+# no hook and no gate enforces any lint rule there; `make dup-census` reports
+# its live rule-duplicate-body count separately rather than letting the
+# enforced roots' zero stand for the whole tree.
 LINT_ROOTS="compiler stdlib sqlite"
 
 ROOT="$(git rev-parse --show-toplevel)"

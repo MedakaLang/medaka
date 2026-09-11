@@ -1,5 +1,5 @@
 # META
-source_lines=2457
+source_lines=2462
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -918,7 +918,12 @@ escSChars cs i
   | otherwise = escSOne (arrayGetUnsafe i cs) :: escSChars cs (i + 1)
 
 escSOne : Char -> String
--- Intentional cross-file duplicate of the same helper in util.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- Cross-file duplicate of util.mdk's `escOne`, held byte-identical to it on
+-- purpose (util.mdk's note records what the last divergence cost: a literal
+-- NUL written into this file's own source). The copy exists because `escOne`
+-- is private to util.mdk and `escSOne` is private here, and neither escaping
+-- helper is something either module's public surface wants. Exporting one and
+-- deleting the other is a real consolidation, not a suppression.
 -- lint-disable-next-line rule-duplicate-body
 escSOne c
   | c == '\\' = "\\\\"

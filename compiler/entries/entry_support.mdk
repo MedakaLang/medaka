@@ -55,6 +55,12 @@ import driver.main_autoprint.{
 -- typecheck diagnostic, which are far likelier in a harness than a wrong arity.
 --
 -- Route every such path through `failWith` rather than a bare `ePutStrLn`.
+--
+-- Structurally identical to `driver/medaka_cli.dieMsg`, and deliberately not
+-- consolidated with it: this module is `medaka run`-only harness scaffolding
+-- and is free to import the whole compiler, while medaka_cli.mdk is compiled
+-- into the shipped binary and sits in the emitter seed graph, so the
+-- dependency can only ever point one way — and not this way.
 export
 failWith : String -> <IO> Unit
 -- lint-disable-next-line rule-duplicate-body
