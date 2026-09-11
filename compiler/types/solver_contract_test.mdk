@@ -252,7 +252,34 @@ predicateCells inst = match inst.arguments
       _ => (None, None)
   _ => (None, None)
 
-cellsAliasWithinAndSeparateAcross : Instantiation -> Instantiation -> List Bool
+data CellAliasObservation = CellAliasObservation {
+  caoFirstPredicateTypeLinked : Bool,
+  caoFirstPredicateEffectLinked : Bool,
+  caoSecondBodyTypeFresh : Bool,
+  caoSecondBodyEffectFresh : Bool,
+}
+  deriving (Eq, Debug)
+
+data SharedSubstitutionObservation = SharedSubstitutionObservation {
+  ssoSubstitutionCount : Int,
+  ssoSeenTypeVariables : List Int,
+  ssoSeenEffectVariables : List Int,
+  ssoSeenBody : List Int,
+  ssoFirstBodyTypeShared : Bool,
+  ssoFirstBodyEffectShared : Bool,
+  ssoSecondBodyTypeShared : Bool,
+  ssoSecondBodyEffectShared : Bool,
+  ssoTypeCellsFreshAcrossRuns : Bool,
+  ssoEffectCellsFreshAcrossRuns : Bool,
+  ssoGoalFreshAcrossRuns : Bool,
+  ssoDestinationFreshAcrossRuns : Bool,
+  ssoCellAliases : CellAliasObservation,
+}
+  deriving (Eq, Debug)
+
+cellsAliasWithinAndSeparateAcross : Instantiation ->
+  Instantiation ->
+  CellAliasObservation
 cellsAliasWithinAndSeparateAcross first second =
   let (firstPredicateType, firstPredicateEffect) = predicateCells first
   match (
@@ -266,23 +293,28 @@ cellsAliasWithinAndSeparateAcross first second =
     (Some firstBodyType, Some firstBodyEffect, Some firstPredType, Some firstPredEffect, Some secondBodyType, Some secondBodyEffect) =>
       firstBodyType := Link (TRigid "linked")
       firstBodyEffect := ELink (EffRow [] None)
-      [
-        match !firstPredType
+      CellAliasObservation {
+        caoFirstPredicateTypeLinked = match !firstPredType
           Link _ => True
           _ => False,
-        match !firstPredEffect
+        caoFirstPredicateEffectLinked = match !firstPredEffect
           ELink _ => True
           _ => False,
-        match !secondBodyType
+        caoSecondBodyTypeFresh = match !secondBodyType
           Unbound _ _ => True
           _ => False,
-        match !secondBodyEffect
+        caoSecondBodyEffectFresh = match !secondBodyEffect
           EUnbound _ _ => True
           _ => False,
-      ]
-    _ => [False, False, False, False]
+      }
+    _ => CellAliasObservation {
+      caoFirstPredicateTypeLinked = False,
+      caoFirstPredicateEffectLinked = False,
+      caoSecondBodyTypeFresh = False,
+      caoSecondBodyEffectFresh = False,
+    }
 
-sharedSubstitutionResult : Unit -> List Bool
+sharedSubstitutionResult : Unit -> SharedSubstitutionObservation
 sharedSubstitutionResult _ =
   resetCounts ()
   let first =
@@ -295,28 +327,44 @@ sharedSubstitutionResult _ =
     instantiationSignature second
   let (firstGoal, firstDestination) = instantiationIds first
   let (secondGoal, secondDestination) = instantiationIds second
-  [
-      !makeCount == 2,
-      !seenTypeVariables == [101, 103],
-      !seenEffectVariables == [202, 204],
-      !seenBody == [101, 202, 101],
-      firstBodyType == firstPredType,
-      firstBodyEffect == firstPredEffect,
-      secondBodyType == secondPredType,
-      secondBodyEffect == secondPredEffect,
-      firstBodyType /= secondBodyType,
-      firstBodyEffect /= secondBodyEffect,
-      firstGoal /= secondGoal,
-      firstDestination /= secondDestination,
-    ]
-    ++ cellsAliasWithinAndSeparateAcross first second
+  SharedSubstitutionObservation {
+    ssoSubstitutionCount = !makeCount,
+    ssoSeenTypeVariables = !seenTypeVariables,
+    ssoSeenEffectVariables = !seenEffectVariables,
+    ssoSeenBody = !seenBody,
+    ssoFirstBodyTypeShared = firstBodyType == firstPredType,
+    ssoFirstBodyEffectShared = firstBodyEffect == firstPredEffect,
+    ssoSecondBodyTypeShared = secondBodyType == secondPredType,
+    ssoSecondBodyEffectShared = secondBodyEffect == secondPredEffect,
+    ssoTypeCellsFreshAcrossRuns = firstBodyType /= secondBodyType,
+    ssoEffectCellsFreshAcrossRuns = firstBodyEffect /= secondBodyEffect,
+    ssoGoalFreshAcrossRuns = firstGoal /= secondGoal,
+    ssoDestinationFreshAcrossRuns = firstDestination /= secondDestination,
+    ssoCellAliases = cellsAliasWithinAndSeparateAcross first second,
+  }
 
 test "one type/effect substitution is shared and each instantiation is fresh" =
   expectEqual
-    [
-      True, True, True, True, True, True, True, True, True, True, True, True,
-      True, True, True, True
-    ]
+    SharedSubstitutionObservation {
+      ssoSubstitutionCount = 2,
+      ssoSeenTypeVariables = [101, 103],
+      ssoSeenEffectVariables = [202, 204],
+      ssoSeenBody = [101, 202, 101],
+      ssoFirstBodyTypeShared = True,
+      ssoFirstBodyEffectShared = True,
+      ssoSecondBodyTypeShared = True,
+      ssoSecondBodyEffectShared = True,
+      ssoTypeCellsFreshAcrossRuns = True,
+      ssoEffectCellsFreshAcrossRuns = True,
+      ssoGoalFreshAcrossRuns = True,
+      ssoDestinationFreshAcrossRuns = True,
+      ssoCellAliases = CellAliasObservation {
+        caoFirstPredicateTypeLinked = True,
+        caoFirstPredicateEffectLinked = True,
+        caoSecondBodyTypeFresh = True,
+        caoSecondBodyEffectFresh = True,
+      },
+    }
     (sharedSubstitutionResult ())
 
 vectorScheme : QualifiedScheme
@@ -404,7 +452,17 @@ wantedDestination (InstantiationArgument { wanted = wanted, ... }) =
   match wanted.destination
     EvId moduleId ordinal => (moduleId, ordinal)
 
-contextForwardingResult : Unit -> List Bool
+data ContextForwardingObservation = ContextForwardingObservation {
+  cfoRichStoredContexts : List (String, Int, String, Int),
+  cfoAbsentStoredContexts : List (String, Int, String, Int),
+  cfoGoalContexts : List (String, Int, String, Int),
+  cfoDestinationContexts : List (String, Int, String, Int),
+  cfoRichDestinations : List (String, Int),
+  cfoAbsentDestinations : List (String, Int),
+}
+  deriving (Eq, Debug)
+
+contextForwardingResult : Unit -> ContextForwardingObservation
 contextForwardingResult _ =
   resetCounts ()
   -- The occurrence scope is deliberately unrelated to every qualifier's
@@ -417,24 +475,33 @@ contextForwardingResult _ =
     instantiateQualified testServices absentScope absentOrigin sharedScheme
   let richSignature = ("contract", 3, "boundValue", 37)
   let absentSignature = ("synthetic", 0 - 1, "<none>", 53)
-  [
-    map wantedContext rich.arguments
-      == [richSignature, richSignature, richSignature, richSignature],
-    map wantedContext absent.arguments == [absentSignature],
-    !seenGoalContexts
-      == [
-        absentSignature, richSignature, richSignature, richSignature,
-        richSignature
-      ],
-    !seenDestinationContexts
-      == [
-        absentSignature, richSignature, richSignature, richSignature,
-        richSignature
-      ],
-    map wantedDestination rich.arguments
-      == [("contract", 1), ("contract", 2), ("contract", 3), ("contract", 4)],
-    map wantedDestination absent.arguments == [("synthetic", 5)],
-  ]
+  ContextForwardingObservation {
+    cfoRichStoredContexts = map wantedContext rich.arguments,
+    cfoAbsentStoredContexts = map wantedContext absent.arguments,
+    cfoGoalContexts = !seenGoalContexts,
+    cfoDestinationContexts = !seenDestinationContexts,
+    cfoRichDestinations = map wantedDestination rich.arguments,
+    cfoAbsentDestinations = map wantedDestination absent.arguments,
+  }
 
 test "wanted storage and both allocators receive the occurrence context" =
-  expectEqual [True, True, True, True, True, True] (contextForwardingResult ())
+  let richSignature = ("contract", 3, "boundValue", 37)
+  let absentSignature = ("synthetic", 0 - 1, "<none>", 53)
+  expectEqual
+    ContextForwardingObservation {
+      cfoRichStoredContexts =
+        [richSignature, richSignature, richSignature, richSignature],
+      cfoAbsentStoredContexts = [absentSignature],
+      cfoGoalContexts = [
+        absentSignature, richSignature, richSignature, richSignature,
+        richSignature
+      ],
+      cfoDestinationContexts = [
+        absentSignature, richSignature, richSignature, richSignature,
+        richSignature
+      ],
+      cfoRichDestinations =
+        [("contract", 1), ("contract", 2), ("contract", 3), ("contract", 4)],
+      cfoAbsentDestinations = [("synthetic", 5)],
+    }
+    (contextForwardingResult ())

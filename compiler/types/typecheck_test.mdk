@@ -12,19 +12,15 @@ import types.typecheck.{
   AssumptionTraceKind(..),
   DefaultBodyRNoneKind(..),
   DefaultBodyRNoneTraceEntry(..),
-  MethodRowTestObservation(..),
   ModDiags,
-  NumAnchorTestObservation(..),
   beginAssumptionTrace,
   beginDefaultBodyRNoneTrace,
   checkModulesDiagsChain,
   checkOneDiags,
   checkProgramDiags,
-  defaultBodyRNoneServiceProbe,
   elaborateDict,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
-  observeMethodSchemeRowsForTest,
   scopeFrameStats,
   scopeTraceContext,
   tcMsg,
@@ -345,124 +341,6 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
         && afterConflict.rvFrameCount <= afterConflict.rvFrameCapacity,
     ]
 
-test "method rows keep constraint slots on their own scheme allocation" =
-  let observed = observeMethodSchemeRowsForTest ()
-  expectEqual
-    ([0, 1, 2], [[1]], [[1]], [[1]], [[1]])
-    (
-      observed.mrtoSchemeIds,
-      observed.mrtoSlotBoundIds,
-      observed.mrtoSlotPositions,
-      observed.mrtoSlotIdsAtPositions,
-      observed.mrtoSlotArgumentIds,
-    )
-
-test "second method-row construction stays fresh while registry remains first-write" =
-  let observed = observeMethodSchemeRowsForTest ()
-  let _ =
-    expectEqual
-      (0, 3, 6, [0, 1, 2], [3, 4, 5])
-      (
-        observed.mrtoCounterBefore,
-        observed.mrtoCounterAfterFirst,
-        observed.mrtoCounterAfterSecond,
-        observed.mrtoFirstSchemeIds,
-        observed.mrtoSecondSchemeIds,
-      )
-  expectEqual
-    ([[1]], [[4]], [[1]])
-    (
-      observed.mrtoFirstRowSlotIds,
-      observed.mrtoSecondRowSlotIds,
-      observed.mrtoRegistryAfterSecondSlotIds,
-    )
-
-test "same-spelled and constant methods retain complete declaration rows" =
-  let observed = observeMethodSchemeRowsForTest ()
-  expectEqual
-    (
-      [
-        ("A", "same", 0, 0),
-        ("A", "extra", 0, 0),
-        ("B", "same", 1, 1),
-      ],
-      [
-        ("B", "same", 1, 1),
-        ("A", "same", 0, 0),
-        ("A", "extra", 0, 0),
-      ],
-      (1, 0, False, 0),
-    )
-    (
-      observed.mrtoSameNameForward,
-      observed.mrtoSameNameReverse,
-      (
-        observed.mrtoConstantRowCount,
-        observed.mrtoConstantSchemeIdCount,
-        observed.mrtoConstantBodyIsFunction,
-        observed.mrtoConstantSlotCount,
-      ),
-    )
-
-test "numeric anchor uses builtin identity and preserves attributed boundary" =
-  let observed = observeMethodSchemeRowsForTest ()
-  expectEqual
-    (
-      0,
-      "Foldable",
-      ["t"],
-      [
-        NumAnchorTestObservation {
-          natoCase = "attrOnly",
-          natoHasScheme = False,
-          natoHasParams = False,
-          natoSchemeBody = "",
-          natoParamType = "",
-        },
-        NumAnchorTestObservation {
-          natoCase = "directOnly",
-          natoHasScheme = True,
-          natoHasParams = True,
-          natoSchemeBody = "String -> a",
-          natoParamType = "String -> a",
-        },
-        NumAnchorTestObservation {
-          natoCase = "attrThenDirect",
-          natoHasScheme = True,
-          natoHasParams = True,
-          natoSchemeBody = "String -> a",
-          natoParamType = "String -> a",
-        },
-        NumAnchorTestObservation {
-          natoCase = "directThenAttr",
-          natoHasScheme = False,
-          natoHasParams = False,
-          natoSchemeBody = "",
-          natoParamType = "",
-        },
-        NumAnchorTestObservation {
-          natoCase = "builtinThenUser",
-          natoHasScheme = True,
-          natoHasParams = True,
-          natoSchemeBody = "Int -> a",
-          natoParamType = "Int -> a",
-        },
-        NumAnchorTestObservation {
-          natoCase = "userThenBuiltin",
-          natoHasScheme = True,
-          natoHasParams = True,
-          natoSchemeBody = "Int -> a",
-          natoParamType = "Int -> a",
-        },
-      ],
-    )
-    (
-      observed.mrtoAttributedRowCount,
-      observed.mrtoAttributedParamIface,
-      observed.mrtoAttributedParamTyparams,
-      observed.mrtoNumAnchors,
-    )
-
 mixedAttrFirstSource : String
 mixedAttrFirstSource = joinNl [
   "@inline",
@@ -569,11 +447,6 @@ mixedDefaultSource = joinNl [
   "    let _ = other z",
   "    base y",
 ]
-
-test "default RNone observer keeps its three gates and historical binder ABI" =
-  expectEqual
-    (True, True, ["$dict_copy_0", "$dict_copy_1"], True)
-    (defaultBodyRNoneServiceProbe ())
 
 test "genuine inherited Supply return keeps full default owner and parser origin" =
   let observed = runModulesObserved [("supply_iface", supplySource)]

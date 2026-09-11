@@ -1546,9 +1546,13 @@ methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
 methodPredicateSlotsOfType : List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
 methodRet : Ty -> Ty
+methodRowDeclarationProbe : Unit -> (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
+methodRowFreshnessProbe : Unit -> ((Int, Int, Int, List Int, List Int), (List (List Int), List (List Int), List (List Int)))
 methodRowNumObservation : String -> List Decl -> List Decl -> NumAnchorTestObservation
+methodRowNumericAnchorProbe : Unit -> (Int, String, List String, List (String, Bool, Bool, String, String))
 methodRowRegistrySlotIds : String -> List (List Int)
 methodRowSameNameView : List MethodSchemeRow -> List (String, String, Int, Int)
+methodRowSlotAllocationProbe : Unit -> (List Int, List (List Int), List (List Int), List (List Int), List (List Int))
 methodRowTestConstantDecl : Decl
 methodRowTestConstraint : String -> String -> List Ty -> Constraint
 methodRowTestFoldMapDecl : Decl
@@ -1657,6 +1661,7 @@ nthKindList : Int -> List (List Kind) -> Option (List Kind)
 nthMethodMono : Int -> List Mono -> Mono
 nthMono : Int -> List Mono -> Option Mono
 nthTy : Int -> List Ty -> Option Ty
+numAnchorObservationView : NumAnchorTestObservation -> (String, Bool, Bool, String, String)
 numArithOp : Mono -> Mono -> Mono
 numCallObls : List UObligation -> List UObligation
 numConstrainedIds : List UObligation -> List Int

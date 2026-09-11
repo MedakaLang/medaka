@@ -7843,8 +7843,7 @@ data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 -- row was absent or its prefix ended before this slot, while the latter is a known
 -- nullary predicate.  [psBoundIds] is likewise the whole ordered id projection for the
 -- predicate.  Function slots currently contribute one lead id; impl-`requires` slots
--- contribute every id in their argument vector.  This slice stores neither type: the
--- live legacy producers below round-trip through it only as a migration audit.
+-- contribute every id in their argument vector.
 data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {
   prIface : IfaceRef,
@@ -7881,7 +7880,7 @@ data LegacyNumLiteralAnchor = LegacyNumLiteralAnchor {
   lnlaParams : Option (IfaceRef, List String, Ty, List (String, List Kind)),
 }
 
-public export data NumAnchorTestObservation = NumAnchorTestObservation {
+data NumAnchorTestObservation = NumAnchorTestObservation {
   natoCase : String,
   natoHasScheme : Bool,
   natoHasParams : Bool,
@@ -7890,7 +7889,7 @@ public export data NumAnchorTestObservation = NumAnchorTestObservation {
 }
   deriving (Eq, Debug)
 
-public export data MethodRowTestObservation = MethodRowTestObservation {
+data MethodRowTestObservation = MethodRowTestObservation {
   mrtoSchemeIds : List Int,
   mrtoSlotBoundIds : List (List Int),
   mrtoSlotPositions : List (List Int),
@@ -9816,7 +9815,6 @@ copyGraphRun g = GraphRun {
 -- scope.  The production Module-path coverage lives in typecheck_test.mdk; this probe
 -- only pins the observer's early disabled exit, ancestry walk, pre-entail tag guard,
 -- computed-route guard, and ABI rendering.
-export
 defaultBodyRNoneServiceProbe : Unit -> (Bool, Bool, List String, Bool)
 defaultBodyRNoneServiceProbe _ =
   let savedGraph = graphRun.value
@@ -9869,6 +9867,9 @@ defaultBodyRNoneServiceProbe _ =
   graphRun := savedGraph
   perRun := savedPerRun
   (True, ancestry, rendered, cleared)
+
+-- > defaultBodyRNoneServiceProbe ()
+-- (True, True, ["$dict_copy_0", "$dict_copy_1"], True)
 
 -- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
 -- per module by `checkBodyImpl` before any body is inferred and copied by
@@ -34882,7 +34883,7 @@ legacyMethodSchemes (row :: rest) =
 -- to that list at all, so no spelling can reach it — this removes the read, it does not
 -- special-case the name.
 --
--- 🚨 SELECTED FROM THE ALREADY-MINTED ROWS, NEVER RE-ELABORATED.  A second
+-- Selected from the already-minted rows, never re-elaborated.  A second
 -- `sigToSchemeTvsIn` here would hand `recordMethodDicts` a scheme whose ids no constraint
 -- row is keyed by, besides shifting every downstream id.
 --
@@ -37662,7 +37663,6 @@ methodRowNumObservation caseName builtinDecls decls =
   perRun := savedPerRun
   observation
 
-export
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 observeMethodSchemeRowsForTest _ =
   let savedCross = crossRun.value
@@ -37794,6 +37794,85 @@ observeMethodSchemeRowsForTest _ =
   graphRun := savedGraph
   perRun := savedPerRun
   observation
+
+methodRowSlotAllocationProbe : Unit ->
+  (List Int, List (List Int), List (List Int), List (List Int), List (List Int))
+methodRowSlotAllocationProbe _ =
+  let observed = observeMethodSchemeRowsForTest ()
+  (
+    observed.mrtoSchemeIds,
+    observed.mrtoSlotBoundIds,
+    observed.mrtoSlotPositions,
+    observed.mrtoSlotIdsAtPositions,
+    observed.mrtoSlotArgumentIds,
+  )
+
+-- > methodRowSlotAllocationProbe ()
+-- ([0, 1, 2], [[1]], [[1]], [[1]], [[1]])
+
+methodRowFreshnessProbe : Unit ->
+  ((Int, Int, Int, List Int, List Int), (List (List Int), List (List Int), List (List Int)))
+methodRowFreshnessProbe _ =
+  let observed = observeMethodSchemeRowsForTest ()
+  (
+    (
+      observed.mrtoCounterBefore,
+      observed.mrtoCounterAfterFirst,
+      observed.mrtoCounterAfterSecond,
+      observed.mrtoFirstSchemeIds,
+      observed.mrtoSecondSchemeIds,
+    ),
+    (
+      observed.mrtoFirstRowSlotIds,
+      observed.mrtoSecondRowSlotIds,
+      observed.mrtoRegistryAfterSecondSlotIds,
+    ),
+  )
+
+-- > methodRowFreshnessProbe ()
+-- ((0, 3, 6, [0, 1, 2], [3, 4, 5]), ([[1]], [[4]], [[1]]))
+
+methodRowDeclarationProbe : Unit ->
+  (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
+methodRowDeclarationProbe _ =
+  let observed = observeMethodSchemeRowsForTest ()
+  (
+    observed.mrtoSameNameForward,
+    observed.mrtoSameNameReverse,
+    (
+      observed.mrtoConstantRowCount,
+      observed.mrtoConstantSchemeIdCount,
+      observed.mrtoConstantBodyIsFunction,
+      observed.mrtoConstantSlotCount,
+    ),
+  )
+
+-- > methodRowDeclarationProbe ()
+-- ([("A", "same", 0, 0), ("A", "extra", 0, 0), ("B", "same", 1, 1)], [("B", "same", 1, 1), ("A", "same", 0, 0), ("A", "extra", 0, 0)], (1, 0, False, 0))
+
+numAnchorObservationView : NumAnchorTestObservation ->
+  (String, Bool, Bool, String, String)
+numAnchorObservationView observation = (
+  observation.natoCase,
+  observation.natoHasScheme,
+  observation.natoHasParams,
+  observation.natoSchemeBody,
+  observation.natoParamType,
+)
+
+methodRowNumericAnchorProbe : Unit ->
+  (Int, String, List String, List (String, Bool, Bool, String, String))
+methodRowNumericAnchorProbe _ =
+  let observed = observeMethodSchemeRowsForTest ()
+  (
+    observed.mrtoAttributedRowCount,
+    observed.mrtoAttributedParamIface,
+    observed.mrtoAttributedParamTyparams,
+    map numAnchorObservationView observed.mrtoNumAnchors,
+  )
+
+-- > methodRowNumericAnchorProbe ()
+-- (0, "Foldable", ["t"], [("attrOnly", False, False, "", ""), ("directOnly", True, True, "String -> a", "String -> a"), ("attrThenDirect", True, True, "String -> a", "String -> a"), ("directThenAttr", False, False, "", ""), ("builtinThenUser", True, True, "Int -> a", "Int -> a"), ("userThenBuiltin", True, True, "Int -> a", "Int -> a")])
 
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only

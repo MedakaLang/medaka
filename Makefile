@@ -98,9 +98,10 @@ test: medaka
 	## `checkTestMdkRoster` (compiler/driver/medaka_cli.mdk): the roster check runs
 	## inside `runTestManyTargets`, which only a multi-target/directory invocation
 	## takes, so with file targets alone its "git-tracked but never walked" arm was
-	## dead code. `compiler/types` holds tracked `*_test.mdk` siblings
-	## (`registry_test.mdk` and `solver_contract_test.mdk`),
-	## so the roster has something real to account for. It subsumes the four file
+	## dead code. Directory discovery walks all tracked `compiler/types/*_test.mdk`
+	## siblings: `registry_test.mdk`, `scopes_test.mdk`,
+	## `solver_contract_test.mdk`, and `typecheck_test.mdk`. The roster therefore
+	## has something real to account for. It subsumes the four file
 	## lines that stood here, each for its own [W-MODULE-BLIND] reason:
 	##   registry.mdk / registry_test.mdk — the module is outside every entry's
 	##     import closure, so nothing else walks it;
