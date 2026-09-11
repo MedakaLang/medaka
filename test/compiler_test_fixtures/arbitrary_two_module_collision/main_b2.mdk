@@ -1,0 +1,9 @@
+-- `main_b.mdk` with the two import lines swapped: `b` is loaded BEFORE `a`,
+-- and the prop is still over `b`'s `Color`, whose instance is now the FIRST
+-- candidate under the shared route word rather than the second. Every case
+-- must be `Blue`. See `main_a2.mdk` for why the import order is its own axis.
+import b.{Color(..), tag}
+import a
+
+prop "b's own Arbitrary instance is what b's Color draws from" (c : Color) =
+  tag c == "b-blue"

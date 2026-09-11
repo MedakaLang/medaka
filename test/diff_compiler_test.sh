@@ -62,6 +62,13 @@
 #     other module's type, which reaches the prop body as a foreign value.
 #     Driven by its own block below (a multi-module project has no single
 #     `.test.golden`).
+#   test/compiler_test_fixtures/arbitrary_two_module_collision/  GH #2820: the
+#     same two spellings, but an instance at BOTH, across four entries — each
+#     type named from each import order. Driven by its own block below.
+#   test/compiler_test_fixtures/shrink_not_called.mdk  GH #2812: the runner's
+#     own reduction strategy, not `Arbitrary.shrink`, produces a counterexample.
+#     Driven by its own block below (the claim is which value is REPORTED, and
+#     a golden diff would not say which of the two answers it recorded).
 #
 # DEFERRED (pre-existing compiler/native gaps, NOT gate-rerooting regressions):
 #   error-path doctests — compiler eval has no per-binding panic recovery.
@@ -343,18 +350,24 @@ fi
 # head spelling and nothing else). Each prop is over a specific, resolvable
 # module's `Color`, so each must draw from THAT module's instance.
 #
-# Two entries, not one: an alias-qualified name is a parse error in type
+# Four entries, not one: an alias-qualified name is a parse error in type
 # position, so a single file can name only one of the two `Color`s. They are the
 # SET this arm exists for -- a fix that always takes the first candidate passes
 # main_a and fails main_b, and one arm alone cannot tell the two apart.
 # Asserted on CONTENT: the declining base and a wrong-candidate pick both exit
 # nonzero, and the wrong pick's shape varies (a non-exhaustive match here, a
 # dispatch panic for other constructor arities).
+#
+# The `2` entries vary the second, independent axis: WHICH type the prop is over
+# and WHICH order the two modules were imported in are separate questions, and
+# the candidate list under the shared route word is built in load order. main_a
+# and main_a2 name the same type from opposite load orders, so a fix keyed on
+# position rather than on the resolved type's own identity splits the pair.
 atmc_dir="$ROOT/test/compiler_test_fixtures/arbitrary_two_module_collision"
-for atmc_entry in main_a main_b; do
+for atmc_entry in main_a main_b main_a2 main_b2; do
   case "$atmc_entry" in
-    main_a) atmc_want="a's own Arbitrary instance is what a's Color draws from" ;;
-    *)      atmc_want="b's own Arbitrary instance is what b's Color draws from" ;;
+    main_a|main_a2) atmc_want="a's own Arbitrary instance is what a's Color draws from" ;;
+    *)              atmc_want="b's own Arbitrary instance is what b's Color draws from" ;;
   esac
   atmc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$atmc_dir/$atmc_entry.mdk" "$atmc_dir" 2>&1 | sed "s#$ROOT/##g")"
   atmc_code=0
@@ -383,6 +396,27 @@ if printf '%s' "$aci_out" | grep -qF "the 'Arbitrary' instance for 'Tree' cannot
   pass=$((pass + 1)); printf 'ok   arbitrary_constrained_instance (an unusable Arbitrary instance is reported, not ignored)\n'
 else
   fail=$((fail + 1)); printf 'FAIL arbitrary_constrained_instance: expected the unusable-instance report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$aci_code" "$aci_out"
+fi
+
+# GH #2812: the runner reduces a counterexample with its own internal strategy
+# (`shrinkValue`/`shrinkInt`, compiler/tools/prop_runner.mdk), which has no arm
+# for a user ADT — `Arbitrary.shrink` is declared but never consulted. The
+# fixture's instance draws `Wrap 500` deterministically and its `shrink` names
+# `Wrap 0`, so the two answers are distinguishable in the report itself.
+# Asserted on CONTENT, not on a golden: a consulted `shrink` fails the prop the
+# same way and exits nonzero too — only the reported counterexample separates
+# them, and `Wrap 0`'s ABSENCE is the half that carries the claim.
+snc="$ROOT/test/compiler_test_fixtures/shrink_not_called.mdk"
+snc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$snc" "$ROOT/test/compiler_test_fixtures" 2>&1 | sed "s#$ROOT/##g")"
+snc_code=0
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$snc" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1 || snc_code=$?
+if printf '%s' "$snc_out" | grep -qF "w = Wrap 500" \
+  && ! printf '%s' "$snc_out" | grep -qF "w = Wrap 0" \
+  && printf '%s' "$snc_out" | grep -qF "0 passed, 1 failed" \
+  && [ "$snc_code" -ne 0 ]; then
+  pass=$((pass + 1)); printf 'ok   shrink_not_called (the counterexample is the drawn value; Arbitrary.shrink is never consulted)\n'
+else
+  fail=$((fail + 1)); printf 'FAIL shrink_not_called: expected the unshrunk `Wrap 500` counterexample, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$snc_code" "$snc_out"
 fi
 
 # Issue #892 (S2): a FILE-LEVEL parse error in the TARGET must surface as the SAME

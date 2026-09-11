@@ -1,0 +1,15 @@
+-- `main_a.mdk` with the two import lines swapped: `b` is loaded BEFORE `a`,
+-- and the prop is still over `a`'s `Color`, so the draw must still come from
+-- `a`'s instance -- every case is `Red`.
+--
+-- WHICH type a prop is over and WHICH order the two modules were imported in
+-- are two independent questions, and one is not evidence about the other: a
+-- candidate list keyed on the shared route word is built in load order, so a
+-- fix that takes the first candidate rather than the resolved type's own is
+-- right here and wrong in `main_a.mdk` (or the reverse). The four entries are
+-- the SET that tells those apart.
+import b
+import a.{Color(..), tag}
+
+prop "a's own Arbitrary instance is what a's Color draws from" (c : Color) =
+  tag c == "a-red"
