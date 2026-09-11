@@ -59,7 +59,13 @@ warning: ROOT/test/lint_crossfile_fixtures/top.mdk:11:1: [rule-dead-code] privat
   |  ^
 
 cross-file:
+warning: ROOT/test/lint_crossfile_fixtures/dup_multiclause_a.mdk:9:1: [rule-duplicate-body] function 'stepA' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/dup_multiclause_b.mdk — consolidate into a shared module
+warning: ROOT/test/lint_crossfile_fixtures/dup_multiclause_b.mdk:6:1: [rule-duplicate-body] function 'stepB' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/dup_multiclause_a.mdk — consolidate into a shared module
+warning: ROOT/test/lint_crossfile_fixtures/dup_dedupe_a.mdk:10:1: [rule-duplicate-body] function 'mkA' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/dup_dedupe_b.mdk — consolidate into a shared module
+warning: ROOT/test/lint_crossfile_fixtures/dup_dedupe_b.mdk:7:1: [rule-duplicate-body] function 'mkB' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/dup_dedupe_a.mdk — consolidate into a shared module
 warning: ROOT/test/lint_crossfile_fixtures/nested/deep.mdk:14:1: [rule-duplicate-body] function 'classify' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/top.mdk — consolidate into a shared module
 warning: ROOT/test/lint_crossfile_fixtures/top.mdk:5:1: [rule-duplicate-body] function 'classify' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/nested/deep.mdk — consolidate into a shared module
 warning: ROOT/test/lint_crossfile_fixtures/dup_next_line.mdk:4:1: [rule-duplicate-body] function 'sizeB' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/supp_next_line.mdk — consolidate into a shared module
 warning: ROOT/test/lint_crossfile_fixtures/dup_file_level.mdk:4:1: [rule-duplicate-body] function 'gradeA' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/supp_file_level.mdk — consolidate into a shared module
+warning: ROOT/test/lint_crossfile_fixtures/dup_partialclause_a.mdk:11:1: [rule-duplicate-body] function 'pickA' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/dup_partialclause_b.mdk — consolidate into a shared module
+warning: ROOT/test/lint_crossfile_fixtures/dup_partialclause_b.mdk:6:1: [rule-duplicate-body] function 'pickB' has a body structurally identical to a definition in ROOT/test/lint_crossfile_fixtures/dup_partialclause_a.mdk — consolidate into a shared module

@@ -49,6 +49,12 @@ runCheckCached runtimeP coreP tsrc =
   reportFor resDiags runtimeP coreP raw desugared
 
 reportFor : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
+-- Intentional cross-file duplicate of check.mdk's copy, for the same reason
+-- `cleanReport` below carries: both are module-private report assembly, and
+-- sharing them means exporting tools/check.mdk's internals — the module this
+-- entry exists to reproduce EXACTLY, whose divergence hazard the file header
+-- above records. Consolidate the two drivers or neither.
+-- lint-disable-next-line rule-duplicate-body
 reportFor "" runtimeP coreP raw desugared =
   cleanReport runtimeP coreP raw desugared
 reportFor resDiags _ _ _ _ = resDiags
@@ -64,6 +70,10 @@ cleanReport runtimeP coreP raw desugared =
   joinNonEmpty exWarns schemes
 
 joinNonEmpty : String -> String -> String
+-- Intentional cross-file duplicate of check.mdk's copy — same constraint as
+-- `reportFor` above: module-private in both, and the two report assemblies are
+-- consolidated together with their drivers or not at all.
+-- lint-disable-next-line rule-duplicate-body
 joinNonEmpty "" b = b
 joinNonEmpty a "" = a
 joinNonEmpty a b = "\{a}\n\{b}"

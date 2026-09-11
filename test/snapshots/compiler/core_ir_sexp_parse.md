@@ -1,5 +1,5 @@
 # META
-source_lines=422
+source_lines=424
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -114,6 +114,8 @@ escPair c = charToStr c
 
 -- ── generic S-expression tree ─────────────────────────────────────────────────
 
+-- Atom-vs-list, not failure-vs-success: the arity matches `Result`'s by
+-- coincidence, but the variants mean something else entirely.
 -- lint-disable-next-line rule-clone-type
 public export data SExp = SAtom String | SList (List SExp)
 

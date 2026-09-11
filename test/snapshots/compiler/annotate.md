@@ -1,5 +1,5 @@
 # META
-source_lines=320
+source_lines=325
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -69,6 +69,11 @@ import support.util.{reverseL}
 
 -- ── self-contained helper copies (resolve.mdk keeps its own for its main pass) ─
 patBindings : Pat -> List String
+-- Intentional cross-file duplicate of resolve.mdk's copy. This module imports
+-- only frontend.ast and support.util by design, so that annotation can run on a
+-- raw AST without dragging the resolver in; importing resolve.mdk for a pattern
+-- walk would invert the pass order this file sits after.
+-- lint-disable-next-line rule-duplicate-body
 patBindings (PVar x _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []

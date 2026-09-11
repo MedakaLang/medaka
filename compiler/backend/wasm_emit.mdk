@@ -254,6 +254,7 @@ import backend.trmc_analysis.{
   dispIsSatRootCall,
   dictUniformClauses,
   dropFirstN,
+  flattenApp,
   clauseArityOf,
   clauseBodyOf,
   armBody,
@@ -1204,6 +1205,11 @@ noteTupleArity emit n =
     setRef emit.tupleArities (n :: !emit.tupleArities)
 
 containsInt : Int -> List Int -> Bool
+-- Intentional cross-file duplicate of eval.mdk's private helper. The interpreter
+-- is the oracle this backend is differenced against and imports nothing from
+-- backend/, so the direction that would remove the copy does not exist; a
+-- monomorphic Int membership test is not worth a new shared module.
+-- lint-disable-next-line rule-duplicate-body
 containsInt _ [] = False
 containsInt x (y :: ys) = x == y || containsInt x ys
 
@@ -2159,6 +2165,11 @@ scanImplEntryW7 emit (CImplEntry _ _ body) = match body
     let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
 
 forEachU : (a -> Unit) -> List a -> Unit
+-- Intentional cross-file duplicate of wasm_reach.mdk's copy. The two modules are
+-- independent passes with NO import edge in either direction — the entries
+-- assemble them — so sharing a three-line effectful fold would be the only
+-- coupling between them, and it would exist for a fold alone.
+-- lint-disable-next-line rule-duplicate-body
 forEachU _ [] = ()
 forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
@@ -12107,10 +12118,6 @@ allDigitsGo cs i =
     allDigitsGo cs (i + 1)
   else
     False
-
-flattenApp : CExpr -> List CExpr -> (CExpr, List CExpr)
-flattenApp (CApp f a) acc = flattenApp f (a :: acc)
-flattenApp hd acc = (hd, acc)
 
 indent : List String -> List String
 indent lines = map ("    " ++ _) lines

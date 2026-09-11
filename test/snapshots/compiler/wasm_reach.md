@@ -1,5 +1,5 @@
 # META
-source_lines=276
+source_lines=281
 stages=DESUGAR,MARK
 # SOURCE
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
@@ -110,6 +110,11 @@ wasmReachFilter (CProgram groups ctorArs ctorTypes impls) =
 -- local peer of wasm_emit's forEachU (module-private there); the HashMap builders
 -- below are effectful folds, not value folds.
 forEachU : (a -> Unit) -> List a -> Unit
+-- Intentional cross-file duplicate of that peer. This module and wasm_emit.mdk
+-- have NO import edge in either direction — the entries assemble both — so
+-- sharing this fold would create the only coupling between two independent
+-- passes, for three lines.
+-- lint-disable-next-line rule-duplicate-body
 forEachU _ [] = ()
 forEachU f (x :: xs) = let _ = f x in forEachU f xs
 

@@ -1,5 +1,5 @@
 # META
-source_lines=14845
+source_lines=14850
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -11072,6 +11072,11 @@ tailS [] = []
 tailS (_ :: xs) = xs
 
 nthArm : List CArm -> Int -> Option CArm
+-- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
+-- interpreter is the oracle this backend is differenced against, so the two must
+-- not share code: a defect in a shared helper would move both arms of the
+-- differential together and the gate would report agreement.
+-- lint-disable-next-line rule-duplicate-body
 nthArm (a :: _) 0 = Some a
 nthArm (_ :: rest) n = nthArm rest (n - 1)
 nthArm [] _ = None

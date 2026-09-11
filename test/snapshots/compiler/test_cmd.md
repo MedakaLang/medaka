@@ -1,5 +1,5 @@
 # META
-source_lines=2313
+source_lines=2315
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -2118,6 +2118,8 @@ cliDoctestRunEngineNames : List (Engine, RunResult) -> List Engine
 cliDoctestRunEngineNames [] = []
 cliDoctestRunEngineNames ((e, _) :: rest) = e :: cliDoctestRunEngineNames rest
 
+-- #2341: mirrors `mcp.mdk`'s `primaryEngineName`, not shared across the
+-- module boundary for the same reason as `cliDoctestRunEngineNames` above.
 -- lint-disable-next-line rule-duplicate-body
 cliPrimaryEngineName : List Engine -> String
 cliPrimaryEngineName [] = "unknown"

@@ -1,5 +1,5 @@
 # META
-source_lines=2004
+source_lines=2014
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -578,6 +578,8 @@ derivedShowWrap s
   | otherwise = s
 
 derivedArgNeedsParens : String -> Bool
+-- Reached only from `derivedShowWrap`'s own generated-code call above, same
+-- invisible-to-the-rule reason.
 -- lint-disable-next-line rule-dead-code
 derivedArgNeedsParens s
   | stringLength s == 0 = False
@@ -586,10 +588,14 @@ derivedArgNeedsParens s
   | otherwise = derivedHasTopLevelSpace (stringToChars s) 0 (stringLength s) 0
 
 derivedIsQuoteChar : Char -> Bool
+-- Reached only from `derivedArgNeedsParens` in this same generated-code-only
+-- cluster.
 -- lint-disable-next-line rule-dead-code
 derivedIsQuoteChar c = c == '"' || c == '\''
 
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
+-- Reached only from `derivedArgNeedsParens` in this same generated-code-only
+-- cluster.
 -- lint-disable-next-line rule-dead-code
 derivedHasTopLevelSpace chars i n depth
   | i >= n = False
@@ -602,6 +608,8 @@ derivedHasTopLevelSpace chars i n depth
       (derivedNextDepth (arrayGetUnsafe i chars) depth)
 
 derivedNextDepth : Char -> Int -> Int
+-- Reached only from `derivedHasTopLevelSpace` in this same generated-code-only
+-- cluster.
 -- lint-disable-next-line rule-dead-code
 derivedNextDepth c depth
   | c == '(' || c == '[' || c == '{' = depth + 1
@@ -1343,12 +1351,14 @@ export impl Traversable List where
     [] => pure []
     x :: rest => andThen (f x) (y => map (y :: _) (traverse f rest))
 
+-- Same single-clause-plus-match shape as `Traversable List` above, same reason.
 -- lint-disable-next-line rule-match-on-param
 export impl Traversable Option where
   traverse f opt = match opt
     None => pure None
     Some x => map Some (f x)
 
+-- Same single-clause-plus-match shape as `Traversable List` above, same reason.
 -- lint-disable-next-line rule-match-on-param
 export impl Traversable (Result e) where
   traverse f res = match res

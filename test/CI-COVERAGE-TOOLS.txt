@@ -187,6 +187,18 @@ test/doctest_shape_census      derived doctest-shape census (#2513 tracking, #22
                                 documentary, unit-test-shaped, or UNCLASSIFIED, printing a
                                 per-site worklist that #2290's later remediation consumes.
                                 Always exits 0 and asserts nothing. See the script header.
+test/dup_suppression_census    derived rule-duplicate-body suppression census (#2861, #2276
+                                legs 1+2, `make dup-census`, `make slop-census` row
+                                `dup-suppression`): publishes what the rule's tree-wide ZERO is
+                                hiding — suppression directives per file, the findings they hide
+                                (derived by stripping the directives in a SCRATCH copy and
+                                re-running the same built ./medaka; the working tree is never
+                                written), a per-root reported/enforced split so an unenforced
+                                root cannot read as clean, and a heuristic reasoned/bare split
+                                over the directives. Needs a built ./medaka. Always exits 0 and
+                                asserts nothing — the enforcement floor is
+                                test/diff_compiler_lint_baseline.sh assertion 3 and
+                                .githooks/pre-commit check 3. See the script header.
 
 test/slop_census               composing entry point over the slop-burndown crusade's (#2276)
                                 member censuses (#2304, S-slop-census, `make slop-census`): a

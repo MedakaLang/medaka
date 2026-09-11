@@ -62,6 +62,7 @@ rule-stdlib-reimpl|compiler/tools/lint.mdk|1|"$MEDAKA" lint --only=rule-stdlib-r
 diag-census (leg 8, #2446)|test/diag_census.sh|1|sh test/diag_census.sh
 doc-disposition (#2300)|test/doc_census.sh|0|sh test/doc_census.sh
 doctest-shape (leg 5)|test/doctest_shape_census.sh|0|sh test/doctest_shape_census.sh
+dup-suppression (legs 1+2, #2861)|test/dup_suppression_census.sh|1|sh test/dup_suppression_census.sh
 '
 
 # The rule-stdlib-reimpl row has no owner .sh file of its own (§4 of the

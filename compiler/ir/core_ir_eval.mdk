@@ -364,6 +364,11 @@ cBindersGo i n
     PVar ("$d" ++ intToString i) (Loc "" 0 0 0 0) :: cBindersGo (i + 1) n
 
 nthArm : List CArm -> Int -> Option CArm
+-- Intentional cross-file duplicate of llvm_emit.mdk's copy. This interpreter is
+-- the oracle the native backend is differenced against; sharing a helper with it
+-- would let one defect move both arms of the differential in step, which is the
+-- one failure mode the engine-agreement gates cannot see.
+-- lint-disable-next-line rule-duplicate-body
 nthArm (a :: _) 0 = Some a
 nthArm (_ :: rest) n = nthArm rest (n - 1)
 nthArm [] _ = None

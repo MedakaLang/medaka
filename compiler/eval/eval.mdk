@@ -277,6 +277,11 @@ startsWithAt s =
   arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
 
 containsInt : Int -> List Int -> Bool
+-- Intentional cross-file duplicate of wasm_emit.mdk's private helper. The
+-- interpreter must stay runnable with no backend in its import closure (it is
+-- the oracle the backends are differenced against), so nothing here may import
+-- backend/, and a monomorphic Int membership test is not worth a new module.
+-- lint-disable-next-line rule-duplicate-body
 containsInt _ [] = False
 containsInt x (y :: ys) = x == y || containsInt x ys
 
@@ -2450,6 +2455,11 @@ payloadArity (ConPos tys) = listLen tys
 payloadArity (ConNamed fs _) = listLen fs
 
 funDefs : List Decl -> List (String, (List Pat, Expr))
+-- Intentional cross-file duplicate of typecheck.mdk's copy. The interpreter must
+-- run with no typechecker in its import closure — untyped eval is a real path
+-- ([T-PRELUDE-DICT]) and the typed pipeline differences against it — so eval.mdk
+-- may not import types/, and this decl-flattening is small enough to restate.
+-- lint-disable-next-line rule-duplicate-body
 funDefs [] = []
 funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): each binding behaves exactly like a

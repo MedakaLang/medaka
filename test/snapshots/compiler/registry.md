@@ -1,5 +1,5 @@
 # META
-source_lines=1599
+source_lines=1608
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -1025,6 +1025,7 @@ identBuiltinFixture : Ns -> String -> Ident
 identBuiltinFixture ns name = Ident ns identOriginBuiltin name
 
 identIn : Ns -> String -> String -> Ident
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 identIn ns mid name =
   optionOr
@@ -1068,6 +1069,7 @@ identShiftB : Ident
 identShiftB = identIn NsType "a" "bc"
 
 regBothNs : Registry Int
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 regBothNs = regInsert identIfaceFooM 2 (regInsert identTypeFooM 1 regEmpty)
 
@@ -1099,11 +1101,13 @@ identTypeIntM = identIn NsType "m" "Int"
 
 -- `Ix Int b0` — argument 0 present (head `Int`), argument 1 undetermined.
 keyIxIntUndet : RegKey
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 keyIxIntUndet = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 0]
 
 -- `Ix a0 Int` — argument 0 undetermined, argument 1 present (head `Int`).
 keyIxUndetInt : RegKey
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 keyIxUndetInt = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 1]
 
@@ -1148,10 +1152,12 @@ regPairs =
 -- mregAdd, called in OPPOSITE orders under the SAME Ident with the SAME two
 -- values — demonstrates no registration is lost to call order.
 mregOrderA : MultiRegistry Int
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 mregOrderA = mregAdd identTypeFooM 2 (mregAdd identTypeFooM 1 mregEmpty)
 
 mregOrderB : MultiRegistry Int
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 
@@ -1376,10 +1382,12 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- shape verbatim; `tabU` is what a flat/single-file driver mints for that same
 -- name (no identity at all).
 tabA : TabKey
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 tabA = tabKeyOf NsType (OriginModule "apub") "Box"
 
 tabZ : TabKey
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 tabZ = tabKeyOf NsType (OriginModule "zopapub") "Box"
 
@@ -1461,6 +1469,7 @@ ifaceG : TabKey
 ifaceG = tabKeyOf NsIface (OriginModule "gmod") "Same"
 
 ifaceP : TabKey
+-- Mirrors the same fixture in registry_test.mdk; consolidating would put doctest fixtures on this module's public surface.
 -- lint-disable-next-line rule-duplicate-body
 ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
 

@@ -1,5 +1,5 @@
 # META
-source_lines=632
+source_lines=638
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -275,7 +275,12 @@ escOne : Char -> String
 -- `grep printDecl printer.mdk` silently found nothing on a file with 34 matches.
 -- See the long note at printer.mdk's escStringLit. Keep these two in lockstep.
 --
--- Intentional cross-file duplicate of the same helper in printer.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- Cross-file duplicate of printer.mdk's `escSOne`, which the two are REQUIRED
+-- to be (the lockstep above), so the constraint is not "these may diverge" —
+-- it is that `escOne` is private to this module while `escSOne` is private to
+-- printer.mdk, and neither module's escaping helper is part of a public
+-- surface either wants to grow. Exporting one and deleting the other is a real
+-- consolidation, not a suppression, and it is not what this directive is for.
 -- lint-disable-next-line rule-duplicate-body
 escOne c
   | c == '\\' = "\\\\"
@@ -287,8 +292,9 @@ escOne c
   | charCode c < 32 = "\\u{\{escOneHex2 (charCode c)}}"
   | otherwise = charToStr c
 
--- Shared with printer.mdk's escSOne (which imports it). escOne/escSOne are a
--- deliberate divergent-by-design pair, but the hex digits are not — one copy.
+-- Shared with printer.mdk's escSOne (which imports it). escOne/escSOne are
+-- private-per-module copies held in lockstep; the hex digits are neither —
+-- one exported copy, used by both.
 export
 escOneHex2 : Int -> String
 escOneHex2 b = escOneHexDigit (b / 16) ++ escOneHexDigit (b % 16)

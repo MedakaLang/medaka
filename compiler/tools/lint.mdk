@@ -97,7 +97,7 @@ import hash_map.{
   findWithDefault,
 }
 import list.{take, drop}
-import string.{drop as strDrop}
+import string.{drop as strDrop, isAlpha, isDigit, toLower, words}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
@@ -237,6 +237,9 @@ ruleNameCloneType = "rule-clone-type"
 
 ruleNameClauseMap : String
 ruleNameClauseMap = "rule-clause-map"
+
+ruleNameDirectiveReason : String
+ruleNameDirectiveReason = "rule-directive-reason"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -517,6 +520,17 @@ clauseMapRule = Rule {
   fix = None,
 }
 
+directiveReasonRule : Rule
+directiveReasonRule = Rule {
+  name = ruleNameDirectiveReason,
+  descr =
+    "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDirectiveReason,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -546,6 +560,7 @@ allRules = [
   cloneTypeRule,
   clauseMapRule,
   duplicateBodySameFileRule,
+  directiveReasonRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -1062,22 +1077,41 @@ findingToDiag f =
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file
--- and return `(path, src, List Diag)` — exactly the per-file triple
--- `driver.diagnostics.cjAllToJson` expects.  Shared by `medaka lint --json`
--- (medaka_cli.mdk) and the `medaka_lint` MCP tool (mcp.mdk) so both surfaces
--- serialize through the SAME envelope `check --json` uses, with the lint rule
--- name landing in each diagnostic's `code` (via `findingToDiag`).  Uses
--- `readFileSafe` (the same "" -on-read-error helper `checkJsonFile` uses), so
--- an unreadable path parses as empty source and yields `(path, "", [])` —
--- total, no crash, and consistent with `check --json`'s own file-variant
--- behaviour on a missing target.  Uses `parseWithPositionsLocated` (#649) so a
--- `Finding` at a nested sub-expression (`exprRuleFindings`) carries THAT
--- expression's own location, not the enclosing decl's.
+-- and return `(path, src, List Diag, Positions, List Decl)` — the per-file
+-- triple `driver.diagnostics.cjAllToJson` expects, PLUS the parse the
+-- cross-file tier (`runCrossFileRules`) needs as `(path, Positions, decls)`.
+-- Shared by `medaka lint --json` (medaka_cli.mdk) and the `medaka_lint` MCP
+-- tool (mcp.mdk) so both surfaces serialize through the SAME envelope
+-- `check --json` uses, with the lint rule name landing in each diagnostic's
+-- `code` (via `findingToDiag`).  Uses `readFileSafe` (the same ""-on-read-error
+-- helper `checkJsonFile` uses), so an unreadable path parses as empty source
+-- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
+-- consistent with `check --json`'s own file-variant behaviour on a missing
+-- target.  Uses `parseWithPositionsLocated` (#649) so a `Finding` at a nested
+-- sub-expression (`exprRuleFindings`) carries THAT expression's own location,
+-- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
 -- this function builds, because both callers (`medaka lint --json`'s
 -- `runLintJsonCmd` and `mcp.mdk`'s `medaka_lint`) sequence this over a LIST of
 -- paths — building the index here would re-parse the whole stdlib once per
 -- target file instead of once per process.
+export
+lintFileDiagTripleParsed : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  String ->
+  <IO> (String, String, List Diag, Positions, List Decl)
+lintFileDiagTripleParsed idx disable only deny path =
+  let src = readFileSafe path
+  let (decls, pos) = parseWithPositionsLocated src
+  let allFindings =
+    applySuppressions src (lintProgram idx allRules path src pos decls)
+  let findings = applyFindingFilters disable only deny allFindings
+  (path, src, map findingToDiag findings, pos, decls)
+
+-- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
+-- caller that does not need the cross-file tier's inputs still wants.
 export
 lintFileDiagTriple : StdlibIndex ->
   List String ->
@@ -1086,12 +1120,11 @@ lintFileDiagTriple : StdlibIndex ->
   String ->
   <IO> (String, String, List Diag)
 lintFileDiagTriple idx disable only deny path =
-  let src = readFileSafe path
-  let (decls, pos) = parseWithPositionsLocated src
-  let allFindings =
-    applySuppressions src (lintProgram idx allRules path src pos decls)
-  let findings = applyFindingFilters disable only deny allFindings
-  (path, src, map findingToDiag findings)
+  dropParsedTriple (lintFileDiagTripleParsed idx disable only deny path)
+
+dropParsedTriple : (String, String, List Diag, Positions, List Decl) ->
+  (String, String, List Diag)
+dropParsedTriple (path, src, diags, _, _) = (path, src, diags)
 
 -- One finding per line: `<severity>: [<rule>] <message>` (location-stripped, the
 -- golden harness sorts).  Mirror of exhaust.mdk's `exhaustToLines`.  `src` is the
@@ -5615,6 +5648,49 @@ runCrossRuleOn only disable files r
     map (restampSeverity r.severity) (r.check files)
   | otherwise = []
 
+-- Fold cross-file findings into the per-file `(path, src, List Diag)` triples
+-- the JSON envelope (`cjAllToJson`) and the `medaka_lint` MCP tool both
+-- serialize.  Each `Finding` already carries ITS OWN occurrence's file in
+-- `loc` (`emitDupGroup` emits one finding per occurrence), so a finding is
+-- appended to the triple whose path matches that file — never aggregated
+-- under a new key.  A finding whose file is not already among `triples`
+-- would get a synthesized `(file, "", [diag])` entry appended instead of
+-- being dropped — a defensive fallback, structurally unreachable from both
+-- of today's call sites, since each builds `triples` from exactly the same
+-- file list it hands to `runCrossFileRules`, so every finding's file is
+-- already present.  Kept for the day a caller passes a narrower path set
+-- than its cross-file rules run over.  A `Finding` with no `loc` (only the
+-- cross-file rule shape used today always sets one) is skipped: there is no
+-- file to attribute it to.
+export
+mergeCrossFileIntoTriples : List Finding ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+mergeCrossFileIntoTriples [] triples = triples
+mergeCrossFileIntoTriples (f :: rest) triples =
+  mergeCrossFileIntoTriples rest (mergeOneFinding f triples)
+
+mergeOneFinding : Finding ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+mergeOneFinding f triples = match f.loc
+  None => triples
+  Some (Loc file _ _ _ _) =>
+    if anyList (tripleHasPath file) triples then
+      map (appendIfPath file (findingToDiag f)) triples
+    else
+      triples ++ [(file, "", [findingToDiag f])]
+
+tripleHasPath : String -> (String, String, List Diag) -> Bool
+tripleHasPath file (path, _, _) = path == file
+
+appendIfPath : String ->
+  Diag ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
+appendIfPath file diag (path, src, diags) =
+  if path == file then (path, src, diags ++ [diag]) else (path, src, diags)
+
 -- ── the cross-file tier, reached from CACHED per-file inputs (#395) ────────────
 -- `runCrossFileRules` needs every file's `(path, Positions, decls)` — i.e. a
 -- PARSE of every target, which is exactly what `--cache` skips.  So a cached run
@@ -5766,11 +5842,6 @@ isUpperFirst s =
   else
     isUpper (arrayGetUnsafe 0 (stringToChars s))
 
--- combined eligibility: big enough AND not pure data.
-dupEligible : Expr -> Bool
-dupEligible body =
-  bodyComplexity body >= dupComplexityThreshold && not (isPureDataExpr body)
-
 -- Same-file eligibility uses a HIGHER complexity floor than the cross-file
 -- rule.  This is not tuning-to-the-corpus: it is a structural consequence of
 -- how the two comparisons scale.  Cross-file compares bodies across a small
@@ -5844,9 +5915,43 @@ dupJoin occs =
     filterList
       (k => dupGroupFires (findWithDefault [] k groups))
       (dupDistinctKeys occs)
-  flatMap
-    (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
-    (sortUniqS live)
+  dedupeFindings
+    (flatMap
+      (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
+      (sortUniqS live))
+
+-- Both occurrence grains can key the SAME duplicate pair: a multi-clause
+-- function whose every clause matches another's fires once per matching clause
+-- and once in aggregate, and the aggregate anchors at the first individually
+-- eligible clause — the very line the clause grain reports.  The two findings
+-- are then word-for-word identical, and a reader gains nothing from reading the
+-- sentence twice.
+--
+-- Repeats are dropped HERE rather than prevented at the occurrence level because
+-- only the rendered finding can tell whether two grains say the same thing: the
+-- grains carry different keys, so they group over different partner-file sets,
+-- and a clause grain that spans strictly more files than the aggregate says
+-- something the aggregate does not.  First finding wins, so the `sortUniqS`-
+-- ordered output above keeps its order.
+dedupeFindings : List Finding -> List Finding
+dedupeFindings fs =
+  let seen = new ()
+  dedupeFindingsGo seen fs
+
+dedupeFindingsGo : HashMap String Unit -> List Finding -> List Finding
+dedupeFindingsGo _ [] = []
+dedupeFindingsGo seen (f :: rest)
+  | has (findingDedupeKey f) seen = dedupeFindingsGo seen rest
+  | otherwise =
+    let _ = setInPlace (findingDedupeKey f) () seen
+    f :: dedupeFindingsGo seen rest
+
+findingDedupeKey : Finding -> String
+findingDedupeKey f = "\{f.rule}\n\{dupLocKey f.loc}\n\{f.message}"
+
+dupLocKey : Option Loc -> String
+dupLocKey (Some (Loc file line col _ _)) = "\{file}:\{line}:\{col}"
+dupLocKey None = "-"
 
 -- key → its occurrences, in one linear pass.  Each bucket accumulates REVERSED
 -- (prepend is O(1)); `dupJoin` reverses on the way out so the occurrence order
@@ -5895,24 +6000,137 @@ dupGroupFires : List (String, Int, String, String) -> Bool
 dupGroupFires grp =
   listLen grp >= 2 && listLen (sortUniqS (map occFile grp)) >= 2
 
--- one occurrence per eligible top-level DFunDef: (file, line, name, structuralKey)
+-- ── the per-clause floor blind spot (#2651) ────────────────────────────────────
+-- A function written as several pattern clauses is several `DFunDef`s sharing
+-- one name.  Judging the complexity floor on ONE clause's body meant a function
+-- whose clauses are individually small never reached it, however faithfully the
+-- whole set of them duplicated another file's — so a multi-clause recursion, the
+-- commonest shape in this codebase, was the shape the rule could not see.
+-- Clauses are therefore collected first and the floor ALSO applied to the
+-- FUNCTION: complexities summed (`bodyComplexity` counts '(' in the sexp dump,
+-- so the units are additive and nothing is re-serialized) and clause keys
+-- concatenated in declaration order, so a function matches only when every
+-- clause matches, in the same order.
+--
+-- The function grain does not subsume the clause grain, and emitting only the
+-- former silently dropped every PARTIAL match: one clause of a multi-clause
+-- function duplicating a whole single-clause function elsewhere, or two
+-- multi-clause functions sharing some clauses but not all, produce unequal
+-- aggregate keys however exactly the shared clauses coincide.  Both grains are
+-- therefore emitted, each judged against the floor on its own terms.  A
+-- single-clause function's two grains are the same occurrence, so the aggregate
+-- is emitted only for a group of two or more clauses.
+--
+-- The occurrence TUPLE is unchanged, which is what keeps the `--cache` path in
+-- lockstep for free: `fileDupOccs` is what a cached run persists per file, and
+-- the aggregation happens strictly inside it, so `runCrossFileRulesFromOccs`
+-- runs the identical join over the identical shape.
+data DupClause = DupClause {
+  dcName : String,
+  dcLine : Int,
+  dcKey : String,
+  dcCost : Int,
+  dcPure : Bool,
+}
+
+-- one occurrence per eligible top-level CLAUSE, plus one per eligible
+-- multi-clause FUNCTION: (file, line, name, key)
 export
 fileDupOccs : (String, Positions, List Decl) ->
   List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
-  flatMap (dupOccOfDecl path) (declLocList pos decls)
+  flatMap
+    (dupOccsOfGroup path)
+    (dupClauseGroups (flatMap dupClauseOfDecl (declLocList pos decls)))
 
-dupOccOfDecl : String ->
-  (Decl, Option Loc) ->
-  List (String, Int, String, String)
-dupOccOfDecl path (d, loc) = match d
-  DFunDef _ name pats body =>
-    if dupEligible body then
-      [(path, locLineOf loc, name, structuralKey pats body)]
-    else
-      []
-  DAttrib _ inner => dupOccOfDecl path (inner, loc)
+dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
+dupClauseOfDecl (d, loc) = match d
+  DFunDef _ name pats body => [
+    DupClause {
+      dcName = name,
+      dcLine = locLineOf loc,
+      dcKey = structuralKey pats body,
+      dcCost = bodyComplexity body,
+      dcPure = isPureDataExpr body,
+    },
+  ]
+  DAttrib _ inner => dupClauseOfDecl (inner, loc)
   _ => []
+
+-- Clauses of one function are adjacent in the decl list, so consecutive runs of
+-- a name group them.  Grouping by name across the whole file instead would fuse
+-- two unrelated definitions if a file ever held one name twice.
+dupClauseGroups : List DupClause -> List (List DupClause)
+dupClauseGroups [] = []
+dupClauseGroups (c :: rest) =
+  let (same, others) = dupSpanName c.dcName rest
+  (c :: same) :: dupClauseGroups others
+
+dupSpanName : String -> List DupClause -> (List DupClause, List DupClause)
+dupSpanName _ [] = ([], [])
+dupSpanName nm (c :: rest)
+  | c.dcName == nm =
+    let (same, others) = dupSpanName nm rest
+    (c :: same, others)
+  | otherwise = ([], c :: rest)
+
+dupOccsOfGroup : String -> List DupClause -> List (String, Int, String, String)
+dupOccsOfGroup path cs = dupClauseOccs path cs ++ dupAggregateOcc path cs
+
+-- Clause grain: each clause that clears the floor on its own, keyed and reported
+-- at its own line.  This is the original (pre-#2651) occurrence set.
+dupClauseOccs : String -> List DupClause -> List (String, Int, String, String)
+dupClauseOccs _ [] = []
+dupClauseOccs path (c :: cs)
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure =
+    (path, c.dcLine, c.dcName, c.dcKey) :: dupClauseOccs path cs
+  | otherwise = dupClauseOccs path cs
+
+-- Function grain.  The group is eligible when the COMBINED body clears the floor
+-- and at least one clause is real logic: a function all of whose clauses are
+-- pure data is data, which is #893's narrowing applied at function grain instead
+-- of clause grain.  A one-clause group has nothing to aggregate — its function
+-- grain is byte-for-byte its clause grain — so it yields nothing here.
+dupAggregateOcc : String -> List DupClause -> List (String, Int, String, String)
+dupAggregateOcc _ [] = []
+dupAggregateOcc _ [_] = []
+dupAggregateOcc path (c :: cs)
+  | dupGroupCost (c :: cs) >= dupComplexityThreshold
+    && not (allList dcPureOf (c :: cs)) = [
+    (
+      path,
+      dupAnchorLine (c :: cs) c.dcLine,
+      c.dcName,
+      joinWith "\n" (map dcKeyOf (c :: cs)),
+    ),
+  ]
+  | otherwise = []
+
+-- WHERE the finding points, and this is load-bearing rather than cosmetic.
+-- A suppression directive is matched against the reported line, so moving an
+-- anchor silently un-suppresses a duplicate someone has already adjudicated —
+-- and this tree carries over a hundred such directives.  So the anchor is the
+-- first clause that clears the floor ON ITS OWN, which is exactly the clause the
+-- per-clause rule used to report and therefore exactly the clause every existing
+-- directive was placed above.  Aggregation then only ADDS findings; it moves
+-- none.  A function that fires only in aggregate has no such clause and no
+-- directive to preserve, so it anchors at its first clause, where a reader looks
+-- to find the function.
+dupAnchorLine : List DupClause -> Int -> Int
+dupAnchorLine [] fallback = fallback
+dupAnchorLine (c :: cs) fallback
+  | c.dcCost >= dupComplexityThreshold && not c.dcPure = c.dcLine
+  | otherwise = dupAnchorLine cs fallback
+
+dcKeyOf : DupClause -> String
+dcKeyOf c = c.dcKey
+
+dcPureOf : DupClause -> Bool
+dcPureOf c = c.dcPure
+
+dupGroupCost : List DupClause -> Int
+dupGroupCost [] = 0
+dupGroupCost (c :: cs) = c.dcCost + dupGroupCost cs
 
 locLineOf : Option Loc -> Int
 locLineOf (Some (Loc _ l _ _ _)) = l
@@ -5983,11 +6201,18 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- takes every target file at once and requires ≥2 DISTINCT files per group) —
 -- so two byte-identical top-level bodies in the SAME file (e.g. parser.mdk's
 -- `parseBracketBlock`/`indentedBody`) were structurally invisible to it.  This
--- is the in-file counterpart: same structural key (`structuralKey`), same
--- eligibility gate (`dupEligible` — size threshold + not-pure-data), but grouped
--- within ONE file's own decls instead of across the whole project.  Registered
--- under the SAME rule name (`ruleNameDuplicateBody`) so `--disable`/`--only`/
--- `-- lint-disable-*` all address both halves of the rule with one name.
+-- is the in-file counterpart: same structural key (`structuralKey`), its own
+-- higher floor (`dupEligibleSameFile` — size threshold + not-pure-data), but
+-- grouped within ONE file's own decls instead of across the whole project.
+-- Registered under the SAME rule name (`ruleNameDuplicateBody`) so
+-- `--disable`/`--only`/`-- lint-disable-*` address both halves with one name.
+--
+-- It keys one CLAUSE at a time, so the multi-clause aggregation the cross-file
+-- half gained above does not apply here: a multi-clause same-file duplicate is
+-- still invisible, and a function whose clauses all match another's is reported
+-- once PER CLAUSE rather than once.  Both are left as they are deliberately —
+-- the same-file collision space is O(bindings²) (see the floor note above), so
+-- widening this half needs an over-fire budget of its own.
 sameFileOccOfDecl : (Decl, Option Loc) -> List (String, Int, String)
 sameFileOccOfDecl (d, loc) = match d
   DFunDef _ name pats body =>
@@ -6101,4 +6326,233 @@ duplicateBodySameFileRule = Rule {
   enabled = True,
   check = ruleDuplicateBodySameFile,
   fix = None,
+}
+
+-- ── rule: directive-reason (#2862) ────────────────────────────────────────────
+-- A `-- lint-disable-*` directive with no comment stating the constraint that
+-- forced it is itself a finding: the same failure mode the-baseline-goes-down
+-- sprint found only by hand.
+--
+-- The reason must live in the SAME contiguous comment block as the directive
+-- (`commentBlocks`/`codePortions`, rule-promissory-reader's helpers, reused
+-- unmodified above) — above it, below it, or beside another directive in the
+-- same block. Several existing file-scope directives sit on line 1, where
+-- nothing can precede them, and state their reason in the lines that follow
+-- instead (`compiler/tools/lsp.mdk`, `compiler/backend/wasm_emit.mdk`); the
+-- same-block rule (rather than "immediately above only") is what keeps this
+-- rule silent on those.
+--
+-- A `lint-disable-line`/`lint-disable-next-line` directive whose own block
+-- has no reason gets ONE fallback: `export\n<name> : <type>` (or a bare
+-- signature line alone) can sit between a leading doc comment and the
+-- directive, breaking block contiguity even though a reader plainly reads
+-- that comment as the declaration's reason (`compiler/tools/lint.mdk`'s own
+-- `trimWs`, `compiler/entries/entry_support.mdk`'s `failWith`). The parsed
+-- AST already threads `Positions` into every rule, so instead of guessing
+-- what a "signature-only" line looks like, find the `DeclPos` the directive's
+-- target line falls inside and check the comment block ending immediately
+-- before THAT declaration starts.
+--
+-- A block counts as reasoned when some OTHER comment in it (not a directive
+-- line itself) has a "substantive word": a run of at least 4 alphabetic
+-- characters. Digits and `#` never contribute, so a bare issue reference
+-- (`#1234`) is never one; short connector words ("see", "cf", "ref") aren't
+-- either, so `-- see #1234` does not count as a reason.
+ruleDirectiveReason : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleDirectiveReason _ _ src pos prog =
+  let comments = collectComments src
+  let ls = splitNl src
+  let codeLines = arrayFromList (codePortions ls comments 1)
+  let blocks = commentBlocks comments codeLines
+  let declZips = zipDeclPos prog (positionsDecls pos)
+  let dirCmts = filterList (c => isSome (parseDirective c)) comments
+  flatMap (directiveReasonCheck comments blocks declZips) dirCmts
+
+directiveReasonCheck : List Comment ->
+  List CommentBlock ->
+  List (Decl, DeclPos) ->
+  Comment ->
+  List Finding
+directiveReasonCheck comments blocks declZips c =
+  if directiveReasoned comments blocks declZips c then
+    []
+  else
+    [directiveReasonFinding c]
+
+directiveReasoned : List Comment ->
+  List CommentBlock ->
+  List (Decl, DeclPos) ->
+  Comment ->
+  Bool
+directiveReasoned comments blocks declZips c =
+  let ownReasoned = match find (commentBlockContainsLine (commentLine c)) blocks
+    Some b => blockHasReason comments b
+    None => False
+  if ownReasoned then
+    True
+  else match parseDirective c
+    Some (Directive (DScopeLine target) _) =>
+      declGapReasoned
+        comments
+        blocks
+        declZips
+        (declZipNameAt declZips target)
+        (commentLine c)
+    Some (Directive DScopeFile _) => False
+    None => False
+
+-- Walk backward from `line` through a CHAIN of declarations that abut it
+-- exactly (no blank line between): a signature-only `DTypeSig` (alone or
+-- `export`-prefixed) between a leading doc comment and the directive it
+-- explains — `compiler/tools/lint.mdk`'s own `trimWs` a few hundred lines
+-- above this rule, `compiler/entries/entry_support.mdk`'s `failWith` — or a
+-- one-line-per-clause function whose OWN signature sits one hop further back
+-- (`compiler/types/route_key.mdk`'s `rkEffAtom`: directive between its two
+-- clauses, reason above the signature two hops up). Each hop requires the
+-- PRECEDING declaration to end on the exact line before AND to be the SAME
+-- declaration the directive suppresses — a `DTypeSig`/`DFunDef` sharing the
+-- target's own name — so a real blank line still stops the walk, and so does
+-- an adjacent but UNRELATED top-level declaration (a different function's
+-- doc comment must never be credited to this directive).
+declGapReasoned : List Comment ->
+  List CommentBlock ->
+  List (Decl, DeclPos) ->
+  Option String ->
+  Int ->
+  Bool
+declGapReasoned comments blocks declZips targetName line =
+  match find (commentBlockEndsAt (line - 1)) blocks
+    Some b => blockHasReason comments b
+    None => match find (declZipEndsAt (line - 1)) declZips
+      Some (d, dp) =>
+        if declGapNameMatches targetName d then
+          declGapReasoned comments blocks declZips targetName (declPosLine dp)
+        else
+          False
+      None => False
+
+-- The name of the declaration the directive's target `line` falls inside —
+-- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a
+-- different decl kind, or the directive is the last thing in the file), in
+-- which case `declGapNameMatches` below never credits a gap hop.
+declZipNameAt : List (Decl, DeclPos) -> Int -> Option String
+declZipNameAt declZips line = match find (declZipContainsLine line) declZips
+  Some (d, _) => declBridgeName d
+  None => None
+
+declZipContainsLine : Int -> (Decl, DeclPos) -> Bool
+declZipContainsLine line (_, dp) =
+  declPosLine dp <= line && declPosEndLine dp >= line
+
+declBridgeName : Decl -> Option String
+declBridgeName (DTypeSig _ n _) = Some n
+declBridgeName (DFunDef _ n _ _) = Some n
+declBridgeName _ = None
+
+declGapNameMatches : Option String -> Decl -> Bool
+declGapNameMatches (Some target) d = match declBridgeName d
+  Some n => n == target
+  None => False
+declGapNameMatches None _ = False
+
+commentBlockContainsLine : Int -> CommentBlock -> Bool
+commentBlockContainsLine line (CommentBlock first last _ _) =
+  line >= first && line <= last
+
+commentBlockEndsAt : Int -> CommentBlock -> Bool
+commentBlockEndsAt line (CommentBlock _ last _ _) = last == line
+
+declZipEndsAt : Int -> (Decl, DeclPos) -> Bool
+declZipEndsAt line (_, dp) = declPosEndLine dp == line
+
+blockHasReason : List Comment -> CommentBlock -> Bool
+blockHasReason comments (CommentBlock first last _ _) =
+  let inBlock =
+    filterList (c => commentLine c >= first && commentLine c <= last) comments
+  let reasonCmts = filterList (c => isNone (parseDirective c)) inBlock
+  anyList directiveReasonHasProse reasonCmts
+
+-- A comment line counts as a reason only when it contains a REASON WORD: a
+-- whitespace-delimited token with a substantive (>=4 alphabetic char) run
+-- that is not one of the shapes `rule-directive-reason` exists to reject —
+-- `todo`/`fixme`/`xxx`, an issue-reference token (`#1234`) or its connector
+-- word (`see`/`issue`/`cf`/`ref`), or a bare rule name (`rule-clone-type`) —
+-- each of which has >=4 alphabetic characters on its own but states no
+-- constraint. A comment mixing one of these with real prose still counts,
+-- since the prose word alone satisfies the check.
+directiveReasonHasProse : Comment -> Bool
+directiveReasonHasProse c = anyList isReasonWord (words (commentText c))
+
+isReasonWord : String -> Bool
+isReasonWord raw =
+  if isNonReasonToken raw then False else hasSubstantiveWord raw
+
+isNonReasonToken : String -> Bool
+isNonReasonToken raw =
+  let low = toLower (stripTrailingPunct raw)
+  contains low ["todo", "fixme", "xxx", "see", "issue", "cf", "ref"]
+    || isIssueRefToken low
+    || isRuleNameToken low
+
+-- A single hyphenated token naming a rule (`rule-clone-type`) rather than a
+-- reason -- checked char-by-char rather than against a quoted "rule-..."
+-- literal, which would falsely register this heuristic as an unenrolled
+-- rule name under `diff_compiler_lint_baseline.sh`'s assertion 1b.
+isRuleNameToken : String -> Bool
+isRuleNameToken low =
+  startsWith "rule" low
+    && stringLength low > 4
+    && arrayGetUnsafe 4 (stringToChars low) == '-'
+
+isIssueRefToken : String -> Bool
+isIssueRefToken low = startsWith "#" low && isNonEmptyDigits (strDrop 1 low)
+
+isNonEmptyDigits : String -> Bool
+isNonEmptyDigits s =
+  stringLength s > 0 && allDigitsGo (stringToChars s) 0 (stringLength s)
+
+allDigitsGo : Array Char -> Int -> Int -> Bool
+allDigitsGo chars i n
+  | i >= n = True
+  | isDigit (arrayGetUnsafe i chars) = allDigitsGo chars (i + 1) n
+  | otherwise = False
+
+stripTrailingPunct : String -> String
+stripTrailingPunct s =
+  let n = stringLength s
+  if n == 0 then
+    s
+  else if isTrailingPunctChar (arrayGetUnsafe (n - 1) (stringToChars s)) then
+    stripTrailingPunct (stringSlice 0 (n - 1) s)
+  else
+    s
+
+isTrailingPunctChar : Char -> Bool
+isTrailingPunctChar ch =
+  ch == ':' || ch == '.' || ch == ',' || ch == ';' || ch == '!' || ch == '?'
+
+hasSubstantiveWord : String -> Bool
+hasSubstantiveWord s =
+  hasSubstantiveWordGo (stringToChars s) 0 (stringLength s) 0
+
+hasSubstantiveWordGo : Array Char -> Int -> Int -> Int -> Bool
+hasSubstantiveWordGo chars i n run
+  | run >= 4 = True
+  | i >= n = False
+  | isAlpha (arrayGetUnsafe i chars) =
+    hasSubstantiveWordGo chars (i + 1) n (run + 1)
+  | otherwise = hasSubstantiveWordGo chars (i + 1) n 0
+
+directiveReasonFinding : Comment -> Finding
+directiveReasonFinding c = Finding {
+  rule = ruleNameDirectiveReason,
+  message =
+    "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
+  severity = SevWarning,
+  loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
 }

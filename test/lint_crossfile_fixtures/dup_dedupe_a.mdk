@@ -1,0 +1,12 @@
+-- Cross-file fixture for the dedupe case (#2864 FIX-2 item E): `mkA` is a
+-- two-clause function whose FIRST clause alone already clears
+-- `dupComplexityThreshold`, so the clause grain and the function-aggregate
+-- grain both key on it and anchor at the SAME line -- the exact shape
+-- `dedupeFindings` exists to collapse into one finding rather than two
+-- word-for-word identical ones. Exported so only rule-duplicate-body has
+-- anything to say.
+export
+mkA : Int -> Int -> String
+mkA 0 m =
+  if m > 10 then "left \{m}" else if m > 5 then "right \{m}" else "same \{m}"
+mkA n m = "other \{n} \{m}"

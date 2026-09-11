@@ -2114,6 +2114,8 @@ cliDoctestRunEngineNames : List (Engine, RunResult) -> List Engine
 cliDoctestRunEngineNames [] = []
 cliDoctestRunEngineNames ((e, _) :: rest) = e :: cliDoctestRunEngineNames rest
 
+-- #2341: mirrors `mcp.mdk`'s `primaryEngineName`, not shared across the
+-- module boundary for the same reason as `cliDoctestRunEngineNames` above.
 -- lint-disable-next-line rule-duplicate-body
 cliPrimaryEngineName : List Engine -> String
 cliPrimaryEngineName [] = "unknown"

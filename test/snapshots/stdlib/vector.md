@@ -1,5 +1,5 @@
 # META
-source_lines=525
+source_lines=526
 stages=DESUGAR,MARK
 # SOURCE
 {- | A growable, mutable array.
@@ -436,6 +436,7 @@ naiveInsert x (y :: ys) =
   if lte x y then x :: y :: ys else y :: naiveInsert x ys
 
 naiveSort : Ord a => List a -> List a
+-- Same independent-oracle purpose as `naiveInsert` above, built on it directly.
 -- lint-disable-next-line rule-stdlib-reimpl
 naiveSort [] = []
 naiveSort (x :: xs) = naiveInsert x (naiveSort xs)

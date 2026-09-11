@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dist o2-survivor-census doc-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -154,6 +154,12 @@ test: medaka
 	./medaka test stdlib/http.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
+	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
+	## import closure ([W-MODULE-BLIND]), so its renderer-parity property
+	## (text/JSON/MCP cross-file findings agree) never runs otherwise.
+	## `--native`: every property here parses real fixture files, an extern
+	## `medaka test`'s interpreter policy does not bind.
+	./medaka test --native compiler/tools/lint_test.mdk
 	## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 	## is outside every entry's import closure ([W-MODULE-BLIND]), so without
 	## this line its `rngNextLocal` distribution regression (both Bool values
@@ -314,6 +320,16 @@ doc-census:
 ##           test/o2_survivor_census.sh's header.
 o2-survivor-census: medaka
 	sh test/o2_survivor_census.sh
+
+## dup-census — report what rule-duplicate-body's zero is hiding (#2861):
+##           suppression directives per file, the findings they hide (derived
+##           by stripping them in a SCRATCH copy and re-running the same
+##           binary — the working tree is never written), and how many of the
+##           directives state a constraint. Needs a built ./medaka. Always
+##           exits 0: a census, not a gate — see
+##           test/dup_suppression_census.sh's header.
+dup-census: medaka
+	sh test/dup_suppression_census.sh
 
 ## slop-census — the ONE composing entry point over the slop-burndown
 ##           crusade's (#2276) member censuses (#2304). Registry is data IN

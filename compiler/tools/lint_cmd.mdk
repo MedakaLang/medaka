@@ -52,7 +52,9 @@ import tools.lint.{
   findingToDiag,
   isFindingError,
   lintFileDiagTriple,
+  lintFileDiagTripleParsed,
   lintProgram,
+  mergeCrossFileIntoTriples,
   runCrossFileRules,
   runCrossFileRulesFromOccs,
   stdlibFingerprint,
@@ -128,11 +130,19 @@ lintCacheCtx True False
 -- and emit the SAME `{"files":[{"file":...,"diagnostics":[...]}]}` envelope
 -- `medaka check --json` emits (via `cjAllToJson`) — one schema for both
 -- surfaces (#249).  Each `Finding` becomes a `Diag` via `findingToDiag`
--- (inside `lintFileDiagTriple`), which stamps the lint RULE NAME into the
--- diagnostic's `code` field.  Cross-file rules do not participate (JSON mode
--- is per-file, mirroring `check --json`'s own per-file shape); `--fix` is
--- ignored here.  Exit 1 iff any diagnostic is a hard error (severity 1) —
--- matches `runCheckJsonCmd`'s convention.
+-- (inside `lintFileDiagTripleParsed`), which stamps the lint RULE NAME into
+-- the diagnostic's `code` field.  Cross-file rules DO participate now (#2701
+-- leg 3): the per-file pass already parses every target
+-- (`lintFileDiagTripleParsed`), so those parses are reused — never re-read —
+-- to run `runCrossFileRules` exactly like the human-text path does, and each
+-- resulting `Finding` is folded into its OWN file's `diagnostics` array via
+-- `mergeCrossFileIntoTriples` (never a new top-level key).  A duplicate whose
+-- partner file lay outside `files` would be folded into a synthesized entry
+-- for that file instead — `mergeCrossFileIntoTriples`'s own defensive
+-- fallback, unreachable today since `files` is exactly the set every
+-- cross-file rule here runs over.  `--fix` never reaches this function.
+-- Exit 1 iff any diagnostic is a
+-- hard error (severity 1) — matches `runCheckJsonCmd`'s convention.
 export
 runLintJsonCmd : StdlibIndex ->
   List String ->
@@ -142,14 +152,80 @@ runLintJsonCmd : StdlibIndex ->
   List String ->
   <IO> Unit
 runLintJsonCmd idx disableNames onlyNames denyNames baseCtx files =
-  let triples =
-    lintFilesToDiagTriples idx disableNames onlyNames denyNames baseCtx files
-  let _ = putStr (cjAllToJson triples)
-  if anyList cjLintTripleHasErr triples then exit 1
+  let quads =
+    lintFilesToDiagQuads idx disableNames onlyNames denyNames baseCtx files
+  let triples = map dropQuadParse quads
+  let cross = crossFileJsonFindings disableNames onlyNames denyNames quads
+  let merged = mergeCrossFileIntoTriples cross triples
+  let _ = putStr (cjAllToJson merged)
+  if anyList cjLintTripleHasErr merged then exit 1
+
+-- The cross-file tier's JSON-path inputs, reused from the per-file parses
+-- already sitting in `quads` (#394's no-second-read rule applies here too).
+-- Mirrors `runCrossFileReport`: `--only`/`--disable` are honored inside
+-- `runCrossFileRules`, inline `-- lint-disable-*` directives are applied via
+-- `applySuppressionsMulti` (each finding anchors to its own file), then
+-- `--deny` promotion.  Unlike the text path this never renders — the caller
+-- folds the result into the JSON triples instead.  Exported so
+-- `compiler/tools/lint_test.mdk`'s renderer-parity property can call the SAME
+-- function `runLintJsonCmd` calls, rather than a reimplementation.
+export
+crossFileJsonFindings : List String ->
+  List String ->
+  List String ->
+  List (String, String, List Diag, Positions, List Decl) ->
+  List Finding
+crossFileJsonFindings disableNames onlyNames denyNames quads =
+  let parsedTriples = map quadToParseTriple quads
+  let raw = runCrossFileRules onlyNames disableNames parsedTriples
+  let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
+  applyFindingDeny denyNames suppressed
+
+quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
+  (String, Positions, List Decl)
+quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
+
+quadToSrc : (String, String, List Diag, Positions, List Decl) ->
+  (String, String)
+quadToSrc (path, src, _, _, _) = (path, src)
+
+dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
+  (String, String, List Diag)
+dropQuadParse (path, src, diags, _, _) = (path, src, diags)
+
+-- Sequence `lintFileDiagTripleParsed` over every target file, in order,
+-- applying baseline promotion to the diagnostics while carrying the parse
+-- along untouched — the cross-file tier's input.  Mirrors `lintFilesGo`'s
+-- explicit recursion — this codebase sequences an `<IO>` list traversal by
+-- hand, not via `map` over an effectful function.  Exported for the same
+-- reason as `crossFileJsonFindings` above.
+export
+lintFilesToDiagQuads : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  Option (String, LintBaseline) ->
+  List String ->
+  <IO> List (String, String, List Diag, Positions, List Decl)
+lintFilesToDiagQuads _ _ _ _ _ [] = []
+lintFilesToDiagQuads idx disable only deny baseCtx (f :: rest) =
+  applyBaselineQuad baseCtx (lintFileDiagTripleParsed idx disable only deny f)
+    :: lintFilesToDiagQuads idx disable only deny baseCtx rest
+
+applyBaselineQuad : Option (String, LintBaseline) ->
+  (String, String, List Diag, Positions, List Decl) ->
+  <IO> (String, String, List Diag, Positions, List Decl)
+applyBaselineQuad None quad = quad
+applyBaselineQuad (Some (cwd, base)) (path, src, diags, pos, decls) =
+  let key = baselineKeyOf cwd path
+  let _ = reportBaselineViolations key (baselineDiagViolations base key diags)
+  (path, src, applyBaselineToDiags base key diags, pos, decls)
 
 -- Sequence `lintFileDiagTriple` over every target file, in order.  Mirrors
 -- `lintFilesGo`'s explicit recursion — this codebase sequences an `<IO>`
--- list traversal by hand, not via `map` over an effectful function.
+-- list traversal by hand, not via `map` over an effectful function.  Used by
+-- `--write-baseline`, which needs only the per-file diagnostics, not the
+-- cross-file tier's parse inputs.
 export
 lintFilesToDiagTriples : StdlibIndex ->
   List String ->
