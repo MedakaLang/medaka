@@ -1627,7 +1627,7 @@ shellBecauseViolations root (g :: gs) =
 -- back its exit code and stderr alongside stdout: the sole `<Exec>`
 -- primitive (`runVerb`/`runCommandOk`, `stdlib/io.mdk`) and the bounded
 -- wrappers built on it (`boundedVerb`/`boundedVerbSeconds`/`boundedInTree`,
--- `runMedaka`, `checkRunBuild` — `test/test_process.mdk` and
+-- `runMedaka`, `checkRunBuild` — `stdlib/test_process.mdk` and
 -- `test/compiler_cli_test_support.mdk`). This is deliberately about the
 -- SPAWN PRIMITIVE, not about `./medaka` specifically — a module that spawns
 -- an oracle binary through the same primitives is exactly as in-scope.
