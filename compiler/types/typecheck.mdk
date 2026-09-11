@@ -8766,7 +8766,7 @@ resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKArg implRef fullMono =>
-      resolveArgStamp name tagRef implRef am fullMono encl scope
+      resolveArgStamp name tagRef implRef am fullMono encl loc scope
     _ => ()
   resolveArgStamps rest
 
@@ -8793,12 +8793,14 @@ resolveArgStamp : String ->
   Mono ->
   Mono ->
   String ->
+  Option Loc ->
   ScopeId ->
   Unit
-resolveArgStamp name tagRef implRef am fullMono encl scope =
+resolveArgStamp name tagRef implRef am fullMono encl origin scope =
+  let tagBefore = tagRef.value
   let (route, routes) = entail name am encl scope (EKArg fullMono)
   let _ = match route
-    RNone => ()
+    RNone => noteDefaultBodyRNone DBRKArg name origin scope tagBefore route
     _ => tagRef := route
   implRef := routes
 
@@ -9359,8 +9361,27 @@ data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 data ScopeOwner =
   | ModuleOwner
   | BindingOwner String
+  | DefaultBodyOwner DefaultBodyIdentity
   | PropOwner String
   | TestOwner String
+
+public export data DefaultBodyIdentity = DefaultBodyIdentity {
+  dbiIface : IfaceRef,
+  dbiMethod : String,
+}
+
+public export data DefaultBodyRNoneKind =
+  | DBRKArg
+  | DBRKReturn
+  deriving (Eq, Debug)
+
+public export data DefaultBodyRNoneTraceEntry = DefaultBodyRNoneTraceEntry {
+  dbrOwner : DefaultBodyIdentity,
+  dbrCallee : String,
+  dbrKind : DefaultBodyRNoneKind,
+  dbrOrigin : Option Loc,
+  dbrScope : ScopeId,
+}
 
 data ScopeCursor = ScopeClosed | ScopeOpen ScopeId
 
@@ -9396,6 +9417,26 @@ assumptionTraceEnabled = Ref False
 
 assumptionTraceEntries : Ref (List AssumptionTraceEntry)
 assumptionTraceEntries = Ref []
+
+defaultBodyRNoneTraceEnabled : Ref Bool
+defaultBodyRNoneTraceEnabled = Ref False
+
+defaultBodyRNoneTraceEntries : Ref (List DefaultBodyRNoneTraceEntry)
+defaultBodyRNoneTraceEntries = Ref []
+
+export
+beginDefaultBodyRNoneTrace : Unit -> Unit
+beginDefaultBodyRNoneTrace _ =
+  defaultBodyRNoneTraceEntries := []
+  defaultBodyRNoneTraceEnabled := True
+
+export
+finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
+finishDefaultBodyRNoneTrace _ =
+  let entries = reverseL defaultBodyRNoneTraceEntries.value
+  defaultBodyRNoneTraceEntries := []
+  defaultBodyRNoneTraceEnabled := False
+  entries
 
 export
 beginAssumptionTrace : Unit -> Unit
@@ -9508,13 +9549,49 @@ renderEvidenceBinder : EvidenceBinderId -> String
 renderEvidenceBinder (EvidenceBinderId sid ordinal) =
   match (scopeFrame sid).sfOwner
     BindingOwner owner => dictParamName owner ordinal
+    DefaultBodyOwner owner => dictParamName owner.dbiMethod ordinal
     _ => panic "evidence binder outside binding scope"
 
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
+scopeOwnerLabel (DefaultBodyOwner owner) = "default:" ++ owner.dbiMethod
 scopeOwnerLabel (PropOwner name) = "prop:" ++ name
 scopeOwnerLabel (TestOwner name) = "test:" ++ name
+
+enclosingDefaultBody : ScopeId -> Option DefaultBodyIdentity
+enclosingDefaultBody sid =
+  let frame = scopeFrame sid
+  match frame.sfOwner
+    DefaultBodyOwner owner => Some owner
+    _ => match frame.sfParent
+      Some parent => enclosingDefaultBody parent
+      None => None
+
+noteDefaultBodyRNone : DefaultBodyRNoneKind ->
+  String ->
+  Option Loc ->
+  ScopeId ->
+  Route ->
+  Route ->
+  Unit
+noteDefaultBodyRNone kind callee origin scope tagBefore computedRoute =
+  if not defaultBodyRNoneTraceEnabled.value then
+    ()
+  else match (tagBefore, computedRoute)
+    (RNone, RNone) => match enclosingDefaultBody scope
+      Some owner =>
+        defaultBodyRNoneTraceEntries :=
+          DefaultBodyRNoneTraceEntry {
+              dbrOwner = owner,
+              dbrCallee = callee,
+              dbrKind = kind,
+              dbrOrigin = origin,
+              dbrScope = scope,
+            }
+            :: defaultBodyRNoneTraceEntries.value
+      None => ()
+    _ => ()
 
 export
 scopeTraceContext : ScopeId -> (String, String)
@@ -9855,6 +9932,56 @@ scopeServiceProbe _ =
 
 -- > scopeServiceProbe ()
 -- (True, True, True, True)
+
+-- Test-only seam for route states that production inference cannot place together:
+-- an RLocal seed inside a default body, and a retained RNone in a synthetic child
+-- scope.  The production Module-path coverage lives in typecheck_test.mdk; this probe
+-- only pins the observer's early disabled exit, ancestry walk, pre-entail tag guard,
+-- computed-route guard, and ABI rendering.
+export
+defaultBodyRNoneServiceProbe : Unit -> (Bool, Bool, List String, Bool)
+defaultBodyRNoneServiceProbe _ =
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let iface =
+    IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
+  let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
+  let root = freshScope None 0 "owner-module" ModuleOwner
+  let body = freshScope (Some root) 1 "owner-module" (DefaultBodyOwner owner)
+  let child = freshScope (Some body) 2 "owner-module" (BindingOwner "local")
+  let ordinary = freshScope (Some root) 1 "owner-module" (BindingOwner "copy")
+  let _ =
+    noteDefaultBodyRNone DBRKReturn "disabled" None (ScopeId 9999) RNone RNone
+  let _ = beginDefaultBodyRNoneTrace ()
+  let _ = noteDefaultBodyRNone DBRKReturn "seed" None child RNone RNone
+  let _ =
+    noteDefaultBodyRNone DBRKReturn "seed" None child (RLocal "seeded" []) RNone
+  let _ =
+    noteDefaultBodyRNone DBRKReturn "seed" None child RNone (RKey "Int" [])
+  let _ = noteDefaultBodyRNone DBRKReturn "seed" None ordinary RNone RNone
+  let entries = finishDefaultBodyRNoneTrace ()
+  let ancestry = match entries
+    [entry] =>
+      entry.dbrCallee == "seed"
+        && entry.dbrKind == DBRKReturn
+        && entry.dbrScope == child
+        && entry.dbrOwner.dbiMethod == "copy"
+        && (match entry.dbrOwner.dbiIface.irOrigin
+          OriginModule m => m == "owner-module"
+          _ => False)
+    _ => False
+  let rendered = [
+    renderEvidenceBinder (binderAt body 0),
+    renderEvidenceBinder (binderAt body 1),
+  ]
+  let cleared = match finishDefaultBodyRNoneTrace ()
+    [] => True
+    _ => False
+  graphRun := savedGraph
+  perRun := savedPerRun
+  (True, ancestry, rendered, cleared)
 
 -- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
 -- per module by `checkBodyImpl` before any body is inferred and copied by
@@ -21356,7 +21483,7 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
   goalSiteLoc := loc
   let _ = match kind
     SKReturn implRef fullMono =>
-      resolveSite rpNames name tagRef implRef resultMono fullMono encl scope
+      resolveSite rpNames name tagRef implRef resultMono fullMono encl loc scope
     _ => ()
   resolveSites rpNames rest
 
@@ -21388,6 +21515,7 @@ resolveSite : List String ->
   Mono ->
   Mono ->
   String ->
+  Option Loc ->
   ScopeId ->
   Unit
 -- #156 S3b: a thin adapter over `entail` (EKReturn kind).  `entail` returns
@@ -21401,7 +21529,8 @@ resolveSite : List String ->
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
-resolveSite rpNames name tagRef implRef resultMono fullMono encl scope =
+resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
+  let tagBefore = tagRef.value
   let (route, routes) =
     entail
       name
@@ -21410,7 +21539,7 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl scope =
       scope
       (EKReturn fullMono (contains name rpNames))
   let _ = match route
-    RNone => ()
+    RNone => noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
     _ => tagRef := route
   implRef := routes
 
@@ -30238,17 +30367,23 @@ inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
 -- does not depend on which impls happen to exist.)
 -- Also extend env with these schemes so PEER-method refs in a default body
 -- resolve to the interface methods (oracle's env_with_methods), not user shadows.
-inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, ... }) =
+inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) =
   -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
   -- threaded down so the default bodies see the same Row slots the schemes were built
   -- with.  Computed ONCE per interface rather than per method.
   let dscope = declGradedScope typarams typaramKinds methods
   let ifaceSchemes = methodSchemesPure dscope methods
-  inferDefaultMethods (extendVars env ifaceSchemes) name dscope typarams methods
+  let iface = IfaceRef { irName = name, irOrigin = ifaceOrigin }
+  inferDefaultMethods
+    (extendVars env ifaceSchemes)
+    iface
+    dscope
+    typarams
+    methods
 inferOneIfaceDefaults _ _ = ()
 
 inferDefaultMethods : TcEnv ->
-  String ->
+  IfaceRef ->
   List (String, List Kind) ->
   List String ->
   List IfaceMethod ->
@@ -30297,19 +30432,20 @@ inferDefaultMethods env iface dscope typarams (m :: rest) =
 -- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
 -- diagnostic list (issue 1146).
 inferDefaultMethod : TcEnv ->
-  String ->
+  IfaceRef ->
   List (String, List Kind) ->
   List String ->
   IfaceMethod ->
   Unit
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   let parentScope = captureScope ()
+  let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = mname }
   let bodyScope =
     freshScope
       (Some parentScope)
       perRun.value.currentLevel.value
       (scopeFrame parentScope).sfModuleId
-      (BindingOwner mname)
+      (DefaultBodyOwner owner)
   let _ = openScope bodyScope
   -- #822: [dscope] is the same declaration-derived graded scope the method's own
   -- scheme was built under (inferOneIfaceDefaults → methodSchemesPure) — a DEFAULT
@@ -30328,7 +30464,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let defLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
-  let subject = defaultSubject iface mname
+  let subject = defaultSubject iface.irName mname
   -- EFFECT axis on the generic default path (round-2 adversarial break 2): a
   -- cross-module impl inherits the default via the untagged fallback, so this
   -- is the ONLY place its intrinsic effects can be bounded — the same-module
@@ -30371,7 +30507,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   let addedCallObls = callOblsWindow callN0
   let _ =
     checkDefaultMethodRigidity
-      iface
+      iface.irName
       typarams
       mname
       mty

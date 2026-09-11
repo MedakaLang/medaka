@@ -3,21 +3,27 @@
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
 import test.{expectEqual}
+import frontend.ast.{Loc(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
+  DefaultBodyRNoneKind(..),
+  DefaultBodyRNoneTraceEntry(..),
   MethodRowTestObservation(..),
   ModDiags,
   NumAnchorTestObservation(..),
   beginAssumptionTrace,
+  beginDefaultBodyRNoneTrace,
   checkModulesDiagsChain,
   checkOneDiags,
   checkProgramDiags,
+  defaultBodyRNoneServiceProbe,
   elaborateDict,
   finishAssumptionTrace,
+  finishDefaultBodyRNoneTrace,
   observeMethodSchemeRowsForTest,
   scopeFrameStats,
   scopeTraceContext,
@@ -43,6 +49,24 @@ data RequestView = RequestView {
   rvFrameCapacity : Int,
 }
   deriving (Eq, Debug)
+
+data DefaultTraceView = DefaultTraceView {
+  dtvIfaceModule : String,
+  dtvIfaceName : String,
+  dtvMethod : String,
+  dtvCallee : String,
+  dtvKind : DefaultBodyRNoneKind,
+  dtvScopeModule : String,
+  dtvScopeOwner : String,
+  dtvHasParserLoc : Bool,
+}
+  deriving (Eq, Debug)
+
+data ModuleTraceView = ModuleTraceView {
+  mtvDefaults : List DefaultTraceView,
+  mtvAssumptions : List TraceView,
+  mtvErrors : Int,
+}
 
 data ContextView = ContextView {
   cvKind : AssumptionTraceKind,
@@ -73,6 +97,48 @@ traceView entry =
 -- reset the graph that owns the request-local ScopeIds.
 traceViewsNow : List AssumptionTraceEntry -> List TraceView
 traceViewsNow entries = map traceView entries
+
+defaultTraceView : DefaultBodyRNoneTraceEntry -> DefaultTraceView
+defaultTraceView entry =
+  let owner = entry.dbrOwner
+  let ifaceModule = match owner.dbiIface.irOrigin
+    OriginModule m => m
+    OriginBuiltin => "<builtin>"
+    OriginUnresolved => "<unresolved>"
+  let (scopeModule, scopeOwner) = scopeTraceContext entry.dbrScope
+  let hasParserLoc = match entry.dbrOrigin
+    Some (Loc _ startLine _ _ _) => startLine > 0
+    None => False
+  DefaultTraceView {
+    dtvIfaceModule = ifaceModule,
+    dtvIfaceName = owner.dbiIface.irName,
+    dtvMethod = owner.dbiMethod,
+    dtvCallee = entry.dbrCallee,
+    dtvKind = entry.dbrKind,
+    dtvScopeModule = scopeModule,
+    dtvScopeOwner = scopeOwner,
+    dtvHasParserLoc = hasParserLoc,
+  }
+
+runModulesObserved : List (String, String) -> ModuleTraceView
+runModulesObserved sources =
+  beginAssumptionTrace ()
+  beginDefaultBodyRNoneTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      []
+      (map (entry => (fst entry, desugar (parse (snd entry)))) sources)
+  let defaultEntries = finishDefaultBodyRNoneTrace ()
+  let assumptionEntries = finishAssumptionTrace ()
+  ModuleTraceView {
+    mtvDefaults = map defaultTraceView defaultEntries,
+    mtvAssumptions = traceViewsNow assumptionEntries,
+    mtvErrors = modErrorCount results,
+  }
 
 runObserved : String -> String -> RequestView
 runObserved moduleId source =
@@ -466,3 +532,153 @@ test "id-witnessed impl givens remain legacy" =
   expectEqual
     ([context ATLegacyPredicate "id_assisted" "binding:foo"], 0)
     (withoutBinderIds observed.rvTrace, observed.rvErrors)
+
+binderOrdinal : EvidenceBinderId -> Int
+binderOrdinal (EvidenceBinderId _ ordinal) = ordinal
+
+assumptionShape : TraceView -> (AssumptionTraceKind, Int, String, String, Bool)
+assumptionShape view = (
+  view.tvKind,
+  binderOrdinal view.tvBinder,
+  view.tvGoalOwner,
+  view.tvBinderOwner,
+  view.tvSameScope,
+)
+
+supplySource : String
+supplySource = joinNl [
+  "export default interface Supply a where",
+  "  seed : a",
+  "  copy : a",
+  "  copy = seed",
+]
+
+mixedDefaultSource : String
+mixedDefaultSource = joinNl [
+  "interface Base a where",
+  "  base : a -> Int",
+  "interface Other a where",
+  "  other : a -> Int",
+  "default interface Rich a requires Base a where",
+  "  peer : a -> Int",
+  "  mixed : Rich b => Other c => a -> b -> c -> Int",
+  "  mixed x y z =",
+  "    let local _ = peer x",
+  "    let _ = local ()",
+  "    let _ = peer y",
+  "    let _ = other z",
+  "    base y",
+]
+
+test "default RNone observer keeps its three gates and historical binder ABI" =
+  expectEqual
+    (True, True, ["$dict_copy_0", "$dict_copy_1"], True)
+    (defaultBodyRNoneServiceProbe ())
+
+test "genuine inherited Supply return keeps full default owner and parser origin" =
+  let observed = runModulesObserved [("supply_iface", supplySource)]
+  expectEqual
+    (
+      [
+        DefaultTraceView {
+          dtvIfaceModule = "supply_iface",
+          dtvIfaceName = "Supply",
+          dtvMethod = "copy",
+          dtvCallee = "seed",
+          dtvKind = DBRKReturn,
+          dtvScopeModule = "supply_iface",
+          dtvScopeOwner = "default:copy",
+          dtvHasParserLoc = True,
+        },
+      ],
+      0,
+    )
+    (observed.mtvDefaults, observed.mtvErrors)
+
+test "mixed default separates argument fallback from qualified givens" =
+  let observed = runModulesObserved [("mixed_default", mixedDefaultSource)]
+  expectEqual
+    (
+      [
+        DefaultTraceView {
+          dtvIfaceModule = "mixed_default",
+          dtvIfaceName = "Rich",
+          dtvMethod = "mixed",
+          dtvCallee = "peer",
+          dtvKind = DBRKArg,
+          dtvScopeModule = "mixed_default",
+          dtvScopeOwner = "default:mixed",
+          dtvHasParserLoc = True,
+        },
+      ],
+      [
+        (ATLegacySuperclass, 0, "default:mixed", "default:mixed", True),
+        (ATDirectPredicate, 1, "default:mixed", "default:mixed", True),
+        (ATDirectPredicate, 0, "default:mixed", "default:mixed", True),
+      ],
+      0,
+    )
+    (
+      observed.mtvDefaults,
+      map assumptionShape observed.mtvAssumptions,
+      observed.mtvErrors,
+    )
+
+test "same spelling retains module identity while impl bodies stay ordinary" =
+  let first = runModulesObserved [("owner_a", supplySource)]
+  let second = runModulesObserved [("owner_b", supplySource)]
+  let synthesized = runModulesObserved [
+    (
+      "owner_same",
+      supplySource ++ "\nimpl Supply Int where\n  seed = 41\n",
+    ),
+  ]
+  let explicit = runModulesObserved [
+    (
+      "ordinary_impl",
+      joinNl [
+        "interface Echo a where",
+        "  echo : a -> a",
+        "impl Echo Int where",
+        "  echo x = echo x",
+      ],
+    ),
+  ]
+  let concrete = runModulesObserved [
+    (
+      "concrete_default",
+      joinNl [
+        "data Token = Token",
+        "default interface Concrete a where",
+        "  echo : a -> a",
+        "  echo x = x",
+        "  use : a -> Token",
+        "  use _ = echo Token",
+        "impl Concrete Token where",
+      ],
+    ),
+  ]
+  expectEqual
+    (
+      (["owner_a"], ["owner_b"]),
+      (1, [], []),
+      [0, 0, 0, 0, 0],
+    )
+    (
+      (
+        map (entry => entry.dtvIfaceModule) first.mtvDefaults,
+        map (entry => entry.dtvIfaceModule) second.mtvDefaults,
+      ),
+      (
+        listLen synthesized.mtvDefaults,
+        explicit.mtvDefaults,
+        concrete.mtvDefaults,
+      ),
+      [
+        first.mtvErrors,
+        second.mtvErrors,
+        synthesized.mtvErrors,
+        explicit.mtvErrors,
+        concrete.mtvErrors,
+      ],
+    )
