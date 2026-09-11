@@ -36,6 +36,7 @@ import lib.websocket.{
   Frame(..),
   Opcode(..),
   assembleFrame,
+  closeCodeOnWire,
   closeFrame,
   decodeFrame,
   encodeServerFrame,
@@ -472,8 +473,7 @@ echoCloseCode payload = match parseClosePayload payload
 -- residual guard for one it could not have produced, so a code that may not
 -- appear on the wire never reaches a close frame.
 asCloseCode : Int -> Int
-asCloseCode code =
-  if code >= 1000 && code <= 1015 then code else protocolCloseCode
+asCloseCode code = if closeCodeOnWire code then code else protocolCloseCode
 
 afterFrame : Array Int -> Int -> Array Int
 afterFrame buffered consumed =
