@@ -155,8 +155,8 @@ arms and see how the name *actually* resolves. (Full counterexample:
 `.claude/dossier/traps.md`, [T-DISPATCH-LOADER].)
 
 Because single-file masks these, **the regression test must exercise the
-multi-module path** (`test/diff_compiler_eval_modules.sh`), not a single-file
-doctest.
+multi-module path** (the `eval_modules_main` rows of `test/diff_compiler_eval_test.mdk`),
+not a single-file doctest.
 
 ## Build a minimal repro
 
@@ -173,9 +173,9 @@ gates you never named. Before you add a file, find every consumer and run them a
 grep -rl '<fixture_dir>' test/
 ```
 
-e.g. `test/eval_modules_fixtures/` feeds **both** `diff_compiler_eval_modules.sh`
-**and** `diff_compiler_core_ir_modules.sh`; `test/wasm/fixtures/` feeds **four**
-consumers. Capture the golden with `CAPTURE=1` on the specific gate.
+e.g. `test/eval_modules_fixtures/` feeds **both** the `eval_modules_main`
+**and** `core_ir_modules_main` oracles of `diff_compiler_eval`; `test/wasm/fixtures/`
+feeds **four** consumers. Capture the golden with `CAPTURE=1` on the specific gate.
 
 ## Probe and flag catalogue
 
@@ -260,7 +260,8 @@ a claim shipping its own derivation is only honest if someone ran it.
 - For LSP-surfaced errors, run `bash test/diff_compiler_lsp.sh` and
   `test/lsp_harness.sh`.
 - For multi-module bugs, run `bash test/diff_compiler_check_modules.sh` and
-  `bash test/diff_compiler_eval_modules.sh` to isolate the loader path.
+  `./medaka gate run diff_compiler_eval` (the `eval_modules_main` rows) to isolate
+  the loader path.
 - Before blaming the compiler, run `gh issue list --label known-red` — one issue
   per expected-red gate, closed when it goes green again. A red gate is often
   already known and not your bug.

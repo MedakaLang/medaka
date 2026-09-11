@@ -21,7 +21,7 @@ DRIVER, not dict-passing — this pattern recurred at Phases 96, 103, 121, and 1
 Phase 134 was the documented inverse case, and the standard two-probe comparison did *not* flag
 it. Full method, both probes, and the instrument-the-resolution-arms technique live in the
 `debug-pipeline` skill. Regression tests for this class must exercise the multi-module path
-(`test/diff_compiler_eval_modules.sh`), not a single-file doctest.
+(the `eval_modules_main` rows of `test/diff_compiler_eval_test.mdk`), not a single-file doctest.
 
 ## [T-EVAL-LOCKSTEP] evalModules / cevalModules lockstep
 

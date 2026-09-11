@@ -563,7 +563,8 @@ fi
 # gates on a STRICTER/DIFFERENT check than the probes it's supposed to stand in
 # for (e.g. it rejects `test/eval_dict_fixtures/inferred_chain.mdk` with
 # "Ambiguous instance for `Semigroup`" — a program the dict-passing probe
-# resolves and diff_compiler_eval_dict_batch.sh runs green, 26/26). A `medaka run`
+# resolves and the eval_dict_batch oracle of diff_compiler_eval runs green,
+# 26/26). A `medaka run`
 # oracle silently regenerated a "drifted" golden that was never wrong — the
 # committed golden was right, `medaka run` was the wrong reference. Mirror the
 # gate's REAL producer exactly (test/bin/eval_dict_main / eval_typed_main with
@@ -759,10 +760,10 @@ done
 # that block needs it too, and `want()` doesn't depend on anything defined between
 # the two locations.)
 
-# eval_modules : golden = the SAME native loader-driven probe
-# diff_compiler_eval_modules.sh diffs against (test/bin/eval_modules_main),
-# invoked identically ($CORE $entry $dir + strip_unit), so a regenerated
-# golden is BY CONSTRUCTION the gate's "actual" side.
+# eval_modules : golden = the SAME native loader-driven probe the
+# eval_modules_main oracle of diff_compiler_eval diffs against
+# (test/bin/eval_modules_main), invoked identically ($CORE $entry $dir +
+# strip_unit), so a regenerated golden is BY CONSTRUCTION the gate's "actual" side.
 #
 # Previously used `medaka run <entry>` as a stand-in (same risk class as the
 # eval_dict/eval_typed rows above: `medaka run` runs a typecheck GATE the raw

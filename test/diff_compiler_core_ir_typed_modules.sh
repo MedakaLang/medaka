@@ -8,7 +8,8 @@
 #
 # ── WHY THIS GATE EXISTS ──────────────────────────────────────────────────────
 #
-# test/diff_compiler_core_ir_modules.sh already runs `cevalModules`, and it is
+# The `core_ir_modules_main` oracle of `medaka gate run diff_compiler_eval` already
+# runs `cevalModules`, and it is
 # STRUCTURALLY BLIND to dispatch: its driver (compiler/entries/core_ir_modules_main.mdk)
 # is desugar + annotate only — no marker, no typecheck — so NO `Route` is ever
 # stamped, and the driver falls back to untyped arg-tag "first impl wins" for every

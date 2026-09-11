@@ -103,9 +103,10 @@ fi
 #   core_ir_run_main  — diff_compiler_eval (=== EVAL === goldens)
 #   ── Phase 2 §2a value gates (eval / core-ir / llvm), goldens = .eval.golden
 #      (llvm's own goldens are .native.golden as of #559 — see below) ──
-#   ── The ten oracles below are read by ONE gate, the native 12-row sweep
-#      diff_compiler_eval (test/diff_compiler_eval_test.mdk), which replaced the
-#      twelve per-(oracle, corpus) scripts in #2593.  --for derives them by
+#   ── The thirteen oracles below, plus the three above, are read by ONE gate,
+#      the native 18-row sweep diff_compiler_eval (test/diff_compiler_eval_test.mdk,
+#      16 oracles total), which replaced the eighteen per-(oracle, corpus) scripts
+#      across #2593's slices.  --for derives them by
 #      grepping that module for its `test/bin/<name>` literals, exactly as it
 #      does for a .sh gate. ──
 #   eval_main             — diff_compiler_eval
@@ -116,19 +117,19 @@ fi
 #                           (regenerates eval_dict_fixtures/*.eval.golden for the batch
 #                            gate). Its own single-file gate migrated to the snapshot
 #                            # EVAL section (diff_compiler_snapshot_eval.sh), #81 R6.
-#   eval_dict_batch       — diff_compiler_eval_dict_batch.sh
+#   eval_dict_batch       — diff_compiler_eval
 #   eval_typed_main       — capture_goldens.sh (regenerates eval_typed_fixtures/
 #                            *.eval.golden for the batch gate). Its own single-file gate
 #                            migrated to the snapshot # EVAL section
 #                            (diff_compiler_snapshot_eval.sh), #81 R6.
-#   eval_typed_batch      — diff_compiler_eval_typed_batch.sh
-#   eval_typed_modules_main — diff_compiler_eval_typed_modules.sh
-#   eval_modules_main     — diff_compiler_eval_modules.sh
+#   eval_typed_batch      — diff_compiler_eval
+#   eval_typed_modules_main — diff_compiler_eval
+#   eval_modules_main     — diff_compiler_eval
 #   core_ir_main          — diff_compiler_eval
 #   core_ir_prelude_main  — diff_compiler_eval
-#   core_ir_typed_main    — diff_compiler_core_ir_typed.sh
+#   core_ir_typed_main    — diff_compiler_eval
 #   core_ir_roundtrip_main — diff_compiler_eval
-#   core_ir_modules_main  — diff_compiler_core_ir_modules.sh
+#   core_ir_modules_main  — diff_compiler_eval
 #   core_ir_typed_modules_main — diff_compiler_core_ir_typed_modules.sh (#1608): the
 #                           FOURTH engine arm — cevalModules driven over MARKED +
 #                           TYPECHECKED trees.  core_ir_modules_main runs the same
