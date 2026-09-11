@@ -30,7 +30,7 @@
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
-import string.{fromUtf8, join, split, startsWith, toUtf8}
+import string.{fromUtf8, join, split, startsWith, stripPrefix, toUtf8}
 import lib.dagcbor.{dagCborDecode}
 import lib.handlers.{pdsServer}
 import lib.lexjson.{dagCborToLexJson}
@@ -327,6 +327,11 @@ firstHex text = stringSlice 0 32 text
 lastHex : String -> String
 lastHex text = stringSlice (stringLength text - 32) (stringLength text) text
 
+didKeyMultibaseOf : String -> String
+didKeyMultibaseOf did = match stripPrefix "did:key:" did
+  Some multibase => multibase
+  None => panic "read_handlers: corpus DID is not a did:key: \{did}"
+
 runReads : String ->
   Server ->
   Store ->
@@ -368,8 +373,13 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
   let describe =
     readJson server final "com.atproto.repo.describeRepo?repo=\{did}"
   let describeBody = stringify describe
+  -- The served `publicKeyMultibase` is spelled from the CORPUS's own DID, not
+  -- from the handler's output: the corpus DID is the `did:key` of the secret
+  -- key its transcript signs with, so this equality is the one that says the
+  -- document hands a verifier the key that actually signed these commits.
+  let expectedMultibase = didKeyMultibaseOf did
   let expectedDescribe =
-    "{\"did\":\"\{did}\",\"handle\":\"\{accountHandleText}\",\"didDoc\":{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:\{accountHostText}\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://\{accountHostText}\"}]},\"collections\":[\"\{collectionText}\"],\"handleIsCorrect\":true}"
+    "{\"did\":\"\{did}\",\"handle\":\"\{accountHandleText}\",\"didDoc\":{\"@context\":[\"https://www.w3.org/ns/did/v1\",\"https://w3id.org/security/multikey/v1\"],\"id\":\"\{did}\",\"alsoKnownAs\":[\"at://\{accountHandleText}\"],\"verificationMethod\":[{\"id\":\"\{did}#atproto\",\"type\":\"Multikey\",\"controller\":\"\{did}\",\"publicKeyMultibase\":\"\{expectedMultibase}\"}],\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://\{accountHostText}\"}]},\"collections\":[\"\{collectionText}\"],\"handleIsCorrect\":true}"
   let cellDescribe =
     check
       "describeRepo"

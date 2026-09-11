@@ -76,6 +76,7 @@ import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor, dagCborEncode}
+import lib.did_key.{didKeyMultibase}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.repo.{
   Repo,
@@ -90,6 +91,7 @@ import lib.repo.{
   repoEntries,
   repoLatestCommit,
   repoLookup,
+  repoPublicKey,
   repoMutationCommit,
   repoMutationState,
   repoUpdate,
@@ -104,6 +106,7 @@ import lib.credential.{
   defaultIterations,
 }
 import lib.jwt.{mintToken}
+import lib.sign.{PublicKey}
 import lib.server_core.{
   Account,
   AuthOutcome(..),
@@ -1141,9 +1144,10 @@ applyListRecords account store params = do
    admitted both and `resolveHandle` answers from that same pair — so it is
    `true` by construction, not by a resolution this server cannot perform.
 
-   `didDoc` is this server's own did:web document (`didWebDocument`, below) —
-   the same one served at `/.well-known/did.json` for this same account, not a
-   second document synthesized here. -}
+   `didDoc` is the HOSTED ACCOUNT's document (`accountDidDocument`, below),
+   whose verification method carries the repository's real signing key. It is
+   not `/.well-known/did.json`'s `didWebDocument`, which describes the server
+   and carries no key at all. -}
 applyDescribeRepo : Account -> Store -> List QueryParam -> Result Response Json
 applyDescribeRepo account store params = do
   repo <- requireConfiguredRepo store
@@ -1155,7 +1159,7 @@ applyDescribeRepo account store params = do
     (jObject [
       ("did", JString (accountDid account)),
       ("handle", JString (accountHandle account)),
-      ("didDoc", didWebDocument account),
+      ("didDoc", accountDidDocument account (repoPublicKey repo)),
       ("collections", jArray (map JString collections)),
       ("handleIsCorrect", JBool True),
     ])
@@ -1309,10 +1313,60 @@ applyResolveHandle account params = do
 
 -- ── the two well-knowns ─────────────────────────────────────────────────────
 
+{- | The hosted account's DID document, built from the repository's OWN
+   signing key rather than from configuration alone.
+
+   `publicKeyMultibase` is `repoPublicKey`'s multibase — the same string the
+   key's `did:key` identifier is made of — so the key a verifier reads out of
+   this document is by construction the key that signed the commits this
+   server serves. It is reached under the `#atproto` fragment because that is
+   the verification method an atproto consumer looks up by name to check a
+   commit signature.
+
+   `id` is the configured DID whatever method it uses: `--did` admits
+   `did:plc:` and `did:web:` as well as the signing key's own `did:key:`, so
+   this is deliberately not the `did:key` method's deterministic document and
+   carries neither that method's `#<multibase>` fragment nor its verification
+   relationships. -}
+accountDidDocument : Account -> PublicKey -> Json
+accountDidDocument account publicKey =
+  let did = accountDid account
+  jObject [
+    (
+      "@context",
+      jArray [
+        JString "https://www.w3.org/ns/did/v1",
+        JString "https://w3id.org/security/multikey/v1",
+      ],
+    ),
+    ("id", JString did),
+    ("alsoKnownAs", jArray [JString "at://\{accountHandle account}"]),
+    (
+      "verificationMethod",
+      jArray [
+        jObject [
+          ("id", JString "\{did}#atproto"),
+          ("type", JString "Multikey"),
+          ("controller", JString did),
+          ("publicKeyMultibase", JString (didKeyMultibase publicKey)),
+        ],
+      ],
+    ),
+    (
+      "service",
+      jArray [
+        jObject [
+          ("id", JString "#atproto_pds"),
+          ("type", JString "AtprotoPersonalDataServer"),
+          ("serviceEndpoint", JString "https://\{accountHostname account}"),
+        ],
+      ],
+    ),
+  ]
+
 {- | This PDS's own did:web document, keyed by the hostname `makeAccount`
    admitted. It describes the SERVER (its atproto service endpoint), not the
-   hosted account — the account is a `did:key` and owns a different document
-   this server does not serve. -}
+   hosted account — `accountDidDocument`, above, is the account's. -}
 didWebDocument : Account -> Json
 didWebDocument account = jObject [
   ("@context", jArray [JString "https://www.w3.org/ns/did/v1"]),
