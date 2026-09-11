@@ -20,7 +20,7 @@
    past `maxHttpRequestBytes`, so re-checking it here would be a second,
    divergent answer to a question `lib.http` has already settled. -}
 
-import array.{blit, sliceClamped}
+import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
 import lib.credential.{
@@ -85,6 +85,8 @@ import shell.blobfile.{blobFileWrite}
 import shell.persist.{persistCredential, persistSave}
 import string.{toUtf8}
 import time.{Duration, now, seconds}
+import vector.{Vector(..)}
+import vector as V
 
 {- | How long a connection in the BODY phase may go without delivering a new
    byte before it is closed (#2815).
@@ -506,72 +508,58 @@ retireConnection active slot =
   let () = releaseUnframed slot
   active := !active - 1
 
-{- | A connection's accumulated read bytes: a backing array with spare
-   capacity, and how many of its bytes are live. Appending a chunk
-   (`readBufferAppend`) copies only the chunk, doubling the backing store
-   when it doesn't fit — a request delivered in K reads costs O(bytes), not
-   O(bytes × K), which `buf ++ bytes` on a plain `Array Int` would cost
-   because `++` copies its whole left operand on every call.
+{- | A connection's accumulated read bytes: `Vector Int`'s own backing array
+   with spare capacity, and how many of its bytes are live. Appending a
+   chunk (`readBufferAppend`) copies only the chunk, doubling the backing
+   store when it doesn't fit — a request delivered in K reads costs
+   O(bytes), not O(bytes × K), which `buf ++ bytes` on a plain `Array Int`
+   would cost because `++` copies its whole left operand on every call. The
+   doubling itself is `vector.pushArray`'s: this module no longer does its
+   own capacity arithmetic.
 
    The live count is exactly what `scanRequestBoundaryWithin` calls `avail`:
    the backing array's own length is spare capacity, never received bytes,
    so nothing may read past it.
 
-   Exported abstractly, with the six operations below, for
-   `pds/test/read_buffer_test.mdk`: the growth arithmetic is the one part of
-   this module that is pure arithmetic over a mutable cell and so can be
-   asserted without a socket. The representation stays private — a caller
-   outside this module cannot reach either `Ref`. -}
-export data ReadBuffer = ReadBuffer (Ref (Array Int)) (Ref Int)
+   Exported abstractly, with the operations below, for
+   `pds/test/read_buffer_test.mdk`: the growth behavior is pure — a function
+   of the bytes appended — and so can be asserted without a socket. The
+   representation stays private — a caller outside this module cannot reach
+   the `Vector`. -}
+export data ReadBuffer = ReadBuffer (Vector Int)
 
 -- | An empty buffer; the backing store is allocated on the first append.
 export
 readBufferNew : Unit -> ReadBuffer
-readBufferNew _ = ReadBuffer (Ref [||]) (Ref 0)
+readBufferNew _ = ReadBuffer (V.new ())
 
 -- | How many bytes are live, in O(1): a `Ref Int` deref, never a traversal of
 -- the backing store.
 export
 readBufferLen : ReadBuffer -> Int
-readBufferLen (ReadBuffer _ len) = !len
+readBufferLen (ReadBuffer v) = let (_, len) = V.rawParts v in len
 
 readBufferIsEmpty : ReadBuffer -> Bool
 readBufferIsEmpty buf = readBufferLen buf == 0
 
 -- | The backing array, for a caller (`scanRequestBoundaryWithin`,
 -- `parseRequestAt`) that is handed the live count separately and must never
--- read past it on its own.
+-- read past it on its own. Zero-copy: `V.rawParts` hands back the vector's
+-- own backing store.
 export
 readBufferBacking : ReadBuffer -> Array Int
-readBufferBacking (ReadBuffer backing _) = !backing
-
--- | The smallest doubling of `cap` that is at least `needed`; an empty
--- backing store starts doubling from 1 rather than from 0.
-export
-growCapacity : Int -> Int -> Int
-growCapacity cap needed =
-  if cap >= needed then
-    cap
-  else
-    growCapacity (if cap == 0 then 1 else cap * 2) needed
+readBufferBacking (ReadBuffer v) = let (backing, _) = V.rawParts v in backing
 
 {- | Appends `bytes` in place. When the backing store doesn't fit them, it is
    replaced by a doubled one first, copying the live prefix once (`blit`);
    the append itself is one more `blit`, of exactly `arrayLength bytes`
    elements. Neither copy is proportional to bytes already buffered from
-   earlier reads. -}
+   earlier reads — `V.pushArray` grows at most once per call, to the
+   smallest doubling that holds the result, however many capacity classes a
+   single delivered chunk spans. -}
 export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
-readBufferAppend bytes (ReadBuffer backing len) =
-  let n = arrayLength bytes
-  let needed = !len + n
-  let () =
-    if needed > arrayLength !backing then
-      let grown = arrayMake (growCapacity (arrayLength !backing) needed) 0
-      let () = blit !backing 0 grown 0 !len
-      backing := grown
-  let () = blit bytes 0 !backing !len n
-  len := needed
+readBufferAppend bytes (ReadBuffer v) = V.pushArray bytes v
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
@@ -580,7 +568,7 @@ readBufferAppend bytes (ReadBuffer backing len) =
 readBufferFrom : Int -> ReadBuffer -> ReadBuffer
 readBufferFrom from buf =
   let sliced = sliceClamped from (readBufferLen buf) (readBufferBacking buf)
-  ReadBuffer (Ref sliced) (Ref (arrayLength sliced))
+  ReadBuffer (Vector (Ref sliced) (Ref (arrayLength sliced)))
 
 -- | The live bytes as an ordinary array, for the one caller
 -- (`rejectBufferAt`) that hands the whole buffer to `applyRequest` rather

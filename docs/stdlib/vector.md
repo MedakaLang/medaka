@@ -297,6 +297,39 @@ The sortInPlace is stable.
 [1, 2, 3]
 ```
 
+## Bulk operations
+
+### `pushArray`
+
+```
+pushArray : Array a -> Vector a -> Unit
+```
+
+Appends every element of `xs`, in order, in one bulk copy.
+
+Amortized `O(1)` per element: the backing store grows at most once, to
+the smallest doubling that holds the result, so appending an `n`-element
+array costs one `blit` of the live prefix (on grow) plus one `blit` of
+`xs` — never `n` separate single-element grows. `pds/test/read_buffer_test.mdk`
+covers the growth boundary directly; no doctest here, since asserting a
+capacity rather than a returned value doesn't fit a doctest's shape.
+
+### `rawParts`
+
+```
+rawParts : Vector a -> (Array a, Int)
+```
+
+The live backing array and its length, with no copy.
+
+For a caller that scans elements in place (an HTTP framer reading
+buffered bytes, say) and would rather not pay `toArray`'s allocation. The
+returned array is the vector's own backing store: mutating through it is
+visible in the vector, and slots at or past the returned length are spare
+capacity, not live elements. `pds/test/read_buffer_test.mdk` proves the
+identity directly (a write through the returned array is visible back in
+the vector); a doctest can show the length but not the aliasing.
+
 ## Instances
 
 ### `Index (Vector a) Int a`

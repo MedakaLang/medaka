@@ -934,4 +934,6 @@ A growable, mutable array.
 - [`removeAtInPlace`](vector.md#removeatinplace)
 - [`sortInPlaceBy`](vector.md#sortinplaceby)
 - [`sortInPlace`](vector.md#sortinplace)
+- [`pushArray`](vector.md#pusharray)
+- [`rawParts`](vector.md#rawparts)
 
