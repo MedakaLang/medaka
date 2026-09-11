@@ -49,7 +49,12 @@
 #   test/compiler_test_fixtures/user_arbitrary.mdk  GH #2292: a prop parameter
 #     at an argument-free user-defined type is drawn through that type's
 #     `Arbitrary` instance, not structurally. Passes only when the instance is
-#     honored; a structural draw fails it within a few tests.
+#     honored; a structural draw fails it within a few tests. GH #2813 case 2
+#     extends it to a nested FIELD of that type, which was still structural.
+#   test/compiler_test_fixtures/arbitrary_constrained_instance.mdk  GH #2813
+#     case 3: an `Arbitrary` instance the runner cannot draw through must be
+#     reported rather than silently replaced by the structural draw. Driven by
+#     its own block below (the diagnostic is a panic, not golden output).
 #   test/compiler_test_fixtures/arbitrary_name_collision/  two modules spelling
 #     one type name, an `Arbitrary` instance at only one of them. The runner
 #     must decide on the type's IDENTITY, not on its spelling: keyed on the
@@ -330,6 +335,23 @@ if printf '%s' "$anc_out" | grep -qF "prop_runner: no generator for type 'Color'
   pass=$((pass + 1)); printf 'ok   arbitrary_name_collision (an Arbitrary instance is chosen by type identity, not by spelling)\n'
 else
   fail=$((fail + 1)); printf 'FAIL arbitrary_name_collision: expected the no-generator report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$anc_code" "$anc_out"
+fi
+
+# GH #2813 case 3: an `Arbitrary` instance the runner cannot draw through (it is
+# constrained, or stands at an applied head) must be REPORTED, not silently
+# dropped in favor of the structural draw. Asserted on CONTENT for the same
+# reason the collision arm is: the silent-drop answer also exits nonzero, with a
+# structural `Node …` counterexample.
+aci="$ROOT/test/compiler_test_fixtures/arbitrary_constrained_instance.mdk"
+aci_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$aci" "$ROOT/test/compiler_test_fixtures" 2>&1 | sed "s#$ROOT/##g")"
+aci_code=0
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$aci" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1 || aci_code=$?
+if printf '%s' "$aci_out" | grep -qF "the 'Arbitrary' instance for 'Tree' cannot be drawn from" \
+  && ! printf '%s' "$aci_out" | grep -qF "Counterexample" \
+  && [ "$aci_code" -ne 0 ]; then
+  pass=$((pass + 1)); printf 'ok   arbitrary_constrained_instance (an unusable Arbitrary instance is reported, not ignored)\n'
+else
+  fail=$((fail + 1)); printf 'FAIL arbitrary_constrained_instance: expected the unusable-instance report, exit!=0\n  --- actual (exit %d) ---\n%s\n' "$aci_code" "$aci_out"
 fi
 
 # Issue #892 (S2): a FILE-LEVEL parse error in the TARGET must surface as the SAME
