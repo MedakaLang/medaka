@@ -184,26 +184,39 @@ nullableRev : Option Tid -> DagCbor
 nullableRev None = DcNull
 nullableRev (Some rev) = DcString (tidToString rev)
 
+{- | The lexicon's `maxLength` on the `#commit` body's `ops` array
+   (`com.atproto.sync.subscribeRepos`, def `commit`). A commit carrying more
+   ops than this cannot be reported in full. -}
+syncCommitOpsMaxLength : Int
+syncCommitOpsMaxLength = 200
+
 {- | The `#commit` body as a data-model value.
 
-   `rebase`, `tooBig` and `blobs` are deprecated but still required by the
-   lexicon, so they are emitted at their fixed empty values rather than
-   omitted. Field ORDER here is irrelevant: DAG-CBOR sorts map keys
-   canonically at encode time. -}
+   `rebase` and `blobs` are deprecated but still required by the lexicon, so
+   they are emitted at their fixed empty values rather than omitted. Field
+   ORDER here is irrelevant: DAG-CBOR sorts map keys canonically at encode
+   time.
+
+   `ops` carries a `maxLength` of 200 in the lexicon, and a single write batch
+   can legally exceed that, so an over-long op list is reported rather than
+   emitted: `tooBig` goes true and `ops` goes empty, which is exactly what
+   that field means — the consumer re-fetches the missing data in a separate
+   request. `blocks` is unaffected; its own size limit is a separate bound. -}
 export
 syncCommitBody : SyncCommitEvent -> DagCbor
 syncCommitBody event =
+  let tooBig = length event.ops > syncCommitOpsMaxLength
   DcMap
     ([
         ("seq", DcInt event.seq),
         ("rebase", DcBool False),
-        ("tooBig", DcBool False),
+        ("tooBig", DcBool tooBig),
         ("repo", DcString event.repoDid),
         ("commit", DcLink event.commitCid),
         ("rev", DcString (tidToString event.rev)),
         ("since", nullableRev event.since),
         ("blocks", DcBytes event.blocksCar),
-        ("ops", DcArray (map opValue event.ops)),
+        ("ops", DcArray (if tooBig then [] else map opValue event.ops)),
         ("blobs", DcArray []),
         ("time", DcString event.time),
       ]
