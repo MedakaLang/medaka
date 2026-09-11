@@ -224,7 +224,8 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     tmpDir
     False
     extraRoots
-    True)
+    True
+    False)
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"

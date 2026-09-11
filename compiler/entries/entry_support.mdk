@@ -19,8 +19,11 @@ import types.typecheck.{
   elaborateOne,
   elaborateModules,
   hadTypeErrors,
+  resetTypeErrorsSticky,
   setLocalPinDisabled,
+  setStdlibOwnership,
 }
+import support.path.{dirOf}
 import driver.diagnostics.{
   emitDiagExitCode,
   emitGateDiags,
@@ -33,6 +36,7 @@ import driver.loader.{
   loadErrorMessage,
   loadProgramFilesLocatedE,
   modIdToPath,
+  stdlibOwnership,
   unknownModuleIdOf,
 }
 import backend.private_mangle.{mangleUnitsEv}
@@ -191,11 +195,25 @@ driveModulesGo runEmit runtimeP coreP entry roots = match readFile runtimeP
     Ok csrc => match loadProgramFilesLocatedE (_ => None) entry roots
       Err e => failWith (moduleLoadHint (loadErrorMessage e))
       Ok mods =>
+        -- #2072: publish the FFI-stamp discriminator before anything elaborates.
+        -- `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules",
+        -- so a driver that never publishes this rejects a stdlib-root-owned module
+        -- whose externs the stdlib itself wrote — which `medaka check` accepts.
+        -- The parent derives it in `medaka_cli.typecheckGate`; since ruling 3 this
+        -- process owns the type verdict for a build, so it must derive the same
+        -- fact from the same inputs or the two verdicts differ on that one class.
+        -- The stdlib root is `dirOf coreP`: this driver's CLI shape hands it the
+        -- stdlib's own `core.mdk`, which is the file the parent spells
+        -- `<root>/stdlib/core.mdk`.
+        let pairs = map dropPathTriple mods
+        let (flatStdlib, ownedStdlib) =
+          stdlibOwnership entry roots (dirOf coreP) pairs
+        let _ = setStdlibOwnership flatStdlib ownedStdlib
         runEmit
           mods
           (desugar (parse rsrc))
           (desugar (parse csrc))
-          (map desugarPair (map dropPathTriple mods))
+          (map desugarPair pairs)
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root
@@ -336,6 +354,12 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   -- verdict equal `check`'s by construction; `mangleUnitsEv` then renames the elaborated
   -- trees AND the evidence table's `RLocal` routes.  Each branch below mangles exactly
   -- once, after its own elaboration.
+  -- The sticky flag is cleared before each elaboration, as every driver in
+  -- `medaka_cli.mdk` clears it before its own: `runEmitWith` runs a SECOND
+  -- elaboration through `emitModulesWith` on the wrapped program, and the
+  -- `underivedMainDiags` re-check between them typechecks a synthetic program
+  -- whose errors must not be read as that second elaboration's residual.
+  let _ = resetTypeErrorsSticky ()
   let (coreE, modulesE, perMod, residual, _) =
     elaborateModules runtimeDecls coreDecls modules
   -- Both halves of the fold now read the trees the loader parsed: the elaboration
@@ -384,6 +408,7 @@ emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Un
 emitModulesWith emitTail modsWithPath runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   -- Elaborate first, mangle after — see `runEmitWith` (#2809).
+  let _ = resetTypeErrorsSticky ()
   let (coreE, modulesE, _, residual, _) =
     elaborateModules runtimeDecls coreDecls modules
   let _ =

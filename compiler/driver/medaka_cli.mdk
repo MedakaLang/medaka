@@ -1452,7 +1452,12 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
               let outPath = match outOpt
                 Some o => o
                 None => defaultOutPath target input
-              match runBuild root medaka cc target input outPath keepIrCli
+              -- `quietEmitStderr = True`: this route has already rendered every
+              -- diagnostic into the stdout envelope above (`checkJsonFileParts`),
+              -- so forwarding the child's human copy would report one diagnostic
+              -- twice on two channels. A FAILING emit still carries the child's
+              -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
+              match runBuild root medaka cc target input outPath keepIrCli True
                 -- #2243: the build's own notes (a failed `--keep-ir` copy)
                 -- join the entry file's `diagnostics` array rather than
                 -- vanishing with the status line this channel never prints.
@@ -2287,7 +2292,15 @@ runBuildPlainCmd a =
           Ok _ =>
             let perfTTc = now ()
             let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
-            match runBuild root medaka cc target inputAbs outPath keepIrCli
+            match (runBuild
+              root
+              medaka
+              cc
+              target
+              inputAbs
+              outPath
+              keepIrCli
+              False)
               Ok rep =>
                 let perfTEmit = now ()
                 let _ = emitPhase perfOn "emit" (perfTEmit - perfTTc) input
@@ -2358,18 +2371,22 @@ buildUsage _ =
 defaultOutPath : BuildTarget -> String -> String
 defaultOutPath TNative input = chopExt (baseOf input)
 defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
--- G1 (SOUNDNESS): typecheck the whole module graph BEFORE shelling out to
--- the emitter.  runBuild emits/clangs whatever the emitter produces — for
--- an ill-typed program that is garbage (the G1 bug), so we abort here on any
--- type error.  Mirrors the OCaml driver's STEP-0 check gate.
-
+-- G1 (SOUNDNESS): nothing downstream of this gate re-checks the program, so a
+-- graph that reaches `runBuild` must already have a verdict.  Resolve is that
+-- verdict here; the TYPE verdict belongs to the `medaka_emitter` child, whose
+-- own elaboration gate is hard and whose diagnostics `runBuild` forwards.  What
+-- must never happen is the G1 bug — `runBuild` emitting and clanging garbage for
+-- a program no pass rejected.
+--
 -- G1 typecheck gate result, a `Result String Unit`: `Err diagnostic` (a resolve
 -- error, or a pre-typecheck read/load failure) whose message we surface
 -- verbatim, or `Ok ()` — a clean-enough-to-emit verdict, not a clean-program
 -- one.  The payload is Unit because this process no longer typechecks: the
 -- `medaka_emitter` child does, once, and every diagnostic that pass produces —
 -- errors and warnings alike — reaches the user through the child's own stderr,
--- which `runBuild` forwards verbatim whichever way the build goes.
+-- which `runBuild` forwards verbatim whichever way the build goes, except on the
+-- `--json` route, where this process still renders them into the envelope and
+-- the human copy would be a second report of the same diagnostic.
 --
 -- Load the entry + transitive imports, resolve them, and abort BEFORE the
 -- emitter/clang on a naming error, rendering it exactly as `check` renders it.

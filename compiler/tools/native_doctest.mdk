@@ -299,7 +299,8 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
     tmpDir
     False
     extraRoots
-    True)
+    True
+    False)
     Err rep =>
       Err
         "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"
