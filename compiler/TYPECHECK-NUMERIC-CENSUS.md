@@ -85,6 +85,15 @@ substitute without dropping any co-predicate (D2), and restamp literal routes af
 grounding. Distinguish full finalization from every prefix drain. After defaulting,
 re-take the per-goal T4 census; SC-3 remains an owner decision.
 
+The existing schemes-only `checkModulesK`/`cmCheckWorker` path also remains a
+prerequisite: diagnostics.projectEntrySchemes uses it for hover/completion, and
+it deliberately does not queue or drain user-module solving. Defaulting only in
+driveGraphK would leave those scheme consumers outside finalization. A future
+implementation must project finalized schemes through the shared pipeline while
+preserving the module-scaling constraint recorded at cmCheckWorker. This branch
+does not enable graph-end defaulting or change that query path; a complete concrete
+implementation packet for these dependencies is still owed.
+
 ## Reproduction receipts
 
 The session artifacts include findings.md, instrument.patch, the exact
