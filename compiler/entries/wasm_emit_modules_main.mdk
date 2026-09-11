@@ -51,7 +51,7 @@ import ir.core_ir_lower.{
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
 import backend.wasm_reach.{wasmReachFilter}
-import entries.entry_support.{driveModules, runEmitWith}
+import entries.entry_support.{driveModulesLocated, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{listLen}
 
@@ -60,7 +60,7 @@ main : <IO> Unit
 -- rows), so an `Async` main is driven by the sequential `runAsync` here.  The
 -- `*Main` variant declares a `Unit` result, which is how the emitter's
 -- `mainBodyIsUnit` knows not to auto-print it.
-main = driveModules (runEmitWith "runAsyncMain" emitTail)
+main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
 
 -- COMPOSITE-MAIN AUTO-PRINT (design §10, WasmGC peer of llvm_emit_modules_main):
 -- the shared mangle+elaborate+auto-print-wrap glue lives once in

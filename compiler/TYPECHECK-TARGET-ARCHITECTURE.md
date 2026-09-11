@@ -794,6 +794,10 @@ both landed — see item 9. #2549 is landed for its first half only — see item
 
 16. **`build`'s second typecheck is NOT redundant — ruling 3's shape (a) is refuted by
    measurement, 2026-09-09** (branch `rearch3-build-child`, off `20869bcc7`; not merged).
+   **SUPERSEDED by item 21, 2026-09-10**: the prerequisite this item names — making the
+   mangled graph's elaboration agree with the unmangled one — landed as #2809 (item 20),
+   and re-running these eight acceptance items on top of it passes all eight. Read item 21
+   before acting on anything below.
    Shape (a) — the `medaka_emitter` child owns the whole verdict, the parent runs resolve
    only — was implemented in full: the child loads with `loadProgramFilesLocatedE`, renders
    its per-module diagnostics through `emitGateDiags` (the same `typecheckDiagsFold` +
@@ -1166,6 +1170,98 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    leading arm is the -50.5M above. No predicate changed: the admission rule is the one
    stated above, with `depExportsUnknown` naming the fail-open condition that the wildcard
    arm and `depExportsStandalone` now share instead of each restating it.
+
+21. **Ruling 3 shape (a) passes its acceptance on top of #2809, 2026-09-10** (branch
+   `rearch4-build-child`, off main `69107a07c`; not merged). Item 16's refutation had one
+   stated prerequisite — make the emit elaboration's verdict agree with the front end's —
+   and item 20 is that prerequisite. Re-running item 16's eight acceptance items against
+   the same change, ported rather than cherry-picked (`typecheckGateRoute` had become
+   `Result String Unit` over `analyzeSurface` / `resolveModulesErrorsByFile`, and the
+   elaborate-then-mangle order had to survive the port), **all eight pass.**
+   - **The five lost rejections are recovered.** `reject_845_xmod_inferred_{alias,reexport,
+     reexport_2hop,selective}` and `reject_ambiguous_reexport_inside_map_literal` all reject
+     through the child at exit 1 with `check`'s text, byte-identical modulo `check`'s absent
+     trailing newline, and with no `__` anywhere in stderr;
+     `diff_compiler_run_check_agreement` is green.
+   - **The phantom drain is gone.** `must_fail`'s `1359-reexport-ctor-mangle-miss` still
+     REPROduces; the suite reads 33 fixtures, 33 REPRO, 0 drained.
+   - **The two drivers no longer differ on a single file.** `check` and `build` are
+     byte-identical on all ten fixtures item 16 named (`p0_18_*`, `p0_19_*`, `p0_21_*`,
+     `s1_constrained_shadow_dispatch`, the three `s6-*`).
+   - **Mangled names no longer leak** into any diagnostic the corpus produces.
+   **#2810 does not reproduce.** `diff_compiler_test_native` is green with the gate hard,
+   `native_test_abort.mdk` included; the `Ambiguous instance for Debug/Eq` on the
+   synthesized `expectEqual` shim was itself an artifact of elaborating the mangled graph
+   (the #1675 class of item 20: two mangled denotations of one name are two names), so
+   #2809 discharged it. It was measured, not assumed — the same gate, the same fixture.
+   **Measured.** `selfcompile_fixpoint` C3a PASS and C3b PASS with the gate hard. Emitted
+   IR byte-identical across the loader swap, one source tree and two emitter binaries:
+   `medaka_cli` 36,868,184 B and the emitter entry 18,001,690 B, `cmp`-equal. Two-arm
+   `build` differential (stdout+stderr+exit plus the built binary's own output, temp paths
+   and the per-arm output name normalized) over `test/{run_check_agreement,dict,
+   eval_modules,llvm}_fixtures*`, `error_quality_fixtures/build` and `engine_fixtures` —
+   **782 entries, 2 divergent** (the enumeration is flat `.mdk` plus `*/main.mdk` and
+   `*/entry.mdk`, which is why it is not item 16's 1022). The gate set
+   (`run_check_agreement`, `llvm*`, `engines`, `must_fail`, `error_quality*`,
+   `eval_modules`, `eval_typed_modules`, `dict_semantics`, `snapshot_*`, `selfproc`,
+   `core_ir*`, `test*`, `catch_all_census`, `shadow*`, `cli*`, `diff_native_cli`) is 39/39
+   green, and every `test/wasm/*.sh` gate is green.
+   **Ir, held workload** (the same source tree, only the binary swapped;
+   `GC_INITIAL_HEAP_SIZE` at 4 GB; `--trace-children=no` so each process is its own figure
+   and clang, identical on both arms, is in neither): `check` of the compiler's own graph
+   72.764B → 72.460B (**-0.42%**, i.e. the parent's check path is untouched, as the port
+   claims); `build`'s PARENT 57.211B → 24.765B (**-56.7%**); the emitter CHILD 62.346B →
+   70.020B (**+12.3%**, the located loader and the diagnostic render). Compiler-side total
+   for a `build` **119.557B → 94.785B, -20.7%** — item 16's "about -25%" was the right
+   order and slightly optimistic.
+   **ONE VERDICT DOES FLIP, and the fix round's review is what found it (#2873).** A
+   multi-module program whose `main` is a bare value with no `Display` impl
+   (`import m.{Foo(..)}` / `main = Foo 1`) is `check` 0 on both arms; `build` is 0 on main
+   and **1 on this branch**, with a located `No impl of Display for Foo`. The branch is the
+   more correct arm — main's binary builds and then dies `E-DISPATCH-NO-IMPL` at run time —
+   and the defect underneath is pre-existing and `check`'s: multi-module `check` never runs
+   the auto-print obligation, because `analyzeFinish`'s auto-print half is flat-path only.
+   The child reaches it through `underivedMainDiags`, so shape (a) turns a runtime failure
+   into a compile-time diagnostic. It is still a `check`/`build` verdict divergence a user
+   can hit, so it is named here rather than filed under "report only", and #2873 owns the
+   `check` gap.
+   **The two remaining divergences are the child's REPORT, never its verdict.**
+   `error_quality_fixtures/build/main_takes_unit.out` re-blessed: on a FAILING emit the
+   child's stderr, warnings included, rides inside the parent's `emitter failed compiling`
+   wrap instead of preceding it, so two lines swap. And on the auto-print path a rejecting
+   build still prints the clean-path `W-MAIN-SHAPE` warning ahead of the wrap's error,
+   where `check` would print the error alone — `emitFullGate` has already decided the
+   unwrapped program is clean by the time the wrap re-checks. Both were found by the
+   differential, not reasoned about.
+   **A must-fail pin was RE-POINTED, not drained, and the distinction is the finding.**
+   `1575-self-naming-requires-aborts-compiler` flipped to DRAINED at `exit: expected 134,
+   got 1`. It is a phantom: `medaka run` still aborts 134 and `build` still prints the same
+   `E-STACK-OVERFLOW` line — the overflow simply moved into the emitter child, whose SIGABRT
+   the parent reports as a failed emit. The claim's `exit:` is now 1 with a `why-exit:`
+   block; the discriminating `stdout-line` is untouched. **Any shape-(a)-like change must
+   re-read every `must_fail` row whose verb is `build`: a process boundary between the
+   defect and the exit code can drain a pin that nothing fixed.**
+   **THE GENERAL HAZARD, and the fix round's most useful finding.** Any driver fact the
+   parent publishes to typecheck BEFORE its own pass has to be published in the child too,
+   or the two verdicts differ on exactly that fact's class. `setStdlibOwnership` (#2072) was
+   the one that was missed: `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration
+   rules", so with the gate hard a stdlib-root-owned module carrying a bare `extern` was
+   accepted by `check` and REJECTED by `build`. The child now derives the same fact from the
+   same inputs in `driveModulesGo`, taking the stdlib root as `dirOf coreP` — the CLI shape
+   hands the child the stdlib's own `core.mdk`. The census is DERIVED, not asserted: the
+   exported publishers of driver state in `types/typecheck.mdk` that `driver/medaka_cli.mdk`
+   calls are exactly three — `resetTypeErrorsSticky`, `setLocalPinDisabled`,
+   `setStdlibOwnership` — and the child now calls all three. `setCoherenceUserDecls` reaches
+   the flat arm only and no Module-arm driver calls it; `projectTrustedMods` and
+   `--allow-internal` feed resolve, which stays with the parent by design.
+   **What is still NOT converged**, and was not in this unit's scope: `build --json` still
+   runs `checkJsonFileParts` in the parent plus the child (`runBuildJsonCmd`), because the
+   child has no machine channel and `runCommand` takes no environment — item 16's reading,
+   unchanged. The parent therefore still typechecks on the `--json` route alone, and that
+   double render is why the route passes `quietEmitStderr`: the envelope already carries
+   every diagnostic, so forwarding the child's human copy would report one diagnostic twice
+   on two channels, against `docs/ops/CLI-CONFORMANCE.md` §4's exemplar X9. A FAILING emit
+   is unaffected — its text still rides `ppBuildReport` into `cjBuildFailedJson`.
 
 ### SA-11. Artifacts
 

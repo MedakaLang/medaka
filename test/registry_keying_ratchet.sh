@@ -1019,4 +1019,59 @@ check_order() {
 check_order "graphPreamble" "$preamble_body"
 echo "  ok: populateEffectDomainsGraph precedes declEnvsRef := at the driver entry"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry)."
+# ── check 7: the parent and the emitter child publish the SAME driver state ────
+#
+# Since ruling 3 shape (a) the `medaka_emitter` child owns `medaka build`'s TYPE
+# verdict, so any driver fact the CLI publishes to typecheck before its own pass
+# must be published in the child too -- otherwise the two verdicts differ on
+# exactly that fact's class, silently, and only for programs that exercise it.
+# That is not hypothetical: #2072's `setStdlibOwnership` was missed, and because
+# `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules", a
+# stdlib-root-owned module carrying a bare `extern` was accepted by `check` and
+# rejected by `build`.
+#
+# The candidate set is DERIVED, never listed here: the exported `set*`/`reset*`
+# publishers defined at column 0 in types/typecheck.mdk. The assertion is a
+# SUBSET one -- the child may publish more (it does not today), never less.
+CLI="$ROOT/compiler/driver/medaka_cli.mdk"
+ES="$ROOT/compiler/entries/entry_support.mdk"
+pubs=$(grep -o '^\(set\|reset\)[A-Za-z]* :' "$TC" | sed 's/ :$//' | sort -u)
+if [ -z "$pubs" ]; then
+  echo "FAIL: check 7 derived ZERO driver-state publishers from $TC. The grep"
+  echo "  ('^set...' / '^reset...' at column 0) no longer matches how they are"
+  echo "  declared. REMEDY: fix the derivation -- an empty candidate set makes"
+  echo "  this check vacuous, which is the failure mode it exists to avoid."
+  exit 1
+fi
+# A CALL SITE is a mention that is neither a comment nor a bare import-member
+# line (`  setStdlibOwnership,` inside an `import m.{...}` block).  Excluding the
+# import form is load-bearing and was MEASURED, not reasoned: with only the
+# comment filter, deleting the child's CALL while leaving its import in place
+# still read as present, so the check passed on the very mutant it exists to
+# catch.  The per-file predicate is shared so the two sides cannot drift.
+calls_in() {
+  grep -n "$2" "$1" \
+    | grep -v ':[[:space:]]*--' \
+    | grep -qv "^[0-9]*:[[:space:]]*$2,\{0,1\}$"
+}
+missing=""
+for p in $pubs; do
+  if calls_in "$CLI" "$p"; then
+    if ! calls_in "$ES" "$p"; then
+      missing="$missing $p"
+    fi
+  fi
+done
+if [ -n "$missing" ]; then
+  echo "FAIL: driver state the CLI publishes before its typecheck is NOT published"
+  echo "  by the emitter child (compiler/entries/entry_support.mdk):$missing"
+  echo "  Since ruling 3 the child owns 'medaka build''s type verdict, so a fact"
+  echo "  only the parent publishes makes 'check' and 'build' disagree on exactly"
+  echo "  the programs that fact is about (#2072 was this, via setStdlibOwnership)."
+  echo "  REMEDY: publish it in entry_support.driveModulesGo, derived from the same"
+  echo "  inputs the CLI derives it from -- not copied, DERIVED."
+  exit 1
+fi
+echo "  ok: every driver-state publisher the CLI calls is also called in the child"
+
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."
