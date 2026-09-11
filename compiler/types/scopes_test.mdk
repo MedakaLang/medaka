@@ -159,8 +159,8 @@ test "copy owns a detached counter and backing array" =
     CopyView {
       copyOriginalId = originalId,
       copyCopiedId = copiedId,
-      copyOriginalOwner = bindingOwner original (ScopeId 4),
-      copyCopiedOwner = bindingOwner copied (ScopeId 4),
+      copyOriginalOwner = bindingOwner original originalId,
+      copyCopiedOwner = bindingOwner copied copiedId,
       copyOriginalStats = scopeFrameStats original,
       copyCopiedStats = scopeFrameStats copied,
     }
