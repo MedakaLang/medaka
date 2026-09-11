@@ -1,0 +1,21 @@
+-- Defaulting exposes a ground goal shared by two incomparable instances.
+-- The remaining Need predicate must be checked after the Int substitution.
+import test.{expectEqual}
+
+data Pair a b = MkPair a b
+
+interface Need a where
+  need : a -> Bool
+
+impl Need (Pair Int a) where
+  need _ = True
+
+impl Need (Pair a Bool) where
+  need _ = False
+
+use : (Num a, Need (Pair a Bool)) => a -> Bool
+use x = need (MkPair x True)
+
+test "defaulting exposes an ambiguous co-predicate" = expectEqual True (use 1)
+
+main = println 0

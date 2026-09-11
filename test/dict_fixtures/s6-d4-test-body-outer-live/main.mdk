@@ -1,0 +1,3 @@
+import cases
+
+main = println 0

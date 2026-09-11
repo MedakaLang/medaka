@@ -7,8 +7,9 @@ chooseNum x = x
 
 test "closed body defaults Num" = expectEqual 1 1
 
-test "inner generalized Num remains caller selected" =
+test "inner generalized Num remains caller selected twice" =
   let choose = x => chooseNum x
+  let _ = expectEqual 3 (choose 3)
   expectEqual 2.5 (choose 2.5)
 
 test "explicit Float remains Float" = expectEqual 1.0 (1 : Float)
