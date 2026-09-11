@@ -1,5 +1,5 @@
 # META
-source_lines=203
+source_lines=207
 stages=DESUGAR,MARK
 # SOURCE
 {- | Base32 encoding and decoding of bytes, per RFC 4648.
@@ -8,7 +8,11 @@ stages=DESUGAR,MARK
    uses the lowercase alphabet and never emits `=` padding. `base32Decode`
    accepts exactly that canonical form: uppercase, `=` padding, non-alphabet
    characters, non-zero residual bits, and non-canonical lengths are rejected
-   rather than normalized. -}
+   rather than normalized.
+
+   Both build a `List Char`/`List Int` through non-tail recursion, so under
+   the tree-walking interpreter (`medaka run`/`test`) they overflow the
+   stack at a few kilobytes of input; native builds have no such limit. -}
 
 -- base32Encode/base32Decode declare the same signatures as base64's
 -- encode/decode — a signature-only match between two distinct codecs; the

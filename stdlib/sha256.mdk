@@ -10,7 +10,13 @@
    the same hash without that scan, for a caller whose bytes are already
    known to be in range.
 
-   There is no incremental form. A message is hashed in one call. -}
+   There is no incremental form. A message is hashed in one call.
+
+   `sha256` (the checked entry) is tail-recursive over the whole message and
+   relies on native's `musttail` lowering; the tree-walking interpreter has
+   no TCO, so under `medaka run`/`test` it overflows its stack around tens
+   of kilobytes even though `sha256FixedBytes` and native builds handle a
+   megabyte and more. -}
 
 -- Arithmetic contract. Every word is an `Int` in [0, 2^32). `mask32 x =
 -- bitAnd x 4294967295`, and every `+`, `shiftLeft` and `bitNot` result is
@@ -241,7 +247,9 @@ processTail tail st =
 -- This must stay a full-arity self tail call. Native lowers that shape to
 -- `musttail`, and callers hash messages of a megabyte and more, so a
 -- non-tail rewrite here is a million-frame stack overflow rather than a
--- slowdown.
+-- slowdown. The tree-walking interpreter does not TCO at all, so this same
+-- checked entry overflows its stack around tens of kilobytes under `run`/
+-- `test` even though native handles a megabyte-plus.
 byteDomainOk : Array Int -> Int -> Int -> Bool
 byteDomainOk msg len i =
   if i >= len then
