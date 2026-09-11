@@ -1,2 +1,6 @@
 warning: [rule-directive-reason] `-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason
 warning: [rule-directive-reason] `-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason
+warning: [rule-directive-reason] `-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason
+warning: [rule-directive-reason] `-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason
+warning: [rule-directive-reason] `-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason
+warning: [rule-directive-reason] `-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason

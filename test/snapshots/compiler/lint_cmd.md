@@ -1,5 +1,5 @@
 # META
-source_lines=587
+source_lines=588
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -141,10 +141,11 @@ lintCacheCtx True False
 -- to run `runCrossFileRules` exactly like the human-text path does, and each
 -- resulting `Finding` is folded into its OWN file's `diagnostics` array via
 -- `mergeCrossFileIntoTriples` (never a new top-level key).  A duplicate whose
--- partner file lies outside `files` still gets reported, as a synthesized
--- entry for that file — `mergeCrossFileIntoTriples` handles that, mirroring
--- how the text path already renders a cross-file finding under any file's
--- name.  `--fix` never reaches this function.  Exit 1 iff any diagnostic is a
+-- partner file lay outside `files` would be folded into a synthesized entry
+-- for that file instead — `mergeCrossFileIntoTriples`'s own defensive
+-- fallback, unreachable today since `files` is exactly the set every
+-- cross-file rule here runs over.  `--fix` never reaches this function.
+-- Exit 1 iff any diagnostic is a
 -- hard error (severity 1) — matches `runCheckJsonCmd`'s convention.
 export
 runLintJsonCmd : StdlibIndex ->

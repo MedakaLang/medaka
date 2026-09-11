@@ -97,7 +97,7 @@ import hash_map.{
   findWithDefault,
 }
 import list.{take, drop}
-import string.{drop as strDrop, isAlpha}
+import string.{drop as strDrop, isAlpha, isDigit, toLower, words}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
@@ -5653,13 +5653,15 @@ runCrossRuleOn only disable files r
 -- serialize.  Each `Finding` already carries ITS OWN occurrence's file in
 -- `loc` (`emitDupGroup` emits one finding per occurrence), so a finding is
 -- appended to the triple whose path matches that file — never aggregated
--- under a new key.  A finding whose file is not already among `triples` (the
--- caller's requested path set can be a strict subset of the two-or-more files
--- a duplicate spans) gets a synthesized `(file, "", [diag])` entry appended,
--- exactly like `runCrossFileReport`'s own `parsedToTriple`/rendering treats an
--- unrequested duplicate partner — reported, never dropped.  A `Finding` with
--- no `loc` (only the cross-file rule shape used today always sets one) is
--- skipped: there is no file to attribute it to.
+-- under a new key.  A finding whose file is not already among `triples`
+-- would get a synthesized `(file, "", [diag])` entry appended instead of
+-- being dropped — a defensive fallback, structurally unreachable from both
+-- of today's call sites, since each builds `triples` from exactly the same
+-- file list it hands to `runCrossFileRules`, so every finding's file is
+-- already present.  Kept for the day a caller passes a narrower path set
+-- than its cross-file rules run over.  A `Finding` with no `loc` (only the
+-- cross-file rule shape used today always sets one) is skipped: there is no
+-- file to attribute it to.
 export
 mergeCrossFileIntoTriples : List Finding ->
   List (String, String, List Diag) ->
@@ -6367,35 +6369,40 @@ ruleDirectiveReason _ _ src pos prog =
   let ls = splitNl src
   let codeLines = arrayFromList (codePortions ls comments 1)
   let blocks = commentBlocks comments codeLines
-  let dps = positionsDecls pos
+  let declZips = zipDeclPos prog (positionsDecls pos)
   let dirCmts = filterList (c => isSome (parseDirective c)) comments
-  flatMap (directiveReasonCheck comments blocks dps) dirCmts
+  flatMap (directiveReasonCheck comments blocks declZips) dirCmts
 
 directiveReasonCheck : List Comment ->
   List CommentBlock ->
-  List DeclPos ->
+  List (Decl, DeclPos) ->
   Comment ->
   List Finding
-directiveReasonCheck comments blocks dps c =
-  if directiveReasoned comments blocks dps c then
+directiveReasonCheck comments blocks declZips c =
+  if directiveReasoned comments blocks declZips c then
     []
   else
     [directiveReasonFinding c]
 
 directiveReasoned : List Comment ->
   List CommentBlock ->
-  List DeclPos ->
+  List (Decl, DeclPos) ->
   Comment ->
   Bool
-directiveReasoned comments blocks dps c =
+directiveReasoned comments blocks declZips c =
   let ownReasoned = match find (commentBlockContainsLine (commentLine c)) blocks
     Some b => blockHasReason comments b
     None => False
   if ownReasoned then
     True
   else match parseDirective c
-    Some (Directive (DScopeLine _) _) =>
-      declGapReasoned comments blocks dps (commentLine c)
+    Some (Directive (DScopeLine target) _) =>
+      declGapReasoned
+        comments
+        blocks
+        declZips
+        (declZipNameAt declZips target)
+        (commentLine c)
     Some (Directive DScopeFile _) => False
     None => False
 
@@ -6407,20 +6414,51 @@ directiveReasoned comments blocks dps c =
 -- one-line-per-clause function whose OWN signature sits one hop further back
 -- (`compiler/types/route_key.mdk`'s `rkEffAtom`: directive between its two
 -- clauses, reason above the signature two hops up). Each hop requires the
--- PRECEDING declaration to end on the exact line before, so a real blank
--- line — the boundary a reader also uses — stops the walk rather than
--- reaching into an unrelated earlier declaration.
+-- PRECEDING declaration to end on the exact line before AND to be the SAME
+-- declaration the directive suppresses — a `DTypeSig`/`DFunDef` sharing the
+-- target's own name — so a real blank line still stops the walk, and so does
+-- an adjacent but UNRELATED top-level declaration (a different function's
+-- doc comment must never be credited to this directive).
 declGapReasoned : List Comment ->
   List CommentBlock ->
-  List DeclPos ->
+  List (Decl, DeclPos) ->
+  Option String ->
   Int ->
   Bool
-declGapReasoned comments blocks dps line =
+declGapReasoned comments blocks declZips targetName line =
   match find (commentBlockEndsAt (line - 1)) blocks
     Some b => blockHasReason comments b
-    None => match find (declPosEndsAt (line - 1)) dps
-      Some dp => declGapReasoned comments blocks dps (declPosLine dp)
+    None => match find (declZipEndsAt (line - 1)) declZips
+      Some (d, dp) =>
+        if declGapNameMatches targetName d then
+          declGapReasoned comments blocks declZips targetName (declPosLine dp)
+        else
+          False
       None => False
+
+-- The name of the declaration the directive's target `line` falls inside —
+-- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a
+-- different decl kind, or the directive is the last thing in the file), in
+-- which case `declGapNameMatches` below never credits a gap hop.
+declZipNameAt : List (Decl, DeclPos) -> Int -> Option String
+declZipNameAt declZips line = match find (declZipContainsLine line) declZips
+  Some (d, _) => declBridgeName d
+  None => None
+
+declZipContainsLine : Int -> (Decl, DeclPos) -> Bool
+declZipContainsLine line (_, dp) =
+  declPosLine dp <= line && declPosEndLine dp >= line
+
+declBridgeName : Decl -> Option String
+declBridgeName (DTypeSig _ n _) = Some n
+declBridgeName (DFunDef _ n _ _) = Some n
+declBridgeName _ = None
+
+declGapNameMatches : Option String -> Decl -> Bool
+declGapNameMatches (Some target) d = match declBridgeName d
+  Some n => n == target
+  None => False
+declGapNameMatches None _ = False
 
 commentBlockContainsLine : Int -> CommentBlock -> Bool
 commentBlockContainsLine line (CommentBlock first last _ _) =
@@ -6429,8 +6467,8 @@ commentBlockContainsLine line (CommentBlock first last _ _) =
 commentBlockEndsAt : Int -> CommentBlock -> Bool
 commentBlockEndsAt line (CommentBlock _ last _ _) = last == line
 
-declPosEndsAt : Int -> DeclPos -> Bool
-declPosEndsAt line dp = declPosEndLine dp == line
+declZipEndsAt : Int -> (Decl, DeclPos) -> Bool
+declZipEndsAt line (_, dp) = declPosEndLine dp == line
 
 blockHasReason : List Comment -> CommentBlock -> Bool
 blockHasReason comments (CommentBlock first last _ _) =
@@ -6439,8 +6477,64 @@ blockHasReason comments (CommentBlock first last _ _) =
   let reasonCmts = filterList (c => isNone (parseDirective c)) inBlock
   anyList directiveReasonHasProse reasonCmts
 
+-- A comment line counts as a reason only when it contains a REASON WORD: a
+-- whitespace-delimited token with a substantive (>=4 alphabetic char) run
+-- that is not one of the shapes `rule-directive-reason` exists to reject —
+-- `todo`/`fixme`/`xxx`, an issue-reference token (`#1234`) or its connector
+-- word (`see`/`issue`/`cf`/`ref`), or a bare rule name (`rule-clone-type`) —
+-- each of which has >=4 alphabetic characters on its own but states no
+-- constraint. A comment mixing one of these with real prose still counts,
+-- since the prose word alone satisfies the check.
 directiveReasonHasProse : Comment -> Bool
-directiveReasonHasProse c = hasSubstantiveWord (commentText c)
+directiveReasonHasProse c = anyList isReasonWord (words (commentText c))
+
+isReasonWord : String -> Bool
+isReasonWord raw =
+  if isNonReasonToken raw then False else hasSubstantiveWord raw
+
+isNonReasonToken : String -> Bool
+isNonReasonToken raw =
+  let low = toLower (stripTrailingPunct raw)
+  contains low ["todo", "fixme", "xxx", "see", "issue", "cf", "ref"]
+    || isIssueRefToken low
+    || isRuleNameToken low
+
+-- A single hyphenated token naming a rule (`rule-clone-type`) rather than a
+-- reason -- checked char-by-char rather than against a quoted "rule-..."
+-- literal, which would falsely register this heuristic as an unenrolled
+-- rule name under `diff_compiler_lint_baseline.sh`'s assertion 1b.
+isRuleNameToken : String -> Bool
+isRuleNameToken low =
+  startsWith "rule" low
+    && stringLength low > 4
+    && arrayGetUnsafe 4 (stringToChars low) == '-'
+
+isIssueRefToken : String -> Bool
+isIssueRefToken low = startsWith "#" low && isNonEmptyDigits (strDrop 1 low)
+
+isNonEmptyDigits : String -> Bool
+isNonEmptyDigits s =
+  stringLength s > 0 && allDigitsGo (stringToChars s) 0 (stringLength s)
+
+allDigitsGo : Array Char -> Int -> Int -> Bool
+allDigitsGo chars i n
+  | i >= n = True
+  | isDigit (arrayGetUnsafe i chars) = allDigitsGo chars (i + 1) n
+  | otherwise = False
+
+stripTrailingPunct : String -> String
+stripTrailingPunct s =
+  let n = stringLength s
+  if n == 0 then
+    s
+  else if isTrailingPunctChar (arrayGetUnsafe (n - 1) (stringToChars s)) then
+    stripTrailingPunct (stringSlice 0 (n - 1) s)
+  else
+    s
+
+isTrailingPunctChar : Char -> Bool
+isTrailingPunctChar ch =
+  ch == ':' || ch == '.' || ch == ',' || ch == ';' || ch == '!' || ch == '?'
 
 hasSubstantiveWord : String -> Bool
 hasSubstantiveWord s =

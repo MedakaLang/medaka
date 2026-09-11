@@ -1357,8 +1357,10 @@ anyDiagErr (d :: rest) = diagIsError d || anyDiagErr rest
 -- (#2701 leg 3, parity with `medaka lint --json`): `lintPathsToDiagQuads`
 -- keeps each path's parse, `crossFileMcpFindings` runs `runCrossFileRules`
 -- over them, and `mergeCrossFileIntoTriples` folds each finding into its own
--- file's `diagnostics` array — synthesizing an entry for a duplicate's
--- partner file when that file is outside `paths`. `isError` is true iff any
+-- file's `diagnostics` array — its synthesized-entry fallback for a
+-- duplicate's partner file lying outside `paths` is unreachable here, since
+-- `paths` is exactly the set every cross-file rule runs over. `isError` is
+-- true iff any
 -- diagnostic is a hard error (severity 1) — only reachable via `deny`
 -- promotion, since every seed rule defaults to SevWarning.
 runLintTool : String -> String -> String -> Json -> <IO> Json

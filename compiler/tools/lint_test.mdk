@@ -11,8 +11,8 @@
 --      unchanged — it is still `--write-baseline`'s vehicle) has NO
 --      `rule-duplicate-body` diagnostic anywhere in it, for ANY file set —
 --      `duplicateBodyRule` is a `CrossFileRule`, never a per-file `Rule`, so
---      this holds independent of this slice's fix and documents exactly the
---      shape of the pre-fix gap.
+--      this holds independent of the fix below and documents exactly the
+--      shape of the gap `rule-duplicate-body` fell into.
 --   2. the JSON path's OWN internals (`lintFilesToDiagQuads` +
 --      `crossFileJsonFindings`, exactly what `runLintJsonCmd` calls) DO
 --      surface it, merged into the owning file's entry via
@@ -79,7 +79,7 @@ diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{code}::\{msg}"
 dropQuadParse : (String, String, List Diag, a, b) -> (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 
--- ── 1. the pre-fix gap, pinned ──────────────────────────────────────────────
+-- ── 1. the per-file-only gap, pinned ────────────────────────────────────────
 test "the old per-file-only triple builder never carries a duplicate-body finding" =
   let idx = buildStdlibIndex
   let triples = lintFilesToDiagTriples idx [] [] [] None fixtureFiles

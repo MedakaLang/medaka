@@ -1,0 +1,9 @@
+-- Twin of dup_dedupe_a.mdk: the same two clauses under a different function
+-- name. Neither file carries a directive, so the collapsed finding must
+-- still appear on BOTH sides of the pair in the golden -- exactly once per
+-- side, not twice.
+export
+mkB : Int -> Int -> String
+mkB 0 m =
+  if m > 10 then "left \{m}" else if m > 5 then "right \{m}" else "same \{m}"
+mkB n m = "other \{n} \{m}"

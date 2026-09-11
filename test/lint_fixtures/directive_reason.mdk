@@ -6,14 +6,16 @@
 
 -- FIRES: bare directive, nothing precedes it even across the declaration gap.
 
-export bareTarget : Int
+export
+bareTarget : Int
 -- lint-disable-next-line rule-missing-signature
 bareTarget = 1
 
 -- FIRES: an issue number alone is not a reason.
 
 -- see #1234
-export issueOnlyTarget : Int
+export
+issueOnlyTarget : Int
 -- lint-disable-next-line rule-missing-signature
 issueOnlyTarget = 2
 
@@ -21,9 +23,62 @@ issueOnlyTarget = 2
 
 -- Mirrors a fixture elsewhere in this corpus; consolidating would remove this
 -- file's own regression coverage for the rule.
-export reasonedTarget : Int
+export
+reasonedTarget : Int
 -- lint-disable-next-line rule-missing-signature
 reasonedTarget = 3
 
-export useAll : Int
-useAll = bareTarget + issueOnlyTarget + reasonedTarget
+-- FIRES: the walk stops at an ADJACENT but UNRELATED declaration -- its own
+-- doc comment must never be credited to a directive on a different
+-- declaration, even with no blank line between them.
+
+-- This helper exists because the runtime cannot allocate here.
+export
+adjacentHelper : Int -> Int
+adjacentHelper x = x + 1
+-- lint-disable-next-line rule-missing-signature
+adjacentTarget = 5
+
+-- FIRES: `TODO` alone is not a reason.
+
+-- TODO
+export
+todoOnlyTarget : Int
+-- lint-disable-next-line rule-missing-signature
+todoOnlyTarget = 6
+
+-- FIRES: `issue #1234` is still only an issue reference, not a reason.
+
+-- issue #1234
+export
+issueWordOnlyTarget : Int
+-- lint-disable-next-line rule-missing-signature
+issueWordOnlyTarget = 7
+
+-- FIRES: a bare rule name says WHAT is suppressed, never WHY.
+
+-- rule-clone-type
+export
+ruleNameOnlyTarget : Int
+-- lint-disable-next-line rule-missing-signature
+ruleNameOnlyTarget = 8
+
+-- silent: real prose that happens to also cite an issue number.
+
+-- Disabled because the runtime cannot validate this path yet, see #1234.
+export
+proseWithIssueTarget : Int
+-- lint-disable-next-line rule-missing-signature
+proseWithIssueTarget = 9
+
+export
+useAll : Int
+useAll =
+  bareTarget
+    + issueOnlyTarget
+    + reasonedTarget
+    + adjacentTarget
+    + todoOnlyTarget
+    + issueWordOnlyTarget
+    + ruleNameOnlyTarget
+    + proseWithIssueTarget
