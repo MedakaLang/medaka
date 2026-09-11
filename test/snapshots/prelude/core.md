@@ -1,5 +1,5 @@
 # META
-source_lines=2001
+source_lines=2004
 stages=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1913,11 +1913,14 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) =
 -- ─── Instance laws ───────────────────────────────────────────────────────
 {- Two things constrain how these are written.
 
-   1. `medaka test`'s property runner does NOT dispatch on `Arbitrary` — it
-      generates from the declared TYPE (`prop_runner.mdk`'s `genForType`,
-      which handles `List`/`Array`/tuple/`Option`/`Result` structurally).  So
-      a `prop` PARAMETER cannot observe these instances; every law below calls
-      `arbitrary` / `shrink` explicitly instead.
+   1. `medaka test`'s property runner consults a user `Arbitrary` instance for
+      a `prop` parameter's own type and for that type reached as a field of
+      another, but deliberately never for `Int`/`Bool`/`Float`/`Char`/`String`
+      (honoring those would route generation onto the program-under-test's
+      `randomInt`/`randomBool` externs, making `--seed` inert for those
+      params).  Since the types below have no such instance in scope here
+      anyway, every law calls `arbitrary` / `shrink` explicitly rather than
+      relying on a `prop` parameter to draw them.
    2. Inside this module the `==` OPERATOR does not resolve to `Eq` for a
       non-primitive (`Some n == Some n` fails to check here while
       `eq (Some n) (Some n)` succeeds, and the same program compiles in any
