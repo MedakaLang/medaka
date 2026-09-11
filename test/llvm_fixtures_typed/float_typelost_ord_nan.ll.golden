@@ -617,6 +617,8 @@ else2:
 }
 
 ; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
+; mdk-module program
 @mdk_g_nan = global i64 0
 ; mdk-module program
 @mdk_g_nanBits = global i64 0

@@ -176,36 +176,24 @@ entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_impl_Color_gt(i64 8589934595, i64 8589934593)
   %t1 = alloca i64
-  %t4 = and i64 %t0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %t0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %t0 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 1
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
+  %t3 = icmp eq i64 %t0, 3
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t1
   br label %decend2
-connext11:
-  %t12 = icmp eq i64 %t9, 0
-  br i1 %t12, label %conyes13, label %connext13
-conyes13:
+connext4:
+  %t5 = icmp eq i64 %t0, 1
+  br i1 %t5, label %conyes6, label %connext6
+conyes6:
   store i64 1, ptr %t1
   br label %decend2
-connext13:
+connext6:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend2:
-  %t14 = load i64, ptr %t1
-  %t15 = ashr i64 %t14, 1
-  call void @mdk_print_int(i64 %t15)
+  %t7 = load i64, ptr %t1
+  %t8 = ashr i64 %t7, 1
+  call void @mdk_print_int(i64 %t8)
   ret i32 0
 }
 ; mdk-module impl:Int_compare
@@ -239,187 +227,79 @@ define i64 @mdk_impl_Int_gt(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_impl_Int_compare(i64 %arg0, i64 %arg1)
   %t1 = alloca i64
-  %t4 = and i64 %t0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %t0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %t0 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 2
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
+  %t3 = icmp eq i64 %t0, 5
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t1
   br label %decend2
-connext11:
+connext4:
   store i64 1, ptr %t1
   br label %decend2
 decend2:
-  %t12 = load i64, ptr %t1
-  ret i64 %t12
+  %t5 = load i64, ptr %t1
+  ret i64 %t5
 }
 
 ; mdk-module impl:Color_compare
 define i64 @mdk_impl_Color_compare(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
-  %t4 = and i64 %arg0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %arg0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %arg0 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 4294967296
+  %t3 = icmp eq i64 %arg0, 8589934593
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
+  %t5 = icmp eq i64 %arg1, 8589934593
+  br i1 %t5, label %conyes6, label %connext6
+conyes6:
+  store i64 3, ptr %t0
+  br label %decend1
+connext6:
+  br label %clause2
+connext4:
+  br label %clause2
+clause2:
+  %t8 = icmp eq i64 %arg0, 8589934593
+  br i1 %t8, label %conyes9, label %connext9
+conyes9:
+  %t10 = icmp eq i64 %arg1, 8589934595
   br i1 %t10, label %conyes11, label %connext11
 conyes11:
-  %t13 = and i64 %arg1, 1
-  %t14 = icmp eq i64 %t13, 1
-  br i1 %t14, label %discimm12, label %discbox12
-discimm12:
-  %t15 = ashr i64 %arg1, 1
-  br label %disccont12
-discbox12:
-  %t16 = inttoptr i64 %arg1 to ptr
-  %t17 = load i64, ptr %t16
-  br label %disccont12
-disccont12:
-  %t18 = phi i64 [ %t15, %discimm12 ], [ %t17, %discbox12 ]
-  %t19 = icmp eq i64 %t18, 4294967296
+  store i64 1, ptr %t0
+  br label %decend1
+connext11:
+  br label %clause7
+connext9:
+  br label %clause7
+clause7:
+  %t13 = icmp eq i64 %arg0, 8589934595
+  br i1 %t13, label %conyes14, label %connext14
+conyes14:
+  %t15 = icmp eq i64 %arg1, 8589934593
+  br i1 %t15, label %conyes16, label %connext16
+conyes16:
+  store i64 5, ptr %t0
+  br label %decend1
+connext16:
+  br label %clause12
+connext14:
+  br label %clause12
+clause12:
+  %t17 = icmp eq i64 %arg0, 8589934595
+  br i1 %t17, label %conyes18, label %connext18
+conyes18:
+  %t19 = icmp eq i64 %arg1, 8589934595
   br i1 %t19, label %conyes20, label %connext20
 conyes20:
   store i64 3, ptr %t0
   br label %decend1
 connext20:
-  br label %clause2
-connext11:
-  br label %clause2
-clause2:
-  %t23 = and i64 %arg0, 1
-  %t24 = icmp eq i64 %t23, 1
-  br i1 %t24, label %discimm22, label %discbox22
-discimm22:
-  %t25 = ashr i64 %arg0, 1
-  br label %disccont22
-discbox22:
-  %t26 = inttoptr i64 %arg0 to ptr
-  %t27 = load i64, ptr %t26
-  br label %disccont22
-disccont22:
-  %t28 = phi i64 [ %t25, %discimm22 ], [ %t27, %discbox22 ]
-  %t29 = icmp eq i64 %t28, 4294967296
-  br i1 %t29, label %conyes30, label %connext30
-conyes30:
-  %t32 = and i64 %arg1, 1
-  %t33 = icmp eq i64 %t32, 1
-  br i1 %t33, label %discimm31, label %discbox31
-discimm31:
-  %t34 = ashr i64 %arg1, 1
-  br label %disccont31
-discbox31:
-  %t35 = inttoptr i64 %arg1 to ptr
-  %t36 = load i64, ptr %t35
-  br label %disccont31
-disccont31:
-  %t37 = phi i64 [ %t34, %discimm31 ], [ %t36, %discbox31 ]
-  %t38 = icmp eq i64 %t37, 4294967297
-  br i1 %t38, label %conyes39, label %connext39
-conyes39:
-  store i64 1, ptr %t0
-  br label %decend1
-connext39:
-  br label %clause21
-connext30:
-  br label %clause21
-clause21:
-  %t42 = and i64 %arg0, 1
-  %t43 = icmp eq i64 %t42, 1
-  br i1 %t43, label %discimm41, label %discbox41
-discimm41:
-  %t44 = ashr i64 %arg0, 1
-  br label %disccont41
-discbox41:
-  %t45 = inttoptr i64 %arg0 to ptr
-  %t46 = load i64, ptr %t45
-  br label %disccont41
-disccont41:
-  %t47 = phi i64 [ %t44, %discimm41 ], [ %t46, %discbox41 ]
-  %t48 = icmp eq i64 %t47, 4294967297
-  br i1 %t48, label %conyes49, label %connext49
-conyes49:
-  %t51 = and i64 %arg1, 1
-  %t52 = icmp eq i64 %t51, 1
-  br i1 %t52, label %discimm50, label %discbox50
-discimm50:
-  %t53 = ashr i64 %arg1, 1
-  br label %disccont50
-discbox50:
-  %t54 = inttoptr i64 %arg1 to ptr
-  %t55 = load i64, ptr %t54
-  br label %disccont50
-disccont50:
-  %t56 = phi i64 [ %t53, %discimm50 ], [ %t55, %discbox50 ]
-  %t57 = icmp eq i64 %t56, 4294967296
-  br i1 %t57, label %conyes58, label %connext58
-conyes58:
-  store i64 5, ptr %t0
-  br label %decend1
-connext58:
-  br label %clause40
-connext49:
-  br label %clause40
-clause40:
-  %t60 = and i64 %arg0, 1
-  %t61 = icmp eq i64 %t60, 1
-  br i1 %t61, label %discimm59, label %discbox59
-discimm59:
-  %t62 = ashr i64 %arg0, 1
-  br label %disccont59
-discbox59:
-  %t63 = inttoptr i64 %arg0 to ptr
-  %t64 = load i64, ptr %t63
-  br label %disccont59
-disccont59:
-  %t65 = phi i64 [ %t62, %discimm59 ], [ %t64, %discbox59 ]
-  %t66 = icmp eq i64 %t65, 4294967297
-  br i1 %t66, label %conyes67, label %connext67
-conyes67:
-  %t69 = and i64 %arg1, 1
-  %t70 = icmp eq i64 %t69, 1
-  br i1 %t70, label %discimm68, label %discbox68
-discimm68:
-  %t71 = ashr i64 %arg1, 1
-  br label %disccont68
-discbox68:
-  %t72 = inttoptr i64 %arg1 to ptr
-  %t73 = load i64, ptr %t72
-  br label %disccont68
-disccont68:
-  %t74 = phi i64 [ %t71, %discimm68 ], [ %t73, %discbox68 ]
-  %t75 = icmp eq i64 %t74, 4294967297
-  br i1 %t75, label %conyes76, label %connext76
-conyes76:
-  store i64 3, ptr %t0
-  br label %decend1
-connext76:
   call void @mdk_nonexhaustive_match()
   unreachable
-connext67:
+connext18:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t77 = load i64, ptr %t0
-  ret i64 %t77
+  %t21 = load i64, ptr %t0
+  ret i64 %t21
 }
 
 ; mdk-module impl:Color_gt
@@ -427,27 +307,18 @@ define i64 @mdk_impl_Color_gt(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_impl_Color_compare(i64 %arg0, i64 %arg1)
   %t1 = alloca i64
-  %t4 = and i64 %t0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %t0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %t0 to ptr
-  %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 2
-  br i1 %t10, label %conyes11, label %connext11
-conyes11:
+  %t3 = icmp eq i64 %t0, 5
+  br i1 %t3, label %conyes4, label %connext4
+conyes4:
   store i64 3, ptr %t1
   br label %decend2
-connext11:
+connext4:
   store i64 1, ptr %t1
   br label %decend2
 decend2:
-  %t12 = load i64, ptr %t1
-  ret i64 %t12
+  %t5 = load i64, ptr %t1
+  ret i64 %t5
 }
+
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1

@@ -1,0 +1,20 @@
+-- #2848 S0 PIN: the abort must survive on BOTH engines when the scrutinee's type
+-- reuses the reserved constructor spellings.  `Nil`/`Cons` are exempt from module
+-- mangling, so an exhaustiveness check that resolved them through the RESERVED
+-- roster read this match's covered set as the complete two-constructor LIST
+-- roster, called the switch exhaustive, and emitted no default -- so `run`
+-- aborted (E-NONEXHAUSTIVE-MATCH) while the compiled binary fell through into
+-- the `Cons` arm's field loads on a `Text` cell and printed 229, exit 0.
+-- This gate's run-vs-build row is what makes that divergence loud.
+-- See index_oob.mdk for the stdout-flush writeup this corpus is named for.
+data Doc = Nil | Cons Int Int | Text Int
+
+f : Doc -> Int
+f d = match d
+  Nil => 111
+  Cons a b => 222 + a + b
+
+main : <IO> Unit
+main =
+  println "SENTINEL"
+  println "\{f (Text 7)}"

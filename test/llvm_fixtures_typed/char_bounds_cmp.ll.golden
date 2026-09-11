@@ -227,18 +227,13 @@ else2:
 define i64 @mdk_unwrap(i64 %arg0) {
 entry:
   %t0 = alloca i64
+  %t3 = icmp eq i64 %arg0, 562958543355907
   %t4 = and i64 %arg0, 1
-  %t5 = icmp eq i64 %t4, 1
-  br i1 %t5, label %discimm3, label %discbox3
-discimm3:
-  %t6 = ashr i64 %arg0, 1
-  br label %disccont3
-discbox3:
-  %t7 = inttoptr i64 %arg0 to ptr
+  %t5 = icmp eq i64 %t4, 0
+  %t6 = inttoptr i64 %arg0 to ptr
+  %t7 = select i1 %t5, ptr %t6, ptr @mdk_disc_none
   %t8 = load i64, ptr %t7
-  br label %disccont3
-disccont3:
-  %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
+  %t9 = select i1 %t3, i64 281479271677953, i64 %t8
   %t10 = icmp eq i64 %t9, 281479271677952
   br i1 %t10, label %conyes11, label %connext11
 conyes11:
@@ -253,18 +248,13 @@ conyes11:
 connext11:
   br label %clause2
 clause2:
+  %t18 = icmp eq i64 %arg0, 562958543355907
   %t19 = and i64 %arg0, 1
-  %t20 = icmp eq i64 %t19, 1
-  br i1 %t20, label %discimm18, label %discbox18
-discimm18:
-  %t21 = ashr i64 %arg0, 1
-  br label %disccont18
-discbox18:
-  %t22 = inttoptr i64 %arg0 to ptr
+  %t20 = icmp eq i64 %t19, 0
+  %t21 = inttoptr i64 %arg0 to ptr
+  %t22 = select i1 %t20, ptr %t21, ptr @mdk_disc_none
   %t23 = load i64, ptr %t22
-  br label %disccont18
-disccont18:
-  %t24 = phi i64 [ %t21, %discimm18 ], [ %t23, %discbox18 ]
+  %t24 = select i1 %t18, i64 281479271677953, i64 %t23
   %t25 = icmp eq i64 %t24, 281479271677953
   br i1 %t25, label %conyes26, label %connext26
 conyes26:
@@ -278,6 +268,8 @@ decend1:
   ret i64 %t27
 }
 
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 @mdk_g_lo = global i64 0
 ; mdk-module program

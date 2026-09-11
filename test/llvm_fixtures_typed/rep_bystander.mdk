@@ -1,0 +1,38 @@
+-- #2848, per [T-GLOBAL-TABLE]: all three cheap-discriminant shapes are LIVE in
+-- this program, but the number under assertion is produced by arithmetic that
+-- never scrutinises any of them.  Each fast-path call is chosen to contribute
+-- zero, so the asserted 117 is the untouched code's own answer -- a classifier
+-- that corrupted unrelated lowering shows up here even though the feature
+-- "works" in the fixtures that test it directly.
+data Flag = On | Off
+
+data Wrap = Wrap Int
+
+data Mix = MEnd | MOne Int | MTwo Int Int
+
+flagBit : Flag -> Int
+flagBit On = 1
+flagBit Off = 0
+
+unwrap : Wrap -> Int
+unwrap (Wrap n) = n
+
+mixv : Mix -> Int
+mixv MEnd = 0
+mixv (MOne n) = n
+mixv (MTwo a b) = a + b
+
+-- neither of these looks at Flag/Wrap/Mix/List
+untouched : Int -> Int
+untouched n = if n > 3 then n * 2 else n + 100
+
+tri : Int -> Int
+tri n = if n <= 0 then 0 else n + tri (n - 1)
+
+main =
+  untouched 5
+    + untouched 1
+    + tri 3
+    + flagBit Off
+    + unwrap (Wrap 0)
+    + mixv MEnd

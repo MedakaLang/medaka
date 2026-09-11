@@ -4734,7 +4734,7 @@ interfaceNamesOf (_ :: rest) = interfaceNamesOf rest
 --
 -- ⚠️ Why a CALL-THROUGH and not decls threaded through the drivers: `medaka build`
 -- shells out to a separate `medaka_emitter` process whose pipeline
--- (`driveModules → runEmitWith → mangleUnits → elaborateModules`) never runs
+-- (`driveModules → runEmitWith → elaborateModules → mangleUnitsEv`) never runs
 -- resolve at all — resolve's resolution pass is DCE'd out of that binary.  Data
 -- threaded from a `check`-path driver cannot reach it, so identity acquired that
 -- way would exist on `check` and not on `build`: a new instance of the #1070

@@ -1,0 +1,10 @@
+-- Owns BOTH the impl and a standalone `size`.  `main` imports only the constructor.
+import ifc.{Sizeable}
+
+public export data BoxS = BoxS Int
+
+impl Sizeable BoxS where
+  size (BoxS n) = n * 5
+
+export size : Int -> Int
+size n = n + 1

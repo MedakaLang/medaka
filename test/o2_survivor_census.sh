@@ -26,8 +26,20 @@
 #
 # ── IT ASSERTS NOTHING. IT IS A CENSUS, NOT A GATE. ─────────────────────────
 # It always exits 0 and is listed in test/CI-COVERAGE-TOOLS.txt, not
-# test/gates.toml. A probe whose build (or whose clang -O2 pass) fails
-# reports MISSING for that row, never a silent zero-count line.
+# test/gates.toml.
+#
+# A probe that never reaches the OPAQUE_CALL/ALLOCATION/LOAD/TAG_ARITH report
+# lands in one of two DISTINCT rows (#2521) — never a single generic MISSING
+# bucket, because the two outcomes mean opposite things:
+#
+#   BUILD_FAILED  — `medaka build` itself failed, `--keep-ir` produced no
+#                   output, or `clang -O2` failed on the emitted IR. An
+#                   infra/tooling failure: bad, worth investigating.
+#   ELIMINATED    — the build and the -O2 pass both succeeded, but the
+#                   probe's own symbol is absent from the optimized output
+#                   (fully eliminated or renamed). For a probe whose whole
+#                   point is testing whether -O2 can remove a construct
+#                   entirely, this is the OPTIMAL outcome: good, not bad.
 #
 # Usage:
 #   sh test/o2_survivor_census.sh          # or: make o2-survivor-census
@@ -65,7 +77,8 @@ extract_fn() {
 }
 
 n_probes=0
-n_missing=0
+n_build_failed=0
+n_eliminated=0
 
 for f in "$CORPUS"/*.mdk; do
   [ -f "$f" ] || continue
@@ -77,34 +90,34 @@ for f in "$CORPUS"/*.mdk; do
   echo "== $base (probe : @$sym) =="
 
   if ! MEDAKA_STRICT=1 "$BIN" build "$f" -o "$out" --keep-ir >"$WORK/$base.build.log" 2>&1; then
-    echo "  MISSING — build failed:"
+    echo "  BUILD_FAILED — build failed:"
     sed 's/^/    /' "$WORK/$base.build.log"
-    n_missing=$((n_missing + 1))
+    n_build_failed=$((n_build_failed + 1))
     echo
     continue
   fi
 
   ir="$out.ll"
   if [ ! -f "$ir" ]; then
-    echo "  MISSING — build succeeded but --keep-ir produced no $ir"
-    n_missing=$((n_missing + 1))
+    echo "  BUILD_FAILED — build succeeded but --keep-ir produced no $ir"
+    n_build_failed=$((n_build_failed + 1))
     echo
     continue
   fi
 
   opt="$WORK/$base.opt.ll"
   if ! clang -O2 -S -emit-llvm "$ir" -o "$opt" >"$WORK/$base.clang.log" 2>&1; then
-    echo "  MISSING — clang -O2 failed:"
+    echo "  BUILD_FAILED — clang -O2 failed:"
     sed 's/^/    /' "$WORK/$base.clang.log"
-    n_missing=$((n_missing + 1))
+    n_build_failed=$((n_build_failed + 1))
     echo
     continue
   fi
 
   body="$(extract_fn "$opt" "$sym")"
   if [ -z "$body" ]; then
-    echo "  MISSING — @$sym not found in the -O2 output (fully eliminated or renamed)"
-    n_missing=$((n_missing + 1))
+    echo "  ELIMINATED — @$sym not found in the -O2 output (fully eliminated or renamed) — optimal, not a failure"
+    n_eliminated=$((n_eliminated + 1))
     echo
     continue
   fi
@@ -136,6 +149,6 @@ for f in "$CORPUS"/*.mdk; do
   echo
 done
 
-echo "-- summary: $n_probes probe(s), $n_missing MISSING --"
+echo "-- summary: $n_probes probe(s), $n_build_failed BUILD_FAILED, $n_eliminated ELIMINATED --"
 
 exit 0

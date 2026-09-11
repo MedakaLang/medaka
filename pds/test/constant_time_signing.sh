@@ -569,19 +569,19 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-# Re-derived alongside the closure grade above. Measured column-wise against the
-# previous manifest (base symbols renamed into the stdlib namespace first) over
-# all 164 shared symbols: not one branch, comparison, index, write, make, copy
-# or call count ROSE. Two fell, both in hmacSha256FixedKey, which is now a
-# length guard delegating to stdlib instead of the schedule itself: branches
-# 2 -> 1 (it lost an unreachable digest-length invariant) and calls 9 -> 2.
-# In the 8 rows that entered, the HMAC subgraph trades 2 indexed reads and 2
-# indexed writes of key material for 1 of each, because array.concat copies
-# with a bulk arrayBlit where the old joined/copyBytes walked element by
-# element; it pays for that with 4 more branches, every one of them a test on
-# an array LENGTH (k >= outer, len <= 0, total <= 0), all of which are fixed
-# for every signing call site. No branch anywhere in the closure tests a byte.
-[ "$control_grade" = '139088890 7220' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived across two independent changes landing on top of each other: the
+# stdlib hmac/sha256 migration (170 -> 172 shared symbols, same set/order as
+# before) and the emitter's direct-discriminant optimization (deletes the
+# discimm/discbox/disccont triple per constructor match). Measured column-wise
+# against the migration-only manifest over all 172 rows, same set, same order:
+# comparisons, indices, writes, makes, copies and the call total did not move
+# in a single row. The branch column fell by exactly 1 in the same 14 rows the
+# discriminant optimization affects elsewhere in the tree (mdk_core__not,
+# rawFe, rawSc, the four point/select helpers, secretAffine,
+# selectSigningCandidates, signCandidate, and three sha256 internals) and rose
+# in none. No function outside those 14 changed at all; no branch anywhere in
+# the closure tests a byte.
+[ "$control_grade" = '2431464021 7220' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -701,12 +701,15 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-# Re-derived with the two secret-side grades above, and measured the same way:
-# over the 168 symbols shared with the previous manifest, nothing rose in any
-# column; the same two hmacSha256FixedKey rows fell, and the same 6 pds-side
-# HMAC privates gave way to the same 8 stdlib/array.concat definitions.
-# 174 -> 176 definitions.
-if [ "$public_closure_grade" != '824690028 4915' ] || [ "$public_control_grade" != '1247908920 7395' ]; then
+# Same two changes as the secret-side grade above. The closure grade did not
+# move -- the public union reaches the same 176 symbols it did after the
+# migration alone. Only the control grade shifted, and by the same mechanism:
+# measured column-wise over all 176 rows, same set, same order, nothing rose
+# in any column. Branches fell by exactly 1 in 16 rows -- the 14 shared with
+# the secret-side manifest, plus publicKeyForSecret (2->1) and signDigest
+# (5->4), the two public wrappers outside the secret closure that the
+# discriminant optimization also reaches.
+if [ "$public_closure_grade" != '824690028 4915' ] || [ "$public_control_grade" != '3601723552 7395' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

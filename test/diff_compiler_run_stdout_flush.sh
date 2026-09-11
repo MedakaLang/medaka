@@ -34,9 +34,12 @@
 # (index-OOB, non-exhaustive match, …), which is exactly this bug's shape.
 #
 # Corpus: test/run_stdout_flush_fixtures/<name>.mdk. Every fixture prints the
-# literal line "SENTINEL" before triggering an abort. For the three "coded"
+# literal line "SENTINEL" before triggering an abort. For the "coded"
 # abort paths that route through `exit()` on BOTH engines (index_oob.mdk,
-# panic.mdk, nonexhaustive_match.mdk) this gate also asserts `medaka run`'s
+# panic.mdk, nonexhaustive_match.mdk, nonexhaustive_reserved_name.mdk — the
+# last pinning #2848's S0, where a reserved-spelling collision made the
+# emitter drop the default arm so only `run` aborted) this gate also asserts
+# `medaka run`'s
 # stdout is BYTE-IDENTICAL to the compiled binary's stdout (the reference:
 # `medaka build` + running the binary already prints SENTINEL correctly, since
 # `exit()` -- unlike the raw-signal `_exit()` path -- flushes libc's stdio
@@ -152,6 +155,7 @@ check_one() {
 check_one index_oob run-vs-build
 check_one panic run-vs-build
 check_one nonexhaustive_match run-vs-build
+check_one nonexhaustive_reserved_name run-vs-build
 check_one stack_overflow_depth_guard run-only
 check_one raw_panic_site run-only
 check_one stack_overflow_build build-only

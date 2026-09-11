@@ -1,5 +1,5 @@
 # META
-source_lines=615
+source_lines=640
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
@@ -197,6 +197,31 @@ installEvidence entries =
   let arr = arrayMake (evSlotCount entries 0) None
   let _ = fillEvidence arr entries
   evidenceRef := Some arr
+
+-- Rewrite every installed entry in place (#2809).  The emit path renames its top-level
+-- symbols AFTER elaboration, and an `RLocal` route carries one -- but the table
+-- `elaborateModules` RETURNS holds only the goal entries, not the per-method occurrence
+-- entries `publishEvidence` prepends, so a caller cannot re-derive what is installed and
+-- re-installing the returned table panics on the first method occurrence it lost.
+-- Rewriting the installed array is the only complete view of it.
+export
+remapEvidence : (EvEntry -> EvEntry) -> Unit
+remapEvidence f = match !evidenceRef
+  None => ()
+  Some arr => remapEvidenceGo f arr 0 (arrayLength arr)
+
+remapEvidenceGo : (EvEntry -> EvEntry) ->
+  Array (Option EvEntry) ->
+  Int ->
+  Int ->
+  Unit
+remapEvidenceGo f arr i n
+  | i >= n = ()
+  | otherwise =
+    let _ = match arrayGetUnsafe i arr
+      None => ()
+      Some e => arraySetUnsafe i (Some (f e)) arr
+    remapEvidenceGo f arr (i + 1) n
 
 -- one past the largest ordinal in [entries]
 evSlotCount : EvTable -> Int -> Int
@@ -624,6 +649,10 @@ rkTyList =
 (DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "installEvidence" (TyFun (TyCon "EvTable") (TyCon "Unit")))
 (DFunDef false "installEvidence" ((PVar "entries")) (EBlock (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (ELit (LInt 0)))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "fillEvidence") (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceRef")) (EApp (EVar "Some") (EVar "arr"))))))
+(DTypeSig true "remapEvidence" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyCon "Unit")))
+(DFunDef false "remapEvidence" ((PVar "f")) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
+(DTypeSig false "remapEvidenceGo" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
+(DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EVar "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -693,6 +722,10 @@ rkTyList =
 (DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "installEvidence" (TyFun (TyCon "EvTable") (TyCon "Unit")))
 (DFunDef false "installEvidence" ((PVar "entries")) (EBlock (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (ELit (LInt 0)))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "fillEvidence") (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceRef")) (EApp (EVar "Some") (EVar "arr"))))))
+(DTypeSig true "remapEvidence" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyCon "Unit")))
+(DFunDef false "remapEvidence" ((PVar "f")) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
+(DTypeSig false "remapEvidenceGo" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
+(DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))

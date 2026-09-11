@@ -1291,17 +1291,21 @@ isKnownFn e name = match !e.knownFnMap
   None => panic "llvm: knownFnMap read before install (internal error)"
 
 -- Canonicalize a referenced function name to the actual emitted symbol.  The emit
--- drivers run `mangleUnits` BEFORE `elaborateModules`, so every prelude definition
--- is renamed `core__<name>` (and uses present at mangle time are rewritten to
--- match).  But `elaborateModules` SYNTHESIZES bare references that never passed
--- through mangling — notably the `/=` rewrite (`typecheck.mdk` binopMethodApp)
--- which builds `EApp (EVar "not") …`.  Such a bare prelude name is absent from the
--- `core__`-keyed known-fn table → it would fall through to a closure-load and the
--- emitter aborts `unbound variable 'not'`.  GENERAL FIX: when a bare name is not a
--- known fn but its `core__`-mangled form IS, resolve to the mangled symbol.  This
--- covers ANY post-mangle-synthesized prelude reference, not just `not`.  A name
--- already known (incl. a user `core__`-collision) is returned unchanged, and a
--- genuinely-unbound name still falls through to the original gap.
+-- drivers used to run `mangleUnits` BEFORE `elaborateModules`, so every prelude
+-- definition was renamed `core__<name>` while `elaborateModules` SYNTHESIZES bare
+-- references afterwards — notably the `/=` rewrite (`typecheck.mdk` binopMethodApp)
+-- which builds `EApp (EVar "not") …`.  Such a bare prelude name was absent from the
+-- `core__`-keyed known-fn table → it fell through to a closure-load and the emitter
+-- aborted `unbound variable 'not'`.  The repair: a bare name that is not a known fn
+-- but whose `core__`-mangled form IS resolves to the mangled symbol.  A name already
+-- known (incl. a user `core__`-collision) is returned unchanged, and a genuinely
+-- unbound name still falls through to the original gap.
+-- Since #2809 the emit drivers elaborate FIRST and mangle the elaborated trees, so a
+-- synthesized bare reference is renamed with everything else and is a known fn by the
+-- time it reaches here.  Accommodation 12 of the census in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20 (`dce.canonRef`,
+-- `wasm_emit.canonFn` and `wasm_reach` carry the mirrored copies); it retires with
+-- that census, on a measurement of which callers still reach it.
 canonFnName : Emit -> String -> String
 canonFnName e name =
   if isKnownFn e name then
@@ -5332,9 +5336,10 @@ emitRefutableCsLet : Emit ->
   OrdMap (String, LTy)
 emitRefutableCsLet e env pat sv = match letElseHead pat
   Some (c, a, fieldPats) =>
-    let tag = loadDiscriminant e sv
+    let rep = discRepOfHead e c a [c]
+    let tag = discReg e rep sv
     let cmp = freshReg e
-    let _ = emit e "  \{cmp} = icmp eq i64 \{tag}, \{intToString (cellTag e c)}"
+    let _ = emit e "  \{cmp} = icmp eq i64 \{tag}, \{discExpected e rep c}"
     let n = intToString (freshLocal e)
     let ok = "letrefok" ++ n
     let no = "letrefno" ++ n
@@ -5704,15 +5709,19 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
 -- impl of this interface but an explicitly-imported/local standalone shadows the
 -- method name.  Emit a DIRECT call to that standalone top-level fn (`mdk_<target>`),
 -- exactly as emitApp's isKnownFn branch would for a plain call — no dispatch, no
--- dicts.  P0-18: `target` is the carried MANGLED symbol `<mid>__name` when non-empty
--- (the EMИТ path, where the def was renamed by mangleUnits and the EMethodAt carries
--- the BARE dispatch name), else the bare `name` (un-mangled run path).  The compiler's
--- OWN definer shadows now reach
--- THIS arm with their mangled symbol; the emitted `emitKnownFnSat` call is byte-
--- identical to the pre-P0-18 direct `@mdk_<mid>__name` bare-EVar call (fixpoint gate).
--- The membership is derived, not memorised — a module's own top-level function whose
--- name is also a nameable interface method — and it moves with the tree: `map`'s and
--- `hash_map`'s `toList` were members until #2769 deleted both in favour of a real
+-- dicts.  P0-18: `target` is the symbol the route CARRIES, and the `EMethodAt` beside
+-- it keeps the BARE dispatch name so `implFor` still finds the impl for a receiver
+-- that has one.  Since #2809 the route names its symbol on EVERY path: typecheck seeds
+-- a definer-shadow occurrence with the bare standalone name, and `private_mangle`'s
+-- `mangleRoute` renames it on the emit path — so `target` reads `<mid>__name` in an
+-- emitted program and the plain name off the emit path.  The `sym == ""` fallback
+-- below is what a route carrying no symbol at all would take; typecheck mints no such
+-- `RLocal` (`mintMethodCell ""` yields `RNone`).  The compiler's OWN definer shadows
+-- reach THIS arm with their mangled symbol; the emitted `emitKnownFnSat` call is
+-- byte-identical to the pre-P0-18 direct `@mdk_<mid>__name` bare-EVar call (fixpoint
+-- gate).  The membership is derived, not memorised — a module's own top-level function
+-- whose name is also a nameable interface method — and it moves with the tree: `map`'s
+-- and `hash_map`'s `toList` were members until #2769 deleted both in favour of a real
 -- `impl Foldable`; `stdlib/map.mdk`'s and `stdlib/hash_map.mdk`'s `isEmpty` (against
 -- `Foldable.isEmpty`) and `compiler/frontend/parser.mdk`'s `orElse` still are.
 
@@ -9936,6 +9945,46 @@ loadDiscriminant e word =
   let _ = emit e "  \{d} = phi i64 [ \{iv}, %\{imm} ], [ \{bv}, %\{box} ]"
   d
 
+-- the cell a guarded boxed load reads INSTEAD of a word that is not a cell
+-- pointer, so the load is total without a branch (`loadTagGuarded`).  Its one
+-- word holds -1, which no `cellTag` can return — `typeId * ctorTagShift +
+-- ordinal` and `reservedTag` are non-negative by construction, True/False are
+-- 1/0, and the three sentinel headers ("$tuple"/"$ref"/"$closure") are djb2
+-- hashes of short strings — so the loaded "tag" matches no constructor and every
+-- test on it falls through to the switch default.
+discNoneCell : String
+discNoneCell = "@mdk_disc_none"
+
+-- define that cell, once per emitted module.  It goes through `emitGlobal` (a
+-- `; mdk-module`-MARKED top-level entity) rather than the preamble, because the
+-- preamble is copied into EVERY ThinLTO partition and a definition copied that
+-- way redefines itself (test/lib/pcg_partition.sh).  `program` scope is the one
+-- every whole-program entity already uses; `private` keeps it local, so the two
+-- halves of a `--emit-prelude-obj` build can each carry their own.
+emitDiscNoneCell : Emit -> Unit
+emitDiscNoneCell e = withProgramScope e (_ =>
+  emitGlobal e "\{discNoneCell} = private unnamed_addr constant i64 -1")
+
+-- the boxed half of `loadDiscriminant`, made TOTAL without a branch: read the
+-- header of `word` when `word` really is a cell pointer (low bit 0), and of
+-- `discNoneCell` when it is not.  `select` on the POINTER (not on the loaded
+-- value) is what keeps the load from ever dereferencing an immediate, which
+-- `inttoptr`s to a misaligned address and segfaults.  Branchless on purpose: the
+-- guard must not add a value-dependent branch to code that is timing-sensitive.
+loadTagGuarded : Emit -> String -> String
+loadTagGuarded e word =
+  let lb = freshReg e
+  let _ = emit e "  \{lb} = and i64 \{word}, 1"
+  let isBox = freshReg e
+  let _ = emit e "  \{isBox} = icmp eq i64 \{lb}, 0"
+  let p = freshReg e
+  let _ = emit e "  \{p} = inttoptr i64 \{word} to ptr"
+  let sp = freshReg e
+  let _ = emit e "  \{sp} = select i1 \{isBox}, ptr \{p}, ptr \{discNoneCell}"
+  let t = freshReg e
+  let _ = emit e "  \{t} = load i64, ptr \{sp}"
+  t
+
 -- load field `idx` (offset 8*(idx+1)) of a cell given its pointer word.
 loadField : Emit -> String -> Int -> String
 loadField e ptrWord idx =
@@ -10441,21 +10490,21 @@ emitRefutMatch e env (PCon "True" []) v body failL =
 emitRefutMatch e env (PCon "False" []) v body failL =
   emitRefutMatch e env (PLit (LBool False)) v body failL
 emitRefutMatch e env (PCon c args) v body failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e c)) failL
+  let rep = discRepOfHead e c (lengthS args) [c]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep c) failL
   emitRefutFields e env args v body failL 0
 -- list cons cell: test the discriminant is "Cons", then recurse on head/tail.
 emitRefutMatch e env (PCons h t) v body failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e "Cons")) failL
+  let rep = discRepOfHead e "Cons" 2 ["Cons"]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
   emitRefutFields e env [h, t] v body failL 0
 emitRefutMatch e env (PList []) v _ failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e "Nil")) failL
+  let rep = discRepOfHead e "Nil" 0 ["Nil"]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep "Nil") failL
   env
 emitRefutMatch e env (PList (p :: ps)) v body failL =
-  let tagReg = loadDiscriminant e v
-  let _ = emitWordEqTest e tagReg (intToString (cellTag e "Cons")) failL
+  let rep = discRepOfHead e "Cons" 2 ["Cons"]
+  let _ = emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
   emitRefutFields e env [p, PList ps] v body failL 0
 emitRefutMatch e env p _ _ _ =
   gapEnv
@@ -10552,7 +10601,9 @@ emitSwitch e env roots arms (foc :: rest) ((CTBranch HUnit sub) :: _) dft slot e
 emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft slot endL ftL rty =
   match conHeadInfo h
     Some _ =>
-      let tagReg = loadDiscriminant e foc
+      let rep = switchDiscRep e branches
+      let tagReg = discReg e rep foc
+      let exh = switchIsExhaustive e (coveredCtorNames branches)
       emitConChain
         e
         env
@@ -10561,12 +10612,14 @@ emitSwitch e env roots arms (foc :: rest) (branches@((CTBranch h _) :: _)) dft s
         foc
         rest
         tagReg
+        rep
         branches
         dft
         slot
         endL
         ftL
         rty
+        exh
     None => gapSwitchHead e slot endL
 -- HUnit is irrefutable (Unit has exactly one inhabitant): no discriminant test
 -- needed.  Drop the focus occurrence and descend into the single branch body.
@@ -10601,11 +10654,280 @@ conHeadInfo HNil = Some ("Nil", 0)
 conHeadInfo (HTuple n) = Some ("$tuple", n)
 conHeadInfo _ = None
 
--- the constructor-switch test chain: compare the discriminant word (immediate or
--- boxed, via loadDiscriminant) against each branch's composite (type, ctor) tag
--- (`cellTag`); on a match, descend with the matched
+-- The constructor roster of a BUILT-IN ADT absent from the ctor->type table
+-- (`ctorTypeOf`/`ctorsOfType` have nothing for these four either — see
+-- `reservedTag`, whose grouping this mirrors), keyed by one of its own
+-- constructor names since a covered-constructor set only ever carries names
+-- (`conHeadInfo`), never a type.
+reservedRosterOf : String -> Option (List String)
+reservedRosterOf name =
+  if contains name ["Cons", "Nil"] then
+    Some ["Cons", "Nil"]
+  else if contains name ["Some", "None"] then
+    Some ["Some", "None"]
+  else if contains name ["Ok", "Err"] then
+    Some ["Ok", "Err"]
+  else if contains name ["Lt", "Eq", "Gt"] then
+    Some ["Lt", "Eq", "Gt"]
+  else
+    None
+
+-- #2848 (S-dead-tails): true when `covered` (the constructor names a
+-- CTSwitch's own branches test) already accounts for every constructor of
+-- the type owning them, so that switch's own default arm — a CTFail lowering
+-- to the `@mdk_nonexhaustive_match` abort — is provably unreachable.
+-- The roster MUST come from `resolveRoster`: a lookup that answers
+-- `reservedRosterOf` first would test a user type reusing a reserved spelling
+-- (`data Doc = Nil | Cons Int Int | Text Int`) against the LIST roster and read
+-- `["Cons","Nil"]` as fully covered.  Trying every covered name also makes the
+-- answer order-independent.
+-- A wrong answer here is bounded: the default arm this proves unreachable is
+-- emitted anyway, as the same defined abort `emitTree` emits (`emitConChain`),
+-- so a mis-derived roster costs a reached abort, never a silent wrong value.
+switchIsExhaustive : Emit -> List String -> Bool
+switchIsExhaustive _ [] = False
+switchIsExhaustive e covered = match resolveRoster e covered
+  Some roster => isNonEmptyL roster && coveredByRoster covered roster
+  None => False
+
+-- The constructor names a CTSwitch's own branches test, in branch order — the
+-- covered set `switchIsExhaustive` compares against a type's full roster.
+coveredCtorNames : List CTBranch -> List String
+coveredCtorNames [] = []
+coveredCtorNames ((CTBranch h _) :: rest) = match conHeadInfo h
+  Some (c, _) => c :: coveredCtorNames rest
+  None => coveredCtorNames rest
+
+-- #2848: how a scrutinee's own constructor roster lets a discriminant test be
+-- cheaper than the generic immediate/boxed phi dance (`loadDiscriminant`).
+--   RepAllImm     every ctor of the type is nullary ⇒ every value is ONE immediate
+--                 word ⇒ the scrutinee word IS the discriminant, compared against
+--                 the ctor's whole immediate encoding.  No instruction at all.
+--   RepAllBox     every ctor takes fields ⇒ every value is a boxed cell ⇒ the
+--                 header `load` is the tag (pointer-guarded: `loadTagGuarded`).
+--   RepTwoSplit c exactly two ctors, `c` nullary and the other boxed ⇒ one compare
+--                 against `c`'s immediate word decides `c`, and the guarded header
+--                 load answers the other — branchless, no blocks, no phi.
+--   RepMixed      unproven (≥3 ctors of both shapes, or a roster that cannot be
+--                 determined) ⇒ the generic `loadDiscriminant`, unchanged.
+-- Every case is derived POSITIVELY from the constructor table; anything not proved
+-- lands in RepMixed.  Each case is also TOTAL on an arbitrary word, which is what
+-- bounds the cost of getting one wrong: a rep that does not describe the actual
+-- scrutinee yields a discriminant matching no constructor of the claimed type, so
+-- the switch takes its default (the next clause, or the
+-- `@mdk_nonexhaustive_match` abort) instead of a wrong arm or a wild load.  The
+-- fast paths are therefore an optimisation only — never a soundness premise.
+data DiscRep = RepAllImm | RepAllBox | RepTwoSplit String | RepMixed
+
+-- the declared arity of a RESERVED built-in constructor — the ones `ctorMap` has
+-- no entry for (List/Option/Result/Ordering, mirroring `reservedTag`'s roster).
+-- `ctorArity` cannot answer for these: it returns 0 for any absent name, which is
+-- indistinguishable from a genuinely nullary ctor and would classify `Cons` as an
+-- immediate.  So membership is asked FIRST and this table answers second.
+reservedCtorArity : String -> Option Int
+reservedCtorArity name =
+  if name == "Cons" then
+    Some 2
+  else if contains name ["Some", "Ok", "Err"] then
+    Some 1
+  else if contains name ["Nil", "None", "Lt", "Eq", "Gt"] then
+    Some 0
+  else
+    None
+
+-- the field count of a constructor when it can be established, `None` when it
+-- cannot.  A name BOTH tables claim (a user type declaring one of the exempt
+-- reserved spellings) counts as unestablished unless they agree, since the two
+-- tables would then describe different values under one tag.
+ctorArityOf : Emit -> String -> Option Int
+ctorArityOf e name = match reservedCtorArity name
+  Some r =>
+    if isCtor e name then
+      if ctorArity e name == r then Some r else None
+    else
+      Some r
+  None => if isCtor e name then Some (ctorArity e name) else None
+
+-- the representation of ONE constructor: nullary ⇒ immediate word, otherwise a
+-- boxed cell.  An unestablished arity is claimed by NEITHER predicate, which
+-- lands its type in RepMixed.
+ctorIsImmediate : Emit -> String -> Bool
+ctorIsImmediate e name = match ctorArityOf e name
+  Some a => a == 0
+  None => False
+
+ctorIsBoxed : Emit -> String -> Bool
+ctorIsBoxed e name = match ctorArityOf e name
+  Some a => a > 0
+  None => False
+
+-- classify a type from its FULL constructor roster (never a covered subset — a
+-- branch list that omits a ctor still has to lower a value of that ctor safely).
+ctorRepOfRoster : Emit -> List String -> DiscRep
+ctorRepOfRoster e roster =
+  let n = listLen roster
+  let imms = filterList (ctorIsImmediate e) roster
+  let ni = listLen imms
+  let nb = listLen (filterList (ctorIsBoxed e) roster)
+  if n == 0 || ni + nb < n then
+    RepMixed
+  else if nb == 0 then
+    RepAllImm
+  else if ni == 0 then
+    RepAllBox
+  else if n == 2 then match imms
+    [c] => RepTwoSplit c
+    _ => RepMixed
+  else
+    RepMixed
+
+-- true when every name in `names` also appears in `roster`.
+coveredByRoster : List String -> List String -> Bool
+coveredByRoster roster names =
+  not (anyList (c => not (contains c roster)) names)
+
+-- two ctor-name lists denote the same roster (order is not significant).
+sameRoster : List String -> List String -> Bool
+sameRoster a b = listLen a == listLen b && coveredByRoster b a
+
+-- every constructor in `roster` resolves back to type `ty`.  False means some
+-- OTHER type also declares one of these names, and `ctorTypeOf` keeps only the
+-- first such type — so this roster is not provably the one a scrutinee has.
+rosterOwnedBy : Emit -> String -> List String -> Bool
+rosterOwnedBy e ty roster =
+  not
+    (anyList
+      (r => match ctorTypeOf e r
+        Some t => t /= ty
+        None => True)
+      roster)
+
+-- The roster a ctor NAME determines, or `None` when the name does not determine
+-- exactly one.  Asking `reservedRosterOf` FIRST is the wrong lookup for either
+-- the REPRESENTATION or the EXHAUSTIVENESS question, because the
+-- reserved constructor names are exempt from module mangling
+-- (private_mangle.mdk), so a user type that declares one of them reaches the
+-- emitter under the bare name too — compiler/tools/printer.mdk's `Doc` really
+-- does declare a `Nil`, and reading it as the list `Nil` would make every
+-- immediate `Doc` (Line/Softline/…) answer a low-bit test for `Nil`.  So: a name
+-- the ctor table knows is resolved through the table, and a name BOTH tables
+-- claim must have them agree.
+unambiguousRoster : Emit -> String -> Option (List String)
+unambiguousRoster e name =
+  if isCtor e name then match ctorTypeOf e name
+    None => None
+    Some ty =>
+      let t = ctorsOfType e ty
+      if isNonEmptyL t && rosterOwnedBy e ty t then match reservedRosterOf name
+        None => Some t
+        Some r => if sameRoster r t then Some t else None
+      else
+        None
+  else
+    reservedRosterOf name
+
+-- The roster of the type a constructor test is testing, taken from the first
+-- covered ctor name that determines one.  Trying every covered name (not just
+-- the head) is what keeps a `Nil`-first list switch on the fast path: `Nil` is
+-- ambiguous, `Cons` is not, and either one identifies the same type.
+resolveRoster : Emit -> List String -> Option (List String)
+resolveRoster _ [] = None
+resolveRoster e (c :: rest) = match unambiguousRoster e c
+  Some r => Some r
+  None => resolveRoster e rest
+
+-- classify the scrutinee of a constructor test from one head constructor `name`
+-- (arity `a`) plus the full set of ctor names the test's own branches cover.
+-- The covered set is a SOUNDNESS guard, not an optimisation: the roster is looked
+-- up from ONE name, so a branch naming a ctor outside that roster would mean the
+-- roster does not describe the scrutinee and no case may be claimed.
+discRepOfHead : Emit -> String -> Int -> List String -> DiscRep
+discRepOfHead e name a covered = match resolveRoster e covered
+  Some roster =>
+    if coveredByRoster roster covered then
+      ctorRepOfRoster e roster
+    else
+      RepMixed
+  -- No roster: two constructor sets live entirely outside the ctor table, and
+  -- both are decided by facts `cellTag`/`emitCtorAlloc` already hardcode.
+  -- `$tuple` allocates a cell for every non-empty tuple ⇒ boxed; an EMPTY tuple
+  -- would be an immediate, so guard it rather than assume `HUnit` caught it.
+  -- `True`/`False` are the hardcoded immediate words 3 and 1.
+  None =>
+    if name == "$tuple" && a >= 1 && coveredByRoster ["$tuple"] covered then
+      RepAllBox
+    else if contains name ["True", "False"]
+      && coveredByRoster ["True", "False"] covered then
+      RepAllImm
+    else
+      RepMixed
+
+-- classify the scrutinee of a whole CTSwitch from its branch list.
+switchDiscRep : Emit -> List CTBranch -> DiscRep
+switchDiscRep _ [] = RepMixed
+switchDiscRep e (branches@((CTBranch h _) :: _)) = match conHeadInfo h
+  Some (c, a) => discRepOfHead e c a (coveredCtorNames branches)
+  None => RepMixed
+
+-- RepTwoSplit's discriminant: the full composite tag, materialised WITHOUT a
+-- branch.  The nullary constructor `imm` occupies exactly ONE word — its
+-- immediate encoding `cellTag * 2 + 1` — so testing for it is one compare against
+-- that constant, no shift and no load.  Everything else routes through the
+-- guarded header load, which answers the boxed constructor's own `cellTag` for a
+-- real cell of this type, some OTHER type's (globally unique) composite tag for a
+-- cell of another type, and `discNoneCell`'s non-tag for a word that is neither.
+-- So a value that is not of this type matches NEITHER constructor, and the switch
+-- falls to its default.
+twoSplitDisc : Emit -> String -> String -> String
+twoSplitDisc e imm word =
+  let isImm = freshReg e
+  let immWord = intToString (cellTag e imm * 2 + 1)
+  let _ = emit e "  \{isImm} = icmp eq i64 \{word}, \{immWord}"
+  let boxed = loadTagGuarded e word
+  let d = freshReg e
+  let _ =
+    emit
+      e
+      "  \{d} = select i1 \{isImm}, i64 \{intToString (cellTag e imm)}, i64 \{boxed}"
+  d
+
+-- emit the discriminant `rep` licenses for scrutinee word `word`, returning the
+-- register (or, under RepAllImm, the scrutinee word itself) a test compares
+-- against `discExpected`.  EVERY rep is total: a word that is not a value of the
+-- rep's own type yields a discriminant no constructor of that type answers to, so
+-- the switch falls through to its default rather than taking an arm.  That
+-- totality is the whole point — `ctorRepOfRoster`'s proof is derived from the
+-- constructor table, and a wrong roster answer must cost a missed optimisation,
+-- never a wrong arm or a wild load (`data DiscRep`).
+discReg : Emit -> DiscRep -> String -> String
+-- every ctor is nullary ⇒ every value of the type is ONE immediate word, so the
+-- word IS the discriminant: no instruction at all, and a boxed pointer (low bit
+-- 0) can equal no immediate constant (low bit 1).
+discReg _ RepAllImm word = word
+discReg e RepAllBox word = loadTagGuarded e word
+discReg e (RepTwoSplit imm) word = twoSplitDisc e imm word
+discReg e RepMixed word = loadDiscriminant e word
+
+-- the constant a `discReg` register is compared against to test for ctor `c` —
+-- the composite `cellTag` the alloc site stamps, except under RepAllImm where the
+-- register is the untouched scrutinee word and the constant is therefore `c`'s
+-- whole immediate encoding (the same `cellTag * 2 + 1` `emitCtorAlloc` emits).
+discExpected : Emit -> DiscRep -> String -> String
+discExpected e RepAllImm c = intToString (cellTag e c * 2 + 1)
+discExpected e _ c = intToString (cellTag e c)
+
+-- the constructor-switch test chain: compare the discriminant register `tagReg`
+-- (produced by `discReg` for `rep`) against the constant `discExpected` says
+-- identifies each branch's constructor; on a match, descend with the matched
 -- cell's fields as the new leading columns; on exhausting the branches, take the
 -- default (focus dropped).
+-- `exh` (`switchIsExhaustive`) proves the default is unreachable, but the default
+-- is still emitted as a DEFINED abort rather than a bare `unreachable`: an
+-- unreachable that control does reach is UB (LLVM `ud2` → a silent SIGTRAP, no
+-- output), so the proof would have to be infallible to be worth the trade, and it
+-- is derived from the constructor table rather than from the value in hand.  This
+-- clause therefore matches `emitTree`'s own `ftL == ""` CTFail arm, and is where a
+-- wrong roster answer is paid for in a loud abort (#2848).
 emitConChain : Emit ->
   OrdMap (String, LTy) ->
   List String ->
@@ -10613,21 +10935,27 @@ emitConChain : Emit ->
   String ->
   List String ->
   String ->
+  DiscRep ->
   List CTBranch ->
   CTree ->
   String ->
   String ->
   String ->
   Ref LTy ->
+  Bool ->
   Unit
-emitConChain e env roots arms _ rest _ [] dft slot endL ftL rty =
-  emitTree e env roots arms rest slot endL ftL rty dft
-emitConChain e env roots arms foc rest tagReg ((CTBranch h sub) :: more) dft slot endL ftL rty =
+emitConChain e env roots arms _ rest _ _ [] dft slot endL ftL rty exh
+  | exh && ftL == "" = match dft
+    CTFail =>
+      let _ = emit e "  call void @mdk_nonexhaustive_match()"
+      emit e "  unreachable"
+    _ => emitTree e env roots arms rest slot endL ftL rty dft
+  | otherwise = emitTree e env roots arms rest slot endL ftL rty dft
+emitConChain e env roots arms foc rest tagReg rep ((CTBranch h sub) :: more) dft slot endL ftL rty exh =
   match conHeadInfo h
     Some (c, a) =>
       let cmp = freshReg e
-      let _ =
-        emit e "  \{cmp} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      let _ = emit e "  \{cmp} = icmp eq i64 \{tagReg}, \{discExpected e rep c}"
       let n = intToString (freshLocal e)
       let yes = "conyes" ++ n
       let next = "connext" ++ n
@@ -10636,7 +10964,22 @@ emitConChain e env roots arms foc rest tagReg ((CTBranch h sub) :: more) dft slo
       let fields = loadFields e foc a 0
       let _ = emitTree e env roots arms (fields ++ rest) slot endL ftL rty sub
       let _ = emit e (next ++ ":")
-      emitConChain e env roots arms foc rest tagReg more dft slot endL ftL rty
+      emitConChain
+        e
+        env
+        roots
+        arms
+        foc
+        rest
+        tagReg
+        rep
+        more
+        dft
+        slot
+        endL
+        ftL
+        rty
+        exh
     None =>
       let _ =
         gapU
@@ -14230,7 +14573,9 @@ emitProgramMain e groups =
 -- LLVM module-item order is irrelevant, so appending the side buffer is sound.
 
 emitPreamble : Emit -> Unit
-emitPreamble e = emitLines e preambleLines
+emitPreamble e =
+  let _ = emitLines e preambleLines
+  emitDiscNoneCell e
 
 -- emit each constant preamble line in order; the strings live in
 -- backend.llvm_preamble (pure data) so this module's `emit`/`Emit` machinery

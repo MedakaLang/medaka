@@ -178,3 +178,5 @@ entry:
   call void @mdk_print_str(i64 %t0)
   ret i32 0
 }
+; mdk-module program
+@mdk_disc_none = private unnamed_addr constant i64 -1

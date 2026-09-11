@@ -1,5 +1,5 @@
 # META
-source_lines=12248
+source_lines=12252
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -943,12 +943,16 @@ progFnArity : Prog -> String -> Int
 progFnArity prog n = arityOfIndexW (indexFnAritiesW (progIndex prog)) n
 
 -- W9: canonicalize a referenced fn name against the defined-fn set, mirroring DCE's
--- canonRef + the LLVM emitter's canonFnName.  `mangleUnits` renames prelude defs to
--- `core__<name>` AND rewrites uses present at mangle time — but the desugar/elaborate
--- passes SYNTHESIZE bare prelude references afterwards (notably string-interp `\{e}`
--- → `debug`/`debugStringLit`/`displayListItems`, and `/=` → `not`).  Such a bare ref
--- does not match its `core__`-mangled def by string equality, so resolve it: if the
--- bare name isn't a defined fn but its `core__` form is, use the mangled name.
+-- canonRef + the LLVM emitter's canonFnName.  Mangling renames prelude defs to
+-- `core__<name>` AND rewrites the uses it can see; under the old mangle-first order it
+-- ran before the passes that SYNTHESIZE bare prelude references (notably string-interp
+-- `\{e}` → `debug`/`debugStringLit`/`displayListItems`, and `/=` → `not`), so such a
+-- bare ref did not match its `core__`-mangled def by string equality.  The repair: if
+-- the bare name isn't a defined fn but its `core__` form is, use the mangled name.
+-- Since #2809 the emit drivers elaborate FIRST and mangle after, so those synthesized
+-- references are renamed too.  Accommodation 12 of the census in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20, and it retires with it —
+-- each of the four mirrored copies on its own measurement.
 canonFn : Prog -> String -> String
 canonFn prog n =
   if progFnMemberW prog n then
