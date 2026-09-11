@@ -7856,6 +7856,59 @@ data MethodPredicateSlot = MethodPredicateSlot {
   mpsPositions : List Int,
 }
 
+-- One interface-method declaration, its scheme, and the method-level predicate slots
+-- built from that scheme's own type-variable allocation.  Rows stay local to environment
+-- setup: they carry live cells and are not a cache or published solver artifact.
+data MethodSchemeRow = MethodSchemeRow {
+  msrIface : IfaceRef,
+  msrName : String,
+  msrScheme : Scheme,
+  msrMethodSlots : List MethodPredicateSlot,
+}
+
+-- The existing numeric-literal scheme and declaration-parameter answers, held together
+-- so their lifecycle cannot drift while the legacy declaration walk remains in use.
+data LegacyNumLiteralAnchor = LegacyNumLiteralAnchor {
+  lnlaScheme : Scheme,
+  lnlaParams : Option (IfaceRef, List String, Ty, List (String, List Kind)),
+}
+
+public export data NumAnchorTestObservation = NumAnchorTestObservation {
+  natoCase : String,
+  natoHasScheme : Bool,
+  natoHasParams : Bool,
+  natoSchemeBody : String,
+  natoParamType : String,
+}
+  deriving (Eq, Debug)
+
+public export data MethodRowTestObservation = MethodRowTestObservation {
+  mrtoSchemeIds : List Int,
+  mrtoSlotBoundIds : List (List Int),
+  mrtoSlotPositions : List (List Int),
+  mrtoSlotIdsAtPositions : List (List Int),
+  mrtoSlotArgumentIds : List (List Int),
+  mrtoCounterBefore : Int,
+  mrtoCounterAfterFirst : Int,
+  mrtoCounterAfterSecond : Int,
+  mrtoFirstSchemeIds : List Int,
+  mrtoSecondSchemeIds : List Int,
+  mrtoFirstRowSlotIds : List (List Int),
+  mrtoSecondRowSlotIds : List (List Int),
+  mrtoRegistryAfterSecondSlotIds : List (List Int),
+  mrtoSameNameForward : List (String, String, Int, Int),
+  mrtoSameNameReverse : List (String, String, Int, Int),
+  mrtoConstantRowCount : Int,
+  mrtoConstantSchemeIdCount : Int,
+  mrtoConstantBodyIsFunction : Bool,
+  mrtoConstantSlotCount : Int,
+  mrtoAttributedRowCount : Int,
+  mrtoAttributedParamIface : String,
+  mrtoAttributedParamTyparams : List String,
+  mrtoNumAnchors : List NumAnchorTestObservation,
+}
+  deriving (Eq, Debug)
+
 -- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
 -- `expandSupersPairs`' transitive super expansion APPENDED any.
 -- ⚠️ THAT WORDING IS THE CORRECTION, and the direction of the old one matters.  This
@@ -8608,8 +8661,8 @@ argDispatchOfMethod typarams (IfaceMethod mname mty _ _) =
 -- `argDispatchIndices` and everything it reaches (`argDispatchOfDecl`,
 -- `argDispatchOfMethod`, `dispatchTyparams`, `firstDispatchIdx`, `argMentions`,
 -- `methodArgs`) is pure and structural, so running this second walk beside it advances
--- no counter, mints no id and registers nothing.  Contrast `ifaceMethodSchemes`, which
--- is NOT pure — see `ifaceMethodSchemeIds` for what that forced there.
+-- no counter, mints no id and registers nothing.  The scheme-bearing method-row walk is
+-- intentionally effectful and therefore constructs identity and scheme together.
 argDispatchIndicesById : List Decl -> List ((IfaceRef, String), Int)
 argDispatchIndicesById prog = flatMap argDispatchOfDeclById prog
 
@@ -9932,9 +9985,7 @@ data PerRun = PerRun {
   dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
   aliasTableRef : Ref (List (TabKey, (List String, Ty))),
   shadowStandaloneSchemesRef : Ref (OrdMap Scheme),
-  ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1/L2: the Module arm's interface-method schemes under an identity key; read by `pickSchemesByDecl` (checkBodyImpl step 21)
-  numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
-  numLitFromIntParamsRef : Ref (Option (IfaceRef, List String, Ty, List (String, List Kind))),  -- #2157: the IDENTITY-selected companion of the line above — the PRELUDE `Num`'s own `fromInt` obligation row (iface, typarams, declared Ty, graded scope), seeded from the SAME decl list by the SAME `sameIfaceDecl` test.  `inferNumLitMethod`'s obligation anchor; it never consults the bare-name `methodIfaceParamsRef`.
+  numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor),  -- #2549 method rows: the identity-selected PRELUDE `Num.fromInt` scheme and its legacy declaration params, seeded together from one row/declaration pair.  `inferNumLit` reads the scheme; `inferNumLitMethod` reads the optional params.
   definerShadowNamesRef : Ref (OrdMap Unit),
   definerShadowSigsRef : Ref (OrdMap Ty),
   bodyImplEnvRef : Ref ImplEnv,
@@ -10037,9 +10088,7 @@ freshPerRun _ = PerRun {
   dataParamRowAtomsRef = Ref [],
   aliasTableRef = Ref [],
   shadowStandaloneSchemesRef = Ref omEmpty,
-  ifaceMethodSchemesByIdRef = Ref [],
-  numLitFromIntSchemeRef = Ref None,
-  numLitFromIntParamsRef = Ref None,
+  numLitFromIntAnchorRef = Ref None,
   definerShadowNamesRef = Ref omEmpty,
   definerShadowSigsRef = Ref omEmpty,
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -14918,17 +14967,17 @@ numArithOp lt rt =
 -- ⚠️ #1539 converted the GATE; #259 converts the ANCHOR, which was the larger half of
 -- the same I7 divergence (§11's "I7 (literals)" row).  Both halves now ask the PRELUDE
 -- and nothing else: the gate is `builtinClassPresent BNum`, the method is the scheme
--- `seedNumLitFromIntScheme` selected out of the prelude `Num` DECLARATION by identity.
+-- `seedNumLitFromIntAnchor` selected out of the prelude `Num` DECLARATION by identity.
 -- A binding spelled `fromInt` in the user's term scope is no longer consulted, so it can
 -- no longer re-anchor the literals around it (#259: `fromInt : Int -> Float` made
 -- `println (7 / 2)` print `3.5` under `run` and `3` from the built binary, exit 0).
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLit env n fref dref
-  | builtinClassPresent BNum = match perRun.value.numLitFromIntSchemeRef.value
+  | builtinClassPresent BNum = match perRun.value.numLitFromIntAnchorRef.value
     None => inferNumLitBare n fref
-    Some s =>
+    Some anchor =>
       -- records the Num impl obligation + a pendingSite on [dref].
-      let fromIntTy = inferNumLitMethod env s dref
+      let fromIntTy = inferNumLitMethod env anchor.lnlaScheme dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       let _ = pushNumlit (a, fref, n, dref)
@@ -15742,7 +15791,7 @@ recordMethodObligationGuarded env name s mono =
 
 -- #2157: the numeric literal's own obligation recorder — `recordMethodObligationGuarded`
 -- + `recordImplObligation` with the bare-name `omLookup` REPLACED by the identity-selected
--- `Num` row `seedNumLitFromIntParams` put in `numLitFromIntParamsRef`.  Every other arm is
+-- `Num` row `seedNumLitFromIntAnchor` put in `numLitFromIntAnchorRef`.  Every other arm is
 -- preserved verbatim so a program without a same-named user interface behaves identically:
 --   • `lookupLocalFlag` / `isMonoScheme` — the #816/#818 local-shadow guard;
 --   • `definerShadowNamesRef` / `standaloneValuesRef` — the P0-18 standalone-shadow guard
@@ -15766,12 +15815,14 @@ recordNumLitImplObligation : Mono -> Mono
 recordNumLitImplObligation mono
   | omHasKey "fromInt" perRun.value.definerShadowNamesRef.value
     || omHasKey "fromInt" driverState.value.standaloneValuesRef.value = mono
-  | otherwise = match perRun.value.numLitFromIntParamsRef.value
+  | otherwise = match perRun.value.numLitFromIntAnchorRef.value
     None => mono
-    Some (iface, typarams, mty, _) =>
-      let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
-      let _ = recordMethodLevelObls typarams mty mono
-      mono
+    Some anchor => match anchor.lnlaParams
+      None => mono
+      Some (iface, typarams, mty, _) =>
+        let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
+        let _ = recordMethodLevelObls typarams mty mono
+        mono
 
 -- #818 (#838 I3): record one PMethodLevel obligation per method-level `=>` constraint
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
@@ -29573,8 +29624,9 @@ checkBodyImpl seed mode prog0 =
   -- #2072: `userExternSchemes`, not `externSchemes` — this is the extern
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
+  let currentMethodRows = ifaceMethodSchemeRows prog
   let globalS =
-    ifaceMethodSchemes prog
+    legacyMethodSchemes currentMethodRows
       ++ userExternSchemes mode (externTyOriginScope []) prog
   -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
   -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
@@ -29594,8 +29646,8 @@ checkBodyImpl seed mode prog0 =
   let _ = ffiCheckExternsShadow (ffiStampMode mode) prog
   let _ = ffiCheckExternsReserved (ffiStampMode mode) prog
   let _ = ffiCheckExternsCatalogRow (ffiStampMode mode) prog
-  -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
-  -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
+  -- methodNames: FLAT's SECOND ifaceMethodSchemeRows call over prog — dedup-skipped by
+  -- installMethodPredicateSlots so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
   -- #973: an OrdMap-backed SET, not a `List` — its two consumers (methodShadowNamesRef via
   -- dropSchemesNamed at 12036 and per-SCC at processGroup) test MEMBERSHIP only, and as a
@@ -29603,45 +29655,33 @@ checkBodyImpl seed mode prog0 =
   -- list once per scheme → O(schemes x methods), a flat-path `manyifaces:typecheck` quadratic
   -- (once here over topSchemes, once PER SCC group).  omHasKey is byte-identical membership.
   let methodNames = match mode
-    Flat _ => namesToSet (map fst (ifaceMethodSchemes prog)) omEmpty
+    Flat _ =>
+      namesToSet (map (row => row.msrName) (ifaceMethodSchemeRows prog)) omEmpty
     Module _ _ _ => omEmpty
   -- (#4 cont) post-globalS mode setup.  Module: shadowMethodSchemes env layer (rebinding
   -- imported method names to the interface-method scheme) + the method-constraint cross
-  -- seed (AFTER globalS's ifaceMethodSchemes registration, per registerMethodConstraints).
+  -- seed (AFTER globalS's row registration, per installMethodPredicateSlots).
   -- Flat: record the interface-method names for processSCC's method-shadow scoping.
   let shadowLayer = match mode
     Flat _ =>
       perRun.value.methodShadowNamesRef := methodNames
       -- #259: anchor the numeric literal's `fromInt` to the PRELUDE `Num` DECLARATION.
-      -- `globalS`'s interface-method prefix IS `ifaceMethodSchemes prog` (the externs it
-      -- appends come after, and `zipIfaceMethodSchemeIds` truncates at the key list), so
+      -- `currentMethodRows` is the interface-method prefix projected into `globalS`, so
       -- this reuses the schemes already minted above rather than eliciting new ids.
-      let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds prog) globalS
-      -- #2157: the obligation half of the same anchor, off the SAME decl list.
-      let _ = seedNumLitFromIntParams prog
+      let _ = seedNumLitFromIntAnchor currentMethodRows prog
       []
     Module _ _ implDecls =>
-      -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
-      -- is called EXACTLY ONCE, as before: it is effectful (mints tyvar ids, registers
-      -- method constraints), so a second call here would shift ids and break this leaf's
-      -- zero-behaviour-change property.  `pickSchemes` is pure, so hoisting moves no
-      -- effect relative to the `methodPredicateSlotsRef` write below.
-      let ifaceSchemes = ifaceMethodSchemes implDecls
-      perRun.value.ifaceMethodSchemesByIdRef :=
-        zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes
-      -- #259: same anchor on the Module arm, off the same already-minted list.
-      let _ =
-        seedNumLitFromIntScheme (ifaceMethodSchemeIds implDecls) ifaceSchemes
-      let _ = seedNumLitFromIntParams implDecls
+      -- The rows remain local: they carry live scheme cells needed only by setup and
+      -- must not become another graph-lived authority.
+      let visibleMethodRows = ifaceMethodSchemeRows implDecls
+      let ifaceSchemes = legacyMethodSchemes visibleMethodRows
+      -- #259/#2157: seed both halves from the same already-minted row selection.
+      let _ = seedNumLitFromIntAnchor visibleMethodRows implDecls
       -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
       -- name to the scheme of the declaration THIS module's import scope admits
       -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
       -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
-      let sm =
-        pickSchemesByDecl
-          importerShadows
-          ifaceSchemes
-          perRun.value.ifaceMethodSchemesByIdRef.value
+      let sm = pickSchemesByDecl importerShadows ifaceSchemes visibleMethodRows
       perRun.value.methodPredicateSlotsRef :=
         perRun.value.methodPredicateSlotsRef.value
           ++ crossRun.value.crossModuleMethodPredicateSlotsRef.value
@@ -30225,7 +30265,7 @@ inferDefaultMethods env iface dscope typarams (m :: rest) =
 --   emit path), infer body, unify.
 --   CRITICAL: the constraint slot ids AND the default-body instantiation MUST come
 --   from the SAME sigToSchemeTvs build of THIS method's type.  Reading the ids from
---   methodPredicateSlotsRef (filled by a separate ifaceMethodSchemes build with its own
+--   methodPredicateSlotsRef (filled by a separate method-row build with its own
 --   fresh tyvar ids) and instantiating an unrelated methodSchemesPure scheme gave ids
 --   that did not appear in the instantiation subst → registerOneMethodDict's
 --   `lookupAssocI id subst` returned None → activeDictVars got no entry → the in-body
@@ -34731,67 +34771,47 @@ externSchemesGo ((DExtern _ n ty) :: rest) =
   (n, sigToScheme ty) :: externSchemesGo rest
 externSchemesGo (_ :: rest) = externSchemesGo rest
 
--- interface method schemes: each method's declared type, free tyvars (incl. the
--- interface param) quantified — the bare scheme the === TYPES === output shows
--- (the typeclass constraint itself is never rendered).  Impl bodies add no
--- top-level bindings, so DImpl needs no output here.
-ifaceMethodSchemes : List Decl -> List (String, Scheme)
-ifaceMethodSchemes [] = []
-ifaceMethodSchemes (d :: rest) = declIfaceMethods d ++ ifaceMethodSchemes rest
+-- Interface method rows: each method's declaration identity, bare scheme, and
+-- method-level predicate slots are constructed together.  The walk deliberately admits
+-- only direct DInterface declarations; attributed-only interfaces retain their historical
+-- absence from the method scheme environment.
+ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
+ifaceMethodSchemeRows [] = []
+ifaceMethodSchemeRows ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) :: rest) =
+  methodSchemeRows
+      (declGradedScope typarams typaramKinds methods)
+      IfaceRef { irName = name, irOrigin = ifaceOrigin }
+      typarams
+      methods
+    ++ ifaceMethodSchemeRows rest
+ifaceMethodSchemeRows (_ :: rest) = ifaceMethodSchemeRows rest
 
-declIfaceMethods : Decl -> List (String, Scheme)
-declIfaceMethods (DInterface { name, typarams, typaramKinds, methods, ... }) =
-  methodSchemes (declGradedScope typarams typaramKinds methods) typarams methods
-declIfaceMethods _ = []
+-- Exactly one `sigToSchemeTvsIn` allocation per row.  Slots are computed from that
+-- allocation's tv map and quantified-id order, then installed at the same construction
+-- point before the row is exposed to any projection.
+methodSchemeRows : List (String, List Kind) ->
+  IfaceRef ->
+  List String ->
+  List IfaceMethod ->
+  List MethodSchemeRow
+methodSchemeRows _ _ _ [] = []
+methodSchemeRows scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
+  let (scheme, tvs) = sigToSchemeTvsIn scope mty
+  let slots = methodPredicateSlotsOfType typarams mty tvs (schemeIds scheme)
+  let _ = installMethodPredicateSlots mname slots
+  MethodSchemeRow {
+      msrIface = iface,
+      msrName = mname,
+      msrScheme = scheme,
+      msrMethodSlots = slots,
+    }
+    :: methodSchemeRows scope iface typarams rest
 
--- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `ifaceMethodSchemes` above.
---
--- 🚨 WHY THIS IS A KEY-ONLY WALK AND NOT A SECOND `ifaceMethodSchemes` CALL.  A second
--- call would NOT be observationally neutral: `methodSchemes` mints tyvar ids through
--- `sigToSchemeTvsIn` (off `PerRun.tyvarCounter`) AND registers method-level constraints
--- into `methodPredicateSlotsRef`.  Re-obtaining the same schemes under a richer key that way
--- would shift every downstream tyvar id — an observable change, which L1 (a pure-addition
--- leaf) may not make.  `methodSchemesPure` is no escape: it drops the registration but
--- still mints ids.  So this walk produces ONLY the keys, and `zipIfaceMethodSchemeIds`
--- pairs them against the single, existing scheme list.
---
--- The pairing is positional, so the two walks must stay arm-for-arm identical.  Note in
--- particular that `declIfaceMethods` does NOT unwrap `DAttrib` (an attributed interface
--- contributes no schemes) and neither does `declIfaceMethodIds` — that asymmetry against
--- `argDispatchOfDeclById`, which DOES unwrap it, is inherited from the functions being
--- mirrored, not a slip.
---
--- Read by checkBodyImpl step 21: paired with `ifaceMethodSchemes`' output by
--- `zipIfaceMethodSchemeIds` into `PerRun.ifaceMethodSchemesByIdRef`, and handed to
--- `seedNumLitFromIntScheme` (#259).  See the matching note on `argDispatchIndicesById`.
-ifaceMethodSchemeIds : List Decl -> List (IfaceRef, String)
-ifaceMethodSchemeIds [] = []
-ifaceMethodSchemeIds (d :: rest) =
-  declIfaceMethodIds d ++ ifaceMethodSchemeIds rest
-
-declIfaceMethodIds : Decl -> List (IfaceRef, String)
-declIfaceMethodIds (DInterface { name, methods, ifaceOrigin, ... }) =
-  map
-    (ifaceMethodIdRow IfaceRef { irName = name, irOrigin = ifaceOrigin })
-    methods
-declIfaceMethodIds _ = []
-
-ifaceMethodIdRow : IfaceRef -> IfaceMethod -> (IfaceRef, String)
-ifaceMethodIdRow iface (IfaceMethod mname _ _ _) = (iface, mname)
-
--- Pair `ifaceMethodSchemeIds`' keys against `ifaceMethodSchemes`' own output,
--- positionally: the two walks visit the same decls in the same order and emit exactly one
--- row per `IfaceMethod` of every `DInterface`, so row i of one is row i of the other.
--- Ragged input truncates rather than raising — this is written-only substrate, and a
--- length disagreement must not be able to fail a build that is otherwise fine.  L2, the
--- first reader, is where such a mismatch becomes a graded fact.
-zipIfaceMethodSchemeIds : List (IfaceRef, String) ->
-  List (String, Scheme) ->
-  List ((IfaceRef, String), Scheme)
-zipIfaceMethodSchemeIds [] _ = []
-zipIfaceMethodSchemeIds _ [] = []
-zipIfaceMethodSchemeIds (k :: ks) ((_, s) :: ss) =
-  (k, s) :: zipIfaceMethodSchemeIds ks ss
+-- Compatibility projection for the existing term environment and scheme output.
+legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
+legacyMethodSchemes [] = []
+legacyMethodSchemes (row :: rest) =
+  (row.msrName, row.msrScheme) :: legacyMethodSchemes rest
 
 -- ── #259 / DICT §8 I7 (literals): the numeric literal's anchor ──────────────────
 --
@@ -34809,36 +34829,34 @@ zipIfaceMethodSchemeIds (k :: ks) ((_, s) :: ss) =
 -- to that list at all, so no spelling can reach it — this removes the read, it does not
 -- special-case the name.
 --
--- 🚨 SELECTED FROM THE ALREADY-MINTED SCHEMES, NEVER RE-ELABORATED.  `methodSchemes`
--- mints tyvar ids off `PerRun.tyvarCounter` AND registers `methodPredicateSlotsRef` keyed by
--- those ids.  A second `sigToSchemeTvsIn` here would hand `recordMethodDicts` a scheme
--- whose ids no constraint row is keyed by (silently: it aligns nothing and records no
--- dict), besides shifting every downstream id.  Hence the zip against the caller's own
--- list rather than a fresh lookup — the same reasoning `ifaceMethodSchemeIds` states.
+-- 🚨 SELECTED FROM THE ALREADY-MINTED ROWS, NEVER RE-ELABORATED.  A second
+-- `sigToSchemeTvsIn` here would hand `recordMethodDicts` a scheme whose ids no constraint
+-- row is keyed by, besides shifting every downstream id.
 --
 -- Identity, not spelling: `sameIfaceDecl` (the one total mint, #1647) — two STAMPED
 -- occurrences match on `(module, name)`, two UNSTAMPED ones by spelling, stamped never
 -- matches unstamped.  A MISS is loud in the honest direction: `inferNumLit` falls to
 -- `inferNumLitBare`, which is exactly the no-prelude arm (a fresh `Num`-obligated var,
 -- route RNone ⇒ Int), never a user binding's type.
-seedNumLitFromIntScheme : List (IfaceRef, String) ->
-  List (String, Scheme) ->
-  Unit
-seedNumLitFromIntScheme keys schemes =
-  perRun.value.numLitFromIntSchemeRef :=
-    pickIfaceMethodSchemeById
-      (builtinIfaceRef BNum)
-      "fromInt"
-      (zipIfaceMethodSchemeIds keys schemes)
+seedNumLitFromIntAnchor : List MethodSchemeRow -> List Decl -> Unit
+seedNumLitFromIntAnchor rows prog =
+  perRun.value.numLitFromIntAnchorRef :=
+    map
+      (scheme => LegacyNumLiteralAnchor {
+        lnlaScheme = scheme,
+        lnlaParams = numLitFromIntParamsOf prog,
+      })
+      (pickNumLitScheme (builtinIfaceRef BNum) "fromInt" rows)
 
-pickIfaceMethodSchemeById : IfaceRef ->
-  String ->
-  List ((IfaceRef, String), Scheme) ->
-  Option Scheme
-pickIfaceMethodSchemeById _ _ [] = None
-pickIfaceMethodSchemeById iface mname (((ifn, n), s) :: rest)
-  | n == mname && sameIfaceDecl ifn iface = Some s
-  | otherwise = pickIfaceMethodSchemeById iface mname rest
+-- Numeric seeding retains the stricter declaration-identity comparison.  The general
+-- admitted-method lookup below deliberately uses `sameTyConHead`; these policies serve
+-- different compatibility paths and must not be merged.
+pickNumLitScheme : IfaceRef -> String -> List MethodSchemeRow -> Option Scheme
+pickNumLitScheme _ _ [] = None
+pickNumLitScheme iface mname (row :: rest)
+  | row.msrName == mname && sameIfaceDecl row.msrIface iface =
+    Some row.msrScheme
+  | otherwise = pickNumLitScheme iface mname rest
 
 -- ── #2157: the OBLIGATION half of the same anchor ───────────────────────────────
 --
@@ -34862,10 +34880,6 @@ pickIfaceMethodSchemeById iface mname (((ifn, n), s) :: rest)
 -- Because both seeds read one list, `inferNumLitMethod` (reached only when the scheme
 -- seed hit) can never find this one empty — a miss here would be a MISSED reject, the
 -- quiet direction, and the lockstep seeding is what rules it out.
-seedNumLitFromIntParams : List Decl -> Unit
-seedNumLitFromIntParams prog =
-  perRun.value.numLitFromIntParamsRef := numLitFromIntParamsOf prog
-
 numLitFromIntParamsOf : List Decl ->
   Option (IfaceRef, List String, Ty, List (String, List Kind))
 numLitFromIntParamsOf [] = None
@@ -34957,24 +34971,10 @@ registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _ 
       perRun.value.methodIfaceParamsRef.value
   registerMethodIfaceParamsMethods iface typarams scope rest
 
--- build each method's scheme AND register its method-level constraints (foldMap's
--- `Monoid m`) into methodPredicateSlotsRef, keyed by the scheme's own quantified ids
--- (from the same tvs map), so a call-site instantiation can route the dict.
-methodSchemes : List (String, List Kind) ->
-  List String ->
-  List IfaceMethod ->
-  List (String, Scheme)
-methodSchemes _ _ [] = []
-methodSchemes scope typarams ((IfaceMethod mname mty _ _) :: rest) =
-  let st = sigToSchemeTvsIn scope mty
-  let _ =
-    registerMethodConstraints typarams mname mty (snd st) (schemeIds (fst st))
-  (mname, fst st) :: methodSchemes scope typarams rest
-
--- like methodSchemes but WITHOUT the registerMethodConstraints side effect — for
+-- Like the row builder but WITHOUT the installMethodPredicateSlots side effect — for
 -- callers (inferOneIfaceDefaults) that only need the schemes to look up a method's
 -- own type and must not double-register methodPredicateSlotsRef entries (those are
--- registered once during ifaceMethodSchemes at env setup).
+-- registered once during ifaceMethodSchemeRows at env setup).
 methodSchemesPure : List (String, List Kind) ->
   List IfaceMethod ->
   List (String, Scheme)
@@ -34982,17 +34982,11 @@ methodSchemesPure _ [] = []
 methodSchemesPure scope ((IfaceMethod mname mty _ _) :: rest) =
   (mname, fst (sigToSchemeTvsIn scope mty)) :: methodSchemesPure scope rest
 
--- Build one MethodPredicateSlot per method-level `=>` predicate that mentions a
--- non-interface-param variable.  Each slot retains the whole predicate, every bound
--- id it mentions, and their stable positions in the scheme's quantified-id order.
-registerMethodConstraints : List String ->
-  String ->
-  Ty ->
-  List (String, Mono) ->
-  List Int ->
-  Unit
-registerMethodConstraints typarams mname mty tvs fullIds =
-  let slots = methodPredicateSlotsOfType typarams mty tvs fullIds
+-- Install the precomputed row slots through the historical first-write guard.  Empty
+-- method contexts remain absent, and the preserved Flat second row construction cannot
+-- replace the first build's allocation-local ids.
+installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
+installMethodPredicateSlots mname slots =
   if isEmptyL slots
     || isSome
       (lookupMethodPredicateSlots
@@ -35056,7 +35050,7 @@ indexOfIntGo x (y :: ys) i = if x == y then i else indexOfIntGo x ys (i + 1)
 -- DRIVER-COLLAPSE Phase 2: skip when [mname] is ALREADY registered in THIS pass.
 -- The ids must be the SAME quantified ids the call-site instantiation maps through
 -- its subst (see the method carrier doc).  The module path's checkModuleFullImpl
--- can call ifaceMethodSchemes more than once per pass (env setup + impl/default body
+-- can construct method rows more than once per pass (env setup + Flat name discovery
 -- inference re-resolving schemes), and a SECOND registration prepends DIFFERENT
 -- freshly-instantiated carrier → first-match would select metadata from the wrong
 -- scheme build.  Keeping the FIRST (env-setup) registration — whose scheme is the one
@@ -37425,6 +37419,320 @@ scopeGivenProbe _ =
 -- > scopeGivenProbe ()
 -- [True, True, True, True, True, True, True, True, True, True]
 
+-- Immutable observer for the method-row preparation contract.  It projects every live
+-- scheme/slot cell to ids or rendered text before restoring the caller's three state
+-- bundles; no row, Mono, Ref, or graph object escapes.
+methodRowTestIface : String -> String -> List String -> List IfaceMethod -> Decl
+methodRowTestIface moduleId name typarams methods = DInterface {
+  pub = False,
+  def = False,
+  name = name,
+  typarams = typarams,
+  typaramKinds = map (_ => None) typarams,
+  supers = [],
+  methods = methods,
+  ifaceOrigin = OriginModule moduleId,
+}
+
+methodRowTestConstraint : String -> String -> List Ty -> Constraint
+methodRowTestConstraint moduleId name args = Constraint {
+  constraintHead = name,
+  constraintArgs = args,
+  constraintOrigin = OriginModule moduleId,
+}
+
+methodRowTestFoldMapDecl : Decl
+methodRowTestFoldMapDecl =
+  methodRowTestIface
+    "foldable-test"
+    "Foldable"
+    ["t"]
+    [
+      IfaceMethod
+        "foldMap"
+        (TyConstrained
+          [methodRowTestConstraint "monoid-test" "Monoid" [TyVar "m"]]
+          (TyFun
+            (TyFun (TyVar "a") (TyVar "m"))
+            (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyVar "m"))))
+        None
+        None,
+    ]
+
+methodRowTestConstantDecl : Decl
+methodRowTestConstantDecl = methodRowTestIface "constant-test" "Constant" [] [
+  IfaceMethod "token" (tyConBuiltin "Int" None) None None,
+]
+
+methodRowTestSameA : Decl
+methodRowTestSameA = methodRowTestIface "same-a" "A" [] [
+  IfaceMethod
+    "same"
+    (TyFun (tyConBuiltin "Int" None) (tyConBuiltin "Int" None))
+    None
+    None,
+  IfaceMethod "extra" (tyConBuiltin "Int" None) None None,
+]
+
+methodRowTestSameB : Decl
+methodRowTestSameB =
+  methodRowTestIface
+    "same-b"
+    "B"
+    ["t"]
+    [
+      IfaceMethod
+        "same"
+        (TyConstrained
+          [methodRowTestConstraint "d-test" "D" [TyVar "a"]]
+          (TyFun (TyVar "a") (TyVar "a")))
+        None
+        None,
+    ]
+
+methodRowTestNum : String -> Ty -> Decl
+methodRowTestNum moduleId fromIntTy =
+  methodRowTestIface
+    moduleId
+    "Num"
+    ["a"]
+    [IfaceMethod "fromInt" fromIntTy None None]
+
+methodRowTestUserFromInt : Decl
+methodRowTestUserFromInt =
+  methodRowTestIface
+    "user-from-int"
+    "Buildable"
+    ["a"]
+    [
+      IfaceMethod
+        "fromInt"
+        (TyFun (tyConBuiltin "Bool" None) (TyVar "a"))
+        None
+        None,
+    ]
+
+firstMethodRow : List MethodSchemeRow -> MethodSchemeRow
+firstMethodRow (row :: _) = row
+firstMethodRow [] = panic "method-row observer expected a row"
+
+schemeBodyOf : Scheme -> Mono
+schemeBodyOf (Forall _ _ body) = body
+
+methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
+methodSlotBoundIds slots = map (slot => slot.mpsPredicate.psBoundIds) slots
+
+methodSlotPositions : List MethodPredicateSlot -> List (List Int)
+methodSlotPositions slots = map (slot => slot.mpsPositions) slots
+
+methodSlotIdsAtPositions : List Int ->
+  List MethodPredicateSlot ->
+  List (List Int)
+methodSlotIdsAtPositions ids slots =
+  map (slot => map (pos => nthInt pos ids) slot.mpsPositions) slots
+
+methodSlotArgumentIds : List MethodPredicateSlot -> List (List Int)
+methodSlotArgumentIds slots = map methodSlotArgumentIdsOne slots
+
+methodSlotArgumentIdsOne : MethodPredicateSlot -> List Int
+methodSlotArgumentIdsOne slot = match slot.mpsPredicate.psArgs
+  PSArgsUnknown => []
+  PSArgsKnown args => flatMap monoTyvarIds args
+
+methodRowSameNameView : List MethodSchemeRow -> List (String, String, Int, Int)
+methodRowSameNameView rows =
+  map
+    (row => (
+      row.msrIface.irName,
+      row.msrName,
+      listLen (schemeIds row.msrScheme),
+      listLen row.msrMethodSlots,
+    ))
+    rows
+
+methodRowRegistrySlotIds : String -> List (List Int)
+methodRowRegistrySlotIds name =
+  match (lookupMethodPredicateSlots
+    name
+    perRun.value.methodPredicateSlotsRef.value)
+    None => []
+    Some slots => methodSlotBoundIds slots
+
+methodRowNumObservation : String ->
+  List Decl ->
+  List Decl ->
+  NumAnchorTestObservation
+methodRowNumObservation caseName builtinDecls decls =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  crossRun.value.builtinClassesRef := builtinClassesOf builtinDecls
+  let rows = ifaceMethodSchemeRows decls
+  let _ = seedNumLitFromIntAnchor rows decls
+  let observation = match perRun.value.numLitFromIntAnchorRef.value
+    None => NumAnchorTestObservation {
+      natoCase = caseName,
+      natoHasScheme = False,
+      natoHasParams = False,
+      natoSchemeBody = "",
+      natoParamType = "",
+    }
+    Some anchor => match anchor.lnlaParams
+      None => NumAnchorTestObservation {
+        natoCase = caseName,
+        natoHasScheme = True,
+        natoHasParams = False,
+        natoSchemeBody = ppMono (schemeBodyOf anchor.lnlaScheme),
+        natoParamType = "",
+      }
+      Some (_, _, paramTy, _) => NumAnchorTestObservation {
+        natoCase = caseName,
+        natoHasScheme = True,
+        natoHasParams = True,
+        natoSchemeBody = ppMono (schemeBodyOf anchor.lnlaScheme),
+        natoParamType = ppTy paramTy,
+      }
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observation
+
+export
+observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
+observeMethodSchemeRowsForTest _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let constrainedRow =
+    firstMethodRow (ifaceMethodSchemeRows [methodRowTestFoldMapDecl])
+  let constrainedIds = schemeIds constrainedRow.msrScheme
+  let constrainedSlots = constrainedRow.msrMethodSlots
+  let constrainedBoundIds = methodSlotBoundIds constrainedSlots
+  let constrainedPositions = methodSlotPositions constrainedSlots
+  let constrainedIdsAtPositions =
+    methodSlotIdsAtPositions constrainedIds constrainedSlots
+  let constrainedArgumentIds = methodSlotArgumentIds constrainedSlots
+
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let counterBefore = graphRun.value.tyvarCounter.value
+  let firstRow =
+    firstMethodRow (ifaceMethodSchemeRows [methodRowTestFoldMapDecl])
+  let counterAfterFirst = graphRun.value.tyvarCounter.value
+  let secondRow =
+    firstMethodRow (ifaceMethodSchemeRows [methodRowTestFoldMapDecl])
+  let counterAfterSecond = graphRun.value.tyvarCounter.value
+  let firstSchemeIds = schemeIds firstRow.msrScheme
+  let secondSchemeIds = schemeIds secondRow.msrScheme
+  let firstRowSlotIds = methodSlotBoundIds firstRow.msrMethodSlots
+  let secondRowSlotIds = methodSlotBoundIds secondRow.msrMethodSlots
+  let registryAfterSecondSlotIds = methodRowRegistrySlotIds "foldMap"
+
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let sameNameForward =
+    methodRowSameNameView
+      (ifaceMethodSchemeRows [methodRowTestSameA, methodRowTestSameB])
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let sameNameReverse =
+    methodRowSameNameView
+      (ifaceMethodSchemeRows [methodRowTestSameB, methodRowTestSameA])
+
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let constantRows = ifaceMethodSchemeRows [methodRowTestConstantDecl]
+  let constantRow = firstMethodRow constantRows
+  let constantBodyIsFunction =
+    match normalize (schemeBodyOf constantRow.msrScheme)
+      TFun _ _ _ => True
+      _ => False
+
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let attributed = DAttrib [] methodRowTestFoldMapDecl
+  let attributedRows = ifaceMethodSchemeRows [attributed]
+  let _ = registerMethodIfaceParamsAll [attributed]
+  let (attributedParamIface, attributedParamTyparams) =
+    match omLookup "foldMap" perRun.value.methodIfaceParamsRef.value
+      None => ("", [])
+      Some (iface, typarams, _, _) => (iface.irName, typarams)
+
+  let directNum =
+    methodRowTestNum
+      "direct-num"
+      (TyFun (tyConBuiltin "String" None) (TyVar "a"))
+  let attributedNum =
+    DAttrib
+      []
+      (methodRowTestNum
+        "attributed-num"
+        (TyFun (tyConBuiltin "Int" None) (TyVar "a")))
+  let builtinNum =
+    methodRowTestNum "builtin-num" (TyFun (tyConBuiltin "Int" None) (TyVar "a"))
+  let numAnchors = [
+    methodRowNumObservation "attrOnly" [attributedNum] [attributedNum],
+    methodRowNumObservation "directOnly" [directNum] [directNum],
+    methodRowNumObservation
+      "attrThenDirect"
+      [attributedNum, directNum]
+      [attributedNum, directNum],
+    methodRowNumObservation
+      "directThenAttr"
+      [directNum, attributedNum]
+      [directNum, attributedNum],
+    methodRowNumObservation
+      "builtinThenUser"
+      [builtinNum]
+      [builtinNum, methodRowTestUserFromInt],
+    methodRowNumObservation
+      "userThenBuiltin"
+      [builtinNum]
+      [methodRowTestUserFromInt, builtinNum],
+  ]
+
+  let observation = MethodRowTestObservation {
+    mrtoSchemeIds = constrainedIds,
+    mrtoSlotBoundIds = constrainedBoundIds,
+    mrtoSlotPositions = constrainedPositions,
+    mrtoSlotIdsAtPositions = constrainedIdsAtPositions,
+    mrtoSlotArgumentIds = constrainedArgumentIds,
+    mrtoCounterBefore = counterBefore,
+    mrtoCounterAfterFirst = counterAfterFirst,
+    mrtoCounterAfterSecond = counterAfterSecond,
+    mrtoFirstSchemeIds = firstSchemeIds,
+    mrtoSecondSchemeIds = secondSchemeIds,
+    mrtoFirstRowSlotIds = firstRowSlotIds,
+    mrtoSecondRowSlotIds = secondRowSlotIds,
+    mrtoRegistryAfterSecondSlotIds = registryAfterSecondSlotIds,
+    mrtoSameNameForward = sameNameForward,
+    mrtoSameNameReverse = sameNameReverse,
+    mrtoConstantRowCount = listLen constantRows,
+    mrtoConstantSchemeIdCount = listLen (schemeIds constantRow.msrScheme),
+    mrtoConstantBodyIsFunction = constantBodyIsFunction,
+    mrtoConstantSlotCount = listLen constantRow.msrMethodSlots,
+    mrtoAttributedRowCount = listLen attributedRows,
+    mrtoAttributedParamIface = attributedParamIface,
+    mrtoAttributedParamTyparams = attributedParamTyparams,
+    mrtoNumAnchors = numAnchors,
+  }
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observation
+
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
 -- writer that can ever answer a structured goal:
@@ -39466,7 +39774,7 @@ pickSchemes (n :: ns) table = match lookupAssoc n table
 -- ── #1351 L2 (MIGRATE Leg 2b): the IDENTITY-SCOPED picker for the shadow layer ──
 --
 -- `pickSchemes` above answers "which scheme does the bare name [n] have" with
--- `lookupAssoc` — FIRST MATCH over `ifaceMethodSchemes`' decl-walk order.  When two
+-- `lookupAssoc` — FIRST MATCH over the method-row decl-walk order.  When two
 -- interfaces declare the same method name, that order is module-processing order, so
 -- the scheme an importer shadow is CHECKED AGAINST is decided by import-clause order.
 -- MEASURED six-for-six (RUN-METHID-058): on `#1351`'s corpus the accept/reject split
@@ -39482,14 +39790,14 @@ pickSchemes (n :: ns) table = match lookupAssoc n table
 --
 -- ⚠️ MISS FALLS BACK TO `pickSchemes`' OWN ANSWER, deliberately.  Both misses are
 -- real: `methodIfaceParamsRef` holds no entry for [n] (not an interface method at
--- all), or the admitted declaration contributes no row to `ifaceMethodSchemesByIdRef`
+-- all), or the admitted declaration contributes no method row
 -- (its interface is not among `implDecls`).  A miss must not DROP the binding — that
 -- would remove a name from the shadow layer, i.e. turn a checked occurrence into an
 -- unchecked one, `exit 1 → exit 0`, a severity INCREASE.  Falling back keeps exactly
 -- today's answer for every shape this leaf does not decide.
 pickSchemesByDecl : List String ->
   List (String, Scheme) ->
-  List ((IfaceRef, String), Scheme) ->
+  List MethodSchemeRow ->
   List (String, Scheme)
 pickSchemesByDecl [] _ _ = []
 pickSchemesByDecl (n :: ns) table byId = match admittedSchemeFor n byId
@@ -39502,7 +39810,7 @@ pickSchemesByDecl (n :: ns) table byId = match admittedSchemeFor n byId
 -- that declaration's own scheme row.  `None` at either step means "this module's
 -- scope does not decide it", and the caller keeps the bare-name answer — never a
 -- guess, the same discipline `scopedMethodEntry` states for the table itself.
-admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
 -- #1386: the row half is keyed by the method's OWN declared name, the same asymmetry
 -- `dispatchIdxScoped` carries — an alias-qualified occurrence resolves its interface
 -- from the spelling and its row from the origin.  Both projections are read HERE, off
@@ -39516,14 +39824,15 @@ admittedSchemeFor n byId =
 -- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus
 -- name equality is the comparator the file's own rule (`cohSameIface`'s header) picks
 -- for this direction.  A false MISS costs only the fall-back to today's answer.
-lookupSchemeById : IfaceRef ->
-  String ->
-  List ((IfaceRef, String), Scheme) ->
-  Option Scheme
+lookupSchemeById : IfaceRef -> String -> List MethodSchemeRow -> Option Scheme
 lookupSchemeById _ _ [] = None
-lookupSchemeById iface n (((ir, mn), s) :: rest)
-  | mn == n && sameTyConHead ir.irName ir.irOrigin iface.irName iface.irOrigin =
-    Some s
+lookupSchemeById iface n (row :: rest)
+  | row.msrName == n
+    && sameTyConHead
+      row.msrIface.irName
+      row.msrIface.irOrigin
+      iface.irName
+      iface.irOrigin = Some row.msrScheme
   | otherwise = lookupSchemeById iface n rest
 
 -- Bug C: for each importer-shadow name, pick from [table] the scheme that is the
@@ -43773,7 +44082,7 @@ selfQualEntries mid own qual =
 
 -- WS-2/D2 method analog of scopePredicateSlots, WITHOUT the sig-fallback: every method-level
 -- constraint is registered during its interface module's typecheck
--- (registerMethodConstraints over ifaceMethodSchemes), so there is no
+-- (installMethodPredicateSlots during method-row construction), so there is no
 -- unsignatured-promoted residual to seed from signatures.  No method-name scope filter
 -- either: keep every entry whose bare method name does NOT collide across modules (so a
 -- method whose impl lives in a different module than its interface is never dropped),
@@ -43920,7 +44229,7 @@ attributeSchemeOblsGo mid progNames seen (e :: rest)
 -- WS-2/D2 method analog: attribute each method whose INTERFACE is declared in [prog]
 -- (carrying a methodPredicateSlotsRef entry) to [mid].  Keyed by the interface's module —
 -- the arity is a property of the method signature, registered during that module's
--- ifaceMethodSchemes pass.
+-- method-row construction pass.
 attributeMethodModulePredicateSlots : String ->
   List Decl ->
   List (String, List MethodPredicateSlot) ->

@@ -1150,7 +1150,7 @@ crossRun.value.crossModuleFunPredicateSlotsRef
 crossRun.value.crossModuleFunPredicateSlotsQualRef
 crossRun.value.crossModuleMethodPredicateSlotsRef :=
 crossRun.value.crossModuleMethodPredicateSlotsQualRef
-registerMethodConstraints : List String ->
+installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
 resolveMethodDicts : List PendingMethodDict -> Unit
@@ -1167,6 +1167,66 @@ attributeMethodModulePredicateSlots : String ->'
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+# #2549 method-row preparation: declaration identity, scheme, and method-level slots
+# are built in one row walk.  The Flat arm deliberately performs two constructions;
+# the Module arm one.  Positional key/scheme zips and graph-lived row state are retired.
+method_row_required='data MethodSchemeRow = MethodSchemeRow {
+  msrIface : IfaceRef,
+  msrName : String,
+  msrScheme : Scheme,
+  msrMethodSlots : List MethodPredicateSlot,
+data LegacyNumLiteralAnchor = LegacyNumLiteralAnchor {
+  numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor),
+ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
+methodSchemeRows : List (String, List Kind) ->
+legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
+installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
+seedNumLitFromIntAnchor : List MethodSchemeRow -> List Decl -> Unit
+pickSchemesByDecl : List String ->
+admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
+  List MethodSchemeRow ->
+  let currentMethodRows = ifaceMethodSchemeRows prog
+      let visibleMethodRows = ifaceMethodSchemeRows implDecls'
+
+printf '%s\n' "$method_row_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: #2549 method-row preparation is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+method_row_flat_count="$(grep -Fc 'ifaceMethodSchemeRows prog' "$predicate_slot_src")"
+if [ "$method_row_flat_count" -ne 2 ]; then
+  echo "FAIL: expected exactly two Flat ifaceMethodSchemeRows constructions, got $method_row_flat_count"
+  exit 1
+fi
+method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows implDecls' "$predicate_slot_src")"
+if [ "$method_row_module_count" -ne 1 ]; then
+  echo "FAIL: expected exactly one Module ifaceMethodSchemeRows construction, got $method_row_module_count"
+  exit 1
+fi
+
+method_row_retired='ifaceMethodSchemes :
+declIfaceMethods :
+methodSchemes :
+ifaceMethodSchemeIds
+declIfaceMethodIds
+ifaceMethodIdRow
+zipIfaceMethodSchemeIds
+ifaceMethodSchemesByIdRef
+numLitFromIntSchemeRef
+numLitFromIntParamsRef
+seedNumLitFromIntScheme
+seedNumLitFromIntParams
+registerMethodConstraints :'
+
+printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$predicate_slot_src"; then
+    echo "FAIL: #2549 retired method-row authority remains: $retired"
     exit 1
   fi
 done || exit 1

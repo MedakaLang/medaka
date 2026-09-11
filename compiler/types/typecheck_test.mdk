@@ -9,13 +9,18 @@ import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
+  MethodRowTestObservation(..),
   ModDiags,
+  NumAnchorTestObservation(..),
   beginAssumptionTrace,
   checkModulesDiagsChain,
   checkOneDiags,
+  checkProgramDiags,
   finishAssumptionTrace,
+  observeMethodSchemeRowsForTest,
   scopeFrameStats,
   scopeTraceContext,
+  tcMsg,
 }
 import support.util.{joinNl, listLen}
 
@@ -272,3 +277,154 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
         && afterFailed.rvFrameCount <= afterFailed.rvFrameCapacity
         && afterConflict.rvFrameCount <= afterConflict.rvFrameCapacity,
     ]
+
+test "method rows keep constraint slots on their own scheme allocation" =
+  let observed = observeMethodSchemeRowsForTest ()
+  expectEqual
+    ([0, 1, 2], [[1]], [[1]], [[1]], [[1]])
+    (
+      observed.mrtoSchemeIds,
+      observed.mrtoSlotBoundIds,
+      observed.mrtoSlotPositions,
+      observed.mrtoSlotIdsAtPositions,
+      observed.mrtoSlotArgumentIds,
+    )
+
+test "second method-row construction stays fresh while registry remains first-write" =
+  let observed = observeMethodSchemeRowsForTest ()
+  let _ =
+    expectEqual
+      (0, 3, 6, [0, 1, 2], [3, 4, 5])
+      (
+        observed.mrtoCounterBefore,
+        observed.mrtoCounterAfterFirst,
+        observed.mrtoCounterAfterSecond,
+        observed.mrtoFirstSchemeIds,
+        observed.mrtoSecondSchemeIds,
+      )
+  expectEqual
+    ([[1]], [[4]], [[1]])
+    (
+      observed.mrtoFirstRowSlotIds,
+      observed.mrtoSecondRowSlotIds,
+      observed.mrtoRegistryAfterSecondSlotIds,
+    )
+
+test "same-spelled and constant methods retain complete declaration rows" =
+  let observed = observeMethodSchemeRowsForTest ()
+  expectEqual
+    (
+      [
+        ("A", "same", 0, 0),
+        ("A", "extra", 0, 0),
+        ("B", "same", 1, 1),
+      ],
+      [
+        ("B", "same", 1, 1),
+        ("A", "same", 0, 0),
+        ("A", "extra", 0, 0),
+      ],
+      (1, 0, False, 0),
+    )
+    (
+      observed.mrtoSameNameForward,
+      observed.mrtoSameNameReverse,
+      (
+        observed.mrtoConstantRowCount,
+        observed.mrtoConstantSchemeIdCount,
+        observed.mrtoConstantBodyIsFunction,
+        observed.mrtoConstantSlotCount,
+      ),
+    )
+
+test "numeric anchor uses builtin identity and preserves attributed boundary" =
+  let observed = observeMethodSchemeRowsForTest ()
+  expectEqual
+    (
+      0,
+      "Foldable",
+      ["t"],
+      [
+        NumAnchorTestObservation {
+          natoCase = "attrOnly",
+          natoHasScheme = False,
+          natoHasParams = False,
+          natoSchemeBody = "",
+          natoParamType = "",
+        },
+        NumAnchorTestObservation {
+          natoCase = "directOnly",
+          natoHasScheme = True,
+          natoHasParams = True,
+          natoSchemeBody = "String -> a",
+          natoParamType = "String -> a",
+        },
+        NumAnchorTestObservation {
+          natoCase = "attrThenDirect",
+          natoHasScheme = True,
+          natoHasParams = True,
+          natoSchemeBody = "String -> a",
+          natoParamType = "String -> a",
+        },
+        NumAnchorTestObservation {
+          natoCase = "directThenAttr",
+          natoHasScheme = False,
+          natoHasParams = False,
+          natoSchemeBody = "",
+          natoParamType = "",
+        },
+        NumAnchorTestObservation {
+          natoCase = "builtinThenUser",
+          natoHasScheme = True,
+          natoHasParams = True,
+          natoSchemeBody = "Int -> a",
+          natoParamType = "Int -> a",
+        },
+        NumAnchorTestObservation {
+          natoCase = "userThenBuiltin",
+          natoHasScheme = True,
+          natoHasParams = True,
+          natoSchemeBody = "Int -> a",
+          natoParamType = "Int -> a",
+        },
+      ],
+    )
+    (
+      observed.mrtoAttributedRowCount,
+      observed.mrtoAttributedParamIface,
+      observed.mrtoAttributedParamTyparams,
+      observed.mrtoNumAnchors,
+    )
+
+mixedAttrFirstSource : String
+mixedAttrFirstSource = joinNl [
+  "@inline",
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "interface Num a b where",
+  "  fromInt : String -> a",
+  "main = 1",
+]
+
+mixedDirectFirstSource : String
+mixedDirectFirstSource = joinNl [
+  "interface Num a b where",
+  "  fromInt : String -> a",
+  "@inline",
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "main = 1",
+]
+
+flatMessages : String -> List String
+flatMessages source =
+  let (errors, _) = checkProgramDiags [] [] (desugar (parse source))
+  map tcMsg errors
+
+test "legacy attributed-direct Num diagnostics keep their order-sensitive cross-pair" =
+  expectEqual
+    (
+      ["Type mismatch: String vs Int", "Type mismatch: Int literal vs Int"],
+      ["Type mismatch: String vs Int"],
+    )
+    (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)
