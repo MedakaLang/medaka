@@ -1,5 +1,5 @@
 # META
-source_lines=14505
+source_lines=14513
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1295,17 +1295,21 @@ isKnownFn e name = match !e.knownFnMap
   None => panic "llvm: knownFnMap read before install (internal error)"
 
 -- Canonicalize a referenced function name to the actual emitted symbol.  The emit
--- drivers run `mangleUnits` BEFORE `elaborateModules`, so every prelude definition
--- is renamed `core__<name>` (and uses present at mangle time are rewritten to
--- match).  But `elaborateModules` SYNTHESIZES bare references that never passed
--- through mangling — notably the `/=` rewrite (`typecheck.mdk` binopMethodApp)
--- which builds `EApp (EVar "not") …`.  Such a bare prelude name is absent from the
--- `core__`-keyed known-fn table → it would fall through to a closure-load and the
--- emitter aborts `unbound variable 'not'`.  GENERAL FIX: when a bare name is not a
--- known fn but its `core__`-mangled form IS, resolve to the mangled symbol.  This
--- covers ANY post-mangle-synthesized prelude reference, not just `not`.  A name
--- already known (incl. a user `core__`-collision) is returned unchanged, and a
--- genuinely-unbound name still falls through to the original gap.
+-- drivers used to run `mangleUnits` BEFORE `elaborateModules`, so every prelude
+-- definition was renamed `core__<name>` while `elaborateModules` SYNTHESIZES bare
+-- references afterwards — notably the `/=` rewrite (`typecheck.mdk` binopMethodApp)
+-- which builds `EApp (EVar "not") …`.  Such a bare prelude name was absent from the
+-- `core__`-keyed known-fn table → it fell through to a closure-load and the emitter
+-- aborted `unbound variable 'not'`.  The repair: a bare name that is not a known fn
+-- but whose `core__`-mangled form IS resolves to the mangled symbol.  A name already
+-- known (incl. a user `core__`-collision) is returned unchanged, and a genuinely
+-- unbound name still falls through to the original gap.
+-- Since #2809 the emit drivers elaborate FIRST and mangle the elaborated trees, so a
+-- synthesized bare reference is renamed with everything else and is a known fn by the
+-- time it reaches here.  Accommodation 12 of the census in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20 (`dce.canonRef`,
+-- `wasm_emit.canonFn` and `wasm_reach` carry the mirrored copies); it retires with
+-- that census, on a measurement of which callers still reach it.
 canonFnName : Emit -> String -> String
 canonFnName e name =
   if isKnownFn e name then
@@ -5708,15 +5712,19 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
 -- impl of this interface but an explicitly-imported/local standalone shadows the
 -- method name.  Emit a DIRECT call to that standalone top-level fn (`mdk_<target>`),
 -- exactly as emitApp's isKnownFn branch would for a plain call — no dispatch, no
--- dicts.  P0-18: `target` is the carried MANGLED symbol `<mid>__name` when non-empty
--- (the EMИТ path, where the def was renamed by mangleUnits and the EMethodAt carries
--- the BARE dispatch name), else the bare `name` (un-mangled run path).  The compiler's
--- OWN definer shadows now reach
--- THIS arm with their mangled symbol; the emitted `emitKnownFnSat` call is byte-
--- identical to the pre-P0-18 direct `@mdk_<mid>__name` bare-EVar call (fixpoint gate).
--- The membership is derived, not memorised — a module's own top-level function whose
--- name is also a nameable interface method — and it moves with the tree: `map`'s and
--- `hash_map`'s `toList` were members until #2769 deleted both in favour of a real
+-- dicts.  P0-18: `target` is the symbol the route CARRIES, and the `EMethodAt` beside
+-- it keeps the BARE dispatch name so `implFor` still finds the impl for a receiver
+-- that has one.  Since #2809 the route names its symbol on EVERY path: typecheck seeds
+-- a definer-shadow occurrence with the bare standalone name, and `private_mangle`'s
+-- `mangleRoute` renames it on the emit path — so `target` reads `<mid>__name` in an
+-- emitted program and the plain name off the emit path.  The `sym == ""` fallback
+-- below is what a route carrying no symbol at all would take; typecheck mints no such
+-- `RLocal` (`mintMethodCell ""` yields `RNone`).  The compiler's OWN definer shadows
+-- reach THIS arm with their mangled symbol; the emitted `emitKnownFnSat` call is
+-- byte-identical to the pre-P0-18 direct `@mdk_<mid>__name` bare-EVar call (fixpoint
+-- gate).  The membership is derived, not memorised — a module's own top-level function
+-- whose name is also a nameable interface method — and it moves with the tree: `map`'s
+-- and `hash_map`'s `toList` were members until #2769 deleted both in favour of a real
 -- `impl Foldable`; `stdlib/map.mdk`'s and `stdlib/hash_map.mdk`'s `isEmpty` (against
 -- `Foldable.isEmpty`) and `compiler/frontend/parser.mdk`'s `orElse` still are.
 

@@ -1,5 +1,5 @@
 # META
-source_lines=278
+source_lines=281
 stages=DESUGAR,MARK
 # SOURCE
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
@@ -44,8 +44,11 @@ stages=DESUGAR,MARK
 --
 -- CANONICALIZATION mirrors `dce.canonRef` / `wasm_emit.canonFn`: a bare reference
 -- that is not itself defined but whose `core__`-mangled form is resolves to the
--- mangled definition (`elaborateModules` synthesizes bare prelude references such
--- as `not` AFTER `mangleUnits` has renamed the definition).
+-- mangled definition.  It exists because under the old mangle-first order
+-- `elaborateModules` synthesized bare prelude references such as `not` AFTER the
+-- rename had moved the definition; since #2809 mangling runs on the elaborated trees
+-- and renames them too.  Accommodation 12 of the census in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20, retiring with it.
 --
 -- ── WHY THIS IS SOUND WHERE NAIVE IMPL-DCE IS NOT ────────────────────────────
 --
