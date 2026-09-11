@@ -8,6 +8,10 @@ accepts exactly that canonical form: uppercase, `=` padding, non-alphabet
 characters, non-zero residual bits, and non-canonical lengths are rejected
 rather than normalized.
 
+Both build a `List Char`/`List Int` through non-tail recursion, so under
+the tree-walking interpreter (`medaka run`/`test`) they overflow the
+stack at a few kilobytes of input; native builds have no such limit.
+
 ## `base32Encode`
 
 ```
