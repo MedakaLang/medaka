@@ -57,7 +57,9 @@ import tools.lsp.{
   docsPut,
   uriOfPath,
 }
+import frontend.ast.{Decl}
 import frontend.parser.{
+  Positions,
   parseResult,
   parseErrorLine,
   parseErrorCol,
@@ -65,7 +67,12 @@ import frontend.parser.{
 }
 import tools.fmt.{formatSource}
 import tools.lint.{
-  lintFileDiagTriple,
+  Finding,
+  lintFileDiagTripleParsed,
+  mergeCrossFileIntoTriples,
+  runCrossFileRules,
+  applySuppressionsMulti,
+  applyFindingDeny,
   splitLintNames,
   buildStdlibIndex,
   StdlibIndex,
@@ -1278,22 +1285,58 @@ lintNameListArg key args = match fieldStr key args
   Some "" => []
   Some s => splitLintNames s
 
--- Sequence `lintFileDiagTriple` over every target path, in order (same
+-- Sequence `lintFileDiagTripleParsed` over every target path, in order (same
 -- explicit-recursion idiom `medaka_cli.mdk`'s `lintFilesToDiagTriples` uses —
 -- `map` over an effectful function is not how this codebase sequences an
--- `<IO>` list traversal).
+-- `<IO>` list traversal).  Carries the parse (`Positions`, `List Decl`) along
+-- so the cross-file tier can reuse it — the SAME no-second-parse discipline
+-- `lint_cmd.mdk`'s `lintFilesToDiagQuads` uses.
 --
 -- `idx` is the stdlib reference index, built ONCE by the caller and threaded:
 -- it is the same value for every path in the request, and rebuilding it per
--- path would re-parse the whole stdlib once per target file.
-lintPathsToDiagTriples : StdlibIndex ->
+-- path would re-parse the whole stdlib once per target file.  Exported so
+-- `compiler/tools/lint_test.mdk`'s renderer-parity property can call the SAME
+-- function `runLintTool` calls, rather than a reimplementation.
+export
+lintPathsToDiagQuads : StdlibIndex ->
   List String ->
   List String ->
   List String ->
   List String ->
-  <IO> List (String, String, List Diag)
-lintPathsToDiagTriples idx disable only deny paths =
-  map (lintFileDiagTriple idx disable only deny) paths
+  <IO> List (String, String, List Diag, Positions, List Decl)
+lintPathsToDiagQuads idx disable only deny paths =
+  map (lintFileDiagTripleParsed idx disable only deny) paths
+
+-- Run the cross-file tier (`runCrossFileRules`) over the parses `quads`
+-- already carries, honoring `only`/`disable` (inside `runCrossFileRules`),
+-- inline `-- lint-disable-*` directives (`applySuppressionsMulti`, each
+-- finding anchored to its own file), then `deny` promotion — mirroring
+-- `lint_cmd.mdk`'s `crossFileJsonFindings` and the human-text
+-- `runCrossFileReport` path.  Never renders; the caller folds the result into
+-- the JSON triples via `mergeCrossFileIntoTriples`.
+export
+crossFileMcpFindings : List String ->
+  List String ->
+  List String ->
+  List (String, String, List Diag, Positions, List Decl) ->
+  List Finding
+crossFileMcpFindings disable only deny quads =
+  let parsedTriples = map quadToParseTriple quads
+  let raw = runCrossFileRules only disable parsedTriples
+  let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
+  applyFindingDeny deny suppressed
+
+quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
+  (String, Positions, List Decl)
+quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
+
+quadToSrc : (String, String, List Diag, Positions, List Decl) ->
+  (String, String)
+quadToSrc (path, src, _, _, _) = (path, src)
+
+dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
+  (String, String, List Diag)
+dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 
 anyTripleHasErr : List (String, String, List Diag) -> Bool
 anyTripleHasErr [] = False
@@ -1309,10 +1352,15 @@ anyDiagErr (d :: rest) = diagIsError d || anyDiagErr rest
 -- over every path in `paths` and return the SAME `{"files":[...]}` envelope
 -- `medaka_check`/`medaka lint --json` emit (via `cjAllToJson`) — one schema
 -- across all three surfaces. Each `Finding` becomes a `Diag` via
--- `findingToDiag` (inside `lintFileDiagTriple`), which stamps the lint RULE
--- NAME into the diagnostic's `code`. `isError` is true iff any diagnostic is a
--- hard error (severity 1) — only reachable via `deny` promotion, since every
--- seed rule defaults to SevWarning.
+-- `findingToDiag` (inside `lintFileDiagTripleParsed`), which stamps the lint
+-- RULE NAME into the diagnostic's `code`. Cross-file rules participate too
+-- (#2701 leg 3, parity with `medaka lint --json`): `lintPathsToDiagQuads`
+-- keeps each path's parse, `crossFileMcpFindings` runs `runCrossFileRules`
+-- over them, and `mergeCrossFileIntoTriples` folds each finding into its own
+-- file's `diagnostics` array — synthesizing an entry for a duplicate's
+-- partner file when that file is outside `paths`. `isError` is true iff any
+-- diagnostic is a hard error (severity 1) — only reachable via `deny`
+-- promotion, since every seed rule defaults to SevWarning.
 runLintTool : String -> String -> String -> Json -> <IO> Json
 runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
   None =>
@@ -1322,10 +1370,13 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let disable = lintNameListArg "disable" args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
-    -- once per REQUEST, not per path (see lintPathsToDiagTriples)
+    -- once per REQUEST, not per path (see lintPathsToDiagQuads)
     let idx = buildStdlibIndex
-    let triples = lintPathsToDiagTriples idx disable only deny paths
-    toolTextResult (cjAllToJson triples) (anyTripleHasErr triples)
+    let quads = lintPathsToDiagQuads idx disable only deny paths
+    let triples = map dropQuadParse quads
+    let cross = crossFileMcpFindings disable only deny quads
+    let merged = mergeCrossFileIntoTriples cross triples
+    toolTextResult (cjAllToJson merged) (anyTripleHasErr merged)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 

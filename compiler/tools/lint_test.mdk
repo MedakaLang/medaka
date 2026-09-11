@@ -1,0 +1,108 @@
+-- compiler/tools/lint_test.mdk — sibling test for lint.mdk / lint_cmd.mdk /
+-- mcp.mdk (`[P-TEST-SIBLING]`, AGENTS.md).
+--
+-- #2701 leg 3: `rule-duplicate-body` (a `CrossFileRule`) never reached
+-- `medaka lint --json` or the `medaka_lint` MCP tool — both surfaces looped
+-- the per-file diag-triple builder alone and never called
+-- `runCrossFileRules`.  This property pins the gap AND the fix, over the
+-- SHARED `test/lint_crossfile_fixtures` corpus (`[T-SHARED-CORPUS]`):
+--
+--   1. the OLD per-file-only triple builder (`lintFilesToDiagTriples`, kept
+--      unchanged — it is still `--write-baseline`'s vehicle) has NO
+--      `rule-duplicate-body` diagnostic anywhere in it, for ANY file set —
+--      `duplicateBodyRule` is a `CrossFileRule`, never a per-file `Rule`, so
+--      this holds independent of this slice's fix and documents exactly the
+--      shape of the pre-fix gap.
+--   2. the JSON path's OWN internals (`lintFilesToDiagQuads` +
+--      `crossFileJsonFindings`, exactly what `runLintJsonCmd` calls) DO
+--      surface it, merged into the owning file's entry via
+--      `mergeCrossFileIntoTriples`.
+--   3. the MCP path's OWN internals (`lintPathsToDiagQuads` +
+--      `crossFileMcpFindings`, exactly what `runLintTool` calls) produce the
+--      SAME finding set as the JSON path — renderer parity across both
+--      machine-readable surfaces.  Licensed per the sprint contract §8.4 to
+--      assert this by calling the tool's own internal functions rather than
+--      a live MCP stdio round trip.
+--
+-- `--native`, not the interpreter: every function here reaches the
+-- filesystem (parsing the real fixture files), and `medaka test` under the
+-- interpreter binds no filesystem extern.  Run as
+-- `medaka test --native compiler/tools/lint_test.mdk` (the Makefile `test:`
+-- target line does this).
+
+import test.{expectEqual, expectTrue}
+import support.util.{anyList, sortUniqS}
+import driver.diagnostics.{Diag(..)}
+import tools.lint.{StdlibIndex, buildStdlibIndex, mergeCrossFileIntoTriples}
+import tools.lint_cmd.{
+  lintFilesToDiagTriples,
+  lintFilesToDiagQuads,
+  crossFileJsonFindings,
+}
+import tools.mcp.{lintPathsToDiagQuads, crossFileMcpFindings}
+
+-- The two-file duplicate pair the multi-clause blind spot (#2651) fixed —
+-- `stepA`/`stepB` are each one function split across two clauses, so neither
+-- clause alone clears `dupComplexityThreshold`, but the two together do.
+-- Picked over the single-clause pair so this property also proves the
+-- cross-file tier's INPUT (the full per-file parse) reaches JSON/MCP intact,
+-- not just a simpler one-clause case.
+fixtureFiles : List String
+fixtureFiles = [
+  "test/lint_crossfile_fixtures/dup_multiclause_a.mdk",
+  "test/lint_crossfile_fixtures/dup_multiclause_b.mdk",
+]
+
+diagCode : Diag -> String
+diagCode (Diag _ code _ _ _ _) = code
+
+tripleDiags : (String, String, List Diag) -> List Diag
+tripleDiags (_, _, diags) = diags
+
+anyDupRuleDiag : List (String, String, List Diag) -> Bool
+anyDupRuleDiag triples =
+  anyList
+    (t => anyList (d => diagCode d == "rule-duplicate-body") (tripleDiags t))
+    triples
+
+-- (path, code, message) keys, sorted — a set representation two triple lists
+-- can be compared by, independent of file/rule ordering.
+tripleKeys : List (String, String, List Diag) -> List String
+tripleKeys triples = sortUniqS (flatMap tripleKeysOne triples)
+
+tripleKeysOne : (String, String, List Diag) -> List String
+tripleKeysOne (path, _, diags) = map (diagKeyOf path) diags
+
+diagKeyOf : String -> Diag -> String
+diagKeyOf path (Diag _ code msg _ _ _) = "\{path}::\{code}::\{msg}"
+
+dropQuadParse : (String, String, List Diag, a, b) -> (String, String, List Diag)
+dropQuadParse (path, src, diags, _, _) = (path, src, diags)
+
+-- ── 1. the pre-fix gap, pinned ──────────────────────────────────────────────
+test "the old per-file-only triple builder never carries a duplicate-body finding" =
+  let idx = buildStdlibIndex
+  let triples = lintFilesToDiagTriples idx [] [] [] None fixtureFiles
+  expectTrue (not (anyDupRuleDiag triples))
+
+-- ── 2. the JSON path's own internals surface it ─────────────────────────────
+test "the JSON path's own internals surface the duplicate-body finding" =
+  let idx = buildStdlibIndex
+  let quads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
+  let triples = map dropQuadParse quads
+  let cross = crossFileJsonFindings [] [] [] quads
+  let merged = mergeCrossFileIntoTriples cross triples
+  expectTrue (anyDupRuleDiag merged)
+
+-- ── 3. renderer parity: JSON internals == MCP internals ─────────────────────
+test "the MCP path's own internals produce the SAME finding set as JSON" =
+  let idx = buildStdlibIndex
+  let jsonQuads = lintFilesToDiagQuads idx [] [] [] None fixtureFiles
+  let jsonTriples = map dropQuadParse jsonQuads
+  let jsonCross = crossFileJsonFindings [] [] [] jsonQuads
+  let jsonMerged = mergeCrossFileIntoTriples jsonCross jsonTriples
+  let mcpQuads = lintPathsToDiagQuads idx [] [] [] fixtureFiles
+  let mcpTriples = map dropQuadParse mcpQuads
+  let mcpCross = crossFileMcpFindings [] [] [] mcpQuads
+  let mcpMerged = mergeCrossFileIntoTriples mcpCross mcpTriples
+  expectEqual (tripleKeys jsonMerged) (tripleKeys mcpMerged)

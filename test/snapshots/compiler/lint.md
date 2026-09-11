@@ -1,5 +1,5 @@
 # META
-source_lines=6194
+source_lines=6253
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1066,22 +1066,41 @@ findingToDiag f =
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file
--- and return `(path, src, List Diag)` — exactly the per-file triple
--- `driver.diagnostics.cjAllToJson` expects.  Shared by `medaka lint --json`
--- (medaka_cli.mdk) and the `medaka_lint` MCP tool (mcp.mdk) so both surfaces
--- serialize through the SAME envelope `check --json` uses, with the lint rule
--- name landing in each diagnostic's `code` (via `findingToDiag`).  Uses
--- `readFileSafe` (the same "" -on-read-error helper `checkJsonFile` uses), so
--- an unreadable path parses as empty source and yields `(path, "", [])` —
--- total, no crash, and consistent with `check --json`'s own file-variant
--- behaviour on a missing target.  Uses `parseWithPositionsLocated` (#649) so a
--- `Finding` at a nested sub-expression (`exprRuleFindings`) carries THAT
--- expression's own location, not the enclosing decl's.
+-- and return `(path, src, List Diag, Positions, List Decl)` — the per-file
+-- triple `driver.diagnostics.cjAllToJson` expects, PLUS the parse the
+-- cross-file tier (`runCrossFileRules`) needs as `(path, Positions, decls)`.
+-- Shared by `medaka lint --json` (medaka_cli.mdk) and the `medaka_lint` MCP
+-- tool (mcp.mdk) so both surfaces serialize through the SAME envelope
+-- `check --json` uses, with the lint rule name landing in each diagnostic's
+-- `code` (via `findingToDiag`).  Uses `readFileSafe` (the same ""-on-read-error
+-- helper `checkJsonFile` uses), so an unreadable path parses as empty source
+-- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
+-- consistent with `check --json`'s own file-variant behaviour on a missing
+-- target.  Uses `parseWithPositionsLocated` (#649) so a `Finding` at a nested
+-- sub-expression (`exprRuleFindings`) carries THAT expression's own location,
+-- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
 -- this function builds, because both callers (`medaka lint --json`'s
 -- `runLintJsonCmd` and `mcp.mdk`'s `medaka_lint`) sequence this over a LIST of
 -- paths — building the index here would re-parse the whole stdlib once per
 -- target file instead of once per process.
+export
+lintFileDiagTripleParsed : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  String ->
+  <IO> (String, String, List Diag, Positions, List Decl)
+lintFileDiagTripleParsed idx disable only deny path =
+  let src = readFileSafe path
+  let (decls, pos) = parseWithPositionsLocated src
+  let allFindings =
+    applySuppressions src (lintProgram idx allRules path src pos decls)
+  let findings = applyFindingFilters disable only deny allFindings
+  (path, src, map findingToDiag findings, pos, decls)
+
+-- `lintFileDiagTripleParsed`, dropping the parse — the shape every existing
+-- caller that does not need the cross-file tier's inputs still wants.
 export
 lintFileDiagTriple : StdlibIndex ->
   List String ->
@@ -1090,12 +1109,11 @@ lintFileDiagTriple : StdlibIndex ->
   String ->
   <IO> (String, String, List Diag)
 lintFileDiagTriple idx disable only deny path =
-  let src = readFileSafe path
-  let (decls, pos) = parseWithPositionsLocated src
-  let allFindings =
-    applySuppressions src (lintProgram idx allRules path src pos decls)
-  let findings = applyFindingFilters disable only deny allFindings
-  (path, src, map findingToDiag findings)
+  dropParsedTriple (lintFileDiagTripleParsed idx disable only deny path)
+
+dropParsedTriple : (String, String, List Diag, Positions, List Decl) ->
+  (String, String, List Diag)
+dropParsedTriple (path, src, diags, _, _) = (path, src, diags)
 
 -- One finding per line: `<severity>: [<rule>] <message>` (location-stripped, the
 -- golden harness sorts).  Mirror of exhaust.mdk's `exhaustToLines`.  `src` is the
@@ -5619,6 +5637,47 @@ runCrossRuleOn only disable files r
     map (restampSeverity r.severity) (r.check files)
   | otherwise = []
 
+-- Fold cross-file findings into the per-file `(path, src, List Diag)` triples
+-- the JSON envelope (`cjAllToJson`) and the `medaka_lint` MCP tool both
+-- serialize.  Each `Finding` already carries ITS OWN occurrence's file in
+-- `loc` (`emitDupGroup` emits one finding per occurrence), so a finding is
+-- appended to the triple whose path matches that file — never aggregated
+-- under a new key.  A finding whose file is not already among `triples` (the
+-- caller's requested path set can be a strict subset of the two-or-more files
+-- a duplicate spans) gets a synthesized `(file, "", [diag])` entry appended,
+-- exactly like `runCrossFileReport`'s own `parsedToTriple`/rendering treats an
+-- unrequested duplicate partner — reported, never dropped.  A `Finding` with
+-- no `loc` (only the cross-file rule shape used today always sets one) is
+-- skipped: there is no file to attribute it to.
+export
+mergeCrossFileIntoTriples : List Finding ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+mergeCrossFileIntoTriples [] triples = triples
+mergeCrossFileIntoTriples (f :: rest) triples =
+  mergeCrossFileIntoTriples rest (mergeOneFinding f triples)
+
+mergeOneFinding : Finding ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+mergeOneFinding f triples = match f.loc
+  None => triples
+  Some (Loc file _ _ _ _) =>
+    if anyList (tripleHasPath file) triples then
+      map (appendIfPath file (findingToDiag f)) triples
+    else
+      triples ++ [(file, "", [findingToDiag f])]
+
+tripleHasPath : String -> (String, String, List Diag) -> Bool
+tripleHasPath file (path, _, _) = path == file
+
+appendIfPath : String ->
+  Diag ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
+appendIfPath file diag (path, src, diags) =
+  if path == file then (path, src, diags ++ [diag]) else (path, src, diags)
+
 -- ── the cross-file tier, reached from CACHED per-file inputs (#395) ────────────
 -- `runCrossFileRules` needs every file's `(path, Positions, decls)` — i.e. a
 -- PARSE of every target, which is exactly what `--cache` skips.  So a cached run
@@ -6441,8 +6500,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "isFindingError" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "severity") (arm (PCon "SevError") () (EVar "True")) (arm (PCon "SevWarning") () (EVar "False"))))
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
 (DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EFieldAccess (EVar "f") "rule")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EVar "None")))
+(DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EVar "findings"))))))
+(DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EApp (EVar "dropParsedTriple") (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "path"))))
+(DTypeSig false "dropParsedTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
+(DFunDef false "dropParsedTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig true "lintToLines" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))))
 (DFunDef false "lintToLines" ((PVar "idx") (PVar "src") (PVar "path") (PVar "pos") (PVar "prog")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "findingLine")) (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "findingLine" (TyFun (TyCon "Finding") (TyCon "String")))
@@ -7920,6 +7983,15 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "runCrossFileRules" ((PVar "only") (PVar "disable") (PVar "files")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "runCrossRuleOn") (EVar "only")) (EVar "disable")) (EVar "files"))) (EVar "allCrossFileRules")))
 (DTypeSig false "runCrossRuleOn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "CrossFileRule") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "runCrossRuleOn" ((PVar "only") (PVar "disable") (PVar "files") (PVar "r")) (EIf (EApp (EApp (EApp (EVar "crossRuleActive") (EVar "only")) (EVar "disable")) (EVar "r")) (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EFieldAccess (EVar "r") "check") (EVar "files"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "mergeCrossFileIntoTriples" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "mergeCrossFileIntoTriples" ((PList) (PVar "triples")) (EVar "triples"))
+(DFunDef false "mergeCrossFileIntoTriples" ((PCons (PVar "f") (PVar "rest")) (PVar "triples")) (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "rest")) (EApp (EApp (EVar "mergeOneFinding") (EVar "f")) (EVar "triples"))))
+(DTypeSig false "mergeOneFinding" (TyFun (TyCon "Finding") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "mergeOneFinding" ((PVar "f") (PVar "triples")) (EMatch (EFieldAccess (EVar "f") "loc") (arm (PCon "None") () (EVar "triples")) (arm (PCon "Some" (PCon "Loc" (PVar "file") PWild PWild PWild PWild)) () (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "tripleHasPath") (EVar "file"))) (EVar "triples")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "appendIfPath") (EVar "file")) (EApp (EVar "findingToDiag") (EVar "f")))) (EVar "triples")) (EBinOp "++" (EVar "triples") (EListLit (ETuple (EVar "file") (ELit (LString "")) (EListLit (EApp (EVar "findingToDiag") (EVar "f"))))))))))
+(DTypeSig false "tripleHasPath" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool"))))
+(DFunDef false "tripleHasPath" ((PVar "file") (PTuple (PVar "path") PWild PWild)) (EBinOp "==" (EVar "path") (EVar "file")))
+(DTypeSig false "appendIfPath" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "appendIfPath" ((PVar "file") (PVar "diag") (PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EIf (EBinOp "==" (EVar "path") (EVar "file")) (ETuple (EVar "path") (EVar "src") (EBinOp "++" (EVar "diags") (EListLit (EVar "diag")))) (ETuple (EVar "path") (EVar "src") (EVar "diags"))))
 (DTypeSig true "crossFileCacheSound" (TyCon "Bool"))
 (DFunDef false "crossFileCacheSound" () (EMatch (EVar "allCrossFileRules") (arm (PList (PVar "r")) () (EBinOp "==" (EFieldAccess (EVar "r") "name") (EVar "ruleNameDuplicateBody"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "runCrossFileRulesFromOccs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -8294,8 +8366,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "isFindingError" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "severity") (arm (PCon "SevError") () (EVar "True")) (arm (PCon "SevWarning") () (EVar "False"))))
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
 (DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EFieldAccess (EVar "f") "rule")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EVar "None")))
+(DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EVar "findings"))))))
+(DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EApp (EVar "dropParsedTriple") (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "path"))))
+(DTypeSig false "dropParsedTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
+(DFunDef false "dropParsedTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig true "lintToLines" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))))
 (DFunDef false "lintToLines" ((PVar "idx") (PVar "src") (PVar "path") (PVar "pos") (PVar "prog")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "findingLine")) (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "findingLine" (TyFun (TyCon "Finding") (TyCon "String")))
@@ -9773,6 +9849,15 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "runCrossFileRules" ((PVar "only") (PVar "disable") (PVar "files")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "runCrossRuleOn") (EVar "only")) (EVar "disable")) (EVar "files"))) (EVar "allCrossFileRules")))
 (DTypeSig false "runCrossRuleOn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "CrossFileRule") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "runCrossRuleOn" ((PVar "only") (PVar "disable") (PVar "files") (PVar "r")) (EIf (EApp (EApp (EApp (EVar "crossRuleActive") (EVar "only")) (EVar "disable")) (EVar "r")) (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EFieldAccess (EVar "r") "check") (EVar "files"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "mergeCrossFileIntoTriples" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "mergeCrossFileIntoTriples" ((PList) (PVar "triples")) (EVar "triples"))
+(DFunDef false "mergeCrossFileIntoTriples" ((PCons (PVar "f") (PVar "rest")) (PVar "triples")) (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "rest")) (EApp (EApp (EVar "mergeOneFinding") (EVar "f")) (EVar "triples"))))
+(DTypeSig false "mergeOneFinding" (TyFun (TyCon "Finding") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "mergeOneFinding" ((PVar "f") (PVar "triples")) (EMatch (EFieldAccess (EVar "f") "loc") (arm (PCon "None") () (EVar "triples")) (arm (PCon "Some" (PCon "Loc" (PVar "file") PWild PWild PWild PWild)) () (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "tripleHasPath") (EVar "file"))) (EVar "triples")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "appendIfPath") (EVar "file")) (EApp (EVar "findingToDiag") (EVar "f")))) (EVar "triples")) (EBinOp "++" (EVar "triples") (EListLit (ETuple (EVar "file") (ELit (LString "")) (EListLit (EApp (EVar "findingToDiag") (EVar "f"))))))))))
+(DTypeSig false "tripleHasPath" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool"))))
+(DFunDef false "tripleHasPath" ((PVar "file") (PTuple (PVar "path") PWild PWild)) (EBinOp "==" (EVar "path") (EVar "file")))
+(DTypeSig false "appendIfPath" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
+(DFunDef false "appendIfPath" ((PVar "file") (PVar "diag") (PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EIf (EBinOp "==" (EVar "path") (EVar "file")) (ETuple (EVar "path") (EVar "src") (EBinOp "++" (EVar "diags") (EListLit (EVar "diag")))) (ETuple (EVar "path") (EVar "src") (EVar "diags"))))
 (DTypeSig true "crossFileCacheSound" (TyCon "Bool"))
 (DFunDef false "crossFileCacheSound" () (EMatch (EVar "allCrossFileRules") (arm (PList (PVar "r")) () (EBinOp "==" (EFieldAccess (EVar "r") "name") (EVar "ruleNameDuplicateBody"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "runCrossFileRulesFromOccs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))))

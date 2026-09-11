@@ -138,6 +138,12 @@ test: medaka
 	## crash, never a pass.
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
+	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
+	## import closure ([W-MODULE-BLIND]), so its renderer-parity property
+	## (text/JSON/MCP cross-file findings agree) never runs otherwise.
+	## `--native`: every property here parses real fixture files, an extern
+	## `medaka test`'s interpreter policy does not bind.
+	./medaka test --native compiler/tools/lint_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
