@@ -6065,8 +6065,8 @@ buildImplEnvGo (m :: rest) ia =
 -- the evidence reader onto an EMPTY Flat `IE` is a correct→broken regression on the
 -- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively.
 -- ⚠️ This sentence used to end "nothing reads `bodyImplEnvRef` yet", which is FALSE from
--- B-2.1-b2 on: three SELECTION legs read it (`concreteReqMatchByIface`,
--- `selectReqImpl`/`predicateRouteKeyForRow`, `implDictRoutesForFull`/`argImplDictRoutesForEncl`),
+-- B-2.1-b2 on: the SELECTION legs read it (`concreteReqMatchByIface`,
+-- `selectReqImpl`/`predicateRouteKeyForRow`, `implDictRoutesForRow`/`argImplDictRoutesForEncl`),
 -- and B-2.1-g added the METHOD-keyed route word (`keyForSite`) plus all three shadow
 -- existence reads (`ieImplExistsForHead`).  Derive the set, do not trust a list:
 -- `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
@@ -21725,7 +21725,7 @@ resolveSite : List String ->
 -- #156 S3b: a thin adapter over `entail` (EKReturn kind).  `entail` returns
 -- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
 -- pre-S3b arm-by-arm body: assum → `(RDictFwd/RDict, [])`, inst → `(RKey key [],
--- implDictRoutesForFull …)`, fallback → `(RNone, [])`.
+-- selected-row prerequisite routes)`, fallback → `(RNone, [])`.
 -- ⚠️ tagRef is NOT always RNone-seeded: a P0-18 standalone-shadow site seeds it to
 -- `RLocal <sym> []` at rewriteArgScoped (~7438), and `resolveRLocalSites` (later) leaves
 -- an importer-shadow / argDispatchOf-None / ungrounded-result site's ref UNTOUCHED — so
@@ -22862,7 +22862,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
     let goals = predicate.predicateArguments
     match ieSelectRowByIface env predicate.predicateInterface goals
       Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
-        let reqs = implDictRoutesForRow encl useScope operandMono goals row
+        let reqs = implDictRoutesForRow encl useScope goals row
         let key = methodRouteKeyForRow method env row
         let route = RKey key reqs
         let _ =
@@ -26846,7 +26846,7 @@ tyStructEqList _ _ = False
 --      `predicateRouteKeyForRow` plus `argImplRequiresRoutesForRow`, so route word
 --      and `requires` cannot drift to different winners (§6 C2).  `selectReqImpl`
 --      remains only on the legacy undetermined top route.
---   3. METHOD-keyed — the element dicts at `implDictRoutesForFull` /
+--   3. METHOD-keyed — the element dicts at `implDictRoutesForRow` /
 --      `argImplDictRoutesForEncl`, which used `matchedEntry` over the prefix
 --      `stampKeyTable`.  ⚠️ At b2, `matchedEntry` / `matchingEntries` /
 --      `candidateBucket` / `countHead` / `headCollides` / `keyForSite` were left LIVE
@@ -27098,12 +27098,9 @@ ieSelectRowByIface env iface goals = match goalHeadCon goals
 -- ⚠️ DELIBERATELY NOT A NEW PARAMETER ON THIS FUNCTION, and the reason is
 -- `ieImplExistsForHead`'s verbatim — its three existence readers move together "by
 -- construction rather than by diligence" precisely because the scope is projected
--- inside the one query.  This selector has the SAME three real callers
--- (`keyForSite`, `implDictRoutesForFull`, `argImplDictRoutesForEncl`), each passing a
--- bare `name : String`; threading `admittedIfaceFor name` through them would let a
--- future edit give the three selection sites three different scopes, which is the
--- MEASURED S0 shape (RUN-METHID-004).  Reading it here makes a partial move
--- unrepresentable and leaves all three callers untouched.
+-- inside the one query.  Every caller passes a bare `name : String`; threading
+-- `admittedIfaceFor name` through them would let selection sites disagree on scope.
+-- Reading it here makes that partial move unrepresentable.
 --
 -- ⚠️ ONE `omLookup` PER SELECTION, hoisted out of the row scan for the same reason
 -- `ieImplExistsForHead` hoists its own ([T-PERF-HUNT]: Medaka is strict, so an in-loop
@@ -27154,6 +27151,14 @@ ieRowHeadTriple None = None
 ieRowHeadTriple (Some (ImplRow _ _ _ (tys@(headTy :: _)) reqs _)) =
   Some (headTy, tys, reqs)
 ieRowHeadTriple (Some _) = None
+
+-- Match an already-selected instance row against the complete predicate goal.
+-- The substitution and prerequisites are projections of that same row.
+selectedRowReqMatch : List Mono ->
+  ImplRow ->
+  Option (List (String, Mono), List Require)
+selectedRowReqMatch goals (ImplRow _ _ _ itys reqs _) =
+  map (subst => (subst, reqs)) (implHeadSubst itys goals)
 
 -- The route word for an already-selected predicate row.  Same-interface head
 -- overlap keeps the established canonical-key rule.  A second condition is needed
@@ -27619,65 +27624,21 @@ headKeyNameOr : String -> Option HeadKey -> String
 headKeyNameOr _ (Some hk) = headKeyName hk
 headKeyNameOr dflt None = dflt
 
--- Multi-param-interface variant: [paramMonos] is the FULL list of the interface's
--- type-parameter monos at this occurrence (recovered by ifaceParamMonos), e.g. for
--- `Set { 3,1,2 } : Set _a` the `FromEntries c e` occurrence has c↦Set _a, e↦Int.
--- The single-param result-only path lost the element grounding (`e`): matching the
--- impl head `Set a` against the result `Set _a` only binds a↦_a (a free var), so the
--- `requires Ord a` route fell to RNone → a null Ord dict → SIGSEGV.  Matching the
--- impl's FULL `implTys` (`[Set a, a]`) against ALL the param monos recovers a↦Int from
--- the second param, exactly as the OCaml oracle's impl_head_subst keys off the full
--- concrete_args (the interface's param_vars), not just the result.
--- #203 (G): the return-position element/requires routes.  Was a FIRST-MATCH scan of the
--- ImplBuckets [tag] bucket (which OMITS no-requires impls, so it could never see the
--- specific `List Int` sibling next to `List a` and always discharged `List a`'s requires).
--- Now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
--- via the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
--- replaced `matchedEntry`; §3 `inst` = min⊑) and discharges THAT impl's OWN
--- requires — [] for a no-requires specific impl.  Non-overlapping site (one match) → the
--- same impl the first-match scan returned ⇒ byte-identical routes.  [implTable] is a dead
--- parameter here (see the header a few lines below implDictRoutesForFull's body for the
--- measurement — it is NOT threaded for a live re-bucketing).
--- The OUTER head match still uses headSubstWithParams (multi-param augmentation).
-implDictRoutesForFull : String ->
-  ScopeId ->
-  String ->
-  String ->
-  Mono ->
-  List Mono ->
-  List Route
--- #609: the impl is now selected on the SAME full param-mono vector the head subst
--- is built from (was: `matchedEntry … resultMono` — arg-0 only, so at n≥2 it could
--- hand headSubstWithParams the requires of an impl that does not match the goal).
--- ARCH B-2.1-b2 (LEG 3a, the METHOD-keyed ELEMENT DICTS): selection moved off the
--- prefix `stampKeyTable` onto the graph-global `IE`.  🚨 THIS IS THE LEG WHOSE
--- ABSENCE MAKES THE OTHER TWO AN S0: with legs 1/2 moved and this one left behind,
--- #1564's impl gained a dict param it was never passed — `check` exit 0, built
--- binary 139 (RUN-B-023).  This comment used to justify the parameter as *"still threaded for the
--- nested `requires` recursion, which re-buckets by each requires' own head"* — MEASURED
--- FALSE, and the recursion's own end point already says so: it terminates at
--- `selectReqImpl`, whose signature takes no `KeyBuckets` at all, and whose header
--- records why (*"the `KeyBuckets` parameter is REMOVED rather than ignored — it had
--- exactly one reader, this arm"*).  Nothing on the chain
--- (`argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail`'s `EKNestedTop` arms)
--- reads the table; each link only forwards it, and the one `KeyBuckets`-consuming
--- fallback (`undeterminedRoute`'s `CountImpls` arm) is unreachable because
--- `argReqRoute` seeds the recursion with `KeepNone`.
-implDictRoutesForFull encl useScope name tag resultMono paramMonos =
-  match ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name paramMonos
-    Some row => implDictRoutesForRow encl useScope resultMono paramMonos row
+-- Exact prerequisite routing consumes the complete predicate vector and the row
+-- already selected for the route word.  The checker uses the same row matcher.
+implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
+implDictRoutesForRow encl useScope goals row =
+  match selectedRowReqMatch goals row
+    Some (subst, reqs) => argImplReqRoutes encl useScope subst reqs 0 0
     None => []
 
-implDictRoutesForRow : String ->
-  ScopeId ->
-  Mono ->
-  List Mono ->
-  ImplRow ->
-  List Route
-implDictRoutesForRow encl useScope resultMono paramMonos row =
+-- Missing predicate-vector metadata keeps the scalar result-head match used by
+-- the legacy return path.  Exact callers use selectedRowReqMatch instead.
+legacyReturnReqRoutesForRow : String -> ScopeId -> Mono -> ImplRow -> List Route
+legacyReturnReqRoutesForRow encl useScope resultMono row =
   match ieRowHeadTriple (Some row)
     Some (headTy, implTys, reqs) =>
-      match headSubstWithParams headTy implTys resultMono paramMonos
+      match headSubstWithParams headTy implTys resultMono [resultMono]
         Some subst => argImplReqRoutes encl useScope subst reqs 0 0
         None => []
     None => []
@@ -27898,8 +27859,8 @@ data Undetermined = KeepNone | CountImpls (List Decl) String
 --   * assum: EKNestedTop uses `activeDictVarForEncl`; EKReturn uses the enclDictVarOf-
 --     preferring `activeDictVarOfEncl`.  EKReturn routes RDictFwd when the method is
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
---   * inst: EKReturn upgrades the head tag to the canonical full-type key (`keyForSite`)
---     and fills element routes via `implDictRoutesForFull`; EKNestedTop stamps the
+--   * inst: EKReturn selects one row for its canonical key and element routes;
+--     EKNestedTop stamps the
 --     canonical key of the min⊑ winner + `argImplRequiresRoutes`-packed requires (with
 --     the W2 depth fuse).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
@@ -28156,23 +28117,33 @@ entailInst : String ->
   String ->
   EntailKind ->
   (Route, List Route)
--- #609: the goal is the interface's FULL param-mono vector `τ̄` (§5: "the dispatch
--- type is the instantiated vector"), not the result mono alone — and it is the SAME
--- vector `implDictRoutesForFull` already recovered for element grounding, so the
--- selector and the requires router now agree on one goal by construction.  A method
--- with no registered interface (ifaceParamMonos → None) still selects on [m],
--- exactly as before.
+-- The exact arm selects on the interface's full instantiated parameter vector and
+-- uses that same row and vector for both the route word and prerequisites.  A method
+-- with no registered vector retains the legacy scalar result-head match.
 entailInst name m encl useScope tag (EKReturn fullMono _) =
-  let paramMonos = optionOr [m] (ifaceParamMonos name fullMono)
-  let routeKey = optionOr tag (keyForSite name paramMonos)
-  (RKey routeKey [], implDictRoutesForFull encl useScope name tag m paramMonos)
+  let env = perRun.value.bodyImplEnvRef.value
+  match ifaceParamMonos name fullMono
+    Some goals => match ieSelectRowByMethod env name goals
+      Some row =>
+        let routeKey = methodRouteKeyForRow name env row
+        let routes = implDictRoutesForRow encl useScope goals row
+        (RKey routeKey [], routes)
+      None => (RKey tag [], [])
+    -- A method without predicate-vector metadata retains the scalar result-head
+    -- selection and substitution used by the compatibility path.
+    None => match ieSelectRowByMethod env name [m]
+      Some row =>
+        let routeKey = methodRouteKeyForRow name env row
+        let routes = legacyReturnReqRoutesForRow encl useScope m row
+        (RKey routeKey [], routes)
+      None => (RKey tag [], [])
 entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env predicate.predicateInterface goals
     Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
       let route = RKey (methodRouteKeyForRow name env row) []
-      let routes = implDictRoutesForRow encl useScope m goals row
+      let routes = implDictRoutesForRow encl useScope goals row
       let _ =
         noteNumericEntailment kind useScope (Some selectedIface) route routes
       (route, routes)
@@ -28491,7 +28462,7 @@ ambiguousImplMsg iface =
 -- valid concrete instantiation in a well-typed program".  Both halves are false for a
 -- GROUND chain: `impl Tag (Wrap a) requires Tag a` applied to `Wrap^34 Int` is perfectly
 -- well-formed, reaches this function at depth 34 through the RETURN-position chain
--- (`implDictRoutesForFull` → `argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail`
+-- (`implDictRoutesForRow` → `argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail`
 -- (EKNestedTop) → here), and the `[]` DROPPED A REAL `requires`.  The emitted witness
 -- (`emitConstDictCell`, `backend/llvm_emit.mdk`) then carried a 1-word `Wrap` cell with
 -- no nested `Tag a` dict; the innermost `tagOf` read a nonexistent field and the built
@@ -28657,15 +28628,15 @@ argImplRequiresRoutesForRow encl useScope m goals prevSize spent row =
 -- method registered the shared impl tyvar id LAST — see activeDictVarForEncl).  An
 -- empty [encl] has no lexical dict owner and therefore cannot forward one.
 -- #203 (H): the arg/op-position element routes.  Was a FIRST-MATCH scan of the
--- ImplBuckets [tag] bucket (blind to no-requires siblings, see implDictRoutesForFull);
+-- ImplBuckets [tag] bucket (blind to no-requires siblings, see implDictRoutesForRow);
 -- now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
 -- via the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
 -- replaced `matchedEntry`) and discharges THAT impl's OWN requires.  A
 -- non-overlapping site (one match) selects the same impl the first-match scan did ⇒
 -- byte-identical routes.
 -- #609 (arg position): selects on the goal VECTOR [goals] and binds the subst from
--- the winner's FULL head types, exactly as its return-position twin
--- implDictRoutesForFull does.  This is the SAME defect as #609 proper, one leg over:
+-- the winner's FULL head types, as the return-position selected-row matcher does.
+-- This is the SAME defect as #609 proper, one leg over:
 -- selecting on `[mono]` length-mismatches a multi-param impl's `itys`, so
 -- entryHeadMatches fell back to arg-0 and two siblings differing only past arg 0 both
 -- matched.  They are genuinely disjoint, so coherence never rejected them and
@@ -28704,7 +28675,7 @@ argImplDictRoutesForEncl encl useScope name _tag mono goals =
 -- #217/#1576: [prevSize]/[spent] carry the WS-4b fuse through the aware recursion (see
 -- argImplRequiresRoutes, which owns the shrinking argument).  Every entry point seeds
 -- `0 0` — arg-position (argImplDictRoutesForEncl), return-position
--- (implDictRoutesForFull), routeOf/topRouteV and routeUndeterminedTop alike: `prevSize
+-- (implDictRoutesForRow), routeOf/topRouteV and routeUndeterminedTop alike: `prevSize
 -- == 0` is the "no parent goal yet" sentinel, so a seed's own first level is counted
 -- as non-shrinking and costs one unit of fuel.
 argImplReqRoutes : String ->
@@ -31650,8 +31621,7 @@ concreteReqMatchByIface : IfaceRef ->
 -- above for why moving this leg ALONE is an S0 rather than half a fix.
 concreteReqMatchByIface iface args =
   match ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface args
-    Some (ImplRow _ _ _ itys reqs _) =>
-      map (sub => (sub, reqs)) (implHeadSubst itys args)
+    Some row => selectedRowReqMatch args row
     None => None
 
 firstReqMatch : List (List Ty, List Require) ->

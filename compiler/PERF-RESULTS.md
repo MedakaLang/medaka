@@ -1494,3 +1494,36 @@ gate reports 2,330,014 bytes and 3,071 functions, within the unchanged ceiling.
 Its other arms also remain complete: 157 plain fixtures (366,491 bytes) and nine
 typed fixtures (17,459 bytes). The typed producer supplies declaration metadata
 to the selected-arity consumer, preserving all nine executable cases.
+
+### Ordinary return prerequisite matching (2026-09-12)
+
+The full-predicate matcher shared by checking and return stamping was measured at
+`cbab660804` against `3b4e6a5f83`, using each revision's independently built binary.
+All three legacy caches remain enabled. The LSP workloads are a typed two-argument
+integer `add` function and the same document importing `list.range` with a typed
+`List Int` binding. Each stream initializes and shuts down; N1 adds `didOpen`,
+and N2/N3 add successive literal-only edits to the final call. Cold and warm
+columns subtract adjacent N0–N3 totals, excluding common process startup.
+
+Cachegrind instruction counts use disabled cache/branch simulation. Allocation
+counts use `GC_get_total_bytes` at process exit through an external preload shim,
+with two repetitions. Both use a fixed 1 GiB initial GC heap and strict source
+freshness. Every stream exited successfully with the expected count of empty
+diagnostics and a shutdown response.
+
+| Workload / metric | Revision | Cold | Warm 1 | Warm 2 |
+|---|---|---:|---:|---:|
+| Integer document / instructions | baseline | 315,364,784 | 25,120,475 | 25,157,755 |
+| Integer document / instructions | candidate | 315,370,101 | 25,142,491 | 25,164,813 |
+| Import document / instructions | baseline | 547,095,941 | 38,114,201 | 38,107,252 |
+| Import document / instructions | candidate | 547,136,029 | 38,098,948 | 38,115,465 |
+| Integer document / allocated bytes | baseline | 49,743,792 | 4,579,120 | 4,603,152 |
+| Integer document / allocated bytes | candidate | 49,739,696 | 4,583,216 | 4,607,264 |
+| Import document / allocated bytes | baseline | 93,909,920 | 6,858,912 | 6,873,904 |
+| Import document / allocated bytes | candidate | 93,910,288 | 6,859,216 | 6,878,240 |
+
+Every marginal change is below 0.1% in magnitude. Allocation repetitions matched
+except for a 16-byte spread in the baseline integer document's N3 total. These
+measurements cover checking requests and total allocation; they do not establish
+retained-live-heap bounds or safe finalized caching. Dispatch correctness is
+checked separately with the wrapped-return regression and engine value pin.

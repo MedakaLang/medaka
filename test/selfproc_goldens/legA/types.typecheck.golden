@@ -1179,8 +1179,7 @@ implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> Int -> List String
 implDictPassMethods : TyConOrigin -> Int -> List ImplMethod -> List ImplMethod
-implDictRoutesForFull : String -> ScopeId -> String -> String -> Mono -> List Mono -> List Route
-implDictRoutesForRow : String -> ScopeId -> Mono -> List Mono -> ImplRow -> List Route
+implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
 implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLabel : String -> KeyEntry -> String
@@ -1452,6 +1451,7 @@ launderEscapeFromLog : List EffRow -> List EffRow -> List AbsorptionEvent -> Lis
 launderOpenActualArrow : EffRow -> List AbsorptionEvent -> List Atom
 leadInferredPred : (IfaceRef, List Int, List Mono) -> List (IfaceRef, Int, List Mono)
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
+legacyReturnReqRoutesForRow : String -> ScopeId -> Mono -> ImplRow -> List Route
 letBindDictSites : LetBind -> List (List Route)
 letBindEVars : LetBind -> List String
 letBindName : LetBind -> String
@@ -2186,6 +2186,7 @@ seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
+selectedRowReqMatch : List Mono -> ImplRow -> Option (List (String, Mono), List Require)
 selfBinding : String -> (String, String)
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
 selfNameRows : List Decl -> List (String, a) -> List (String, a)
