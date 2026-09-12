@@ -921,36 +921,6 @@ sources = ["sqlite/*"]
 corpus = []
 toolchain = []
 
-[[gate]]
-name = "sqlite/test/multipage_write_oracle"
-area = "engines"
-shard = "gates_4"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/multipage_write_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/multitable_write_oracle"
-area = "engines"
-shard = "gates_8"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/multitable_write_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
 # A gate OUTSIDE test/ entirely, owned by another project, needing an external
 # oracle binary (the real sqlite3 CLI) as a toolchain requirement. It is also
 # the READ group's single row: ten `sqlite/test/*_oracle.sh` scripts became ten
@@ -987,21 +957,6 @@ corpus = []
 toolchain = ["sqlite3"]
 
 [[gate]]
-name = "sqlite/test/rowid_roundtrip_oracle"
-area = "engines"
-shard = "gates_4"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/rowid_roundtrip_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
 name = "sqlite/test/sql_oracle"
 area = "engines"
 shard = "gates_4"
@@ -1016,21 +971,10 @@ sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
-[[gate]]
-name = "sqlite/test/writer_api_oracle"
-area = "engines"
-shard = "gates_3"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/writer_api_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
+# The STORAGE-write group's single row: five `sqlite/test/{writer,writer_api,
+# multipage_write,multitable_write,rowid_roundtrip}_oracle.sh` scripts became
+# five rows of one native runner (#2592/#2593). It keeps this NAME so it keeps
+# `sqlite_test_writer_oracle`'s cost history.
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
@@ -1038,9 +982,9 @@ shard = "gates_5"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/writer_oracle.sh"
+kind = "native"
+migration = "done"
+run = "sqlite/test/writer_oracle_test.mdk"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
@@ -1425,7 +1369,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_json"
 area = "types"
-shard = "gates_3"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

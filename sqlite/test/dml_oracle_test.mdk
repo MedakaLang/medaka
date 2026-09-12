@@ -35,6 +35,14 @@
 
    Run: `medaka gate run sqlite/test/dml_oracle`. -}
 
+-- The spawn primitives below (`spawnRaw`/`spawnOut`/`rowScratch`/`seedDb`/
+-- `spawnEnv`/`emitterBin`) are byte-for-byte the same as
+-- `writer_oracle_test.mdk`'s copies — deliberately, not an oversight:
+-- `medaka gate verify`'s native-grading clause reads only the source text of
+-- the module a gate's `run =` names, so moving these into a module the two
+-- files share would make the check see nothing to grade in either file and
+-- pass having verified neither.
+-- lint-disable-file rule-duplicate-body
 import io.{getEnvOr, runVerb}
 import list.{replicate}
 import string.{contains, join, startsWith, trim, unwords}

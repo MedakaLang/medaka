@@ -54,7 +54,7 @@ rosterNames = map fst suites
    directly rather than through this roster. Anything else under
    `sqlite/test/` is a suite and belongs in `suites` — that is what keeps a
    new test file from being added silently, since a file in neither list
-   fails the closure check below. Three gate-tests are exempt today; the list
+   fails the closure check below. Four gate-tests are exempt today; the list
    was a list before the second one landed, because a gate-test arriving
    beside this one had to be a deliberate row, not a mechanism change. -}
 exempt : List (String, String)
@@ -70,6 +70,10 @@ exempt = [
   (
     "dml_oracle_test",
     "the DML-path differential oracles; `test/gates.toml` runs it as `sqlite/test/dml_oracle`",
+  ),
+  (
+    "writer_oracle_test",
+    "the STORAGE-write differential oracles; `test/gates.toml` runs it as `sqlite/test/writer_oracle`",
   ),
 ]
 

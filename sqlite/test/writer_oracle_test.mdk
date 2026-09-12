@@ -1,0 +1,908 @@
+{- | The STORAGE-path differential oracles for the Medaka SQLite writer, as one
+   native runner, migrated from five `sqlite/test/{writer,writer_api,
+   multipage_write,multitable_write,rowid_roundtrip}_oracle.sh` scripts under
+   #2592 / #2593.
+
+   Every row here writes a fresh `.db` file WITH THE MEDAKA WRITER (no
+   sqlite3 seeding — the writer builds the file from scratch), then checks
+   it the same three ways every retired script did:
+
+     1. `PRAGMA integrity_check` == "ok"     (strongest gate — any wrong
+        offset/pointer in the on-disk b-tree fails this immediately)
+     2. `sqlite3 SELECT` matches a HAND-DERIVED "intended rows" literal (not a
+        live query compared against another live query — a human decided
+        these values once, the same pattern as `dml_oracle_test.mdk`'s
+        `delete`/`update` rows)
+     3. the existing Medaka reader decodes the SAME rows, proving the writer
+        is the exact inverse of the trusted reader
+
+   Every row's combined report is checked TWICE, against two independent
+   sources of "expected": a hand-typed literal embedded in this file (which
+   a corrupted golden cannot fake), and the committed `.golden` (which a
+   corrupted literal cannot fake) — mirroring `dml_oracle_test.mdk`'s
+   `delete`/`update` split.
+
+   `rowid_roundtrip` is not a fresh-write row: it round-trips an EXISTING
+   sqlite3-seeded file through the explicit-rowid rewrite path and pins the
+   specific regression it was written for (a non-IPK table's rowid GAP must
+   survive rewrite), plus a reader round-trip check that is deliberately kept
+   OUT of the golden — it compares a different column shape than the report's
+   `rowid,k,v` lines, exactly as `rowid_roundtrip_oracle.sh` did.
+
+   `multipage_write` and `multitable_write` also each carry a structural
+   assertion the golden alone cannot express (root-page-is-interior-over-N-
+   leaves; three tables with distinct rootpages and a mixed page layout) —
+   computed here via one recursive-CTE `readfile`/`substr` SQL query per
+   database rather than the retired scripts' `python3` byte-parsing, so
+   `python3` is no longer a toolchain dependency of this group either.
+
+   Run: `medaka gate run sqlite/test/writer_oracle`. -}
+
+-- The spawn primitives below (`spawnRaw`/`spawnOut`/`rowScratch`/`seedDb`/
+-- `spawnEnv`/`emitterBin`) are byte-for-byte the same as `dml_oracle_test.mdk`'s
+-- copies — deliberately, not an oversight: `medaka gate verify`'s native-grading
+-- clause reads only the source text of the module a gate's `run =` names, so
+-- moving these into a module the two files share would make the check see
+-- nothing to grade in either file and pass having verified neither.
+-- lint-disable-file rule-duplicate-body
+import io.{getEnvOr, runVerb}
+import list.{drop}
+import string.{join, split, trim, unwords}
+import test.{Expectation(..), expectEqual}
+import test.oracle_support.{expectLines, flatLines, outLines}
+import test_process.{
+  boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
+}
+
+-- # Spawning
+--
+-- Kept in THIS file, not `oracle_support`, for the same reason
+-- `dml_oracle_test.mdk` keeps its own copy: `medaka gate verify`'s
+-- native-grading clause reads only the source text of the module a gate's
+-- `run =` names, so a spawn routed through a shared helper module would be
+-- invisible to it.
+buildTimeoutSeconds : Int
+buildTimeoutSeconds = 600
+
+queryTimeoutSeconds : Int
+queryTimeoutSeconds = 120
+
+emitterBin : <IO> String
+emitterBin =
+  let root = medakaRoot
+  getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
+
+spawnEnv : <IO> List String
+spawnEnv =
+  let rootVar = "MEDAKA_ROOT=\{medakaRoot}"
+  let emitterVar = "MEDAKA_EMITTER=\{emitterBin}"
+  [rootVar, emitterVar]
+
+spawnRaw : Int ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+spawnRaw secs cmd args =
+  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
+    Err e =>
+      Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
+    Ok (127, _, err) =>
+      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
+    Ok triple => Ok triple
+
+spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+spawnOut secs cmd args = match spawnRaw secs cmd args
+  Err e => Err e
+  Ok (0, out, _) => Ok out
+  Ok (code, out, err) =>
+    Err
+      "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- # Small process-backed primitives every row below is built from.
+
+rowScratch : String -> <Exec "_"> Result String String
+rowScratch name = match scratchDir
+  Err e => Err "\{name}: \{e}"
+  Ok dir => Ok "\{dir}/\{name}"
+
+buildBin : String -> String -> <Exec "_", IO> Result String Unit
+buildBin entry bin =
+  map
+    (_ => ())
+    (spawnOut buildTimeoutSeconds medakaBin [
+      "build",
+      underRoot entry,
+      "-o",
+      bin,
+    ])
+
+seedDb : String -> String -> <Exec "_", IO> Result String Unit
+seedDb db sql = map (_ => ()) (spawnOut queryTimeoutSeconds "sqlite3" [db, sql])
+
+sqlite3Query : String -> String -> <Exec "_", IO> Result String String
+sqlite3Query db sql = spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
+
+sqlite3Lines : String -> String -> <Exec "_", IO> Result String (List String)
+sqlite3Lines db sql = map outLines (sqlite3Query db sql)
+
+-- # Page-layout structural checks
+--
+-- Replaces the retired `multipage_write`/`multitable_write` scripts'
+-- `python3` byte-parsing with one recursive-CTE SQL query per database: one
+-- `p|hex` line per physical page, the page-type byte read at its own start
+-- (page 1's real b-tree header sits 100 bytes in, past the file header).
+
+pageTypesSql : String -> String
+pageTypesSql db =
+  "SELECT p, hex(substr(readfile('\{db}'), CASE WHEN p=1 THEN 101 ELSE (p-1)*(SELECT page_size FROM pragma_page_size)+1 END, 1)) FROM (WITH RECURSIVE seq(p) AS (SELECT 1 UNION ALL SELECT p+1 FROM seq WHERE p < (SELECT page_count FROM pragma_page_count)) SELECT p FROM seq) ORDER BY p;"
+
+pageHexes : String -> <Exec "_", IO> Result String (List String)
+pageHexes db = map (map hexOfRow) (sqlite3Lines db (pageTypesSql db))
+
+hexOfRow : String -> String
+hexOfRow line = match split "|" line
+  [_, h] => h
+  _ => "??"
+
+-- `05` (table interior) and `0D` (table leaf) are the only page types these
+-- fixtures ever produce (no index is written) — the fallback below leaves an
+-- unexpected type as its own hex text, which fails a decimal comparison
+-- loudly rather than silently reading as a plausible number.
+pageTypeDecimal : String -> String
+pageTypeDecimal "05" = "5"
+pageTypeDecimal "0D" = "13"
+pageTypeDecimal other = other
+
+-- Interior/leaf counts exclude physical page 1 (`sqlite_master`), matching
+-- the retired scripts' own `range(1, pages)` — the `types=` string below
+-- does NOT exclude it, since that one is a straight byte-for-byte dump.
+countHex : String -> List String -> Int
+countHex want hexes = length (filter (== want) (drop 1 hexes))
+
+typesDigits : List String -> String
+typesDigits hexes = join "" (map pageTypeDecimal hexes)
+
+-- # writer
+--
+-- `sqlite/test/writer_oracle.sh`: a single table (`users`), one data page,
+-- non-contiguous IPK rowids, a NULL age, a negative age, an i8 boundary.
+
+data WriterRun = WriterRun {
+  integrityCheck : String,
+  schema : List String,
+  selectRows : List String,
+  readerRows : List String,
+}
+
+writerReport : WriterRun -> List String
+writerReport r = flatLines [
+  ["# integrity_check"],
+  [r.integrityCheck],
+  ["# schema"],
+  r.schema,
+  ["# sqlite3 SELECT"],
+  r.selectRows,
+  ["# medaka reader"],
+  r.readerRows,
+]
+
+writerExpectedLines : List String
+writerExpectedLines = [
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|users|2",
+  "# sqlite3 SELECT",
+  "1|Alice|30",
+  "2|Bob|",
+  "3|Carol|-5",
+  "7|Dave|1000000",
+  "42|Eve|127",
+  "# medaka reader",
+  "1|Alice|30",
+  "2|Bob|",
+  "3|Carol|-5",
+  "7|Dave|1000000",
+  "42|Eve|127",
+]
+
+writerResult : <Exec "_", IO> Result String WriterRun
+writerResult = match rowScratch "writer"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let writer = "\{prefix}-writer"
+    let reader = "\{prefix}-reader"
+    let out = runWriter db writer reader
+    let _ = runVerb "rm" ["-rf", db, writer, reader]
+    out
+
+runWriter : String -> String -> String -> <Exec "_", IO> Result String WriterRun
+runWriter db writer reader = do
+  _ <- buildBin "sqlite/writer_demo.mdk" writer
+  _ <- buildBin "sqlite/main.mdk" reader
+  _ <- spawnOut queryTimeoutSeconds writer [db]
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
+  selectRows <- sqlite3Lines db "SELECT * FROM users ORDER BY rowid;"
+  readerOut <- spawnOut queryTimeoutSeconds reader [db, "users"]
+  Ok WriterRun {
+    integrityCheck = trim ic,
+    schema = schema,
+    selectRows = selectRows,
+    readerRows = outLines readerOut,
+  }
+
+test "writer: literal gates match the hand-derived expected values" =
+  match writerResult
+    Err e => Fail e (join "\n" writerExpectedLines) "the row did not run"
+    Ok r => expectLines writerExpectedLines (writerReport r)
+
+test "writer: report matches sqlite/test/writer.golden" = match writerResult
+  Err e => Fail e "the committed golden" "the row did not run"
+  Ok r => match readFile (underRoot "sqlite/test/writer.golden")
+    Err e =>
+      Fail
+        "could not read sqlite/test/writer.golden: \{e}"
+        "sqlite/test/writer.golden"
+        "unreadable"
+    Ok text => expectLines (outLines text) (writerReport r)
+
+-- # writer_api
+--
+-- `sqlite/test/writer_api_oracle.sh`: the P4 API (`writeTable`), one row per
+-- schema (users WITH IPK + NULL, kv WITHOUT IPK, blobs WITH a BLOB column,
+-- reals WITH a REAL column), each checked the same three ways, plus one
+-- combined golden covering all four.
+
+data WriterApiSchema = WriterApiSchema {
+  apiHeader : String,
+  apiIntegrityCheck : String,
+  apiSchema : List String,
+  apiSelectLabel : String,
+  apiSelectRows : List String,
+  apiReaderRows : List String,
+}
+
+writerApiSchemaReport : WriterApiSchema -> List String
+writerApiSchemaReport s = flatLines [
+  [s.apiHeader],
+  ["# integrity_check"],
+  [s.apiIntegrityCheck],
+  ["# schema"],
+  s.apiSchema,
+  [s.apiSelectLabel],
+  s.apiSelectRows,
+  ["# medaka reader"],
+  s.apiReaderRows,
+]
+
+runApiSchema : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String WriterApiSchema
+runApiSchema writer reader cmd db header selectLabel selectSql = do
+  _ <- spawnOut queryTimeoutSeconds writer [cmd, db]
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
+  selectRows <- sqlite3Lines db selectSql
+  readerOut <- spawnOut queryTimeoutSeconds reader [db, tableOfCmd cmd]
+  Ok WriterApiSchema {
+    apiHeader = header,
+    apiIntegrityCheck = trim ic,
+    apiSchema = schema,
+    apiSelectLabel = selectLabel,
+    apiSelectRows = selectRows,
+    apiReaderRows = outLines readerOut,
+  }
+
+-- The writer_api_demo command names one table by a singular name (`blob`)
+-- for a plural-named table (`blobs`) — kept as the demo itself names it.
+tableOfCmd : String -> String
+tableOfCmd "blob" = "blobs"
+tableOfCmd cmd = cmd
+
+data WriterApiRun = WriterApiRun {
+  apiUsers : WriterApiSchema,
+  apiKv : WriterApiSchema,
+  apiBlobs : WriterApiSchema,
+  apiReals : WriterApiSchema,
+}
+
+writerApiReport : WriterApiRun -> List String
+writerApiReport r = flatLines [
+  writerApiSchemaReport r.apiUsers,
+  [""],
+  writerApiSchemaReport r.apiKv,
+  [""],
+  writerApiSchemaReport r.apiBlobs,
+  [""],
+  writerApiSchemaReport r.apiReals,
+]
+
+writerApiExpectedLines : List String
+writerApiExpectedLines = [
+  "### schema: users (INTEGER PRIMARY KEY + NULL)",
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|users|2",
+  "# sqlite3 SELECT",
+  "1|Alice|30",
+  "2|Bob|",
+  "5|Carol|-5",
+  "10|Dave|1000000",
+  "# medaka reader",
+  "1|Alice|30",
+  "2|Bob|",
+  "5|Carol|-5",
+  "10|Dave|1000000",
+  "",
+  "### schema: kv (no IPK, auto rowid)",
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|kv|2",
+  "# sqlite3 SELECT",
+  "alpha|1",
+  "beta|42",
+  "gamma|",
+  "delta|-7",
+  "# medaka reader",
+  "alpha|1",
+  "beta|42",
+  "gamma|",
+  "delta|-7",
+  "",
+  "### schema: blobs (BLOB column)",
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|blobs|2",
+  "# sqlite3 SELECT (id, blob length)",
+  "1|5",
+  "2|4",
+  "3|",
+  "# medaka reader",
+  "1|<blob>",
+  "2|<blob>",
+  "3|",
+  "",
+  "### schema: reals (REAL column)",
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|reals|2",
+  "# sqlite3 SELECT",
+  "1|3.14",
+  "2|0.0",
+  "3|-2.718",
+  "4|9999999.9",
+  "5|",
+  "# medaka reader",
+  "1|3.14",
+  "2|0.0",
+  "3|-2.718",
+  "4|9999999.9",
+  "5|",
+]
+
+writerApiResult : <Exec "_", IO> Result String WriterApiRun
+writerApiResult = match rowScratch "writer-api"
+  Err e => Err e
+  Ok prefix =>
+    let writer = "\{prefix}-writer"
+    let reader = "\{prefix}-reader"
+    let dbUsers = "\{prefix}-users.db"
+    let dbKv = "\{prefix}-kv.db"
+    let dbBlob = "\{prefix}-blob.db"
+    let dbReals = "\{prefix}-reals.db"
+    let out = runWriterApi writer reader dbUsers dbKv dbBlob dbReals
+    let _ = runVerb "rm" ["-rf", writer, reader, dbUsers, dbKv, dbBlob, dbReals]
+    out
+
+runWriterApi : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String WriterApiRun
+runWriterApi writer reader dbUsers dbKv dbBlob dbReals = do
+  _ <- buildBin "sqlite/writer_api_demo.mdk" writer
+  _ <- buildBin "sqlite/main.mdk" reader
+  users <- runApiSchema
+    writer
+    reader
+    "users"
+    dbUsers
+    "### schema: users (INTEGER PRIMARY KEY + NULL)"
+    "# sqlite3 SELECT"
+    "SELECT * FROM users ORDER BY rowid;"
+  kv <- runApiSchema
+    writer
+    reader
+    "kv"
+    dbKv
+    "### schema: kv (no IPK, auto rowid)"
+    "# sqlite3 SELECT"
+    "SELECT * FROM kv ORDER BY rowid;"
+  blobs <- runApiSchema
+    writer
+    reader
+    "blob"
+    dbBlob
+    "### schema: blobs (BLOB column)"
+    "# sqlite3 SELECT (id, blob length)"
+    "SELECT id, length(data) FROM blobs ORDER BY rowid;"
+  reals <- runApiSchema
+    writer
+    reader
+    "reals"
+    dbReals
+    "### schema: reals (REAL column)"
+    "# sqlite3 SELECT"
+    "SELECT * FROM reals ORDER BY rowid;"
+  Ok WriterApiRun {
+    apiUsers = users,
+    apiKv = kv,
+    apiBlobs = blobs,
+    apiReals = reals,
+  }
+
+test "writer_api: literal gates match the hand-derived expected values" =
+  match writerApiResult
+    Err e => Fail e (join "\n" writerApiExpectedLines) "the row did not run"
+    Ok r => expectLines writerApiExpectedLines (writerApiReport r)
+
+test "writer_api: report matches sqlite/test/writer_api.golden" =
+  match writerApiResult
+    Err e => Fail e "the committed golden" "the row did not run"
+    Ok r => match readFile (underRoot "sqlite/test/writer_api.golden")
+      Err e =>
+        Fail
+          "could not read sqlite/test/writer_api.golden: \{e}"
+          "sqlite/test/writer_api.golden"
+          "unreadable"
+      Ok text => expectLines (outLines text) (writerApiReport r)
+
+-- # multipage_write
+--
+-- `sqlite/test/multipage_write_oracle.sh`: 700 rows forcing an interior
+-- (0x05) root page over >=3 leaves — same three gates as `writer`, plus a
+-- structural assertion the golden alone cannot express.
+
+bigTableN : Int
+bigTableN = 700
+
+data MultipageRun = MultipageRun {
+  mpIntegrityCheck : String,
+  mpSchema : List String,
+  mpHexes : List String,
+  mpCount : String,
+  mpFirst3 : List String,
+  mpLast3 : List String,
+}
+
+multipageLayoutLine : MultipageRun -> String
+multipageLayoutLine r =
+  let pages = intToString (length r.mpHexes)
+  let interior = intToString (countHex "05" r.mpHexes)
+  let leaves = intToString (countHex "0D" r.mpHexes)
+  let rootType = rootPageDecimal r.mpHexes
+  "pages=\{pages} interior=\{interior} leaves=\{leaves} rootpage_type=\{rootType}"
+
+-- Page 2 (index 1) is `t`'s root in every fixture below: one table besides
+-- `sqlite_master`, always the second page allocated.
+rootPageDecimal : List String -> String
+rootPageDecimal hexes = match drop 1 hexes
+  h :: _ => pageTypeDecimal h
+  [] => "?"
+
+multipageReport : MultipageRun -> List String
+multipageReport r = flatLines [
+  ["# integrity_check"],
+  [r.mpIntegrityCheck],
+  ["# schema"],
+  r.mpSchema,
+  ["# page layout"],
+  [multipageLayoutLine r],
+  ["# count"],
+  [r.mpCount],
+  ["# first 3 rows"],
+  r.mpFirst3,
+  ["# last 3 rows"],
+  r.mpLast3,
+]
+
+multipageExpectedLines : List String
+multipageExpectedLines = [
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|t|2",
+  "# page layout",
+  "pages=5 interior=1 leaves=3 rootpage_type=5",
+  "# count",
+  "700",
+  "# first 3 rows",
+  "1|item_1",
+  "2|item_2",
+  "3|item_3",
+  "# last 3 rows",
+  "698|item_698",
+  "699|item_699",
+  "700|item_700",
+]
+
+multipageResult : <Exec "_", IO> Result String MultipageRun
+multipageResult = match rowScratch "multipage-write"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let writer = "\{prefix}-writer"
+    let out = runMultipage db writer
+    let _ = runVerb "rm" ["-rf", db, writer]
+    out
+
+runMultipage : String -> String -> <Exec "_", IO> Result String MultipageRun
+runMultipage db writer = do
+  _ <- buildBin "sqlite/multipage_write_demo.mdk" writer
+  _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
+  hexes <- pageHexes db
+  count <- sqlite3Query db "SELECT count(*) FROM t;"
+  first3 <- sqlite3Lines db "SELECT * FROM t ORDER BY rowid ASC LIMIT 3;"
+  last3 <- sqlite3Lines
+    db
+    "SELECT * FROM t ORDER BY rowid ASC LIMIT 3 OFFSET \{intToString (bigTableN - 3)};"
+  Ok MultipageRun {
+    mpIntegrityCheck = trim ic,
+    mpSchema = schema,
+    mpHexes = hexes,
+    mpCount = trim count,
+    mpFirst3 = first3,
+    mpLast3 = last3,
+  }
+
+test "multipage_write: literal gates match the hand-derived expected values" =
+  match multipageResult
+    Err e => Fail e (join "\n" multipageExpectedLines) "the row did not run"
+    Ok r => expectLines multipageExpectedLines (multipageReport r)
+
+test "multipage_write: report matches sqlite/test/multipage_write.golden" =
+  match multipageResult
+    Err e => Fail e "the committed golden" "the row did not run"
+    Ok r => match readFile (underRoot "sqlite/test/multipage_write.golden")
+      Err e =>
+        Fail
+          "could not read sqlite/test/multipage_write.golden: \{e}"
+          "sqlite/test/multipage_write.golden"
+          "unreadable"
+      Ok text => expectLines (outLines text) (multipageReport r)
+
+test "multipage_write: 700 rows put the root page on an interior page (0x05) over >=3 leaves" =
+  match multipageResult
+    Err e => Fail e "root page type 5, >=3 leaves" "the row did not run"
+    Ok r =>
+      let rootType = rootPageDecimal r.mpHexes
+      let leaves = countHex "0D" r.mpHexes
+      if rootType == "5" && leaves >= 3 then
+        Pass
+          "root page type 5, >=3 leaves"
+          "root page type 5, \{intToString leaves} leaves"
+      else
+        Fail
+          "multipage_write's root page is type \{rootType} over \{intToString leaves} leaves — this row no longer exercises multi-page B-tree traversal"
+          "root page type 5, >=3 leaves"
+          "root page type \{rootType}, \{intToString leaves} leaves"
+
+-- # multitable_write
+--
+-- `sqlite/test/multitable_write_oracle.sh`: three tables in one file, mixed
+-- layouts (`users` single leaf, `big` interior root, `kv` no-IPK single
+-- leaf) — same three gates per table, plus a `sqlite_master` structural
+-- assertion the golden alone cannot express.
+
+data MultitableRun = MultitableRun {
+  mtIntegrityCheck : String,
+  mtSchema : List String,
+  mtHexes : List String,
+  mtCounts : List String,
+  mtUsersRows : List String,
+  mtKvRows : List String,
+  mtBigFirstLast : List String,
+  mtDistinctRootpages : String,
+  mtTableCount : String,
+}
+
+multitableLayoutLine : MultitableRun -> String
+multitableLayoutLine r =
+  let pages = intToString (length r.mtHexes)
+  let interior = intToString (countHex "05" r.mtHexes)
+  let leaves = intToString (countHex "0D" r.mtHexes)
+  let types = typesDigits r.mtHexes
+  "pages=\{pages} interior=\{interior} leaves=\{leaves} types=\{types}"
+
+multitableReport : MultitableRun -> List String
+multitableReport r = flatLines [
+  ["# integrity_check"],
+  [r.mtIntegrityCheck],
+  ["# schema"],
+  r.mtSchema,
+  ["# page layout"],
+  [multitableLayoutLine r],
+  ["# counts"],
+  r.mtCounts,
+  ["# users"],
+  r.mtUsersRows,
+  ["# kv"],
+  r.mtKvRows,
+  ["# big first/last"],
+  r.mtBigFirstLast,
+]
+
+multitableExpectedLines : List String
+multitableExpectedLines = [
+  "# integrity_check",
+  "ok",
+  "# schema",
+  "table|users|2",
+  "table|big|3",
+  "table|kv|7",
+  "# page layout",
+  "pages=7 interior=1 leaves=5 types=1313513131313",
+  "# counts",
+  "users=3",
+  "big=700",
+  "kv=3",
+  "# users",
+  "1|alice",
+  "2|bob",
+  "3|carol",
+  "# kv",
+  "one|1",
+  "two|2",
+  "three|3",
+  "# big first/last",
+  "1|item_1",
+  "2|item_2",
+  "699|item_699",
+  "700|item_700",
+]
+
+multitableResult : <Exec "_", IO> Result String MultitableRun
+multitableResult = match rowScratch "multitable-write"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let writer = "\{prefix}-writer"
+    let out = runMultitable db writer
+    let _ = runVerb "rm" ["-rf", db, writer]
+    out
+
+runMultitable : String -> String -> <Exec "_", IO> Result String MultitableRun
+runMultitable db writer = do
+  _ <- buildBin "sqlite/multitable_write_demo.mdk" writer
+  _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  schema <- sqlite3Lines
+    db
+    "SELECT type, name, rootpage FROM sqlite_master ORDER BY rootpage;"
+  hexes <- pageHexes db
+  usersCount <- sqlite3Query db "SELECT count(*) FROM users;"
+  bigCount <- sqlite3Query db "SELECT count(*) FROM big;"
+  kvCount <- sqlite3Query db "SELECT count(*) FROM kv;"
+  usersRows <- sqlite3Lines db "SELECT * FROM users ORDER BY id;"
+  kvRows <- sqlite3Lines db "SELECT * FROM kv ORDER BY rowid;"
+  bigFirst <- sqlite3Lines db "SELECT * FROM big ORDER BY id LIMIT 2;"
+  bigLast <- sqlite3Lines
+    db
+    "SELECT * FROM big ORDER BY id ASC LIMIT 2 OFFSET \{intToString (bigTableN - 2)};"
+  distinctRootpages <- sqlite3Query
+    db
+    "SELECT count(DISTINCT rootpage) FROM sqlite_master WHERE type='table';"
+  tableCount <- sqlite3Query
+    db
+    "SELECT count(*) FROM sqlite_master WHERE type='table';"
+  Ok MultitableRun {
+    mtIntegrityCheck = trim ic,
+    mtSchema = schema,
+    mtHexes = hexes,
+    mtCounts = [
+      "users=\{trim usersCount}",
+      "big=\{trim bigCount}",
+      "kv=\{trim kvCount}",
+    ],
+    mtUsersRows = usersRows,
+    mtKvRows = kvRows,
+    mtBigFirstLast = bigFirst ++ bigLast,
+    mtDistinctRootpages = trim distinctRootpages,
+    mtTableCount = trim tableCount,
+  }
+
+test "multitable_write: literal gates match the hand-derived expected values" =
+  match multitableResult
+    Err e => Fail e (join "\n" multitableExpectedLines) "the row did not run"
+    Ok r => expectLines multitableExpectedLines (multitableReport r)
+
+test "multitable_write: report matches sqlite/test/multitable_write.golden" =
+  match multitableResult
+    Err e => Fail e "the committed golden" "the row did not run"
+    Ok r => match readFile (underRoot "sqlite/test/multitable_write.golden")
+      Err e =>
+        Fail
+          "could not read sqlite/test/multitable_write.golden: \{e}"
+          "sqlite/test/multitable_write.golden"
+          "unreadable"
+      Ok text => expectLines (outLines text) (multitableReport r)
+
+test "multitable_write: 3 tables with distinct rootpages, >=1 interior + >=5 leaves" =
+  match multitableResult
+    Err e =>
+      Fail
+        e
+        "3 tables, 3 distinct rootpages, >=1 interior, >=5 leaves"
+        "the row did not run"
+    Ok r =>
+      let interior = countHex "05" r.mtHexes
+      let leaves = countHex "0D" r.mtHexes
+      if r.mtTableCount == "3"
+        && r.mtDistinctRootpages == "3"
+        && interior >= 1
+        && leaves >= 5 then
+        Pass
+          "3 tables, 3 distinct rootpages, >=1 interior, >=5 leaves"
+          "\{r.mtTableCount} tables, \{r.mtDistinctRootpages} distinct rootpages, \{intToString interior} interior, \{intToString leaves} leaves"
+      else
+        Fail
+          "multitable_write: ntab=\{r.mtTableCount} distinct=\{r.mtDistinctRootpages} interior=\{intToString interior} leaves=\{intToString leaves} — expected 3/3/>=1/>=5"
+          "3 tables, 3 distinct rootpages, >=1 interior, >=5 leaves"
+          "\{r.mtTableCount} tables, \{r.mtDistinctRootpages} distinct rootpages, \{intToString interior} interior, \{intToString leaves} leaves"
+
+-- # rowid_roundtrip
+--
+-- `sqlite/test/rowid_roundtrip_oracle.sh`: NOT a fresh-write row — round-trips
+-- an EXISTING sqlite3-seeded file (a non-IPK table with a rowid GAP, an IPK
+-- table with a non-contiguous IPK) through the Medaka explicit-rowid rewrite
+-- path. Pins the named historical bug: the old auto-rowid writer collapsed a
+-- non-IPK gap (1,3,4) to 1,2,3 on rewrite.
+
+rowidSeedSql : String
+rowidSeedSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users(id,name) VALUES (1,'alice'),(5,'bob'),(9,'carol'); CREATE TABLE kv(k TEXT, v INTEGER); INSERT INTO kv(rowid,k,v) VALUES (1,'a',10),(3,'b',30),(4,'c',40);"
+
+data RowidRun = RowidRun {
+  rrIntegrityCheck : String,
+  rrSrcKvRowids : String,
+  rrDstKvRowids : String,
+  rrSrcUsersRowids : String,
+  rrDstUsersRowids : String,
+  rrKvRows : List String,
+  rrUsersRows : List String,
+  rrReaderKvRows : List String,
+  rrReaderUsersRows : List String,
+}
+
+-- `tr '\n' ','`'s trailing comma, including after the last element.
+commaJoin : List String -> String
+commaJoin xs = join "," xs ++ ","
+
+rowidReport : RowidRun -> List String
+rowidReport r = flatLines [
+  ["# integrity_check"],
+  [r.rrIntegrityCheck],
+  ["# kv rowids (src -> dst)"],
+  ["src=\{r.rrSrcKvRowids} dst=\{r.rrDstKvRowids}"],
+  ["# users rowids (src -> dst)"],
+  ["src=\{r.rrSrcUsersRowids} dst=\{r.rrDstUsersRowids}"],
+  ["# kv rows"],
+  r.rrKvRows,
+  ["# users rows"],
+  r.rrUsersRows,
+]
+
+rowidExpectedLines : List String
+rowidExpectedLines = [
+  "# integrity_check",
+  "ok",
+  "# kv rowids (src -> dst)",
+  "src=1,3,4, dst=1,3,4,",
+  "# users rowids (src -> dst)",
+  "src=1,5,9, dst=1,5,9,",
+  "# kv rows",
+  "1|a|10",
+  "3|b|30",
+  "4|c|40",
+  "# users rows",
+  "1|1|alice",
+  "5|5|bob",
+  "9|9|carol",
+]
+
+rowidResult : <Exec "_", IO> Result String RowidRun
+rowidResult = match rowScratch "rowid-roundtrip"
+  Err e => Err e
+  Ok prefix =>
+    let src = "\{prefix}-src.db"
+    let dst = "\{prefix}-dst.db"
+    let probe = "\{prefix}-probe"
+    let reader = "\{prefix}-reader"
+    let out = runRowid src dst probe reader
+    let _ = runVerb "rm" ["-rf", src, dst, probe, reader]
+    out
+
+runRowid : String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String RowidRun
+runRowid src dst probe reader = do
+  _ <- buildBin "sqlite/rowid_roundtrip_demo.mdk" probe
+  _ <- buildBin "sqlite/main.mdk" reader
+  _ <- seedDb src rowidSeedSql
+  srcKvRowids <- sqlite3Lines src "SELECT rowid FROM kv ORDER BY rowid;"
+  srcUsersRowids <- sqlite3Lines src "SELECT rowid FROM users ORDER BY rowid;"
+  _ <- spawnOut queryTimeoutSeconds probe [src, dst]
+  dstKvRowids <- sqlite3Lines dst "SELECT rowid FROM kv ORDER BY rowid;"
+  dstUsersRowids <- sqlite3Lines dst "SELECT rowid FROM users ORDER BY rowid;"
+  ic <- sqlite3Query dst "PRAGMA integrity_check;"
+  kvRows <- sqlite3Lines dst "SELECT rowid,k,v FROM kv ORDER BY rowid;"
+  usersRows <- sqlite3Lines
+    dst
+    "SELECT rowid,id,name FROM users ORDER BY rowid;"
+  readerKv <- spawnOut queryTimeoutSeconds reader [dst, "kv"]
+  readerUsers <- spawnOut queryTimeoutSeconds reader [dst, "users"]
+  Ok RowidRun {
+    rrIntegrityCheck = trim ic,
+    rrSrcKvRowids = commaJoin srcKvRowids,
+    rrDstKvRowids = commaJoin dstKvRowids,
+    rrSrcUsersRowids = commaJoin srcUsersRowids,
+    rrDstUsersRowids = commaJoin dstUsersRowids,
+    rrKvRows = kvRows,
+    rrUsersRows = usersRows,
+    rrReaderKvRows = outLines readerKv,
+    rrReaderUsersRows = outLines readerUsers,
+  }
+
+test "rowid_roundtrip: literal gates match the hand-derived expected values" =
+  match rowidResult
+    Err e => Fail e (join "\n" rowidExpectedLines) "the row did not run"
+    Ok r => expectLines rowidExpectedLines (rowidReport r)
+
+test "rowid_roundtrip: report matches sqlite/test/rowid_roundtrip.golden" =
+  match rowidResult
+    Err e => Fail e "the committed golden" "the row did not run"
+    Ok r => match readFile (underRoot "sqlite/test/rowid_roundtrip.golden")
+      Err e =>
+        Fail
+          "could not read sqlite/test/rowid_roundtrip.golden: \{e}"
+          "sqlite/test/rowid_roundtrip.golden"
+          "unreadable"
+      Ok text => expectLines (outLines text) (rowidReport r)
+
+test "rowid_roundtrip: non-IPK rowid gap survives rewrite (1,3,4), not renumbered to 1,2,3" =
+  match rowidResult
+    Err e => Fail e "1,3,4," "the row did not run"
+    Ok r => expectEqual "1,3,4," r.rrDstKvRowids
+
+test "rowid_roundtrip: IPK rowids preserved (1,5,9)" = match rowidResult
+  Err e => Fail e "1,5,9," "the row did not run"
+  Ok r => expectEqual "1,5,9," r.rrDstUsersRowids
+
+-- The Medaka reader's own round-trip is kept OUT of the golden/report above:
+-- it prints a different column shape (`k|v`, `id|name` — no `rowid`) than
+-- the report's `rowid,k,v` sqlite3 lines, exactly as the retired script's
+-- separate Gate 5 did.
+test "rowid_roundtrip: Medaka reader round-trips kv" = match rowidResult
+  Err e => Fail e "a|10\nb|30\nc|40" "the row did not run"
+  Ok r => expectLines ["a|10", "b|30", "c|40"] r.rrReaderKvRows
+
+test "rowid_roundtrip: Medaka reader round-trips users" = match rowidResult
+  Err e => Fail e "1|alice\n5|bob\n9|carol" "the row did not run"
+  Ok r => expectLines ["1|alice", "5|bob", "9|carol"] r.rrReaderUsersRows
