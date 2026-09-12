@@ -1311,9 +1311,11 @@ applyListBlobs account store params = do
    deactivation/takedown state to report, unlike a multi-tenant relay's own
    implementation of this same route.
 
-   `cursor` is accepted for lexicon conformance but never emitted: a real
-   relay's cursor paginates PAST the last row returned, and with never more
-   than one row here there is never a next page to point at. -}
+   `cursor` is never emitted in the response: a real relay's cursor paginates
+   PAST the last row returned, and with never more than one row here there is
+   never a next page to point at. A caller-supplied `cursor` is refused
+   outright (`applyListRepos`'s `rejectUnimplementedParam`), not silently
+   accepted and ignored. -}
 repoListingRow : Account -> Repo -> Json
 repoListingRow account repo =
   let commit = repoLatestCommit repo

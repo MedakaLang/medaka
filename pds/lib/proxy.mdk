@@ -29,7 +29,12 @@
    - `ProxyPdsHosted` — `actor.getPreferences`/`actor.putPreferences`. The
      corpus's own note is that these forward only when the header names a
      service OTHER than the configured appview, and a header naming another
-     service is already refused above, so reaching here means local.
+     service is already refused above, so reaching here means the request is
+     answered as a LOCAL route rather than proxied — not that a local handler
+     for it exists yet. Neither route is registered in this tree (#2912), so
+     today that local path 404s; the classification only decides that a
+     proxy header does not override it, and is correct in advance of the
+     local preference store landing.
    - `ProxyLocallyServed` — a route this server's own registry holds. Asking it
      to be proxied is refused rather than quietly served: the set that must
      never travel with a service token (`PROTECTED_METHODS`, which the corpus
