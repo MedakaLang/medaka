@@ -1,0 +1,205 @@
+{- | `S-crawl-routes`'s stub relay: a loopback listener standing in for the
+   real relay `com.atproto.sync.requestCrawl` announces to, so
+   `pds/test/serve_e2e.sh` can observe what the outbound call actually carries
+   from outside this project — exactly the role `appview_stub_main.mdk` plays
+   for a proxied read, and for the same reason: every other test of this
+   request grades code that built it, not something that read it off a wire.
+
+   It verifies NOTHING and refuses NOTHING; it only logs what a call arrived
+   with — the method, the target, whether an `authorization` header was
+   present at all, and the `hostname` field the body carried — and echoes the
+   same back in its answer, so the gate can assert from the client's side of
+   the PDS as well as from this log.
+
+     crawl_stub_main PORT LOGFILE STATUS
+
+   `PORT` may be 0, in which case the kernel picks one and the readiness line
+   on stdout names it, the same contract `appview_stub_main` and
+   `pds/serve.mdk` already share with this gate. The "relay unreachable" case
+   needs no mode of this driver at all — it is simply never started, so the
+   connection this server's announce attempts is refused by the kernel. -}
+
+import array.{concat, sliceClamped}
+import http.{
+  Header,
+  Request,
+  headerName,
+  makeHeader,
+  makeResponse,
+  parseRequest,
+  requestBody,
+  requestHeaders,
+  requestMethod,
+  requestTarget,
+  serializeResponse,
+}
+import json.{Json(..), get, jObject, parse, stringify}
+import net.{
+  Connection, Listener, accept, close, listen, listenPort, recv, sendAll
+}
+import string.{drop, fromUtf8, lines, startsWith, toInt, toUtf8, trim}
+
+-- ── framing: read until the head, then until the declared body arrives ─────
+
+headerEnd : Array Int -> Int -> Option Int
+headerEnd buf i =
+  if i + 4 > arrayLength buf then
+    None
+  else if buf[i] == 13
+    && buf[i + 1] == 10
+    && buf[i + 2] == 13
+    && buf[i + 3] == 10 then
+    Some i
+  else
+    headerEnd buf (i + 1)
+
+-- `serializeRequest` always emits `content-length: N` in lowercase as the
+-- last framing header it controls, so a plain line search suffices — this
+-- driver need not parse arbitrary header casing the way a real server must.
+declaredContentLength : String -> Int
+declaredContentLength headText = findContentLength (lines headText)
+
+findContentLength : List String -> Int
+findContentLength [] = 0
+findContentLength (line :: rest) =
+  if startsWith "content-length:" line then match toInt (trim (drop 15 line))
+    Some n => n
+    None => 0
+  else
+    findContentLength rest
+
+recvFrame : Connection -> Array Int -> <Net "_"> Result String (Array Int)
+recvFrame conn buffer = match headerEnd buffer 0
+  None => match recv conn 65536
+    Err message => Err "crawl_stub: read failed: \{message}"
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "crawl_stub: call closed before its header terminator"
+      else
+        recvFrame conn (concat [|buffer, chunk|])
+  Some at =>
+    let need =
+      at + 4 + declaredContentLength (fromUtf8 (sliceClamped 0 at buffer))
+    recvBody conn buffer need
+
+recvBody : Connection -> Array Int -> Int -> <Net "_"> Result String (Array Int)
+recvBody conn buffer need =
+  if arrayLength buffer >= need then
+    Ok (sliceClamped 0 need buffer)
+  else match recv conn 65536
+    Err message => Err "crawl_stub: read failed: \{message}"
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "crawl_stub: call closed before its declared body arrived"
+      else
+        recvBody conn (concat [|buffer, chunk|]) need
+
+-- ── the answer ───────────────────────────────────────────────────────────
+
+findHeaderName : String -> List Header -> Bool
+findHeaderName _ [] = False
+findHeaderName wanted (header :: rest) =
+  headerName header == wanted || findHeaderName wanted rest
+
+hostnameField : Array Int -> String
+hostnameField body = match parse (fromUtf8 body)
+  Ok value => match get "hostname" value
+    Some (JString text) => text
+    _ => "<absent>"
+  Err _ => "<unparseable>"
+
+mustJsonHeader : Header
+mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
+  Ok header => header
+  Err message => panic "crawl_stub: header error: \{message}"
+
+answerBytes : Int -> String -> String -> Array Int
+answerBytes status hostname authorization =
+  let body =
+    toUtf8
+      (stringify
+        (jObject [
+          ("relay", JString "stub"),
+          ("hostname", JString hostname),
+          ("authorization", JString authorization),
+        ]))
+  match makeResponse status "OK" [mustJsonHeader] body
+    Ok response => serializeResponse response
+    Err message => panic "crawl_stub: response error: \{message}"
+
+logLine : String -> String -> <FileWrite "_"> Unit
+logLine path line = match appendFile path "\{line}\n"
+  Ok () => ()
+  Err message => panic "crawl_stub: could not log: \{message}"
+
+answerCall : String ->
+  Int ->
+  Connection ->
+  <FileWrite "_", Net "_"> Result String Unit
+answerCall path status conn =
+  let bytes = match recvFrame conn [||]
+    Err message =>
+      let () = logLine path "unreadable \{message}"
+      answerBytes status "<unreadable>" "<unreadable>"
+    Ok framed => match parseRequest framed
+      Err message =>
+        let () = logLine path "unreadable \{message}"
+        answerBytes status "<unreadable>" "<unreadable>"
+      Ok request =>
+        let hostname = hostnameField (requestBody request)
+        let authorization =
+          if findHeaderName "authorization" (requestHeaders request) then
+            "present"
+          else
+            "absent"
+        let () =
+          logLine
+            path
+            "call method=\{requestMethod request} target=\{requestTarget request} hostname=\{hostname} authorization=\{authorization}"
+        answerBytes status hostname authorization
+  sendAll conn bytes
+
+ready : Listener -> <IO, Net "_"> Unit
+ready lis = match listenPort lis
+  Err message => panic "crawl_stub: listener port unavailable: \{message}"
+  Ok port =>
+    let () = println "crawl-stub: listening on 127.0.0.1:\{intToString port}"
+    flushStdout ()
+
+acceptLoop : Listener ->
+  (Connection -> <FileWrite "_", Net "_"> Result String Unit) ->
+  <FileWrite "_", Net "_"> Unit
+acceptLoop lis handle = match accept lis
+  Err message => panic "crawl_stub: accept failed: \{message}"
+  Ok conn =>
+    let _ = handle conn
+    let _ = close conn
+    acceptLoop lis handle
+
+serve : Int ->
+  (Connection -> <FileWrite "_", Net "_"> Result String Unit) ->
+  <IO, Net "_"> Unit
+serve port handle = match listen "127.0.0.1" port
+  Err message => panic "crawl_stub: listen failed: \{message}"
+  Ok lis =>
+    let () = ready lis
+    acceptLoop lis handle
+
+mustPort : String -> Int
+mustPort text = match toInt text
+  Some port => port
+  None => panic "crawl_stub: not a port: \{text}"
+
+mustStatus : String -> Int
+mustStatus text = match toInt text
+  Some status => status
+  None => panic "crawl_stub: not a status code: \{text}"
+
+usage : String
+usage = "usage: crawl_stub_main PORT LOGFILE STATUS"
+
+main : <IO, Env, Net "_"> Unit
+main = match args ()
+  [port, path, status] =>
+    serve (mustPort port) (answerCall path (mustStatus status))
+  _ => panic usage

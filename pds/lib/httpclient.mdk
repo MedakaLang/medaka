@@ -1,0 +1,779 @@
+{- | A pure HTTP/1.1 client codec: serialize an outbound request, parse an
+   inbound response, chunked transfer-encoding included. Bytes in, bytes
+   out — no socket, no effect row on any export
+   (`pds/test/lib_boundary.sh`). `stdlib/net.mdk`/`stdlib/net_async.mdk` are
+   the socket layer; wiring this codec to a connected fd is a later slice's
+   job.
+
+   A response is exactly the untrusted-input shape that has already produced
+   two of this project's worst bugs on the inbound request side: an
+   unbounded read (#2478) and an O(n^2) framing loop (#2571). Every length,
+   chunk size and header count here is checked against one of
+   `pds/lib/resource_limits.mdk`'s `maxHttpClient*`/`checkHttpClient*` pairs
+   before it is trusted, and the decoded body is accumulated through a
+   `bytebuilder.Builder` rather than repeated `Array` concatenation, so a
+   response delivered as N chunks costs O(bytes), not O(bytes x N).
+
+   `stdlib/http.mdk` is the precedent for this shape — a bounded codec with
+   `max*`/`check*` pairs, a `ChunkedBody` mode and a malformed/resource-excess
+   split — but it frames REQUESTS for the server side; this module frames the
+   reverse direction, and is a distinct parser rather than a reuse of that
+   one's internals. -}
+
+import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
+import list.{reverse}
+import string.{fromUtf8, toUtf8}
+import lib.resource_limits.{
+  checkHttpClientBodyBytes,
+  checkHttpClientChunkBytes,
+  checkHttpClientChunks,
+  checkHttpClientHeaderBytes,
+  checkHttpClientHeaderFields,
+  checkHttpClientStatusLineBytes,
+  maxHttpClientBodyBytes,
+  maxHttpClientChunkBytes,
+  maxHttpClientHeaderBytes,
+  maxHttpClientHeaderFields,
+  maxHttpClientStatusLineBytes,
+}
+
+-- # Bytes helpers
+
+validBytes : Array Int -> Int -> Int -> Bool
+validBytes input i end =
+  if i >= end then
+    True
+  else
+    input[i] >= 0 && input[i] <= 255 && validBytes input (i + 1) end
+
+sliceBytes : Array Int -> Int -> Int -> Array Int
+sliceBytes input start size = arrayMakeWith size (i => input[start + i])
+
+lowerByte : Int -> Int
+lowerByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
+
+lowerAscii : Array Int -> Int -> Int -> String
+lowerAscii input start end =
+  fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
+
+isTokenByte : Int -> Bool
+isTokenByte byte =
+  byte >= 48 && byte <= 57
+    || byte >= 65 && byte <= 90
+    || byte >= 97 && byte <= 122
+    || byte == 33
+    || byte == 35
+    || byte == 36
+    || byte == 37
+    || byte == 38
+    || byte == 39
+    || byte == 42
+    || byte == 43
+    || byte == 45
+    || byte == 46
+    || byte == 94
+    || byte == 95
+    || byte == 96
+    || byte == 124
+    || byte == 126
+
+allToken : Array Int -> Int -> Int -> Bool
+allToken input pos end =
+  if pos >= end then
+    True
+  else
+    isTokenByte input[pos] && allToken input (pos + 1) end
+
+isHexByte : Int -> Bool
+isHexByte byte =
+  byte >= 48 && byte <= 57
+    || byte >= 65 && byte <= 70
+    || byte >= 97 && byte <= 102
+
+isUnreservedByte : Int -> Bool
+isUnreservedByte byte =
+  byte >= 48 && byte <= 57
+    || byte >= 65 && byte <= 90
+    || byte >= 97 && byte <= 122
+    || byte == 45
+    || byte == 46
+    || byte == 95
+    || byte == 126
+
+isSubDelimiterByte : Int -> Bool
+isSubDelimiterByte byte =
+  byte == 33
+    || byte == 36
+    || byte == 38
+    || byte == 39
+    || byte == 40
+    || byte == 41
+    || byte == 42
+    || byte == 43
+    || byte == 44
+    || byte == 59
+    || byte == 61
+
+validTargetByte : Array Int -> Int -> Int -> Bool -> Bool
+validTargetByte input pos end query =
+  if pos >= end then
+    True
+  else
+    let byte = input[pos]
+    if byte == 37 then
+      pos + 2 < end
+        && isHexByte input[pos + 1]
+        && isHexByte input[pos + 2]
+        && validTargetByte input (pos + 3) end query
+    else
+      let pchar =
+        isUnreservedByte byte
+          || isSubDelimiterByte byte
+          || byte == 58
+          || byte == 64
+      if pchar || byte == 47 || query && byte == 63 then
+        validTargetByte input (pos + 1) end query
+      else if not query && byte == 63 then
+        validTargetByte input (pos + 1) end True
+      else
+        False
+
+validAsciiValue : Array Int -> Int -> Int -> Bool
+validAsciiValue input i end =
+  if i >= end then
+    True
+  else
+    let byte = input[i]
+    byte >= 32 && byte <= 126 && validAsciiValue input (i + 1) end
+
+validFieldValue : Array Int -> Int -> Int -> Bool
+validFieldValue input pos end =
+  if pos >= end then
+    True
+  else
+    let byte = input[pos]
+    (byte == 9 || byte >= 32 && byte /= 127)
+      && validFieldValue input (pos + 1) end
+
+findByte : Array Int -> Int -> Int -> Int -> Option Int
+findByte input pos end wanted =
+  if pos >= end then
+    None
+  else if input[pos] == wanted then
+    Some pos
+  else
+    findByte input (pos + 1) end wanted
+
+emitArray : Array Int -> Int -> Builder -> Unit
+emitArray bytes i out =
+  if i >= arrayLength bytes then
+    ()
+  else
+    emitU8 bytes[i] out
+    emitArray bytes (i + 1) out
+
+emitAscii : String -> Builder -> Unit
+emitAscii text out = emitArray (toUtf8 text) 0 out
+
+trimLeftOws : Array Int -> Int -> Int -> Int
+trimLeftOws input pos end =
+  if pos < end && (input[pos] == 32 || input[pos] == 9) then
+    trimLeftOws input (pos + 1) end
+  else
+    pos
+
+trimRightOws : Array Int -> Int -> Int -> Int
+trimRightOws input start end =
+  if end > start && (input[end - 1] == 32 || input[end - 1] == 9) then
+    trimRightOws input start (end - 1)
+  else
+    end
+
+-- # Headers
+
+-- | An ordered HTTP field. Names are canonical lowercase ASCII; values are
+-- raw bytes with surrounding optional whitespace already removed.
+export data Header = Header String (Array Int)
+
+-- | The field's canonical lowercase ASCII name.
+export
+headerName : Header -> String
+headerName (Header name _) = name
+
+-- | The field's value bytes. The result is a copy, so mutating it cannot
+-- reach the header.
+export
+headerValue : Header -> Array Int
+headerValue (Header _ value) = arrayCopy value
+
+copyHeaders : List Header -> List Header
+copyHeaders [] = []
+copyHeaders ((Header name value) :: rest) =
+  Header name (arrayCopy value) :: copyHeaders rest
+
+-- | The value of the first field named `name` (already lowercase), if any.
+export
+findHeader : String -> List Header -> Option (Array Int)
+findHeader _ [] = None
+findHeader wanted ((Header name value) :: rest) =
+  if name == wanted then Some (arrayCopy value) else findHeader wanted rest
+
+-- # Structural classification
+
+-- | Structural classification for a codec failure. The diagnostic string is
+-- retained for a plain caller (`parseResponse`); the split lets a caller that
+-- cares choose retry-worthy (`HttpClientResourceExcess`) from not.
+public export data HttpClientParseFailure =
+  | HttpClientMalformed String
+  | HttpClientResourceExcess String
+
+-- | The diagnostic a failure carries, whichever class it is.
+export
+httpClientParseFailureMessage : HttpClientParseFailure -> String
+httpClientParseFailureMessage (HttpClientMalformed message) = message
+httpClientParseFailureMessage (HttpClientResourceExcess message) = message
+
+malformed : String -> Result HttpClientParseFailure a
+malformed message = Err (HttpClientMalformed message)
+
+resourceExcess : Result String Unit -> Result HttpClientParseFailure Unit
+resourceExcess (Ok ()) = Ok ()
+resourceExcess (Err message) = Err (HttpClientResourceExcess message)
+
+-- # Requests
+
+hasReservedRequestField : List Header -> Bool
+hasReservedRequestField [] = False
+hasReservedRequestField ((Header name _) :: rest) =
+  name == "host"
+    || name == "content-length"
+    || name == "transfer-encoding"
+    || hasReservedRequestField rest
+
+-- | Construct a safe request field. The name is canonicalized to lowercase;
+-- the value must be printable ASCII and therefore cannot smuggle a CR, LF, or
+-- any other control byte into the framed request. No doctest here: `Header`
+-- has no `Display` impl, matching `stdlib/http.mdk`'s analogous `makeHeader`,
+-- which is undoctested for the same reason.
+export
+makeRequestHeader : String -> String -> Result String Header
+makeRequestHeader name value =
+  let nameBytes = toUtf8 name
+  if arrayLength nameBytes == 0
+    || not (allToken nameBytes 0 (arrayLength nameBytes)) then
+    Err "httpclient: invalid request header field name"
+  else
+    let valueBytes = toUtf8 value
+    if not (validAsciiValue valueBytes 0 (arrayLength valueBytes)) then
+      Err "httpclient: control or non-ASCII byte in request header field value"
+    else
+      Ok (Header (lowerAscii nameBytes 0 (arrayLength nameBytes)) valueBytes)
+
+emitHeaders : List Header -> Builder -> Unit
+emitHeaders [] _ = ()
+emitHeaders ((Header name value) :: rest) out =
+  emitAscii name out
+  emitAscii ": " out
+  emitArray value 0 out
+  emitAscii "\r\n" out
+  emitHeaders rest out
+
+{- | Serialize a complete, origin-form HTTP/1.1 request: `method` (a token),
+   `target` (an origin-form path, optionally with a query), `host` (the
+   `Host` field's value), caller `headers` in their given order, then exactly
+   one computed `content-length` — the serializer owns all framing, so a
+   caller cannot supply `Host`, `Content-Length` or `Transfer-Encoding`
+   itself.
+
+   > serializeRequest "GET" "/xrpc/com.example.get" "127.0.0.1:8080" [] [||]
+   Ok [|71, 69, 84, 32, 47, 120, 114, 112, 99, 47, 99, 111, 109, 46, 101, 120, 97, 109, 112, 108, 101, 46, 103, 101, 116, 32, 72, 84, 84, 80, 47, 49, 46, 49, 13, 10, 104, 111, 115, 116, 58, 32, 49, 50, 55, 46, 48, 46, 48, 46, 49, 58, 56, 48, 56, 48, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 48, 13, 10, 13, 10|] -}
+export
+serializeRequest : String ->
+  String ->
+  String ->
+  List Header ->
+  Array Int ->
+  Result String (Array Int)
+serializeRequest method target host headers body =
+  let methodBytes = toUtf8 method
+  let targetBytes = toUtf8 target
+  let hostBytes = toUtf8 host
+  if arrayLength methodBytes == 0
+    || not (allToken methodBytes 0 (arrayLength methodBytes)) then
+    Err "httpclient: invalid request method token"
+  else if arrayLength targetBytes == 0
+    || targetBytes[0] /= 47
+    || not (validTargetByte targetBytes 0 (arrayLength targetBytes) False) then
+    Err
+      "httpclient: request target must be an origin-form ASCII target without a fragment"
+  else if arrayLength hostBytes == 0
+    || not (validAsciiValue hostBytes 0 (arrayLength hostBytes)) then
+    Err "httpclient: invalid Host value"
+  else if hasReservedRequestField headers then
+    Err "httpclient: request framing fields are reserved"
+  else if not (validBytes body 0 (arrayLength body)) then
+    Err "httpclient: request body element outside byte range 0..255"
+  else
+    let out = newBuilder ()
+    emitAscii method out
+    emitAscii " " out
+    emitAscii target out
+    emitAscii " HTTP/1.1\r\n" out
+    emitAscii "host: " out
+    emitAscii host out
+    emitAscii "\r\n" out
+    emitHeaders headers out
+    emitAscii "content-length: " out
+    emitAscii (intToString (arrayLength body)) out
+    emitAscii "\r\n\r\n" out
+    emitArray body 0 out
+    Ok (buildArray out)
+
+-- # Responses
+
+-- | A parsed HTTP/1.1 response: status code, reason phrase, header fields in
+-- received order, chunked-transfer trailer fields (empty when the response
+-- was not chunked), and the decoded body with any chunked transfer coding
+-- removed. The constructor is private — a `Response` only ever comes from
+-- `parseResponse`/`parseResponseClassified`.
+export data Response =
+  | Response Int String (List Header) (List Header) (Array Int)
+
+-- | The response status code.
+export
+responseStatus : Response -> Int
+responseStatus (Response status _ _ _ _) = status
+
+-- | The response reason phrase, exactly as received (may be empty).
+export
+responseReason : Response -> String
+responseReason (Response _ reason _ _ _) = reason
+
+-- | The header fields in received order, duplicates retained.
+export
+responseHeaders : Response -> List Header
+responseHeaders (Response _ _ headers _ _) = copyHeaders headers
+
+-- | The trailer fields in received order, empty for a response that was not
+-- chunked.
+export
+responseTrailers : Response -> List Header
+responseTrailers (Response _ _ _ trailers _) = copyHeaders trailers
+
+-- | The decoded body bytes, with any chunked transfer coding removed.
+export
+responseBody : Response -> Array Int
+responseBody (Response _ _ _ _ body) = arrayCopy body
+
+-- | Length of the decoded body without copying its attacker-controlled
+-- bytes.
+export
+responseBodyLength : Response -> Int
+responseBodyLength (Response _ _ _ _ body) = arrayLength body
+
+data StatusLine = StatusLine Int String Int
+
+-- | `avail` bounds how far a scan may look, exactly as `stdlib/http.mdk`'s
+-- framer does, so a byte past what was actually received can never be read.
+findCrlf : String ->
+  Array Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure Int
+findCrlf label input start limit =
+  findCrlfGo label input (arrayLength input) start start limit
+
+findCrlfGo : String ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure Int
+findCrlfGo label input avail start pos limit =
+  if pos - start > limit then
+    Err
+      (HttpClientResourceExcess
+        "httpclient: \{label} exceeds its resource limit")
+  else if pos >= avail then
+    malformed "httpclient: truncated \{label}; expected CRLF"
+  else if input[pos] == 10 then
+    malformed "httpclient: bare LF in \{label}"
+  else if input[pos] == 13 then
+    if pos + 1 >= avail || input[pos + 1] /= 10 then
+      malformed "httpclient: bare CR in \{label}"
+    else
+      Ok pos
+  else
+    findCrlfGo label input avail start (pos + 1) limit
+
+parseDecimalGo : Array Int -> Int -> Int -> Result HttpClientParseFailure Int
+parseDecimalGo value i acc =
+  if i >= arrayLength value then
+    Ok acc
+  else
+    let byte = value[i]
+    if byte < 48 || byte > 57 then
+      malformed "httpclient: invalid decimal field"
+    else
+      let digit = byte - 48
+      if acc > (4611686018427387903 - digit) / 10 then
+        malformed "httpclient: decimal field overflows Int"
+      else
+        parseDecimalGo value (i + 1) (acc * 10 + digit)
+
+parseStatusLine : Array Int -> Result HttpClientParseFailure StatusLine
+parseStatusLine input = do
+  end <- findCrlf "status line" input 0 maxHttpClientStatusLineBytes
+  () <- resourceExcess (checkHttpClientStatusLineBytes end)
+  firstSpace <- match findByte input 0 end 32
+    None =>
+      malformed
+        "httpclient: malformed status line; expected HTTP-version SP status SP reason"
+    Some pos => Ok pos
+  secondSpace <- match findByte input (firstSpace + 1) end 32
+    None =>
+      malformed
+        "httpclient: malformed status line; expected HTTP-version SP status SP reason"
+    Some pos => Ok pos
+  let versionBytes = sliceBytes input 0 firstSpace
+  if firstSpace /= 8
+    || not
+      (versionBytes == toUtf8 "HTTP/1.1"
+        || versionBytes == toUtf8 "HTTP/1.0") then
+    malformed "httpclient: only HTTP/1.0 and HTTP/1.1 responses are supported"
+  else if secondSpace - firstSpace - 1 /= 3 then
+    malformed "httpclient: status code must be exactly three digits"
+  else do
+    status <- parseDecimalGo (sliceBytes input (firstSpace + 1) 3) 0 0
+    if status < 100 || status > 999 then
+      malformed "httpclient: status code out of range"
+    else
+      Ok
+        (StatusLine
+          status
+          (fromUtf8
+            (sliceBytes input (secondSpace + 1) (end - secondSpace - 1)))
+          (end + 2))
+
+data FieldStep = FieldDone Int Int | FieldMore Header Int
+
+parseHeaderLine : Array Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure Header
+parseHeaderLine input start end =
+  if input[start] == 32 || input[start] == 9 then
+    malformed "httpclient: obsolete folded header lines are forbidden"
+  else match findByte input start end 58
+    None => malformed "httpclient: malformed header field; missing colon"
+    Some colon =>
+      if colon == start || not (allToken input start colon) then
+        malformed "httpclient: invalid header field name"
+      else if not (validFieldValue input (colon + 1) end) then
+        malformed "httpclient: control byte in header field value"
+      else
+        let valueStart = trimLeftOws input (colon + 1) end
+        let valueEnd = trimRightOws input valueStart end
+        Ok
+          (Header
+            (lowerAscii input start colon)
+            (sliceBytes input valueStart (valueEnd - valueStart)))
+
+fieldStep : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure FieldStep
+fieldStep input pos sectionStart priorBytes count = do
+  end <- findCrlf "header field" input pos maxHttpClientHeaderBytes
+  let next = end + 2
+  let totalBytes = priorBytes + next - sectionStart
+  () <- resourceExcess (checkHttpClientHeaderBytes totalBytes)
+  if end == pos then
+    Ok (FieldDone next totalBytes)
+  else do
+    () <- resourceExcess (checkHttpClientHeaderFields (count + 1))
+    field <- parseHeaderLine input pos end
+    Ok (FieldMore field next)
+
+parseFields : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List Header ->
+  Result HttpClientParseFailure (List Header, Int, Int)
+parseFields input pos sectionStart priorBytes count acc = do
+  step <- fieldStep input pos sectionStart priorBytes count
+  match step
+    FieldDone next totalBytes => Ok (reverse acc, next, totalBytes)
+    FieldMore field next =>
+      parseFields input next sectionStart priorBytes (count + 1) (field :: acc)
+
+countNamed : String -> List Header -> Int
+countNamed _ [] = 0
+countNamed wanted ((Header name _) :: rest) =
+  (if name == wanted then 1 else 0) + countNamed wanted rest
+
+data BodyMode = NoBody | FixedBody Int | ChunkedBody | UntilCloseBody
+
+-- | RFC 9112 SS6.3: a response with no framing header is empty, not
+-- close-delimited, for the status classes that never carry a body — 1xx,
+-- 204 and 304. Every other status without a framing header runs to
+-- connection close.
+impliesNoBody : Int -> Bool
+impliesNoBody status =
+  status >= 100 && status < 200 || status == 204 || status == 304
+
+selectBodyMode : Int -> List Header -> Result HttpClientParseFailure BodyMode
+selectBodyMode status headers =
+  let clCount = countNamed "content-length" headers
+  let teCount = countNamed "transfer-encoding" headers
+  if clCount > 1 then
+    malformed "httpclient: duplicate Content-Length is ambiguous"
+  else if clCount > 0 && teCount > 0 then
+    malformed "httpclient: Transfer-Encoding with Content-Length is ambiguous"
+  else if teCount > 0 then
+    if teCount /= 1 then
+      malformed "httpclient: repeated Transfer-Encoding is unsupported"
+    else match findHeader "transfer-encoding" headers
+      None => malformed "httpclient: missing Transfer-Encoding value"
+      Some value =>
+        if value == toUtf8 "chunked" then
+          Ok ChunkedBody
+        else
+          malformed "httpclient: unsupported Transfer-Encoding coding"
+  else match findHeader "content-length" headers
+    None => if impliesNoBody status then Ok NoBody else Ok UntilCloseBody
+    Some value =>
+      if arrayLength value == 0 then
+        malformed "httpclient: empty Content-Length"
+      else do
+        size <- parseDecimalGo value 0 0
+        () <- resourceExcess (checkHttpClientBodyBytes size)
+        Ok (FixedBody size)
+
+hexDigit : Int -> Option Int
+hexDigit byte =
+  if byte >= 48 && byte <= 57 then
+    Some (byte - 48)
+  else if byte >= 65 && byte <= 70 then
+    Some (byte - 55)
+  else if byte >= 97 && byte <= 102 then
+    Some (byte - 87)
+  else
+    None
+
+parseHexSizeGo : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure Int
+parseHexSizeGo input pos end acc =
+  if pos >= end then
+    Ok acc
+  else match hexDigit input[pos]
+    None => malformed "httpclient: invalid chunk size"
+    Some digit =>
+      if acc > (maxHttpClientChunkBytes - digit) / 16 then
+        Err
+          (HttpClientResourceExcess
+            "httpclient: chunk size exceeds resource limit")
+      else
+        parseHexSizeGo input (pos + 1) end (acc * 16 + digit)
+
+skipOws : Array Int -> Int -> Int -> Int
+skipOws input pos end =
+  if pos < end && (input[pos] == 32 || input[pos] == 9) then
+    skipOws input (pos + 1) end
+  else
+    pos
+
+scanTokenEnd : Array Int -> Int -> Int -> Int
+scanTokenEnd input pos end =
+  if pos < end && isTokenByte input[pos] then
+    scanTokenEnd input (pos + 1) end
+  else
+    pos
+
+scanQuoted : Array Int -> Int -> Int -> Result HttpClientParseFailure Int
+scanQuoted input pos end =
+  if pos >= end then
+    malformed "httpclient: unterminated quoted chunk extension"
+  else if input[pos] == 34 then
+    Ok (pos + 1)
+  else if input[pos] == 92 then
+    if pos + 1 >= end then
+      malformed "httpclient: truncated quoted-pair in chunk extension"
+    else
+      let escaped = input[pos + 1]
+      if escaped == 9 || escaped == 32 || escaped >= 33 && escaped /= 127 then
+        scanQuoted input (pos + 2) end
+      else
+        malformed "httpclient: control byte in quoted chunk extension"
+  else
+    let byte = input[pos]
+    if byte == 9
+      || byte == 32
+      || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
+      scanQuoted input (pos + 1) end
+    else
+      malformed "httpclient: control byte in quoted chunk extension"
+
+parseChunkExtensionValue : Array Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure Int
+parseChunkExtensionValue input pos end =
+  if pos >= end then
+    malformed "httpclient: missing chunk extension value"
+  else if input[pos] == 34 then
+    scanQuoted input (pos + 1) end
+  else
+    let valueEnd = scanTokenEnd input pos end
+    if valueEnd == pos then
+      malformed "httpclient: invalid chunk extension value"
+    else
+      Ok valueEnd
+
+parseChunkExtensionsGo : Array Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure Unit
+parseChunkExtensionsGo input pos end =
+  let start = skipOws input pos end
+  if start == end then
+    Ok ()
+  else if input[start] /= 59 then
+    malformed "httpclient: invalid chunk extension separator"
+  else
+    let nameStart = skipOws input (start + 1) end
+    let nameEnd = scanTokenEnd input nameStart end
+    if nameEnd == nameStart then
+      malformed "httpclient: empty chunk extension name"
+    else
+      let afterName = skipOws input nameEnd end
+      if afterName < end && input[afterName] == 61 then do
+        valueEnd <- parseChunkExtensionValue
+          input
+          (skipOws input (afterName + 1) end)
+          end
+        parseChunkExtensionsGo input valueEnd end
+      else
+        parseChunkExtensionsGo input afterName end
+
+parseChunkSize : Array Int -> Int -> Int -> Result HttpClientParseFailure Int
+parseChunkSize input start end =
+  let semi = match findByte input start end 59
+    None => end
+    Some pos => pos
+  if semi == start then
+    malformed "httpclient: empty chunk size"
+  else do
+    size <- parseHexSizeGo input start semi 0
+    () <- parseChunkExtensionsGo input semi end
+    Ok size
+
+data ChunkHead = ChunkEnd Int | ChunkBody Int Int
+
+chunkHeadStep : Array Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure ChunkHead
+chunkHeadStep input pos count = do
+  lineEnd <- findCrlf "chunk-size line" input pos maxHttpClientHeaderBytes
+  size <- parseChunkSize input pos lineEnd
+  () <- resourceExcess (checkHttpClientChunkBytes size)
+  let dataPos = lineEnd + 2
+  if size == 0 then
+    Ok (ChunkEnd dataPos)
+  else do
+    () <- resourceExcess (checkHttpClientChunks (count + 1))
+    Ok (ChunkBody dataPos size)
+
+readSliceAt : Array Int ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure (Array Int, Int)
+readSliceAt input pos size =
+  if pos + size > arrayLength input then
+    malformed "httpclient: truncated chunk body"
+  else
+    Ok (sliceBytes input pos size, pos + size)
+
+chunkDataEnd : Array Int -> Int -> Int -> Result HttpClientParseFailure Int
+chunkDataEnd input dataPos size =
+  let afterChunk = dataPos + size
+  let avail = arrayLength input
+  if afterChunk > avail then
+    malformed "httpclient: truncated chunk body"
+  else if afterChunk + 2 > avail then
+    malformed "httpclient: truncated CRLF after chunk data"
+  else if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then
+    malformed "httpclient: missing CRLF after chunk data"
+  else
+    Ok (afterChunk + 2)
+
+parseChunked : Array Int ->
+  Int ->
+  Builder ->
+  Int ->
+  Int ->
+  Result HttpClientParseFailure (Array Int, List Header, Int)
+parseChunked input pos out total count = do
+  head <- chunkHeadStep input pos count
+  match head
+    ChunkEnd dataPos => do
+      (trailers, finalPos, _) <- parseFields input dataPos dataPos 0 0 []
+      Ok (buildArray out, trailers, finalPos)
+    ChunkBody dataPos size => do
+      () <- resourceExcess (checkHttpClientBodyBytes (total + size))
+      (chunk, _) <- readSliceAt input dataPos size
+      next <- chunkDataEnd input dataPos size
+      let () = emitArray chunk 0 out
+      parseChunked input next out (total + size) (count + 1)
+
+parseBody : BodyMode ->
+  Array Int ->
+  Int ->
+  Result HttpClientParseFailure (Array Int, List Header, Int)
+parseBody NoBody _ pos = Ok ([||], [], pos)
+parseBody (FixedBody size) input pos = do
+  (body, finalPos) <- readSliceAt input pos size
+  Ok (body, [], finalPos)
+parseBody ChunkedBody input pos = parseChunked input pos (newBuilder ()) 0 0
+parseBody UntilCloseBody input pos =
+  Ok (sliceBytes input pos (arrayLength input - pos), [], arrayLength input)
+
+{- | Parse one complete HTTP/1.1 response, reporting whether a shortfall was a
+   malformed message or a resource-limit excess (retry-worthy on a
+   reconnect for the excess case, never for the malformed one).
+
+   A response with neither `Content-Length` nor `Transfer-Encoding` is framed
+   as running to the end of the supplied bytes — the caller is expected to
+   have read until its connection closed before calling this, the same
+   close-delimited framing HTTP/1.0 responses use. -}
+export
+parseResponseClassified : Array Int -> Result HttpClientParseFailure Response
+parseResponseClassified input = do
+  (StatusLine status reason lineEnd) <- parseStatusLine input
+  (headers, headerEnd, headerBytes) <- parseFields input lineEnd lineEnd 0 0 []
+  mode <- selectBodyMode status headers
+  (body, trailers, finalPos) <- parseBody mode input headerEnd
+  if finalPos /= arrayLength input then
+    malformed "httpclient: bytes after framed response"
+  else
+    Ok (Response status reason headers trailers body)
+
+{- | `parseResponseClassified`, collapsed to a single diagnostic string for a
+   caller that only needs to know a response was rejected, not why.
+
+   > isErr (parseResponse [||])
+   True -}
+export
+parseResponse : Array Int -> Result String Response
+parseResponse input = match parseResponseClassified input
+  Ok response => Ok response
+  Err failure => Err (httpClientParseFailureMessage failure)

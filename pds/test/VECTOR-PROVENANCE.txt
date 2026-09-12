@@ -742,3 +742,25 @@ extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc6455.txt | sed -n '/^5
 retrieved:     2026-09-11
 consumer:      S-ws-transport (#2608 subscribeRepos inbound surface, frame codec half)
 notes:         §5.7's two extended-length examples state only the frame header; the RFC leaves their payload bytes unspecified, so the consumer grades the header and supplies its own payload
+
+[vector]
+file:          pds/test/vectors/pds_route_registration_corpus.txt
+local-sha256:  860d418cf4a4b4b5d7ded4091e97a22e91fc52e5c7a661a2cc7bca191b041782
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/tree/main/packages/pds/src/api
+extraction:    docker run --rm --entrypoint node -v "$PWD/pds/tools:/medaka-tools:ro" -v "$PWD/pds/test/vectors:/medaka-out" ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 /medaka-tools/extract_pds_proxy_answer_key.mjs /medaka-out 1700000000 — written procedure in pds/README.md, "Proxy answer key"; re-running must reproduce this file byte-for-byte
+retrieved:     2026-09-11
+consumer:      S-proxy-answer-key (#2912 appview-proxying answer key), read by #2608 (appview-proxying leg)
+notes:         the image's own dist/api/index.js is RUN against a recording stub server, twice, so the `if (!bskyAppView) return` registration gates are observed rather than read off; the service is never started and no XRPC call is made, so this stays within the official-pds impl row's image-library scope. An nsid absent from this file is not registered and reaches the catch-all proxyHandler — which is why an HTTP probe CANNOT establish disposition: the oracle answers a forwarded-but-unconfigured nsid and an nsid in no lexicon at all with the identical 400 InvalidRequest "No service configured for <nsid>" (MEASURED live, S-proxy-answer-key report).
+
+[vector]
+file:          pds/test/vectors/pds_service_auth_shape_corpus.txt
+local-sha256:  8d8e3beb5d7b1495c307506ab6e35e2516ac7352eb115f029981125a26f0ca85
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/xrpc-server/src/auth.ts
+extraction:    same single command as the pds_route_registration_corpus.txt row above; this file is its second output. The token is minted by the image's own @atproto/xrpc-server createServiceJwt — the function AppContext.serviceAuthJwt() calls — with iat pinned to 1700000000 on the command line
+retrieved:     2026-09-11
+consumer:      S-proxy-answer-key (#2912 appview-proxying answer key), read by #2608 (appview-proxying leg)
+notes:         jti is fresh random per mint and the signature is computed over it, so neither can be pinned; this corpus therefore records jti's length/charset and the signature's encoding and length rather than values, which is what makes it byte-reproducible. The claim VALUES for iss/aud/lxm are placeholders chosen by the extractor; what the corpus asserts about them is the SHAPE stated in their rows, derived from pipethrough.js's call sites (proxyHandler passes credentials.did/bare aud/parseReqNsid lxm).

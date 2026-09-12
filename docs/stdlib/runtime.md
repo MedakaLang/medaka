@@ -409,6 +409,28 @@ netTryAccept : Int -> <Net _> Result String (Option Int)
 
 `netTcpAccept` that returns `None` instead of blocking.
 
+### `netConnectStart`
+
+```
+netConnectStart : String -> Int -> <Net _> Result String Int
+```
+
+`netTcpConnect` that returns as soon as the handshake is under way. The
+result is a non-blocking descriptor that is not connected yet: wait for it
+to become writable, then ask `netConnectCheck` whether it arrived. Name
+resolution still blocks.
+
+### `netConnectCheck`
+
+```
+netConnectCheck : Int -> <Net _> Result String (Option Unit)
+```
+
+Whether a descriptor from `netConnectStart` has finished its handshake.
+`None` means not yet, so a woken task retries this rather than trusting the
+wake. `Err` is the handshake's own failure — a refused or unreachable peer —
+and leaves the descriptor for the caller to close.
+
 ### `netTryRecv`
 
 ```

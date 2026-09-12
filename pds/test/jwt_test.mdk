@@ -24,16 +24,22 @@
 
 import test.{expectEqual, expectTrue}
 import base64.{decodeUrlSafe, encodeUrlSafe}
-import string.{stripSuffix, toUtf8}
+import hex.{decode}
+import string.{fromUtf8, split, stripSuffix, toUtf8}
 import lib.jwt.{
   Claims,
   Claims(..),
   JwtError,
   JwtError(..),
+  ServiceAuthRequest,
+  ServiceAuthRequest(..),
+  es256kSignature,
   hs256Signature,
   mintToken,
+  mintServiceToken,
   verifyToken,
 }
+import lib.sign.{SecretKey, secretKeyFromBytes, signatureFromCompact}
 
 -- RFC 7520 §3.5 Figure 5, the `k` member verbatim. 43 base64url characters,
 -- decoding to exactly 32 bytes.
@@ -258,3 +264,152 @@ test "verification reads no clock: the same token verifies at any instant in its
   expectTrue
     (verifyToken rfcKey subject audience 1001 goodToken
       == verifyToken rfcKey subject audience 1999 goodToken)
+
+-- ── service auth (S-service-jwt, #2608) ─────────────────────────────────────
+--
+-- These grade the WIRE SHAPE against
+-- pds/test/vectors/pds_service_auth_shape_corpus.txt, decoded from the
+-- official implementation's own `createServiceJwt` output: the header bytes,
+-- the claim order, the sixty-second lifetime and the omitted `lxm` are its
+-- figures, not this implementation's.
+--
+-- What they deliberately do NOT assert is a signature VALUE. Nothing on this
+-- side can grade one — the party that checks a service-auth token is an
+-- off-box peer — so an expected signature committed here would be a
+-- self-captured golden. `pds/tools/check_pds_service_jwt.mjs` grades the
+-- signature with @atproto/crypto instead, driven by
+-- pds/test/service_jwt_interop_main.mdk, which mints from the same scalar.
+
+-- Scalar 1, whose public key is G. Its `did:key` is row 0 of the
+-- reference-derived pds/test/vectors/pds_did_key_corpus.txt, which is what
+-- lets the interop driver hand that verifier an externally graded key.
+hexBytes : String -> Array Int
+hexBytes value = match decode value
+  Ok decoded => decoded
+  Err message => panic "jwt_test: malformed hex: \{message}"
+
+serviceScalar : Array Int
+serviceScalar =
+  hexBytes "0000000000000000000000000000000000000000000000000000000000000001"
+
+serviceKey : SecretKey
+serviceKey = match secretKeyFromBytes serviceScalar
+  Ok key => key
+  Err message => panic "jwt_test: \{message}"
+
+serviceIssuer : String
+serviceIssuer = "did:plc:s-service-jwt-account"
+
+serviceAudience : String
+serviceAudience = "did:web:appview.example"
+
+serviceMethod : String
+serviceMethod = "app.bsky.feed.getTimeline"
+
+serviceIssuedAt : Int
+serviceIssuedAt = 1700000000
+
+serviceJti : String
+serviceJti = "0123456789abcdef0123456789abcdef"
+
+serviceRequest : String -> Option String -> String -> ServiceAuthRequest
+serviceRequest aud lxm jti = ServiceAuthRequest {
+  iss = serviceIssuer,
+  aud = aud,
+  lxm = lxm,
+  jti = jti,
+  iat = serviceIssuedAt,
+}
+
+serviceToken : ServiceAuthRequest -> String
+serviceToken request = match mintServiceToken serviceKey request
+  Ok minted => minted
+  Err message => panic "jwt_test: \{message}"
+
+-- The audience as an `atproto-proxy` header spells it: a service OF a DID.
+withLxmToken : String
+withLxmToken =
+  serviceToken
+    (serviceRequest
+      "\{serviceAudience}#bsky_appview"
+      (Some serviceMethod)
+      serviceJti)
+
+withoutLxmToken : String
+withoutLxmToken =
+  serviceToken
+    (serviceRequest serviceAudience None "fedcba9876543210fedcba9876543210")
+
+segmentsOf : String -> (String, String, String)
+segmentsOf token = match split "." token
+  [headerSeg, claimsSeg, sigSeg] => (headerSeg, claimsSeg, sigSeg)
+  _ => panic "jwt_test: expected a three-segment token"
+
+-- `decodeUrlSafe` is RFC 4648 §5 and wants the padding RFC 7515 §2 drops.
+-- Local to this file for the same reason `b64uSeg` above is: a grader must not
+-- borrow the codec of the thing it grades.
+segmentBytes : String -> Array Int
+segmentBytes segment =
+  let padded = match stringLength segment % 4
+    2 => "\{segment}=="
+    3 => "\{segment}="
+    _ => segment
+  match decodeUrlSafe padded
+    Ok bytes => bytes
+    Err message => panic "jwt_test: \{message}"
+
+segmentText : String -> String
+segmentText segment = fromUtf8 (segmentBytes segment)
+
+test "the service-auth header is the corpus's ES256K header, byte for byte" =
+  let (headerSeg, _, _) = segmentsOf withLxmToken
+  expectEqual headerSeg "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NksifQ"
+
+test "the service-auth claim set serializes in the corpus's order" =
+  let (_, claimsSeg, _) = segmentsOf withLxmToken
+  expectEqual
+    (segmentText claimsSeg)
+    ("{\"iat\":1700000000,\"iss\":\"did:plc:s-service-jwt-account\","
+      ++ "\"aud\":\"did:web:appview.example\",\"exp\":1700000060,"
+      ++ "\"lxm\":\"app.bsky.feed.getTimeline\","
+      ++ "\"jti\":\"0123456789abcdef0123456789abcdef\"}")
+
+-- Omitted entirely rather than nulled, and the remaining five keep their
+-- order: a `"lxm":null` member would satisfy neither a peer's lxm check nor
+-- this assertion.
+test "an absent lxm drops the claim instead of nulling it" =
+  let (_, claimsSeg, _) = segmentsOf withoutLxmToken
+  expectEqual
+    (segmentText claimsSeg)
+    ("{\"iat\":1700000000,\"iss\":\"did:plc:s-service-jwt-account\","
+      ++ "\"aud\":\"did:web:appview.example\",\"exp\":1700000060,"
+      ++ "\"jti\":\"fedcba9876543210fedcba9876543210\"}")
+
+-- The two mints differ only in whether the caller's `aud` carried the
+-- fragment, so byte-identical tokens are the strongest available statement
+-- that the fragment never reached the signature.
+test "a #serviceId fragment is stripped before aud is signed" =
+  expectEqual
+    withLxmToken
+    (serviceToken
+      (serviceRequest serviceAudience (Some serviceMethod) serviceJti))
+
+-- `signatureFromCompact` is pds/lib/secp256k1.mdk's own canonical parser:
+-- exactly 64 bytes, nonzero r and s, both in range, and low-S. Reusing it is
+-- deliberate — a second low-S predicate written here could disagree with the
+-- one the signer canonicalizes against.
+test "the emitted signature is canonical nonzero low-S P1363 r||s" =
+  let (_, _, sigSeg) = segmentsOf withLxmToken
+  let raw = segmentBytes sigSeg
+  let canonical = match signatureFromCompact raw
+    Ok _ => True
+    Err _ => False
+  expectTrue (arrayLength raw == 64 && canonical)
+
+-- The signature covers the first two segments and nothing else: recomputing it
+-- from them alone must reproduce the third.
+test "the signing input is exactly the header and claims segments" =
+  let (headerSeg, claimsSeg, sigSeg) = segmentsOf withLxmToken
+  expectEqual
+    (es256kSignature serviceKey "\{headerSeg}.\{claimsSeg}")
+    (Ok sigSeg)

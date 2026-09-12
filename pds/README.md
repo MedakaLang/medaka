@@ -306,6 +306,71 @@ true live-service repo transcript is therefore not claimed by Phase 1. The full
 manual procedure and limitation live in `docs/ops/PDS-ORACLE.md`; no CI job
 provisions it.
 
+### Proxy answer key
+
+`pds/test/vectors/pds_route_registration_corpus.txt` and
+`pds/test/vectors/pds_service_auth_shape_corpus.txt` are the appview-proxying
+answer key behind design P16/§4.5: which XRPC methods the official PDS registers
+locally (and which of those only when an appview is configured), and the wire
+shape of the service-auth credential it mints for a proxied call. Both are
+produced by one command, a third **library** route alongside the two above — Node
+only, no service started and no XRPC call:
+
+```sh
+docker run --rm --entrypoint node \
+  -v "$PWD/pds/tools:/medaka-tools:ro" \
+  -v "$PWD/pds/test/vectors:/medaka-out" \
+  ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 \
+  /medaka-tools/extract_pds_proxy_answer_key.mjs /medaka-out 1700000000
+```
+
+Run it from the repository root. The trailing argument pins `iat` so the minted
+token is reproducible; re-running must reproduce both files byte-for-byte, which
+is what `pds/test/vector_provenance.sh` checks the committed digests against.
+The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
+`@atproto/crypto` version differs from the one its rows were derived at, so a
+newer image cannot silently answer a different question.
+
+### Service-auth interop
+
+`pds/lib/jwt.mdk`'s `mintServiceToken` is the other half of that answer key: it
+mints the credential whose shape the corpus records. The corpus can only grade
+the claim bytes, and `pds/test/jwt_test.mdk` does that — the SIGNATURE has to be
+graded by the reference verifier, because the party that checks a service-auth
+token is an off-box peer and nothing on this side can certify one without
+grading this implementation against itself.
+
+`pds/tools/check_pds_service_jwt.mjs` is that grading step, a fourth **library**
+route: `@atproto/crypto@0.5.4` from the pinned lockfile, no service and no
+image. `pds/test/service_jwt_interop_main.mdk` mints the tokens and prints them
+as its manifest. From the repository root:
+
+```sh
+WORK=$(mktemp -d)
+cp pds/tools/atproto_reference/package.json \
+   pds/tools/atproto_reference/package-lock.json "$WORK/"
+npm ci --ignore-scripts --prefix "$WORK"
+./medaka build pds/test/service_jwt_interop_main.mdk -o "$WORK/mint"
+"$WORK/mint" > "$WORK/manifest.txt"
+node pds/tools/check_pds_service_jwt.mjs "$WORK/node_modules" "$WORK/manifest.txt" 1700000030
+```
+
+Four rows: two accepts (with and without `lxm`) and two rejects (a token offered
+under the wrong `did:key`, and one minted for a different audience), so one run
+shows both polarities. The trailing argument is the instant `exp` is checked
+against; `1700000030` is inside the sixty-second window of the manifest's pinned
+`iat`. The script refuses a `@atproto/crypto` other than `0.5.4`, and refuses a
+manifest with no rows rather than reporting a pass over nothing.
+
+It verifies WITHOUT `allowMalleableSig`, which the corpus records the official
+verifier as passing — so this check is strictly stricter than the real peer, and
+an accept also certifies the low-S canonicalization `pds/lib/secp256k1.mdk`
+performs. It is a manual tool rather than a gate, for the same reason the corpus
+generators above are: it needs network access for `npm ci`. Nothing enrols it,
+because the CI coverage census enumerates `.sh` files and this is a `.mjs` —
+wrapping it in a shell driver would put it in scope and would then need a
+`test/CI-COVERAGE-TOOLS.txt` row.
+
 ## Phase 1 data model (#2136)
 
 The four Phase 1 vector gates grade external answer corpora on all production
