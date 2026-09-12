@@ -51,6 +51,7 @@ a real social identity, so the correctness bar is higher than the compiler's.
 | **P12** | **Firehose events are persisted to a bounded append-only log, sized to a 259200s (72h) default sweep window** (landed, sprint `pds-a-relay-can-read-us`, `pds/lib/event_log_record.mdk` + `pds/shell/eventlog.mdk`). | Resolved from §7 Q3 by looking at what the ecosystem does rather than deciding a priori — the number stayed soft on purpose: 259200s (72h) is the **configurable default of the relay generation introduced in January 2026**, not a spec requirement and not a historical invariant (`atproto.com/specs/sync` states no retention window at all). The retention window is a parameter to the sweep, not baked into the record format or cursor arithmetic — demonstrated with an arbitrary 5000s bound in the slice's own acceptance run, independent of the shipped 259200s default. `getRepo` still covers full resynchronization independently of the log's retention. On-disk rather than in-memory specifically so a process restart does not invalidate a connected relay's cursor; startup recovery (`eventLogRecover`) closes the crash window between staging and promoting an entry. Operators can tune the default down (or up) with no code change. |
 | **P13** | **Phase 4.5 ships a read-only web view of the repo**, served from the same process. | Val's call. Cheap on top of Phase 2 (the router and the repo reader already exist; it adds templates and no new protocol), and it makes the system inspectable in a browser during the long stretch when Phase 5 is unbuilt and no Bluesky client can see it. Also the natural place to surface health and the block-store state. |
 | **P15** | **The native `field`/`scalar`/signing arithmetic path deployed by the PDS must be constant-time with respect to secret inputs** — private keys and ECDSA nonces. A native signing implementation that is not constant-time does not ship. Eval and Wasm retain value parity; a Wasm constant-time claim requires its own uniform integer/crypto carrier because ordinary Wasm `Int` boxing is value-dependent. | The landed reducer mechanism is specified in [`ATPROTO-PDS-CONSTANT-TIME.md`](ATPROTO-PDS-CONSTANT-TIME.md) and tracked by closed #1724. That closure does not certify future code. The complete successor public-key/signing call graph, fixed algorithms, corpus authorities, and native emitted-control acceptance are specified in [`ATPROTO-PDS-SIGNING-CONTRACT.md`](ATPROTO-PDS-SIGNING-CONTRACT.md), tracked by #1877 and parent #1700. That successor contract explicitly declassifies only the final aggregate success/exhaustion result after two complete RFC 6979 attempts; candidate identity and rejection reasons remain secret. |
+| **P16** | **Service auth — the credential presented to an off-box service when proxying — IS signed with the account's secp256k1 repo signing key, as `ES256K`, with the claim set `iat`/`iss`/`aud`/`exp`/`lxm`/`jti` and a 60-second lifetime.** §4.3's refusal to sign with that key governs SESSION tokens only. Minting only; no inbound verifier through 0.1.0. | Not a preference: the receiving appview holds no secret of ours, so the only key it can verify is the one it already resolves from the account's DID document. The wire shape is derived from the pinned official PDS's own minting function rather than chosen — `pds/test/vectors/pds_service_auth_shape_corpus.txt`. `lxm` is load-bearing, not decorative: a conforming verifier rejects a token whose `lxm` does not equal the method called, so omitting it produces a credential that does not work rather than a simpler one. Full account, including why §4.3's argument does not reach this case and which routes proxying applies to at all: §4.5. |
 
 ---
 
@@ -520,6 +521,73 @@ string anywhere in `pds/lib`, `pds/shell` or `pds/serve.mdk`, with one ledgered
 exemption for the line in `lib.jwt` that assembles a token, where building that string
 is the entire job.
 
+### 4.5 Service auth: the credential an off-box appview verifies (P16)
+
+Session tokens (§4.3) are symmetric because nothing off-box verifies them. **Service
+auth is the opposite case, and it is the reason P16 exists:** when this PDS forwards a
+client's read to an appview it must present a credential the *appview* can verify, and
+the appview holds no secret of ours. The only key it can check is the one it already
+resolves from the account's DID document — the account's secp256k1 repo signing key.
+So service auth is signed with the account key, and §4.3's argument against doing that
+does not reach this case: it is an argument about *session* tokens, where asymmetry
+buys nothing.
+
+The wire shape is not ours to choose. Derived from the pinned official PDS by running
+its own minting function (`pds/test/vectors/pds_service_auth_shape_corpus.txt`, slice
+`S-proxy-answer-key`):
+
+- **`alg` is `ES256K`** for a secp256k1 account key (`ES256` for P-256), `typ` is
+  `JWT`, and the serialization is the same JWS compact form §4.3 already uses.
+- **Claims are `iat`, `iss`, `aud`, `exp`, `lxm`, `jti`, in that order**, and that is
+  the whole set. **No `nbf` and no `sub`** — the claim set is NOT §4.3's `Claims`
+  record with a different key, and reusing that record here would mint a token with
+  two claims the official verifier does not expect.
+- **`iss` is the ACCOUNT's DID**, never the PDS service DID; **`aud` is the bare DID of
+  the receiving service**, with any `#<serviceId>` fragment stripped; **`lxm` is the
+  NSID being called**, and when absent it is omitted entirely rather than emitted as
+  null.
+- **Lifetime is 60 seconds** from `iat`.
+- **The signature is raw IEEE P1363 `r||s`, 64 bytes, base64url unpadded** — not DER.
+  `pds/lib/sign.mdk` already produces low-S P1363 for commits, so this is the encoding
+  we have.
+
+`lxm` is the claim that makes the credential narrow: without it a token minted to read
+a timeline is a bearer credential for every method that service offers. The official
+verifier refuses a token whose `lxm` does not equal the method called, and refuses a
+missing `lxm` when one is demanded, so **minting without `lxm` is not a simplification
+we may take** — it produces a token a conforming appview rejects.
+
+**What we do NOT implement here.** An inbound verifier. This PDS *mints* service auth
+to read from an appview; nothing in 0.1.0 receives a service-auth token from a peer, so
+the verifying side of the contract (DID-document key resolution, the rotation retry)
+stays out until something needs it. Recording it in the corpus is not a commitment to
+build it.
+
+**Which routes this is even for.** Derived, not assumed
+(`pds/test/vectors/pds_route_registration_corpus.txt`): the official PDS serves 67 XRPC
+methods unconditionally and 11 more only when an appview is configured, and everything
+else falls to a catch-all that forwards to the appview. Two results matter for our
+sequencing:
+
+1. **`app.bsky.actor.getPreferences`/`putPreferences` are PDS-HOSTED.** They read and
+   write the PDS's own per-account preference store; they forward only when a client's
+   `atproto-proxy` header names a service other than the configured appview. So a
+   client's startup path does not need the network — which means preferences are a
+   local-storage slice, not a proxying slice.
+2. **`com.atproto.sync.requestCrawl` is a RELAY method, not a PDS one.** The PDS is its
+   *caller*: on sequencing any event it POSTs `{"hostname": <own hostname>}` to each
+   configured crawler, with **no authorization header at all**, fire-and-forget, at most
+   once per 1200 seconds. Serving `requestCrawl` is not something this PDS owes;
+   *calling* it is.
+
+A corollary worth stating because it cost this slice its first answer: **the oracle's
+HTTP surface cannot tell you a route's disposition.** A method it forwards but has no
+service configured for, and a method in no lexicon whatsoever, both answer
+`400 InvalidRequest "No service configured for <nsid>"`; once an appview *is*
+configured, both answer `401 AuthMissing`. Disposition comes from the registration set,
+which is why the corpus is generated by running the image's own route registration
+rather than by transcribing responses.
+
 ---
 
 ## 5. The failure mode that matters, and the apparatus against it
@@ -865,7 +933,9 @@ required-but-virtually-always-null in version 3 — present in the CBOR, not omi
 The outbound half is appview proxying (the app sends
 reads through the PDS via the `atproto-proxy` header, which is an outbound HTTPS call —
 so either `runCommand` to `curl` or a local egress proxy, since P5 means no TLS of our
-own). At the end of this phase relays index the repo and posts reach the network.
+own). The credential that call carries, and which routes are proxied at all rather than
+answered locally, are P16/§4.5. At the end of this phase relays index the repo and posts
+reach the network.
 
 **Phase 6 — `did:plc` migration.** PLC genesis and signed `updateOperation`, rotation
 keys, and the account-migration sequence, to move the real handle onto this server.

@@ -1,0 +1,29 @@
+# Generated only by pds/tools/extract_pds_proxy_answer_key.mjs; see pds/README.md.
+# The inter-service credential the pinned official PDS mints for a proxied call:
+# AppContext.serviceAuthJwt(did, aud, lxm) -> @atproto/xrpc-server createServiceJwt,
+# signed with the ACCOUNT's repo signing keypair (ctx.actorStore.keypair(did)).
+# Minted here with iat pinned to 1700000000; jti is fresh random per mint and the signature
+# is over it, so both are recorded as SHAPES rather than as values.
+# Columns: property<TAB>value.
+serialization	JWS compact, three base64url segments joined by "."
+header-json	{"typ":"JWT","alg":"ES256K"}
+header-segment-b64url	eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NksifQ
+alg-secp256k1-key	ES256K
+alg-p256-key	ES256
+typ	JWT
+payload-claims-in-order	iat,iss,aud,exp,lxm,jti
+payload-claims-without-lxm	iat,iss,aud,exp,jti
+payload-json-jti-elided	{"iat":1700000000,"iss":"did:plc:issueraccountplaceholder","aud":"did:web:appview.invalid","exp":1700000060,"lxm":"app.bsky.feed.getTimeline","jti":"<32-hex>"}
+iss	the ACCOUNT did whose repo key signs, never the PDS service did
+aud	the bare did of the receiving service; any "#<serviceId>" fragment is stripped
+lxm	the nsid being called; omitted entirely rather than null when not supplied
+lifetime-seconds	60
+nbf-present	false
+sub-present	false
+jti-hex-chars	32
+signature-encoding	base64url unpadded, raw IEEE P1363 r||s, not DER
+signature-bytes	64
+verifier-rejects-typ	at+jwt, refresh+jwt, dpop+jwt
+verifier-checks	exp against now; aud equals own did; lxm equals the called nsid; iss is a did or did#fragment; signature under iss's signing key, retried once against a freshly resolved key
+verifier-allows-malleable-sig	true; cryptoVerifySignatureWithKey passes allowMalleableSig
+outbound-relay-announce	POST <crawler>/xrpc/com.atproto.sync.requestCrawl body {"hostname":"<own hostname>"} with NO authorization header, fire-and-forget on the background queue, at most once per 1200 seconds

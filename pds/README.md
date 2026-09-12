@@ -306,6 +306,31 @@ true live-service repo transcript is therefore not claimed by Phase 1. The full
 manual procedure and limitation live in `docs/ops/PDS-ORACLE.md`; no CI job
 provisions it.
 
+### Proxy answer key
+
+`pds/test/vectors/pds_route_registration_corpus.txt` and
+`pds/test/vectors/pds_service_auth_shape_corpus.txt` are the appview-proxying
+answer key behind design P16/§4.5: which XRPC methods the official PDS registers
+locally (and which of those only when an appview is configured), and the wire
+shape of the service-auth credential it mints for a proxied call. Both are
+produced by one command, a third **library** route alongside the two above — Node
+only, no service started and no XRPC call:
+
+```sh
+docker run --rm --entrypoint node \
+  -v "$PWD/pds/tools:/medaka-tools:ro" \
+  -v "$PWD/pds/test/vectors:/medaka-out" \
+  ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 \
+  /medaka-tools/extract_pds_proxy_answer_key.mjs /medaka-out 1700000000
+```
+
+Run it from the repository root. The trailing argument pins `iat` so the minted
+token is reproducible; re-running must reproduce both files byte-for-byte, which
+is what `pds/test/vector_provenance.sh` checks the committed digests against.
+The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
+`@atproto/crypto` version differs from the one its rows were derived at, so a
+newer image cannot silently answer a different question.
+
 ## Phase 1 data model (#2136)
 
 The four Phase 1 vector gates grade external answer corpora on all production

@@ -14,6 +14,14 @@
    surface on it for no interop gain, since nothing off-box ever verifies our
    session tokens. See `docs/design/ATPROTO-PDS-DESIGN.md` §4.3.
 
+   That argument is scoped to SESSION tokens, and does not reach service auth —
+   the credential presented to an off-box appview when proxying a read. There
+   the verifier is a peer holding no secret of ours, so the only key it can
+   check is the account's, and service auth IS signed with it, as `ES256K`
+   over a different claim set (no `nbf`, no `sub`, plus `lxm`). So `Claims`
+   below is this module's session-token claim set, not a shape to reuse there.
+   That wire shape is P16/§4.5 of the same document.
+
    `HS256` is pinned by the verifier, not read from the token. A token's own
    `alg` header is attacker-controlled input; selecting the verification
    algorithm from it is the classic algorithm-confusion forgery, of which
