@@ -1,0 +1,1006 @@
+{- | The composed `check` front-end, the standalone resolve stage, and the
+   parser's two rejection paths sweep over their fixture corpora, as one
+   runner over a table of rows plus a handful of sibling tests.
+
+   Nine shell gates used to do this — `diff_compiler_check`,
+   `diff_compiler_check_batch`, `diff_compiler_check_modules`,
+   `diff_compiler_check_match`, `diff_compiler_resolve`,
+   `diff_compiler_resolve_batch`, `diff_compiler_resolve_modules`,
+   `diff_compiler_parse_errors`, `diff_compiler_parse_result` — most of them a
+   variation on the same loop: spawn a front-end driver over every fixture in
+   a corpus, drop the native runtime's trailing `()`, and hold the result to a
+   committed golden.
+
+   The resolve family (`resolve_main`, `resolve_batch`,
+   `resolve_modules_main`) fits the `Row`/`Leg` table exactly — the last of
+   the three needed one new `Shape` (`OrderedModules`, below), which is a new
+   CORPUS LAYOUT, not a new grading rule, so it is a `data` constructor rather
+   than a branch in the grading logic.
+
+   The parser rejection family (`parse_main`, `parse_result_main`) does NOT
+   fit the table: every existing row requires a CLEAN exit (`processFailure`)
+   and grades STDOUT. `parse_main` requires the OPPOSITE — a non-zero exit is
+   the pass condition — and its graded value is a normalized STDERR message,
+   not stdout at all. `parse_result_main` additionally grades a PER-FIXTURE
+   DERIVED bound (the fixture's own first source line) rather than a fixed
+   golden. Forcing either into `Row`/`Leg` would mean teaching `processFailure`
+   and `valueFailure` a polarity flag and a stream selector — genuinely new
+   control flow in the runner's shared loop, not a new row of data. Both are
+   therefore written as sibling tests below the table, reusing the same
+   corpus-reading and process-spawning helpers but not the `Row` grading
+   path. This is the finding the packet asked this slice to surface: the
+   `Row`/`Leg` shape generalizes to a third corpus LAYOUT but not to a second
+   grading PROTOCOL (exit polarity + which stream is the value).
+
+   | driver | corpus | grading | what it proves |
+   |---|---|---|---|
+   | `check_main` | `diff_fixtures` | subset | parse → desugar → resolve → exhaust → typecheck runs, and the composed driver agrees with the snapshot runner on the USER schemes |
+   | `check_main` | `resolve_fixtures` | equality | resolve errors route out of the composed driver |
+   | `check_main` | `import_error_fixtures` | equality | a bad import halts as `UnknownModule` rather than falling through to a spurious type error |
+   | `check_batch` | the same two corpora, ONE process | subset + equality | a cached prelude and a shared heap leave no trace between fixtures |
+   | `check_modules_main` | `check_module_fixtures` | equality | the loader-driven multi-module typecheck |
+   | `check_match_main` | `check_match_fixtures` | equality | the type-aware match-exhaustiveness check invoked per `EMatch` |
+
+   Unlike the eval sweep next door, these rows do NOT grade the same way, so
+   the rule is a field (`Grade`) rather than a convention. The clean
+   `diff_fixtures` leg is a SUBSET check and every other leg is full sorted
+   equality.
+
+   What the subset leg pins is MEMBERSHIP: each scheme the
+   `# TYPES_USER` snapshot commits must be a line the driver printed. What it
+   does not pin is anything the driver prints beyond them — the prelude's own
+   ~117 schemes, which `diff_compiler_snapshot_prelude` pins once from a
+   single `core.mdk` dump rather than re-stating per clean fixture. Narrowing
+   the other legs to that rule would stop them seeing a diagnostic the driver
+   emitted and the golden does not contain, which is the whole of what a
+   broken fixture asserts.
+
+   The two rules are not interchangeable, but on this corpus as it stands
+   they do not yet disagree: `check_main` prints exactly the committed user
+   schemes and nothing else for all 57 clean fixtures, so the subset leg
+   currently has no slack to spend. That is a fact about today's driver, not
+   about the rule — the leg's contract is membership, and it is written as
+   membership so that a driver which starts printing more does not red a gate
+   that never undertook to pin more.
+
+   A row's legs are not separate rows because one of them is BATCHED: the
+   `check_batch` row spawns a single process over the clean and the broken
+   corpus TOGETHER, so a resolve diagnostic leaking into a later clean
+   fixture's types is visible to it and to nothing else. Splitting that row
+   per corpus would delete the property while leaving every fixture green.
+
+   `test/check_module_fixtures` is a FROZEN corpus: `test/capture_goldens.sh`
+   is a no-op for it and there is no regeneration script, so a missing or
+   wrong `oracle.tcmod` is hand-derived from the fixture's semantics and
+   reviewed, never captured from whatever the driver prints today.
+
+   Two things this runner does that the retired scripts did not: it reads
+   each spawn's EXIT CODE and STDERR rather than stdout alone, and it asserts
+   each leg still holds the number of fixtures it held when the rows were
+   written, so a corpus that silently shrinks reds rather than passing over
+   fewer rows.
+
+   Runs under `medaka test --native`: it spawns driver binaries and reads the
+   corpora, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  batchSection, chompNewlines, stripUnitAutoPrint, sweepUnits
+}
+import fs.{fixtureDirs, fixtureFiles, mkdirAll}
+import io.{runVerb}
+import list.{dropWhile, reverse, somes, sort, takeWhile}
+import path.{basename, dirname, stem}
+import string.{
+  contains,
+  drop,
+  endsWith,
+  lastIndexOf,
+  lines,
+  split,
+  startsWith,
+  stripPrefix,
+  toInt,
+  trim,
+  unlines,
+  words,
+}
+import test.{Expectation, fail, pass}
+import test_process.{boundedVerb, medakaRoot, scratchDir}
+
+-- # The table
+
+{- | How one leg's committed golden is held against what the driver printed.
+
+   - `SubsetOfOutput` — every golden line must appear verbatim as a line of
+     the output, order-independent. Output lines with no golden counterpart
+     are deliberately unpinned.
+   - `SortedEqual` — the two line sets must be equal once sorted. An extra
+     output line is a failure. -}
+data Grade = SubsetOfOutput | SortedEqual
+
+{- | Where one fixture's golden lives, relative to the fixture.
+
+   - `SiblingExpected` — `<stem>.expected` beside the fixture.
+   - `TypesUserSnapshot dir` — the `# TYPES_USER` section of
+     `<dir>/<stem>.md` under the repository root, the same snapshot
+     `diff_compiler_snapshot_types_user` writes.
+   - `InFixtureDir name` — a file of that fixed name inside the fixture's own
+     directory, unrelated to the entry's stem. -}
+data Golden = SiblingExpected | TypesUserSnapshot String | InFixtureDir String
+
+{- | What one fixture of a leg IS.
+
+   - `FileFixture` — a `.mdk` file directly under the corpus root.
+   - `DirFixture` — a whole DIRECTORY of modules under the corpus root, whose
+     `entry` file names the root module inside it. A directory-shaped leg
+     also spawns its driver with the fixture's own directory as a trailing
+     argument, which is how the loader resolves the entry's sibling
+     imports.
+   - `OrderedModules` — a whole DIRECTORY of modules under the corpus root,
+     whose `order` file names EVERY module inside it, space-separated,
+     dependency-first. Unlike `DirFixture`, the driver goes straight at the
+     named files (no loader, no trailing directory argument) — this is the
+     shape `resolve_modules_main` needs, since it threads `resolveModule`
+     over the given files in the caller's own order rather than resolving
+     imports itself. -}
+data Shape = FileFixture | DirFixture | OrderedModules
+
+{- | One corpus a row sweeps, and the rule it is graded by.
+
+   `pairedWith` names a sibling suffix a fixture must ship to be graded at all,
+   or `None` when every `.mdk` under the corpus root is graded.
+   `test/diff_fixtures` is a shared corpus and four of its fixtures pin only
+   a lexer golden, so the clean legs grade the fixtures carrying the
+   multi-stage `<stem>.golden` and the other four are this gate's business
+   only through the lex gate. -}
+data Leg = Leg {
+  corpus : String,
+  shape : Shape,
+  pairedWith : Option String,
+  golden : Golden,
+  grade : Grade,
+  fixtures : Int,
+}
+
+{- | One retired gate: a driver binary, the legs it sweeps, and whether it
+   sees them one process at a time or all at once.
+
+   `oracle` and `prelude` are spelled repo-relative and interpolated onto
+   `medakaRoot` at spawn time. The `test/bin/<name>` spelling is load-bearing
+   beyond readability: `test/build_oracles.sh --for` derives which oracles a
+   gate needs by grepping the gate's own source for that literal, so an
+   oracle assembled from fragments would be invisible to it and the gate
+   would run against a stale or missing binary. -}
+data Row = Row {
+  label : String,
+  oracle : String,
+  prelude : List String,
+  legs : List Leg,
+  batched : Bool,
+}
+
+coreMod : String
+coreMod = "stdlib/core.mdk"
+
+runtimeMod : String
+runtimeMod = "stdlib/runtime.mdk"
+
+-- | The clean leg, shared by the per-fixture and the batched driver: both
+-- grade the same corpus against the same snapshots by the same rule, and
+-- differ only in how many processes see it.
+cleanLeg : Leg
+cleanLeg = Leg {
+  corpus = "test/diff_fixtures",
+  shape = FileFixture,
+  pairedWith = Some ".golden",
+  golden = TypesUserSnapshot "test/snapshots/diff_fixtures_types",
+  grade = SubsetOfOutput,
+  fixtures = 57,
+}
+
+resolveLeg : Leg
+resolveLeg = Leg {
+  corpus = "test/resolve_fixtures",
+  shape = FileFixture,
+  pairedWith = None,
+  golden = SiblingExpected,
+  grade = SortedEqual,
+  fixtures = 22,
+}
+
+-- | The multi-module resolve fixtures: each directory's own `order` file
+-- names its modules dependency-first, and `expected` is the committed
+-- union of every module's diagnostics.
+resolveModulesLeg : Leg
+resolveModulesLeg = Leg {
+  corpus = "test/resolve_module_fixtures",
+  shape = OrderedModules,
+  pairedWith = None,
+  golden = InFixtureDir "expected",
+  grade = SortedEqual,
+  fixtures = 18,
+}
+
+rows : List Row
+rows = [
+  Row {
+    label = "check_main",
+    oracle = "test/bin/check_main",
+    prelude = [runtimeMod, coreMod],
+    legs = [
+      cleanLeg,
+      resolveLeg,
+      Leg {
+        corpus = "test/import_error_fixtures",
+        shape = FileFixture,
+        pairedWith = None,
+        golden = SiblingExpected,
+        grade = SortedEqual,
+        fixtures = 1,
+      },
+    ],
+    batched = False,
+  },
+  Row {
+    label = "check_batch",
+    oracle = "test/bin/check_batch",
+    prelude = [runtimeMod, coreMod],
+    legs = [cleanLeg, resolveLeg],
+    batched = True,
+  },
+  Row {
+    label = "check_modules_main",
+    oracle = "test/bin/check_modules_main",
+    prelude = [runtimeMod, coreMod],
+    legs = [
+      Leg {
+        corpus = "test/check_module_fixtures",
+        shape = DirFixture,
+        pairedWith = None,
+        golden = InFixtureDir "oracle.tcmod",
+        grade = SortedEqual,
+        fixtures = 15,
+      },
+    ],
+    batched = False,
+  },
+  Row {
+    label = "check_match_main",
+    oracle = "test/bin/check_match_main",
+    prelude = [runtimeMod],
+    legs = [
+      Leg {
+        corpus = "test/check_match_fixtures",
+        shape = FileFixture,
+        pairedWith = None,
+        golden = SiblingExpected,
+        grade = SortedEqual,
+        fixtures = 12,
+      },
+    ],
+    batched = False,
+  },
+  Row {
+    label = "resolve_main",
+    oracle = "test/bin/resolve_main",
+    prelude = [runtimeMod, coreMod],
+    legs = [resolveLeg],
+    batched = False,
+  },
+  Row {
+    label = "resolve_batch",
+    oracle = "test/bin/resolve_batch",
+    prelude = [runtimeMod, coreMod],
+    legs = [resolveLeg],
+    batched = True,
+  },
+  Row {
+    label = "resolve_modules_main",
+    oracle = "test/bin/resolve_modules_main",
+    prelude = [runtimeMod, coreMod],
+    legs = [resolveModulesLeg],
+    batched = False,
+  },
+]
+
+-- # The corpus
+
+-- | The ENTRY MODULE of each of a leg's fixtures, sorted, as absolute paths:
+-- the fixture's own file for a file-shaped corpus, the module its `entry`
+-- file names for a directory-shaped one.
+entriesOf : Leg -> <FileRead "_", IO> Result String (List String)
+entriesOf leg =
+  let dir = "\{medakaRoot}/\{leg.corpus}"
+  match leg.shape
+    DirFixture => dirEntries dir
+    OrderedModules => orderedEntries dir
+    FileFixture => fileEntries leg dir
+
+{- | The graded `.mdk` files directly under a file-shaped corpus root.
+
+   `fixtureFiles` walks recursively and carries the anti-vacuity floor, so a
+   corpus that reads cleanly but holds nothing is an `Err` rather than a
+   green run over zero fixtures. Only the corpus root holds fixtures. -}
+fileEntries : Leg -> String -> <FileRead "_"> Result String (List String)
+fileEntries leg dir = match fixtureFiles dir
+  Err e => Err e
+  Ok paths =>
+    let own = p => endsWith ".mdk" p && dirname p == dir && isGraded leg paths p
+    match sort (filter own paths)
+      [] => Err "no top-level .mdk fixtures"
+      fixtures => Ok fixtures
+
+isGraded : Leg -> List String -> String -> Bool
+isGraded leg paths p = match leg.pairedWith
+  None => True
+  Some suffix => elem "\{dirname p}/\{stem p}\{suffix}" paths
+
+{- | The entry module of every fixture directory under `dir`, one per
+   directory, in directory order.
+
+   A directory whose `entry` file cannot be read is an `Err` naming it, not a
+   skip: the retired script counted such a directory as a failure precisely
+   so a fixture whose entry was renamed away could not stop being graded in
+   silence. -}
+dirEntries : String -> <FileRead "_"> Result String (List String)
+dirEntries dir = match fixtureDirs dir
+  Err e => Err e
+  Ok dirs => entriesIn (sort dirs) []
+
+entriesIn : List String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+entriesIn [] acc = Ok (reverse acc)
+entriesIn (d :: rest) acc = match readFile "\{d}/entry"
+  Err e => Err "\{basename d}: no readable entry file: \{e}"
+  Ok name => entriesIn rest ("\{d}/\{chompNewlines name}" :: acc)
+
+{- | The `order` file of every fixture directory under `dir`, one per
+   directory, in directory order — the entries carried forward are the
+   `order` file's own path (not the modules it names), since it is what
+   `argsFor` and `goldenOf` (`InFixtureDir`) both anchor on: `dirname` of an
+   entry recovers the fixture's own directory the same way it does for
+   `DirFixture`.
+
+   A directory whose `order` file cannot be read is an `Err` naming it, not a
+   skip — the same reasoning as `entriesIn`'s `entry` file. -}
+orderedEntries : String -> <FileRead "_"> Result String (List String)
+orderedEntries dir = match fixtureDirs dir
+  Err e => Err e
+  Ok dirs => orderedIn (sort dirs) []
+
+orderedIn : List String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+orderedIn [] acc = Ok (reverse acc)
+orderedIn (d :: rest) acc = match readFile "\{d}/order"
+  Err e => Err "\{basename d}: no readable order file: \{e}"
+  Ok _ => orderedIn rest ("\{d}/order" :: acc)
+
+-- | The expected output for one fixture, read from its committed golden.
+goldenOf : Leg -> String -> <FileRead "_", IO> Result String String
+goldenOf leg path = match leg.golden
+  SiblingExpected =>
+    map chompNewlines (readFile "\{dirname path}/\{stem path}.expected")
+  TypesUserSnapshot dir =>
+    map typesUserSection (readFile "\{medakaRoot}/\{dir}/\{stem path}.md")
+  InFixtureDir name => map chompNewlines (readFile "\{dirname path}/\{name}")
+
+{- | The `# TYPES_USER` section of a snapshot: the lines after that banner, up
+   to the next banner or the end of the file. `""` when there is no such
+   section, which grades as an empty golden rather than as a skip. -}
+typesUserSection : String -> String
+typesUserSection raw = match dropWhile (/= "# TYPES_USER") (lines raw)
+  [] => ""
+  _ :: rest =>
+    chompNewlines (unlines (takeWhile (l => not (startsWith "# " l)) rest))
+
+-- # Grading
+
+{- | The lines of `text` to grade, `[]` for empty text.
+
+   A driver that printed nothing owes no lines. `lines ""` is `[""]`, which
+   would otherwise grade as one empty line and disagree with an empty
+   golden. -}
+gradedLines : String -> List String
+-- `rule-stdlib-reimpl` matches on the declared signature alone, and this one
+-- is `String -> List String` like `string.lines`. The bodies differ on the
+-- only input that matters here.
+-- lint-disable-next-line rule-stdlib-reimpl
+gradedLines "" = []
+gradedLines text = lines text
+
+-- | `None` when `actual` satisfies `grade` against the golden `expected`.
+gradeAgainst : Grade -> String -> String -> Option String
+gradeAgainst SortedEqual expected actual =
+  let want = sort (gradedLines expected)
+  let got = sort (gradedLines actual)
+  if want == got then
+    None
+  else
+    Some "expected \{debug (joinLines want)}, got \{debug (joinLines got)}"
+gradeAgainst SubsetOfOutput expected actual =
+  let printed = gradedLines actual
+  match filter (l => not (elem l printed)) (gradedLines expected)
+    [] => None
+    missing =>
+      Some "missing from the driver's output: \{debug (joinLines missing)}"
+
+joinLines : List String -> String
+joinLines ls = chompNewlines (unlines ls)
+
+{- | How a spawn's exit code and stderr graded.
+
+   Every unit of every row is required to run clean: `code == 0` with no
+   `E-PANIC` on stderr. The retired scripts piped stderr to `/dev/null` and
+   never read `$?`, so a driver that panicked its way to the right bytes
+   passed them. -}
+processFailure : String -> String -> Int -> String -> Option String
+processFailure oracle unit code err =
+  if code == 0 && not (contains "E-PANIC" err) then
+    None
+  else
+    Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
+
+stderrTail : String -> String
+stderrTail "" = ""
+stderrTail err = match lines (chompNewlines err)
+  [] => ""
+  l :: _ => " — \{debug l}"
+
+-- | The short name a failure message calls one fixture by, corpus-qualified
+-- so a red run naming `resolve_fixtures/shadow` is unambiguous across the
+-- five corpora this gate sweeps.
+labelOf : Leg -> String -> String
+labelOf leg path = match leg.shape
+  DirFixture => "\{basename leg.corpus}/\{basename (dirname path)}"
+  OrderedModules => "\{basename leg.corpus}/\{basename (dirname path)}"
+  FileFixture => "\{basename leg.corpus}/\{stem path}"
+
+valueFailure : Leg -> String -> String -> <FileRead "_", IO> Option String
+valueFailure leg path actual =
+  let label = labelOf leg path
+  match goldenOf leg path
+    Err e => Some "\{label}: no readable golden: \{e}"
+    Ok expected =>
+      map (m => "\{label}: \{m}") (gradeAgainst leg.grade expected actual)
+
+-- # Grading a row
+
+-- | One leg of a row, with the fixtures found under it.
+data LegFixtures = LegFixtures { leg : Leg, entries : List String }
+
+{- | One row's outcome. `failures` is the whole list rather than the first,
+   since the vehicle absorbs anything a test body prints and a red run has to
+   name every disagreement in its message. -}
+data Outcome = Outcome { label : String, graded : Int, failures : List String }
+
+unitsOf : List Leg ->
+  List LegFixtures ->
+  <FileRead "_", IO> Result String (List LegFixtures)
+unitsOf [] acc = Ok (reverse acc)
+unitsOf (leg :: rest) acc = match entriesOf leg
+  Err e => Err "\{leg.corpus}: \{e}"
+  Ok paths => unitsOf rest (LegFixtures { leg = leg, entries = paths } :: acc)
+
+countFailure : LegFixtures -> List String
+countFailure u =
+  let found = length u.entries
+  if found == u.leg.fixtures then
+    []
+  else
+    [
+      "\{u.leg.corpus}: expected \{intToString u.leg.fixtures} fixtures, found \{intToString found} — see this leg's `fixtures` field",
+    ]
+
+{- | The driver's argument vector for one fixture: the row's prelude modules,
+   then the entry.
+
+   A directory-shaped leg passes the fixture's own directory as a further
+   trailing argument — the loader resolves the entry's sibling imports
+   against it, and an entry loaded without it fails to find the modules
+   sitting beside it. An `OrderedModules` leg instead expands to every module
+   the `order` file names, in that order, with no trailing directory — the
+   driver takes the files directly and never consults the loader. -}
+argsFor : Row -> Leg -> String -> <FileRead "_", IO> List String
+argsFor r leg path =
+  let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
+  match leg.shape
+    DirFixture => prefix ++ [path, dirname path]
+    OrderedModules => prefix ++ orderedModuleFiles path
+    FileFixture => prefix ++ [path]
+
+-- | The modules named by the `order` file at `orderPath` (itself
+-- `"\{fixtureDir}/order"`, per `orderedEntries`), as absolute-relative paths
+-- inside that same directory, in the file's own order.
+orderedModuleFiles : String -> <FileRead "_"> List String
+orderedModuleFiles orderPath = match readFile orderPath
+  Err _ => []
+  Ok content =>
+    map (name => "\{dirname orderPath}/\{name}") (words (chompNewlines content))
+
+-- | A row that spawns its driver once per fixture: the shape three of the
+-- four retired scripts had, and the reference the batched row is compared
+-- against.
+perFixture : Row -> List LegFixtures -> <Exec "_", FileRead "_", IO> List String
+perFixture r units = flatMap (sweepLeg r) units
+
+sweepLeg : Row -> LegFixtures -> <Exec "_", FileRead "_", IO> List String
+sweepLeg r u = somes (map (oneFixture r u.leg) u.entries)
+
+oneFixture : Row -> Leg -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture r leg path =
+  match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r leg path)
+    Err e => Some "\{labelOf leg path}: could not spawn \{r.oracle}: \{e}"
+    Ok (code, out, err) =>
+      match processFailure r.oracle (labelOf leg path) code err
+        Some m => Some m
+        None => valueFailure leg path (chompNewlines (stripUnitAutoPrint out))
+
+{- | A row that spawns its driver ONCE over every leg's fixtures and cuts its
+   delimited stdout back apart — the property no per-fixture row can state,
+   since a leak between two fixtures needs both of them in one heap. -}
+batchedRow : Row -> List LegFixtures -> <Exec "_", FileRead "_", IO> List String
+batchedRow r units =
+  let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
+  match (boundedVerb
+    "\{medakaRoot}/\{r.oracle}"
+    (prefix ++ flatMap unitEntries units))
+    Err e => ["\{r.label}: could not spawn \{r.oracle}: \{e}"]
+    Ok (code, out, err) =>
+      let all = chompNewlines (stripUnitAutoPrint out)
+      let values = flatMap (legSections all) units
+      match processFailure r.oracle r.label code err
+        Some m => m :: values
+        None => values
+
+unitEntries : LegFixtures -> List String
+unitEntries u = u.entries
+
+legSections : String -> LegFixtures -> <FileRead "_", IO> List String
+legSections all u =
+  let cut = p => chompNewlines (batchSection "===SELFHOST-FIX=== " p all)
+  somes (map (p => valueFailure u.leg p (cut p)) u.entries)
+
+gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow _ r = match unitsOf r.legs []
+  Err e => Outcome { label = r.label, graded = 0, failures = [e] }
+  Ok units =>
+    let counted = flatMap countFailure units
+    let values = if r.batched then batchedRow r units else perFixture r units
+    Outcome {
+      label = r.label,
+      graded = sum (map (u => length u.entries) units),
+      failures = counted ++ values,
+    }
+
+rowFailure : Outcome -> Option String
+rowFailure o = match o.failures
+  [] => None
+  fs =>
+    let body = unlines (map (f => "    \{f}") fs)
+    Some
+      "  \{o.label} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
+
+summarize : Int -> List String -> Expectation
+summarize _ [] = pass
+summarize graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} driver rows failed:\n\{unlines failures}"
+
+test "every check front-end driver reproduces its corpora's goldens" =
+  sweepUnits rows gradeRow rowFailure summarize
+
+-- # The cycle chain a corpus cannot hold
+
+{- | The probe `diff_compiler_check_modules.sh` carried alongside its corpus
+   loop: a two-module import cycle written on the spot, which the loader must
+   report as the whole chain rather than as one edge of it.
+
+   It is not corpus data — there is no fixture directory, no `entry` file and
+   no `oracle.tcmod` — so it stays a second test rather than being bent into
+   a `Leg`. Its observable is on STDERR with a clean exit, which is the half
+   of a process the retired script read and the half a golden cannot hold. -}
+cycleModules : List (String, String)
+cycleModules = [
+  ("a.mdk", "import b.{bar}\nexport foo : Int\nfoo = 1\n"),
+  ("b.mdk", "import a.{foo}\nexport bar : Int\nbar = 2\n"),
+]
+
+cycleChain : String
+cycleChain = "cyclic dependency: a → b → a"
+
+writeAll : String -> List (String, String) -> <FileWrite "_"> Result String Unit
+writeAll _ [] = Ok ()
+writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
+  Err e => Err "\{dir}/\{name}: \{e}"
+  Ok () => writeAll dir rest
+
+{- | A directory of this test's own, under the process's scratch root.
+
+   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
+   per process and every test in this module is handed the same path —
+   including after the sweep above has removed it, which is what `sweepUnits`
+   does when it finishes. A second test in one module therefore has to make
+   its directory rather than assume one; `mkdirAll` remakes the root on the
+   way and is not an error when it is still there. -}
+cycleScratch : <Exec "_", FileWrite "_"> Result String String
+cycleScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/cycle"
+    map (() => dir) (mkdirAll dir)
+
+cycleVerdict : String -> <Exec "_", IO> Option String
+cycleVerdict dir =
+  let oracle = "\{medakaRoot}/test/bin/check_modules_main"
+  let args = [
+    "\{medakaRoot}/\{runtimeMod}",
+    "\{medakaRoot}/\{coreMod}",
+    "\{dir}/a.mdk",
+    dir,
+  ]
+  match boundedVerb oracle args
+    Err e => Some "could not spawn \{oracle}: \{e}"
+    Ok (code, _, err) =>
+      let said = chompNewlines err
+      if code == 0 && said == cycleChain then
+        None
+      else
+        Some
+          "expected exit 0 reporting \{debug cycleChain}, got exit \{intToString code} reporting \{debug said}"
+
+cycleChainReported : <Exec "_", FileWrite "_", IO> Expectation
+cycleChainReported = match cycleScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir => match writeAll dir cycleModules
+    Err e => fail "could not write the cycle modules: \{e}"
+    Ok () =>
+      let finding = cycleVerdict dir
+      let _ = runVerb "rm" ["-rf", dir]
+      match finding
+        None => pass
+        Some m => fail m
+
+test "a two-module import cycle is reported as the whole chain" =
+  cycleChainReported
+
+-- # A valid multi-module program: no false positives
+
+{- | `test/diff_compiler_check_test.mdk`'s corpus-leg ran
+   `resolve_modules_main` over the compiler's OWN module graph, named by bare
+   module name (`util ast lexer …`) against a flat `compiler/<m>.mdk` layout
+   that no longer exists — every one of the 13 names now resolves to nothing
+   (they moved under `compiler/frontend/`, `compiler/types/`, etc.), so the
+   glob silently swept zero files and the script reported "no false
+   positives" having checked nothing.
+
+   Repointing the 13 names at their real, current paths does NOT fix this,
+   and is not attempted here: `resolve_modules_main` (`support/path.mdk`
+   `modIdOf`) derives a module's ID as its bare file basename, with no
+   directory component — a scheme built for the OLD flat layout. Fed the
+   real compiler files, every qualified import (`import frontend.ast.{…}`)
+   resolves against the id `ast`, not `frontend.ast`, so the oracle reports
+   hundreds of spurious `UnknownModule`/`UnboundVariable` diagnostics on a
+   perfectly valid program — measured directly:
+   `test/bin/resolve_modules_main stdlib/runtime.mdk stdlib/core.mdk
+   compiler/support/util.mdk compiler/frontend/ast.mdk …` prints
+   `(UnknownModule "frontend.ast")` and 200+ siblings. That is not the "no
+   false positives" property this leg exists to check; it is a NEW false
+   positive the corpus itself would manufacture. Making the oracle
+   qualified-import-aware is a real fix, but a change to
+   `resolve_modules_main`'s own module-identification scheme is out of this
+   slice's boundary depth — filed separately (see the report) rather than
+   attempted here.
+
+   What survives is a SYNTHETIC two-module program the oracle CAN process
+   correctly, the same device `cycleModules` above uses for the cycle probe:
+   real content, not a fixture directory, so it stays a sibling test rather
+   than a `Leg`. It still exercises the same driver over more than one file,
+   which is what the retired leg's non-vacuity actually bought — the
+   per-fixture `resolve_module_fixtures/valid_cross_module` case already
+   covers the identical property against a Leg, so this is deliberately a
+   second, minimal, self-contained witness of it rather than the sole one. -}
+validModules : List (String, String)
+validModules = [
+  ("shapes.mdk", "public export data Shape = Circle Int | Square Int\n"),
+  (
+    "areas.mdk",
+    "import shapes.{Shape(..)}\nexport area : Shape -> Int\narea (Circle r) = r * r * 3\narea (Square s) = s * s\n",
+  ),
+]
+
+validModulesScratch : <Exec "_", FileWrite "_"> Result String String
+validModulesScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/resolve_modules_valid"
+    map (() => dir) (mkdirAll dir)
+
+validModulesVerdict : String -> <Exec "_", IO> Option String
+validModulesVerdict dir =
+  let oracle = "\{medakaRoot}/test/bin/resolve_modules_main"
+  let args = [
+    "\{medakaRoot}/\{runtimeMod}",
+    "\{medakaRoot}/\{coreMod}",
+    "\{dir}/shapes.mdk",
+    "\{dir}/areas.mdk",
+  ]
+  match boundedVerb oracle args
+    Err e => Some "could not spawn \{oracle}: \{e}"
+    Ok (code, out, err) =>
+      match processFailure oracle "valid multi-module program" code err
+        Some m => Some m
+        None => match gradedLines (chompNewlines (stripUnitAutoPrint out))
+          [] => None
+          got =>
+            Some
+              "compiler reports errors on a valid program: \{debug (joinLines got)}"
+
+validModulesRun : <Exec "_", FileWrite "_", IO> Expectation
+validModulesRun = match validModulesScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir => match writeAll dir validModules
+    Err e => fail "could not write the probe modules: \{e}"
+    Ok () =>
+      let finding = validModulesVerdict dir
+      let _ = runVerb "rm" ["-rf", dir]
+      match finding
+        None => pass
+        Some m => fail m
+
+test "a valid multi-module program resolves with no false positives" =
+  validModulesRun
+
+-- # parse_main — the panicking rejection path
+
+{- | The `.mdk` fixtures directly under `test/parse_error_fixtures`, sorted —
+   shared by both parser sibling tests below. Neither belongs on the `Row`
+   table (see the module header): `parse_main`'s pass condition is a NON-zero
+   exit, the reverse of every `Row`'s `processFailure`, and its graded value
+   is normalized STDERR rather than stdout. -}
+parseErrorFixtures : <FileRead "_", IO> Result String (List String)
+parseErrorFixtures =
+  let dir = "\{medakaRoot}/test/parse_error_fixtures"
+  match fixtureFiles dir
+    Err e => Err e
+    Ok paths =>
+      match sort (filter (p => endsWith ".mdk" p && dirname p == dir) paths)
+        [] => Err "no top-level .mdk fixtures"
+        fixtures => Ok fixtures
+
+{- | The first non-empty line of `err`, with any `…panic: ` prefix (up to and
+   including the LAST such occurrence) and the `runtime error [E-PANIC]: `
+   banner (`mdk_panic`, RUNTIME-TRAP-UNIFY) stripped — the parser/lexer
+   MESSAGE the retired script's `norm_self` isolated, not the runtime's
+   framing around it.
+
+   > normalizeParseErrorMessage "\nsome/path: panic: unexpected token\n"
+   "unexpected token"
+
+   > normalizeParseErrorMessage "runtime error [E-PANIC]: bad indent\n"
+   "bad indent" -}
+normalizeParseErrorMessage : String -> String
+-- `rule-stdlib-reimpl` matches on the declared signature alone (`String ->
+-- String`), which `path.normalize` shares; the bodies are unrelated — this
+-- one strips a panic-message prefix, not a filesystem path.
+-- lint-disable-next-line rule-stdlib-reimpl
+normalizeParseErrorMessage err = match firstNonBlank (lines (chompNewlines err))
+  None => ""
+  Some line =>
+    let stripped = match lastIndexOf "panic: " line
+      Some i => drop (i + 7) line
+      None => line
+    match stripPrefix "runtime error [E-PANIC]: " stripped
+      Some rest => rest
+      None => stripped
+
+firstNonBlank : List String -> Option String
+firstNonBlank [] = None
+firstNonBlank ("" :: rest) = firstNonBlank rest
+firstNonBlank (l :: _) = Some l
+
+parseErrorVerdict : String -> <Exec "_", FileRead "_", IO> Option String
+parseErrorVerdict path =
+  let name = stem path
+  match goldenOf resolveLeg path
+    -- resolveLeg's `golden` field (SiblingExpected) is reused purely for its
+    -- `<stem>.expected` reading rule; this leg has no other relationship to
+    -- resolveLeg's corpus.
+    Err e => Some "\{name}: no readable golden: \{e}"
+    Ok golden =>
+      let oracle = "\{medakaRoot}/test/bin/parse_main"
+      match boundedVerb oracle [path]
+        Err e => Some "\{name}: could not spawn \{oracle}: \{e}"
+        Ok (code, _, err) =>
+          if code == 0 then
+            Some "\{name}: compiler exited 0 (should reject)"
+          else
+            let got = normalizeParseErrorMessage err
+            if got == golden then
+              None
+            else
+              Some "\{name}: expected \{debug golden}, got \{debug got}"
+
+parseErrorsRun : <Exec "_", FileRead "_", IO> Expectation
+parseErrorsRun = match parseErrorFixtures
+  Err e => fail "test/parse_error_fixtures: \{e}"
+  Ok paths =>
+    let expected = 39
+    if length paths /= expected then
+      fail
+        "test/parse_error_fixtures: expected \{intToString expected} fixtures, found \{intToString (length paths)}"
+    else match somes (map parseErrorVerdict paths)
+      [] => pass
+      fs =>
+        fail
+          "\{intToString (length fs)} of \{intToString (length paths)} fixtures failed:\n\{unlines fs}"
+
+test "parse_main rejects every malformed fixture with the expected message" =
+  parseErrorsRun
+
+-- # parse_result_main — the non-panicking, structured-error path
+
+{- | `parseErrorFixtures` filtered to those whose `.expected` is EXACTLY
+   `"parse error"` — the fixtures whose failure is a genuine parser (not
+   lexer) rejection and can therefore round-trip through `parseResult`.
+   Derived, not hand-listed (#595: a hand-maintained list silently drifted).
+   An empty result is an `Err`, never a silent pass over nothing. -}
+parseResultFixtures : <FileRead "_", IO> Result String (List String)
+parseResultFixtures = match parseErrorFixtures
+  Err e => Err e
+  Ok paths => derivedParseResultFixtures paths []
+
+derivedParseResultFixtures : List String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+derivedParseResultFixtures [] acc = match reverse acc
+  [] =>
+    Err
+      "no fixture's .expected is exactly \"parse error\" (corpus moved or .expected convention changed)"
+  fs => Ok fs
+derivedParseResultFixtures (p :: rest) acc =
+  match readFile "\{dirname p}/\{stem p}.expected"
+    Err _ => derivedParseResultFixtures rest acc
+    Ok exp =>
+      if chompNewlines exp == "parse error" then
+        derivedParseResultFixtures rest (p :: acc)
+      else
+        derivedParseResultFixtures rest acc
+
+-- | The first non-comment, non-blank line of `src`, 1-indexed — the earliest
+-- line a genuine parse error can plausibly point at. Corpus convention is
+-- NOT uniform (some fixtures carry a multi-line `--` header, others none),
+-- so this is derived per fixture rather than a hand-maintained threshold
+-- (#595 rejected a hardcoded "line >= 3").
+firstSrcLine : List String -> Int -> Option Int
+firstSrcLine [] _ = None
+firstSrcLine (l :: rest) n =
+  if startsWith "--" l || trim l == "" then
+    firstSrcLine rest (n + 1)
+  else
+    Some n
+
+firstSrcLineOf : String -> <FileRead "_"> Option Int
+firstSrcLineOf path = match readFile path
+  Err _ => None
+  Ok src => firstSrcLine (lines src) 1
+
+-- | `Some (line, col)` when `said` is exactly `"parse error L:C"`.
+parseLocation : String -> Option (Int, Int)
+parseLocation said = match stripPrefix "parse error " said
+  None => None
+  Some rest => match split ":" rest
+    [l, c] => match (toInt l, toInt c)
+      (Some line, Some col) => Some (line, col)
+      _ => None
+    _ => None
+
+{- | The frozen OCaml-oracle `L:C`, where one was captured
+   (`<name>.parse_result_oracle`, `test/capture_goldens.sh`). astdump.exe was
+   removed 2026-06-26; a fixture added since then has no such file and none
+   can ever be captured, which is not a defect — its `.expected == "parse
+   error"` already establishes genuineness. A PRESENT-but-unlocated file is
+   the actual defect this checks: the oracle claiming to have captured a
+   location without recording one. Agreement with the self-hosted L:C is
+   reported nowhere here and enforced nowhere — the two parsers' cursors are
+   structurally different (Menhir's post-lookahead position vs. the
+   recursive-descent combinator's give-up token; see the retired script's own
+   header), so requiring byte-exact parity would be pinning a coincidence. -}
+oracleLocatedOrAbsent : String -> <FileRead "_"> Option String
+oracleLocatedOrAbsent path =
+  let oracleFile = "\{dirname path}/\{stem path}.parse_result_oracle"
+  if fileExists oracleFile then match readFile oracleFile
+    Err _ => None
+    Ok content =>
+      if chompNewlines content == "" then
+        Some
+          "\{stem path}: oracle file present but did not report a located parse error"
+      else
+        None
+  else
+    None
+
+parseResultVerdict : String -> <Exec "_", FileRead "_", IO> Option String
+parseResultVerdict path = match oracleLocatedOrAbsent path
+  Some m => Some m
+  None =>
+    let name = stem path
+    let oracle = "\{medakaRoot}/test/bin/parse_result_main"
+    match boundedVerb oracle [path]
+      Err e => Some "\{name}: could not spawn \{oracle}: \{e}"
+      Ok (code, out, err) =>
+        if code /= 0 then
+          Some
+            "\{name}: compiler exited \{intToString code} (parseResult must NOT panic; out=\{debug out} err=\{debug err})"
+        else
+          let said = chompNewlines (stripUnitAutoPrint out)
+          match parseLocation said
+            None =>
+              Some
+                "\{name}: did not emit a structured 'parse error L:C' (got \{debug said})"
+            Some (line, col) => match firstSrcLineOf path
+              None =>
+                Some
+                  "\{name}: fixture has no non-comment source line to derive a bound from"
+              Some minLine =>
+                if line < minLine then
+                  Some
+                    "\{name}: located line \{intToString line} is before the first real source line (\{intToString minLine})"
+                else if col < 0 then
+                  Some "\{name}: located col \{intToString col} < 0"
+                else
+                  None
+
+parseResultRun : <Exec "_", FileRead "_", IO> Expectation
+parseResultRun = match parseResultFixtures
+  Err e => fail "test/parse_error_fixtures: \{e}"
+  Ok paths => match somes (map parseResultVerdict paths)
+    [] => pass
+    fs =>
+      fail
+        "\{intToString (length fs)} of \{intToString (length paths)} fixtures failed:\n\{unlines fs}"
+
+test "parseResult reports a located parse error within the source, never a panic" =
+  parseResultRun
+
+-- | A well-formed program's `main`-free body — sanity that `parseResult`
+-- returns `Ok` rather than only ever exercising the error arm.
+validParseResultSrc : String
+validParseResultSrc = "f = 1\ng x = x + 1\n"
+
+parseResultValidProgramVerdict : String -> <Exec "_", IO> Option String
+parseResultValidProgramVerdict path =
+  let oracle = "\{medakaRoot}/test/bin/parse_result_main"
+  match boundedVerb oracle [path]
+    Err e => Some "could not spawn \{oracle}: \{e}"
+    Ok (code, out, _) =>
+      let got = chompNewlines (stripUnitAutoPrint out)
+      if code == 0 && got == "ok" then
+        None
+      else
+        Some
+          "expected exit 0 reporting \"ok\", got exit \{intToString code} reporting \{debug got}"
+
+parseResultValidProgramScratch : <Exec "_", FileWrite "_"> Result String String
+parseResultValidProgramScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/parse_result_valid"
+    map (() => dir) (mkdirAll dir)
+
+parseResultValidProgramRun : <Exec "_", FileWrite "_", IO> Expectation
+parseResultValidProgramRun = match parseResultValidProgramScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir =>
+    let path = "\{dir}/valid.mdk"
+    match writeFile path validParseResultSrc
+      Err e => fail "could not write the probe file: \{e}"
+      Ok () =>
+        let finding = parseResultValidProgramVerdict path
+        let _ = runVerb "rm" ["-rf", dir]
+        match finding
+          None => pass
+          Some m => fail m
+
+test "parseResult accepts a well-formed program" = parseResultValidProgramRun

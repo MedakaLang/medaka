@@ -1,6 +1,6 @@
 -- ⚠️ WHAT THIS GATE SEES, and why that is enough here.
--- `diff_compiler_check_modules.sh` diffs the entry's inferred SCHEMES and discards
--- stderr and the exit code — so this fixture guards the SILENT face of a lost
+-- The diff_compiler_check sweep diffs the entry's inferred SCHEMES and discards
+-- stderr content, grading only a clean exit — so it guards the SILENT face of a lost
 -- cross-module param kind: with no `(nt, Wrap)` kind entry, `fromAstTypeApp` falls to
 -- `appFallback` instead of `foldAppKinds`, the written row is elaborated as an ordinary
 -- TYPE, and the golden reads `Wrap Unit -> Int` with nothing on stderr.

@@ -259,7 +259,7 @@ a claim shipping its own derivation is only honest if someone ran it.
 
 - For LSP-surfaced errors, run `bash test/diff_compiler_lsp.sh` and
   `test/lsp_harness.sh`.
-- For multi-module bugs, run `bash test/diff_compiler_check_modules.sh` and
+- For multi-module bugs, run `bash test/diff_compiler_check_test.mdk` and
   `./medaka gate run diff_compiler_eval` (the `eval_modules_main` rows) to isolate
   the loader path.
 - Before blaming the compiler, run `gh issue list --label known-red` — one issue

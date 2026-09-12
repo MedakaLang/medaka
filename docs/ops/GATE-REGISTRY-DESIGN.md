@@ -130,7 +130,7 @@ migration   = "native-rewrite" # where this check ENDS UP under the testing-arch
                                #   docs/ops/TESTING-INVENTORY.md. Value checked by
                                #   `gate verify`; a `shell:*` value is additionally PAIRED
                                #   with its run script — see the fourth rule below.
-run         = "test/diff_compiler_parse_result.sh"   # exec: the script; native: module path
+run         = "test/diff_compiler_check_test.mdk"   # exec: the script; native: module path
 oracles     = ["parse_result_main"]   # test/bin/* names this gate reads (drives oracle builds)
 sources     = ["compiler/frontend/parser.mdk"]   # what SELECTS this gate (preflight/
                                #   queue scoping). GLOBS: `*` (crosses `/`), `?`.

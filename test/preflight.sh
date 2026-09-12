@@ -628,13 +628,18 @@ while IFS= read -r f; do
     # ── front-end: everything downstream of it is suspect ──
     compiler/frontend/lexer.mdk)
       add 'diff_compiler_lex*'
-      add 'diff_compiler_parse*'; add 'diff_compiler_snapshot*' ;;
+      # parse_main/parse_result_main (the former diff_compiler_parse_errors/
+      # _result) are now legs of the survivor diff_compiler_check, whose name
+      # the diff_compiler_parse* glob no longer matches — named explicitly.
+      add 'diff_compiler_parse*'; add 'diff_compiler_check'
+      add 'diff_compiler_snapshot*' ;;
     # #1131: parser.mdk/ast.mdk are cited implementing sites in BOTH
     # docs/spec/SHADOW-SEMANTICS.md §3 and docs/spec/DICT-SEMANTICS.md's own
     # enforcement table (`grep -oE 'compiler/[a-zA-Z_/]+\.mdk' docs/spec/*-SEMANTICS.md`),
     # so both spec-conformance gates belong here too.
     compiler/frontend/parser.mdk|compiler/frontend/ast.mdk)
-      add 'diff_compiler_parse*'
+      # Same diff_compiler_check repoint as the lexer.mdk arm above.
+      add 'diff_compiler_parse*'; add 'diff_compiler_check'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
       # #1110: ast.mdk declares TyConOrigin and mapTyInDecl — the carrier and the
       # traversal BOTH the stamper and the agreement probe walk; parser.mdk mints the
@@ -655,7 +660,7 @@ while IFS= read -r f; do
     # defect in the tracker (#733/#1253/#1284) is decided by. Goldens cannot see an
     # over-widening there; the permutation differential can.
     compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
-      add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
+      add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
       add 'diff_compiler_origin_agreement'
       add 'diff_compiler_import_order'
       # G-0: the SAME argument on a different axis. resolve/marker decide which
@@ -669,7 +674,10 @@ while IFS= read -r f; do
       add 'diff_compiler_core_ir_typed_modules'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
-      add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
+      # diff_compiler_check_match's match-exhaustiveness corpus is a leg of
+      # the diff_compiler_check sweep; the gate that now carries it is named
+      # by the survivor, not by the retired script.
+      add 'diff_compiler_exhaust'; add 'diff_compiler_check' ;;
 
     # ── types ── (also the TYPES snapshot family: typecheck.mdk renders the
     #    `# TYPES` section of test/snapshots/typecheck{,_panic}_fixtures, #81 R5)

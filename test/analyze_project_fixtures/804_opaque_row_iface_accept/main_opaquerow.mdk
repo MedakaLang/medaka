@@ -13,8 +13,8 @@
 -- `T-EFFECT-UNDETERMINED` + exit 1; this is that assertion inverted.  Its sibling
 -- test/check_module_fixtures/opaque_export_row_kind_import pins the inferred SCHEMES
 -- (the silent halves, #1028) and CANNOT see this one: the `speak` scheme it prints is
--- byte-identical before and after the fix, and diff_compiler_check_modules.sh discards
--- stderr and never reads the exit code.  Delete this fixture and the REJECTION half of
+-- byte-identical before and after the fix, and the diff_compiler_check sweep discards
+-- stderr content, grading only a clean exit.  Delete this fixture and the REJECTION half of
 -- #804 is unguarded — a regression that re-broke `checkUndeterminedRetEffVars` or
 -- `rowArgNames` while leaving kind propagation intact would go green.
 import opaquerow.{Asy}
