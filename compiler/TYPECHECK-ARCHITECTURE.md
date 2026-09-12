@@ -111,15 +111,33 @@ same-spelled defaults remain order-sensitive there. Wasm dynamic-dictionary defa
 (#1020) retain their pre-existing limitation. Same-arity defaults still need full
 interface identity and remain subject to the existing first-match limitation.
 
-Ordinary method-return sites with a recovered interface parameter vector select one
-instance row for both the method route and its prerequisites. Checking and return
-stamping share the full-vector instance-head matcher: a result `Box a` does not
-substitute `Box a` for the class parameter `a`. Numeric return and arithmetic routes
-use that matcher too. Ordinary sites without recoverable method metadata retain
-the scalar compatibility path; argument and nested routes retain their existing
-matching policy. Checking and stamping still select separately, and ordinary
-return selection remains spelling-based. This does not complete the shared solver
-or return-family migration. The finalized scheme query
+Eligible ordinary method-return occurrences retain the declaration row that supplied
+their scheme in `TcEnv`. Ordinary variable and local bindings erase that ownership;
+imported method bindings retain it only through the existing admission and nameability
+decision. A private `MethodReturnRequest` carries the declaration descriptor and
+instantiated occurrence to both checking and return stamping. Its marked form also
+supplies the existing return goal's evidence ID, separate from the method expression's
+aggregate evidence ID. Method qualifiers use the same row's slots and remain separate
+from instance prerequisites.
+
+Exact eligibility requires resolved identity, return-position dispatch and every
+interface parameter represented in the declared method type. Projection remains late
+and total: `Some []` is a complete zero-length vector, while `None` means unavailable.
+The two consumers select by the carried interface and complete vector. Each stamping
+selection supplies both the method route and its prerequisites through the same row;
+checking shares the full-vector matcher, so a result `Box a` cannot substitute `Box a`
+for the class parameter `a`. Numeric return and arithmetic routes use that matcher too.
+Other obligation readers retain their existing receiver, defaulting and survivor
+policies. Argument dispatch, shadows, defaults, multi-admitted spellings, unresolved
+identity and missing metadata retain explicit compatibility paths. The unmarked Flat
+checker can carry the same descriptor without minting an unused evidence destination.
+Partially absent parameters and lost ambient return dictionaries remain
+[#2981](https://github.com/MedakaLang/medaka/issues/2981).
+
+Checking and stamping still select independently. The carrier is not a production
+`Wanted` or `SolverOutcome`, and does not complete the shared solver or return-family
+migration. All three legacy caches remain enabled; they can replay live cells and
+already-drained graphs. The carrier introduces no cached result or proof. The finalized scheme query
 `checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
 live inference cells. Cache replacement and immutable publication remain with
 [#2549](https://github.com/MedakaLang/medaka/issues/2549).
@@ -576,7 +594,7 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
   → checkEffectParams / checkLetRecDecls → shadows (#4) → mode-specific ref setup
   → dataEnv → checkUndeterminedRetEffVars → checkGradedImplHeads → rejectCyclicAliases
   → currentMethodRows = ifaceMethodSchemeRows prog
-  → globalS = legacyMethodSchemes currentMethodRows ++ externSchemes → env1
+  → imported method admission → declaration-owned bindings + externSchemes → env1
   → processTopGroups            ← [BREAK #1] inference plan; Flat is two-phase
   → cross-module dict snapshot (#3, Module only)
   → groundMultiParamObligations
@@ -594,6 +612,14 @@ for admitted lookup and Num seeding. Numeric seeding retains the selected
 identity and method predicate slots. Each numeric occurrence derives its
 `ClassPredicate` from that row's instantiation for checking and return stamping.
 This does not yet provide a shared solving judgment for other return sites.
+
+Ordinary environment bindings now retain an optional method row alongside its own
+scheme. Module setup annotates only bound, nameable imported methods; ordinary
+extensions erase that ownership, and importer shadow restoration preserves its
+existing scheme precedence. Eligible return occurrences consume
+that row's descriptor and method slots directly. The legacy spelling tables remain
+for compatibility populations, rather than becoming a second authority for exact
+return consumers.
 
 This sequence runs ONCE per module on the Module arm: marking happens inside it, per
 binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's

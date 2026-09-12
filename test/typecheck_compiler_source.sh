@@ -1244,10 +1244,10 @@ legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 pickSchemesByDecl : List String ->
-admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
+admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
   List MethodSchemeRow ->
   let currentMethodRows = ifaceMethodSchemeRows prog
-      let visibleMethodRows = ifaceMethodSchemeRows implDecls'
+    Module _ _ implDecls => ifaceMethodSchemeRows implDecls'
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1330,28 +1330,77 @@ done || exit 1
 
 # Check each projection consumer in its own function.  A global occurrence count
 # cannot prove that one arm was not duplicated while another reader silently lost it.
-require_numeric_projection_arm() {
+require_typecheck_arm() {
   reader_start="$1"
   reader_end="$2"
   reader_arm="$3"
   reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src")"
   if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
-    echo "FAIL: numeric projection reader $reader_start is missing: $reader_arm"
+    echo "FAIL: typechecker reader $reader_start is missing: $reader_arm"
     exit 1
   fi
 }
 
-require_numeric_projection_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
-require_numeric_projection_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
-require_numeric_projection_arm numObligIds defaultAmbiguousNum 'OpNumLit occ => monoUnboundIds occ'
-require_numeric_projection_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
-require_numeric_projection_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
-require_numeric_projection_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
-require_numeric_projection_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
-require_numeric_projection_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
-require_numeric_projection_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
-require_numeric_projection_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
-require_numeric_projection_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
+require_typecheck_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
+require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
+require_typecheck_arm numObligIds defaultAmbiguousNum 'OpNumLit occ => monoUnboundIds occ'
+require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
+require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
+require_typecheck_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
+require_typecheck_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
+require_typecheck_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
+require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
+require_typecheck_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
+require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
+
+# Ordinary return predicates retain their declaration through both consumers.
+# Scope the instance check to its own arm: the numeric arm uses the same matcher.
+ordinary_return_inst_body="$(sed -n '/^entailInst .*EKExactReturn/,/^entailInst .*EKNumReturn/p' "$predicate_slot_src")"
+ordinary_return_inst_required='  let goals = optionOr [] (methodReturnArgs request)
+  match ieSelectRowByIface env request.mrrIface goals
+      let routeKey = methodRouteKeyForRow request.mrrName env row
+      let routes = implDictRoutesForRow encl useScope goals row'
+printf '%s\n' "$ordinary_return_inst_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_inst_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return instance arm is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+if printf '%s\n' "$ordinary_return_inst_body" | grep -Eq 'ifaceParamMonos|goalPredOf|ieSelectRowByMethod'; then
+  echo "FAIL: ordinary exact return instance arm reconstructs its predicate by spelling"
+  exit 1
+fi
+
+require_typecheck_arm pushExactReturnObl methodReturnRequest 'pred = Predicate { iface = request.mrrIface, args = [] }'
+require_typecheck_arm pushExactReturnObl methodReturnRequest 'oblProj = OpExactReturn request'
+require_typecheck_arm uOblArgs callOblsWindow 'OpExactReturn request => optionOr [] (methodReturnArgs request)'
+require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'let occs = uOblArgs o'
+require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'checkOneCallObligation deferNonGround univ iface occs loc o.uoScope'
+require_typecheck_arm recordSite recordNumLitSite 'Some request => SKExactReturn implRef request'
+require_typecheck_arm recordSite recordNumLitSite 'Some request => optionOr ev request.mrrGoalEv'
+require_typecheck_arm recordSite recordNumLitSite '      siteEv)'
+require_typecheck_arm recordSite recordNumLitSite 'recordMethodDictsFromSlots row.msrMethodSlots methodRef subst'
+require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelSlots 'instantiateMethodPredicateSlots row.msrMethodSlots subst'
+
+# The other projection readers retain their own policies; presence in one reader
+# cannot cover an omitted arm in another reader.
+require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'request.mrrTyparams'
+require_typecheck_arm numObligIds defaultAmbiguousNum 'monoUnboundIds request.mrrOccurrence'
+require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
+require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
+require_typecheck_arm liveNumVarGo takeFirst 'findTvarInMono request.mrrOccurrence id'
+require_typecheck_arm groundMultiParamObligations groundOneObligation 'request.mrrOccurrence'
+require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpExactReturn request =>'
+require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
+require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
+
+# A queued descriptor may retain the existing occurrence Mono, but neither the
+# producer's live Scheme nor a solver result belongs in this compatibility payload.
+ordinary_return_request_body="$(sed -n '/^data MethodReturnRequest =/,/^}/p' "$predicate_slot_src")"
+if [ -z "$ordinary_return_request_body" ] || printf '%s\n' "$ordinary_return_request_body" | grep -Eq ':.*(Scheme|SolverOutcome|SolverEvidence|Ref )'; then
+  echo "FAIL: ordinary return request is absent or retains a scheme, result, or mutable destination"
+  exit 1
+fi
 
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
@@ -1384,9 +1433,9 @@ inferRecLet registerLocalScheme defaultAmbiguousNumOwnedBy
 inferLetSimple inferLetBody defaultAmbiguousNumOwnedBy
 processLetGroup inferLetBinds defaultGroupNumOwnedBy'
 printf '%s\n' "$local_num_boundaries" | while read -r reader next helper; do
-  require_numeric_projection_arm "$reader" "$next" "$helper"
-  require_numeric_projection_arm "$reader" "$next" 'let _ = exitLevel ()'
-  require_numeric_projection_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
+  require_typecheck_arm "$reader" "$next" "$helper"
+  require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
+  require_typecheck_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
 done || exit 1
 
 local_num_expected="$(printf '%s\n' "$local_num_boundaries" | wc -l | tr -d ' ')"
@@ -1396,15 +1445,15 @@ if [ "$local_num_actual" -ne "$local_num_expected" ]; then
   exit 1
 fi
 
-require_numeric_projection_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows (Some level) m = match normalize m'
-require_numeric_projection_arm numDefaultOwnerAllows groundNumVars 'Unbound _ owner => owner == level'
-require_numeric_projection_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows None _ = True'
-require_numeric_projection_arm defaultAmbiguousNum defaultAmbiguousNumOwnedBy 'defaultAmbiguousNumWith None protectedIds obls t'
-require_numeric_projection_arm defaultGroupNum defaultGroupNumOwnedBy 'defaultGroupNumWith None protectedIds obls monos'
-require_numeric_projection_arm groundNumVars groundNumVarsWith 'groundNumVarsWith None obls ids'
-require_numeric_projection_arm defaultBodyLocalNum defaultEachMember 'groundNumVars obls'
-require_numeric_projection_arm defaultEachMember registerAmbiguousConstraints 'defaultAmbiguousNum protectedIds obls m'
-require_numeric_projection_arm processSCC isLetrecGroup 'defaultGroupNum protectedSigIds defaultObls'
+require_typecheck_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows (Some level) m = match normalize m'
+require_typecheck_arm numDefaultOwnerAllows groundNumVars 'Unbound _ owner => owner == level'
+require_typecheck_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows None _ = True'
+require_typecheck_arm defaultAmbiguousNum defaultAmbiguousNumOwnedBy 'defaultAmbiguousNumWith None protectedIds obls t'
+require_typecheck_arm defaultGroupNum defaultGroupNumOwnedBy 'defaultGroupNumWith None protectedIds obls monos'
+require_typecheck_arm groundNumVars groundNumVarsWith 'groundNumVarsWith None obls ids'
+require_typecheck_arm defaultBodyLocalNum defaultEachMember 'groundNumVars obls'
+require_typecheck_arm defaultEachMember registerAmbiguousConstraints 'defaultAmbiguousNum protectedIds obls m'
+require_typecheck_arm processSCC isLetrecGroup 'defaultGroupNum protectedSigIds defaultObls'
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed
 # ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
