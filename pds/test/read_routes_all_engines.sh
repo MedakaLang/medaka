@@ -37,11 +37,22 @@
 # an anonymous caller is refused 401 before the audience is looked at. The
 # socket half — a real proxied read, a real stalled upstream, the limiter's
 # charge — is pds/test/serve_e2e.sh's.
+#
+# The third cell group is com.atproto.server.getServiceAuth: the same seam
+# pointed the other way, where the client asks for the credential itself
+# rather than for a forward made with one. The audience axis stays
+# default-DENY there too, the sixteen account-management methods may not be
+# named at all, and the window a client may ask for is bounded. This is also
+# where the protectedMethods list transcribed into pds/lib/proxy.mdk is
+# compared against pds/test/vectors/pds_protected_methods_corpus.txt, which
+# is why the driver now takes that corpus as its one argument: pds/lib
+# declares no effect row and so cannot read the file it copies.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 SOURCE="$ROOT/pds/test/read_routes_all_engines_main.mdk"
+CORPUS="$ROOT/pds/test/vectors/pds_protected_methods_corpus.txt"
 WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-read-routes.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
@@ -126,7 +137,13 @@ CELL proxy-admitted-chat-service-fragment PASS decision=admitted verb=GET target
 CELL proxy-chat-method-default-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$AVDID iss=$DID aud=$AVDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
 CELL proxy-chat-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
 CELL proxy-appview-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
-cells: 45/45 repository-free routes and proxy dispositions
+CELL service-auth-minted-with-lxm PASS decision=minted iss=$DID aud=$CHATDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 exp=1700000060
+CELL service-auth-minted-no-lxm PASS decision=minted iss=$DID aud=$AVDID lxm=<absent> jti=$JTI iat=1700000000 exp=1700000060
+CELL service-auth-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=aud names a service this server does not mint credentials for signed=none
+CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none
+CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none
+CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set
+cells: 51/51 repository-free routes, proxy dispositions and service-auth mints
 TOTAL: PASS
 EOF
 
@@ -181,16 +198,28 @@ check_cells() {
     || fail "$label missed the refusal of a case-folded spelling of the second audience"
   grep -F -q 'CELL proxy-appview-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
     || fail "$label missed the refusal of a case-folded spelling of the default audience"
-  grep -F -q 'cells: 45/45 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
+  grep -F -q "CELL service-auth-minted-with-lxm PASS decision=minted iss=$DID aud=$CHATDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 exp=1700000060" "$output" \
+    || fail "$label missed the credential minted for the second configured audience"
+  grep -F -q "CELL service-auth-minted-no-lxm PASS decision=minted iss=$DID aud=$AVDID lxm=<absent> jti=$JTI iat=1700000000 exp=1700000060" "$output" \
+    || fail "$label missed the method-less credential and its default window"
+  grep -F -q 'CELL service-auth-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=aud names a service this server does not mint credentials for signed=none' "$output" \
+    || fail "$label missed the confused-deputy refusal on the mint route"
+  grep -F -q 'CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none' "$output" \
+    || fail "$label missed the refusal of an account-management lxm"
+  grep -F -q 'CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none' "$output" \
+    || fail "$label missed the refusal of a window beyond an hour"
+  grep -F -q 'CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set' "$output" \
+    || fail "$label missed the transcribed protected-methods list being compared to the corpus"
+  grep -F -q 'cells: 51/51 repository-free routes, proxy dispositions and service-auth mints' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$SOURCE" > "$WORK/eval.out" 2> "$WORK/eval.err"
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$SOURCE" "$CORPUS" > "$WORK/eval.out" 2> "$WORK/eval.err"
 require_empty "$WORK/eval.err" eval
 check_cells "$WORK/eval.out" eval
 
 MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/native" > "$WORK/native-build.log" 2>&1
-"$WORK/native" > "$WORK/native.out" 2> "$WORK/native.err"
+"$WORK/native" "$CORPUS" > "$WORK/native.out" 2> "$WORK/native.err"
 require_empty "$WORK/native.err" native
 check_cells "$WORK/native.out" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native output differ'
@@ -200,7 +229,7 @@ command -v node >/dev/null 2>&1 || fail 'Wasm is required but node is unavailabl
 command -v wasm-tools >/dev/null 2>&1 || fail 'Wasm is required but wasm-tools is unavailable'
 
 MEDAKA_ROOT="$ROOT" MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$SOURCE" -o "$WORK/read-routes.wasm" > "$WORK/wasm-build.log" 2>&1
-node "$ROOT/test/wasm/run.js" "$WORK/read-routes.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
+MDK_ARGS="$CORPUS" node "$ROOT/test/wasm/run.js" "$WORK/read-routes.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
 require_empty "$WORK/wasm.err" wasm
 check_cells "$WORK/wasm-raw.out" wasm
 cmp "$WORK/native.out" "$WORK/wasm-raw.out" || fail 'native and Wasm output differ'
@@ -238,7 +267,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-tree/pds/tes
   cat "$WORK/mutated-build.log" >&2
   fail 'did:web hostname mutation failed to build'
 }
-if "$WORK/mutated-native" > "$WORK/mutated.out" 2>&1; then
+if "$WORK/mutated-native" "$CORPUS" > "$WORK/mutated.out" 2>&1; then
   fail 'did:web hostname mutation unexpectedly passed'
 fi
 grep -F -q 'CELL wellknown-did-json FAIL' "$WORK/mutated.out" || {
@@ -277,7 +306,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-audience/pds
   cat "$WORK/mutated-audience-build.log" >&2
   fail 'foreign-audience mutation failed to build'
 }
-if "$WORK/mutated-audience" > "$WORK/mutated-audience.out" 2>&1; then
+if "$WORK/mutated-audience" "$CORPUS" > "$WORK/mutated-audience.out" 2>&1; then
   fail 'foreign-audience mutation unexpectedly passed'
 fi
 grep -F -q 'CELL proxy-foreign-audience FAIL decision=admitted' "$WORK/mutated-audience.out" || {
@@ -316,7 +345,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-no-credentia
   cat "$WORK/mutated-no-credential-build.log" >&2
   fail 'no-credential mutation failed to build'
 }
-if "$WORK/mutated-no-credential" > "$WORK/mutated-no-credential.out" 2>&1; then
+if "$WORK/mutated-no-credential" "$CORPUS" > "$WORK/mutated-no-credential.out" 2>&1; then
   fail 'no-credential mutation unexpectedly passed'
 fi
 grep -F -q 'CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired' "$WORK/mutated-no-credential.out" || {
@@ -356,7 +385,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-route/pds/te
   cat "$WORK/mutated-route-build.log" >&2
   fail 'audience-routing mutation failed to build'
 }
-if "$WORK/mutated-route" > "$WORK/mutated-route.out" 2>&1; then
+if "$WORK/mutated-route" "$CORPUS" > "$WORK/mutated-route.out" 2>&1; then
   fail 'audience-routing mutation unexpectedly passed'
 fi
 grep -F -q "CELL proxy-admitted-chat-audience FAIL decision=admitted" "$WORK/mutated-route.out" || {
@@ -371,4 +400,4 @@ echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
 echo 'MUTATION proxy-no-credential PASS direct-red'
 echo 'MUTATION proxy-audience-routing PASS direct-red'
-echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 45/45 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'
+echo 'PASS: PDS repository-free read routes, appview-proxy dispositions and service-auth mints — 51/51 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'

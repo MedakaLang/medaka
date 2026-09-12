@@ -319,6 +319,7 @@ serviceRequest aud lxm jti = ServiceAuthRequest {
   lxm = lxm,
   jti = jti,
   iat = serviceIssuedAt,
+  exp = None,
 }
 
 serviceToken : ServiceAuthRequest -> String
@@ -384,6 +385,22 @@ test "an absent lxm drops the claim instead of nulling it" =
     ("{\"iat\":1700000000,\"iss\":\"did:plc:s-service-jwt-account\","
       ++ "\"aud\":\"did:web:appview.example\",\"exp\":1700000060,"
       ++ "\"jti\":\"fedcba9876543210fedcba9876543210\"}")
+
+-- The instant a caller supplies replaces the DEFAULT lifetime and nothing
+-- else: `exp` keeps its position in the corpus's claim order, and `iat` stays
+-- the instant the credential was minted at rather than being moved to keep the
+-- window sixty seconds wide.
+test "an explicit exp replaces the default lifetime in its own position" =
+  let asked = { serviceRequest serviceAudience (Some serviceMethod) serviceJti |
+    exp = Some 1700000600,
+  }
+  let (_, claimsSeg, _) = segmentsOf (serviceToken asked)
+  expectEqual
+    (segmentText claimsSeg)
+    ("{\"iat\":1700000000,\"iss\":\"did:plc:s-service-jwt-account\","
+      ++ "\"aud\":\"did:web:appview.example\",\"exp\":1700000600,"
+      ++ "\"lxm\":\"app.bsky.feed.getTimeline\","
+      ++ "\"jti\":\"0123456789abcdef0123456789abcdef\"}")
 
 -- The two mints differ only in whether the caller's `aud` carried the
 -- fragment, so byte-identical tokens are the strongest available statement

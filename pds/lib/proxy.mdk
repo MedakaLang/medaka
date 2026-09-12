@@ -53,7 +53,7 @@ import http.{
   Response,
 }
 import list.{filter}
-import string.{fromUtf8, indexOf, startsWith, take, toUtf8}
+import string.{fromUtf8, indexOf, startsWith, take, toLower, toUtf8}
 import lib.atsyntax.{validateDid}
 import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
 import lib.xrpc.{Registry, endpointNsid, registryEndpoints, xrpcErrorResponse}
@@ -302,6 +302,62 @@ proxyDisposition registry nsid =
   else match forwardableProxyMethod nsid
     Some canonical => ProxyForwardable canonical
     None => ProxyNotForwardable
+
+-- ── the account-management methods no credential may name ───────────────────
+
+{- | The official implementation's own `PROTECTED_METHODS`, in its own
+   spelling: the account-management methods it will neither proxy nor mint a
+   service-auth credential for.
+
+   These sixteen are a TRANSCRIPTION of
+   `pds/test/vectors/pds_protected_methods_corpus.txt`, which was read out of
+   the pinned image's `pipethrough.js` rather than typed
+   (`pds/test/VECTOR-PROVENANCE.txt` records that file's extraction and its
+   `local-sha256`). The transcription exists because the set has to be
+   consultable where no effect is available — `com.atproto.server.getServiceAuth`
+   grades a client's `lxm` against it, in the pure core, and a `.txt` vector is
+   not readable from there. What keeps the two from drifting is a cell in
+   `pds/test/read_routes_all_engines_main.mdk`, which reads the corpus and
+   fails unless it names exactly this set.
+
+   The list is needed ON ITS OWN, and is not implied by the namespace bound
+   above: `proxyDisposition` answers `ProxyLocallyServed` for
+   `com.atproto.server.getSession` because this server registers it, and a
+   service-auth credential naming it must still be refused. -}
+export
+protectedMethods : List String
+protectedMethods = [
+  "com.atproto.admin.sendEmail",
+  "com.atproto.identity.requestPlcOperationSignature",
+  "com.atproto.identity.signPlcOperation",
+  "com.atproto.identity.updateHandle",
+  "com.atproto.server.activateAccount",
+  "com.atproto.server.confirmEmail",
+  "com.atproto.server.createAppPassword",
+  "com.atproto.server.deactivateAccount",
+  "com.atproto.server.getAccountInviteCodes",
+  "com.atproto.server.getSession",
+  "com.atproto.server.listAppPasswords",
+  "com.atproto.server.requestAccountDelete",
+  "com.atproto.server.requestEmailConfirmation",
+  "com.atproto.server.requestEmailUpdate",
+  "com.atproto.server.revokeAppPassword",
+  "com.atproto.server.updateEmail",
+]
+
+{- | Whether `lxm` names one of them, folding case over the WHOLE nsid.
+
+   The whole nsid and not just its authority, which is what
+   `lib.nsid`'s `sameNsidIdentity` folds: the oracle's own set lowercases both
+   its members and every value it tests (the corpus header records this), so
+   `com.atproto.server.GetSession` is a member there and must be one here. A
+   comparison that folded less would leave a spelling of every protected method
+   that this server mints for and the official refuses. -}
+export
+isProtectedMethod : String -> Bool
+isProtectedMethod lxm =
+  let folded = toLower lxm
+  any (member => toLower member == folded) protectedMethods
 
 {- | The inbound fields a forwarded call carries with it, and the only ones.
 

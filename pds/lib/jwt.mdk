@@ -283,9 +283,14 @@ verifyToken secret expectedSub expectedAud now token = match split "." token
 
 {- | What a caller supplies to mint one service-auth credential.
 
-     `exp` is absent deliberately: the lifetime is this module's
-     (`serviceTokenLifetimeSeconds`), not the caller's, so no call site can
-     widen it.
+     `exp` is the instant the credential stops being valid, and `None` means
+     this module's own default (`iat + serviceTokenLifetimeSeconds`). A caller
+     that supplies one has been asked for it by a client
+     (`com.atproto.server.getServiceAuth`), and the bound on how far out it may
+     be belongs to whatever graded that request — this module signs the instant
+     it is handed and imposes no ceiling of its own, because a ceiling here
+     would be a second, silently disagreeing answer to a question the grading
+     already settled.
 
      `aud` may arrive carrying a `#<serviceId>` fragment — such a string names
      a service OF a DID, and only the DID itself is ever the audience.
@@ -300,15 +305,17 @@ public export data ServiceAuthRequest = ServiceAuthRequest {
   lxm : Option String,
   jti : String,
   iat : Int,
+  exp : Option Int,
 }
   deriving (Eq, Debug)
 
-{- | How many seconds a service-auth token stays valid.
+{- | How many seconds a service-auth token stays valid when its request names
+     no `exp` of its own.
 
      Exported so a caller can size its own retry window against the figure
      instead of re-deriving it. Sixty seconds is what the official
-     implementation mints, and therefore what a peer's clock-skew tolerance
-     is calibrated against. -}
+     implementation mints for a request that asked for no expiry, and therefore
+     what a peer's clock-skew tolerance is calibrated against. -}
 export
 serviceTokenLifetimeSeconds : Int
 serviceTokenLifetimeSeconds = 60
@@ -332,6 +339,18 @@ lxmMembers : Option String -> List (String, Json)
 lxmMembers (Some method) = [("lxm", JString method)]
 lxmMembers None = []
 
+{- | The instant this credential expires: the one its request named, or this
+     module's default lifetime past `iat` when it named none.
+
+     The claim is present either way. A request that asked for no expiry is
+     asking for the default, not for a token without one, and a peer verifies
+     `exp` before anything else. -}
+export
+serviceTokenExpiry : ServiceAuthRequest -> Int
+serviceTokenExpiry request = match request.exp
+  Some at => at
+  None => request.iat + serviceTokenLifetimeSeconds
+
 -- The claim set, in the order the official implementation serializes it.
 serviceClaimsJson : ServiceAuthRequest -> Json
 serviceClaimsJson request =
@@ -340,7 +359,7 @@ serviceClaimsJson request =
         ("iat", JInt request.iat),
         ("iss", JString request.iss),
         ("aud", JString (bareDid request.aud)),
-        ("exp", JInt (request.iat + serviceTokenLifetimeSeconds)),
+        ("exp", JInt (serviceTokenExpiry request)),
       ]
       ++ lxmMembers request.lxm
       ++ [("jti", JString request.jti)])

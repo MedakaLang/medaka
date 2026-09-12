@@ -1339,6 +1339,56 @@ runProxyRead port token service path want marker =
       else
         report "PROXYREAD" True "status=\{intToString status}"
 
+{- | Ask this server for a service credential, then SPEND it on the service it
+   was minted for.
+
+   Two connections and two claims. The first is that
+   `com.atproto.server.getServiceAuth` answers a token at all for an audience
+   this operator configured. The second is that what came back is a real
+   service-auth credential a PEER can read: the stub decodes the bearer it is
+   handed and echoes the `aud` and `lxm` it found, so those two values come from
+   the token's own bytes rather than from anything this client said about them.
+
+   The minted token is printed in the PASS line because the gate then greps the
+   SERVER's stderr for that exact text: a credential that reached a log is a
+   credential that leaked, and only the party that received it can say what text
+   to look for. -}
+runServiceAuth : Int -> String -> String -> String -> Int -> <IO, Net "_"> Unit
+runServiceAuth port token audience nsid stubPort =
+  let path =
+    xrpcPath "com.atproto.server.getServiceAuth?aud=\{audience}&lxm=\{nsid}"
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token path)
+  let result = readResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "SERVICEAUTH" False message
+    Ok (status, body, _) =>
+      if status /= 200 then
+        report
+          "SERVICEAUTH"
+          False
+          "want status 200, got \{intToString status}: \{fromUtf8 body}"
+      else
+        let minted = stringField "token" body
+        let stub = mustConnect stubPort
+        let () = mustSend stub (getRequestWith minted (xrpcPath nsid))
+        let echoed = readResponse stub [||]
+        let () = ignoreResult (close stub)
+        match echoed
+          Err message =>
+            report "SERVICEAUTH" False "the service did not answer: \{message}"
+          Ok (echoStatus, echoBody, _) =>
+            let echoText = fromUtf8 echoBody
+            if not (contains "\"aud\":\"\{audience}\"" echoText)
+              || not (contains "\"lxm\":\"\{nsid}\"" echoText) then
+              report
+                "SERVICEAUTH"
+                False
+                "the service read back \{echoText} (status \{intToString echoStatus})"
+            else
+              report "SERVICEAUTH" True "token=\{minted}"
+
 {- | The proxied-read class, driven over ONE connection.
 
    One connection for the reason the repo-export case uses one: the connections
@@ -1362,7 +1412,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1419,6 +1469,8 @@ main = match args ()
       rkeyPrefix
   ["proxy-read", port, token, service, path, want, marker] =>
     runProxyRead (mustPort port) token service path (mustStatus want) marker
+  ["service-auth", port, token, audience, nsid, stubPort] =>
+    runServiceAuth (mustPort port) token audience nsid (mustPort stubPort)
   ["proxy-write", port, token, service, path, body, want, marker, field] =>
     runProxyWrite
       (mustPort port)

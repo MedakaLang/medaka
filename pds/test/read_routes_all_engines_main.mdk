@@ -36,11 +36,22 @@
    behalf of the logged-in account and the seam resolves the caller's credential
    before admitting one. That is still repository-free, which is what the eval
    arm's cost turns on: a session is an HMAC over a short string, and `repoInit`
-   is what does not finish. -}
+   is what does not finish.
+
+   The third group grades the other direction of the same seam,
+   `com.atproto.server.getServiceAuth`: there the signature travels outward on
+   a call this server makes, here the client asks for the credential itself and
+   keeps it. It is repository-free for the same reason, and it is also where
+   the transcribed `protectedMethods` list is compared against the extracted
+   corpus it claims to copy — which is why this driver takes that corpus as its
+   one argument. -}
 
 import http.{Request, parseRequest, serializeResponse}
+import io.{readLines}
 import json.{Json(..), jObject, get, parse}
-import string.{contains, fromUtf8, join, split, toUtf8}
+import string.{
+  contains, fromUtf8, join, split, startsWith, toLower, toUtf8, trim
+}
 import lib.handlers.{pdsServer}
 import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
 import lib.proxy.{
@@ -50,6 +61,7 @@ import lib.proxy.{
   AppviewTable,
   makeAppviewRoute,
   makeAppviewTable,
+  protectedMethods,
 }
 import lib.server_core.{
   Account,
@@ -57,8 +69,10 @@ import lib.server_core.{
   ProxyDecision(..),
   RequestContext(..),
   Server,
+  ServiceAuthDecision(..),
   accessAudience,
   classifyProxy,
+  classifyServiceAuth,
   handleBytes,
   makeAccount,
 }
@@ -807,8 +821,166 @@ runProxyCells =
     + unauthenticated
     + mixedCaseNsid
 
-runCells : <IO> Unit
-runCells =
+-- ── the service-auth mint seam ──────────────────────────────────────────────
+
+{- | The `exp` a decision resolved to, or the absence of one.
+
+   Printed separately from `claimText` rather than folded into it because the
+   two seams answer differently: a forward this server makes takes `lib.jwt`'s
+   own default window and names no instant, while a credential handed to a
+   client states the instant it was graded against. -}
+expiryText : Option Int -> String
+expiryText None = "<absent>"
+expiryText (Some at) = intToString at
+
+serviceClaimText : ServiceAuthRequest -> String
+serviceClaimText claims = "\{claimText claims} exp=\{expiryText claims.exp}"
+
+{- | Everything the shell may do with a framed request for the mint route, in
+   one line.
+
+   `signed=none` on every arm that is not a mint is the whole point: the shell
+   signs a `ServiceAuthRequest` and nothing else, so a decision that carries
+   none cannot produce a token. A cell asserting on this string therefore fails
+   both when a refusal turns into a mint and when it turns into a DIFFERENT
+   refusal. -}
+serviceAuthOutcome : ServiceAuthDecision -> String
+serviceAuthOutcome NotServiceAuth = "decision=not-service-auth signed=none"
+serviceAuthOutcome (ServiceAuthRefused response) =
+  let bytes = serializeResponse response
+  "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
+serviceAuthOutcome (ServiceAuthMinted claims) =
+  "decision=minted \{serviceClaimText claims}"
+
+serviceAuthCell : String ->
+  Option AppviewTable ->
+  Array Int ->
+  String ->
+  <IO> Int
+serviceAuthCell label policy bytes expected =
+  let decision =
+    classifyServiceAuth
+      mustServer
+      testContext
+      policy
+      proxySessionStore
+      (mustRequest bytes)
+  let got = serviceAuthOutcome decision
+  check label (got == expected) got
+
+serviceAuthTarget : String -> String
+serviceAuthTarget query = xrpc "com.atproto.server.getServiceAuth?\{query}"
+
+mintedLine : String -> String -> Int -> String
+mintedLine aud nsid expiry =
+  "decision=minted iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000 exp=\{intToString expiry}"
+
+-- | `lib.jwt`'s own default window, which is what a request naming no `exp`
+-- resolves to. Written out rather than imported: what the cells assert is the
+-- instant a client is handed, and re-deriving it from the same constant the
+-- seam used would assert nothing.
+defaultExpiry : Int
+defaultExpiry = 1700000060
+
+-- | Two hours past the fixed instant, which is outside the hour the route
+-- grants any credential at all.
+twoHoursOut : Int
+twoHoursOut = 1700007200
+
+-- | One of the sixteen account-management methods, named by a client asking
+-- for a credential it could spend on this very server's own session route.
+protectedLxm : String
+protectedLxm = "com.atproto.server.getSession"
+
+{- | The corpus rows, as the comparison cell reads them: the file's own
+   commentary and blank lines dropped, nothing else changed. -}
+corpusMethodRows : List String -> List String
+corpusMethodRows rows =
+  filter (line => line /= "" && not (startsWith "#" line)) (map trim rows)
+
+{- | The transcribed `protectedMethods` list against the extracted corpus it
+   claims to be a copy of.
+
+   `pds/lib/` declares no effect row and so cannot read a file, which is why
+   the list is transcribed there at all; this cell is what keeps the
+   transcription honest. Compared as a SET and case-insensitively, because that
+   is how the official implementation's own `LxmSet` matches — so a row that
+   moved is not a failure and a row that was dropped, added, or misspelled
+   is. -}
+protectedMethodsCell : List String -> <IO> Int
+protectedMethodsCell rows =
+  let corpus = map toLower (corpusMethodRows rows)
+  let transcribed = map toLower protectedMethods
+  let sameSet =
+    all (nsid => elem nsid transcribed) corpus
+      && all (nsid => elem nsid corpus) transcribed
+  check
+    "service-auth-protected-methods-corpus"
+    (sameSet && length corpus == 16 && length transcribed == 16)
+    "corpus=\{intToString (length corpus)} transcribed=\{intToString (length transcribed)} same-set"
+
+{- | The mint seam's own cells: who may ask this server to sign the account's
+   identity over to a service, and on what terms.
+
+   They belong beside the proxy cells for the same reason those belong here —
+   `classifyServiceAuth` reads the registry, the account and the open sessions
+   and no repository, so all three engines can grade it for the price of the
+   cells. The socket half, where a real client spends a real token on the chat
+   stub, is `pds/test/serve_e2e.sh`'s. -}
+runServiceAuthCells : List String -> <IO> Int
+runServiceAuthCells corpus =
+  let mintedWithLxm =
+    serviceAuthCell
+      "service-auth-minted-with-lxm"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{configuredChatDid}&lxm=chat.bsky.convo.listConvos"))
+      (mintedLine configuredChatDid "chat.bsky.convo.listConvos" defaultExpiry)
+  let mintedNoLxm =
+    serviceAuthCell
+      "service-auth-minted-no-lxm"
+      configuredAudiences
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{configuredAppviewDid}"))
+      (mintedLine configuredAppviewDid "<absent>" defaultExpiry)
+  -- The confused deputy on this route: the client asks for the credential
+  -- itself, so a `aud` this operator never configured must produce no claim
+  -- set for anything to sign.
+  let foreignAudience =
+    serviceAuthCell
+      "service-auth-foreign-audience"
+      configuredAudiences
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{foreignServiceDid}"))
+      (invalidRequestLine
+        "aud names a service this server does not mint credentials for")
+  let protectedMethod =
+    serviceAuthCell
+      "service-auth-protected-lxm"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{configuredAppviewDid}&lxm=\{protectedLxm}"))
+      (invalidRequestLine
+        "cannot request a service auth token for the following method: \{protectedLxm}")
+  let farExpiry =
+    serviceAuthCell
+      "service-auth-exp-beyond-an-hour"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{configuredAppviewDid}&lxm=app.bsky.feed.getTimeline&exp=\{intToString twoHoursOut}"))
+      (refusedLine
+        "400"
+        "BadExpiration"
+        "cannot request a token with an expiration more than an hour in the future")
+  mintedWithLxm
+    + mintedNoLxm
+    + foreignAudience
+    + protectedMethod
+    + farExpiry
+    + protectedMethodsCell corpus
+
+runCells : List String -> <IO> Unit
+runCells corpus =
   let didJson =
     okCell
       "wellknown-did-json"
@@ -932,8 +1104,10 @@ runCells =
       "404"
       "NotFound"
   let proxied = runProxyCells
+  let serviceAuth = runServiceAuthCells corpus
   let cells =
     proxied
+      + serviceAuth
       + didJson
       + atprotoDid
       + wellKnownPost
@@ -956,12 +1130,18 @@ runCells =
       + unregistered
   let () =
     println
-      "cells: \{intToString cells}/45 repository-free routes and proxy dispositions"
-  if cells == 45 then
+      "cells: \{intToString cells}/51 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 51 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
     exit 1
 
-main : <IO> Unit
-main = runCells
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message =>
+      panic "read_routes: cannot read protected-methods corpus: \{message}"
+    Ok rows => runCells rows
+  _ =>
+    panic "usage: read_routes_all_engines_main <pds_protected_methods_corpus>"

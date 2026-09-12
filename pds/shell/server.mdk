@@ -71,18 +71,23 @@ import lib.proxy.{
   proxyUpstreamFailureResponse,
   proxyUpstreamResponse,
 }
+import lib.handlers.{serviceAuthTokenResponse}
+import lib.jwt.{ServiceAuthRequest}
 import lib.server_core.{
   ProxyAdmission(..),
   ProxyDecision(..),
   RequestContext(..),
   Server,
+  ServiceAuthDecision(..),
   UpgradeAdmission(..),
   UpgradeDecision(..),
   accountDid,
   classifyProxy,
+  classifyServiceAuth,
   classifyUpgrade,
   handleBytes,
   serverAccount,
+  serviceAuthUnavailableResponse,
 }
 import lib.store.{
   Store,
@@ -102,7 +107,7 @@ import lib.xrpc.{
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileWrite}
-import shell.egress.{Egress, egressAppviews, egressCall}
+import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
 import shell.eventlog.{
   eventLogDiscardStaged,
   eventLogNextSequence,
@@ -1265,24 +1270,59 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 keepAlive
                 (serializeResponse refusal)
             NotProxied => defer
-              response <- liftIO (u =>
-                applyRequest
+              credential <- liftIO (u =>
+                serviceAuthDecisionFor
                   server
-                  dir
+                  serving
                   storeRef
-                  (sliceClamped 0 boundary (readBufferBacking buf)))
-              sendAndContinue
-                server
-                dir
-                storeRef
-                limiterRef
-                census
-                serving
-                conn
-                slot
-                rest
-                keepAlive
-                response
+                  nowSeconds
+                  parsed)
+              match credential
+                ServiceAuthMinted claims =>
+                  sendAndContinue
+                    server
+                    dir
+                    storeRef
+                    limiterRef
+                    census
+                    serving
+                    conn
+                    slot
+                    rest
+                    keepAlive
+                    (mintedTokenBytes serving claims)
+                ServiceAuthRefused refusal =>
+                  sendAndContinue
+                    server
+                    dir
+                    storeRef
+                    limiterRef
+                    census
+                    serving
+                    conn
+                    slot
+                    rest
+                    keepAlive
+                    (serializeResponse refusal)
+                NotServiceAuth => defer
+                  response <- liftIO (u =>
+                    applyRequest
+                      server
+                      dir
+                      storeRef
+                      (sliceClamped 0 boundary (readBufferBacking buf)))
+                  sendAndContinue
+                    server
+                    dir
+                    storeRef
+                    limiterRef
+                    census
+                    serving
+                    conn
+                    slot
+                    rest
+                    keepAlive
+                    response
 
 {- | Whether this request asked to be proxied, asked of the pure core
    (`lib.server_core`'s `classifyProxy`) after the upgrade question and before
@@ -1320,6 +1360,83 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
     (map egressAppviews (servingEgress serving))
     !storeRef
     request
+
+{- | Whether this request asked for a service credential of its own, asked of
+   the pure core (`lib.server_core`'s `classifyServiceAuth`) after the proxy
+   question and before `applyRequest`.
+
+   It is a separate question from the proxy one and is asked second, because
+   the two never both apply: `com.atproto.server.getServiceAuth` is a route
+   this server REGISTERS, so the proxy seam answers `NotProxied` for it
+   whatever header it carries, and every request the proxy seam did admit or
+   refuse has already left by the time this runs.
+
+   It draws its OWN nonce, for the same reason `proxyDecisionFor` draws one: it
+   is the `jti` of whatever credential is minted for this request, and two
+   credentials sharing one would be indistinguishable to the peer that spends
+   them. The two calls cannot both mint on one request, so nothing here reuses
+   the other's.
+
+   The store is read for the reason the proxy seam reads it: this route is
+   gated on the caller's own access token, which is resolved against the open
+   sessions. Nothing about that transitions the store, and a minted credential
+   never reaches `applyRequest` at all. -}
+serviceAuthDecisionFor : Server ->
+  Serving ->
+  Ref Store ->
+  Int ->
+  Result HttpParseFailure Request ->
+  <Rand> ServiceAuthDecision
+serviceAuthDecisionFor _ _ _ _ (Err _) = NotServiceAuth
+serviceAuthDecisionFor server serving storeRef nowSeconds (Ok request) =
+  classifyServiceAuth
+    server
+    RequestContext {
+      nowSeconds = nowSeconds,
+      nonce = osEntropyBytes requestNonceBytes,
+    }
+    (map egressAppviews (servingEgress serving))
+    !storeRef
+    request
+
+{- | What a client that asked for a service credential is answered: the
+   credential, signed here with the account's own repo key.
+
+   Nothing about the claim set is chosen here, and the parameter says so: a
+   `ServiceAuthRequest` is the pure classifier's own output and there is no
+   other way to obtain one, so the issuer, the audience, the method and the
+   expiry all arrive already decided. This function signs, and the key never
+   leaves `pds/shell/egress.mdk` — `egressMintToken` takes the claim set and
+   returns a signature.
+
+   `None` for the egress is unreachable: a `ServiceAuthMinted` decision is only
+   produced when an `AppviewTable` was supplied, and the only source of one is
+   a configured `Egress`. It answers the same 501 a deployment with no key
+   configured gets, rather than a panic, for the reason the proxy path's
+   unreachable `None` is a 502: a reachability argument is not a reason to add
+   a crash path to a function a client can reach over the network.
+
+   An `Err` from the mint is 500 and not 501: the key IS configured and the
+   signature did not come out, which is this server failing rather than this
+   server declining. -}
+mintedTokenBytes : Serving -> ServiceAuthRequest -> Array Int
+mintedTokenBytes serving claims = match servingEgress serving
+  None => serializeResponse serviceAuthUnavailableResponse
+  Some egress => match egressMintToken egress claims
+    Err _ => serializeResponse serviceAuthMintFailureResponse
+    Ok minted => serializeResponse (serviceAuthTokenResponse minted)
+
+-- | What a client is told when the signature itself did not come out. The
+-- reason is not in the body for the reason a proxied read's 502 does not carry
+-- one: which internal step failed is this server's business and tells a client
+-- nothing it can act on.
+serviceAuthMintFailureResponse : Response
+serviceAuthMintFailureResponse =
+  xrpcErrorResponse
+    500
+    "Internal Server Error"
+    "InternalServerError"
+    "the service credential could not be signed"
 
 {- | Make the one outbound call an admitted proxied read authorizes, and answer
    the client with what came back.

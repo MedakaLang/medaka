@@ -10,6 +10,14 @@
    obtain the `ServiceAuthRequest` it signs is for that grading to have
    admitted the request.
 
+   The same holds for a credential a client asks for outright
+   (`egressMintToken`, answering `com.atproto.server.getServiceAuth`): the
+   claim set is `classifyServiceAuth`'s output and this module only signs it,
+   with no socket involved at all. Both entry points live here for one reason —
+   the account's repo key is nameable in this module and in no other, so what
+   crosses this module's export boundary is a signature and never a
+   `SecretKey`.
+
    THE ADDRESS IS ALWAYS LOOPBACK and is not configurable. Under P5 the egress
    proxy runs on this box (`docs/ops/PDS-DEPLOY.md`), so a host flag would add
    no deployment this design has, and leaving it out is containment as well as
@@ -50,7 +58,7 @@ import lib.httpclient.{
   responseStatus,
   serializeRequest,
 }
-import lib.jwt.{mintServiceToken}
+import lib.jwt.{ServiceAuthRequest, mintServiceToken}
 import lib.server_core.{ProxyAdmission}
 import lib.proxy.{
   appviewRouteFor,
@@ -136,12 +144,35 @@ export
 egressAppviews : Egress -> AppviewTable
 egressAppviews (Egress appviews _) = appviews
 
--- The account's own repo signing key, for the ONE caller that signs with it.
--- It is private to this module and has no export: the key enters through
--- `makeEgress` and leaves only as a signature over a claim set
+-- The account's own repo signing key, for the two callers in this module that
+-- sign with it. It is private to this module and has no export: the key enters
+-- through `makeEgress` and leaves only as a signature over a claim set
 -- `lib.server_core` built.
 egressSigningKey : Egress -> SecretKey
 egressSigningKey (Egress _ signingKey) = signingKey
+
+{- | Sign one claim set and hand the credential back, for the route whose
+   ANSWER is the credential (`com.atproto.server.getServiceAuth`).
+
+   This is the same signature `egressCall` puts in an outbound `Authorization`
+   field, produced for a client that asked for it instead of for a call this
+   server makes — so no socket is opened and no audience is routed to, and
+   there is nothing here to decide. The `ServiceAuthRequest` is
+   `lib.server_core`'s own output (`classifyServiceAuth`) and there is no other
+   way to obtain one, so a credential this function can produce is one every
+   check admitted.
+
+   It exists so that `pds/shell/server.mdk` never holds the key: this module
+   stays the only one that can name a `SecretKey`, and what crosses the export
+   boundary is a signature over a claim set some other module built.
+
+   `Err` carries `lib.jwt`'s message, and is reachable only when the RFC 6979
+   nonce schedule exhausts its retry bound — which no input chooses and no
+   caller can provoke. -}
+export
+egressMintToken : Egress -> ServiceAuthRequest -> Result String String
+egressMintToken egress claims =
+  mintServiceToken (egressSigningKey egress) claims
 
 -- The `Host` field's value: the egress proxy's own address, on the port this
 -- call's admitted audience is reached at. See the module header on why the
