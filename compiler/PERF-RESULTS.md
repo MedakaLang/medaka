@@ -1408,3 +1408,31 @@ candidate; its floor is 0.12% below baseline. These are execution instructions,
 not allocation or retained-heap measurements. The
 [review finding and repair](https://github.com/MedakaLang/medaka/issues/2549#issuecomment-5642598262)
 explain why the LSP budget alone was insufficient for this change.
+
+#### Arithmetic and local ownership
+
+The combined source at `68774edee` includes arithmetic predicates, local ownership,
+closure capture, exact prelude implementation ownership, and the dynamic-arity
+guard. It was measured against current main `42a672d04` after merging that revision;
+this separates the packet from concurrent upstream library and tooling changes.
+Both arms received two forced emitter rebuilds. The same M2 N0–N3 request streams,
+fixed 1 GiB heaps, strict freshness, and response checks described above were used.
+All eight streams produced the expected publications with empty diagnostics.
+Two allocation repetitions were byte-identical.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,233,369 | 313,866,491 | 48,621,680 | 49,477,472 |
+| playground | first warm | 24,989,585 | 25,132,747 | 4,582,960 | 4,591,280 |
+| playground | second warm | 24,992,346 | 25,162,969 | 4,607,264 | 4,603,296 |
+| import-list | cold | 538,444,939 | 545,947,586 | 93,186,688 | 93,699,584 |
+| import-list | first warm | 38,267,700 | 38,387,664 | 6,895,360 | 6,879,280 |
+| import-list | second warm | 38,295,429 | 38,420,366 | 6,914,640 | 6,902,544 |
+
+The largest increases are 2.83% in instructions and 1.76% in allocated bytes,
+within the 25% soft budget. Warm instruction increases stay below 0.69%; warm
+allocation increases stay below 0.19%. Against the original session baseline
+`800069b269`, the largest instruction increase is 2.91%. All three legacy caches
+remain enabled. These measurements cover checking through the LSP; they do not
+establish retained-live-heap bounds or safe finalized caching, and do not replace
+the separate evaluator and backend validation.

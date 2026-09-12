@@ -81,6 +81,19 @@ Native and Wasm dispatch accept that canonical instance key alongside legacy
 words. The collision test uses the selected row's implemented methods; inherited
 default-only collisions remain part of the unfinished default-evidence work.
 
+The native precompiled-prelude path identifies an implementation by method and
+canonical instance key. Its ownership index also records the symbol chosen when
+the prelude was compiled alone, so declarations and call sites retain that symbol
+when a program introduces a colliding implementation.
+
+Dynamic dictionary routes still lack the interface identity needed to distinguish
+different declared arities of a shared method name. LLVM rejects those ambiguous
+calls rather than guessing their saturation; static exact-key calls retain their
+declared arity. The same guard applies to ordinary and precompiled-prelude builds.
+Prelude-owned bodies replayed only to produce declarations retain their standalone
+arity. Carrying full identity through method values, applications and both backends
+remains part of [#2396](https://github.com/MedakaLang/medaka/issues/2396).
+
 Ordinary method-return sites retain the legacy spelling-based path; this work does not
 complete the shared solver or return-family migration. The finalized scheme query
 `checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
