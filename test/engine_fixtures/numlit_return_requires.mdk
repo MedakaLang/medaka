@@ -1,14 +1,14 @@
--- The literal must call Num and forward Num Int into its body. The explicit
--- fromInt call selects Forge; both bodies consume their prerequisite dictionary.
-import numlit_support.from_int.{lift}
+-- The literal must call Num and forward Num Int into its body. Nested literals
+-- and arithmetic consume that dictionary. Explicit fromInt selects Forge, whose
+-- concrete implementation has no prerequisite dictionary.
 
 data Box a = Box a deriving (Eq)
 
 interface Forge a where
   fromInt : Int -> a
 
-impl Forge (Box a) requires Num a where
-  fromInt n = Box (lift n + lift 2000)
+impl Forge (Box Int) where
+  fromInt _ = Box (2000 + 1)
 
 impl Num (Box a) requires Num a where
   add (Box x) (Box y) = Box (x + y)
@@ -18,7 +18,7 @@ impl Num (Box a) requires Num a where
   negate (Box x) = Box (-x)
   abs (Box x) = Box (abs x)
   signum (Box x) = Box (signum x)
-  fromInt n = Box (lift n + lift 1000)
+  fromInt _ = Box (1000 + 1)
 
 unBox : Box a -> a
 unBox (Box x) = x
