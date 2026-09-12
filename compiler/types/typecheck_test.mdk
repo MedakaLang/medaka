@@ -1097,6 +1097,92 @@ test "block recursive arithmetic retains the outer predicate and route" =
       assumptions,
   ]
 
+wrappedReturnSource : Bool -> Bool -> String
+wrappedReturnSource hasInt hasBox =
+  joinNl
+    ([
+        "data Box a = Box a",
+        "interface Seed a where",
+        "  seed : a",
+      ]
+      ++ (if hasInt then ["impl Seed Int where", "  seed = 41"] else [])
+      ++ (if hasBox then
+        ["impl Seed (Box Int) where", "  seed = Box 99"]
+      else
+        [])
+      ++ [
+        "interface Produce a where",
+        "  produce : Unit -> Box a",
+        "impl Produce a requires Seed a where",
+        "  produce _ = Box seed",
+        "value : Box Int",
+        "value = produce ()",
+      ])
+
+returnMethodRoutes : CExpr -> Option (List String)
+returnMethodRoutes (CApp fn _) = returnMethodRoutes fn
+returnMethodRoutes (CMethod "produce" _ _ prerequisites _) =
+  Some (map numericRouteView prerequisites)
+returnMethodRoutes _ = None
+
+returnBindRoutes : List CBind -> Option (List String)
+returnBindRoutes [] = None
+returnBindRoutes ((CBind "value" [CClause _ body]) :: _) =
+  returnMethodRoutes body
+returnBindRoutes (_ :: rest) = returnBindRoutes rest
+
+wrappedReturnRoutes : String -> Option (List String)
+wrappedReturnRoutes source =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("wrapped_return", program)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  returnBindRoutes binds
+
+wrappedReturnFlatRoutes : String -> Option (List String)
+wrappedReturnFlatRoutes source =
+  let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
+  let elaborated = elaborateDict [] [] ["value"] program
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  returnBindRoutes binds
+
+test "wrapped return prerequisites use the class parameter, not the result type" =
+  expectEqual
+    [Some ["Int[]"], Some ["Int[]"], Some ["Int[]"], Some ["Int[]"]]
+    [
+      wrappedReturnRoutes (wrappedReturnSource True True),
+      wrappedReturnRoutes (wrappedReturnSource True False),
+      wrappedReturnFlatRoutes (wrappedReturnSource True True),
+      wrappedReturnFlatRoutes (wrappedReturnSource True False),
+    ]
+
+test "wrapped return checking rejects an instance for only the result wrapper" =
+  let source = wrappedReturnSource False True
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
+  let (flatErrors, _) = checkProgramDiags [] core program
+  expectAll [
+    expectEqual
+      True
+      (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
+    expectEqual True (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
+  ]
+
+test "wrapped return routes survive an intervening failed request" =
+  let before = wrappedReturnRoutes (wrappedReturnSource True True)
+  let core = desugar (parse numericPreludeSource)
+  let (errors, _) = checkOneDiags [] core (
+    "wrapped_return_failure",
+    desugar (parseLocated (wrappedReturnSource False True)),
+  )
+  let after = wrappedReturnRoutes (wrappedReturnSource True True)
+  expectAll [
+    expectEqual True (listLen errors > 0),
+    expectEqual (Some ["Int[]"]) before,
+    expectEqual before after,
+  ]
+
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
 methodHeadArity : String -> CExpr -> Option Int
