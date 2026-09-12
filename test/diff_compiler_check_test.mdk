@@ -667,7 +667,7 @@ test "a two-module import cycle is reported as the whole chain" =
 
 -- # A valid multi-module program: no false positives
 
-{- | `test/diff_compiler_resolve_modules.sh`'s corpus-leg ran
+{- | `test/diff_compiler_check_test.mdk`'s corpus-leg ran
    `resolve_modules_main` over the compiler's OWN module graph, named by bare
    module name (`util ast lexer …`) against a flat `compiler/<m>.mdk` layout
    that no longer exists — every one of the 13 names now resolves to nothing

@@ -219,7 +219,11 @@
 # and `<name>.sh` from the repo root — test/run_gates.sh:172-181), which is why
 # the sqlite entry's name carries its path and the wasm entry's does not.
 
-# A plain compiler differential that reads an oracle binary.
+# ⚠️ INVERTED POLARITY ([G-MUST-FAIL]): every fixture under
+# test/must_fail_fixtures/ pins an OPEN bug, so RED is this gate's healthy
+# state. It is enrolled here precisely to prove the schema does NOT normalize
+# polarity — there is no ok/failing field, and nothing in an entry claims what
+# a passing run looks like. Whatever runs a gate keeps owning that.
 [[gate]]
 name = "diff_compiler_must_fail"
 area = "soundness"

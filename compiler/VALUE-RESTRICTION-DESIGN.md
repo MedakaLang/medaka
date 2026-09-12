@@ -280,7 +280,7 @@ appears.
    scope, and the `FieldAssign` field-expr accessor for the record arm.
 2. Add the `EApp` and `ERecordCreate` arms (§3). Leave `lowerToCurrent` /
    `genRestricted` untouched.
-3. **Regression fixtures** (typecheck gate — `test/diff_compiler_check.sh` /
+3. **Regression fixtures** (typecheck gate — `test/diff_compiler_check_test.mdk` /
    `diff_compiler_check_modules.sh`, capture goldens per AGENTS "Writing tests"):
    - POSITIVE (must now pass): `MkBox []` at two types; `MkTwo []` (partial) at
      two types; `Some (MkBox [])` nested; `ERecordCreate` of empty lists at two
@@ -292,7 +292,7 @@ appears.
      (or any lowercase-head app / effectful call) used at two element types →
      still rejected (expansive function application).
 4. **Gates:** new positives accept + both negatives still reject +
-   `bash test/diff_compiler_check.sh` + `_check_modules` +
+   `bash test/diff_compiler_check_test.mdk` + `_check_modules` +
    `bash test/diff_compiler_eval.sh` + `_check_batch` (stdlib loads end-to-end,
    catches an over-broad rule) + `bash test/selfcompile_fixpoint.sh` (C3a/C3b).
 5. **Seed re-mint:** `typecheck.mdk` is in the self-compile graph, so the emitted

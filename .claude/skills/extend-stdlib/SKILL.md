@@ -112,7 +112,7 @@ Then:
 ```sh
 ./medaka test stdlib/core.mdk   # and list/string/array
 make preflight                  # derives the gate set from your diff
-bash test/diff_compiler_check.sh
+bash test/diff_compiler_check_test.mdk
 bash test/diff_compiler_eval.sh
 ```
 

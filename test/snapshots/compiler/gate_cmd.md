@@ -1,5 +1,5 @@
 # META
-source_lines=3145
+source_lines=3179
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1841,8 +1841,24 @@ liveSpawnAt m l = match strSplit m l
   before :: _ :: _ => not (bindsWildcard before)
   _ => False
 
--- True when `prefix` binds to the wildcard: a standalone `_` followed by
--- `=`, but not the `_ =>` of a catch-all match arm.
+{- | True when `prefix` ends in a `let _ = ` binding: the `let` keyword, then
+   a standalone `_`, then `=` (not the `_ =>` of a catch-all match arm).
+   Scoped to `let`-bound wildcards specifically, not any wildcard anywhere in
+   `prefix` — a clause head's own wildcard PARAMETER (`sweepOne _ = match
+   spawn ...`) also puts a `_` ahead of an `=` on the line, but that `=` binds
+   the clause's return value, not the spawn's result, to the wildcard.
+
+   > bindsWildcard "let _ = "
+   True
+
+   > bindsWildcard "sweepOne _ = match "
+   False
+
+   > bindsWildcard "outlet _ = "
+   False
+
+   > bindsWildcard "n = "
+   False -}
 bindsWildcard : String -> Bool
 bindsWildcard prefix =
   let cs = stringToChars prefix
@@ -1856,7 +1872,9 @@ bindsWildcardGo cs n i
     bindsWildcardGo cs n (i + 1)
   | otherwise =
     let j = skipBlanks cs n (i + 1)
-    if charAtOr cs n j == '=' && charAtOr cs n (j + 1) /= '>' then
+    if charAtOr cs n j == '='
+      && charAtOr cs n (j + 1) /= '>'
+      && precededByLet cs i then
       True
     else
       bindsWildcardGo cs n (i + 1)
@@ -1865,6 +1883,22 @@ skipBlanks : Array Char -> Int -> Int -> Int
 skipBlanks cs n i
   | i < n && arrayGetUnsafe i cs == ' ' = skipBlanks cs n (i + 1)
   | otherwise = i
+
+skipBlanksBack : Array Char -> Int -> Int
+skipBlanksBack cs i
+  | i > 0 && arrayGetUnsafe (i - 1) cs == ' ' = skipBlanksBack cs (i - 1)
+  | otherwise = i
+
+-- True when the `let` keyword, as a whole word, immediately precedes
+-- position `i` (blanks allowed between).
+precededByLet : Array Char -> Int -> Bool
+precededByLet cs i =
+  let k = skipBlanksBack cs i
+  k >= 3
+    && arrayGetUnsafe (k - 3) cs == 'l'
+    && arrayGetUnsafe (k - 2) cs == 'e'
+    && arrayGetUnsafe (k - 1) cs == 't'
+    && (k == 3 || not (isIdentChar (arrayGetUnsafe (k - 4) cs)))
 
 -- `haystack` names `w` as a whole word, rather than as a fragment of some
 -- longer identifier. `rule-stdlib-reimpl` matches on the declared signature
@@ -3520,9 +3554,13 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "bindsWildcard" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "bindsWildcard" ((PVar "prefix")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "prefix"))) (DoExpr (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "bindsWildcardGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "bindsWildcardGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "j")) (ELit (LChar "="))) (EBinOp "/=" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (ELit (LChar ">")))) (EVar "True") (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "bindsWildcardGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "j")) (ELit (LChar "="))) (EBinOp "/=" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (ELit (LChar ">")))) (EApp (EApp (EVar "precededByLet") (EVar "cs")) (EVar "i"))) (EVar "True") (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "skipBlanks" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipBlanks" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "skipBlanksBack" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "skipBlanksBack" ((PVar "cs") (PVar "i")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EVar "skipBlanksBack") (EVar "cs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "precededByLet" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "precededByLet" ((PVar "cs") (PVar "i")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "skipBlanksBack") (EVar "cs")) (EVar "i"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 3)))) (EVar "cs")) (ELit (LChar "l")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 2)))) (EVar "cs")) (ELit (LChar "e")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "t")))) (EBinOp "||" (EBinOp "==" (EVar "k") (ELit (LInt 3))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 4)))) (EVar "cs")))))))))
 (DTypeSig false "containsWord" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "containsWord" ((PVar "w") (PVar "haystack")) (EApp (EVar "wordBoundary") (EApp (EApp (EVar "strSplit") (EVar "w")) (EVar "haystack"))))
 (DTypeSig false "wordBoundary" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
@@ -4185,9 +4223,13 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "bindsWildcard" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "bindsWildcard" ((PVar "prefix")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "prefix"))) (DoExpr (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "bindsWildcardGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "bindsWildcardGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "j")) (ELit (LChar "="))) (EBinOp "/=" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (ELit (LChar ">")))) (EVar "True") (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "bindsWildcardGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")))) (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "j")) (ELit (LChar "="))) (EBinOp "/=" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (ELit (LChar ">")))) (EApp (EApp (EVar "precededByLet") (EVar "cs")) (EVar "i"))) (EVar "True") (EApp (EApp (EApp (EVar "bindsWildcardGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "skipBlanks" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipBlanks" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "skipBlanksBack" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "skipBlanksBack" ((PVar "cs") (PVar "i")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EVar "skipBlanksBack") (EVar "cs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "precededByLet" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "precededByLet" ((PVar "cs") (PVar "i")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "skipBlanksBack") (EVar "cs")) (EVar "i"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "k") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 3)))) (EVar "cs")) (ELit (LChar "l")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 2)))) (EVar "cs")) (ELit (LChar "e")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "t")))) (EBinOp "||" (EBinOp "==" (EVar "k") (ELit (LInt 3))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "k") (ELit (LInt 4)))) (EVar "cs")))))))))
 (DTypeSig false "containsWord" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "containsWord" ((PVar "w") (PVar "haystack")) (EApp (EVar "wordBoundary") (EApp (EApp (EVar "strSplit") (EVar "w")) (EVar "haystack"))))
 (DTypeSig false "wordBoundary" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))

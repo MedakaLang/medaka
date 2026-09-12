@@ -1837,8 +1837,24 @@ liveSpawnAt m l = match strSplit m l
   before :: _ :: _ => not (bindsWildcard before)
   _ => False
 
--- True when `prefix` binds to the wildcard: a standalone `_` followed by
--- `=`, but not the `_ =>` of a catch-all match arm.
+{- | True when `prefix` ends in a `let _ = ` binding: the `let` keyword, then
+   a standalone `_`, then `=` (not the `_ =>` of a catch-all match arm).
+   Scoped to `let`-bound wildcards specifically, not any wildcard anywhere in
+   `prefix` — a clause head's own wildcard PARAMETER (`sweepOne _ = match
+   spawn ...`) also puts a `_` ahead of an `=` on the line, but that `=` binds
+   the clause's return value, not the spawn's result, to the wildcard.
+
+   > bindsWildcard "let _ = "
+   True
+
+   > bindsWildcard "sweepOne _ = match "
+   False
+
+   > bindsWildcard "outlet _ = "
+   False
+
+   > bindsWildcard "n = "
+   False -}
 bindsWildcard : String -> Bool
 bindsWildcard prefix =
   let cs = stringToChars prefix
@@ -1852,7 +1868,9 @@ bindsWildcardGo cs n i
     bindsWildcardGo cs n (i + 1)
   | otherwise =
     let j = skipBlanks cs n (i + 1)
-    if charAtOr cs n j == '=' && charAtOr cs n (j + 1) /= '>' then
+    if charAtOr cs n j == '='
+      && charAtOr cs n (j + 1) /= '>'
+      && precededByLet cs i then
       True
     else
       bindsWildcardGo cs n (i + 1)
@@ -1861,6 +1879,22 @@ skipBlanks : Array Char -> Int -> Int -> Int
 skipBlanks cs n i
   | i < n && arrayGetUnsafe i cs == ' ' = skipBlanks cs n (i + 1)
   | otherwise = i
+
+skipBlanksBack : Array Char -> Int -> Int
+skipBlanksBack cs i
+  | i > 0 && arrayGetUnsafe (i - 1) cs == ' ' = skipBlanksBack cs (i - 1)
+  | otherwise = i
+
+-- True when the `let` keyword, as a whole word, immediately precedes
+-- position `i` (blanks allowed between).
+precededByLet : Array Char -> Int -> Bool
+precededByLet cs i =
+  let k = skipBlanksBack cs i
+  k >= 3
+    && arrayGetUnsafe (k - 3) cs == 'l'
+    && arrayGetUnsafe (k - 2) cs == 'e'
+    && arrayGetUnsafe (k - 1) cs == 't'
+    && (k == 3 || not (isIdentChar (arrayGetUnsafe (k - 4) cs)))
 
 -- `haystack` names `w` as a whole word, rather than as a fragment of some
 -- longer identifier. `rule-stdlib-reimpl` matches on the declared signature

@@ -90,6 +90,6 @@ capability matrix if you touched more than the interpreter:
 
 ```sh
 bash test/diff_compiler_eval.sh
-bash test/diff_compiler_check.sh
+bash test/diff_compiler_check_test.mdk
 sh test/diff_compiler_capability_matrix.sh
 ```
