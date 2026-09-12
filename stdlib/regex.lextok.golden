@@ -1,5 +1,13 @@
 NEWLINE
 IMPORT
+IDENT "array"
+DOT_LBRACE
+IDENT "sliceClamped"
+AS
+IDENT "sliceBytes"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "list"
 DOT_LBRACE
 IDENT "get"
@@ -11,6 +19,8 @@ IMPORT
 IDENT "string"
 DOT_LBRACE
 IDENT "fromChars"
+COMMA
+IDENT "fromUtf8"
 COMMA
 IDENT "isDigit"
 COMMA
@@ -4565,6 +4575,10 @@ COLON
 UPPER "Array"
 UPPER "Int"
 COMMA
+IDENT "subjStart"
+COLON
+UPPER "Int"
+COMMA
 IDENT "subjEnd"
 COLON
 UPPER "Int"
@@ -4957,7 +4971,9 @@ THEN
 INDENT
 IDENT "pos"
 EQ_EQ
-INT 0
+IDENT "vm"
+DOT
+IDENT "subjStart"
 OR
 IDENT "vm"
 DOT
@@ -5052,9 +5068,12 @@ IDENT "wordAt"
 IDENT "vm"
 IDENT "i"
 EQUAL
+INDENT
 IDENT "i"
 GEQ
-INT 0
+IDENT "vm"
+DOT
+IDENT "subjStart"
 AND
 IDENT "i"
 LT
@@ -5070,6 +5089,8 @@ IDENT "vm"
 DOT
 IDENT "codes"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "stepThreads"
 COLON
@@ -5658,6 +5679,73 @@ IDENT "anchorEnd"
 IDENT "steps"
 EQUAL
 INDENT
+IDENT "searchWindow"
+IDENT "re"
+IDENT "codes"
+LPAREN
+INT 0
+COMMA
+IDENT "arrayLength"
+IDENT "codes"
+RPAREN
+IDENT "startAt"
+IDENT "anchorStart"
+IDENT "anchorEnd"
+IDENT "steps"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "searchWindow"
+COLON
+UPPER "Regex"
+ARROW
+INDENT
+UPPER "Array"
+UPPER "Int"
+ARROW
+NEWLINE
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "Ref"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Option"
+LPAREN
+UPPER "Array"
+UPPER "Int"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "searchWindow"
+IDENT "re"
+IDENT "codes"
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "hi"
+RPAREN
+IDENT "startAt"
+IDENT "anchorStart"
+IDENT "anchorEnd"
+IDENT "steps"
+EQUAL
+INDENT
 LET
 IDENT "vm"
 EQUAL
@@ -5673,10 +5761,13 @@ IDENT "codes"
 EQUAL
 IDENT "codes"
 COMMA
+IDENT "subjStart"
+EQUAL
+IDENT "lo"
+COMMA
 IDENT "subjEnd"
 EQUAL
-IDENT "arrayLength"
-IDENT "codes"
+IDENT "hi"
 COMMA
 IDENT "multi"
 EQUAL
@@ -5718,6 +5809,58 @@ IDENT "anchorStart"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "clampWindow"
+COLON
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "clampWindow"
+IDENT "codes"
+IDENT "start"
+IDENT "end"
+EQUAL
+INDENT
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "codes"
+NEWLINE
+LET
+IDENT "hi"
+EQUAL
+IDENT "max"
+INT 0
+LPAREN
+IDENT "min"
+IDENT "end"
+IDENT "n"
+RPAREN
+NEWLINE
+LPAREN
+IDENT "max"
+INT 0
+LPAREN
+IDENT "min"
+IDENT "start"
+IDENT "hi"
+RPAREN
+COMMA
+IDENT "hi"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "findSteps"
 COLON
 UPPER "Regex"
@@ -5756,20 +5899,26 @@ IDENT "steps"
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "mkMatch"
+IDENT "mkMatchWith"
 COLON
-UPPER "Regex"
+LPAREN
+UPPER "Int"
+ARROW
+UPPER "Int"
 ARROW
 UPPER "String"
+RPAREN
+ARROW
+UPPER "Regex"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 UPPER "Match"
 NEWLINE
-IDENT "mkMatch"
+IDENT "mkMatchWith"
+IDENT "textOf"
 IDENT "re"
-IDENT "s"
 IDENT "slots"
 EQUAL
 INDENT
@@ -5799,16 +5948,15 @@ IDENT "hi"
 COMMA
 IDENT "text"
 EQUAL
-IDENT "sliceClamped"
+IDENT "textOf"
 IDENT "lo"
 IDENT "hi"
-IDENT "s"
 COMMA
 IDENT "groups"
 EQUAL
-IDENT "groupsOf"
+IDENT "groupsOfWith"
+IDENT "textOf"
 IDENT "re"
-IDENT "s"
 IDENT "slots"
 INT 1
 COMMA
@@ -5816,26 +5964,38 @@ RBRACE
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "groupsOf"
+IDENT "groupsOfWith"
 COLON
-UPPER "Regex"
+LPAREN
+UPPER "Int"
+ARROW
+UPPER "Int"
 ARROW
 UPPER "String"
+RPAREN
 ARROW
+INDENT
+UPPER "Regex"
+ARROW
+NEWLINE
 UPPER "Array"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Option"
 UPPER "Group"
 RPAREN
 NEWLINE
-IDENT "groupsOf"
+DEDENT
+NEWLINE
+IDENT "groupsOfWith"
+IDENT "textOf"
 IDENT "re"
-IDENT "s"
 IDENT "slots"
 IDENT "k"
 EQUAL
@@ -5910,10 +6070,9 @@ IDENT "hi"
 COMMA
 IDENT "text"
 EQUAL
-IDENT "sliceClamped"
+IDENT "textOf"
 IDENT "lo"
 IDENT "hi"
-IDENT "s"
 RBRACE
 NEWLINE
 DEDENT
@@ -5922,9 +6081,9 @@ DEDENT
 NEWLINE
 IDENT "g"
 CONS
-IDENT "groupsOf"
+IDENT "groupsOfWith"
+IDENT "textOf"
 IDENT "re"
-IDENT "s"
 IDENT "slots"
 LPAREN
 IDENT "k"
@@ -5935,6 +6094,35 @@ NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "mkMatch"
+COLON
+UPPER "Regex"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Match"
+NEWLINE
+IDENT "mkMatch"
+IDENT "re"
+IDENT "s"
+IDENT "slots"
+EQUAL
+IDENT "mkMatchWith"
+LPAREN
+IDENT "lo"
+IDENT "hi"
+FAT_ARROW
+IDENT "sliceClamped"
+IDENT "lo"
+IDENT "hi"
+IDENT "s"
+RPAREN
+IDENT "re"
+IDENT "slots"
 NEWLINE
 IDENT "matchOnce"
 COLON
@@ -6583,6 +6771,142 @@ IDENT "s"
 INT 0
 UPPER "True"
 UPPER "True"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "isFullMatchBytes"
+COLON
+UPPER "Regex"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isFullMatchBytes"
+IDENT "re"
+IDENT "bytes"
+IDENT "start"
+IDENT "end"
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "hi"
+RPAREN
+EQUAL
+IDENT "clampWindow"
+IDENT "bytes"
+IDENT "start"
+IDENT "end"
+NEWLINE
+MATCH
+IDENT "searchWindow"
+IDENT "re"
+IDENT "bytes"
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "hi"
+RPAREN
+IDENT "lo"
+UPPER "True"
+UPPER "True"
+LPAREN
+UPPER "Ref"
+INT 0
+RPAREN
+INDENT
+UPPER "Some"
+UNDERSCORE
+FAT_ARROW
+UPPER "True"
+NEWLINE
+UPPER "None"
+FAT_ARROW
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "findBytes"
+COLON
+UPPER "Regex"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Option"
+UPPER "Match"
+NEWLINE
+IDENT "findBytes"
+IDENT "re"
+IDENT "bytes"
+IDENT "start"
+IDENT "end"
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "hi"
+RPAREN
+EQUAL
+IDENT "clampWindow"
+IDENT "bytes"
+IDENT "start"
+IDENT "end"
+NEWLINE
+IDENT "map"
+LPAREN
+IDENT "mkMatchWith"
+LPAREN
+IDENT "from"
+IDENT "to"
+FAT_ARROW
+IDENT "fromUtf8"
+LPAREN
+IDENT "sliceBytes"
+IDENT "from"
+IDENT "to"
+IDENT "bytes"
+RPAREN
+RPAREN
+IDENT "re"
+RPAREN
+LPAREN
+IDENT "searchWindow"
+IDENT "re"
+IDENT "bytes"
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "hi"
+RPAREN
+IDENT "lo"
+UPPER "False"
+UPPER "False"
+LPAREN
+UPPER "Ref"
+INT 0
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
