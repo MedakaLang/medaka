@@ -11,6 +11,7 @@ ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 SERVE_SRC="$ROOT/pds/serve.mdk"
 CLIENT_SRC="$ROOT/pds/test/serve_client_main.mdk"
+SUBSCRIBE_SRC="$ROOT/pds/test/serve_subscribe_main.mdk"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-serve-e2e.XXXXXX")
 SERVER_PID=""
@@ -68,6 +69,13 @@ if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CLIENT_SRC" -o "$WORK
 then
   cat "$WORK/build_client.log" >&2
   fail 'native serve_client_main.mdk build failed'
+fi
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SUBSCRIBE_SRC" \
+  -o "$WORK/subclient" > "$WORK/build_subclient.log" 2>&1
+then
+  cat "$WORK/build_subclient.log" >&2
+  fail 'native serve_subscribe_main.mdk build failed'
 fi
 
 # ── fixed fixture identity, mirroring store_persistence_main's convention ──
@@ -162,6 +170,13 @@ start_server() {
 
 client() {
   "$WORK/client" "$@"
+}
+
+# The event-stream driver. A separate binary rather than more subcommands on
+# `client`: nothing it does is an HTTP request/response exchange, so it shares
+# neither that driver's response reader nor its request builders.
+subclient() {
+  "$WORK/subclient" "$@"
 }
 
 # ── first instance: genesis, then cases 1-8 ─────────────────────────────────
@@ -953,6 +968,127 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve32.err" 'case 32 (post-run)'
 
+# ── a dedicated --data dir: the event stream (#2891, #1697) ───────────────
+# `com.atproto.sync.subscribeRepos` gets a server of its own rather than
+# riding on the first instance, for two reasons that are both about isolation
+# rather than tidiness: the ceiling case below holds 32 connections open at
+# once and would otherwise spend the first instance's per-identity connection
+# budget, and every cursor case is graded against exact SEQUENCE NUMBERS, so
+# it needs an event log nothing else has written to.
+
+DATASUB="$WORK/data-subscribe"
+mkdir -p "$DATASUB"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATASUB" --port 0 --init \
+  >"$WORK/servesub.out" 2>"$WORK/servesub.err" &
+SERVER_PID=$!
+PORTSUB=$(wait_for_port "$WORK/servesub.out") || {
+  cat "$WORK/servesub.err" >&2
+  fail 'subscription server did not report readiness'
+}
+require_empty "$WORK/servesub.err" 'subscription server startup'
+
+SUBLOGIN=$(client login "$PORTSUB" "$HANDLE" "$PASSWORD") \
+  || fail 'case 34: login against the subscription server'
+SUBACCESS=${SUBLOGIN%% *}
+
+# 34. the live stream: a subscription opened with no cursor receives the
+#    events of writes made AFTER it opened, in order. Two writes, not one —
+#    a stream that delivered its first event and then stopped tailing would
+#    pass a one-event case, and the consecutive sequence numbers are what
+#    show the second arrived as a new event rather than as a replay.
+#    This also plants events 1 and 2, which every cursor case below is
+#    graded against.
+subclient live "$PORTSUB" "$SUBACCESS" "$DID" "$COLLECTION" sublive \
+  || fail 'case 34: live event delivery'
+
+# 35. a cursor naming an event this server has never emitted is REFUSED, by
+#    atproto's own name for it. Silence and a replay of something else are
+#    both wrong answers that a status-only assertion would accept.
+subclient future-cursor "$PORTSUB" 9999 \
+  || fail 'case 35: a future cursor was not refused'
+
+# 36. a cursor at exactly the newest delivered event replays NOTHING and then
+#    receives the next live event once: no duplicate of what the cursor
+#    named, no gap over what followed it. The silence is graded BEFORE the
+#    write, so a duplicate cannot hide behind the live event. Plants event 3.
+subclient exact-cursor "$PORTSUB" 2 "$SUBACCESS" "$DID" "$COLLECTION" subexact \
+  || fail 'case 36: a cursor at the newest delivered event'
+
+# 37. a cursor whose next events have left the retention window is answered
+#    `#info` `OutdatedCursor` and then replayed from what the log still
+#    holds — the subscriber learns it has a gap rather than inferring one.
+#    The window is emptied by hand, the way cases 15-18 introduce blob
+#    residue by hand: `eventLogSweep` drops entries by AGE, so no drivable
+#    sequence of requests can put a log this young into that state.
+rm "$DATASUB"/events/entries/0000000000000001-* \
+  || fail 'case 37: could not find the first event entry'
+rm "$DATASUB"/events/entries/0000000000000002-* \
+  || fail 'case 37: could not find the second event entry'
+subclient outdated-cursor "$PORTSUB" 0 \
+  || fail 'case 37: an outdated cursor was not told it has a gap'
+
+# 38. #2816 one shape further on: a subscription is held open by design and
+#    is reaped by no timeout, so without a ceiling of its own it is a denial
+#    strictly cheaper than the un-framed flood case 8b already defends
+#    against. Open `maxConcurrentSubscriptions` of them from one identity,
+#    hold them silent, and require BOTH halves: the next attempt refused
+#    cheaply (an ordinary HTTP error, never a completed upgrade) and an
+#    ordinary route still ANSWERED on a fresh connection. The second half is
+#    the claim that matters — a ceiling that shut the server down instead of
+#    the attempt that crossed it would pass the first half alone.
+subclient ceiling "$PORTSUB" 32 "$DID" \
+  || fail 'case 38: the subscription ceiling did not bound one identity cheaply'
+
+# 39. a subscriber silent for longer than `requestTimeout` (60s) is still
+#    there afterwards. The 70s hold is the discriminator and is why this
+#    case costs real wall time: a subscription still governed by the request
+#    lifecycle is reaped during it, and the write afterwards then reaches
+#    nobody. `writeTimeout` is unaffected and still bounds every event write.
+subclient hold "$PORTSUB" 70 "$SUBACCESS" "$DID" "$COLLECTION" subhold \
+  || fail 'case 39: a long-held subscriber was reaped'
+
+# 40. RFC 6455 §5.4: a data message split across continuation frames is
+#    REASSEMBLED. A completed message is still ignored — a subscriber has
+#    nothing this lexicon can read — so the observable is that the connection
+#    is neither closed nor wedged behind the fragments, which the ping after
+#    them grades.
+subclient fragment "$PORTSUB" \
+  || fail 'case 40: a fragmented client message was not reassembled'
+
+# 41. §5.4's two orderings that are protocol VIOLATIONS, each 1002. They are
+#    invisible to a reader that handles one frame at a time and forgets it,
+#    which is what makes them the discriminator for case 40's state: a server
+#    that merely ignored every data frame would pass case 40 and neither of
+#    these.
+subclient stray-continuation "$PORTSUB" \
+  || fail 'case 41a: a continuation frame with nothing open was not refused'
+subclient overlapped-message "$PORTSUB" \
+  || fail 'case 41b: a data frame inside an open message was not refused'
+
+# 42. The ceiling reassembly needs and a per-FRAME bound cannot supply: every
+#    frame here is inside `maxClientFrameBytes` and the message they build is
+#    not, which is the shape that grows a buffer without bound. 1009.
+subclient oversize-message "$PORTSUB" \
+  || fail 'case 42: an unbounded reassembled message was not refused'
+
+# 43. §5.5.1's close handshake: the code the peer sent is the code it is
+#    answered with (3000, an application code the wire permits), and a close
+#    payload that does not parse is 1002 — not a normal close, and not the
+#    unparsable value echoed back.
+subclient close-echo "$PORTSUB" 3000 \
+  || fail 'case 43a: the client close code was not echoed'
+subclient close-malformed "$PORTSUB" \
+  || fail 'case 43b: a malformed close payload was not answered 1002'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servesub.err" 'subscription server (post-run)'
+
 # ── fifth, independent --data dir: rate limiting (#2612) ───────────────────
 # `--trusted-proxy` is also on here — every case in that block above the
 # rate-limit one runs the untrusted, single-bucket identity path, and this
@@ -1074,4 +1210,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'

@@ -8,9 +8,9 @@ import { writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 
-const [moduleRoot, output] = process.argv.slice(2)
-if (!moduleRoot || !output) {
-  throw new Error('usage: gen_mst_corpus.mjs <node_modules> <output>')
+const [moduleRoot, output, proofOutput] = process.argv.slice(2)
+if (!moduleRoot || !output || !proofOutput) {
+  throw new Error('usage: gen_mst_corpus.mjs <node_modules> <output> <proof-output>')
 }
 
 const repo = await import(pathToFileURL(resolve(moduleRoot, '@atproto/repo/dist/index.js')).href)
@@ -125,3 +125,90 @@ for (const [name, operations] of cases) {
 }
 
 await writeFile(output, `${lines.join('\n')}\n`)
+
+// ── the covering-proof corpus ───────────────────────────────────────────────
+// A SECOND, independent output file. Covering proofs go in their own corpus
+// rather than as rows on the one above because that file's bytes are also
+// byte-compared against the pinned official PDS image by
+// pds/tools/check_pds_phase1_image.sh, whose installed @atproto/repo is 0.10.10
+// and not the 0.10.12 pinned here.
+//
+// A proof is only interesting on a tree with more than one node: on a
+// single-node tree every rule that could be written returns that one node. The
+// cases below therefore climb from one layer to three, and the three-layer case
+// is the one that separates a covering proof from a tree diff — its proofs
+// contain nodes no write touched.
+
+const proofKeys = [
+  mine('app.bsky.feed.post/deep-a-', 0),
+  mine('app.bsky.feed.post/deep-b-', 1),
+  mine('app.bsky.feed.post/deep-c-', 0),
+  mine('app.bsky.feed.post/deep-d-', 2),
+  mine('app.bsky.feed.post/deep-e-', 0),
+  mine('app.bsky.feed.post/deep-f-', 1),
+  mine('app.bsky.feed.post/deep-g-', 0),
+]
+const absentLow = mine('app.bsky.feed.post/aaa-absent-', 0)
+const absentMid = mine('app.bsky.feed.post/deep-dd-absent-', 0)
+const absentHigh = mine('app.bsky.feed.post/zzz-absent-', 0)
+
+const proofCases = [
+  {
+    name: 'proof-single-node',
+    puts: [proofKeys[0]],
+    proofs: [[proofKeys[0]], [absentHigh]],
+  },
+  {
+    name: 'proof-two-layer',
+    puts: [proofKeys[0], proofKeys[1], proofKeys[2]],
+    proofs: [[proofKeys[0]], [proofKeys[1]], [proofKeys[2]], [absentMid]],
+  },
+  {
+    name: 'proof-three-layer',
+    puts: proofKeys,
+    proofs: [
+      ...proofKeys.map((key) => [key]),
+      [absentLow],
+      [absentMid],
+      [absentHigh],
+      // The batch shape a commit uses: one union over every written key.
+      [proofKeys[0], proofKeys[3], proofKeys[6]],
+    ],
+  },
+]
+
+const proofLines = [
+  '# Generated only by pds/tools/gen_mst_corpus.sh.',
+  '# Official atproto repository reference; exact package routes are in VECTOR-PROVENANCE.txt.',
+]
+
+for (const proofCase of proofCases) {
+  let tree = await MST.create(new MemoryBlockstore())
+  proofLines.push(`CASE\t${proofCase.name}`)
+  for (let i = 0; i < proofCase.puts.length; i++) {
+    const key = proofCase.puts[i]
+    tree = await tree.add(key, values[i % values.length])
+    proofLines.push(`PUT\t${keyHex(key)}\t${exactDepth(key)}\t${values[i % values.length].toString()}`)
+  }
+  const built = await tree.getUnstoredBlocks()
+  const nodeCids = new Set(Array.from(built.blocks).map(([cid]) => cid.toString()))
+  proofLines.push(`ROOT\t${built.root.toString()}`)
+  proofLines.push(`NODES\t${nodeCids.size}`)
+  for (const keys of proofCase.proofs) {
+    const union = new Map()
+    for (const key of keys) {
+      const proof = await tree.getCoveringProof(key)
+      for (const entry of proof.entries()) union.set(entry.cid.toString(), entry.bytes)
+    }
+    const cids = [...union.keys()].sort()
+    for (const cid of cids) {
+      if (!nodeCids.has(cid)) {
+        throw new Error(`covering proof for ${keys.join(',')} names a block outside the tree: ${cid}`)
+      }
+    }
+    proofLines.push(`PROOF\t${keys.map(keyHex).join(',')}\t${cids.join(',')}`)
+  }
+  proofLines.push('END')
+}
+
+await writeFile(proofOutput, `${proofLines.join('\n')}\n`)

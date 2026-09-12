@@ -1,0 +1,408 @@
+{- | The `com.atproto.sync.subscribeRepos` `#commit` event, as bytes a relay
+   can read.
+
+   An event-stream frame is two concatenated DAG-CBOR objects: a header
+   `{op, t}` and a body. The body here is scoped against the SYNC lexicon
+   (`com.atproto.sync.subscribeRepos`, def `commit`), not against the
+   repository commit object — the two schemas share field names and mean
+   different things by them, so `rev` and `data`/`prevData` cannot be copied
+   from one to the other.
+
+   Nothing here performs I/O or reads server state. A caller hands over the
+   MST either side of a write, the keys that write touched, the record blocks
+   it added and the signed commit block, and gets bytes back; deciding what a
+   write was is the caller's job, encoding it is this module's. -}
+
+import array
+import list.{reverse, sortBy}
+import map.{Map(..), get, has, set}
+import string.{fromUtf8}
+import lib.blockstore.{BlockStore, blockStoreGet}
+import lib.car.{carEncode}
+import lib.cid.{Cid, cidEqual, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborEncode}
+import lib.mst.{Mst, mstCoveringProofBlocks, mstEmpty, mstNodeBlocks}
+import lib.repo.{
+  Repo,
+  RepoCommit,
+  repoCommitCid,
+  repoCommitDataCid,
+  repoCommitSignedBytes,
+  repoCommitTid,
+  repoEntries,
+  repoLatestCommit,
+  repoStore,
+  repoTree,
+}
+import lib.tid.{Tid, tidToString}
+
+{- | One `ops` entry: the mutation of a single record.
+
+   The three arms are three different CBOR SHAPES, not one shape with two
+   nullable fields (`com.atproto.sync.subscribeRepos`, def `repoOp`). `cid` is
+   required and is null only on a delete; `prev` is ABSENT ENTIRELY on a
+   create and present on an update or a delete. Giving each arm exactly the
+   CIDs its shape admits is what stops an absent field from being encoded as a
+   null, which a relay running the inductive firehose reads as a different
+   claim. -}
+public export data SyncRepoOp =
+  | SyncOpCreate (Array Int) Cid
+  | SyncOpUpdate (Array Int) Cid Cid
+  | SyncOpDelete (Array Int) Cid
+
+{- | Everything one `#commit` body states.
+
+   `since` is required-and-nullable: it is null only for a repository's first
+   emitted commit, and is encoded as an explicit null rather than omitted.
+   `prevData` is optional and omitted when absent, but a relay inverting the
+   MST effectively requires it, so a caller that can supply it should. It is
+   the PRIOR commit's data root, never the one in `commitCid`'s own commit
+   object.
+
+   `blocksCar` is a complete CAR file, not a block list, because the lexicon
+   types the field as bytes. `syncCommitBlocks` and `syncCommitCar` build
+   it. -}
+public export data SyncCommitEvent = SyncCommitEvent {
+  seq : Int,
+  time : String,
+  repoDid : String,
+  commitCid : Cid,
+  rev : Tid,
+  since : Option Tid,
+  prevData : Option Cid,
+  blocksCar : Array Int,
+  ops : List SyncRepoOp,
+}
+
+seenCids : List (Cid, Array Int) -> Map String Bool -> Map String Bool
+seenCids [] index = index
+seenCids ((cid, _) :: rest) index =
+  seenCids rest (set (cidToString cid) True index)
+
+missingFrom : List (Cid, Array Int) ->
+  Map String Bool ->
+  List (Cid, Array Int) ->
+  List (Cid, Array Int)
+missingFrom [] _ acc = reverse acc
+missingFrom ((cid, bytes) :: rest) index acc =
+  if has (cidToString cid) index then
+    missingFrom rest index acc
+  else
+    missingFrom rest index ((cid, bytes) :: acc)
+
+dedupe : List (Cid, Array Int) ->
+  Map String Bool ->
+  List (Cid, Array Int) ->
+  List (Cid, Array Int)
+dedupe [] _ acc = reverse acc
+dedupe ((cid, bytes) :: rest) seen acc =
+  let key = cidToString cid
+  if has key seen then
+    dedupe rest seen acc
+  else
+    dedupe rest (set key True seen) ((cid, bytes) :: acc)
+
+{- | Sorted by CID, ascending.
+
+   The lexicon and the sync specification say nothing about the order blocks
+   appear in inside the `blocks` CAR — only that the commit block's CID is the
+   first entry of the CAR header's `roots` list — and a relay reads them into
+   a map. So the order is ours to pick, and picking a total one keeps the
+   emitted bytes a function of the block SET rather than of the order a
+   traversal happened to visit them in. -}
+sortBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
+sortBlocks blocks =
+  sortBy
+    ((left, _) (right, _) => compare (cidToString left) (cidToString right))
+    blocks
+
+{- | The blocks a relay needs to verify this write against the previous root,
+   without asking for anything else.
+
+   Four sources, unioned: the MST nodes this write created (the nodes of the
+   post-write tree that the pre-write tree did not have), the COVERING PROOFS
+   for the touched keys over the POST-write tree, the record blocks the write
+   added, and the signed commit block itself.
+
+   The covering proofs are what make the set sufficient rather than merely
+   new: they name nodes on the root-to-leaf path that this write never
+   changed, which is exactly what convinces a reader the rest of the tree is
+   untouched. Taking them over the post-write tree is what the reference
+   implementation does; over the pre-write tree they would be a plausible,
+   wrong set naming the nodes that no longer exist.
+
+   The created-node term is kept even though it is a subset of the covering
+   proofs for every single-key write measured so far, because it is the
+   reference's own formula and nothing here proves the containment holds for
+   an arbitrary batch. -}
+export
+syncCommitBlocks : Mst ->
+  Mst ->
+  List (Array Int) ->
+  List (Cid, Array Int) ->
+  Cid ->
+  Array Int ->
+  Result String (List (Cid, Array Int))
+syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
+  proof <- mstCoveringProofBlocks keys after
+  let created =
+    missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
+  let union = created ++ proof ++ addedRecords ++ [(commitCid, commitBytes)]
+  Ok (sortBlocks (dedupe union Tip []))
+
+{- | Wrap a block set as the CAR file the `blocks` field carries. The commit
+   CID is the sole root, which is the one ordering constraint the lexicon
+   states. -}
+export
+syncCommitCar : Cid -> List (Cid, Array Int) -> Result String (Array Int)
+syncCommitCar commitCid blocks = carEncode [commitCid] blocks
+
+opValue : SyncRepoOp -> DagCbor
+opValue (SyncOpCreate path cid) = DcMap [
+  ("action", DcString "create"),
+  ("path", DcString (fromUtf8 path)),
+  ("cid", DcLink cid),
+]
+opValue (SyncOpUpdate path cid prev) = DcMap [
+  ("action", DcString "update"),
+  ("path", DcString (fromUtf8 path)),
+  ("cid", DcLink cid),
+  ("prev", DcLink prev),
+]
+opValue (SyncOpDelete path prev) = DcMap [
+  ("action", DcString "delete"),
+  ("path", DcString (fromUtf8 path)),
+  ("cid", DcNull),
+  ("prev", DcLink prev),
+]
+
+optionalLink : String -> Option Cid -> List (String, DagCbor)
+optionalLink _ None = []
+optionalLink key (Some cid) = [(key, DcLink cid)]
+
+nullableRev : Option Tid -> DagCbor
+nullableRev None = DcNull
+nullableRev (Some rev) = DcString (tidToString rev)
+
+{- | The lexicon's `maxLength` on the `#commit` body's `ops` array
+   (`com.atproto.sync.subscribeRepos`, def `commit`). A commit carrying more
+   ops than this cannot be reported in full. -}
+syncCommitOpsMaxLength : Int
+syncCommitOpsMaxLength = 200
+
+{- | The `#commit` body as a data-model value.
+
+   `rebase` and `blobs` are deprecated but still required by the lexicon, so
+   they are emitted at their fixed empty values rather than omitted. Field
+   ORDER here is irrelevant: DAG-CBOR sorts map keys canonically at encode
+   time.
+
+   `ops` carries a `maxLength` of 200 in the lexicon, and a single write batch
+   can legally exceed that, so an over-long op list is reported rather than
+   emitted: `tooBig` goes true and `ops` goes empty, which is exactly what
+   that field means — the consumer re-fetches the missing data in a separate
+   request. `blocks` is unaffected; its own size limit is a separate bound. -}
+export
+syncCommitBody : SyncCommitEvent -> DagCbor
+syncCommitBody event =
+  let tooBig = length event.ops > syncCommitOpsMaxLength
+  DcMap
+    ([
+        ("seq", DcInt event.seq),
+        ("rebase", DcBool False),
+        ("tooBig", DcBool tooBig),
+        ("repo", DcString event.repoDid),
+        ("commit", DcLink event.commitCid),
+        ("rev", DcString (tidToString event.rev)),
+        ("since", nullableRev event.since),
+        ("blocks", DcBytes event.blocksCar),
+        ("ops", DcArray (if tooBig then [] else map opValue event.ops)),
+        ("blobs", DcArray []),
+        ("time", DcString event.time),
+      ]
+      ++ optionalLink "prevData" event.prevData)
+
+-- | The frame header every `#commit` message carries.
+syncCommitHeader : DagCbor
+syncCommitHeader = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
+
+{- | The complete frame: the header object followed by the body object, with
+   no length prefix or separator between them — a reader decodes two CBOR
+   items from the stream. -}
+export
+syncCommitFrame : SyncCommitEvent -> Result String (Array Int)
+syncCommitFrame event = do
+  header <- dagCborEncode syncCommitHeader
+  body <- dagCborEncode (syncCommitBody event)
+  Ok (header ++ body)
+
+{- | An `#info` frame: the same two-object shape as `#commit`, carrying an
+   advisory the subscriber acts on rather than an event it mirrors.
+
+   The one this server sends is `OutdatedCursor`, which says the stream
+   resumed later than the cursor asked for because the entries in between had
+   already left the retention window. It is deliberately not an error: the
+   connection stays open and the replay continues from the oldest entry the
+   log still holds, so a relay learns it has a gap instead of silently
+   believing it has none. -}
+export
+syncInfoFrame : String -> String -> Result String (Array Int)
+syncInfoFrame name message =
+  let bodyValue = DcMap [("name", DcString name), ("message", DcString message)]
+  do
+    header <- dagCborEncode (DcMap [("op", DcInt 1), ("t", DcString "#info")])
+    body <- dagCborEncode bodyValue
+    Ok (header ++ body)
+
+{- | An error frame: header `op` of -1 and no `t`, then a body naming the
+   error. It is the last frame a stream sends — the connection closes behind
+   it, so a subscriber never has to decide whether more is coming. -}
+export
+syncErrorFrame : String -> String -> Result String (Array Int)
+syncErrorFrame error message =
+  let bodyValue =
+    DcMap [("error", DcString error), ("message", DcString message)]
+  do
+    header <- dagCborEncode (DcMap [("op", DcInt (0 - 1))])
+    body <- dagCborEncode bodyValue
+    Ok (header ++ body)
+
+indexEntries : List (Array Int, Cid) -> Map String Cid -> Map String Cid
+indexEntries [] index = index
+indexEntries ((path, cid) :: rest) index =
+  indexEntries rest (set (fromUtf8 path) cid index)
+
+-- A record present after the write is a create when the prior tree did not
+-- name its path, and an update when it did under a different CID. A path whose
+-- CID did not move is not an op at all: a batch may rewrite a record to the
+-- bytes it already held, and announcing that as an update would claim a
+-- mutation the MST cannot show.
+writesAgainst : List (Array Int, Cid) ->
+  Map String Cid ->
+  List SyncRepoOp ->
+  List SyncRepoOp
+writesAgainst [] _ acc = reverse acc
+writesAgainst ((path, cid) :: rest) priorIndex acc =
+  match get (fromUtf8 path) priorIndex
+    None => writesAgainst rest priorIndex (SyncOpCreate path cid :: acc)
+    Some prior =>
+      if cidEqual prior cid then
+        writesAgainst rest priorIndex acc
+      else
+        writesAgainst rest priorIndex (SyncOpUpdate path cid prior :: acc)
+
+deletesAgainst : List (Array Int, Cid) ->
+  Map String Cid ->
+  List SyncRepoOp ->
+  List SyncRepoOp
+deletesAgainst [] _ acc = reverse acc
+deletesAgainst ((path, cid) :: rest) nextIndex acc =
+  if has (fromUtf8 path) nextIndex then
+    deletesAgainst rest nextIndex acc
+  else
+    deletesAgainst rest nextIndex (SyncOpDelete path cid :: acc)
+
+opPath : SyncRepoOp -> Array Int
+opPath (SyncOpCreate path _) = path
+opPath (SyncOpUpdate path _ _) = path
+opPath (SyncOpDelete path _) = path
+
+opRecordCid : SyncRepoOp -> Option Cid
+opRecordCid (SyncOpCreate _ cid) = Some cid
+opRecordCid (SyncOpUpdate _ cid _) = Some cid
+opRecordCid (SyncOpDelete _ _) = None
+
+-- The record blocks this write added, read out of the POST-write store. A
+-- missing one is an error rather than an omission: a `blocks` CAR short a
+-- record the `ops` list names is a frame a relay cannot apply, and shipping
+-- it silently is worse than failing the write.
+addedRecordBlocks : List SyncRepoOp ->
+  BlockStore ->
+  List (Cid, Array Int) ->
+  Result String (List (Cid, Array Int))
+addedRecordBlocks [] _ acc = Ok (reverse acc)
+addedRecordBlocks (op :: rest) store acc = match opRecordCid op
+  None => addedRecordBlocks rest store acc
+  Some cid => match blockStoreGet cid store
+    None =>
+      Err
+        "sync_event: record block \{cidToString cid} is absent from the post-write block store"
+    Some bytes => addedRecordBlocks rest store ((cid, bytes) :: acc)
+
+optionalCommit : Option Repo -> Option RepoCommit
+optionalCommit None = None
+optionalCommit (Some repo) = Some (repoLatestCommit repo)
+
+commitRev : Option RepoCommit -> Option Tid
+commitRev None = None
+commitRev (Some commit) = Some (repoCommitTid commit)
+
+commitData : Option RepoCommit -> Option Cid
+commitData None = None
+commitData (Some commit) = Some (repoCommitDataCid commit)
+
+commitBlocksFor : Mst ->
+  Mst ->
+  List SyncRepoOp ->
+  List (Cid, Array Int) ->
+  RepoCommit ->
+  Result String (List (Cid, Array Int))
+commitBlocksFor priorTree nextTree ops added commit =
+  syncCommitBlocks
+    priorTree
+    nextTree
+    (map opPath ops)
+    added
+    (repoCommitCid commit)
+    (repoCommitSignedBytes commit)
+
+{- | The `#commit` event one write produced, assembled from the repository
+   either side of it.
+
+   The ops are derived from the two trees rather than from the request that
+   caused them, so the event states what the repository actually did: a route
+   that wrote a record to the bytes it already held emits no op, and a batch
+   emits exactly the paths whose CIDs moved. `before` is `None` only for the
+   genesis commit, which is the one case the lexicon spells `since = null`.
+
+   The op ORDER is creates and updates in post-write key order, then deletes
+   in pre-write key order. The lexicon constrains it no further, and a total
+   order chosen here keeps the emitted frame a function of the two trees
+   rather than of the order a request happened to list its writes in.
+
+   `seq` is the caller's: this module performs no I/O and cannot know what the
+   durable counter stands at. `pds/shell/eventlog.mdk` assigns it. -}
+export
+syncCommitEventFor : Int ->
+  String ->
+  String ->
+  Option Repo ->
+  Repo ->
+  Result String SyncCommitEvent
+syncCommitEventFor seq time did before after = do
+  let priorEntries = match before
+    None => []
+    Some repo => repoEntries repo
+  let nextEntries = repoEntries after
+  let ops =
+    writesAgainst nextEntries (indexEntries priorEntries Tip) []
+      ++ deletesAgainst priorEntries (indexEntries nextEntries Tip) []
+  let priorTree = match before
+    None => mstEmpty
+    Some repo => repoTree repo
+  let commit = repoLatestCommit after
+  let commitCid = repoCommitCid commit
+  added <- addedRecordBlocks ops (repoStore after) []
+  blocks <- commitBlocksFor priorTree (repoTree after) ops added commit
+  car <- syncCommitCar commitCid blocks
+  Ok SyncCommitEvent {
+    seq = seq,
+    time = time,
+    repoDid = did,
+    commitCid = commitCid,
+    rev = repoCommitTid commit,
+    since = commitRev (optionalCommit before),
+    prevData = commitData (optionalCommit before),
+    blocksCar = car,
+    ops = ops,
+  }

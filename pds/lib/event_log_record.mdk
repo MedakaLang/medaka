@@ -1,0 +1,194 @@
+{- | The record format and the sequence/cursor/retention arithmetic of the
+   firehose event log (`docs/design/ATPROTO-PDS-DESIGN.md` row P12).
+
+   Nothing here performs I/O. The log FILES, their promotion and their
+   truncation are `pds/shell/eventlog.mdk`'s; what lives here is every
+   decision about the log that can be taken over plain values, so each one is
+   testable without a data directory: how one entry is written down and read
+   back, what a cursor means, which entries a retention bound still admits,
+   and how an entry's identity is spelled in the name of the file that holds
+   it.
+
+   The stored payload is the `#commit` frame `lib.sync_event` produced, as
+   hex. Hex rather than raw bytes because the only text-free write primitive
+   this tree has writes a whole file (`stdlib/runtime.mdk` declares
+   `appendFile` over `String` and no `appendFileBytes`), so an entry has to
+   survive a round trip through text. Doubling the stored size costs retention
+   nothing: the bound is a time window, not an entry count or a byte
+   ceiling. -}
+
+import list.{sortBy}
+import string.{padLeft, split, toInt}
+
+{- | One entry as it is written down.
+
+   `seq` and `timeSeconds` are repeated in the name of the file that carries
+   the entry, and a reader compares the two rather than trusting either
+   (`pds/shell/blockfile.mdk`'s discipline: nothing on disk is assumed valid).
+   `commitCid` is the head this event announces, which is what lets a restart
+   decide whether a half-finished append belongs to the repository actually on
+   disk. -}
+public export data EventLogEntry = EventLogEntry {
+  seq : Int,
+  timeSeconds : Int,
+  commitCid : String,
+  frameHex : String,
+}
+
+{- | The sequence number of a repository's first emitted event.
+
+   One, not zero, so that zero is available as the "before everything" cursor
+   without an `Option` — see `eventLogAfterCursor`. -}
+export
+eventLogFirstSeq : Int
+eventLogFirstSeq = 1
+
+-- | The sequence number after `seq`. Strictly increasing, never reused.
+export
+eventLogNextSeq : Int -> Int
+eventLogNextSeq seq = seq + 1
+
+{- | How long an emitted event stays readable, in seconds — three days.
+
+   This is a DEFAULT, not a protocol constant, and every function that acts on
+   it takes it as a parameter so an operator can move it. The sync
+   specification states no retention window at all; the number is the
+   configurable default of the relay generation `docs/design/
+   ATPROTO-PDS-DESIGN.md` row P12 recorded, which asked that it be re-derived
+   here rather than inherited. Re-derived against the repository's own ground
+   truth it is unchanged, and the design is robust to it moving in either
+   direction: `com.atproto.sync.getRepo` covers full resynchronization
+   independently of anything this log still holds. -}
+export
+eventLogRetentionSeconds : Int
+eventLogRetentionSeconds = 259200
+
+{- | How many appends pass between truncation sweeps.
+
+   Truncation has to list the live log, which is linear in it, so running one
+   per append would make an append cost what the log currently holds — the
+   whole-set-rewrite shape #2692 measured, in a new place. Sweeping on every
+   n-th sequence number instead keeps the append itself a fixed number of file
+   operations and the sweep amortized across them. -}
+export
+eventLogSweepInterval : Int
+eventLogSweepInterval = 256
+
+-- | Whether the entry numbered `seq` is the one whose append also sweeps.
+export
+eventLogSweepsAt : Int -> Bool
+eventLogSweepsAt seq = seq % eventLogSweepInterval == 0
+
+{- | Whether an entry emitted at `timeSeconds` has fallen out of the window.
+
+   An entry exactly `retentionSeconds` old is still live; the window is closed
+   at its far end, so a bound of zero drops everything emitted before this
+   instant and nothing emitted at it. -}
+export
+eventLogExpired : Int -> Int -> Int -> Bool
+eventLogExpired retentionSeconds nowSeconds timeSeconds =
+  nowSeconds - timeSeconds > retentionSeconds
+
+{- | The entries a subscriber holding `cursor` has not seen yet, in sequence
+   order.
+
+   A cursor NAMES THE LAST EVENT ALREADY DELIVERED, so cursor n yields every
+   entry with seq strictly greater than n and a fresh subscriber passes 0 to
+   receive the whole live log. The three boundaries this fixes, and which a
+   later subscribe route must not re-decide: a cursor below the oldest live
+   entry replays from that oldest entry (it neither fails nor skips ahead), a
+   cursor exactly at an entry excludes that entry, and a cursor at or past the
+   newest entry yields nothing rather than the newest one again. -}
+export
+eventLogAfterCursor : Int -> List EventLogEntry -> List EventLogEntry
+eventLogAfterCursor cursor entries =
+  sortBy
+    (left right => compare left.seq right.seq)
+    (filter (entry => entry.seq > cursor) entries)
+
+-- Sequence numbers and timestamps are zero-padded to fixed widths so that a
+-- directory listing sorted as text is sorted as numbers. Sixteen digits
+-- exceeds what a 64-bit counter can reach; eleven covers Unix seconds past
+-- the year 5138.
+seqWidth : Int
+seqWidth = 16
+
+timeWidth : Int
+timeWidth = 11
+
+{- | The file name one entry is stored under: its sequence number and its
+   timestamp, in that order.
+
+   The timestamp is in the NAME so that truncation is filename arithmetic —
+   deciding which entries the window has dropped never opens one. -}
+export
+eventLogEntryName : Int -> Int -> String
+eventLogEntryName seq timeSeconds =
+  "\{padLeft seqWidth '0' (intToString seq)}-\{padLeft timeWidth '0' (intToString timeSeconds)}"
+
+{- | The sequence number and timestamp a stored entry's file name spells, or
+   an error naming what the entry directory held instead. A name that does not
+   parse is never skipped: a log directory holding something nobody wrote is a
+   fact a reader must report, not route around. -}
+export
+eventLogParseEntryName : String -> Result String (Int, Int)
+eventLogParseEntryName name = match split "-" name
+  [seqText, timeText] => match (toInt seqText, toInt timeText)
+    (Some seq, Some timeSeconds) => Ok (seq, timeSeconds)
+    _ => Err "eventlog: entry file name is not two numbers: \{name}"
+  _ => Err "eventlog: entry file name is not a seq-time pair: \{name}"
+
+{- | One entry as the contents of its file: four tab-separated fields and no
+   trailing newline. Tab because no field can hold one — two decimal integers,
+   a base32 CID and a hex string. -}
+export
+eventLogEncodeEntry : EventLogEntry -> String
+eventLogEncodeEntry entry =
+  "\{intToString entry.seq}\t\{intToString entry.timeSeconds}\t\{entry.commitCid}\t\{entry.frameHex}"
+
+-- | An entry read back from its file, or an error naming what was there.
+export
+eventLogDecodeEntry : String -> Result String EventLogEntry
+eventLogDecodeEntry text = match split "\t" text
+  [seqText, timeText, commitCid, frameHex] => match (
+    toInt seqText,
+    toInt timeText,
+  )
+    (Some seq, Some timeSeconds) => Ok EventLogEntry {
+      seq = seq,
+      timeSeconds = timeSeconds,
+      commitCid = commitCid,
+      frameHex = frameHex,
+    }
+    _ => Err "eventlog: entry header is not two numbers: \{text}"
+  fields =>
+    Err
+      "eventlog: entry has \{intToString (length fields)} tab-separated fields, expected 4"
+
+{- | Split parsed entry names into the ones the window has dropped and the
+   ones it still admits, each in sequence order.
+
+   One function over the whole listing rather than a predicate the caller
+   applies twice, so that "which entries leave" and "which entries remain" are
+   one answer and cannot disagree. -}
+export
+eventLogPartitionExpired : Int ->
+  Int ->
+  List (Int, Int, String) ->
+  (List (Int, Int, String), List (Int, Int, String))
+eventLogPartitionExpired retentionSeconds nowSeconds rows =
+  let ordered = sortBy (l r => compare (rowSeq l) (rowSeq r)) rows
+  (
+    filter
+      (row => eventLogExpired retentionSeconds nowSeconds (rowTime row))
+      ordered,
+    filter
+      (row => not (eventLogExpired retentionSeconds nowSeconds (rowTime row)))
+      ordered,
+  )
+
+rowSeq : (Int, Int, String) -> Int
+rowSeq (seq, _, _) = seq
+
+rowTime : (Int, Int, String) -> Int
+rowTime (_, timeSeconds, _) = timeSeconds

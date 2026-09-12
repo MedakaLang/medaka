@@ -205,9 +205,47 @@ grep -F -q 'BLOB listBlobs-corpus-cids PASS' "$WORK/blob.out" || fail 'blob miss
 grep -F -q 'routes: 4/4 corpus-graded blob route reads' "$WORK/blob.out" || fail 'blob read-back route count is incomplete'
 [ "$(tail -1 "$WORK/blob.out")" = 'TOTAL: PASS' ] || fail 'blob driver did not end in TOTAL: PASS'
 
+# ── the #commit firehose event, byte for byte against the official bytes ────
+# A DIFFERENT schema from every transcript above: com.atproto.sync.subscribeRepos
+# def `commit`, which shares field names with the repository commit object and
+# means different things by them. Its own corpus for the same reason the batch
+# has one — its own generator pass, its own row shape — and its own pinned
+# lexicon JSON, which the generator checks the assembled event against, so a
+# field-name typo cannot be graded against itself.
+#
+# Seven signed commits over a tree that climbs to three MST layers, covering
+# create, update, delete and a three-operation batch. That shape is the point:
+# on a one-node, single-write transcript every candidate rule for `blocks`
+# returns the same answer, and `ops[].prev` — absent on a create, present
+# otherwise — needs all three actions exercised at once.
+EVENT_DRIVER="$ROOT/pds/test/commit_event_vectors_main.mdk"
+sh "$ROOT/pds/test/vector_provenance.sh" --files-for P1-F-COMMIT-EVENT > "$WORK/event-files"
+[ "$(wc -l < "$WORK/event-files" | tr -d ' ')" = 1 ] || fail 'expected exactly one ledger-owned commit-event corpus'
+EVENT_CORPUS="$ROOT/$(sed -n '1p' "$WORK/event-files")"
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$EVENT_DRIVER" -o "$WORK/event" > "$WORK/event-build.log" 2>&1; then
+  cat "$WORK/event-build.log" >&2
+  fail 'commit-event driver build failed'
+fi
+
+"$WORK/event" "$EVENT_CORPUS" > "$WORK/event.out" 2> "$WORK/event.err"
+require_empty "$WORK/event.err" 'commit event'
+
+grep -F -q 'prev-lookups: 9/9 op rows matched the reference previous record CID' "$WORK/event.out" || fail 'commit-event prev-record lookups are incomplete'
+grep -F -q 'commit-identity: 7/7 steps matched the pinned commit and data CIDs' "$WORK/event.out" || fail 'commit-event commit identity is incomplete'
+grep -F -q 'blocks: 7/7 steps matched the reference relevant-block set' "$WORK/event.out" || fail 'commit-event block sets are incomplete'
+grep -F -q 'reference-car: 7/7 steps matched the official-ordered CAR root and blocks' "$WORK/event.out" || fail 'commit-event reference CAR decode is incomplete'
+grep -F -q 'frames: 7/7 steps byte-identical to the official-ordered event' "$WORK/event.out" || fail 'commit-event frames are not byte-identical to the official bytes'
+grep -F -q 'frames-sorted: 7/7 steps byte-identical to the canonical-ordered event' "$WORK/event.out" || fail 'commit-event canonical-ordered frames are incomplete'
+grep -F -q "prevData: 7/7 steps named the prior commit's data root" "$WORK/event.out" || fail 'commit-event prevData is not the prior data root'
+# The discriminator between a covering proof and a tree diff: a rule built from
+# the changed nodes alone would still satisfy every count above.
+grep -F -q 'untouched-nodes: 3/7 steps shipped an MST node the write did not change' "$WORK/event.out" || fail 'commit-event blocks stopped carrying unchanged MST nodes'
+[ "$(tail -1 "$WORK/event.out")" = 'TOTAL: PASS' ] || fail 'commit-event driver did not end in TOTAL: PASS'
+
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
-  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch and the three blob routes on native; Wasm unavailable'
+  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes and the seven #commit firehose events on native; Wasm unavailable'
   exit 0
 fi
 
@@ -226,4 +264,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders'

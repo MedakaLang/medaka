@@ -1,0 +1,316 @@
+{- | The durable firehose event log: one file per sequenced `#commit` event,
+   beneath `<dir>/events` (`docs/design/ATPROTO-PDS-DESIGN.md` row P12).
+
+   On disk rather than in memory so a process restart does not invalidate a
+   connected relay's cursor, and one file per entry rather than one growing
+   file because that is what makes both ends cheap: an append creates a file
+   whose name it already knows, and truncation unlinks files whose names
+   already say they are too old. Neither operation reads, rewrites, or even
+   lists what the log already holds, so neither costs what the log currently
+   holds — the whole-set rewrite #2692 measured is the shape this is built to
+   avoid. The one linear step is the retention sweep, which runs once every
+   `eventLogSweepInterval` appends rather than on each one.
+
+   APPENDING IS TWO PHASES, and the split is the whole point. An event and the
+   commit it announces must land together or not at all, and the only atomic
+   step this tree has is `rename` (`pds/shell/persist.mdk`: process-crash
+   consistency, not power-loss durability — nothing here calls `fsync`
+   either). So a caller STAGES the entry, persists the commit, and then
+   PROMOTES it, and every crash point in that sequence is recoverable from
+   what survives:
+
+   - before the stage lands: no commit, no event.
+   - after the stage, before the commit: the staged entry names a head the
+     repository does not have, and `eventLogRecover` discards it.
+   - after the commit, before or during the promote: the staged entry names
+     the head on disk, and `eventLogRecover` finishes the promotion.
+
+   Promotion is idempotent, which is what makes that last case safe to
+   re-run: an entry's file name is a function of the entry, so writing it
+   twice writes the same bytes to the same path.
+
+   This module is an effectful shell (P14): it holds no protocol state, and
+   its signatures carry no `Repo` and no `SecretKey`. -}
+
+import fs.{mkdirAll}
+import list.{reverse}
+import string.{split, toInt}
+import lib.event_log_record.{
+  EventLogEntry(..),
+  eventLogAfterCursor,
+  eventLogDecodeEntry,
+  eventLogEncodeEntry,
+  eventLogEntryName,
+  eventLogFirstSeq,
+  eventLogNextSeq,
+  eventLogParseEntryName,
+  eventLogPartitionExpired,
+  eventLogSweepsAt,
+}
+
+-- | The log directory beneath a data directory.
+export
+eventLogDir : String -> String
+eventLogDir dir = "\{dir}/events"
+
+-- Entries are promoted out of this directory, and the two pointer files sit
+-- beside it, so a listing of the log directory is not simply its entries.
+stagingName : String
+stagingName = ".staging"
+
+stagedName : String
+stagedName = ".staged"
+
+lastName : String
+lastName = ".last"
+
+entriesDir : String -> String
+entriesDir dir = "\{eventLogDir dir}/entries"
+
+stagedPath : String -> String
+stagedPath dir = "\{eventLogDir dir}/\{stagedName}"
+
+lastPath : String -> String
+lastPath dir = "\{eventLogDir dir}/\{lastName}"
+
+stagingDir : String -> String
+stagingDir dir = "\{eventLogDir dir}/\{stagingName}"
+
+-- Write a small pointer file the way `persist.mdk` writes the head pointer:
+-- into the staging directory, then promoted with `rename`, so a reader never
+-- observes a half-written one.
+promoteText : String ->
+  String ->
+  String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+promoteText dir name text = do
+  () <- mkdirAll (stagingDir dir)
+  let staged = "\{stagingDir dir}/\{name}"
+  () <- writeFile staged text
+  rename staged "\{eventLogDir dir}/\{name}"
+
+{- | The sequence number and commit CID of the last PROMOTED entry, or `None`
+   when this repository has emitted no event yet.
+
+   Read from its own small pointer file rather than by inspecting the entry
+   directory, so assigning the next sequence number costs one file read
+   however many entries the log holds. -}
+export
+eventLogLast : String -> <FileRead "_"> Result String (Option (Int, String))
+eventLogLast dir =
+  if not (fileExists (lastPath dir)) then
+    Ok None
+  else match readFile (lastPath dir)
+    Err message => Err "eventlog: unreadable last-entry pointer: \{message}"
+    Ok text => match split "\t" text
+      [seqText, commitCid] => match toInt seqText
+        Some seq => Ok (Some (seq, commitCid))
+        None =>
+          Err "eventlog: last-entry pointer is not a sequence number: \{text}"
+      _ => Err "eventlog: last-entry pointer is not a seq/CID pair: \{text}"
+
+{- | The sequence number the next emitted event takes.
+
+   Derived from what is on disk, so it survives a restart: the in-memory
+   server holds no counter to lose. -}
+export
+eventLogNextSequence : String -> <FileRead "_"> Result String Int
+eventLogNextSequence dir = match eventLogLast dir
+  Err message => Err message
+  Ok None => Ok eventLogFirstSeq
+  Ok (Some (seq, _)) => Ok (eventLogNextSeq seq)
+
+{- | Record an entry as pending, before the commit it announces is persisted.
+
+   A stage that lands over an earlier pending entry is correct rather than a
+   loss: the earlier one's commit did not persist (a promotion removes what it
+   promoted), so it was owed to nobody. -}
+export
+eventLogStage : String ->
+  EventLogEntry ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogStage dir entry = promoteText dir stagedName (eventLogEncodeEntry entry)
+
+-- | Forget a pending entry whose commit did not persist.
+export
+eventLogDiscardStaged : String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogDiscardStaged dir =
+  if fileExists (stagedPath dir) then removeFile (stagedPath dir) else Ok ()
+
+-- | The pending entry, if there is one.
+export
+eventLogStaged : String -> <FileRead "_"> Result String (Option EventLogEntry)
+eventLogStaged dir =
+  if not (fileExists (stagedPath dir)) then
+    Ok None
+  else match readFile (stagedPath dir)
+    Err message => Err "eventlog: unreadable staged entry: \{message}"
+    Ok text => map Some (eventLogDecodeEntry text)
+
+-- Write one entry's own file. Its name is a function of the entry, so a
+-- repeated promotion overwrites the same path with the same bytes and no
+-- duplicate can be created.
+writeEntry : String ->
+  EventLogEntry ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+writeEntry dir entry = do
+  () <- mkdirAll (entriesDir dir)
+  () <- mkdirAll (stagingDir dir)
+  let name = eventLogEntryName entry.seq entry.timeSeconds
+  let staged = "\{stagingDir dir}/\{name}"
+  () <- writeFile staged (eventLogEncodeEntry entry)
+  rename staged "\{entriesDir dir}/\{name}"
+
+{- | Promote the pending entry, if there is one, and sweep the window.
+
+   Ordered entry file, then pointer, then the removal of the staged copy, so
+   that a crash anywhere in it leaves the staged copy behind and the whole
+   sequence runs again — each step idempotent. Doing it the other way round
+   would let a crash between the pointer and the entry publish a sequence
+   number nothing backs.
+
+   The sweep runs only on every `eventLogSweepInterval`-th entry: it lists the
+   live log, which is linear in it, and an append must not be. -}
+export
+eventLogPromote : String ->
+  Int ->
+  Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogPromote dir retentionSeconds nowSeconds = match eventLogStaged dir
+  Err message => Err message
+  Ok None => Ok ()
+  Ok (Some entry) => promoteEntry dir retentionSeconds nowSeconds entry
+
+promoteEntry : String ->
+  Int ->
+  Int ->
+  EventLogEntry ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+promoteEntry dir retentionSeconds nowSeconds entry = do
+  () <- writeEntry dir entry
+  () <- promoteText dir lastName "\{intToString entry.seq}\t\{entry.commitCid}"
+  () <- removeFile (stagedPath dir)
+  sweepIfDue dir retentionSeconds nowSeconds entry.seq
+
+sweepIfDue : String ->
+  Int ->
+  Int ->
+  Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+sweepIfDue dir retentionSeconds nowSeconds seq =
+  if not (eventLogSweepsAt seq) then
+    Ok ()
+  else
+    map (_ => ()) (eventLogSweep dir retentionSeconds nowSeconds)
+
+{- | Finish or abandon a pending entry left by a previous process, against the
+   head that repository actually persisted.
+
+   The staged entry names the commit it announces, and that is the whole
+   discriminator: it is promoted when it names the persisted head and
+   discarded when it does not. `headCommitCid` is `None` for a data directory
+   with no repository yet, where nothing can be owed. -}
+export
+eventLogRecover : String ->
+  Option String ->
+  Int ->
+  Int ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogRecover dir headCommitCid retentionSeconds nowSeconds =
+  match eventLogStaged dir
+    Err message => Err message
+    Ok None => Ok ()
+    Ok (Some entry) =>
+      if headCommitCid == Some entry.commitCid then
+        eventLogPromote dir retentionSeconds nowSeconds
+      else
+        eventLogDiscardStaged dir
+
+entryRows : String ->
+  List String ->
+  List (Int, Int, String) ->
+  Result String (List (Int, Int, String))
+entryRows _ [] acc = Ok (reverse acc)
+entryRows dir (name :: rest) acc = match eventLogParseEntryName name
+  Err message => Err message
+  Ok (seq, timeSeconds) => entryRows dir rest ((seq, timeSeconds, name) :: acc)
+
+listEntryRows : String -> <FileRead "_"> Result String (List (Int, Int, String))
+listEntryRows dir =
+  if not (fileExists (entriesDir dir)) then
+    Ok []
+  else match listDir (entriesDir dir)
+    Err message => Err "eventlog: unreadable entry directory: \{message}"
+    Ok names => entryRows dir names []
+
+dropRows : String ->
+  List (Int, Int, String) ->
+  Int ->
+  <FileWrite "_"> Result String Int
+dropRows _ [] dropped = Ok dropped
+dropRows dir ((_, _, name) :: rest) dropped =
+  match removeFile "\{entriesDir dir}/\{name}"
+    Err message => Err "eventlog: undeletable expired entry \{name}: \{message}"
+    Ok () => dropRows dir rest (dropped + 1)
+
+{- | Drop every entry the retention window no longer admits, and answer how
+   many left. An entry's timestamp is in its file name, so deciding this opens
+   nothing. -}
+export
+eventLogSweep : String ->
+  Int ->
+  Int ->
+  <FileRead "_", FileWrite "_"> Result String Int
+eventLogSweep dir retentionSeconds nowSeconds = match listEntryRows dir
+  Err message => Err message
+  Ok rows =>
+    let (expired, _) = eventLogPartitionExpired retentionSeconds nowSeconds rows
+    dropRows dir expired 0
+
+readRows : String ->
+  List (Int, Int, String) ->
+  List EventLogEntry ->
+  <FileRead "_"> Result String (List EventLogEntry)
+readRows _ [] acc = Ok (reverse acc)
+readRows dir ((seq, timeSeconds, name) :: rest) acc =
+  match readFile "\{entriesDir dir}/\{name}"
+    Err message => Err "eventlog: unreadable entry \{name}: \{message}"
+    Ok text => match eventLogDecodeEntry text
+      Err message => Err message
+      Ok entry =>
+        if entry.seq /= seq || entry.timeSeconds /= timeSeconds then
+          Err
+            "eventlog: entry \{name} contains sequence \{intToString entry.seq} at \{intToString entry.timeSeconds}"
+        else
+          readRows dir rest (entry :: acc)
+
+{- | Every live entry after `cursor`, in sequence order — what a subscriber
+   holding that cursor has not been sent.
+
+   Each entry's file name is checked against its contents rather than trusted:
+   the name decides which files are read, so a name and a body that disagree
+   would silently answer a cursor with the wrong events.
+
+   The cursor is applied to the NAMES before any file is opened, and that is
+   what makes this usable by a connected subscriber rather than only by a
+   fresh one: a sequence number is in every entry's file name, so answering
+   "what is new since 4000" costs one directory listing plus the entries that
+   are actually new, not one file read per entry the window still holds. A
+   subscriber polling a three-day log would otherwise re-read the whole of it
+   on every tick, once per subscriber. The answer is unchanged either way —
+   `eventLogAfterCursor` still fixes what a cursor MEANS, and it is applied to
+   the decoded entries as before. -}
+export
+eventLogRead : String ->
+  Int ->
+  <FileRead "_"> Result String (List EventLogEntry)
+eventLogRead dir cursor = match listEntryRows dir
+  Err message => Err message
+  Ok rows =>
+    map
+      (eventLogAfterCursor cursor)
+      (readRows dir (filter (row => rowSeq row > cursor) rows) [])
+
+rowSeq : (Int, Int, String) -> Int
+rowSeq (seq, _, _) = seq

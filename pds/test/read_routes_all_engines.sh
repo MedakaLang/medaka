@@ -59,6 +59,7 @@ CELL resolve-handle PASS status=200 media=application/json body={"did":"$DID"} s
 CELL resolve-handle-unknown PASS status=400 error=HandleNotFound state=unchanged
 CELL resolve-handle-repeated-param PASS status=400 error=InvalidRequest state=unchanged
 CELL resolve-handle-missing-param PASS status=400 error=InvalidRequest state=unchanged
+CELL describe-server PASS status=200 media=application/json body={"did":"$DID","availableUserDomains":[],"inviteCodeRequired":false} state=unchanged
 CELL get-record-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL list-records-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL describe-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
@@ -66,7 +67,7 @@ CELL get-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL get-latest-commit-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
-cells: 17/17 repository-free routes
+cells: 18/18 repository-free routes
 TOTAL: PASS
 EOF
 
@@ -85,7 +86,7 @@ check_cells() {
     || fail "$label missed the resolveHandle cell"
   grep -F -q 'CELL get-repo-unconfigured PASS status=400 error=RepoNotFound' "$output" \
     || fail "$label missed the unconfigured sync.getRepo refusal"
-  grep -F -q 'cells: 17/17 repository-free routes' "$output" || fail "$label cell count is incomplete"
+  grep -F -q 'cells: 18/18 repository-free routes' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -154,4 +155,4 @@ cmp "$WORK/source-pristine.mdk" "$SOURCE" \
   || fail 'read_routes_all_engines_main.mdk (the live source of truth) was left modified by the mutation test — it should only ever touch the throwaway mutation-tree copy'
 
 echo 'MUTATION did-web-hostname PASS direct-red'
-echo 'PASS: PDS repository-free read routes — 17/17 named cells; eval == native == Wasm; direct-red mutation; bytes restored'
+echo 'PASS: PDS repository-free read routes — 18/18 named cells; eval == native == Wasm; direct-red mutation; bytes restored'

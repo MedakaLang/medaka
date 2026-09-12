@@ -95,6 +95,7 @@ import lib.repo.{
 import lib.server_core.{Server, makeAccount}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.cid.{Cid, cidToString}
+import lib.event_log_record.{eventLogRetentionSeconds}
 import lib.store.{
   Store,
   storePutBlob,
@@ -105,6 +106,7 @@ import lib.store.{
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead}
+import shell.eventlog.{eventLogRecover}
 import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
 import shell.persist.{
   credentialPath,
@@ -565,6 +567,13 @@ configure parsed = do
   secret <- secretKeyFromBytes keyBytes
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
+  -- A previous process may have died between persisting a commit and
+  -- appending the event announcing it. The staged entry names the commit it
+  -- announces, so the repository just loaded is what decides whether it is
+  -- finished or dropped; either way the log is consistent with the head
+  -- before the first connection is accepted.
+  let head = Some (cidToString (repoCommitCid (repoLatestCommit repo)))
+  () <- eventLogRecover dir head eventLogRetentionSeconds (floatToInt (now ()))
   -- Every SUPPLIED secret is read and admitted first, and only then may a
   -- GENERATED one reach the disk: a run rejected for a bad password file or a
   -- world-readable --token-secret must leave no session secret behind for the
