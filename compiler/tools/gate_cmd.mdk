@@ -81,9 +81,12 @@ import tools.gate_pack.{
   timeoutFor,
 }
 import support.util.{
+  anyList,
   contains,
   endsWith,
+  escStr,
   filterList,
+  isSome,
   joinNl,
   joinWith,
   listLen,
@@ -95,7 +98,13 @@ import support.util.{
   startsWith,
   stringTrim,
 }
-import string.{contains as strContains}
+import string.{
+  contains as strContains,
+  fromChars,
+  isAlpha,
+  isAlphaNum,
+  split as strSplit,
+}
 
 -- `withStrictDash` (`args`): every `ArgSpec` in this file wraps its spec with
 -- it so an undeclared `-x`-shaped token is rejected as an unknown flag rather
@@ -1638,23 +1647,22 @@ rawSpawnMarkers = [
   "checkRunBuild",
 ]
 
--- Evidence a module reached one of the markers above and still did
--- something with the exit code/stderr it got back, rather than reading
--- stdout alone: a helper whose own contract already grades them
--- (`binaryRanClean`, the `expectCheck*`/`expectVerbExitStartsWith*`
--- family, `test_process`'s `expectSpawnFails`/`expectSpawnOkLine`), an
--- inline comparison against a code-shaped binding, or the code
--- interpolated into a signature the gate diffs (the shape
--- `diff_compiler_import_order_test.mdk` uses, where `\{intToString
--- checkCode}` is what actually gets compared).
+-- Evidence a spawn's exit code or stderr was read, rather than its stdout
+-- alone: a helper whose own contract already grades them (`binaryRanClean`,
+-- `verdictOf`, the `expectCheck*`/`expectVerbExitStartsWith*` family,
+-- `test_process`'s `expectSpawnFails`/`expectSpawnOk*`), an inline
+-- comparison against a code-shaped binding, or the code interpolated into a
+-- signature the gate diffs (the shape `diff_compiler_import_order_test.mdk`
+-- uses, where `\{intToString checkCode}` is what actually gets compared).
 gradeEvidenceMarkers : List String
 gradeEvidenceMarkers = [
   "binaryRanClean",
+  "verdictOf",
   "expectCheckAccept",
   "expectCheckReject",
   "expectVerbExitStartsWith",
   "expectSpawnFails",
-  "expectSpawnOkLine",
+  "expectSpawnOk",
   "Code /=",
   "Code ==",
   "code /=",
@@ -1667,6 +1675,258 @@ anyMarker : List String -> String -> Bool
 anyMarker [] _ = False
 anyMarker (m :: ms) src = strContains m src || anyMarker ms src
 
+{- | One top-level binding of a gate module: the comment-stripped lines from
+   a column-0 identifier down to the next one, with a binding's signature and
+   its several clauses folded back into one chunk.
+
+   `callName` is the name other bindings call this one by. A `test "…"` block
+   is named by its label instead and is called by nothing, so it carries
+   `None` — two adjacent blocks would otherwise share the name `test`, fold
+   into one chunk, and let either one's grading answer for the other's
+   spawn. -}
+data GateChunk = GateChunk {
+  name : String,
+  callName : Option String,
+  line : Int,
+  text : String,
+}
+
+isIdentChar : Char -> Bool
+isIdentChar c = isAlphaNum c || c == '_' || c == '\''
+
+charAtOr : Array Char -> Int -> Int -> Char
+charAtOr cs n i = if i < n then arrayGetUnsafe i cs else ' '
+
+{- | `src` with every comment blanked out, one output line per input line.
+
+   The clause reads source TEXT, so a marker inside a comment answers for
+   code that is not there (#2899 route 2), and prose naming `io.runVerb` in a
+   module header reads as a spawn site that was never written. String
+   literals are kept, so a flag like `"--json"` is not mistaken for the start
+   of a line comment; `\{…}` interpolation is blanked down to its contents,
+   which is what leaves `\{intToString code}` still matchable. -}
+stripComments : String -> List String
+stripComments src = stripLines (splitNl src) 0
+
+stripLines : List String -> Int -> List String
+stripLines [] _ = []
+stripLines (l :: ls) depth =
+  let cs = stringToChars l
+  match stripLine cs (arrayLength cs) 0 depth False
+    (kept, depth2) => fromChars kept :: stripLines ls depth2
+
+stripLine : Array Char -> Int -> Int -> Int -> Bool -> (List Char, Int)
+stripLine cs n i depth inStr
+  | i >= n = ([], depth)
+  | otherwise =
+    let c = arrayGetUnsafe i cs
+    let d = charAtOr cs n (i + 1)
+    if depth > 0 then
+      if c == '{' && d == '-' then
+        stripLine cs n (i + 2) (depth + 1) False
+      else if c == '-' && d == '}' then
+        stripLine cs n (i + 2) (depth - 1) False
+      else
+        stripLine cs n (i + 1) depth False
+    else if inStr then
+      if c == '\\' then
+        blankTwo (stripLine cs n (i + 2) depth True)
+      else
+        keepChar c (stripLine cs n (i + 1) depth (c /= '"'))
+    else if c == '"' then
+      keepChar c (stripLine cs n (i + 1) depth True)
+    else if c == '-' && d == '-' then
+      ([], depth)
+    else if c == '{' && d == '-' then
+      stripLine cs n (i + 2) (depth + 1) False
+    else
+      keepChar c (stripLine cs n (i + 1) depth False)
+
+keepChar : Char -> (List Char, Int) -> (List Char, Int)
+keepChar c (cs, depth) = (c :: cs, depth)
+
+blankTwo : (List Char, Int) -> (List Char, Int)
+blankTwo (cs, depth) = (' ' :: ' ' :: cs, depth)
+
+startsChunk : String -> Bool
+startsChunk l =
+  let cs = stringToChars l
+  if arrayLength cs == 0 then
+    False
+  else
+    let c = arrayGetUnsafe 0 cs
+    isAlpha c || c == '_'
+
+identPrefix : String -> String
+identPrefix s =
+  let cs = stringToChars s
+  fromChars (identPrefixGo cs (arrayLength cs) 0)
+
+identPrefixGo : Array Char -> Int -> Int -> List Char
+identPrefixGo cs n i
+  | i >= n = []
+  | isIdentChar (arrayGetUnsafe i cs) =
+    arrayGetUnsafe i cs :: identPrefixGo cs n (i + 1)
+  | otherwise = []
+
+testLabel : String -> Option String
+testLabel l = match splitOnChar '"' l
+  _ :: lbl :: _ :: _ => Some lbl
+  _ => None
+
+chunkNames : String -> (String, Option String)
+chunkNames l =
+  let h = identPrefix l
+  if h /= "test" then
+    (h, Some h)
+  else match testLabel l
+    Some lbl => ("test \{escStr lbl}", None)
+    None => (h, Some h)
+
+gateChunks : List String -> List GateChunk
+gateChunks ls = foldClauses (rawChunks ls 1)
+
+rawChunks : List String -> Int -> List GateChunk
+rawChunks [] _ = []
+rawChunks (l :: ls) n
+  | not (startsChunk l) = rawChunks ls (n + 1)
+  | otherwise = match chunkBody ls (n + 1)
+    (body, rest, n2) => match chunkNames l
+      (nm, cn) =>
+        GateChunk {
+            name = nm,
+            callName = cn,
+            line = n,
+            text = joinNl (l :: body),
+          }
+          :: rawChunks rest n2
+
+chunkBody : List String -> Int -> (List String, List String, Int)
+chunkBody [] n = ([], [], n)
+chunkBody (l :: ls) n
+  | startsChunk l = ([], l :: ls, n)
+  | otherwise = match chunkBody ls (n + 1)
+    (body, rest, n2) => (l :: body, rest, n2)
+
+-- A signature and its clauses, or the several clauses of one binding, are
+-- consecutive chunks under one call name: fold them so that a binding is one
+-- chunk. A `test` block has no call name, so two of them never fold.
+foldClauses : List GateChunk -> List GateChunk
+foldClauses [] = []
+foldClauses (c :: cs) = match foldClauses cs
+  [] => [c]
+  d :: rest =>
+    if isSome c.callName && c.callName == d.callName then
+      GateChunk { c | text = "\{c.text}\n\{d.text}" } :: rest
+    else
+      c :: d :: rest
+
+{- | Does `text` hold a spawn whose result is not discarded?
+
+   A spawn bound to the wildcard — `let _ = runVerb "rm" ["-rf", scratch]` —
+   is the scratch-cleanup shape: it asserts nothing, so it has nothing to
+   grade and cannot be the vacuous row this clause exists to catch. -}
+liveSpawn : String -> Bool
+liveSpawn text = anyList liveSpawnLine (splitNl text)
+
+liveSpawnLine : String -> Bool
+liveSpawnLine l = anyList (m => liveSpawnAt m l) rawSpawnMarkers
+
+liveSpawnAt : String -> String -> Bool
+liveSpawnAt m l = match strSplit m l
+  before :: _ :: _ => not (bindsWildcard before)
+  _ => False
+
+-- True when `prefix` binds to the wildcard: a standalone `_` followed by
+-- `=`, but not the `_ =>` of a catch-all match arm.
+bindsWildcard : String -> Bool
+bindsWildcard prefix =
+  let cs = stringToChars prefix
+  bindsWildcardGo cs (arrayLength cs) 0
+
+bindsWildcardGo : Array Char -> Int -> Int -> Bool
+bindsWildcardGo cs n i
+  | i >= n = False
+  | arrayGetUnsafe i cs /= '_' = bindsWildcardGo cs n (i + 1)
+  | i > 0 && isIdentChar (arrayGetUnsafe (i - 1) cs) =
+    bindsWildcardGo cs n (i + 1)
+  | otherwise =
+    let j = skipBlanks cs n (i + 1)
+    if charAtOr cs n j == '=' && charAtOr cs n (j + 1) /= '>' then
+      True
+    else
+      bindsWildcardGo cs n (i + 1)
+
+skipBlanks : Array Char -> Int -> Int -> Int
+skipBlanks cs n i
+  | i < n && arrayGetUnsafe i cs == ' ' = skipBlanks cs n (i + 1)
+  | otherwise = i
+
+-- `haystack` names `w` as a whole word, rather than as a fragment of some
+-- longer identifier. `rule-stdlib-reimpl` matches on the declared signature
+-- alone, which `string.contains` shares; taking its suggestion would drop the
+-- boundary condition that is the entire point here, so a call name would match
+-- inside any longer identifier that happens to embed it.
+containsWord : String -> String -> Bool
+-- lint-disable-next-line rule-stdlib-reimpl
+containsWord w haystack = wordBoundary (strSplit w haystack)
+
+wordBoundary : List String -> Bool
+wordBoundary (a :: b :: rest) =
+  not (endsIdent a) && not (startsIdent b) || wordBoundary (b :: rest)
+wordBoundary _ = False
+
+endsIdent : String -> Bool
+endsIdent s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  n > 0 && isIdentChar (arrayGetUnsafe (n - 1) cs)
+
+startsIdent : String -> Bool
+startsIdent s =
+  let cs = stringToChars s
+  arrayLength cs > 0 && isIdentChar (arrayGetUnsafe 0 cs)
+
+{- | The spawn sites in `src` that no grading evidence answers for.
+
+   Per SITE, not per file (#2899 route 3): once several gates share one
+   runner module, a single graded row would otherwise clear every other row
+   in that module — including a row added later that spawns a process and
+   never grades it.
+
+   A spawning chunk is answered for when the evidence sits in the chunk
+   itself, in a chunk it calls, or in a chunk that calls it: the three ways a
+   spawn's exit code legitimately leaves the binding that obtained it (graded
+   here, handed to a grading helper, or returned to a grading caller). One
+   level each way — the point is to see every row, not to chase a call
+   graph. -}
+ungradedSpawnSites : String -> List GateChunk
+ungradedSpawnSites src =
+  let cs = gateChunks (stripComments src)
+  filterList (c => not (spawnAnswered cs c)) (filterList spawningChunk cs)
+
+spawningChunk : GateChunk -> Bool
+spawningChunk c = c.name /= "import" && liveSpawn c.text
+
+spawnAnswered : List GateChunk -> GateChunk -> Bool
+spawnAnswered cs c =
+  anyMarker gradeEvidenceMarkers c.text || anyList (d => gradesFor c d) cs
+
+gradesFor : GateChunk -> GateChunk -> Bool
+gradesFor c d
+  | d.line == c.line = False
+  | not (anyMarker gradeEvidenceMarkers d.text) = False
+  | otherwise = namesOther c d || namesOther d c
+
+namesOther : GateChunk -> GateChunk -> Bool
+namesOther a b = match b.callName
+  None => False
+  Some nm => containsWord nm a.text
+
+siteError : Gate -> GateChunk -> String
+siteError g c =
+  "\{g.name}: \{g.run}:\{intToString c.line}: `\{c.name}` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"
+
 nativeGradeErrors : String -> Gate -> <IO> List String
 nativeGradeErrors root g
   | g.kind /= "native" = []
@@ -1674,15 +1934,7 @@ nativeGradeErrors root g
     Err m => [
       "\{g.name}: kind 'native' but its module cannot be read to check process grading: \{g.run}: \{m}",
     ]
-    Ok src =>
-      if not (anyMarker rawSpawnMarkers src) then
-        []
-      else if anyMarker gradeEvidenceMarkers src then
-        []
-      else
-        [
-          "\{g.name}: \{g.run} spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but appears to grade only its stdout — check the exit code and stderr the spawn returned too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine",
-        ]
+    Ok src => map (siteError g) (ungradedSpawnSites src)
 
 nativeGradeViolations : String -> List Gate -> <IO> List String
 nativeGradeViolations _ [] = []
