@@ -2,14 +2,26 @@
 # gate_cost_ingest.sh — fold `run_gates.sh` per-gate timing reports into the
 # committed cost baseline (#2178, S-1-S-cost-record).
 #
-#   sh test/gate_cost_ingest.sh [--baseline PATH] [--allow-event EV]... \
-#                               [--max-samples N] [--max-runs N] [--dry-run] \
+#   sh test/gate_cost_ingest.sh [--baseline PATH] [--registry PATH] \
+#                               [--allow-event EV]... [--max-samples N] \
+#                               [--max-runs N] [--dry-run] \
 #                               REPORT.json...
 #
 # A REPORT is what `GATE_TIMING_JSON=<path> sh test/run_gates.sh …` writes
 # (schema `gate-cost/1`). The BASELINE (test/gate_cost_baseline.json by default)
 # is a COMMITTED file: schema `gate-cost-baseline/1`, one row per gate carrying
 # its retained raw samples and their median.
+#
+# ── PRUNE MODE (#2770) ────────────────────────────────────────────────────
+# `--registry PATH` (e.g. `--registry test/gates.toml`) is the flag `medaka
+# gate budget` clause (d) tells an author to run. With it, after any sample
+# ingest (REPORT.json... may be omitted — pruning alone is a valid
+# invocation), every baseline row whose `name` (a `baselineKey`) matches no
+# live registry gate's `baselineKey g.run` is dropped, and the dropped names
+# are printed. The join is computed by `./medaka gate list --json --registry
+# PATH` — the same field `medaka gate budget` itself joins on — never
+# reimplemented here. A no-op without the flag: existing invocations are
+# unaffected.
 #
 # ── WHY A COMMITTED FILE, NOT THE ACTIONS API ────────────────────────────────
 # GATE-REGISTRY-DESIGN.md §7 weighed "committed file updated from CI" against
@@ -94,6 +106,7 @@ ALLOW_SET=0
 MAX_SAMPLES=9
 MAX_RUNS=24
 DRY=0
+REGISTRY=""
 reports=""
 
 usage() {
@@ -140,6 +153,7 @@ _digest() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --baseline)     BASELINE="$2"; shift 2 ;;
+    --registry)     REGISTRY="$2"; shift 2 ;;
     --allow-event)  if [ "$ALLOW_SET" = 0 ]; then ALLOW=""; ALLOW_SET=1; fi
                     ALLOW="$ALLOW $2"; shift 2 ;;
     --max-samples)  MAX_SAMPLES="$2"; shift 2 ;;
@@ -161,7 +175,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$reports" ] || { echo "gate_cost_ingest: no report files given"; usage 1; }
+if [ -z "$reports" ] && [ -z "$REGISTRY" ]; then
+  echo "gate_cost_ingest: no report files given"
+  usage 1
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -402,6 +419,65 @@ BEGIN {
   print "}"
 }
 ' >"$TMP/out.json" || { echo "gate_cost_ingest: merge failed"; exit 1; }
+
+# ── prune (#2770) — a no-op unless --registry was given ─────────────────────
+# Drops every gates[] row whose "name" (a baselineKey) matches no live
+# registry gate's `baselineKey g.run`. `medaka gate list --json` already
+# emits that computed field per gate — reusing it here means this script
+# never reimplements the join `medaka gate budget` clause (d) itself uses.
+if [ -n "$REGISTRY" ]; then
+  MEDAKA_BIN="$ROOT/medaka"
+  [ -x "$MEDAKA_BIN" ] || {
+    echo "gate_cost_ingest: REFUSED — --registry needs a built ./medaka ($MEDAKA_BIN not found)"
+    exit 1
+  }
+  LIVE="$TMP/live_keys.txt"
+  if ! "$MEDAKA_BIN" gate list --json --registry "$REGISTRY" >"$TMP/gate_list.json" 2>"$TMP/gate_list.err"; then
+    cat "$TMP/gate_list.err" >&2
+    echo "gate_cost_ingest: REFUSED — could not read registry $REGISTRY"
+    exit 1
+  fi
+  python3 -c 'import json, sys
+for g in json.load(sys.stdin):
+    print(g["baselineKey"])' <"$TMP/gate_list.json" >"$LIVE" \
+    || { echo "gate_cost_ingest: REFUSED — could not parse gate list JSON from $REGISTRY"; exit 1; }
+
+  DROPPED="$TMP/dropped.txt"
+  awk -v livef="$LIVE" -v droppedf="$DROPPED" '
+    BEGIN { while ((getline l < livef) > 0) live[l] = 1; close(livef); ingates = 0; n = 0 }
+    /^  "gates": \[$/ { print; ingates = 1; next }
+    ingates && /^  \]$/ {
+      kept = 0
+      for (i = 1; i <= n; i++) if (name[i] in live) kept++
+      j = 0
+      for (i = 1; i <= n; i++) {
+        if (!(name[i] in live)) { print name[i] >> droppedf; continue }
+        j++
+        printf "%s%s\n", row[i], (j < kept ? "," : "")
+      }
+      print
+      ingates = 0
+      next
+    }
+    ingates {
+      n++
+      line = $0
+      sub(/,$/, "", line)
+      row[n] = line
+      match(line, /"name": "[^"]*"/)
+      name[n] = substr(line, RSTART + 9, RLENGTH - 10)
+      next
+    }
+    { print }
+  ' "$TMP/out.json" >"$TMP/out.pruned.json" && mv "$TMP/out.pruned.json" "$TMP/out.json"
+
+  if [ -s "$DROPPED" ]; then
+    echo "gate_cost_ingest: pruned $(wc -l <"$DROPPED" | tr -d ' ') orphan baseline row(s) (registry: $REGISTRY):"
+    sed 's/^/  /' "$DROPPED"
+  else
+    echo "gate_cost_ingest: pruned 0 orphan baseline row(s) (registry: $REGISTRY) — nothing to drop."
+  fi
+fi
 
 if [ "$DRY" = 1 ]; then
   cat "$TMP/out.json"
