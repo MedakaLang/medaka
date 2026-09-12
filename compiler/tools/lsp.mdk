@@ -69,9 +69,10 @@ import frontend.parser.{
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
-import support.char.{isIdentChar, isDigit}
+import support.char.{isIdentChar}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
-import string.{stripCR}
+import string.{stripCR, toInt}
+import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..)}
 import types.typecheck.{
@@ -327,24 +328,29 @@ posOffGo arr off i line lineStart
 
 -- A whole-source word-boundary occurrence scan: every offset where `name`
 -- appears as a standalone identifier.  Returns the offsets in source order.
+--
+-- The boundary check runs on each match's OWN position afterward (match,
+-- then test the neighbors) rather than folded into the pattern, for the
+-- same reason `lint.mdk`'s `wordReadIn` keeps it out of the pattern: a
+-- consuming boundary class baked in would make two occurrences separated by
+-- exactly one boundary char invisible to a left-to-right non-overlapping
+-- scan.
 occurrences : String -> String -> List Int
 occurrences src name =
-  let arr = stringToChars src
-  let len = arrayLength arr
-  let nlen = stringLength name
-  if nlen == 0 then [] else occGo src arr len name nlen 0
+  if stringLength name == 0 then
+    []
+  else
+    let arr = stringToChars src
+    let len = arrayLength arr
+    filterMap (occStart arr len) (findAll (mustCompile (escape name)) src)
 
-occGo : String -> Array Char -> Int -> String -> Int -> Int -> List Int
-occGo src arr len name nlen i
-  | i + nlen > len = []
-  | windowEq src i name nlen
-    && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) arr)))
-    && (i + nlen == len || not (isIdentChar (arrayGetUnsafe (i + nlen) arr))) =
-    i :: occGo src arr len name nlen (i + nlen)
-  | otherwise = occGo src arr len name nlen (i + 1)
-
-windowEq : String -> Int -> String -> Int -> Bool
-windowEq src i name nlen = stringSlice i (i + nlen) src == name
+occStart : Array Char -> Int -> Match -> Option Int
+occStart arr len m =
+  if (m.start == 0 || not (isIdentChar (arrayGetUnsafe (m.start - 1) arr)))
+    && (m.end == len || not (isIdentChar (arrayGetUnsafe m.end arr))) then
+    Some m.start
+  else
+    None
 
 -- documentHighlight ranges (one per occurrence) of `name` in `src`.
 highlightRanges : String -> String -> List Json
@@ -1401,35 +1407,20 @@ readHeaders lenAcc = match readLineOpt ()
 -- blank line ends the header block
 
 -- Parse "Content-Length: <n>" (case-sensitive, as clients emit it).  Returns
--- the integer N or None if this header line is something else.
-parseContentLength : String -> Option Int
-parseContentLength line =
-  let prefix = "Content-Length:"
-  let pn = stringLength prefix
-  if stringLength line >= pn && stringSlice 0 pn line == prefix then
-    parseDigits
-      (stringToChars (stringSlice pn (stringLength line) line))
-      0
-      (arrayLength (stringToChars (stringSlice pn (stringLength line) line)))
-      0
-      False
-  else
-    None
+-- the integer N or None if this header line is something else. Not anchored
+-- at the end: the hand-rolled parser this replaces stopped at the first
+-- non-digit and returned what it had, so trailing text after the digits
+-- (there never is any, in practice) is tolerated rather than rejected —
+-- preserved here by `find` rather than `isFullMatch`.
+contentLengthRe : Regex
+contentLengthRe = mustCompile "^Content-Length: *([0-9]+)"
 
--- Parse a run of ASCII digits (skipping leading spaces) into an Int.  `seen`
--- tracks whether at least one digit was consumed.
-parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Option Int
-parseDigits arr i n acc seen
-  | i >= n = if seen then Some acc else None
-  | arrayGetUnsafe i arr == ' ' && not seen = parseDigits arr (i + 1) n acc seen
-  | isDigit (arrayGetUnsafe i arr) =
-    parseDigits
-      arr
-      (i + 1)
-      n
-      (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48))
-      True
-  | otherwise = if seen then Some acc else None
+parseContentLength : String -> Option Int
+parseContentLength line = match find contentLengthRe line
+  None => None
+  Some m => match m.groups
+    [Some g] => toInt g.text
+    _ => None
 
 {- ── textDocument/semanticTokens/full ────────────────────────────────────────
 
