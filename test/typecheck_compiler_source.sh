@@ -1371,6 +1371,24 @@ if printf '%s\n' "$ordinary_return_inst_body" | grep -Eq 'ifaceParamMonos|goalPr
   exit 1
 fi
 
+# #2982: a match inside the record field loses its bound local in Wasm's local collector.
+# Keep the complete/unknown projection outside construction until that emitter gap
+# is repaired; the playground compiler build exercises the actual emitted artifact.
+ordinary_return_goal_body="$(sed -n '/^goalRequestOfKind .*EKExactReturn/,/^goalRequestOfKind .*EKNumReturn/p' "$predicate_slot_src")"
+ordinary_return_goal_required='  let args = match methodReturnArgs request
+    Some args => PSArgsKnown args
+    None => PSArgsUnknown
+  Some PredicateRequest { prIface = request.mrrIface, prArgs = args }'
+printf '%s\n' "$ordinary_return_goal_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_goal_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return goal projection is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'let published = match entry.mrtGoal'
+require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'mrtPublished = published'
+
 require_typecheck_arm pushExactReturnObl methodReturnRequest 'pred = Predicate { iface = request.mrrIface, args = [] }'
 require_typecheck_arm pushExactReturnObl methodReturnRequest 'oblProj = OpExactReturn request'
 require_typecheck_arm uOblArgs callOblsWindow 'OpExactReturn request => optionOr [] (methodReturnArgs request)'

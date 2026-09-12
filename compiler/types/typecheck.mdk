@@ -9578,18 +9578,20 @@ finishMethodReturnTrace _ =
 publishMethodReturnTrace : EvTable ->
   MethodReturnTraceEntry ->
   MethodReturnTraceEntry
-publishMethodReturnTrace evidence entry = MethodReturnTraceEntry {
-  mrtStage = entry.mrtStage,
-  mrtInterface = entry.mrtInterface,
-  mrtMethod = entry.mrtMethod,
-  mrtArguments = entry.mrtArguments,
-  mrtScope = entry.mrtScope,
-  mrtOrigin = entry.mrtOrigin,
-  mrtGoal = entry.mrtGoal,
-  mrtPublished = match entry.mrtGoal
+publishMethodReturnTrace evidence entry =
+  let published = match entry.mrtGoal
     Some goal => lookupTraceEvidence goal evidence
-    None => None,
-}
+    None => None
+  MethodReturnTraceEntry {
+    mrtStage = entry.mrtStage,
+    mrtInterface = entry.mrtInterface,
+    mrtMethod = entry.mrtMethod,
+    mrtArguments = entry.mrtArguments,
+    mrtScope = entry.mrtScope,
+    mrtOrigin = entry.mrtOrigin,
+    mrtGoal = entry.mrtGoal,
+    mrtPublished = published,
+  }
 
 lookupTraceEvidence : EvId -> EvTable -> Option EvVal
 lookupTraceEvidence _ [] = None
@@ -28438,12 +28440,11 @@ entailAssum m encl name useScope kind =
 
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalRequestOfKind name (EKReturn fullMono _) = goalPredOf name fullMono
-goalRequestOfKind _ (EKExactReturn request _) = Some PredicateRequest {
-  prIface = request.mrrIface,
-  prArgs = match methodReturnArgs request
+goalRequestOfKind _ (EKExactReturn request _) =
+  let args = match methodReturnArgs request
     Some args => PSArgsKnown args
-    None => PSArgsUnknown,
-}
+    None => PSArgsUnknown
+  Some PredicateRequest { prIface = request.mrrIface, prArgs = args }
 goalRequestOfKind _ (EKNumReturn predicate _ _ _) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
   prArgs = PSArgsKnown predicate.predicateArguments,
