@@ -139,6 +139,19 @@ pageTypesSql db =
 pageHexes : String -> <Exec "_", IO> Result String (List String)
 pageHexes db = map (map hexOfRow) (sqlite3Lines db (pageTypesSql db))
 
+-- Page COUNT, independent of `PRAGMA page_count` (a 4-byte field the writer
+-- itself wrote at file offset 28) — derived instead from the file's actual
+-- byte length, so a writer that miscounts its own pages (trailing zero
+-- pages, under/over-allocation) cannot grade itself. `page_size` is still
+-- read from the header: it is a fixed engine constant, not something the
+-- writer could silently get wrong the way page COUNT can.
+filePagesSql : String -> String
+filePagesSql db =
+  "SELECT length(readfile('\{db}')) / (SELECT page_size FROM pragma_page_size);"
+
+filePages : String -> <Exec "_", IO> Result String String
+filePages db = map trim (sqlite3Query db (filePagesSql db))
+
 hexOfRow : String -> String
 hexOfRow line = match split "|" line
   [_, h] => h
@@ -479,18 +492,31 @@ test "writer_api: report matches sqlite/test/writer_api.golden" =
 bigTableN : Int
 bigTableN = 700
 
+-- The full intended row set for the 700-row `t`/`big` tables — used both by
+-- `multipage_write` and `multitable_write` (identical `id|item_id` shape),
+-- so a middle-row corruption has something to be compared against besides
+-- the report's own first/last samples.
+itemRow : Int -> String
+itemRow i = "\{intToString i}|item_\{intToString i}"
+
+itemRows : Int -> List String
+itemRows n = map itemRow [1..=n]
+
 data MultipageRun = MultipageRun {
   mpIntegrityCheck : String,
   mpSchema : List String,
   mpHexes : List String,
+  mpFilePages : String,
   mpCount : String,
   mpFirst3 : List String,
   mpLast3 : List String,
+  mpSelectAll : List String,
+  mpReaderRows : List String,
 }
 
 multipageLayoutLine : MultipageRun -> String
 multipageLayoutLine r =
-  let pages = intToString (length r.mpHexes)
+  let pages = r.mpFilePages
   let interior = intToString (countHex "05" r.mpHexes)
   let leaves = intToString (countHex "0D" r.mpHexes)
   let rootType = rootPageDecimal r.mpHexes
@@ -545,29 +571,40 @@ multipageResult = match rowScratch "multipage-write"
   Ok prefix =>
     let db = "\{prefix}.db"
     let writer = "\{prefix}-writer"
-    let out = runMultipage db writer
-    let _ = runVerb "rm" ["-rf", db, writer]
+    let reader = "\{prefix}-reader"
+    let out = runMultipage db writer reader
+    let _ = runVerb "rm" ["-rf", db, writer, reader]
     out
 
-runMultipage : String -> String -> <Exec "_", IO> Result String MultipageRun
-runMultipage db writer = do
+runMultipage : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String MultipageRun
+runMultipage db writer reader = do
   _ <- buildBin "sqlite/multipage_write_demo.mdk" writer
+  _ <- buildBin "sqlite/main.mdk" reader
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
   hexes <- pageHexes db
+  filePagesN <- filePages db
   count <- sqlite3Query db "SELECT count(*) FROM t;"
   first3 <- sqlite3Lines db "SELECT * FROM t ORDER BY rowid ASC LIMIT 3;"
   last3 <- sqlite3Lines
     db
     "SELECT * FROM t ORDER BY rowid ASC LIMIT 3 OFFSET \{intToString (bigTableN - 3)};"
+  selectAll <- sqlite3Lines db "SELECT * FROM t ORDER BY rowid ASC;"
+  readerOut <- spawnOut queryTimeoutSeconds reader [db, "t"]
   Ok MultipageRun {
     mpIntegrityCheck = trim ic,
     mpSchema = schema,
     mpHexes = hexes,
+    mpFilePages = filePagesN,
     mpCount = trim count,
     mpFirst3 = first3,
     mpLast3 = last3,
+    mpSelectAll = selectAll,
+    mpReaderRows = outLines readerOut,
   }
 
 test "multipage_write: literal gates match the hand-derived expected values" =
@@ -602,6 +639,16 @@ test "multipage_write: 700 rows put the root page on an interior page (0x05) ove
           "root page type 5, >=3 leaves"
           "root page type \{rootType}, \{intToString leaves} leaves"
 
+test "multipage_write: sqlite3 SELECT matches all 700 intended rows, not just first/last 3" =
+  match multipageResult
+    Err e => Fail e "700 matching rows" "the row did not run"
+    Ok r => expectLines (itemRows bigTableN) r.mpSelectAll
+
+test "multipage_write: Medaka reader round-trips all 700 rows through the interior root" =
+  match multipageResult
+    Err e => Fail e "700 matching rows" "the row did not run"
+    Ok r => expectLines (itemRows bigTableN) r.mpReaderRows
+
 -- # multitable_write
 --
 -- `sqlite/test/multitable_write_oracle.sh`: three tables in one file, mixed
@@ -613,17 +660,22 @@ data MultitableRun = MultitableRun {
   mtIntegrityCheck : String,
   mtSchema : List String,
   mtHexes : List String,
+  mtFilePages : String,
   mtCounts : List String,
   mtUsersRows : List String,
   mtKvRows : List String,
   mtBigFirstLast : List String,
+  mtBigAll : List String,
+  mtUsersReaderRows : List String,
+  mtKvReaderRows : List String,
+  mtBigReaderRows : List String,
   mtDistinctRootpages : String,
   mtTableCount : String,
 }
 
 multitableLayoutLine : MultitableRun -> String
 multitableLayoutLine r =
-  let pages = intToString (length r.mtHexes)
+  let pages = r.mtFilePages
   let interior = intToString (countHex "05" r.mtHexes)
   let leaves = intToString (countHex "0D" r.mtHexes)
   let types = typesDigits r.mtHexes
@@ -682,19 +734,25 @@ multitableResult = match rowScratch "multitable-write"
   Ok prefix =>
     let db = "\{prefix}.db"
     let writer = "\{prefix}-writer"
-    let out = runMultitable db writer
-    let _ = runVerb "rm" ["-rf", db, writer]
+    let reader = "\{prefix}-reader"
+    let out = runMultitable db writer reader
+    let _ = runVerb "rm" ["-rf", db, writer, reader]
     out
 
-runMultitable : String -> String -> <Exec "_", IO> Result String MultitableRun
-runMultitable db writer = do
+runMultitable : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String MultitableRun
+runMultitable db writer reader = do
   _ <- buildBin "sqlite/multitable_write_demo.mdk" writer
+  _ <- buildBin "sqlite/main.mdk" reader
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines
     db
     "SELECT type, name, rootpage FROM sqlite_master ORDER BY rootpage;"
   hexes <- pageHexes db
+  filePagesN <- filePages db
   usersCount <- sqlite3Query db "SELECT count(*) FROM users;"
   bigCount <- sqlite3Query db "SELECT count(*) FROM big;"
   kvCount <- sqlite3Query db "SELECT count(*) FROM kv;"
@@ -704,16 +762,21 @@ runMultitable db writer = do
   bigLast <- sqlite3Lines
     db
     "SELECT * FROM big ORDER BY id ASC LIMIT 2 OFFSET \{intToString (bigTableN - 2)};"
+  bigAll <- sqlite3Lines db "SELECT * FROM big ORDER BY id ASC;"
   distinctRootpages <- sqlite3Query
     db
     "SELECT count(DISTINCT rootpage) FROM sqlite_master WHERE type='table';"
   tableCount <- sqlite3Query
     db
     "SELECT count(*) FROM sqlite_master WHERE type='table';"
+  usersReaderOut <- spawnOut queryTimeoutSeconds reader [db, "users"]
+  kvReaderOut <- spawnOut queryTimeoutSeconds reader [db, "kv"]
+  bigReaderOut <- spawnOut queryTimeoutSeconds reader [db, "big"]
   Ok MultitableRun {
     mtIntegrityCheck = trim ic,
     mtSchema = schema,
     mtHexes = hexes,
+    mtFilePages = filePagesN,
     mtCounts = [
       "users=\{trim usersCount}",
       "big=\{trim bigCount}",
@@ -722,6 +785,10 @@ runMultitable db writer = do
     mtUsersRows = usersRows,
     mtKvRows = kvRows,
     mtBigFirstLast = bigFirst ++ bigLast,
+    mtBigAll = bigAll,
+    mtUsersReaderRows = outLines usersReaderOut,
+    mtKvReaderRows = outLines kvReaderOut,
+    mtBigReaderRows = outLines bigReaderOut,
     mtDistinctRootpages = trim distinctRootpages,
     mtTableCount = trim tableCount,
   }
@@ -764,6 +831,25 @@ test "multitable_write: 3 tables with distinct rootpages, >=1 interior + >=5 lea
           "multitable_write: ntab=\{r.mtTableCount} distinct=\{r.mtDistinctRootpages} interior=\{intToString interior} leaves=\{intToString leaves} — expected 3/3/>=1/>=5"
           "3 tables, 3 distinct rootpages, >=1 interior, >=5 leaves"
           "\{r.mtTableCount} tables, \{r.mtDistinctRootpages} distinct rootpages, \{intToString interior} interior, \{intToString leaves} leaves"
+
+test "multitable_write: sqlite3 SELECT matches all 700 intended `big` rows, not just first/last 2" =
+  match multitableResult
+    Err e => Fail e "700 matching rows" "the row did not run"
+    Ok r => expectLines (itemRows bigTableN) r.mtBigAll
+
+test "multitable_write: Medaka reader round-trips users" =
+  match multitableResult
+    Err e => Fail e "1|alice\n2|bob\n3|carol" "the row did not run"
+    Ok r => expectLines ["1|alice", "2|bob", "3|carol"] r.mtUsersReaderRows
+
+test "multitable_write: Medaka reader round-trips kv" = match multitableResult
+  Err e => Fail e "one|1\ntwo|2\nthree|3" "the row did not run"
+  Ok r => expectLines ["one|1", "two|2", "three|3"] r.mtKvReaderRows
+
+test "multitable_write: Medaka reader round-trips all 700 `big` rows through the interior root" =
+  match multitableResult
+    Err e => Fail e "700 matching rows" "the row did not run"
+    Ok r => expectLines (itemRows bigTableN) r.mtBigReaderRows
 
 -- # rowid_roundtrip
 --
