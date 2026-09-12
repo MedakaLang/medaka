@@ -871,7 +871,11 @@ data EmitInputData = EmitInputData {
   mainIsFloat : Bool,
   emitHalf : Int,
   preludeBinds : List String,
-  preludeImpls : List (String, String),
+  -- Exact prelude impl ownership, method -> canonical impl key -> the symbol tag
+  -- selected when core.mdk was lowered alone.  The program half uses the same
+  -- entry both to suppress the prelude-owned define and to keep every reference
+  -- to it byte-identical to the symbol that prelude.o actually exports.
+  preludeImplIndex : OrdMap (OrdMap String),
   srcName : String,
   -- #948/#1036/#1047: one row per DECLARED impl,
   -- (iface identity, iface, head tag, canonical impl key), minted by the emit
@@ -900,7 +904,7 @@ makeEmitInput : List ((String, String), Bool) ->
   Bool ->
   Int ->
   List String ->
-  List (String, String) ->
+  List (String, String, String) ->
   String ->
   List (String, List String) ->
   List (String, (List String, String)) ->
@@ -922,11 +926,19 @@ makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorF
   mainIsFloat = mainIsFloat,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
-  preludeImpls = preludeImpls,
+  preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
   srcName = srcName,
   recordFieldOrders = recordFieldOrders,
   ifaceImplHeads = ifaceImplHeads,
 }
+
+preludeImplIndexOf : List (String, String, String) ->
+  OrdMap (OrdMap String) ->
+  OrdMap (OrdMap String)
+preludeImplIndexOf [] acc = acc
+preludeImplIndexOf ((method, key, symTag) :: rest) acc =
+  let byKey = optionOr omEmpty (omLookup method acc)
+  preludeImplIndexOf rest (omInsert method (omInsert key symTag byKey) acc)
 
 -- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row.
 --   * `bareIfaceArityRow` reproduces the row this table has always carried,
@@ -1732,10 +1744,63 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- `wasm_emit.implFnSymTagW` and `core_ir_lower.implSymTagOf` call the SAME
 -- `injectiveIdent`, so both backends and the guard agree on the emitted symbol.
 -- The typechecker stamps the SAME canonical key into the RKey route (keyForSite),
--- so emitMethod's `implFnSymOf` and emitGroup's name agree.
+-- so emitMethod's `implFnSymE` and emitGroup's name agree.
 implFnSymTag : List CImplEntry -> String -> String -> String -> String
 implFnSymTag entries method tag key =
   if headTagUnique entries method tag then tag else injectiveIdent key
+
+-- The exact impl symbols exported by a standalone prelude object.  A later
+-- program can add a same-(method, head) impl, changing the whole-program C7
+-- collision answer; retaining this standalone choice is what keeps references
+-- to the already-compiled object linkable.  Both indexes use injective newline
+-- keys and are built once in O(entries log entries), rather than rescanning the
+-- impl list for every row.
+export
+preludeImplSymbols : List CImplEntry -> List (String, String, String)
+preludeImplSymbols entries =
+  let collisions = preludeImplCollisions entries omEmpty omEmpty
+  preludeImplSymbolsGo entries collisions omEmpty
+
+preludeImplCollisions : List CImplEntry ->
+  OrdMap String ->
+  OrdMap Unit ->
+  OrdMap Unit
+preludeImplCollisions [] _ collisions = collisions
+preludeImplCollisions ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) firstKeys collisions =
+  let headKey = preludeImplPairKey method tag
+  match omLookup headKey firstKeys
+    None =>
+      preludeImplCollisions rest (omInsert headKey key firstKeys) collisions
+    Some firstKey => preludeImplCollisions rest firstKeys (if firstKey
+      == key then
+      collisions
+    else
+      omInsert headKey () collisions)
+preludeImplCollisions (_ :: rest) firstKeys collisions =
+  preludeImplCollisions rest firstKeys collisions
+
+preludeImplSymbolsGo : List CImplEntry ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List (String, String, String)
+preludeImplSymbolsGo [] _ _ = []
+preludeImplSymbolsGo ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
+  let implKey = preludeImplPairKey method key
+  if omHasKey implKey seen then
+    preludeImplSymbolsGo rest collisions seen
+  else
+    let symTag =
+      if omHasKey (preludeImplPairKey method tag) collisions then
+        injectiveIdent key
+      else
+        tag
+    (method, key, symTag)
+      :: preludeImplSymbolsGo rest collisions (omInsert implKey () seen)
+preludeImplSymbolsGo (_ :: rest) collisions seen =
+  preludeImplSymbolsGo rest collisions seen
+
+preludeImplPairKey : String -> String -> String
+preludeImplPairKey method identity = "\{method}\n\{identity}"
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct
 -- ones (C7 collision)?  Count DISTINCT canonical keys at this head — NOT raw
@@ -1760,20 +1825,30 @@ distinctKeysAtHead full ((CImplEntry n _ (CImplTagged t k _ _ _ _)) :: rest) met
 distinctKeysAtHead full (_ :: rest) method tag acc =
   distinctKeysAtHead full rest method tag acc
 
--- the symbol tag for the impl an RKey route resolved to (call-site side).  [tag] is
--- the route's stamped tag — the bare head when unique, the canonical key on
--- collision; [entry] is the matched CImplEntry (carries the real head + key).
-implFnSymOf : List CImplEntry -> String -> CImplEntry -> String
-implFnSymOf entries method (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =
-  implFnSymTag entries method t k
-implFnSymOf _ _ _ = ""
-
--- #990: the index-backed form of `implFnSymOf (implEntriesOf e) method ent`.  The C7
--- collision count (`headTagUnique`→`distinctKeysAtHead`) only ever accumulates entries
--- whose method == [method], so passing [method]'s bucket instead of the whole list is
--- byte-identical — just O(bucket) not O(impls) per RKey site.
+-- The call-site symbol for an exact impl entry.  The C7 collision count
+-- (`headTagUnique`→`distinctKeysAtHead`) only accumulates entries whose method ==
+-- [method], so passing [method]'s bucket is the whole-program answer in O(bucket).
+-- In the program half, an exact prelude-owned row instead retains the standalone
+-- symbol recorded when prelude.o was compiled.
 implFnSymE : Emit -> String -> CImplEntry -> String
-implFnSymE e method ent = implFnSymOf (methodEntries e method) method ent
+implFnSymE e method (CImplEntry _ _ (CImplTagged tag key _ _ _ _)) =
+  implFnSymForKey e (methodEntries e method) method tag key
+implFnSymE _ _ _ = ""
+
+implFnSymForKey : Emit ->
+  List CImplEntry ->
+  String ->
+  String ->
+  String ->
+  String
+implFnSymForKey e entries method tag key = match preludeImplSym e method key
+  Some symTag => symTag
+  None => implFnSymTag entries method tag key
+
+preludeImplSym : Emit -> String -> String -> Option String
+preludeImplSym e method key = match omLookup method e.input.preludeImplIndex
+  Some byKey => omLookup key byKey
+  None => None
 
 -- the method names of the program's tagged impls.  A bare CVar naming one of these,
 -- applied to args, is an arg-position dispatch site (return-position methods are
@@ -6491,13 +6566,13 @@ hiddenBind e name =
   e.input.emitHalf == emitHalfProgram && contains name e.input.preludeBinds
 
 hiddenImplGroup : Emit -> ImplGroup -> Bool
-hiddenImplGroup e (ImplGroup method tag _ _ _ _) =
-  e.input.emitHalf == emitHalfProgram
-    && hasImplKey method tag e.input.preludeImpls
+hiddenImplGroup e (ImplGroup method _ key _ _ _ _) =
+  e.input.emitHalf == emitHalfProgram && hasPreludeImpl e method key
 
-hasImplKey : String -> String -> List (String, String) -> Bool
-hasImplKey _ _ [] = False
-hasImplKey m t ((m2, t2) :: rest) = m == m2 && t == t2 || hasImplKey m t rest
+hasPreludeImpl : Emit -> String -> String -> Bool
+hasPreludeImpl e method key = match preludeImplSym e method key
+  Some _ => True
+  None => False
 
 -- Run `act` (an ordinary emitFn/emitGroup), then throw its BODY TEXT away and keep
 -- only a `declare` per define it produced.
@@ -7191,10 +7266,9 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
 
 -- #747: the synthesized per-instance CAF bind name for (symTag, method) — must match
 -- core_ir_lower.memoBindName EXACTLY.  It does NOT re-encode: [symTag] is already
--- the encoded selector `implFnSymTag` chose, and since #1950 both sides spell that
--- selector with the SAME `private_mangle.injectiveIdent`, so the force target names
--- the global core_ir_lower prepended.  Adding an encode step here would break that
--- agreement, not strengthen it.
+-- the selected symbol word: either a bare standalone-prelude tag or the encoded
+-- whole-program collision key.  Both are already legal LLVM identifier fragments.
+-- Adding an encode step here would break that agreement, not strengthen it.
 memoGlobalName : String -> String -> String
 memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
 
@@ -7858,27 +7932,27 @@ filterGroupsByMethod method (g :: rest)
   | otherwise = filterGroupsByMethod method rest
 
 groupTag : ImplGroup -> String
-groupTag (ImplGroup _ tag _ _ _ _) = tag
+groupTag (ImplGroup _ tag _ _ _ _ _) = tag
 
 groupSymTag : ImplGroup -> String
-groupSymTag (ImplGroup _ _ symTag _ _ _) = symTag
+groupSymTag (ImplGroup _ _ _ symTag _ _ _) = symTag
 
 groupMethodOf : ImplGroup -> String
-groupMethodOf (ImplGroup m _ _ _ _ _) = m
+groupMethodOf (ImplGroup m _ _ _ _ _ _) = m
 
 groupPositionsOf : ImplGroup -> List Int
-groupPositionsOf (ImplGroup _ _ _ p _ _) = p
+groupPositionsOf (ImplGroup _ _ _ _ p _ _) = p
 
 -- #1818: the arity `gatherGroup` MINTED for this group's `define` — the single
 -- number every F10 call site should consult rather than re-derive.  See
 -- `armArityOfEntry` below, the one caller that used to recompute it.
 groupArity : ImplGroup -> Int
-groupArity (ImplGroup _ _ _ _ arity _) = arity
+groupArity (ImplGroup _ _ _ _ _ arity _) = arity
 
 -- the group among [groups] whose lifted define is `@mdk_impl_<symTag>_<method>` —
 -- i.e. the one `gatherGroup` built for the SAME impl an entry-holding call site
 -- names.  `symTag` (`implFnSymE`) is exactly the identity `gatherGroup` used to
--- name that define (`implFnSymTag` over the same entries pool), so this is a
+-- name that define (`implFnSymForKey` over the same entries + prelude map), so this is a
 -- same-identity lookup, not a second guess: any hit is THE group whose `arity`
 -- field is what the define was actually emitted to accept.
 findGroupBySymTag : String -> List ImplGroup -> Option ImplGroup
@@ -8078,18 +8152,19 @@ dictOperand e env d = match omLookup d env
 --     emitTree / bindPattern be reused VERBATIM (note (o); one extra `$tuple`
 --     cell alloc per call, acceptable for the spike).
 
--- a coalesced impl group: method, type-head tag, the SYMBOL tag (= head tag when
--- this is the sole impl at that head, else the sanitized canonical key — C7), the
+-- a coalesced impl group: method, type-head tag, canonical impl key, the SYMBOL
+-- tag (= the standalone prelude tag for an owned row; otherwise head tag when
+-- this is the sole impl at that head, else the encoded canonical key — C7), the
 -- dispatch positions, arity, and the clauses (patterns + body) in source order
 -- (leftmost-first — the priority the decision tree preserves).
 data ImplGroup =
-  | ImplGroup String String String (List Int) Int (List (List Pat, CExpr))
+  | ImplGroup String String String String (List Int) Int (List (List Pat, CExpr))
 
 -- #2726: the gensym scope of an impl group — its OWN emitted symbol, prefixed so
 -- the marker reads as what it is (`impl:List_eq`) and can never be confused with
 -- a module id.  `scopeWordOf` maps the `:` out again for the LLVM name form.
 implGroupScope : ImplGroup -> String
-implGroupScope (ImplGroup method _ symTag _ _ _) = "impl:\{symTag}_\{method}"
+implGroupScope (ImplGroup method _ _ symTag _ _ _) = "impl:\{symTag}_\{method}"
 
 emitImpls : Emit -> List CImplEntry -> Unit
 emitImpls e entries = emitGroups e (groupImpls e entries)
@@ -8111,7 +8186,7 @@ emitGroups e (g :: rest) =
   emitGroups e rest
 
 emitGroup : Emit -> ImplGroup -> Unit
-emitGroup e (ImplGroup method tag symTag positions arity clauses) =
+emitGroup e (ImplGroup method tag _ symTag positions arity clauses) =
   let fname = implFnName symTag method
   let iface = implGroupIface e method tag
   let selfFnPos = selfFnParamPositions e iface method
@@ -8900,7 +8975,7 @@ keySeen m t ((m2, t2) :: rest) =
 gatherGroup : Emit -> List CImplEntry -> (String, String) -> ImplGroup
 gatherGroup e entries (method, key) =
   let tag = headTagForKey method key entries
-  let symTag = implFnSymTag entries method tag key
+  let symTag = implFnSymForKey e entries method tag key
   let cls0 = gatherClauses method key entries
   let positions = groupPositions method key entries
   -- Eta-expand a point-free / ETA-SHORT impl clause up to the method's FULL arity
@@ -8937,7 +9012,7 @@ gatherGroup e entries (method, key) =
     else
       maxInt srcTotal declaredTotal
   let cls = map (etaExpandClause arity) cls0
-  ImplGroup method tag symTag positions arity cls
+  ImplGroup method tag key symTag positions arity cls
 
 -- the head tycon tag of the impl whose (method, key) matches (the first such entry).
 headTagForKey : String -> String -> List CImplEntry -> String

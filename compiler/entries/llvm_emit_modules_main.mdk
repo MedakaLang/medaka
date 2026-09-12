@@ -36,7 +36,7 @@ import types.typecheck.{
   mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
 }
-import ir.core_ir.{CProgram(..), CBind(..), CImplEntry(..), CImplBody(..)}
+import ir.core_ir.{CProgram(..), CBind(..)}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
@@ -50,7 +50,12 @@ import ir.core_ir_lower.{
   declSigTypeNames,
   validateFfiExternTypeNames,
 }
-import backend.llvm_emit.{emitProgram, emitProgramWithStats, makeEmitInput}
+import backend.llvm_emit.{
+  emitProgram,
+  emitProgramWithStats,
+  makeEmitInput,
+  preludeImplSymbols,
+}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModulesLocated, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
@@ -101,26 +106,17 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- MEDAKA_PRELUDE_OBJ fast path. The pin is cheap (one small fn), so the fix is
 -- to always DEFINE it in the program half instead of asking the shared object
 -- for it.
-preludeSymsOf : List Decl -> (List String, List (String, String))
+preludeSymsOf : List Decl -> (List String, List (String, String, String))
 preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
   CProgram groups _ _ impls => (
     filterList
       (n => not (endsWith autoPrintPinName n))
       (map cbindNameOf groups),
-    implKeysOf impls,
+    preludeImplSymbols impls,
   )
 
 cbindNameOf : CBind -> String
 cbindNameOf (CBind n _) = n
-
--- (method, type-head tag) per TAGGED impl entry — the key emitGroups classifies a
--- group by.  An untagged interface DEFAULT has no head, and its
--- `@mdk_default_<m>_<tag>` define lives in the program half regardless.
-implKeysOf : List CImplEntry -> List (String, String)
-implKeysOf [] = []
-implKeysOf ((CImplEntry m _ (CImplTagged tag _ _ _ _ _)) :: rest) =
-  (m, tag) :: implKeysOf rest
-implKeysOf (_ :: rest) = implKeysOf rest
 
 -- Install the emitter side-tables + emit, from an already-elaborated program.
 emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
