@@ -614,7 +614,9 @@ identity and method predicate slots. Each numeric occurrence derives its
 This does not yet provide a shared solving judgment for other return sites.
 
 Ordinary environment bindings now retain an optional method row alongside its own
-scheme. Module setup annotates only bound, nameable imported methods; ordinary
+scheme. Row presence certifies resolved identity and structural return eligibility;
+contextual exclusions are checked at the occurrence. Module setup annotates only
+bound, nameable imported methods; ordinary
 extensions erase that ownership, and importer shadow restoration preserves its
 existing scheme precedence. Eligible return occurrences consume
 that row's descriptor and method slots directly. The legacy spelling tables remain

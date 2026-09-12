@@ -1527,3 +1527,38 @@ except for a 16-byte spread in the baseline integer document's N3 total. These
 measurements cover checking requests and total allocation; they do not establish
 retained-live-heap bounds or safe finalized caching. Dispatch correctness is
 checked separately with the wrapped-return regression and engine value pin.
+
+### Producer-owned ordinary return predicates (2026-09-12)
+
+Measured `0027e8fb24521f88505cfd06964ba2ead338ba67` against separately built
+`6496981577c73e0574e3ca9c421e01cda77d0a74`, with all three legacy caches enabled.
+The workloads, N0–N3 request streams, fixed 1 GiB heap, strict source freshness,
+Cachegrind settings and allocation instrument are the same as above. Every stream
+passed its empty-diagnostics and shutdown checks. Both allocation repetitions were
+identical.
+
+| Workload / metric | Revision | Cold | Warm 1 | Warm 2 |
+|---|---|---:|---:|---:|
+| Integer document / instructions | baseline | 315,413,481 | 25,159,811 | 25,183,384 |
+| Integer document / instructions | candidate | 319,820,861 | 26,966,444 | 27,017,412 |
+| Import document / instructions | baseline | 547,514,794 | 38,466,579 | 38,498,297 |
+| Import document / instructions | candidate | 555,478,588 | 40,296,072 | 40,340,812 |
+| Integer document / allocated bytes | baseline | 49,738,288 | 4,597,376 | 4,613,232 |
+| Integer document / allocated bytes | candidate | 50,241,376 | 4,884,416 | 4,916,688 |
+| Import document / allocated bytes | baseline | 93,960,288 | 6,889,776 | 6,916,320 |
+| Import document / allocated bytes | candidate | 94,918,944 | 7,185,200 | 7,207,728 |
+
+The largest increases are 7.29% in instructions and 6.58% in allocated bytes,
+within the existing 25% soft instruction budget. Cold increases stay below 1.46%
+and 1.03%, respectively. The initial implementation at `6569aa6a9` increased warm
+instructions by 9.9–15.1%; restricting row ownership at setup, enumerating imported
+method candidates instead of all seed bindings, and skipping contextual eligibility
+checks for ordinary variables reduced that cost. Repeated value-map lookups remain
+a possible optimization, with no cache-policy change required.
+
+These measurements cover request execution and total allocation. They do not
+establish retained-heap bounds or finalized cache safety; the new request retains
+the existing live occurrence Mono, and `checkOneSchemeFullK` still returns live
+Scheme cells after draining its graph. Predicate ownership and evidence consumption
+are tested separately through checker verdicts, canonical routes, slot collisions,
+and a three-engine value pin.
