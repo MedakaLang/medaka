@@ -1,5 +1,5 @@
 # META
-source_lines=2540
+source_lines=2552
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -988,7 +988,7 @@ bindFieldTemps ((CField k ex) :: rest) body =
 -- `x = theUnit : Box` correct on both backends.  No new memo infrastructure.
 --
 -- Gated to EXACTLY eval's memoThunk case: an RKey route with NO nested (parametric-
--- impl) dicts and NO impl/method dict routes (`CMethod _ (RKey tag []) [] []`), whose
+-- impl) dicts and NO impl/method dict routes (`CMethod _ 0 (RKey tag []) [] []`), whose
 -- resolved impl is RETURN-position (`positions == []`) AND point-free (`pats == []`).
 -- A method WITH arguments (non-empty pats), a discriminating-arg method (non-empty
 -- positions), a runtime-dict route (RDict/RDictFwd), or a dict-parametric impl
@@ -1880,7 +1880,7 @@ checkDictTagsInjective space hash ((m, w, owner) :: rest) seen =
 -- #1047: the interface IDENTITIES of every declared impl whose head tag OR
 -- canonical key is [tag] — the reverse of `ifaceImplRouteKeys`.  The emitters'
 -- `defaultFor`/`defaultForW` use it to decide WHICH interface's default body a
--- `@mdk_default_<method>_<tag>` wrapper must hold; see their own comments for why
+-- selected-arity default wrapper must hold; see their own comments for why
 -- the answer is only consulted when two defaults share a METHOD name (the
 -- interfaces' own names are irrelevant and may differ freely).
 --
@@ -1892,8 +1892,8 @@ checkDictTagsInjective space hash ((m, w, owner) :: rest) seen =
 -- ⚠️ AND THE INTERSECTION IS NOT ENOUGH, which is #1265 (still open).  When ONE type
 -- implements TWO interfaces that share a method name, this list contains BOTH
 -- identities, so BOTH candidate defaults survive the intersection and every caller
--- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
--- interface component, so the two default bodies have one symbol between them.
+-- falls back to first-match.  Arity-qualified names separate different-arity
+-- defaults, but same-arity bodies still share a symbol with no interface component.
 export
 ifaceIdsAtTag : List (String, String, String, String) -> String -> List String
 ifaceIdsAtTag heads tag = ifaceIdsAtTagGo tag heads
@@ -2229,6 +2229,8 @@ ifaceWordOfKey key = match splitOnChar '|' key
 -- `@mdk_default_foldMap_List` serves both a List-monoid and a String-monoid fold.
 -- A constraint over ONLY interface params contributes no slot (it dispatches via
 -- the impl, not a per-call dict); mirrors typecheck's `constraintIsMethodLevel`.
+-- Qualified rows include an explicit [] so a selected unconstrained method cannot
+-- fall through to a same-spelled interface method's legacy bare row.
 export
 methodConstraintIfaces : List Decl -> List (String, List String)
 methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
@@ -2236,16 +2238,26 @@ methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
 methodConstraintIfaceEntries : Decl -> List (String, List String)
 -- #1037
 methodConstraintIfaceEntries (DAttrib _ d) = methodConstraintIfaceEntries d
-methodConstraintIfaceEntries (DInterface { typarams, methods, ... }) =
-  flatMap (m => methodConstraintIfaceEntry typarams m) methods
+methodConstraintIfaceEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams, methods, ... }) =
+  flatMap
+    (m => methodConstraintIfaceEntry (ifaceWordOf o ifaceName) typarams m)
+    methods
 methodConstraintIfaceEntries _ = []
 
-methodConstraintIfaceEntry : List String ->
+methodConstraintIfaceEntry : String ->
+  List String ->
   IfaceMethod ->
   List (String, List String)
-methodConstraintIfaceEntry typarams (IfaceMethod mname mty _ _) =
+methodConstraintIfaceEntry ifaceWord typarams (IfaceMethod mname mty _ _) =
   let ifaces = methodLevelConstraintIfaces typarams mty
-  if isEmptyL ifaces then [] else [(mname, ifaces)]
+  let qualified = (ifaceMethodArityKey ifaceWord mname, ifaces)
+  if isEmptyL ifaces then
+    [qualified]
+  else
+    [
+      (mname, ifaces),
+      qualified,
+    ]
 
 -- the interface name of each method-level constraint in [ty], in declaration
 -- order (peels TyConstrained/TyEffect like methodConstraintSlotIds).
@@ -3155,10 +3167,10 @@ nodeTag _ = "?"
 (DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
 (DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfaceEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "methodConstraintIfaceEntries") (EVar "d")))
-(DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "methodConstraintIfaceEntry") (EVar "typarams")) (EVar "m")))) (EVar "methods")))
+(DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "methodConstraintIfaceEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "typarams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "methodConstraintIfaceEntries" (PWild) (EListLit))
-(DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "methodConstraintIfaceEntry" ((PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit) (EListLit (ETuple (EVar "mname") (EVar "ifaces")))))))
+(DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "methodConstraintIfaceEntry" ((PVar "ifaceWord") (PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoLet false false (PVar "qualified") (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "ifaces"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit (EVar "qualified")) (EListLit (ETuple (EVar "mname") (EVar "ifaces")) (EVar "qualified"))))))
 (DTypeSig false "methodLevelConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "constraintIfaceIfMethodLevel") (EVar "typarams")) (EVar "c")))) (EVar "cs")) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t"))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t")))
@@ -3881,10 +3893,10 @@ nodeTag _ = "?"
 (DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
 (DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfaceEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "methodConstraintIfaceEntries") (EVar "d")))
-(DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "methodConstraintIfaceEntry") (EVar "typarams")) (EVar "m")))) (EVar "methods")))
+(DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "methodConstraintIfaceEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "typarams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "methodConstraintIfaceEntries" (PWild) (EListLit))
-(DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "methodConstraintIfaceEntry" ((PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit) (EListLit (ETuple (EVar "mname") (EVar "ifaces")))))))
+(DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "methodConstraintIfaceEntry" ((PVar "ifaceWord") (PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoLet false false (PVar "qualified") (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "ifaces"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit (EVar "qualified")) (EListLit (ETuple (EVar "mname") (EVar "ifaces")) (EVar "qualified"))))))
 (DTypeSig false "methodLevelConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "constraintIfaceIfMethodLevel") (EVar "typarams")) (EVar "c")))) (EVar "cs")) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t"))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t")))

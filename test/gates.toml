@@ -2601,7 +2601,7 @@ migration = "native-wrap"
 run = "test/diff_compiler_prelude_obj.sh"
 oracles = []
 sources = ["test/diff_compiler_prelude_obj.sh"]
-corpus = ["test/construct_fixtures", "test/llvm_fixtures", "test/wasm/fixtures"]
+corpus = ["test/construct_fixtures", "test/engine_fixtures", "test/llvm_fixtures", "test/prelude_obj_fixtures", "test/wasm/fixtures"]
 toolchain = ["clang"]
 
 [[gate]]

@@ -274,8 +274,8 @@ evRoutesOf (EvMethod _ _ _ _) =
   panic
     "evidence table: a dictionary application answered by a method occurrence"
 
--- The answer published for a method occurrence: its selected value arity,
--- dispatch route, selected impl's `requires` dicts and the method's own `=>`
+-- The answer published for a method occurrence: its selected denotation's pre-use
+-- arrow arity, dispatch route, selected impl's `requires` dicts and the method's own `=>`
 -- dicts.  The arity is fixed from the selected scheme before application can
 -- specialize its result.
 --

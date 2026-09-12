@@ -1436,6 +1436,31 @@ remain enabled. These measurements cover checking through the LSP; they do not
 establish retained-live-heap bounds or safe finalized caching, and do not replace
 the separate evaluator and backend validation.
 
+#### Selected-arity consumer integration
+
+The combined source at `58b79b8ab` replaces the broad dynamic-arity guard with
+selected occurrence arity, implementation-side saturation, and selected default
+metadata. It includes the CI repairs and native dispatch-before-partial-application
+follow-up. Both this revision and baseline `42a672d04` received two forced emitter
+rebuilds. The same M2 N0–N3 streams, fixed 1 GiB heaps, strict freshness and response
+checks were used; all eight streams produced the expected publications with empty
+diagnostics. Two allocation repetitions were byte-identical.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,233,369 | 315,375,616 | 48,621,680 | 49,740,384 |
+| playground | first warm | 24,989,585 | 25,140,253 | 4,582,960 | 4,591,264 |
+| playground | second warm | 24,992,346 | 25,145,453 | 4,607,264 | 4,603,312 |
+| import-list | cold | 538,444,939 | 547,460,112 | 93,186,688 | 93,966,576 |
+| import-list | first warm | 38,267,700 | 38,414,106 | 6,895,360 | 6,883,376 |
+| import-list | second warm | 38,295,429 | 38,429,110 | 6,914,640 | 6,906,640 |
+
+Maximum increases are 3.32% in instructions and 2.30% in allocated bytes, within
+the 25% soft budget. Warm increases remain below 0.62% and 0.19%, respectively.
+All three legacy caches remain enabled. These checking workloads do not establish
+retained-live-heap bounds or safe finalized caching, and do not replace executable
+backend and evaluator checks.
+
 #### Wasm dictionary alias size
 
 The modules arm of `test/wasm/diff_wasm_emitted_size.sh` exposed duplicated
