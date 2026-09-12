@@ -39,18 +39,8 @@
 import http.{Header, headerName, headerValue}
 import list.{head, reverse}
 import map.{Map(..), get, set}
-import string.{
-  contains,
-  fromChar,
-  fromUtf8,
-  isDigit,
-  split,
-  toChars,
-  toInt,
-  toLower,
-  trim,
-  utf8ByteLength,
-}
+import regex.{Regex, isFullMatch, mustCompile}
+import string.{fromUtf8, split, trim}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   maxConnectionsPerWindow,
@@ -317,42 +307,36 @@ lastHopToken raw =
 isAddressToken : String -> Bool
 isAddressToken token = isIPv4Address token || isIPv6Address token
 
+-- One definition of a decimal octet, shared by the plain quad and the
+-- IPv4-mapped tail below. Leading zeros are admitted: "007" is 7, and a
+-- proxy that writes them is still naming an address.
+decOctet : String
+decOctet = "(?:25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])"
+
+dottedQuad : String
+dottedQuad = "\{decOctet}\\.\{decOctet}\\.\{decOctet}\\.\{decOctet}"
+
+ipv4Re : Regex
+ipv4Re = mustCompile dottedQuad
+
+{- | Loose on purpose: this only has to reject non-address garbage
+   ("not-an-address", empty, punctuation), not validate a fully compliant IPv6
+   literal — the value is a rate-limit bucket key, not a routed address. So
+   either arm is enough: hex-or-colon throughout with at least one colon, or
+   hex-or-colon groups then a dotted quad.
+
+   That second arm is the IPv4-mapped form a dual-stack proxy emits
+   (`::ffff:198.51.100.7`). It is neither hex-only (the dots) nor a bare quad
+   (the colons), so a check of only those two shapes rejects it — and
+   rejecting it collapses every client behind such a proxy into the one shared
+   `direct` bucket, turning the per-client limiter into a global one with the
+   trust flag correctly set. -}
+ipv6Re : Regex
+ipv6Re =
+  mustCompile "[0-9a-fA-F:]*:[0-9a-fA-F:]*|(?:[0-9a-fA-F]*:)+\{dottedQuad}"
+
 isIPv4Address : String -> Bool
-isIPv4Address token =
-  let parts = split "." token
-  length parts == 4 && all isDecOctet parts
+isIPv4Address token = isFullMatch ipv4Re token
 
-isDecOctet : String -> Bool
-isDecOctet part =
-  let len = utf8ByteLength part
-  len >= 1
-    && len <= 3
-    && all isDigit (toChars part)
-    && (match toInt part
-      Some value => value >= 0 && value <= 255
-      None => False)
-
--- | Loose on purpose: this only has to reject non-address garbage
--- ("not-an-address", empty, punctuation), not validate a fully compliant
--- IPv6 literal — the value is a rate-limit bucket key, not a routed address.
 isIPv6Address : String -> Bool
-isIPv6Address token =
-  utf8ByteLength token > 0
-    && contains ":" token
-    && (all isHexOrColonChar (toChars token) || hasMappedIPv4Tail token)
-
-{- | The IPv4-mapped form a dual-stack proxy emits (`::ffff:198.51.100.7`):
-   hex-or-colon groups, then a dotted quad. It is neither hex-only (the dots)
-   nor a bare quad (the colons), so a check of only those two shapes rejects
-   it — and rejecting it collapses every client behind such a proxy into the
-   one shared `direct` bucket, turning the per-client limiter into a global
-   one with the trust flag correctly set. -}
-hasMappedIPv4Tail : String -> Bool
-hasMappedIPv4Tail token = match reverse (split ":" token)
-  tail :: groups =>
-    isIPv4Address tail
-      && all (group => all isHexOrColonChar (toChars group)) groups
-  [] => False
-
-isHexOrColonChar : Char -> Bool
-isHexOrColonChar c = contains (toLower (fromChar c)) "0123456789abcdef:"
+isIPv6Address token = isFullMatch ipv6Re token

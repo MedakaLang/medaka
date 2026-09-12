@@ -3,6 +3,7 @@
    Validation reports a typed cause. Callers own their diagnostic prefix and
    may deliberately collapse details at a protocol boundary. -}
 
+import regex.{Regex, isFullMatchBytes, mustCompile}
 import string.{toUtf8}
 
 public export data NsidError =
@@ -27,16 +28,13 @@ digitByte byte = byte >= 48 && byte <= 57
 alphaByte : Int -> Bool
 alphaByte byte = lowerByte byte || byte >= 65 && byte <= 90
 
-alphaNumericByte : Int -> Bool
-alphaNumericByte byte = alphaByte byte || digitByte byte
+-- Each rule below reports its own cause, so only the character-set SCANS are
+-- patterns; the length, hyphen and first-byte rules stay separate.
+authorityCharsRe : Regex
+authorityCharsRe = mustCompile "[a-zA-Z0-9-]*"
 
-validAuthorityBytes : Array Int -> Int -> Int -> Bool
-validAuthorityBytes bytes i end =
-  if i >= end then
-    True
-  else
-    (alphaByte bytes[i] || digitByte bytes[i] || bytes[i] == 45)
-      && validAuthorityBytes bytes (i + 1) end
+nameCharsRe : Regex
+nameCharsRe = mustCompile "[a-zA-Z0-9]*"
 
 validateAuthoritySegment : Array Int ->
   Int ->
@@ -51,7 +49,7 @@ validateAuthoritySegment bytes start end first =
     Err NsidAuthoritySegmentHyphen
   else if first && digitByte bytes[start] then
     Err NsidTopLevelStartsWithDigit
-  else if not (validAuthorityBytes bytes start end) then
+  else if not (isFullMatchBytes authorityCharsRe bytes start end) then
     Err NsidAuthorityNotNormalized
   else
     Ok ()
@@ -81,13 +79,6 @@ lastDotBefore bytes i end last =
   else
     lastDotBefore bytes (i + 1) end last
 
-validNameBytes : Array Int -> Int -> Int -> Bool
-validNameBytes bytes i end =
-  if i >= end then
-    True
-  else
-    alphaNumericByte bytes[i] && validNameBytes bytes (i + 1) end
-
 validateName : Array Int -> Int -> Int -> Result NsidError Unit
 validateName bytes start end =
   let size = end - start
@@ -95,7 +86,7 @@ validateName bytes start end =
     Err NsidNameLength
   else if digitByte bytes[start] || not (alphaByte bytes[start]) then
     Err NsidNameStart
-  else if not (validNameBytes bytes start end) then
+  else if not (isFullMatchBytes nameCharsRe bytes start end) then
     Err NsidNameCharacters
   else
     Ok ()

@@ -13,6 +13,11 @@
    codepoint but `\n`, and `\d`, `\w`, `\s`, `\b` and `(?i)` folding are
    ASCII only, matching `string.isDigit` and `string.toUpper`.
 
+   A subject may also be a UTF-8 byte buffer rather than a `String`:
+   `isFullMatchBytes` and `findBytes` match over a window of an `Array Int`
+   with each byte a code 0..255, which is what a protocol grammar whose limits
+   are stated in bytes wants.
+
    `compile` reports a bad pattern as an `Err`, and `mustCompile` panics,
    which suits a pattern written as a literal. A top-level binding is
    evaluated once, so `wordRe = mustCompile "\\w+"` compiles one time
@@ -51,11 +56,13 @@
 -- Threads are added in priority order and everything below a thread that
 -- reaches IMatch is cut, which is where leftmost-first comes from.
 --
--- The VM runs over an Array Int of codepoints rather than over the String,
--- so a byte front door (each byte a code 0..255) can reuse it unchanged.
+-- The VM runs over an Array Int with a (start, end) window rather than over
+-- the String, which is what lets `isFullMatchBytes`/`findBytes` be a second
+-- front door onto the same engine with each byte a code 0..255.
 
+import array.{sliceClamped as sliceBytes}
 import list.{get, reverse}
-import string.{fromChars, isDigit, repeat, sliceClamped, toChars}
+import string.{fromChars, fromUtf8, isDigit, repeat, sliceClamped, toChars}
 
 -- # Types
 
@@ -847,6 +854,7 @@ compileNode (NGroup idx body) pc =
 data Vm = Vm {
   prog : Array Inst,
   codes : Array Int,
+  subjStart : Int,
   subjEnd : Int,
   multi : Bool,
   anchorEnd : Bool,
@@ -916,7 +924,7 @@ addThread vm list pc pos slots =
 assertHolds : Vm -> Int -> Int -> Bool
 assertHolds vm kind pos =
   if kind == asStart then
-    pos == 0 || vm.multi && arrayGetUnsafe (pos - 1) vm.codes == 10
+    pos == vm.subjStart || vm.multi && arrayGetUnsafe (pos - 1) vm.codes == 10
   else if kind == asEnd then
     pos == vm.subjEnd || vm.multi && arrayGetUnsafe pos vm.codes == 10
   else if kind == asWordB then
@@ -925,7 +933,8 @@ assertHolds vm kind pos =
     wordAt vm (pos - 1) == wordAt vm pos
 
 wordAt : Vm -> Int -> Bool
-wordAt vm i = i >= 0 && i < vm.subjEnd && isWordCode (arrayGetUnsafe i vm.codes)
+wordAt vm i =
+  i >= vm.subjStart && i < vm.subjEnd && isWordCode (arrayGetUnsafe i vm.codes)
 
 -- One position's worth of work: advance every thread past the code at `pos`
 -- into `nlist`.  A thread reaching IMatch records its slots and cuts every
@@ -1013,10 +1022,33 @@ searchFrom : Regex ->
   Ref Int ->
   Option (Array Int)
 searchFrom re codes startAt anchorStart anchorEnd steps =
+  searchWindow
+    re
+    codes
+    (0, arrayLength codes)
+    startAt
+    anchorStart
+    anchorEnd
+    steps
+
+-- The window is what the byte front door needs: a validator holding one
+-- buffer grades a slice of it without copying, and `^`, `$` and `\b` mean the
+-- ends of the WINDOW, not of the buffer, so a slice grades the same as that
+-- slice standing alone.
+searchWindow : Regex ->
+  Array Int ->
+  (Int, Int) ->
+  Int ->
+  Bool ->
+  Bool ->
+  Ref Int ->
+  Option (Array Int)
+searchWindow re codes (lo, hi) startAt anchorStart anchorEnd steps =
   let vm = Vm {
     prog = re.prog,
     codes = codes,
-    subjEnd = arrayLength codes,
+    subjStart = lo,
+    subjEnd = hi,
     multi = re.multiline,
     anchorEnd = anchorEnd,
     nslots = 2 * (re.ngroups + 1),
@@ -1024,6 +1056,14 @@ searchFrom re codes startAt anchorStart anchorEnd steps =
     found = Ref None,
   }
   vmSearch vm startAt anchorStart
+
+-- `[lo, hi)` narrowed to the array, with `lo` never past `hi`, so no caller
+-- can hand the VM a window that indexes outside the buffer.
+clampWindow : Array Int -> Int -> Int -> (Int, Int)
+clampWindow codes start end =
+  let n = arrayLength codes
+  let hi = max 0 (min end n)
+  (max 0 (min start hi), hi)
 
 -- Threads added to a list over one `find`.  The linear-time doctest at the
 -- bottom of this module is the only caller; it exists so the bound can be
@@ -1034,19 +1074,25 @@ findSteps re s =
   let _ = searchFrom re (codesOf s) 0 False False steps
   !steps
 
-mkMatch : Regex -> String -> Array Int -> Match
-mkMatch re s slots =
+-- `textOf lo hi` renders one span: a String subject slices itself, a byte
+-- subject decodes the span, and the span walk is written once either way.
+mkMatchWith : (Int -> Int -> String) -> Regex -> Array Int -> Match
+mkMatchWith textOf re slots =
   let lo = arrayGetUnsafe 0 slots
   let hi = arrayGetUnsafe 1 slots
   Match {
     start = lo,
     end = hi,
-    text = sliceClamped lo hi s,
-    groups = groupsOf re s slots 1,
+    text = textOf lo hi,
+    groups = groupsOfWith textOf re slots 1,
   }
 
-groupsOf : Regex -> String -> Array Int -> Int -> List (Option Group)
-groupsOf re s slots k =
+groupsOfWith : (Int -> Int -> String) ->
+  Regex ->
+  Array Int ->
+  Int ->
+  List (Option Group)
+groupsOfWith textOf re slots k =
   if k > re.ngroups then
     []
   else
@@ -1056,8 +1102,11 @@ groupsOf re s slots k =
       if lo < 0 || hi < 0 then
         None
       else
-        Some Group { start = lo, end = hi, text = sliceClamped lo hi s }
-    g :: groupsOf re s slots (k + 1)
+        Some Group { start = lo, end = hi, text = textOf lo hi }
+    g :: groupsOfWith textOf re slots (k + 1)
+
+mkMatch : Regex -> String -> Array Int -> Match
+mkMatch re s slots = mkMatchWith (lo hi => sliceClamped lo hi s) re slots
 
 matchOnce : Regex -> String -> Int -> Bool -> Bool -> Option Match
 matchOnce re s startAt anchorStart anchorEnd =
@@ -1294,6 +1343,76 @@ findFrom from re s =
 export
 fullMatch : Regex -> String -> Option Match
 fullMatch re s = matchOnce re s 0 True True
+
+-- # Byte subjects
+--
+-- One engine, two front doors.  A site holding a UTF-8 byte buffer grades a
+-- window of it directly, with each byte taken as a code 0..255, rather than
+-- decoding back to a String to be re-encoded as codepoints.
+
+{- | Whether the pattern matches the whole of `bytes[start..end)`, each byte
+   taken as a code 0..255.
+
+   The validator shape for a byte buffer, and the reason a protocol grammar
+   wants this door: a bound written into the pattern counts BYTES, which is
+   what a DNS label, a DID or an RFC 7230 token means by its limits, and the
+   window grades a slice of a larger buffer without copying it. `start` and
+   `end` are clamped to the buffer, and `^`, `$` and `\b` mean the ends of the
+   window.
+
+   A pattern reaching this door should name only ASCII: `[a-z]` matches the
+   byte 97, and a non-ASCII codepoint arrives as its two or more UTF-8 bytes,
+   each of them outside every ASCII class. `toUtf8 "abc"` is `[|97, 98, 99|]`.
+
+   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
+   True
+   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
+   True
+   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
+   False -}
+export
+isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+isFullMatchBytes re bytes start end =
+  let (lo, hi) = clampWindow bytes start end
+  match searchWindow re bytes (lo, hi) lo True True (Ref 0)
+    Some _ => True
+    None => False
+
+-- An out-of-range window is shorter, never a panic, and an empty one matches
+-- only a pattern that can match nothing.
+-- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 0 99
+-- True
+-- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 5 1
+-- True
+-- > isFullMatchBytes (mustCompile "[a-z]+") [|97|] 5 1
+-- False
+
+-- `^` and `$` are the ends of the WINDOW, so a slice grades as that slice
+-- standing alone.
+-- > isFullMatchBytes (mustCompile "^b$") [|97, 98, 99|] 1 2
+-- True
+
+{- | The leftmost match in `bytes[start..end)`, or `None`.
+
+   The peer of `find` over a byte buffer. `start`, `end` and the reported
+   offsets are byte offsets into the whole buffer, and the match's text and
+   each group's text are the matched bytes decoded as UTF-8, so a span that
+   cuts a codepoint decodes the way `fromUtf8` decodes any malformed input.
+   Keeping byte patterns ASCII is what keeps that from arising.
+
+   > map (m => m.text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   Some "12"
+   > map (m => m.start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   Some 1
+   > findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
+   None -}
+export
+findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+findBytes re bytes start end =
+  let (lo, hi) = clampWindow bytes start end
+  map
+    (mkMatchWith (from to => fromUtf8 (sliceBytes from to bytes)) re)
+    (searchWindow re bytes (lo, hi) lo False False (Ref 0))
 
 {- | Every match, left to right, none of them overlapping.
 

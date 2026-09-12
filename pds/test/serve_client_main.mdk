@@ -21,14 +21,13 @@ import lib.credential.{
 import sha256.{sha256}
 import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
+import regex.{Regex, find, mustCompile}
 import string.{
   contains,
-  drop,
   fromChars,
   fromUtf8,
   lines,
   split,
-  startsWith,
   toChars,
   toInt,
   toUtf8,
@@ -82,27 +81,37 @@ statusOf statusLine = match split " " statusLine
     None => Err "serve_client: unparsable status code in '\{statusLine}'"
   _ => Err "serve_client: unparsable status line '\{statusLine}'"
 
+-- Response headers are always lowercase (`serializeResponse` emits them that
+-- way), so these two patterns are case-sensitive. Each captures the whole
+-- field value rather than matching its shape: a line that names the field but
+-- carries an unreadable value is still THIS field's line, and must report its
+-- own error rather than fall through to the next line.
+contentLengthRe : Regex
+contentLengthRe = mustCompile "^content-length:(.*)$"
+
+contentTypeRe : Regex
+contentTypeRe = mustCompile "^content-type:(.*)$"
+
 contentLengthOf : List String -> Result String Int
 contentLengthOf [] = Err "serve_client: response has no content-length header"
-contentLengthOf (line :: rest) =
-  -- Response headers are always lowercase (`serializeResponse` emits them
-  -- that way), so a plain case-sensitive `startsWith` is enough here.
-  if startsWith "content-length:" line then match toInt (trim (drop 15 line))
-    Some n => Ok n
-    None => Err "serve_client: unparsable content-length in '\{line}'"
-  else
-    contentLengthOf rest
+contentLengthOf (line :: rest) = match find contentLengthRe line
+  None => contentLengthOf rest
+  Some m => match m.groups
+    [Some g] => match toInt (trim g.text)
+      Some n => Ok n
+      None => Err "serve_client: unparsable content-length in '\{line}'"
+    _ => Err "serve_client: unparsable content-length in '\{line}'"
 
 -- | The response's declared media type, or the empty string when it declares
 -- none. `sync.getBlob` answers with the blob's DECLARED type here, which is
 -- the one thing about a blob content addressing cannot check.
 contentTypeOf : List String -> String
 contentTypeOf [] = ""
-contentTypeOf (line :: rest) =
-  if startsWith "content-type:" line then
-    trim (drop 13 line)
-  else
-    contentTypeOf rest
+contentTypeOf (line :: rest) = match find contentTypeRe line
+  None => contentTypeOf rest
+  Some m => match m.groups
+    [Some g] => trim g.text
+    _ => ""
 
 parseHeaderBlock : Array Int -> Result String (Int, String, Int)
 parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)

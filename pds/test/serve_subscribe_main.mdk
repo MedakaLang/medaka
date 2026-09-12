@@ -33,18 +33,8 @@ import lib.websocket.{
   parseClosePayload,
 }
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
-import string.{
-  contains,
-  drop,
-  fromUtf8,
-  lines,
-  split,
-  startsWith,
-  toInt,
-  toLower,
-  toUtf8,
-  trim,
-}
+import regex.{Regex, find, mustCompile}
+import string.{contains, fromUtf8, lines, split, toInt, toUtf8, trim}
 import time.{Duration, elapsedSince, monotonic, seconds, sleep}
 
 -- # The handshake
@@ -132,13 +122,18 @@ statusOf headerText = match lines headerText
       None => Err "serve_subscribe: unparsable status code in '\{statusLine}'"
     _ => Err "serve_subscribe: unparsable status line '\{statusLine}'"
 
-headerValueOf : String -> List String -> String
+-- A server may spell the field name in any case, hence `(?i)`; the VALUE is
+-- read from the line as it arrived, not from a folded copy.
+acceptRe : Regex
+acceptRe = mustCompile "(?i)^sec-websocket-accept:(.*)$"
+
+headerValueOf : Regex -> List String -> String
 headerValueOf _ [] = ""
-headerValueOf wanted (line :: rest) =
-  if startsWith wanted (toLower line) then
-    trim (drop (stringLength wanted) line)
-  else
-    headerValueOf wanted rest
+headerValueOf wanted (line :: rest) = match find wanted line
+  None => headerValueOf wanted rest
+  Some m => match m.groups
+    [Some g] => trim g.text
+    _ => ""
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -157,7 +152,7 @@ mustUpgrade conn cursor =
           "serve_subscribe: handshake answered \{intToString status}, not 101"
       else
         let fields = lines headerText
-        let got = headerValueOf "sec-websocket-accept:" fields
+        let got = headerValueOf acceptRe fields
         match handshakeAccept handshakeKey
           Err message => panic "serve_subscribe: \{message}"
           Ok wanted =>

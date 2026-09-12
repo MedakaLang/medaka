@@ -17,7 +17,7 @@
 import json.{Json(..), get, jObject, stringify}
 import lib.cid.{Cid, cidForRaw, cidFromString, cidToString}
 import lib.resource_limits.{checkAccountBlobBytes, checkBlobBytes}
-import string.{isAlphaNum, split, toChars}
+import regex.{Regex, isFullMatch, mustCompile}
 
 -- | Content-address a blob's raw bytes with the raw codec (reuses
 -- `cidForRaw`; blobs are not a new CID kind).
@@ -49,18 +49,8 @@ blobRefSize (BlobRef _ _ size) = size
 -- RFC 2045 §5.1 token characters, restricted to the ASCII subset relevant to
 -- a `type/subtype` media-type shape (no parameters admitted here — atproto
 -- blob refs carry a bare media type).
-mimeTokenChar : Char -> Bool
-mimeTokenChar c = isAlphaNum c || c == '-' || c == '.' || c == '+' || c == '_'
-
-allTokenChars : Array Char -> Int -> Bool
-allTokenChars chars i =
-  if i >= arrayLength chars then
-    True
-  else
-    mimeTokenChar chars[i] && allTokenChars chars (i + 1)
-
-nonEmptyToken : String -> Bool
-nonEmptyToken s = stringLength s > 0 && allTokenChars (toChars s) 0
+mimeShapeRe : Regex
+mimeShapeRe = mustCompile "[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+"
 
 {- | Syntactic MIME-type shape admission: exactly one `/` separating a
    non-empty type and subtype, each drawn from RFC 2045 token characters. Not
@@ -79,9 +69,7 @@ nonEmptyToken s = stringLength s > 0 && allTokenChars (toChars s) 0
    False -}
 export
 validMimeShape : String -> Bool
-validMimeShape mimeType = match split "/" mimeType
-  [typePart, subtypePart] => nonEmptyToken typePart && nonEmptyToken subtypePart
-  _ => False
+validMimeShape mimeType = isFullMatch mimeShapeRe mimeType
 
 -- ── admission: the one place size caps are enforced ─────────────────────────
 
