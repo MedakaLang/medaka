@@ -1824,9 +1824,9 @@ evalMethodAt : EvalEnv (Value e) ->
 -- machinery, now reachable from the shadow arm that the marking prePass consumes.
 evalMethodAtEv : EvalEnv (Value e) ->
   String ->
-  (Route, List Route, List Route) ->
+  (Int, Route, List Route, List Route) ->
   <e> Value e
-evalMethodAtEv env name (route, implRoutes, methodRoutes) =
+evalMethodAtEv env name (_, route, implRoutes, methodRoutes) =
   evalMethodAt env name route implRoutes methodRoutes
 
 evalMethodAt env name (RLocal sym dicts) _ _ =
@@ -5477,8 +5477,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
 (DTypeSig false "evalMethodAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
+(DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple PWild (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym")))) (EVar "dicts")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name"))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
 (DTypeSig true "applyMethodDicts" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
@@ -7005,8 +7005,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
 (DTypeSig false "evalMethodAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
+(DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple PWild (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym")))) (EVar "dicts")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name"))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
 (DTypeSig true "applyMethodDicts" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))

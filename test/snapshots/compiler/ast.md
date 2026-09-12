@@ -1,5 +1,5 @@
 # META
-source_lines=2096
+source_lines=2097
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -947,7 +947,8 @@ public export data EvId = EvId String Int
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
--- `EMethodAt` node's three answers (its dispatch route, the selected impl's
+-- `EMethodAt` node's selected value arity and three route answers (its dispatch
+-- route, the selected impl's
 -- `requires` dicts, the method's own `=>` dicts) in the order the node's three
 -- cells used to hold them.  One node can be the destination of zero goals (the
 -- unbound-method recovery arm writes a final route without pushing one) or three
@@ -961,7 +962,7 @@ public export data EvId = EvId String Int
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
-  | EvMethod Route (List Route) (List Route)
+  | EvMethod Int Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 
@@ -2195,7 +2196,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
-(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
@@ -2485,7 +2486,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
-(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
