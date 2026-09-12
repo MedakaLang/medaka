@@ -118,12 +118,12 @@
 | `test/diff_compiler_build.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 20877 | 112 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_call_arity.sh` | STRUCTURAL-IR | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 184883 | 320 | WRAP: spawns ./medaka + diffs, module does the same [clang,python3] |
 | `test/diff_compiler_capability_matrix.sh` | RATCHET/LEDGER | multiple (parses interpreter/LLVM/wasm dispatch SOURCE text; no execution of any) | N | NO | NATIVE-KIND-RUNNER | 1880 | 481 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_check.sh` | GOLDEN | native (compiled test/bin oracle) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 8578 | 108 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_check_batch.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 3566 | 72 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native (compiled test/bin oracle) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 8578 | 108 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 3566 | 72 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_check_cli_modules.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, SECTION-SPLIT | 35548 | 2926 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_check_json.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 7472 | 240 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
-| `test/diff_compiler_check_match.sh` | GOLDEN | native (compiled test/bin oracle) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 165 | 37 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_check_modules.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 1514 | 81 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native (compiled test/bin oracle) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 165 | 37 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 1514 | 81 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_check_policy.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 2478 | 210 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_check_wrapper_callers.sh` | RATCHET/LEDGER | none | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 87 | 153 | REWRITE: probe/static text becomes library calls [python3] |
 | `test/diff_compiler_cli_help_conformance.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 12885 | 197 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
@@ -196,8 +196,8 @@
 | `test/diff_compiler_origin_agreement.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL | 2427 | 512 | REWRITE: probe/static text becomes library calls [clang] |
 | `test/diff_compiler_os_entropy.sh` | OTHER | multiple | N | NO | NATIVE-KIND-RUNNER | 3413 | 143 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_parse_error_loc.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 1839 | 70 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/diff_compiler_parse_errors.sh` | GOLDEN | none | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 335 | 66 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_parse_result.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 142 | 163 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | none | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 335 | 66 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 142 | 163 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_perf_stage_census.sh` | RATCHET/LEDGER | none | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 37 | 207 | REWRITE: probe/static text becomes library calls [python3] |
 | `test/diff_compiler_prelude_obj.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 29397 | 145 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_prelude_shadow_census.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, INVERTED-POLARITY | 67846 | 189 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
@@ -205,9 +205,9 @@
 | `test/diff_compiler_references_tool.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 812 | 203 | WRAP: spawns ./medaka + diffs, module does the same [python3] |
 | `test/diff_compiler_rejection_parity.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE, EXTERNAL-TOOL | 4372 | 177 | REWRITE: probe/static text becomes library calls [clang,node] |
 | `test/diff_compiler_repl.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 467 | 64 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_resolve.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 1370 | 41 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_resolve_batch.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 221 | 28 | REWRITE: probe/static text becomes library calls |
-| `test/diff_compiler_resolve_modules.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 1240 | 78 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 1370 | 41 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 221 | 28 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_check_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 1240 | 78 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_rt_obj.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 30299 | 239 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_run_check_agreement.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 108345 | 159 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_run_entry_subdir.sh` | CLI-CONTRACT | multiple | N | NO | NATIVE-KIND-RUNNER | 1685 | 119 | WRAP: spawns ./medaka + diffs, module does the same |

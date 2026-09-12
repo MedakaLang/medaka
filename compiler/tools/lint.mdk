@@ -96,11 +96,23 @@ import hash_map.{
   size,
   findWithDefault,
 }
-import list.{take, drop}
-import string.{drop as strDrop, isAlpha, isDigit, toLower, words}
+import list.{take, drop, last}
+import string.{drop as strDrop, toLower, words}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
+import regex.{
+  Regex,
+  RegexError(..),
+  Match,
+  compile,
+  mustCompile,
+  isMatch,
+  find as reFind,
+  findAll as reFindAll,
+  replaceAll,
+  escape,
+}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
 import frontend.lexer.{
@@ -240,6 +252,9 @@ ruleNameClauseMap = "rule-clause-map"
 
 ruleNameDirectiveReason : String
 ruleNameDirectiveReason = "rule-directive-reason"
+
+ruleNameRegexLiteral : String
+ruleNameRegexLiteral = "rule-regex-literal"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -531,6 +546,17 @@ directiveReasonRule = Rule {
   fix = None,
 }
 
+regexLiteralRule : Rule
+regexLiteralRule = Rule {
+  name = ruleNameRegexLiteral,
+  descr =
+    "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleRegexLiteral,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -561,6 +587,7 @@ allRules = [
   clauseMapRule,
   duplicateBodySameFileRule,
   directiveReasonRule,
+  regexLiteralRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -1264,28 +1291,39 @@ parseDirective c =
   else
     None
 
+lintDisableNextLineRe : Regex
+lintDisableNextLineRe = keywordRe "lint-disable-next-line"
+
+lintDisableLineRe : Regex
+lintDisableLineRe = keywordRe "lint-disable-line"
+
+lintDisableFileRe : Regex
+lintDisableFileRe = keywordRe "lint-disable-file"
+
+-- `kw` at the start of `s`, followed by end-of-string or whitespace (so
+-- `lint-disable-lineXYZ` does NOT match `lint-disable-line`), with the
+-- remainder captured in group 1.
+keywordRe : String -> Regex
+keywordRe kw = mustCompile ("^" ++ escape kw ++ "($|[ \\t].*)$")
+
 parseDirectiveBody : Int -> String -> Option Directive
-parseDirectiveBody line s = match matchKeyword "lint-disable-next-line" s
+parseDirectiveBody line s = match matchKeyword lintDisableNextLineRe s
   Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
-  None => match matchKeyword "lint-disable-line" s
+  None => match matchKeyword lintDisableLineRe s
     Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
     None =>
       map
         (names => Directive DScopeFile (parseRuleNames names))
-        (matchKeyword "lint-disable-file" s)
+        (matchKeyword lintDisableFileRe s)
 
--- If `s` starts with keyword `kw` AND the keyword is followed by end-of-string
--- or whitespace (so `lint-disable-lineXYZ` does NOT match), return the trimmed
--- remainder (the rule-name list); else None.
-matchKeyword : String -> String -> Option String
-matchKeyword kw s
-  | startsWith kw s =
-    let rest = stringSlice (stringLength kw) (stringLength s) s
-    if rest == "" || startsWith " " rest || startsWith "\t" rest then
-      Some (trimWs rest)
-    else
-      None
-  | otherwise = None
+-- If `s` matches `re` (`keywordRe`'s keyword-plus-boundary shape), return the
+-- trimmed remainder (the rule-name list) captured in group 1; else None.
+matchKeyword : Regex -> String -> Option String
+matchKeyword re s = match reFind re s
+  Some m => match m.groups
+    (Some g) :: _ => Some (trimWs g.text)
+    _ => None
+  None => None
 
 -- Split a rule-name list on commas and/or spaces, dropping empty fragments.
 parseRuleNames : String -> List String
@@ -1530,29 +1568,19 @@ replaceAt n x (y :: rest) = y :: replaceAt (n - 1) x rest
 -- whole-word (identifier-token) occurrence of `name` in `s`.  Boundaries are any
 -- non-identifier char (isAlnum covers alnum/_/').  Over-matches into string
 -- literals etc. — that only makes the fix gate MORE conservative, never less.
+--
+-- The boundary is a hand-built CONSUMING class around the escaped name
+-- (`(?:^|[^A-Za-z0-9_'])…(?:$|[^A-Za-z0-9_'])`) rather than the engine's
+-- built-in `\b`, which is ASCII `[A-Za-z0-9_]` only and would narrow a name
+-- ending in `'`. `isMatch` tries every start position independently (it is
+-- not a left-to-right non-overlapping scan), so this is safe for a plain
+-- existence check even though the class is consuming.
 wholeWordIn : String -> String -> Bool
-wholeWordIn name s =
-  let cs = stringToChars s
-  let nlen = stringLength name
-  wholeWordGo name nlen s cs (arrayLength cs) 0
+wholeWordIn name s = isMatch (mustCompile (wholeWordPattern name)) s
 
-wholeWordGo : String -> Int -> String -> Array Char -> Int -> Int -> Bool
-wholeWordGo name nlen s cs n i
-  | i + nlen > n = False
-  | boundaryAt cs i
-    && boundaryAt cs (i + nlen)
-    && stringSlice i (i + nlen) s == name = True
-  | otherwise = wholeWordGo name nlen s cs n (i + 1)
-
--- position j is a boundary iff at least one neighbour across the candidate edge
--- is NOT an identifier char (or off the ends of the string).
-boundaryAt : Array Char -> Int -> Bool
-boundaryAt cs j
-  | j == 0 = True
-  | j >= arrayLength cs = True
-  | otherwise =
-    not (isAlnum (arrayGetUnsafe (j - 1) cs))
-      || not (isAlnum (arrayGetUnsafe j cs))
+wholeWordPattern : String -> String
+wholeWordPattern name =
+  "(?:^|[^A-Za-z0-9_'])" ++ escape name ++ "(?:$|[^A-Za-z0-9_'])"
 
 -- ── rule: destructure-in-param ────────────────────────────────────────────────
 -- The single-arm sibling of `rule-match-on-param`.  A `DFunDef _ name pats body`
@@ -5153,27 +5181,51 @@ promissoryLine (l :: rest) i
   | isPromissoryText (stringToLower (stripQuoted l)) = Some (i, l)
   | otherwise = promissoryLine rest (i + 1)
 
+nothingReadsRe : Regex
+nothingReadsRe = mustCompile (escape "nothing reads")
+
+yetRe : Regex
+yetRe = mustCompile (escape "yet")
+
+promissoryPhraseRe : Regex
+promissoryPhraseRe =
+  mustCompile
+    (joinWith
+      "|"
+      (map escape [
+        "no reader yet",
+        "no readers yet",
+        "no consumer yet",
+        "no consumers yet",
+        "do not add a reader",
+        "don't add a reader",
+      ]))
+
 isPromissoryText : String -> Bool
 isPromissoryText t =
-  let has = needle => isSome (stringIndexOf needle t)
-  has "nothing reads" && has "yet"
-    || has "no reader yet"
-    || has "no readers yet"
-    || has "no consumer yet"
-    || has "no consumers yet"
-    || has "do not add a reader"
-    || has "don't add a reader"
+  isMatch nothingReadsRe t && isMatch yetRe t || isMatch promissoryPhraseRe t
+
+quoteCharRe : Regex
+quoteCharRe = mustCompile "\""
+
+pairedQuoteRe : Regex
+pairedQuoteRe = mustCompile "\"[^\"]*\""
 
 -- Drop every double-quoted span (an unterminated quote runs to end of line).
+-- Pairing is sequential from the start (1st+2nd quote, 3rd+4th, …), so an odd
+-- total count means the LAST quote is the unpaired one; truncate there first
+-- (matching the original recursion's per-line "runs to end of line" base
+-- case), then replace every remaining paired span with a single space.
 stripQuoted : String -> String
-stripQuoted s = match stringIndexOf "\"" s
-  None => s
-  Some i =>
-    let after = stringSlice (i + 1) (stringLength s) s
-    match stringIndexOf "\"" after
-      None => stringSlice 0 i s
-      Some j =>
-        "\{stringSlice 0 i s} \{stripQuoted (stringSlice (j + 1) (stringLength after) after)}"
+stripQuoted s =
+  let quotes = reFindAll quoteCharRe s
+  let truncated =
+    if listLen quotes % 2 == 1 then match last quotes
+      Some m => stringSlice 0 m.start s
+      None => s
+    else
+      s
+  replaceAll pairedQuoteRe " " truncated
 
 -- The subject of a claim, per the header's order.
 claimSubject : Array String -> (Int, String, CommentBlock) -> Option String
@@ -5231,15 +5283,13 @@ dropPrefixWord w s
     trimWs (stringSlice (stringLength w) (stringLength s) s)
   | otherwise = s
 
-leadingIdent : String -> String
-leadingIdent s =
-  let cs = stringToChars s
-  stringSlice 0 (subjectIdentEnd cs (arrayLength cs) 0) s
+leadingIdentRe : Regex
+leadingIdentRe = mustCompile "^[A-Za-z0-9_']+"
 
-subjectIdentEnd : Array Char -> Int -> Int -> Int
-subjectIdentEnd cs n i
-  | i < n && isIdentChar (arrayGetUnsafe i cs) = subjectIdentEnd cs n (i + 1)
-  | otherwise = i
+leadingIdent : String -> String
+leadingIdent s = match reFind leadingIdentRe s
+  Some m => m.text
+  None => ""
 
 isIdentChar : Char -> Bool
 isIdentChar ch = isAlnum ch || ch == '_' || ch == '\''
@@ -5322,27 +5372,24 @@ identBoundaryAt cs i =
   i >= arrayLength cs || not (isIdentChar (arrayGetUnsafe i cs))
 
 -- Whole-word occurrence of `w` in `line` that is not an assignment target.
+-- `reFindAll` locates every raw occurrence of `w`; the boundary and
+-- assignment-target checks stay plain code and are applied to each match's
+-- OWN position afterward (match, then test the tail), rather than folded
+-- into the pattern — a consuming boundary class baked into the pattern would
+-- make two occurrences of `w` separated by exactly one boundary char (e.g.
+-- `a[a]`) invisible to a left-to-right non-overlapping scan, since the first
+-- match would consume the shared boundary character the second needs.
 wordReadIn : String -> String -> Bool
 wordReadIn w line =
   let cs = stringToChars line
-  let ws = stringToChars w
-  wordReadScan cs (arrayLength cs) ws (arrayLength ws) 0
+  let n = arrayLength cs
+  anyList (m => wordReadOk cs n m) (reFindAll (mustCompile (escape w)) line)
 
-wordReadScan : Array Char -> Int -> Array Char -> Int -> Int -> Bool
-wordReadScan cs n ws m i
-  | i + m > n = False
-  | charsMatchAt cs ws m i 0
-    && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) cs)))
-    && identBoundaryAt cs (i + m)
-    && not (assignFollows cs n (i + m)) = True
-  | otherwise = wordReadScan cs n ws m (i + 1)
-
-charsMatchAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-charsMatchAt cs ws m i j
-  | j >= m = True
-  | arrayGetUnsafe (i + j) cs == arrayGetUnsafe j ws =
-    charsMatchAt cs ws m i (j + 1)
-  | otherwise = False
+wordReadOk : Array Char -> Int -> Match -> Bool
+wordReadOk cs n m =
+  (m.start == 0 || not (isIdentChar (arrayGetUnsafe (m.start - 1) cs)))
+    && identBoundaryAt cs m.end
+    && not (assignFollows cs n m.end)
 
 assignFollows : Array Char -> Int -> Int -> Bool
 assignFollows cs n i
@@ -6503,24 +6550,17 @@ isNonReasonToken raw =
 -- reason -- checked char-by-char rather than against a quoted "rule-..."
 -- literal, which would falsely register this heuristic as an unenrolled
 -- rule name under `diff_compiler_lint_baseline.sh`'s assertion 1b.
+ruleNameTokenRe : Regex
+ruleNameTokenRe = mustCompile "^rule-"
+
 isRuleNameToken : String -> Bool
-isRuleNameToken low =
-  startsWith "rule" low
-    && stringLength low > 4
-    && arrayGetUnsafe 4 (stringToChars low) == '-'
+isRuleNameToken low = isMatch ruleNameTokenRe low
+
+issueRefTokenRe : Regex
+issueRefTokenRe = mustCompile "^#[0-9]+$"
 
 isIssueRefToken : String -> Bool
-isIssueRefToken low = startsWith "#" low && isNonEmptyDigits (strDrop 1 low)
-
-isNonEmptyDigits : String -> Bool
-isNonEmptyDigits s =
-  stringLength s > 0 && allDigitsGo (stringToChars s) 0 (stringLength s)
-
-allDigitsGo : Array Char -> Int -> Int -> Bool
-allDigitsGo chars i n
-  | i >= n = True
-  | isDigit (arrayGetUnsafe i chars) = allDigitsGo chars (i + 1) n
-  | otherwise = False
+isIssueRefToken low = isMatch issueRefTokenRe low
 
 stripTrailingPunct : String -> String
 stripTrailingPunct s =
@@ -6536,17 +6576,11 @@ isTrailingPunctChar : Char -> Bool
 isTrailingPunctChar ch =
   ch == ':' || ch == '.' || ch == ',' || ch == ';' || ch == '!' || ch == '?'
 
-hasSubstantiveWord : String -> Bool
-hasSubstantiveWord s =
-  hasSubstantiveWordGo (stringToChars s) 0 (stringLength s) 0
+substantiveWordRe : Regex
+substantiveWordRe = mustCompile "[A-Za-z]{4}"
 
-hasSubstantiveWordGo : Array Char -> Int -> Int -> Int -> Bool
-hasSubstantiveWordGo chars i n run
-  | run >= 4 = True
-  | i >= n = False
-  | isAlpha (arrayGetUnsafe i chars) =
-    hasSubstantiveWordGo chars (i + 1) n (run + 1)
-  | otherwise = hasSubstantiveWordGo chars (i + 1) n 0
+hasSubstantiveWord : String -> Bool
+hasSubstantiveWord s = isMatch substantiveWordRe s
 
 directiveReasonFinding : Comment -> Finding
 directiveReasonFinding c = Finding {
@@ -6556,3 +6590,72 @@ directiveReasonFinding c = Finding {
   severity = SevWarning,
   loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
 }
+
+-- ── rule: regex-literal ────────────────────────────────────────────────────────
+-- A string literal passed directly to `compile`/`mustCompile` (bare, or
+-- module-qualified `regex.compile`/`regex.mustCompile`) is run through
+-- `regex.compile` AT LINT TIME; a bad pattern becomes one located finding
+-- instead of a `mustCompile` panic the FIRST time the line runs.
+regexLiteralCallNames : List String
+regexLiteralCallNames =
+  ["compile", "mustCompile", "regex.compile", "regex.mustCompile"]
+
+ruleRegexLiteral : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleRegexLiteral _ _ _ pos prog =
+  exprRuleFindings noExcl regexLiteralOf regexLiteralFinding pos prog
+
+-- The parser ELoc-wraps every expr, callee and argument included, so both
+-- must be peeled (`stripELoc`) before the shape match.
+regexLiteralOf : Expr -> Option Expr
+regexLiteralOf e = regexLiteralOfSpine e (stripELoc e)
+
+regexLiteralOfSpine : Expr -> Expr -> Option Expr
+regexLiteralOfSpine e (EApp callee arg) =
+  regexLiteralOfArg e (stripELoc callee) (stripELoc arg)
+regexLiteralOfSpine _ _ = None
+
+regexLiteralOfArg : Expr -> Expr -> Expr -> Option Expr
+regexLiteralOfArg e callee (ELit (LString pat))
+  | contains (exprToString callee) regexLiteralCallNames && isRegexErr pat =
+    Some e
+  | otherwise = None
+regexLiteralOfArg _ _ _ = None
+
+isRegexErr : String -> Bool
+isRegexErr pat = match compile pat
+  Err _ => True
+  Ok _ => False
+
+regexLiteralFinding : Option Loc -> Expr -> Finding
+regexLiteralFinding loc e = regexLiteralFindingSpine loc (stripELoc e)
+
+regexLiteralFindingSpine : Option Loc -> Expr -> Finding
+regexLiteralFindingSpine loc (EApp _ arg) =
+  regexLiteralFindingArg loc (stripELoc arg)
+-- `regexLiteralOf` only ever hits an `EApp _ (ELit (LString _))`.
+regexLiteralFindingSpine loc _ = regexLiteralErrFinding loc ""
+
+regexLiteralFindingArg : Option Loc -> Expr -> Finding
+regexLiteralFindingArg loc (ELit (LString pat)) = regexLiteralErrFinding loc pat
+regexLiteralFindingArg loc _ = regexLiteralErrFinding loc ""
+
+regexLiteralErrFinding : Option Loc -> String -> Finding
+regexLiteralErrFinding loc pat = match compile pat
+  Err (RegexError { message, position }) => Finding {
+    rule = ruleNameRegexLiteral,
+    message =
+      "regex pattern \"\{pat}\" fails to compile: \{message} (position \{intToString position})",
+    severity = SevWarning,
+    loc = loc,
+  }
+  Ok _ => Finding {
+    rule = ruleNameRegexLiteral,
+    message = "regex pattern \"\{pat}\" fails to compile",
+    severity = SevWarning,
+    loc = loc,
+  }

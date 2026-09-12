@@ -53,6 +53,610 @@ RBRACE
 NEWLINE
 EXPORT
 NEWLINE
+IDENT "connect"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+IDENT "connect"
+IDENT "host"
+IDENT "port"
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "startConnect"
+IDENT "host"
+IDENT "port"
+RPAREN
+LPAREN
+IDENT "started"
+FAT_ARROW
+IDENT "connectStarted"
+IDENT "started"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "startConnect"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "startConnect"
+IDENT "host"
+IDENT "port"
+EQUAL
+IDENT "liftIO"
+LPAREN
+IDENT "u"
+FAT_ARROW
+IDENT "netConnectStart"
+IDENT "host"
+IDENT "port"
+RPAREN
+NEWLINE
+IDENT "connectStarted"
+COLON
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+ARROW
+INDENT
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectStarted"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+IDENT "deferPure"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+NEWLINE
+IDENT "connectStarted"
+LPAREN
+UPPER "Ok"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "connectPending"
+IDENT "fd"
+NEWLINE
+IDENT "connectPending"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+IDENT "connectPending"
+IDENT "fd"
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "liftIO"
+LPAREN
+IDENT "u"
+FAT_ARROW
+IDENT "netConnectCheck"
+IDENT "fd"
+RPAREN
+RPAREN
+LPAREN
+IDENT "step"
+FAT_ARROW
+IDENT "connectStep"
+IDENT "fd"
+IDENT "step"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectStep"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "Unit"
+RPAREN
+ARROW
+NEWLINE
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectStep"
+IDENT "fd"
+LPAREN
+UPPER "Ok"
+UPPER "None"
+RPAREN
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "awaitAny"
+LBRACKET
+UPPER "WaitWrite"
+IDENT "fd"
+RBRACKET
+RPAREN
+LPAREN
+UNDERSCORE
+FAT_ARROW
+IDENT "connectPending"
+IDENT "fd"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectStep"
+IDENT "fd"
+LPAREN
+UPPER "Ok"
+LPAREN
+UPPER "Some"
+UNDERSCORE
+RPAREN
+RPAREN
+EQUAL
+IDENT "deferPure"
+LPAREN
+UPPER "Ok"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+RPAREN
+NEWLINE
+IDENT "connectStep"
+IDENT "fd"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+IDENT "abandonConnect"
+IDENT "fd"
+IDENT "e"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "connectWithin"
+COLON
+UPPER "Duration"
+ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Async"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectWithin"
+IDENT "d"
+IDENT "host"
+IDENT "port"
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "deadlineAfter"
+IDENT "d"
+RPAREN
+LPAREN
+IDENT "dl"
+FAT_ARROW
+IDENT "connectFrom"
+IDENT "dl"
+IDENT "host"
+IDENT "port"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectFrom"
+COLON
+UPPER "Wait"
+ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Async"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectFrom"
+IDENT "dl"
+IDENT "host"
+IDENT "port"
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "startConnect"
+IDENT "host"
+IDENT "port"
+RPAREN
+LPAREN
+IDENT "started"
+FAT_ARROW
+IDENT "connectUntilStarted"
+IDENT "dl"
+IDENT "started"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectUntilStarted"
+COLON
+UPPER "Wait"
+ARROW
+INDENT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Async"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectUntilStarted"
+UNDERSCORE
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+IDENT "deferPure"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+NEWLINE
+IDENT "connectUntilStarted"
+IDENT "dl"
+LPAREN
+UPPER "Ok"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "connectUntil"
+IDENT "dl"
+IDENT "fd"
+NEWLINE
+IDENT "connectUntil"
+COLON
+UPPER "Wait"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Async"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectUntil"
+IDENT "dl"
+IDENT "fd"
+EQUAL
+IDENT "deferThen"
+LPAREN
+IDENT "liftIO"
+LPAREN
+IDENT "u"
+FAT_ARROW
+IDENT "netConnectCheck"
+IDENT "fd"
+RPAREN
+RPAREN
+LPAREN
+IDENT "step"
+FAT_ARROW
+INDENT
+IDENT "connectUntilStep"
+IDENT "dl"
+IDENT "fd"
+IDENT "step"
+NEWLINE
+DEDENT
+RPAREN
+NEWLINE
+IDENT "connectUntilStep"
+COLON
+UPPER "Wait"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "Unit"
+RPAREN
+ARROW
+NEWLINE
+UPPER "Async"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "connectUntilStep"
+IDENT "dl"
+IDENT "fd"
+LPAREN
+UPPER "Ok"
+UPPER "None"
+RPAREN
+EQUAL
+IDENT "deferThen"
+LPAREN
+IDENT "expired"
+IDENT "dl"
+RPAREN
+LPAREN
+IDENT "late"
+FAT_ARROW
+INDENT
+IF
+IDENT "late"
+THEN
+INDENT
+IDENT "abandonConnect"
+IDENT "fd"
+STRING "timed out"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "awaitAny"
+LBRACKET
+UPPER "WaitWrite"
+IDENT "fd"
+COMMA
+IDENT "dl"
+RBRACKET
+RPAREN
+LPAREN
+UNDERSCORE
+FAT_ARROW
+IDENT "connectUntil"
+IDENT "dl"
+IDENT "fd"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+RPAREN
+NEWLINE
+IDENT "connectUntilStep"
+UNDERSCORE
+IDENT "fd"
+LPAREN
+UPPER "Ok"
+LPAREN
+UPPER "Some"
+UNDERSCORE
+RPAREN
+RPAREN
+EQUAL
+IDENT "deferPure"
+LPAREN
+UPPER "Ok"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+RPAREN
+NEWLINE
+IDENT "connectUntilStep"
+UNDERSCORE
+IDENT "fd"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+IDENT "abandonConnect"
+IDENT "fd"
+IDENT "e"
+NEWLINE
+IDENT "abandonConnect"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+RPAREN
+NEWLINE
+IDENT "abandonConnect"
+IDENT "fd"
+IDENT "message"
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "close"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+RPAREN
+LPAREN
+UNDERSCORE
+FAT_ARROW
+IDENT "deferPure"
+LPAREN
+UPPER "Err"
+IDENT "message"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
 IDENT "accept"
 COLON
 UPPER "Listener"

@@ -1,0 +1,754 @@
+{- | Gate A's `com.atproto.sync.subscribeRepos` driver: a plain synchronous
+   WebSocket client over `stdlib/net`, one subcommand per acceptance case.
+
+   It lives beside `pds/test/serve_client_main.mdk` rather than inside it
+   because nothing it does is an HTTP request/response exchange: every case
+   here completes a handshake and then reads frames off a connection that has
+   left that lifecycle for good, so it shares none of that driver's response
+   reader and none of its request builders.
+
+   The WebSocket codec is `lib.websocket`'s own, driven in the direction the
+   server never drives it (`FromServer` decode, `encodeClientFrame` send).
+   That is deliberate and it is also the limit of what this driver proves: a
+   client built out of the server's own codec cannot show that the bytes are
+   what the PROTOCOL says, only that they are self-consistent. The
+   independent-client check (E4) is the other half and is a third-party
+   client, not this one.
+
+   Every case prints its name and `PASS`/`FAIL` on the last line
+   (`pds/test/serve_client_main.mdk`'s convention); the shell gate reads that
+   line and nothing else. -}
+
+import array.{concat, make, sliceClamped}
+import lib.dagcbor.{DagCbor(..), dagCborDecode}
+import lib.websocket.{
+  DecodeResult(..),
+  Direction(..),
+  Frame(..),
+  Opcode(..),
+  closeFrame,
+  decodeFrame,
+  encodeClientFrame,
+  handshakeAccept,
+  parseClosePayload,
+}
+import net.{Connection, close, connect, recv, sendAll, setTimeout}
+import regex.{Regex, find, mustCompile}
+import string.{contains, fromUtf8, lines, split, toInt, toUtf8, trim}
+import time.{Duration, elapsedSince, monotonic, seconds, sleep}
+
+-- # The handshake
+
+{- | The `Sec-WebSocket-Key` every case sends: RFC 6455 §1.3's own example
+   value, so the accept this client checks against is the one worked example
+   in the specification rather than a number this tree produced for itself.
+
+   A real client draws 16 fresh random bytes per connection. A constant is
+   correct here for the same reason the gate's signing key is a constant:
+   nothing in the handshake's security argument is being tested, and a fixed
+   key makes a failed accept readable. -}
+handshakeKey : String
+handshakeKey = "dGhlIHNhbXBsZSBub25jZQ=="
+
+-- | The four mask bytes every frame this client sends is masked with. RFC
+-- 6455 §5.1 requires a client to mask; it does not require the key to be
+-- unpredictable to the SERVER, only to an intermediary, and this connection
+-- has none.
+maskKey : Array Int
+maskKey = [|0x37, 0xfa, 0x21, 0x3d|]
+
+-- | The subscription's path, with the cursor query parameter when one is
+-- asked for. An empty `cursor` sends no parameter at all, which is a
+-- different request from `cursor=0`.
+subscribePath : String -> String
+subscribePath "" = "/xrpc/com.atproto.sync.subscribeRepos"
+subscribePath cursor = "/xrpc/com.atproto.sync.subscribeRepos?cursor=\{cursor}"
+
+handshakeRequest : String -> Array Int
+handshakeRequest cursor =
+  toUtf8
+    "GET \{subscribePath cursor} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \{handshakeKey}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right = concat [|left, right|]
+
+-- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
+findHeaderEnd : Array Int -> Int -> Option Int
+findHeaderEnd buf i =
+  if i + 4 > arrayLength buf then
+    None
+  else if buf[i] == 13
+    && buf[i + 1] == 10
+    && buf[i + 2] == 13
+    && buf[i + 3] == 10 then
+    Some i
+  else
+    findHeaderEnd buf (i + 1)
+
+{- | Read one response HEADER SECTION and answer its status code, its header
+   text, and whatever bytes arrived past it.
+
+   `pds/test/serve_client_main.mdk`'s reader cannot be reused: it frames every
+   response by `content-length`, and a 101 has no body and carries no such
+   field — the bytes after its header section are the WebSocket stream. So
+   this stops at the terminator and hands the remainder back. -}
+readHead : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Int, String, Array Int)
+readHead conn pending = match findHeaderEnd pending 0
+  Some headerEnd =>
+    let headerText = fromUtf8 (sliceClamped 0 headerEnd pending)
+    map
+      (status => (
+        status,
+        headerText,
+        sliceClamped (headerEnd + 4) (arrayLength pending) pending,
+      ))
+      (statusOf headerText)
+  None => match recv conn 4096
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "serve_subscribe: connection closed before response headers"
+      else
+        readHead conn (appendBytes pending chunk)
+
+statusOf : String -> Result String Int
+statusOf headerText = match lines headerText
+  [] => Err "serve_subscribe: empty response header block"
+  statusLine :: _ => match split " " statusLine
+    _ :: code :: _ => match toInt code
+      Some n => Ok n
+      None => Err "serve_subscribe: unparsable status code in '\{statusLine}'"
+    _ => Err "serve_subscribe: unparsable status line '\{statusLine}'"
+
+-- A server may spell the field name in any case, hence `(?i)`; the VALUE is
+-- read from the line as it arrived, not from a folded copy.
+acceptRe : Regex
+acceptRe = mustCompile "(?i)^sec-websocket-accept:(.*)$"
+
+headerValueOf : Regex -> List String -> String
+headerValueOf _ [] = ""
+headerValueOf wanted (line :: rest) = match find wanted line
+  None => headerValueOf wanted rest
+  Some m => match m.groups
+    [Some g] => trim g.text
+    _ => ""
+
+{- | Complete a handshake and answer the bytes that arrived past the 101.
+
+   The accept value is checked, not merely read: a server that answered 101
+   with the wrong `Sec-WebSocket-Accept` has not completed RFC 6455's
+   handshake, and a client that skipped the check would call that a
+   subscription. -}
+mustUpgrade : Connection -> String -> <IO, Net "_"> Array Int
+mustUpgrade conn cursor =
+  let () = mustSend conn (handshakeRequest cursor)
+  match readHead conn [||]
+    Err message => panic "serve_subscribe: handshake: \{message}"
+    Ok (status, headerText, rest) =>
+      if status /= 101 then
+        panic
+          "serve_subscribe: handshake answered \{intToString status}, not 101"
+      else
+        let fields = lines headerText
+        let got = headerValueOf acceptRe fields
+        match handshakeAccept handshakeKey
+          Err message => panic "serve_subscribe: \{message}"
+          Ok wanted =>
+            if got /= wanted then
+              panic
+                "serve_subscribe: sec-websocket-accept is '\{got}', expected '\{wanted}'"
+            else
+              rest
+
+-- # Reading the stream
+
+{- | The next complete frame, reading as needed. `None` means the peer closed
+   the TCP connection without a Close frame, which every case here treats as
+   the stream ending. -}
+readFrame : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Option (Frame, Array Int))
+readFrame conn buffered = match decodeFrame FromServer maxFrameBytes buffered 0
+  Decoded frame consumed =>
+    Ok (Some (frame, sliceClamped consumed (arrayLength buffered) buffered))
+  Rejected code detail =>
+    Err
+      "serve_subscribe: server frame rejected (\{intToString code}): \{detail}"
+  NeedMore => match recv conn 65536
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Ok None
+      else
+        readFrame conn (appendBytes buffered chunk)
+
+{- | The largest server frame this client will accept. An event frame carries
+   a commit's blocks, so it is bounded by the same CAR ceiling a
+   `sync.getRepo` response is; this is that ceiling with room to spare, and it
+   exists so a decoder bug cannot make this client allocate without bound. -}
+maxFrameBytes : Int
+maxFrameBytes = 16777216
+
+{- | The next BINARY frame's payload, skipping the control frames RFC 6455
+   allows to be interleaved. A Close ends the stream.
+
+   `Err` is a transport failure; `Ok None` is the stream ending. -}
+nextEvent : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Option (Array Int, Array Int))
+nextEvent conn buffered = match readFrame conn buffered
+  Err message => Err message
+  Ok None => Ok None
+  Ok (Some (Frame _ Close _, _)) => Ok None
+  Ok (Some (Frame _ Binary payload, rest)) => Ok (Some (payload, rest))
+  Ok (Some (_, rest)) => nextEvent conn rest
+
+{- | The two concatenated DAG-CBOR objects one event frame carries.
+
+   `dagCborDecode` refuses trailing bytes by design — it decodes exactly one
+   canonical value — so the split point is found by asking it for the longest
+   prefix that IS exactly one value. A header is a two-key map of a string and
+   a small integer, so the search is bounded by `maxHeaderBytes` rather than
+   by the frame; probing the whole frame would be quadratic in a commit's
+   blocks. -}
+splitEvent : Array Int -> Result String (DagCbor, DagCbor)
+splitEvent payload = splitEventAt payload 1
+
+maxHeaderBytes : Int
+maxHeaderBytes = 64
+
+splitEventAt : Array Int -> Int -> Result String (DagCbor, DagCbor)
+splitEventAt payload cut =
+  if cut > maxHeaderBytes || cut > arrayLength payload then
+    Err "serve_subscribe: event frame has no decodable header object"
+  else match dagCborDecode (sliceClamped 0 cut payload)
+    Err _ => splitEventAt payload (cut + 1)
+    Ok header =>
+      match dagCborDecode (sliceClamped cut (arrayLength payload) payload)
+        Err message => Err "serve_subscribe: event frame body: \{message}"
+        Ok body => Ok (header, body)
+
+mapField : DagCbor -> String -> Option DagCbor
+mapField (DcMap fields) name = fieldIn fields name
+mapField _ _ = None
+
+fieldIn : List (String, DagCbor) -> String -> Option DagCbor
+fieldIn [] _ = None
+fieldIn ((key, value) :: rest) name =
+  if key == name then Some value else fieldIn rest name
+
+textField : DagCbor -> String -> String
+textField value name = match mapField value name
+  Some (DcString text) => text
+  _ => ""
+
+intField : DagCbor -> String -> Int
+intField value name = match mapField value name
+  Some (DcInt n) => n
+  _ => 0 - 1
+
+-- | The message type one event frame announces: `#commit`, `#info`, or
+-- `!error` for the error frame, whose header carries `op` of -1 and no `t`.
+eventKind : DagCbor -> String
+eventKind header =
+  if intField header "op" == 0 - 1 then "!error" else textField header "t"
+
+-- # Reporting
+
+report : String -> Bool -> String -> <IO> Unit
+report label ok detail =
+  if ok then
+    println "\{label}: PASS \{detail}"
+  else
+    let () = println "\{label}: FAIL \{detail}"
+    exit 1
+
+mustConnect : Int -> <Net "_"> Connection
+mustConnect port = match connect "127.0.0.1" port
+  Ok conn => conn
+  Err message => panic "serve_subscribe: connect failed: \{message}"
+
+mustSend : Connection -> Array Int -> <Net "_"> Unit
+mustSend conn bytes = match sendAll conn bytes
+  Ok () => ()
+  Err message => panic "serve_subscribe: send failed: \{message}"
+
+ignoreResult : Result String a -> Unit
+ignoreResult (Ok _) = ()
+ignoreResult (Err _) = ()
+
+-- | Say goodbye the way RFC 6455 §5.5.1 says a client does, then drop the
+-- socket. The server's own close frame is not waited for: every case has
+-- already read what it came for.
+sayGoodbye : Connection -> <Net "_"> Unit
+sayGoodbye conn =
+  ignoreResult (sendAll conn (encodeClientFrame maskKey (closeFrame 1000 "")))
+
+-- How long a case waits for a frame that must arrive. Generous: what is being
+-- graded is that the frame arrives at all, never how fast.
+readBudget : Duration
+readBudget = seconds 20
+
+-- How long a case waits to establish that a frame must NOT arrive. Several
+-- times the server's own poll interval, so silence here is a decision and not
+-- a race.
+silenceBudget : Duration
+silenceBudget = seconds 3
+
+armRead : Connection -> Duration -> <Net "_"> Unit
+armRead conn budget = ignoreResult (setTimeout conn budget)
+
+-- # Writing, so a subscriber has something to receive
+
+-- The one HTTP request this driver makes: a record write, which is what
+-- produces the `#commit` event every live case waits for. It is spelled out
+-- here rather than shelled out to the other driver because the write has to
+-- happen WHILE a subscription this process holds is open.
+writeRecord : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+writeRecord port token did collection rkey =
+  let bodyJson =
+    "{\"repo\":\"\{did}\",\"collection\":\"\{collection}\",\"rkey\":\"\{rkey}\",\"record\":{\"$type\":\"\{collection}\",\"text\":\"subscribe gate \{rkey}\",\"createdAt\":\"2026-01-01T00:00:00Z\"}}"
+  let body = toUtf8 bodyJson
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (concat [|
+        toUtf8
+          "POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+        body,
+      |])
+  let () = match readHead conn [||]
+    Err message => panic "serve_subscribe: write failed: \{message}"
+    Ok (status, _, _) =>
+      if status == 200 then
+        ()
+      else
+        panic "serve_subscribe: write answered \{intToString status}, not 200"
+  ignoreResult (close conn)
+
+-- # Cases
+
+{- | A subscription opened with no cursor receives the events of writes made
+   AFTER it opened, in order, and nothing else.
+
+   Two writes, not one: a stream that delivered its first event and then
+   stopped tailing would pass a one-event case, and the sequence numbers being
+   consecutive is what shows the second was delivered as a new event rather
+   than as a replay of the first. -}
+runLive : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runLive port token did collection rkeyPrefix =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let () = writeRecord port token did collection "\{rkeyPrefix}1"
+  let () = writeRecord port token did collection "\{rkeyPrefix}2"
+  let () = match twoCommits conn rest
+    Err message => report "SUBLIVE" False message
+    Ok (first, second) =>
+      report
+        "SUBLIVE"
+        (second == first + 1)
+        "two #commit events, seq \{intToString first} then \{intToString second}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+twoCommits : Connection -> Array Int -> <Net "_"> Result String (Int, Int)
+twoCommits conn buffered = match commitSeq conn buffered
+  Err message => Err message
+  Ok (first, rest) => map ((second, _) => (first, second)) (commitSeq conn rest)
+
+-- | The sequence number of the next `#commit` event, refusing any other kind:
+-- an `#info` or an error frame where a commit is expected is a different
+-- stream from the one the case is grading.
+commitSeq : Connection -> Array Int -> <Net "_"> Result String (Int, Array Int)
+commitSeq conn buffered = match nextEvent conn buffered
+  Err message => Err message
+  Ok None => Err "serve_subscribe: stream ended before the next #commit"
+  Ok (Some (payload, rest)) => match splitEvent payload
+    Err message => Err message
+    Ok (header, body) =>
+      let kind = eventKind header
+      if kind /= "#commit" then
+        Err "serve_subscribe: expected a #commit event, got '\{kind}'"
+      else
+        Ok (intField body "seq", rest)
+
+{- | A cursor naming an event this server has never emitted is REFUSED, and
+   refused with atproto's own name for it rather than by silence or by a
+   replay of something else. -}
+runFutureCursor : Int -> String -> <IO, Net "_"> Unit
+runFutureCursor port cursor =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn cursor
+  let () = match nextEvent conn rest
+    Err message => report "SUBFUTURE" False message
+    Ok None => report "SUBFUTURE" False "stream closed with no error frame"
+    Ok (Some (payload, _)) => match splitEvent payload
+      Err message => report "SUBFUTURE" False message
+      Ok (header, body) =>
+        let kind = eventKind header
+        let name = textField body "error"
+        report
+          "SUBFUTURE"
+          (kind == "!error" && name == "FutureCursor")
+          "kind '\{kind}', error '\{name}'"
+  ignoreResult (close conn)
+
+{- | A cursor whose next events have left the retention window is answered
+   `#info` `OutdatedCursor` FIRST and then replayed from what the log still
+   holds — so the subscriber learns it has a gap rather than inferring one,
+   and still receives the events that survived.
+
+   Both halves are graded: an `#info` followed by silence would be a stream
+   that announced a gap and then delivered nothing, which is a worse answer
+   than the one this replaces. -}
+runOutdatedCursor : Int -> String -> <IO, Net "_"> Unit
+runOutdatedCursor port cursor =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn cursor
+  let () = match nextEvent conn rest
+    Err message => report "SUBOUTDATED" False message
+    Ok None => report "SUBOUTDATED" False "stream closed with no #info frame"
+    Ok (Some (payload, after)) => match splitEvent payload
+      Err message => report "SUBOUTDATED" False message
+      Ok (header, body) =>
+        let kind = eventKind header
+        let name = textField body "name"
+        if kind /= "#info" || name /= "OutdatedCursor" then
+          report "SUBOUTDATED" False "kind '\{kind}', name '\{name}'"
+        else match commitSeq conn after
+          Err message =>
+            report "SUBOUTDATED" False "after the #info: \{message}"
+          Ok (seq, _) =>
+            report
+              "SUBOUTDATED"
+              True
+              "#info OutdatedCursor, then a replay resuming at seq \{intToString seq}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+{- | A cursor naming exactly the newest event already delivered replays
+   NOTHING and then receives the next live event, once: no duplicate of what
+   the cursor named, and no gap over what came after it.
+
+   The silence is graded before the write, not after: a stream that replayed
+   the cursor's own event would have sent it within the poll interval, and
+   waiting for the write first would let that duplicate hide behind the live
+   event. -}
+runExactCursor : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runExactCursor port cursor token did collection rkey =
+  let conn = mustConnect port
+  let () = armRead conn silenceBudget
+  let rest = mustUpgrade conn cursor
+  let quiet = match nextEvent conn rest
+    Err _ => True
+    Ok None => False
+    Ok (Some _) => False
+  let () = armRead conn readBudget
+  let () = writeRecord port token did collection rkey
+  let () = match commitSeq conn rest
+    Err message => report "SUBEXACT" False message
+    Ok (seq, _) =>
+      let wanted = match toInt cursor
+        Some n => n + 1
+        None => 0 - 1
+      report
+        "SUBEXACT"
+        (quiet && seq == wanted)
+        "no replay before the write: \{boolToString quiet}; next live event seq \{intToString seq} (wanted \{intToString wanted})"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+boolToString : Bool -> String
+boolToString True = "yes"
+boolToString False = "no"
+
+{- | Open subscriptions up to the ceiling from one identity and hold them
+   silent; the next attempt must be refused CHEAPLY — an ordinary HTTP error
+   response, never a completed upgrade — and an ordinary route on a fresh
+   connection must still be answered.
+
+   The second half is the claim that matters, and it is the #2816 shape: a
+   ceiling that shuts the whole server down instead of the attempt that
+   crossed it would pass the first half on its own. The held connections are
+   released only when this process exits, so the refusal and the ordinary
+   request both happen while every slot is genuinely occupied. -}
+runCeiling : Int -> Int -> String -> <IO, Net "_", Clock> Unit
+runCeiling port ceiling did =
+  let held = holdSubscriptions port ceiling []
+  let refusal = attemptOverCeiling port
+  let t0 = monotonic ()
+  let answered = describeRepoStatus port did
+  let elapsed = elapsedSince t0
+  let () =
+    report
+      "SUBCEILING"
+      (refusal == 503 && answered == 200)
+      "\{intToString ceiling} subscriptions held; attempt \{intToString (ceiling + 1)} answered \{intToString refusal} with no upgrade (wanted 503); describeRepo answered \{intToString answered} in \{floatToString elapsed}s (wanted 200)"
+  closeAll held
+
+holdSubscriptions : Int ->
+  Int ->
+  List Connection ->
+  <IO, Net "_"> List Connection
+holdSubscriptions port remaining held =
+  if remaining <= 0 then
+    held
+  else
+    let conn = mustConnect port
+    let () = armRead conn readBudget
+    let _ = mustUpgrade conn ""
+    holdSubscriptions port (remaining - 1) (conn :: held)
+
+{- | One subscription attempt past the ceiling, answered by its HTTP status.
+
+   A 101 is reported as itself rather than as a failure here so the report
+   line can say what actually happened: "the upgrade completed" is the finding
+   this case exists to catch, and it must not read as a transport error. -}
+attemptOverCeiling : Int -> <IO, Net "_"> Int
+attemptOverCeiling port =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let () = mustSend conn (handshakeRequest "")
+  let status = match readHead conn [||]
+    Err message => panic "serve_subscribe: over-ceiling attempt: \{message}"
+    Ok (status, _, _) => status
+  let () = ignoreResult (close conn)
+  status
+
+describeRepoStatus : Int -> String -> <IO, Net "_"> Int
+describeRepoStatus port did =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let () =
+    mustSend
+      conn
+      (toUtf8
+        "GET /xrpc/com.atproto.repo.describeRepo?repo=\{did} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+  let status = match readHead conn [||]
+    Err message => panic "serve_subscribe: describeRepo: \{message}"
+    Ok (status, _, _) => status
+  let () = ignoreResult (close conn)
+  status
+
+closeAll : List Connection -> <Net "_"> Unit
+closeAll [] = ()
+closeAll (conn :: rest) =
+  let () = ignoreResult (close conn)
+  closeAll rest
+
+{- | A subscriber that says nothing for longer than the whole-request budget
+   is still there afterwards.
+
+   `hold` is passed in rather than fixed here so the gate can state the budget
+   it is discriminating against. What makes the case a test and not a wait is
+   that the hold exceeds `requestTimeout` — the bound every ordinary request
+   on this server is under — so a subscription still governed by the request
+   lifecycle is reaped during it, and the write afterwards then has no
+   subscriber to reach. -}
+runHold : Int ->
+  Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runHold port hold token did collection rkey =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let t0 = monotonic ()
+  let () = sleep (seconds hold)
+  let () = writeRecord port token did collection rkey
+  let () = match commitSeq conn rest
+    Err message =>
+      report "SUBHOLD" False "after \{intToString hold}s silent: \{message}"
+    Ok (seq, _) =>
+      report
+        "SUBHOLD"
+        True
+        "silent for \{floatToString (elapsedSince t0)}s, then received seq \{intToString seq}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+-- # Frame-level cases: RFC 6455 §5.4 fragmentation and §5.5.1 close
+
+-- | One client frame on the wire, masked the way §5.1 requires of a client.
+sendFrame : Connection -> Frame -> <Net "_"> Unit
+sendFrame conn frame = mustSend conn (encodeClientFrame maskKey frame)
+
+sendFrames : Connection -> List Frame -> <Net "_"> Unit
+sendFrames _ [] = ()
+sendFrames conn (frame :: rest) =
+  let () = sendFrame conn frame
+  sendFrames conn rest
+
+{- | The status code of the next Close frame the server sends, skipping
+   whatever it sends before one.
+
+   `None` is the server dropping the TCP connection without a Close frame,
+   and `Some 0` is a Close frame carrying no status code at all. Both are
+   distinct answers from any code, and a case that folded them into one would
+   accept a server that said nothing where a code was owed. -}
+serverCloseCode : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Option Int)
+serverCloseCode conn buffered = match readFrame conn buffered
+  Err message => Err message
+  Ok None => Ok None
+  Ok (Some (Frame _ Close payload, _)) => match parseClosePayload payload
+    Err message => Err "serve_subscribe: server close payload: \{message}"
+    Ok None => Ok (Some 0)
+    Ok (Some (code, _)) => Ok (Some code)
+  Ok (Some (_, rest)) => serverCloseCode conn rest
+
+codeText : Option Int -> String
+codeText None = "the connection was dropped with no Close frame"
+codeText (Some 0) = "a Close frame carrying no status code"
+codeText (Some code) = "close code \{intToString code}"
+
+isCode : Option Int -> Int -> Bool
+isCode None _ = False
+isCode (Some got) wanted = got == wanted
+
+{- | Send `frames` on a fresh subscription and grade the status code the
+   server closes with. Every case below is that shape: the frames are the
+   whole input and a close code is the whole answer. -}
+runClosingCase : Int -> String -> Int -> List Frame -> <IO, Net "_"> Unit
+runClosingCase port label wanted frames =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let () = sendFrames conn frames
+  let () = match serverCloseCode conn rest
+    Err message => report label False message
+    Ok got =>
+      report
+        label
+        (isCode got wanted)
+        "\{codeText got} (wanted \{intToString wanted})"
+  ignoreResult (close conn)
+
+{- | A data message split across continuation frames is REASSEMBLED, and the
+   connection is still serving afterwards.
+
+   The ping is what makes this a test rather than a wait: a completed message
+   is ignored by design — a subscriber has nothing this server's lexicon can
+   read — so the only thing observable about the message having been handled
+   correctly is that the connection is neither closed nor wedged behind it. -}
+runFragment : Int -> <IO, Net "_"> Unit
+runFragment port =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let () = sendFrame conn (Frame False Text (toUtf8 "frag"))
+  let () = sendFrame conn (Frame False Continuation (toUtf8 "ment"))
+  let () = sendFrame conn (Frame True Continuation (toUtf8 "ed"))
+  let () = sendFrame conn (Frame True Ping (toUtf8 "alive"))
+  let () = match nextPong conn rest
+    Err message => report "SUBFRAG" False message
+    Ok None =>
+      report "SUBFRAG" False "the stream ended instead of answering the ping"
+    Ok (Some text) =>
+      report
+        "SUBFRAG"
+        (text == "alive")
+        "pong '\{text}' after a three-frame message"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+nextPong : Connection -> Array Int -> <Net "_"> Result String (Option String)
+nextPong conn buffered = match readFrame conn buffered
+  Err message => Err message
+  Ok None => Ok None
+  Ok (Some (Frame _ Pong payload, _)) => Ok (Some (fromUtf8 payload))
+  Ok (Some (Frame _ Close _, _)) => Ok None
+  Ok (Some (_, rest)) => nextPong conn rest
+
+-- | A continuation frame with no fragmented message open (RFC 6455 §5.4).
+strayFrames : List Frame
+strayFrames = [Frame True Continuation (toUtf8 "orphan")]
+
+-- | A new data frame arriving while a fragmented message is still open
+-- (RFC 6455 §5.4), which is the same violation read from the other side.
+overlapFrames : List Frame
+overlapFrames = [
+  Frame False Text (toUtf8 "one"),
+  Frame True Text (toUtf8 "two"),
+]
+
+{- | Enough never-final fragments to pass the server's reassembly ceiling
+   while every individual frame stays inside the per-frame one — which is
+   exactly the shape a per-frame bound cannot see. -}
+oversizeFrames : List Frame
+oversizeFrames = Frame False Text fragmentPayload :: moreFragments 8
+
+fragmentPayload : Array Int
+fragmentPayload = make 1000 65
+
+moreFragments : Int -> List Frame
+moreFragments 0 = []
+moreFragments n =
+  Frame False Continuation fragmentPayload :: moreFragments (n - 1)
+
+-- | A close payload of one byte: RFC 6455 §5.5.1 has no such thing, and the
+-- one byte is not half of a status code the server may read.
+malformedCloseFrames : List Frame
+malformedCloseFrames = [Frame True Close [|3|]]
+
+mustPort : String -> Int
+mustPort text = match toInt text
+  Some n => n
+  None => panic "serve_subscribe: not a port: \{text}"
+
+mustCount : String -> Int
+mustCount text = match toInt text
+  Some n => n
+  None => panic "serve_subscribe: not a count: \{text}"
+
+usage : String
+usage =
+  "usage: serve_subscribe <live|future-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
+
+main : <IO, Env, Net "_", Clock> Unit
+main = match args ()
+  ["live", port, token, did, collection, rkeyPrefix] =>
+    runLive (mustPort port) token did collection rkeyPrefix
+  ["future-cursor", port, cursor] => runFutureCursor (mustPort port) cursor
+  ["outdated-cursor", port, cursor] => runOutdatedCursor (mustPort port) cursor
+  ["exact-cursor", port, cursor, token, did, collection, rkey] =>
+    runExactCursor (mustPort port) cursor token did collection rkey
+  ["ceiling", port, ceiling, did] =>
+    runCeiling (mustPort port) (mustCount ceiling) did
+  ["hold", port, hold, token, did, collection, rkey] =>
+    runHold (mustPort port) (mustCount hold) token did collection rkey
+  ["fragment", port] => runFragment (mustPort port)
+  ["stray-continuation", port] =>
+    runClosingCase (mustPort port) "SUBSTRAY" 1002 strayFrames
+  ["overlapped-message", port] =>
+    runClosingCase (mustPort port) "SUBOVERLAP" 1002 overlapFrames
+  ["oversize-message", port] =>
+    runClosingCase (mustPort port) "SUBOVERSIZE" 1009 oversizeFrames
+  ["close-echo", port, code] => runClosingCase (mustPort
+    port) "SUBCLOSEECHO" (mustCount code) [
+    closeFrame (mustCount code) "bye",
+  ]
+  ["close-malformed", port] =>
+    runClosingCase (mustPort port) "SUBCLOSEBAD" 1002 malformedCloseFrames
+  _ => panic usage

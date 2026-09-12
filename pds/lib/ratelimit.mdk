@@ -39,22 +39,13 @@
 import http.{Header, headerName, headerValue}
 import list.{head, reverse}
 import map.{Map(..), get, set}
-import string.{
-  contains,
-  fromChar,
-  fromUtf8,
-  isDigit,
-  split,
-  toChars,
-  toInt,
-  toLower,
-  trim,
-  utf8ByteLength,
-}
+import regex.{Regex, isFullMatch, mustCompile}
+import string.{fromUtf8, split, trim}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
+  maxProxiedCallsPerWindow,
   maxRepoExportsPerWindow,
   maxRequestsPerWindow,
   maxWritesPerWindow,
@@ -77,12 +68,19 @@ export
 identityLabel : ClientIdentity -> String
 identityLabel (ClientIdentity label) = label
 
+{- | `ProxyClass` is the one class whose cost is not this server's own work: a
+   proxied read turns ONE inbound request into ONE outbound request to the
+   appview plus up to `maxHttpClientBodyBytes` of response to decode, so its
+   count and the shared request count are different quantities and the
+   amplifying one needs naming separately — exactly the argument
+   `RepoExportClass` rests on, in the outbound direction. -}
 public export data RateLimitClass =
   | ConnectionsClass
   | RequestsClass
   | WritesClass
   | CreateSessionClass
   | RepoExportClass
+  | ProxyClass
 
 public export data RateLimitVerdict = Admitted | Refused
 
@@ -102,9 +100,9 @@ public export data RateLimitVerdict = Admitted | Refused
 export data RateLimitState =
   | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters)
 
-data ClientCounters = ClientCounters Int Int Int Int Int
+data ClientCounters = ClientCounters Int Int Int Int Int Int
 -- connections used, requests used, writes used, createSession used,
--- repo exports used
+-- repo exports used, proxied calls used
 
 -- | No window has been entered yet, so any first decision starts fresh: the
 -- index cannot collide with a real `now / rateLimitWindowSeconds`, which is
@@ -120,6 +118,7 @@ classAllowance RequestsClass = maxRequestsPerWindow
 classAllowance WritesClass = maxWritesPerWindow
 classAllowance CreateSessionClass = maxCreateSessionPerWindow
 classAllowance RepoExportClass = maxRepoExportsPerWindow
+classAllowance ProxyClass = maxProxiedCallsPerWindow
 
 {- | The two tables in view at `windowIdx`, given the pair a state holds and
    the index they were written at: the same pair while the index has not
@@ -189,26 +188,29 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
     )
 
 emptyCounters : ClientCounters
-emptyCounters = ClientCounters 0 0 0 0 0
+emptyCounters = ClientCounters 0 0 0 0 0 0
 
 classUsed : RateLimitClass -> ClientCounters -> Int
-classUsed ConnectionsClass (ClientCounters c _ _ _ _) = c
-classUsed RequestsClass (ClientCounters _ r _ _ _) = r
-classUsed WritesClass (ClientCounters _ _ w _ _) = w
-classUsed CreateSessionClass (ClientCounters _ _ _ s _) = s
-classUsed RepoExportClass (ClientCounters _ _ _ _ x) = x
+classUsed ConnectionsClass (ClientCounters c _ _ _ _ _) = c
+classUsed RequestsClass (ClientCounters _ r _ _ _ _) = r
+classUsed WritesClass (ClientCounters _ _ w _ _ _) = w
+classUsed CreateSessionClass (ClientCounters _ _ _ s _ _) = s
+classUsed RepoExportClass (ClientCounters _ _ _ _ x _) = x
+classUsed ProxyClass (ClientCounters _ _ _ _ _ p) = p
 
 bumpClass : RateLimitClass -> ClientCounters -> ClientCounters
-bumpClass ConnectionsClass (ClientCounters c r wr s x) =
-  ClientCounters (c + 1) r wr s x
-bumpClass RequestsClass (ClientCounters c r wr s x) =
-  ClientCounters c (r + 1) wr s x
-bumpClass WritesClass (ClientCounters c r wr s x) =
-  ClientCounters c r (wr + 1) s x
-bumpClass CreateSessionClass (ClientCounters c r wr s x) =
-  ClientCounters c r wr (s + 1) x
-bumpClass RepoExportClass (ClientCounters c r wr s x) =
-  ClientCounters c r wr s (x + 1)
+bumpClass ConnectionsClass (ClientCounters c r wr s x p) =
+  ClientCounters (c + 1) r wr s x p
+bumpClass RequestsClass (ClientCounters c r wr s x p) =
+  ClientCounters c (r + 1) wr s x p
+bumpClass WritesClass (ClientCounters c r wr s x p) =
+  ClientCounters c r (wr + 1) s x p
+bumpClass CreateSessionClass (ClientCounters c r wr s x p) =
+  ClientCounters c r wr (s + 1) x p
+bumpClass RepoExportClass (ClientCounters c r wr s x p) =
+  ClientCounters c r wr s (x + 1) p
+bumpClass ProxyClass (ClientCounters c r wr s x p) =
+  ClientCounters c r wr s x (p + 1)
 
 -- | `RateLimit-Remaining` for a class, without mutating state: for response
 -- headers, computed AFTER the `step` call it accompanies so it reflects the
@@ -317,42 +319,36 @@ lastHopToken raw =
 isAddressToken : String -> Bool
 isAddressToken token = isIPv4Address token || isIPv6Address token
 
+-- One definition of a decimal octet, shared by the plain quad and the
+-- IPv4-mapped tail below. Leading zeros are admitted: "007" is 7, and a
+-- proxy that writes them is still naming an address.
+decOctet : String
+decOctet = "(?:25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])"
+
+dottedQuad : String
+dottedQuad = "\{decOctet}\\.\{decOctet}\\.\{decOctet}\\.\{decOctet}"
+
+ipv4Re : Regex
+ipv4Re = mustCompile dottedQuad
+
+{- | Loose on purpose: this only has to reject non-address garbage
+   ("not-an-address", empty, punctuation), not validate a fully compliant IPv6
+   literal — the value is a rate-limit bucket key, not a routed address. So
+   either arm is enough: hex-or-colon throughout with at least one colon, or
+   hex-or-colon groups then a dotted quad.
+
+   That second arm is the IPv4-mapped form a dual-stack proxy emits
+   (`::ffff:198.51.100.7`). It is neither hex-only (the dots) nor a bare quad
+   (the colons), so a check of only those two shapes rejects it — and
+   rejecting it collapses every client behind such a proxy into the one shared
+   `direct` bucket, turning the per-client limiter into a global one with the
+   trust flag correctly set. -}
+ipv6Re : Regex
+ipv6Re =
+  mustCompile "[0-9a-fA-F:]*:[0-9a-fA-F:]*|(?:[0-9a-fA-F]*:)+\{dottedQuad}"
+
 isIPv4Address : String -> Bool
-isIPv4Address token =
-  let parts = split "." token
-  length parts == 4 && all isDecOctet parts
+isIPv4Address token = isFullMatch ipv4Re token
 
-isDecOctet : String -> Bool
-isDecOctet part =
-  let len = utf8ByteLength part
-  len >= 1
-    && len <= 3
-    && all isDigit (toChars part)
-    && (match toInt part
-      Some value => value >= 0 && value <= 255
-      None => False)
-
--- | Loose on purpose: this only has to reject non-address garbage
--- ("not-an-address", empty, punctuation), not validate a fully compliant
--- IPv6 literal — the value is a rate-limit bucket key, not a routed address.
 isIPv6Address : String -> Bool
-isIPv6Address token =
-  utf8ByteLength token > 0
-    && contains ":" token
-    && (all isHexOrColonChar (toChars token) || hasMappedIPv4Tail token)
-
-{- | The IPv4-mapped form a dual-stack proxy emits (`::ffff:198.51.100.7`):
-   hex-or-colon groups, then a dotted quad. It is neither hex-only (the dots)
-   nor a bare quad (the colons), so a check of only those two shapes rejects
-   it — and rejecting it collapses every client behind such a proxy into the
-   one shared `direct` bucket, turning the per-client limiter into a global
-   one with the trust flag correctly set. -}
-hasMappedIPv4Tail : String -> Bool
-hasMappedIPv4Tail token = match reverse (split ":" token)
-  tail :: groups =>
-    isIPv4Address tail
-      && all (group => all isHexOrColonChar (toChars group)) groups
-  [] => False
-
-isHexOrColonChar : Char -> Bool
-isHexOrColonChar c = contains (toLower (fromChar c)) "0123456789abcdef:"
+isIPv6Address token = isFullMatch ipv6Re token

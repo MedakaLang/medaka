@@ -4,10 +4,12 @@
    applyWrites, uploadBlob}`) are the five that transition the `Store` — the
    first four the repository half under one signed commit apiece (`applyWrites`
    batches the other three), `uploadBlob` the blob half. **Reads** are the
-   eight that cannot:
+   eleven that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
-   `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs}`, and
-   `com.atproto.identity.resolveHandle`. **Sessions** are the four
+   `com.atproto.server.describeServer`,
+   `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs, listRepos,
+   getRepoStatus}`, and `com.atproto.identity.resolveHandle`. **Sessions** are
+   the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
    getSession}` routes, which transition the `Store`'s auth half rather than
    its repository or blob half. **Well-knowns** are the two non-XRPC paths
@@ -21,7 +23,7 @@
    reason, not because it is a repository write.
 
    Every registration carries its own `AuthPolicy`: the five writes and
-   `getSession` are `AuthenticatedRoute`, the eight reads are `PublicRoute`,
+   `getSession` are `AuthenticatedRoute`, the eleven reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`, `createSession` is
    `PublicRoute` (it is the login that issues the tokens the other session
    routes require), and the two well-knowns are public by construction
@@ -75,6 +77,7 @@ import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor, dagCborEncode}
+import lib.did_key.{didKeyMultibase}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.repo.{
   Repo,
@@ -89,6 +92,7 @@ import lib.repo.{
   repoEntries,
   repoLatestCommit,
   repoLookup,
+  repoPublicKey,
   repoMutationCommit,
   repoMutationState,
   repoUpdate,
@@ -103,6 +107,7 @@ import lib.credential.{
   defaultIterations,
 }
 import lib.jwt.{mintToken}
+import lib.sign.{PublicKey}
 import lib.server_core.{
   Account,
   AuthOutcome(..),
@@ -145,6 +150,7 @@ import lib.xrpc.{
   makeRegistry,
   procedureEndpoint,
   queryEndpoint,
+  subscriptionEndpoint,
   wellKnownPath,
   xrpcErrorResponse,
 }
@@ -176,6 +182,9 @@ listRecordsNsid = "com.atproto.repo.listRecords"
 describeRepoNsid : String
 describeRepoNsid = "com.atproto.repo.describeRepo"
 
+describeServerNsid : String
+describeServerNsid = "com.atproto.server.describeServer"
+
 getRepoNsid : String
 getRepoNsid = "com.atproto.sync.getRepo"
 
@@ -190,6 +199,15 @@ getBlobNsid = "com.atproto.sync.getBlob"
 
 listBlobsNsid : String
 listBlobsNsid = "com.atproto.sync.listBlobs"
+
+listReposNsid : String
+listReposNsid = "com.atproto.sync.listRepos"
+
+getRepoStatusNsid : String
+getRepoStatusNsid = "com.atproto.sync.getRepoStatus"
+
+subscribeReposNsid : String
+subscribeReposNsid = "com.atproto.sync.subscribeRepos"
 
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
@@ -1133,8 +1151,10 @@ applyListRecords account store params = do
    admitted both and `resolveHandle` answers from that same pair — so it is
    `true` by construction, not by a resolution this server cannot perform.
 
-   `didDoc` is NOT emitted: the account DID is a `did:key`, and this server has
-   no DID resolver, so any document it printed would be invented. -}
+   `didDoc` is the HOSTED ACCOUNT's document (`accountDidDocument`, below),
+   whose verification method carries the repository's real signing key. It is
+   not `/.well-known/did.json`'s `didWebDocument`, which describes the server
+   and carries no key at all. -}
 applyDescribeRepo : Account -> Store -> List QueryParam -> Result Response Json
 applyDescribeRepo account store params = do
   repo <- requireConfiguredRepo store
@@ -1146,8 +1166,25 @@ applyDescribeRepo account store params = do
     (jObject [
       ("did", JString (accountDid account)),
       ("handle", JString (accountHandle account)),
+      ("didDoc", accountDidDocument account (repoPublicKey repo)),
       ("collections", jArray (map JString collections)),
       ("handleIsCorrect", JBool True),
+    ])
+
+-- ── com.atproto.server.describeServer ───────────────────────────────────────
+
+{- | This is the preflight a relay or a Bluesky client runs before trusting
+   the server at all, so it needs no credential and answers about the server
+   itself, not the hosted account: `availableUserDomains` is empty and
+   `inviteCodeRequired` is `false` because this server is single-account, with
+   no signup surface of its own to describe. -}
+applyDescribeServer : Account -> Result Response Json
+applyDescribeServer account =
+  Ok
+    (jObject [
+      ("did", JString (accountDid account)),
+      ("availableUserDomains", jArray []),
+      ("inviteCodeRequired", JBool False),
     ])
 
 -- ── com.atproto.sync.getRepo ────────────────────────────────────────────────
@@ -1209,8 +1246,11 @@ applyGetBlob account store params = do
 
 -- ── com.atproto.sync.listBlobs ──────────────────────────────────────────────
 
-requireBlobLimit : List QueryParam -> Result Response Int
-requireBlobLimit params = do
+{- | The lexicon's shared paging policy: an optional integer `limit`, 1..1000,
+   default 500. `listBlobs` and `listRepos` both declare exactly this shape for
+   their own `limit` param, so one function grades both. -}
+requireStandardLimit : List QueryParam -> Result Response Int
+requireStandardLimit params = do
   found <- optionalParam "limit" params
   match found
     None => Ok 500
@@ -1245,7 +1285,7 @@ applyListBlobs account store params = do
   target <- requiredParam "did" params
   () <- requireHostedDid account target
   () <- rejectUnimplementedParam "since" params
-  limit <- requireBlobLimit params
+  limit <- requireStandardLimit params
   cursor <- optionalParam "cursor" params
   let allCids = sort (map cidToString (storeBlobCids store))
   let remaining = match cursor
@@ -1262,6 +1302,58 @@ applyListBlobs account store params = do
         ])
   else
     Ok (jObject [("cids", jArray (map JString page))])
+
+-- ── com.atproto.sync.listRepos ──────────────────────────────────────────────
+
+{- | This server hosts exactly one repository, so the listing is at most one
+   row: the hosted account's own, when a repository is configured, or none.
+   `active` is always `true` and `status` always absent — this server has no
+   deactivation/takedown state to report, unlike a multi-tenant relay's own
+   implementation of this same route.
+
+   `cursor` is never emitted in the response: a real relay's cursor paginates
+   PAST the last row returned, and with never more than one row here there is
+   never a next page to point at. A caller-supplied `cursor` is refused
+   outright (`applyListRepos`'s `rejectUnimplementedParam`), not silently
+   accepted and ignored. -}
+repoListingRow : Account -> Repo -> Json
+repoListingRow account repo =
+  let commit = repoLatestCommit repo
+  jObject [
+    ("did", JString (accountDid account)),
+    ("head", JString (cidToString (repoCommitCid commit))),
+    ("rev", JString (tidToString (repoCommitTid commit))),
+    ("active", JBool True),
+  ]
+
+applyListRepos : Account -> Store -> List QueryParam -> Result Response Json
+applyListRepos account store params = do
+  _ <- requireStandardLimit params
+  () <- rejectUnimplementedParam "cursor" params
+  let repos = match storeRepo store
+    None => []
+    Some repo => [repoListingRow account repo]
+  Ok (jObject [("repos", jArray repos)])
+
+-- ── com.atproto.sync.getRepoStatus ──────────────────────────────────────────
+
+{- | The one-account analogue of a relay's per-repo hosting status: `did` must
+   name the hosted account and a repository must be configured, or this
+   refuses `RepoNotFound` exactly as `getRepo`/`getLatestCommit` do — there is
+   no partial state (deactivated, taken down) this server can be in, so
+   `active` is always `true` and `status` is always absent. -}
+applyGetRepoStatus : Account -> Store -> List QueryParam -> Result Response Json
+applyGetRepoStatus account store params = do
+  target <- requiredParam "did" params
+  () <- requireHostedDid account target
+  repo <- requireConfiguredRepo store
+  let commit = repoLatestCommit repo
+  Ok
+    (jObject [
+      ("did", JString target),
+      ("active", JBool True),
+      ("rev", JString (tidToString (repoCommitTid commit))),
+    ])
 
 -- ── com.atproto.identity.resolveHandle ──────────────────────────────────────
 
@@ -1283,10 +1375,60 @@ applyResolveHandle account params = do
 
 -- ── the two well-knowns ─────────────────────────────────────────────────────
 
+{- | The hosted account's DID document, built from the repository's OWN
+   signing key rather than from configuration alone.
+
+   `publicKeyMultibase` is `repoPublicKey`'s multibase — the same string the
+   key's `did:key` identifier is made of — so the key a verifier reads out of
+   this document is by construction the key that signed the commits this
+   server serves. It is reached under the `#atproto` fragment because that is
+   the verification method an atproto consumer looks up by name to check a
+   commit signature.
+
+   `id` is the configured DID whatever method it uses: `--did` admits
+   `did:plc:` and `did:web:` as well as the signing key's own `did:key:`, so
+   this is deliberately not the `did:key` method's deterministic document and
+   carries neither that method's `#<multibase>` fragment nor its verification
+   relationships. -}
+accountDidDocument : Account -> PublicKey -> Json
+accountDidDocument account publicKey =
+  let did = accountDid account
+  jObject [
+    (
+      "@context",
+      jArray [
+        JString "https://www.w3.org/ns/did/v1",
+        JString "https://w3id.org/security/multikey/v1",
+      ],
+    ),
+    ("id", JString did),
+    ("alsoKnownAs", jArray [JString "at://\{accountHandle account}"]),
+    (
+      "verificationMethod",
+      jArray [
+        jObject [
+          ("id", JString "\{did}#atproto"),
+          ("type", JString "Multikey"),
+          ("controller", JString did),
+          ("publicKeyMultibase", JString (didKeyMultibase publicKey)),
+        ],
+      ],
+    ),
+    (
+      "service",
+      jArray [
+        jObject [
+          ("id", JString "#atproto_pds"),
+          ("type", JString "AtprotoPersonalDataServer"),
+          ("serviceEndpoint", JString "https://\{accountHostname account}"),
+        ],
+      ],
+    ),
+  ]
+
 {- | This PDS's own did:web document, keyed by the hostname `makeAccount`
    admitted. It describes the SERVER (its atproto service endpoint), not the
-   hosted account — the account is a `did:key` and owns a different document
-   this server does not serve. -}
+   hosted account — `accountDidDocument`, above, is the account's. -}
 didWebDocument : Account -> Json
 didWebDocument account = jObject [
   ("@context", jArray [JString "https://www.w3.org/ns/did/v1"]),
@@ -1593,6 +1735,7 @@ readHandled account store (QueryCall nsid params)
     Some (finishRead (applyListRecords account store params))
   | nsid == describeRepoNsid =
     Some (finishRead (applyDescribeRepo account store params))
+  | nsid == describeServerNsid = Some (finishRead (applyDescribeServer account))
   | nsid == getRepoNsid =
     Some (collapseResponse (applyGetRepo account store params))
   | nsid == getLatestCommitNsid =
@@ -1601,6 +1744,10 @@ readHandled account store (QueryCall nsid params)
     Some (collapseResponse (applyGetBlob account store params))
   | nsid == listBlobsNsid =
     Some (finishRead (applyListBlobs account store params))
+  | nsid == listReposNsid =
+    Some (finishRead (applyListRepos account store params))
+  | nsid == getRepoStatusNsid =
+    Some (finishRead (applyGetRepoStatus account store params))
   | nsid == resolveHandleNsid =
     Some (finishRead (applyResolveHandle account params))
   | otherwise = None
@@ -1608,7 +1755,7 @@ readHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: five record writes, four session routes, eight
+{- | The complete handler: five record writes, four session routes, nine
    reads, two well-knowns. The halves are disjoint by construction — each owns
    a distinct set of NSIDs, and the read half additionally owns the two
    well-knowns — so the order below is a formality rather than a
@@ -1624,7 +1771,7 @@ pdsHandler account context outcome store call =
         Some response => (store, response)
         None => (store, unhandledRoute call)
 
--- | The registry of all seventeen XRPC endpoints. The two well-known paths are
+-- | The registry of all twenty-one XRPC endpoints. The two well-known paths are
 -- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -1634,15 +1781,23 @@ pdsRegistry = do
   reads <- readEndpoints
   makeRegistry (concatEndpoints writes (concatEndpoints sessions reads))
 
-{- | The eight read queries, every one of them public.
+{- | The eleven read queries and the one event-stream subscription, every one
+   of them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,
-   `listRecords` and `describeRepo`, and the `com.atproto.sync.*` pair another
+   `listRecords` and `describeRepo`, and the `com.atproto.sync.*` reads
+   (including `listRepos`/`getRepoStatus`, the discovery pair a relay calls to
+   find and then check on a repository it hosts no opinion about yet) another
    server's relay reads to mirror this repo, are all reachable on a real PDS
    with no credential — and so is `com.atproto.identity.resolveHandle`, which
-   is how a client finds this account before it could have a token at all. A
-   server that closed these would not be a stricter PDS; it would be one no
-   client and no relay can use.
+   is how a client finds this account before it could have a token at all, and
+   `com.atproto.server.describeServer`, which is how a client or relay finds
+   the account before that. A server that closed these would not be a
+   stricter PDS; it would be one no client and no relay can use.
+
+   `com.atproto.sync.subscribeRepos` is public on the same grounds and for the
+   same reader: it is the live half of what `getRepo` answers once, and a
+   relay that may read the repository may watch it change.
 
    The classification is per route, not per kind: a future public procedure
    would say `PublicRoute` here and be right, and a future private query would
@@ -1652,20 +1807,28 @@ readEndpoints = do
   getRecord <- queryEndpoint getRecordNsid PublicRoute
   listRecords <- queryEndpoint listRecordsNsid PublicRoute
   describeRepo <- queryEndpoint describeRepoNsid PublicRoute
+  describeServer <- queryEndpoint describeServerNsid PublicRoute
   getRepo <- queryEndpoint getRepoNsid PublicRoute
   getLatestCommit <- queryEndpoint getLatestCommitNsid PublicRoute
   getBlob <- queryEndpoint getBlobNsid PublicRoute
   listBlobs <- queryEndpoint listBlobsNsid PublicRoute
+  listRepos <- queryEndpoint listReposNsid PublicRoute
+  getRepoStatus <- queryEndpoint getRepoStatusNsid PublicRoute
   resolveHandle <- queryEndpoint resolveHandleNsid PublicRoute
+  subscribeRepos <- subscriptionEndpoint subscribeReposNsid PublicRoute
   Ok [
     getRecord,
     listRecords,
     describeRepo,
+    describeServer,
     getRepo,
     getLatestCommit,
     getBlob,
     listBlobs,
+    listRepos,
+    getRepoStatus,
     resolveHandle,
+    subscribeRepos,
   ]
 
 concatEndpoints : List Endpoint -> List Endpoint -> List Endpoint

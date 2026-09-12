@@ -1,5 +1,5 @@
 # META
-source_lines=493
+source_lines=469
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lsp_harness.mdk — a Medaka-native test harness that drives the
@@ -37,7 +37,8 @@ import json.{
   asInt,
 }
 import support.util.{utf8Len, utf8CharWidth}
-import string.{isDigit}
+import string.{toInt}
+import regex.{Regex, mustCompile, find}
 
 -- ── JSON-RPC message builders ───────────────────────────────────────────────
 
@@ -172,8 +173,12 @@ parseFrames s =
   let arr = stringToChars s
   pfGo s arr (arrayLength arr) 0
 
-clLabel : String
-clLabel = "Content-Length:"
+-- `regex` has no anchor-at-offset primitive (`findFrom` restarts the SEARCH
+-- there, it does not anchor `^` there), so the header is matched against the
+-- tail slice from `i` with `^` doing the anchoring, and `i` is added back
+-- onto the reported match position.
+headerRe : Regex
+headerRe = mustCompile "^Content-Length: *([0-9]+)\r\n\r\n"
 
 pfGo : String -> Array Char -> Int -> Int -> (List Frame, Bool)
 pfGo s arr len i =
@@ -181,16 +186,20 @@ pfGo s arr len i =
     ([], True)
   else if isTrailingJunk arr len i then
     ([], True)
-  else if matchesAt arr len i clLabel then match parseHeader arr len i
+  else match find headerRe (stringSlice i (stringLength s) s)
     None => ([], False)
-    Some (n, bodyStart) => match takeBytes arr len bodyStart n
-      None => ([Frame n "" False], False)
-      Some bodyEnd =>
-        let body = stringSlice bodyStart bodyEnd s
-        match pfGo s arr len bodyEnd
-          (rest, clean) => (Frame n body True :: rest, clean)
-  else
-    ([], False)
+    Some m => match m.groups
+      [Some g] => match toInt g.text
+        None => ([], False)
+        Some n =>
+          let bodyStart = i + m.end
+          match takeBytes arr len bodyStart n
+            None => ([Frame n "" False], False)
+            Some bodyEnd =>
+              let body = stringSlice bodyStart bodyEnd s
+              match pfGo s arr len bodyEnd
+                (rest, clean) => (Frame n body True :: rest, clean)
+      _ => ([], False)
 
 -- Everything from i to end is trailing junk (the LSP's `0` unit-print + ws).
 isTrailingJunk : Array Char -> Int -> Int -> Bool
@@ -216,39 +225,6 @@ matchesGo arr len i larr j llen
   | arrayGetUnsafe (i + j) arr == arrayGetUnsafe j larr =
     matchesGo arr len i larr (j + 1) llen
   | otherwise = False
-
--- At `i` (== clLabel): skip label + spaces, read digits, expect "\r\n\r\n".
--- Returns (contentLength, bodyStartIndex).  Header bytes are ASCII so codepoint
--- index == byte index here.
-parseHeader : Array Char -> Int -> Int -> Option (Int, Int)
-parseHeader arr len i =
-  let afterLabel = i + stringLength clLabel
-  let numStart = skipSpaces arr len afterLabel
-  match parseDigits arr len numStart 0 False
-    None => None
-    Some (n, afterNum) =>
-      if matchesAt arr len afterNum "\r\n\r\n" then
-        Some (n, afterNum + 4)
-      else
-        None
-
-skipSpaces : Array Char -> Int -> Int -> Int
-skipSpaces arr len i
-  | i >= len = i
-  | arrayGetUnsafe i arr == ' ' = skipSpaces arr len (i + 1)
-  | otherwise = i
-
-parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Option (Int, Int)
-parseDigits arr len i acc seen
-  | i >= len = if seen then Some (acc, i) else None
-  | isDigit (arrayGetUnsafe i arr) =
-    parseDigits
-      arr
-      len
-      (i + 1)
-      (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48))
-      True
-  | otherwise = if seen then Some (acc, i) else None
 
 -- Consume `remaining` BYTES from codepoint `i`; Some end-index on an exact
 -- boundary, None if a codepoint straddles the boundary or the stream runs out.
@@ -498,7 +474,8 @@ summary total =
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "utf8CharWidth" false))))
-(DUse false (UseGroup ("string") ((mem "isDigit" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false))))
 (DTypeSig true "initializeMsg" (TyFun (TyCon "Int") (TyCon "Json")))
 (DFunDef false "initializeMsg" ((PVar "idn")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EApp (EVar "JInt") (EVar "idn"))) (ETuple (ELit (LString "method")) (EApp (EVar "JString") (ELit (LString "initialize")))) (ETuple (ELit (LString "params")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit)))))))))
 (DTypeSig true "initializedMsg" (TyCon "Json"))
@@ -524,10 +501,10 @@ summary total =
 (DData Public "Frame" () ((variant "Frame" (ConPos (TyCon "Int") (TyCon "String") (TyCon "Bool")))) ())
 (DTypeSig true "parseFrames" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool"))))
 (DFunDef false "parseFrames" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LInt 0))))))
-(DTypeSig false "clLabel" (TyCon "String"))
-(DFunDef false "clLabel" () (ELit (LString "Content-Length:")))
+(DTypeSig false "headerRe" (TyCon "Regex"))
+(DFunDef false "headerRe" () (EApp (EVar "mustCompile") (ELit (LString "^Content-Length: *([0-9]+)\r\n\r\n"))))
 (DTypeSig false "pfGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool")))))))
-(DFunDef false "pfGo" ((PVar "s") (PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (ETuple (EListLit) (EVar "True")) (EIf (EApp (EApp (EApp (EVar "isTrailingJunk") (EVar "arr")) (EVar "len")) (EVar "i")) (ETuple (EListLit) (EVar "True")) (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "arr")) (EVar "len")) (EVar "i")) (EVar "clLabel")) (EMatch (EApp (EApp (EApp (EVar "parseHeader") (EVar "arr")) (EVar "len")) (EVar "i")) (arm (PCon "None") () (ETuple (EListLit) (EVar "False"))) (arm (PCon "Some" (PTuple (PVar "n") (PVar "bodyStart"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "takeBytes") (EVar "arr")) (EVar "len")) (EVar "bodyStart")) (EVar "n")) (arm (PCon "None") () (ETuple (EListLit (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (ELit (LString ""))) (EVar "False"))) (EVar "False"))) (arm (PCon "Some" (PVar "bodyEnd")) () (EBlock (DoLet false false (PVar "body") (EApp (EApp (EApp (EVar "stringSlice") (EVar "bodyStart")) (EVar "bodyEnd")) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EVar "len")) (EVar "bodyEnd")) (arm (PTuple (PVar "rest") (PVar "clean")) () (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (EVar "body")) (EVar "True")) (EVar "rest")) (EVar "clean")))))))))) (ETuple (EListLit) (EVar "False"))))))
+(DFunDef false "pfGo" ((PVar "s") (PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (ETuple (EListLit) (EVar "True")) (EIf (EApp (EApp (EApp (EVar "isTrailingJunk") (EVar "arr")) (EVar "len")) (EVar "i")) (ETuple (EListLit) (EVar "True")) (EMatch (EApp (EApp (EVar "find") (EVar "headerRe")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (arm (PCon "None") () (ETuple (EListLit) (EVar "False"))) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PList (PCon "Some" (PVar "g"))) () (EMatch (EApp (EVar "toInt") (EFieldAccess (EVar "g") "text")) (arm (PCon "None") () (ETuple (EListLit) (EVar "False"))) (arm (PCon "Some" (PVar "n")) () (EBlock (DoLet false false (PVar "bodyStart") (EBinOp "+" (EVar "i") (EFieldAccess (EVar "m") "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "takeBytes") (EVar "arr")) (EVar "len")) (EVar "bodyStart")) (EVar "n")) (arm (PCon "None") () (ETuple (EListLit (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (ELit (LString ""))) (EVar "False"))) (EVar "False"))) (arm (PCon "Some" (PVar "bodyEnd")) () (EBlock (DoLet false false (PVar "body") (EApp (EApp (EApp (EVar "stringSlice") (EVar "bodyStart")) (EVar "bodyEnd")) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EVar "len")) (EVar "bodyEnd")) (arm (PTuple (PVar "rest") (PVar "clean")) () (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (EVar "body")) (EVar "True")) (EVar "rest")) (EVar "clean"))))))))))))) (arm PWild () (ETuple (EListLit) (EVar "False")))))))))
 (DTypeSig false "isTrailingJunk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "isTrailingJunk" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "True") (EIf (EApp (EVar "isJunkChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EVar "isTrailingJunk") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isJunkChar" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -536,12 +513,6 @@ summary total =
 (DFunDef false "matchesAt" ((PVar "arr") (PVar "len") (PVar "i") (PVar "lit")) (EBlock (DoLet false false (PVar "larr") (EApp (EVar "stringToChars") (EVar "lit"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchesGo") (EVar "arr")) (EVar "len")) (EVar "i")) (EVar "larr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "larr"))))))
 (DTypeSig false "matchesGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))))
 (DFunDef false "matchesGo" ((PVar "arr") (PVar "len") (PVar "i") (PVar "larr") (PVar "j") (PVar "llen")) (EIf (EBinOp ">=" (EVar "j") (EVar "llen")) (EVar "True") (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (EVar "j")) (EVar "len")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "arr")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "larr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchesGo") (EVar "arr")) (EVar "len")) (EVar "i")) (EVar "larr")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "llen")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "parseHeader" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "parseHeader" ((PVar "arr") (PVar "len") (PVar "i")) (EBlock (DoLet false false (PVar "afterLabel") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "clLabel")))) (DoLet false false (PVar "numStart") (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EVar "len")) (EVar "afterLabel"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EVar "len")) (EVar "numStart")) (ELit (LInt 0))) (EVar "False")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "afterNum"))) () (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "arr")) (EVar "len")) (EVar "afterNum")) (ELit (LString "\r\n\r\n"))) (EApp (EVar "Some") (ETuple (EVar "n") (EBinOp "+" (EVar "afterNum") (ELit (LInt 4))))) (EVar "None")))))))
-(DTypeSig false "skipSpaces" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipSpaces" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))))))
-(DFunDef false "parseDigits" ((PVar "arr") (PVar "len") (PVar "i") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EIf (EVar "seen") (EApp (EVar "Some") (ETuple (EVar "acc") (EVar "i"))) (EVar "None")) (EIf (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LInt 48))))) (EVar "True")) (EIf (EVar "otherwise") (EIf (EVar "seen") (EApp (EVar "Some") (ETuple (EVar "acc") (EVar "i"))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "takeBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "takeBytes" ((PVar "arr") (PVar "len") (PVar "i") (PVar "remaining")) (EIf (EBinOp "==" (EVar "remaining") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "w") (EApp (EVar "utf8CharWidth") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (DoExpr (EIf (EBinOp ">" (EVar "w") (EVar "remaining")) (EVar "None") (EApp (EApp (EApp (EApp (EVar "takeBytes") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "remaining") (EVar "w")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "allByteValid" (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool")))
@@ -614,7 +585,8 @@ summary total =
 # MARK
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "utf8CharWidth" false))))
-(DUse false (UseGroup ("string") ((mem "isDigit" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false))))
 (DTypeSig true "initializeMsg" (TyFun (TyCon "Int") (TyCon "Json")))
 (DFunDef false "initializeMsg" ((PVar "idn")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EApp (EVar "JInt") (EVar "idn"))) (ETuple (ELit (LString "method")) (EApp (EVar "JString") (ELit (LString "initialize")))) (ETuple (ELit (LString "params")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit)))))))))
 (DTypeSig true "initializedMsg" (TyCon "Json"))
@@ -640,10 +612,10 @@ summary total =
 (DData Public "Frame" () ((variant "Frame" (ConPos (TyCon "Int") (TyCon "String") (TyCon "Bool")))) ())
 (DTypeSig true "parseFrames" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool"))))
 (DFunDef false "parseFrames" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LInt 0))))))
-(DTypeSig false "clLabel" (TyCon "String"))
-(DFunDef false "clLabel" () (ELit (LString "Content-Length:")))
+(DTypeSig false "headerRe" (TyCon "Regex"))
+(DFunDef false "headerRe" () (EApp (EVar "mustCompile") (ELit (LString "^Content-Length: *([0-9]+)\r\n\r\n"))))
 (DTypeSig false "pfGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool")))))))
-(DFunDef false "pfGo" ((PVar "s") (PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (ETuple (EListLit) (EVar "True")) (EIf (EApp (EApp (EApp (EVar "isTrailingJunk") (EVar "arr")) (EVar "len")) (EVar "i")) (ETuple (EListLit) (EVar "True")) (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "arr")) (EVar "len")) (EVar "i")) (EVar "clLabel")) (EMatch (EApp (EApp (EApp (EVar "parseHeader") (EVar "arr")) (EVar "len")) (EVar "i")) (arm (PCon "None") () (ETuple (EListLit) (EVar "False"))) (arm (PCon "Some" (PTuple (PVar "n") (PVar "bodyStart"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "takeBytes") (EVar "arr")) (EVar "len")) (EVar "bodyStart")) (EVar "n")) (arm (PCon "None") () (ETuple (EListLit (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (ELit (LString ""))) (EVar "False"))) (EVar "False"))) (arm (PCon "Some" (PVar "bodyEnd")) () (EBlock (DoLet false false (PVar "body") (EApp (EApp (EApp (EVar "stringSlice") (EVar "bodyStart")) (EVar "bodyEnd")) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EVar "len")) (EVar "bodyEnd")) (arm (PTuple (PVar "rest") (PVar "clean")) () (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (EVar "body")) (EVar "True")) (EVar "rest")) (EVar "clean")))))))))) (ETuple (EListLit) (EVar "False"))))))
+(DFunDef false "pfGo" ((PVar "s") (PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (ETuple (EListLit) (EVar "True")) (EIf (EApp (EApp (EApp (EVar "isTrailingJunk") (EVar "arr")) (EVar "len")) (EVar "i")) (ETuple (EListLit) (EVar "True")) (EMatch (EApp (EApp (EDictApp "find") (EVar "headerRe")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (arm (PCon "None") () (ETuple (EListLit) (EVar "False"))) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PList (PCon "Some" (PVar "g"))) () (EMatch (EApp (EVar "toInt") (EFieldAccess (EVar "g") "text")) (arm (PCon "None") () (ETuple (EListLit) (EVar "False"))) (arm (PCon "Some" (PVar "n")) () (EBlock (DoLet false false (PVar "bodyStart") (EBinOp "+" (EVar "i") (EFieldAccess (EVar "m") "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "takeBytes") (EVar "arr")) (EVar "len")) (EVar "bodyStart")) (EVar "n")) (arm (PCon "None") () (ETuple (EListLit (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (ELit (LString ""))) (EVar "False"))) (EVar "False"))) (arm (PCon "Some" (PVar "bodyEnd")) () (EBlock (DoLet false false (PVar "body") (EApp (EApp (EApp (EVar "stringSlice") (EVar "bodyStart")) (EVar "bodyEnd")) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "pfGo") (EVar "s")) (EVar "arr")) (EVar "len")) (EVar "bodyEnd")) (arm (PTuple (PVar "rest") (PVar "clean")) () (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Frame") (EVar "n")) (EVar "body")) (EVar "True")) (EVar "rest")) (EVar "clean"))))))))))))) (arm PWild () (ETuple (EListLit) (EVar "False")))))))))
 (DTypeSig false "isTrailingJunk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "isTrailingJunk" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "True") (EIf (EApp (EVar "isJunkChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EVar "isTrailingJunk") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isJunkChar" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -652,12 +624,6 @@ summary total =
 (DFunDef false "matchesAt" ((PVar "arr") (PVar "len") (PVar "i") (PVar "lit")) (EBlock (DoLet false false (PVar "larr") (EApp (EVar "stringToChars") (EVar "lit"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchesGo") (EVar "arr")) (EVar "len")) (EVar "i")) (EVar "larr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "larr"))))))
 (DTypeSig false "matchesGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))))
 (DFunDef false "matchesGo" ((PVar "arr") (PVar "len") (PVar "i") (PVar "larr") (PVar "j") (PVar "llen")) (EIf (EBinOp ">=" (EVar "j") (EVar "llen")) (EVar "True") (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (EVar "j")) (EVar "len")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "arr")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "larr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchesGo") (EVar "arr")) (EVar "len")) (EVar "i")) (EVar "larr")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "llen")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "parseHeader" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "parseHeader" ((PVar "arr") (PVar "len") (PVar "i")) (EBlock (DoLet false false (PVar "afterLabel") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "clLabel")))) (DoLet false false (PVar "numStart") (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EVar "len")) (EVar "afterLabel"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EVar "len")) (EVar "numStart")) (ELit (LInt 0))) (EVar "False")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "afterNum"))) () (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "arr")) (EVar "len")) (EVar "afterNum")) (ELit (LString "\r\n\r\n"))) (EApp (EVar "Some") (ETuple (EVar "n") (EBinOp "+" (EVar "afterNum") (ELit (LInt 4))))) (EVar "None")))))))
-(DTypeSig false "skipSpaces" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipSpaces" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))))))
-(DFunDef false "parseDigits" ((PVar "arr") (PVar "len") (PVar "i") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EIf (EVar "seen") (EApp (EVar "Some") (ETuple (EVar "acc") (EVar "i"))) (EVar "None")) (EIf (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LInt 48))))) (EVar "True")) (EIf (EVar "otherwise") (EIf (EVar "seen") (EApp (EVar "Some") (ETuple (EVar "acc") (EVar "i"))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "takeBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "takeBytes" ((PVar "arr") (PVar "len") (PVar "i") (PVar "remaining")) (EIf (EBinOp "==" (EVar "remaining") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "w") (EApp (EVar "utf8CharWidth") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (DoExpr (EIf (EBinOp ">" (EVar "w") (EVar "remaining")) (EVar "None") (EApp (EApp (EApp (EApp (EVar "takeBytes") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "remaining") (EVar "w")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "allByteValid" (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyCon "Bool")))

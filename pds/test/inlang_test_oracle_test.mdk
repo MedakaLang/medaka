@@ -69,13 +69,15 @@ engineLabel NativeSpeed = "native (speed)"
    `lib.repo`'s call graph, which the interpreter's capability policy does
    not bind.
 
-   `NativeSpeed` (5 files): eval completes but is materially slower —
+   `NativeSpeed` (6 files): eval completes but is materially slower —
    `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both past a
-   180 s timeout vs 2.5 s / 18.0 s, and the two JWT/PBKDF2 files roughly
-   4-5x. -}
+   180 s timeout vs 2.5 s / 18.0 s, the two JWT/PBKDF2 files roughly 4-5x,
+   and `websocket_test` 295 s vs 4 s (RFC 3174's one-million-byte SHA-1
+   vector is most of that). -}
 suites : List (String, (Int, Engine))
 suites = [
   ("skeleton_test", (2, Eval)),
+  ("httpclient_test", (1, Eval)),
   ("http_test", (85, Eval)),
   ("xrpc_test", (29, Eval)),
   ("server_core_test", (11, Eval)),
@@ -91,13 +93,16 @@ suites = [
   ("rfc6979_test", (4, Eval)),
   ("ecdsa_test", (2, Eval)),
   ("pbkdf2_test", (4, NativeSpeed)),
-  ("jwt_test", (26, NativeSpeed)),
+  ("jwt_test", (32, NativeSpeed)),
   ("credential_test", (20, NativeSpeed)),
   ("session_routes_test", (29, NativeCapability)),
   ("auth_seam_test", (31, NativeCapability)),
   ("blob_routes_test", (15, NativeCapability)),
   ("ratelimit_test", (25, Eval)),
   ("read_buffer_test", (12, Eval)),
+  ("websocket_test", (43, NativeSpeed)),
+  ("event_log_test", (22, NativeCapability)),
+  ("sync_event_test", (3, Eval)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -193,6 +198,9 @@ floorExpectation name = match lookup name excluded
 test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
   floorExpectation "skeleton_test"
 
+test "pds/test/httpclient_test.mdk executed >= 1 assertions" =
+  floorExpectation "httpclient_test"
+
 test "pds/test/http_test.mdk executed >= 85 assertions" =
   floorExpectation "http_test"
 
@@ -238,7 +246,7 @@ test "pds/test/ecdsa_test.mdk executed >= 2 assertions" =
 test "pds/test/pbkdf2_test.mdk executed >= 4 assertions" =
   floorExpectation "pbkdf2_test"
 
-test "pds/test/jwt_test.mdk executed >= 26 assertions" =
+test "pds/test/jwt_test.mdk executed >= 32 assertions" =
   floorExpectation "jwt_test"
 
 test "pds/test/credential_test.mdk executed >= 20 assertions" =
@@ -258,6 +266,15 @@ test "pds/test/ratelimit_test.mdk executed >= 25 assertions" =
 
 test "pds/test/read_buffer_test.mdk executed >= 12 assertions" =
   floorExpectation "read_buffer_test"
+
+test "pds/test/websocket_test.mdk executed >= 43 assertions" =
+  floorExpectation "websocket_test"
+
+test "pds/test/event_log_test.mdk executed >= 22 assertions" =
+  floorExpectation "event_log_test"
+
+test "pds/test/sync_event_test.mdk executed >= 3 assertions" =
+  floorExpectation "sync_event_test"
 
 -- # Non-vacuity
 

@@ -1,5 +1,5 @@
 # META
-source_lines=1666
+source_lines=1623
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -58,6 +58,9 @@ import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
 import json.{Json, JString, jObject, jArray}
 import string.{toLower}
+import regex.{
+  Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll
+}
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
 -- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "") /
@@ -164,11 +167,14 @@ ppTyDoc t = ppTyP 0 t
 --   "--"            -> ""
 --   "-- foo"        -> "foo"   (3-char `-- ` prefix)
 --   "--foo"         -> "foo"   (len>2, drop first 2)
+dashSpaceRe : Regex
+dashSpaceRe = mustCompile "^-- "
+
 commentBody : String -> String
 commentBody t =
   if t == "--" then
     ""
-  else if dlen t >= 3 && dsub 0 3 t == "-- " then
+  else if isMatch dashSpaceRe t then
     dsub 3 (dlen t) t
   else if dlen t > 2 then
     dsub 2 (dlen t) t
@@ -901,17 +907,11 @@ stripPipePrefix line =
 markerEligibleAfter : String -> Bool
 markerEligibleAfter line = line == "" || isDecorativeLine line
 
-isDecorativeLine : String -> Bool
-isDecorativeLine line =
-  let cs = stringToChars line
-  if arrayLength cs == 0 then False else isDecorativeChar (arrayGetUnsafe 0 cs)
+decorativeLineRe : Regex
+decorativeLineRe = mustCompile "^[^a-zA-Z0-9 ]"
 
-isDecorativeChar : Char -> Bool
-isDecorativeChar c =
-  not (c >= 'a' && c <= 'z')
-    && not (c >= 'A' && c <= 'Z')
-    && not (c >= '0' && c <= '9')
-    && c /= ' '
+isDecorativeLine : String -> Bool
+isDecorativeLine line = isMatch decorativeLineRe line
 
 -- A run of extracted doc-prose lines is either plain prose or a doctest
 -- example block (starts at a `> ` line, extends through following non-blank
@@ -1399,45 +1399,18 @@ anyMentions tyName (s :: rest) =
 -- Does `hay` contain `needle` as a whole identifier token?  Word-bounded on
 -- both sides, so a module named `array` does not "mention" `Array` merely by
 -- rendering `ArrayBuilder`.
+-- The boundary class is the wide Medaka identifier class (alnum + `_` + `'`,
+-- matching `support.char.isAlnum`) — NOT the engine's built-in `\b`, which is
+-- ASCII `[A-Za-z0-9_]` only and would narrow this to miss a needle abutting an
+-- apostrophe (e.g. `x'`). Built by hand as a CONSUMING class around the
+-- escaped needle rather than lookaround, per the design's own rewrite for
+-- what a lookbehind/lookahead would otherwise do.
 mentionsToken : String -> String -> Bool
 mentionsToken needle hay =
-  let ns = stringToChars needle
-  let hs = stringToChars hay
-  mentionsTokenGo ns hs 0 (arrayLength ns) (arrayLength hs)
-
-mentionsTokenGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-mentionsTokenGo ns hs i n h =
-  if n == 0 || i + n > h then
-    False
-  else if charsMatchAt ns hs i n
-    && not (isIdentCharAt hs (i - 1) h)
-    && not (isIdentCharAt hs (i + n) h) then
-    True
-  else
-    mentionsTokenGo ns hs (i + 1) n h
-
-charsMatchAt : Array Char -> Array Char -> Int -> Int -> Bool
-charsMatchAt ns hs i n = charsMatchAtGo ns hs i 0 n
-
-charsMatchAtGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-charsMatchAtGo ns hs i j n =
-  if j >= n then
-    True
-  else if arrayGetUnsafe (i + j) hs == arrayGetUnsafe j ns then
-    charsMatchAtGo ns hs i (j + 1) n
-  else
-    False
-
-isIdentCharAt : Array Char -> Int -> Int -> Bool
-isIdentCharAt hs i h =
-  if i < 0 || i >= h then False else isIdentChar (arrayGetUnsafe i hs)
-
-isIdentChar : Char -> Bool
-isIdentChar c =
-  c >= 'a' && c <= 'z'
-    || c >= 'A' && c <= 'Z'
-    || c >= '0' && c <= '9'
-    || c == '_'
+  isMatch
+    (mustCompile
+      ("(?:^|[^A-Za-z0-9_'])" ++ escape needle ++ "(?:$|[^A-Za-z0-9_'])"))
+    hay
 
 lookupStrDoc : String -> List (String, String) -> Option String
 lookupStrDoc _ [] = None
@@ -1503,34 +1476,18 @@ isNoneDoc _ = False
 -- exactness, only on the entry's OWN header and the index's link agreeing,
 -- which `slugifyAnchor` guarantees by construction (both read from the same
 -- function).
+-- A maximal run of non-slug chars becomes one `-`; a pre-existing `-` is a
+-- slug char, so it is never absorbed into an adjacent converted run on
+-- either side (`a- b` -> `a--b`, `.-a` -> `--a`). The pre-migration walk
+-- treated a `-` that FOLLOWED a run differently (`.-a` -> `-a`, one dash);
+-- no doc-entry name exercises that distinction, so this is a deliberate,
+-- symmetric replacement rather than a byte-for-byte port.
+nonSlugRunRe : Regex
+nonSlugRunRe = mustCompile "[^a-z0-9_-]+"
+
 slugifyAnchor : String -> String
 slugifyAnchor name =
-  let lowered = toLower name
-  let chars = stringToChars lowered
-  let n = arrayLength chars
-  stringTrimDashes (slugCharsGo chars 0 n)
-
--- Walk char-by-char (`arrayGetUnsafe`/`arrayLength` — both globals, no
--- `array` module import needed), mapping a non slug-char to `-` and
--- collapsing adjacent `-` as we go (so we never materialize the
--- un-collapsed string).
-slugCharsGo : Array Char -> Int -> Int -> String
-slugCharsGo chars i n =
-  if i >= n then
-    ""
-  else
-    let c = arrayGetUnsafe i chars
-    let rest = slugCharsGo chars (i + 1) n
-    if isSlugChar c then
-      charToStr c ++ rest
-    else if dlen rest > 0 && dsub 0 1 rest == "-" then
-      rest
-    else
-      "-" ++ rest
-
-isSlugChar : Char -> Bool
-isSlugChar c =
-  c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+  stringTrimDashes (replaceAll nonSlugRunRe "-" (toLower name))
 
 stringTrimDashes : String -> String
 stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)
@@ -1592,36 +1549,36 @@ renderIndexLink moduleName (DocEntry name _ _ _ _) =
 -- The first sentence of a prose block: up to and including the first `.`
 -- that ends a word, or the first line when there is none.  Newlines inside
 -- the sentence become spaces, since the source wraps at a fixed width.
+periodRe : Regex
+periodRe = mustCompile "\\."
+
+newlineRe : Regex
+newlineRe = mustCompile "\\n"
+
 firstSentence : String -> String
 firstSentence prose =
-  let cs = stringToChars prose
-  let n = arrayLength cs
-  let cut = sentenceEnd cs 0 n
+  let cut = firstSentenceCut prose
   joinWith " " (splitNl (stringTrim (dsub 0 cut prose)))
 
-sentenceEnd : Array Char -> Int -> Int -> Int
-sentenceEnd cs i n =
-  if i >= n then
-    firstLineEnd cs 0 n
-  else
-    let c = arrayGetUnsafe i cs
-    if c == '.'
-      && (i + 1 >= n || isSentenceGap (arrayGetUnsafe (i + 1) cs)) then
-      i + 1
-    else
-      sentenceEnd cs (i + 1) n
+-- The end of the first `.` that is itself followed by end-of-string or a
+-- sentence gap (a space or a newline), matched then tail-tested rather than
+-- via lookahead; falling back to the first newline, or the whole string.
+firstSentenceCut : String -> Int
+firstSentenceCut prose = match sentenceEndAt prose (findAll periodRe prose)
+  Some cut => cut
+  None => match find newlineRe prose
+    Some m => m.start
+    None => dlen prose
 
-isSentenceGap : Char -> Bool
-isSentenceGap c = c == ' ' || c == '\n'
-
-firstLineEnd : Array Char -> Int -> Int -> Int
-firstLineEnd cs i n =
-  if i >= n then
-    n
-  else if arrayGetUnsafe i cs == '\n' then
-    i
+sentenceEndAt : String -> List Match -> Option Int
+sentenceEndAt _ [] = None
+sentenceEndAt prose (m :: rest) =
+  if m.end >= dlen prose
+    || dsub m.end (m.end + 1) prose == " "
+    || dsub m.end (m.end + 1) prose == "\n" then
+    Some m.end
   else
-    firstLineEnd cs (i + 1) n
+    sentenceEndAt prose rest
 
 -- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
 -- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the
@@ -1680,6 +1637,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
 (DData Private "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
 (DTypeAlias false "CommentRow" () (TyTuple (TyCon "Int") (TyCon "String") (TyCon "Int")))
@@ -1706,8 +1664,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "ppConstrDoc" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EMatch (EVar "args") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString ""))))))
 (DTypeSig false "ppTyDoc" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyDoc" ((PVar "t")) (EApp (EApp (EVar "ppTyP") (ELit (LInt 0))) (EVar "t")))
+(DTypeSig false "dashSpaceRe" (TyCon "Regex"))
+(DFunDef false "dashSpaceRe" () (EApp (EVar "mustCompile") (ELit (LString "^-- "))))
 (DTypeSig false "commentBody" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "commentBody" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "--"))) (ELit (LString "")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "t")) (ELit (LString "-- ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 3))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (EIf (EBinOp ">" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (ELit (LString ""))))))
+(DFunDef false "commentBody" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "--"))) (ELit (LString "")) (EIf (EApp (EApp (EVar "isMatch") (EVar "dashSpaceRe")) (EVar "t")) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 3))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (EIf (EBinOp ">" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (ELit (LString ""))))))
 (DTypeSig false "isDoctestInputText" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDoctestInputText" ((PVar "t")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "t")) (ELit (LString "-- > ")))))
 (DTypeSig false "docLineBody" (TyFun (TyCon "String") (TyCon "String")))
@@ -1881,10 +1841,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "stripPipePrefix" ((PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "line")) (ELit (LString "| ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "line"))) (EVar "line")) (EIf (EBinOp "==" (EVar "line") (ELit (LString "|"))) (ELit (LString "")) (EVar "line"))))
 (DTypeSig false "markerEligibleAfter" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "markerEligibleAfter" ((PVar "line")) (EBinOp "||" (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "isDecorativeLine") (EVar "line"))))
+(DTypeSig false "decorativeLineRe" (TyCon "Regex"))
+(DFunDef false "decorativeLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^[^a-zA-Z0-9 ]"))))
 (DTypeSig false "isDecorativeLine" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDecorativeLine" ((PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isDecorativeChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
-(DTypeSig false "isDecorativeChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isDecorativeChar" ((PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z"))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z")))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))) (EBinOp "/=" (EVar "c") (ELit (LChar " ")))))
+(DFunDef false "isDecorativeLine" ((PVar "line")) (EApp (EApp (EVar "isMatch") (EVar "decorativeLineRe")) (EVar "line")))
 (DData Private "DocSegment" () ((variant "ProseSeg" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "ExampleSeg" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Private "SegMode" () ((variant "ModeProse" (ConPos)) (variant "ModeExample" (ConPos))) ())
 (DTypeSig false "isExampleStart" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -2004,17 +1964,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "anyMentions" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyMentions" ((PVar "tyName") (PCons (PVar "s") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsToken") (EVar "tyName")) (EVar "s")) (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "rest"))))
 (DTypeSig false "mentionsToken" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "mentionsToken" ((PVar "needle") (PVar "hay")) (EBlock (DoLet false false (PVar "ns") (EApp (EVar "stringToChars") (EVar "needle"))) (DoLet false false (PVar "hs") (EApp (EVar "stringToChars") (EVar "hay"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "ns"))) (EApp (EVar "arrayLength") (EVar "hs"))))))
-(DTypeSig false "mentionsTokenGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "mentionsTokenGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n") (PVar "h")) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "n")) (EVar "h"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "ns")) (EVar "hs")) (EVar "i")) (EVar "n")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "h")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "+" (EVar "i") (EVar "n"))) (EVar "h")))) (EVar "True") (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "h")))))
-(DTypeSig false "charsMatchAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "charsMatchAt" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (ELit (LInt 0))) (EVar "n")))
-(DTypeSig false "charsMatchAtGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "charsMatchAtGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "j") (PVar "n")) (EIf (EBinOp ">=" (EVar "j") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "hs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "ns"))) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
-(DTypeSig false "isIdentCharAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "isIdentCharAt" ((PVar "hs") (PVar "i") (PVar "h")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EVar "h"))) (EVar "False") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "hs")))))
-(DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isIdentChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9"))))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
+(DFunDef false "mentionsToken" ((PVar "needle") (PVar "hay")) (EApp (EApp (EVar "isMatch") (EApp (EVar "mustCompile") (EBinOp "++" (EBinOp "++" (ELit (LString "(?:^|[^A-Za-z0-9_'])")) (EApp (EVar "escape") (EVar "needle"))) (ELit (LString "(?:$|[^A-Za-z0-9_'])"))))) (EVar "hay")))
 (DTypeSig false "lookupStrDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lookupStrDoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupStrDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupStrDoc") (EVar "k")) (EVar "rest"))))
@@ -2035,12 +1985,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "isNoneDoc" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "isNoneDoc" ((PCon "None")) (EVar "True"))
 (DFunDef false "isNoneDoc" (PWild) (EVar "False"))
+(DTypeSig false "nonSlugRunRe" (TyCon "Regex"))
+(DFunDef false "nonSlugRunRe" () (EApp (EVar "mustCompile") (ELit (LString "[^a-z0-9_-]+"))))
 (DTypeSig false "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "slugifyAnchor" ((PVar "name")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "name"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "lowered"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n"))))))
-(DTypeSig false "slugCharsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "slugCharsGo" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "isSlugChar") (EVar "c")) (EBinOp "++" (EApp (EVar "charToStr") (EVar "c")) (EVar "rest")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "dlen") (EVar "rest")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rest")) (ELit (LString "-")))) (EVar "rest") (EBinOp "++" (ELit (LString "-")) (EVar "rest"))))))))
-(DTypeSig false "isSlugChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isSlugChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9"))))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EBinOp "==" (EVar "c") (ELit (LChar "-")))))
+(DFunDef false "slugifyAnchor" ((PVar "name")) (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "replaceAll") (EVar "nonSlugRunRe")) (ELit (LString "-"))) (EApp (EVar "toLower") (EVar "name")))))
 (DTypeSig false "stringTrimDashes" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stringTrimDashes" ((PVar "s")) (EApp (EVar "stringTrimDashEnd") (EApp (EVar "stringTrimDashStart") (EVar "s"))))
 (DTypeSig false "stringTrimDashStart" (TyFun (TyCon "String") (TyCon "String")))
@@ -2059,14 +2007,17 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "links"))) (ELit (LString "\n\n"))))))
 (DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
 (DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
+(DTypeSig false "periodRe" (TyCon "Regex"))
+(DFunDef false "periodRe" () (EApp (EVar "mustCompile") (ELit (LString "\\."))))
+(DTypeSig false "newlineRe" (TyCon "Regex"))
+(DFunDef false "newlineRe" () (EApp (EVar "mustCompile") (ELit (LString "\\n"))))
 (DTypeSig false "firstSentence" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "prose"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "cut") (EApp (EApp (EApp (EVar "sentenceEnd") (EVar "cs")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
-(DTypeSig false "sentenceEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "sentenceEnd" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EApp (EApp (EVar "firstLineEnd") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "."))) (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EApp (EVar "isSentenceGap") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EApp (EApp (EVar "sentenceEnd") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))))
-(DTypeSig false "isSentenceGap" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isSentenceGap" ((PVar "c")) (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar " "))) (EBinOp "==" (EVar "c") (ELit (LChar "\n")))))
-(DTypeSig false "firstLineEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "firstLineEnd" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EVar "i") (EApp (EApp (EApp (EVar "firstLineEnd") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
+(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cut") (EApp (EVar "firstSentenceCut") (EVar "prose"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
+(DTypeSig false "firstSentenceCut" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "firstSentenceCut" ((PVar "prose")) (EMatch (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EApp (EApp (EVar "findAll") (EVar "periodRe")) (EVar "prose"))) (arm (PCon "Some" (PVar "cut")) () (EVar "cut")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EVar "newlineRe")) (EVar "prose")) (arm (PCon "Some" (PVar "m")) () (EFieldAccess (EVar "m") "start")) (arm (PCon "None") () (EApp (EVar "dlen") (EVar "prose")))))))
+(DTypeSig false "sentenceEndAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "sentenceEndAt" (PWild (PList)) (EVar "None"))
+(DFunDef false "sentenceEndAt" ((PVar "prose") (PCons (PVar "m") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EApp (EVar "dlen") (EVar "prose"))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString " ")))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString "\n")))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "end")) (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EVar "rest"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
 # MARK
@@ -2081,6 +2032,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
 (DData Private "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
 (DTypeAlias false "CommentRow" () (TyTuple (TyCon "Int") (TyCon "String") (TyCon "Int")))
@@ -2107,8 +2059,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "ppConstrDoc" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EMatch (EVar "args") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString ""))))))
 (DTypeSig false "ppTyDoc" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyDoc" ((PVar "t")) (EApp (EApp (EVar "ppTyP") (ELit (LInt 0))) (EVar "t")))
+(DTypeSig false "dashSpaceRe" (TyCon "Regex"))
+(DFunDef false "dashSpaceRe" () (EApp (EVar "mustCompile") (ELit (LString "^-- "))))
 (DTypeSig false "commentBody" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "commentBody" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "--"))) (ELit (LString "")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "t")) (ELit (LString "-- ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 3))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (EIf (EBinOp ">" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (ELit (LString ""))))))
+(DFunDef false "commentBody" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "--"))) (ELit (LString "")) (EIf (EApp (EApp (EVar "isMatch") (EVar "dashSpaceRe")) (EVar "t")) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 3))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (EIf (EBinOp ">" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (ELit (LString ""))))))
 (DTypeSig false "isDoctestInputText" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDoctestInputText" ((PVar "t")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "t")) (ELit (LString "-- > ")))))
 (DTypeSig false "docLineBody" (TyFun (TyCon "String") (TyCon "String")))
@@ -2282,10 +2236,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "stripPipePrefix" ((PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "line")) (ELit (LString "| ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "line"))) (EVar "line")) (EIf (EBinOp "==" (EVar "line") (ELit (LString "|"))) (ELit (LString "")) (EVar "line"))))
 (DTypeSig false "markerEligibleAfter" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "markerEligibleAfter" ((PVar "line")) (EBinOp "||" (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "isDecorativeLine") (EVar "line"))))
+(DTypeSig false "decorativeLineRe" (TyCon "Regex"))
+(DFunDef false "decorativeLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^[^a-zA-Z0-9 ]"))))
 (DTypeSig false "isDecorativeLine" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDecorativeLine" ((PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isDecorativeChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
-(DTypeSig false "isDecorativeChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isDecorativeChar" ((PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z"))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z")))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))) (EBinOp "/=" (EVar "c") (ELit (LChar " ")))))
+(DFunDef false "isDecorativeLine" ((PVar "line")) (EApp (EApp (EVar "isMatch") (EVar "decorativeLineRe")) (EVar "line")))
 (DData Private "DocSegment" () ((variant "ProseSeg" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "ExampleSeg" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Private "SegMode" () ((variant "ModeProse" (ConPos)) (variant "ModeExample" (ConPos))) ())
 (DTypeSig false "isExampleStart" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -2405,17 +2359,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "anyMentions" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyMentions" ((PVar "tyName") (PCons (PVar "s") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsToken") (EVar "tyName")) (EVar "s")) (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "rest"))))
 (DTypeSig false "mentionsToken" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "mentionsToken" ((PVar "needle") (PVar "hay")) (EBlock (DoLet false false (PVar "ns") (EApp (EVar "stringToChars") (EVar "needle"))) (DoLet false false (PVar "hs") (EApp (EVar "stringToChars") (EVar "hay"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "ns"))) (EApp (EVar "arrayLength") (EVar "hs"))))))
-(DTypeSig false "mentionsTokenGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "mentionsTokenGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n") (PVar "h")) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "n")) (EVar "h"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "ns")) (EVar "hs")) (EVar "i")) (EVar "n")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "h")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "+" (EVar "i") (EVar "n"))) (EVar "h")))) (EVar "True") (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "h")))))
-(DTypeSig false "charsMatchAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "charsMatchAt" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (ELit (LInt 0))) (EVar "n")))
-(DTypeSig false "charsMatchAtGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "charsMatchAtGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "j") (PVar "n")) (EIf (EBinOp ">=" (EVar "j") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "hs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "ns"))) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
-(DTypeSig false "isIdentCharAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "isIdentCharAt" ((PVar "hs") (PVar "i") (PVar "h")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EVar "h"))) (EVar "False") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "hs")))))
-(DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isIdentChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9"))))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
+(DFunDef false "mentionsToken" ((PVar "needle") (PVar "hay")) (EApp (EApp (EVar "isMatch") (EApp (EVar "mustCompile") (EBinOp "++" (EBinOp "++" (ELit (LString "(?:^|[^A-Za-z0-9_'])")) (EApp (EVar "escape") (EVar "needle"))) (ELit (LString "(?:$|[^A-Za-z0-9_'])"))))) (EVar "hay")))
 (DTypeSig false "lookupStrDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lookupStrDoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupStrDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupStrDoc") (EVar "k")) (EVar "rest"))))
@@ -2436,12 +2380,10 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "isNoneDoc" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "isNoneDoc" ((PCon "None")) (EVar "True"))
 (DFunDef false "isNoneDoc" (PWild) (EVar "False"))
+(DTypeSig false "nonSlugRunRe" (TyCon "Regex"))
+(DFunDef false "nonSlugRunRe" () (EApp (EVar "mustCompile") (ELit (LString "[^a-z0-9_-]+"))))
 (DTypeSig false "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "slugifyAnchor" ((PVar "name")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "name"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "lowered"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n"))))))
-(DTypeSig false "slugCharsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "slugCharsGo" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "isSlugChar") (EVar "c")) (EBinOp "++" (EApp (EVar "charToStr") (EVar "c")) (EVar "rest")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "dlen") (EVar "rest")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rest")) (ELit (LString "-")))) (EVar "rest") (EBinOp "++" (ELit (LString "-")) (EVar "rest"))))))))
-(DTypeSig false "isSlugChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isSlugChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9"))))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EBinOp "==" (EVar "c") (ELit (LChar "-")))))
+(DFunDef false "slugifyAnchor" ((PVar "name")) (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "replaceAll") (EVar "nonSlugRunRe")) (ELit (LString "-"))) (EApp (EVar "toLower") (EVar "name")))))
 (DTypeSig false "stringTrimDashes" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stringTrimDashes" ((PVar "s")) (EApp (EVar "stringTrimDashEnd") (EApp (EVar "stringTrimDashStart") (EVar "s"))))
 (DTypeSig false "stringTrimDashStart" (TyFun (TyCon "String") (TyCon "String")))
@@ -2460,13 +2402,16 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "links"))) (ELit (LString "\n\n"))))))
 (DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
 (DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
+(DTypeSig false "periodRe" (TyCon "Regex"))
+(DFunDef false "periodRe" () (EApp (EVar "mustCompile") (ELit (LString "\\."))))
+(DTypeSig false "newlineRe" (TyCon "Regex"))
+(DFunDef false "newlineRe" () (EApp (EVar "mustCompile") (ELit (LString "\\n"))))
 (DTypeSig false "firstSentence" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "prose"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "cut") (EApp (EApp (EApp (EVar "sentenceEnd") (EVar "cs")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
-(DTypeSig false "sentenceEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "sentenceEnd" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EApp (EApp (EVar "firstLineEnd") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "."))) (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EApp (EVar "isSentenceGap") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EApp (EApp (EVar "sentenceEnd") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))))
-(DTypeSig false "isSentenceGap" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isSentenceGap" ((PVar "c")) (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar " "))) (EBinOp "==" (EVar "c") (ELit (LChar "\n")))))
-(DTypeSig false "firstLineEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "firstLineEnd" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EVar "i") (EApp (EApp (EApp (EVar "firstLineEnd") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
+(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cut") (EApp (EVar "firstSentenceCut") (EVar "prose"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
+(DTypeSig false "firstSentenceCut" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "firstSentenceCut" ((PVar "prose")) (EMatch (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EApp (EApp (EVar "findAll") (EVar "periodRe")) (EVar "prose"))) (arm (PCon "Some" (PVar "cut")) () (EVar "cut")) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EVar "newlineRe")) (EVar "prose")) (arm (PCon "Some" (PVar "m")) () (EFieldAccess (EVar "m") "start")) (arm (PCon "None") () (EApp (EVar "dlen") (EVar "prose")))))))
+(DTypeSig false "sentenceEndAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "sentenceEndAt" (PWild (PList)) (EVar "None"))
+(DFunDef false "sentenceEndAt" ((PVar "prose") (PCons (PVar "m") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EApp (EVar "dlen") (EVar "prose"))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString " ")))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString "\n")))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "end")) (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EVar "rest"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))

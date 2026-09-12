@@ -173,6 +173,27 @@ NEWLINE
 DEDENT
 NEWLINE
 EXTERN
+IDENT "writeFileMode"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "String"
+ARROW
+LT
+UPPER "FileWrite"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+DEDENT
+NEWLINE
+EXTERN
 IDENT "appendFile"
 COLON
 UPPER "String"
@@ -197,6 +218,19 @@ UPPER "FileRead"
 STRING "_"
 GT
 UPPER "Bool"
+NEWLINE
+EXTERN
+IDENT "fileMode"
+COLON
+UPPER "String"
+ARROW
+LT
+UPPER "FileRead"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
 NEWLINE
 EXTERN
 IDENT "canonicalizePath"
@@ -335,6 +369,26 @@ UPPER "String"
 NEWLINE
 EXTERN
 IDENT "buildFingerprint"
+COLON
+UPPER "Unit"
+ARROW
+LT
+UPPER "Env"
+GT
+UPPER "String"
+NEWLINE
+EXTERN
+IDENT "buildCommit"
+COLON
+UPPER "Unit"
+ARROW
+LT
+UPPER "Env"
+GT
+UPPER "String"
+NEWLINE
+EXTERN
+IDENT "buildDate"
 COLON
 UPPER "Unit"
 ARROW
@@ -642,6 +696,37 @@ UPPER "String"
 LPAREN
 UPPER "Option"
 UPPER "Int"
+RPAREN
+NEWLINE
+EXTERN
+IDENT "netConnectStart"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "netConnectCheck"
+COLON
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "Unit"
 RPAREN
 NEWLINE
 EXTERN

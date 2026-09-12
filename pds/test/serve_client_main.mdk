@@ -21,14 +21,13 @@ import lib.credential.{
 import sha256.{sha256}
 import json.{Json(..), get, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
+import regex.{Regex, find, mustCompile}
 import string.{
   contains,
-  drop,
   fromChars,
   fromUtf8,
   lines,
   split,
-  startsWith,
   toChars,
   toInt,
   toUtf8,
@@ -82,27 +81,37 @@ statusOf statusLine = match split " " statusLine
     None => Err "serve_client: unparsable status code in '\{statusLine}'"
   _ => Err "serve_client: unparsable status line '\{statusLine}'"
 
+-- Response headers are always lowercase (`serializeResponse` emits them that
+-- way), so these two patterns are case-sensitive. Each captures the whole
+-- field value rather than matching its shape: a line that names the field but
+-- carries an unreadable value is still THIS field's line, and must report its
+-- own error rather than fall through to the next line.
+contentLengthRe : Regex
+contentLengthRe = mustCompile "^content-length:(.*)$"
+
+contentTypeRe : Regex
+contentTypeRe = mustCompile "^content-type:(.*)$"
+
 contentLengthOf : List String -> Result String Int
 contentLengthOf [] = Err "serve_client: response has no content-length header"
-contentLengthOf (line :: rest) =
-  -- Response headers are always lowercase (`serializeResponse` emits them
-  -- that way), so a plain case-sensitive `startsWith` is enough here.
-  if startsWith "content-length:" line then match toInt (trim (drop 15 line))
-    Some n => Ok n
-    None => Err "serve_client: unparsable content-length in '\{line}'"
-  else
-    contentLengthOf rest
+contentLengthOf (line :: rest) = match find contentLengthRe line
+  None => contentLengthOf rest
+  Some m => match m.groups
+    [Some g] => match toInt (trim g.text)
+      Some n => Ok n
+      None => Err "serve_client: unparsable content-length in '\{line}'"
+    _ => Err "serve_client: unparsable content-length in '\{line}'"
 
 -- | The response's declared media type, or the empty string when it declares
 -- none. `sync.getBlob` answers with the blob's DECLARED type here, which is
 -- the one thing about a blob content addressing cannot check.
 contentTypeOf : List String -> String
 contentTypeOf [] = ""
-contentTypeOf (line :: rest) =
-  if startsWith "content-type:" line then
-    trim (drop 13 line)
-  else
-    contentTypeOf rest
+contentTypeOf (line :: rest) = match find contentTypeRe line
+  None => contentTypeOf rest
+  Some m => match m.groups
+    [Some g] => trim g.text
+    _ => ""
 
 parseHeaderBlock : Array Int -> Result String (Int, String, Int)
 parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
@@ -578,10 +587,16 @@ checkRoute label port want request =
   let () = expectStatus label want (readResponse conn [||])
   ignoreResult (close conn)
 
-{- | The endpoints the other cases do not already drive, so that all nine XRPC
-   NSIDs and both well-knowns are proven by this gate rather than by reading
-   the routing table. `createRecord` is CHUNKED's, `getRecord` is RESUME's, and
-   `/.well-known/atproto-did` is QUERY's; the rest are here.
+{- | The endpoints the other cases do not already drive, so that all eleven
+   XRPC NSIDs and both well-knowns are proven by this gate rather than by
+   reading the routing table. `createRecord` is CHUNKED's, `getRecord` is
+   RESUME's, and `/.well-known/atproto-did` is QUERY's; the rest are here.
+
+   `listRepos`/`getRepoStatus` run here rather than in a case of their own
+   because this is the first point in the gate where the hosted repository
+   has a commit (case 4's chunked write) — the repository-free shape of both
+   is already covered by `read_routes_all_engines.sh`'s cells, so what this
+   gate adds is the repo-bearing shape neither engine harness can produce.
 
    `putRecord` and `deleteRecord` do mutate, so they work on a scratch record
    key of their own and the delete puts the repository back — RESUME reads the
@@ -627,6 +642,18 @@ runEndpoints port token did handle collection rkey =
       200
       (getRequest
         "\{xrpcPath "com.atproto.identity.resolveHandle"}?handle=\{handle}")
+  let () =
+    checkRoute
+      "LISTREPOS"
+      port
+      200
+      (getRequest (xrpcPath "com.atproto.sync.listRepos"))
+  let () =
+    checkRoute
+      "GETREPOSTATUS"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.sync.getRepoStatus"}?did=\{did}")
   let () = checkRoute "DIDJSON" port 200 (getRequest didJsonPath)
   let () =
     checkRoute
@@ -1186,9 +1213,87 @@ runBodyStallFlood port sockets budgetSeconds =
         "\{intToString sockets} stalled-body sockets held open; no unrelated caller was answered within \{intToString budgetSeconds}s"
   closeAll held
 
+-- # The appview proxy (#2912)
+
+{- | A GET asking to be proxied: the same read every other case sends, plus the
+   one client-controlled header that names the audience a service credential
+   would be minted for.
+
+   `token` is the caller's own access token, and an empty one sends no
+   `Authorization` field at all. It is not optional decoration: a forward is
+   made on behalf of the logged-in account and carries the ACCOUNT's signature,
+   so a proxied read is an `AuthenticatedRoute` like any other and an anonymous
+   one is refused 401 before the audience it named is looked at.
+
+   `xff` identifies the caller to the rate limiter exactly as in the limit cases,
+   and an empty one sends no field at all — so the cases that are about proxying
+   and the case that is about its ceiling build their requests the same way. -}
+proxyRequest : String -> String -> String -> String -> Array Int
+proxyRequest xff token service path =
+  toUtf8
+    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}atproto-proxy: \{service}\r\n\r\n"
+
+{- | Drive one proxied read and grade what came back.
+
+   `marker` is text the body must contain, or empty to grade the status alone.
+   For a read the server forwarded it is the stub appview's own echo of the
+   credential's `aud` and `lxm` — which is what lets this case assert, from the
+   CLIENT's side of the PDS and with access to neither the token nor the stub's
+   log, that the audience and method a credential was minted for are the ones
+   the header asked for. For a refusal it is the refusal's own message, which is
+   what tells a refused AUDIENCE apart from a refused METHOD: both are 400
+   `InvalidRequest`, and a case graded on the status alone could not tell which
+   defense fired or whether either did. -}
+runProxyRead : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  <IO, Net "_"> Unit
+runProxyRead port token service path want marker =
+  let conn = mustConnect port
+  let () = mustSend conn (proxyRequest "" token service path)
+  let result = readResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PROXYREAD" False message
+    Ok (status, body, _) =>
+      let bodyText = fromUtf8 body
+      if status /= want then
+        report
+          "PROXYREAD"
+          False
+          "want status \{intToString want}, got \{intToString status}: \{bodyText}"
+      else if marker /= "" && not (contains marker bodyText) then
+        report "PROXYREAD" False "body did not carry '\{marker}': \{bodyText}"
+      else
+        report "PROXYREAD" True "status=\{intToString status}"
+
+{- | The proxied-read class, driven over ONE connection.
+
+   One connection for the reason the repo-export case uses one: the connections
+   class is charged once per connection and its ceiling is far lower than this
+   one, so a connection-per-request flood would observe that ceiling instead and
+   the case would pass without ever reaching the class it names. -}
+runProxyFlood : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  <IO, Net "_"> Unit
+runProxyFlood port xff token service path count want =
+  let conn = mustConnect port
+  let (status, headerText, body) =
+    floodLoop conn count (_ => proxyRequest xff token service path)
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLPROXY" want status headerText body
+
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1243,6 +1348,17 @@ main = match args ()
       did
       collection
       rkeyPrefix
+  ["proxy-read", port, token, service, path, want, marker] =>
+    runProxyRead (mustPort port) token service path (mustStatus want) marker
+  ["rl-proxy", port, xff, token, service, path, count, want] =>
+    runProxyFlood
+      (mustPort port)
+      xff
+      token
+      service
+      path
+      (mustCount count)
+      (mustStatus want)
   ["rl-repo", port, xff, count, want, did] =>
     runRateLimitRepo (mustPort port) xff (mustCount count) (mustStatus want) did
   ["rl-malformed", port, shape, count, want] =>

@@ -24,6 +24,7 @@ import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 import json.{Json, JString}
+import regex.{Regex, mustCompile, isMatch, find}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -156,23 +157,36 @@ clText (_, t) = t
 clLine : (Int, String) -> Int
 clLine (l, _) = l
 
+-- Compiled once: the two comment-lexeme prefixes doctest input/expected lines
+-- key on. The slice offset that follows each prefix check is the MATCH'S OWN
+-- end position, not a re-typed literal 5 / 3.
+inputLineRe : Regex
+inputLineRe = mustCompile "^-- > "
+
+expectedLineRe : Regex
+expectedLineRe = mustCompile "^-- "
+
 isInputLine : (Int, String) -> Bool
-isInputLine c = startsWith "-- > " (clText c)
+isInputLine c = isMatch inputLineRe (clText c)
 
 inputBody : (Int, String) -> String
 inputBody c =
   let t = clText c
-  substr3 5 (slen t) t
+  match find inputLineRe t
+    Some m => substr3 m.end (slen t) t
+    None => ""
 
 isExpectedLine : (Int, String) -> Bool
 isExpectedLine c =
   let t = clText c
-  startsWith "-- " t && not (isInputLine c)
+  isMatch expectedLineRe t && not (isInputLine c)
 
 expectedBody : (Int, String) -> String
 expectedBody c =
   let t = clText c
-  substr3 3 (slen t) t
+  match find expectedLineRe t
+    Some m => substr3 m.end (slen t) t
+    None => ""
 
 isBlankComment : (Int, String) -> Bool
 isBlankComment c = clText c == "--"

@@ -2428,6 +2428,68 @@ static int mdk_net_would_block(int e) {
   return e == EAGAIN || e == EWOULDBLOCK || e == EINPROGRESS || e == EINTR;
 }
 
+/* netConnectStart : host -> port -> Result String Int (a handshake under way)
+ * O_NONBLOCK goes on BEFORE connect(2), so EINPROGRESS is the ordinary answer
+ * and an immediate success (common on loopback) is the other; both hand back the
+ * descriptor, and netConnectCheck below is what tells them apart.  Resolution is
+ * still getaddrinfo and still blocks: only the handshake is deferred.
+ * Unlike mdk_net_tcp_connect this does NOT walk the whole address list to
+ * completion — a caller cannot park on a descriptor it was never handed, so the
+ * first address whose connect either succeeds or starts is the one returned. */
+long long mdk_net_connect_start(long long host_cell, long long port_tagged) {
+  const char *host = (const char *)host_cell + 24;
+  char port[16]; snprintf(port, sizeof port, "%d", MDK_NET_UNTAG(port_tagged));
+  struct addrinfo hints = {0}, *res, *ai;
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  int gai = getaddrinfo(host, port, &hints, &res);
+  if (gai != 0) return mdk_err(mdk_str_cstr(gai_strerror(gai)));
+  int fd = -1, last = 0;
+  for (ai = res; ai; ai = ai->ai_next) {
+    fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd < 0) { last = errno; continue; }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      last = errno; close(fd); fd = -1; continue;
+    }
+    if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+    if (mdk_net_would_block(errno)) break;
+    last = errno; close(fd); fd = -1;
+  }
+  freeaddrinfo(res);
+  if (fd < 0) return mdk_err(mdk_str_cstr(strerror(last)));
+#ifdef SO_NOSIGPIPE
+  { int on = 1; setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on); }
+#endif
+  return mdk_ok(MDK_NET_TAG(fd));
+}
+
+/* netConnectCheck : fd -> Result String (Option Unit) — None = still in flight.
+ * SO_ERROR alone cannot answer this: it reads 0 both for a connected socket and
+ * for one still in EINPROGRESS, so a woken task that trusted it would take an
+ * unconnected descriptor for a connected one.  poll(2) with a zero timeout is
+ * the discriminator — writability is what completing the handshake signals —
+ * and SO_ERROR then says whether what completed was a connection or a refusal.
+ * POLLERR/POLLHUP arrive with SO_ERROR set, so they need no arm of their own. */
+long long mdk_net_connect_check(long long fd_tagged) {
+  struct pollfd pfd;
+  pfd.fd = MDK_NET_UNTAG(fd_tagged);
+  pfd.events = POLLOUT;
+  pfd.revents = 0;
+  int rc = poll(&pfd, 1, 0);
+  if (rc < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+  if (rc == 0 || !(pfd.revents & (POLLOUT | POLLERR | POLLHUP | POLLNVAL)))
+    return mdk_ok(mdk_none());
+  int err = 0; socklen_t len = sizeof err;
+  if (getsockopt(pfd.fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0)
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  if (err != 0) return mdk_err(mdk_str_cstr(strerror(err)));
+  return mdk_ok(mdk_some(1));  /* Ok (Some ()) */
+}
+
 /* netTryAccept : listening fd -> Result String (Option Int) — None = would-block. */
 long long mdk_net_try_accept(long long lis_tagged) {
   int c = accept(MDK_NET_UNTAG(lis_tagged), NULL, NULL);

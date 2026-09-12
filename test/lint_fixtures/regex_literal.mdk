@@ -1,0 +1,9 @@
+-- Fixture for rule-regex-literal (#2924): a string literal passed directly to
+-- `compile`/`mustCompile` is run through `regex.compile` at lint time, so a
+-- bad pattern is a located finding instead of a `mustCompile` panic the first
+-- time the line runs.
+
+import regex.{mustCompile}
+
+-- POSITIVE: an unclosed group never compiles.
+badRe = mustCompile "(unclosed"

@@ -1,5 +1,5 @@
 # META
-source_lines=252
+source_lines=343
 stages=DESUGAR,MARK
 # SOURCE
 -- net_async.mdk — the non-blocking half of `net`, over the async scheduler.
@@ -7,10 +7,11 @@ stages=DESUGAR,MARK
 -- Every operation here tries its syscall, and on would-block parks the task
 -- with `awaitAny` until the descriptor is ready, then retries.  Readiness is
 -- level-triggered, so a retry after any wake is correct.  The socket is
--- switched to non-blocking mode by `accept`; a `Connection` from the blocking
--- `net.connect` is switched on first use.  Deadlines are a wait set of the
--- descriptor plus a `WaitUntil`; the task itself decides to give up, so no
--- task is ever dropped (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
+-- switched to non-blocking mode by `accept` and by `connect`; a `Connection`
+-- from the blocking `net.connect` is switched on first use.  Deadlines are a
+-- wait set of the descriptor plus a `WaitUntil`; the task itself decides to
+-- give up, so no task is ever dropped
+-- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
 import net.{Connection(..), Listener(..)}
@@ -21,16 +22,106 @@ import time.{Duration}
 {- | TCP over the async scheduler: the `net` operations that park instead of
    blocking, so many connections share one thread.
 
-   `accept`, `recv`, `send`, and `sendAll` mirror their `net` namesakes but
-   return `Async` values that park until the socket is ready. `recvWithin`
-   and `sendAllWithin` give up after a `Duration` with `Err "timed out"`.
-   `serve` is an accept loop that runs each connection's handler as its
-   own task and closes the connection when the handler finishes. Use
-   `import net_async as A` and call `A.accept`, `A.recv`, and so on.
+   `connect`, `accept`, `recv`, `send`, and `sendAll` mirror their `net`
+   namesakes but return `Async` values that park until the socket is ready.
+   `connectWithin`, `recvWithin` and `sendAllWithin` give up after a
+   `Duration` with `Err "timed out"`. `serve` is an accept loop that runs each
+   connection's handler as its own task and closes the connection when the
+   handler finishes. Use `import net_async as A` and call `A.accept`,
+   `A.recv`, and so on.
 
    Every operation performs `<Net "_">`, and the deadline forms also read
    the clock. Drive the program with `runAsyncIO` or a `main : Async e Unit`.
    Networking works only in a program built for the native target. -}
+
+{- | Connects to `host` on `port`, parking until the handshake finishes
+   instead of blocking the thread in `connect(2)`.
+
+   The returned socket is already non-blocking, so the `recv`/`send` below
+   park on it without switching it first. Resolving `host` still blocks —
+   `netConnectStart` does that part before there is any descriptor to park
+   on — so this parks for the handshake, which is the wait an unreachable or
+   overloaded peer makes unbounded, and not for a name lookup.
+
+   A descriptor is never handed back except inside `Ok`: every other path
+   closes the socket this opened, because the caller has nothing to close
+   it with. -}
+export
+connect : String -> Int -> Async <Net "_" | e> (Result String Connection)
+connect host port =
+  deferThen (startConnect host port) (started => connectStarted started)
+
+startConnect : String -> Int -> Async <Net "_" | e> (Result String Int)
+startConnect host port = liftIO (u => netConnectStart host port)
+
+connectStarted : Result String Int ->
+  Async <Net "_" | e> (Result String Connection)
+connectStarted (Err e) = deferPure (Err e)
+connectStarted (Ok fd) = connectPending fd
+
+connectPending : Int -> Async <Net "_" | e> (Result String Connection)
+connectPending fd =
+  deferThen (liftIO (u => netConnectCheck fd)) (step => connectStep fd step)
+
+-- `Ok None` is a handshake still in flight, which is why the check is asked
+-- again after every wake rather than trusted to mean readiness: a woken task
+-- retries (stdlib/async.mdk's `Wait`), and an unconnected socket reports a
+-- zero `SO_ERROR` exactly like a connected one.
+connectStep : Int ->
+  Result String (Option Unit) ->
+  Async <Net "_" | e> (Result String Connection)
+connectStep fd (Ok None) =
+  deferThen (awaitAny [WaitWrite fd]) (_ => connectPending fd)
+connectStep fd (Ok (Some _)) = deferPure (Ok (Connection fd))
+connectStep fd (Err e) = abandonConnect fd e
+
+-- | `connect` that gives up after `d` with `Err "timed out"`.
+export
+connectWithin : Duration ->
+  String ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectWithin d host port =
+  deferThen (deadlineAfter d) (dl => connectFrom dl host port)
+
+connectFrom : Wait ->
+  String ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectFrom dl host port =
+  deferThen (startConnect host port) (started => connectUntilStarted dl started)
+
+connectUntilStarted : Wait ->
+  Result String Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectUntilStarted _ (Err e) = deferPure (Err e)
+connectUntilStarted dl (Ok fd) = connectUntil dl fd
+
+connectUntil : Wait ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectUntil dl fd = deferThen (liftIO (u => netConnectCheck fd)) (step =>
+  connectUntilStep dl fd step)
+
+connectUntilStep : Wait ->
+  Int ->
+  Result String (Option Unit) ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectUntilStep dl fd (Ok None) = deferThen (expired dl) (late =>
+  if late then
+    abandonConnect fd "timed out"
+  else
+    deferThen (awaitAny [WaitWrite fd, dl]) (_ => connectUntil dl fd))
+connectUntilStep _ fd (Ok (Some _)) = deferPure (Ok (Connection fd))
+connectUntilStep _ fd (Err e) = abandonConnect fd e
+
+-- The socket belongs to the wrapper until a `Connection` reaches the caller,
+-- so a give-up path that left it open would leak one descriptor per failed
+-- dial — a server that proxies would run out of them while every dial still
+-- looked like an ordinary error.
+abandonConnect : Int -> String -> Async <Net "_" | e> (Result String Connection)
+abandonConnect fd message =
+  deferThen (close (Connection fd)) (_ => deferPure (Err message))
 
 -- | Accepts the next connection, parking until one arrives. The listener
 -- and the accepted socket are switched to non-blocking mode.
@@ -260,6 +351,34 @@ handleThenClose handle conn =
 (DUse false (UseAlias ("net") "N"))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false))))
+(DTypeSig true "connect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connect" ((PVar "host") (PVar "port")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "startConnect") (EVar "host")) (EVar "port"))) (ELam ((PVar "started")) (EApp (EVar "connectStarted") (EVar "started")))))
+(DTypeSig false "startConnect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "startConnect" ((PVar "host") (PVar "port")) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "netConnectStart") (EVar "host")) (EVar "port")))))
+(DTypeSig false "connectStarted" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
+(DFunDef false "connectStarted" ((PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "connectStarted" ((PCon "Ok" (PVar "fd"))) (EApp (EVar "connectPending") (EVar "fd")))
+(DTypeSig false "connectPending" (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
+(DFunDef false "connectPending" ((PVar "fd")) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "netConnectCheck") (EVar "fd"))))) (ELam ((PVar "step")) (EApp (EApp (EVar "connectStep") (EVar "fd")) (EVar "step")))))
+(DTypeSig false "connectStep" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connectStep" ((PVar "fd") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd"))))) (ELam (PWild) (EApp (EVar "connectPending") (EVar "fd")))))
+(DFunDef false "connectStep" ((PVar "fd") (PCon "Ok" (PCon "Some" PWild))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (EApp (EVar "Connection") (EVar "fd")))))
+(DFunDef false "connectStep" ((PVar "fd") (PCon "Err" (PVar "e"))) (EApp (EApp (EVar "abandonConnect") (EVar "fd")) (EVar "e")))
+(DTypeSig true "connectWithin" (TyFun (TyCon "Duration") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))))
+(DFunDef false "connectWithin" ((PVar "d") (PVar "host") (PVar "port")) (EApp (EApp (EVar "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EVar "connectFrom") (EVar "dl")) (EVar "host")) (EVar "port")))))
+(DTypeSig false "connectFrom" (TyFun (TyCon "Wait") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))))
+(DFunDef false "connectFrom" ((PVar "dl") (PVar "host") (PVar "port")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "startConnect") (EVar "host")) (EVar "port"))) (ELam ((PVar "started")) (EApp (EApp (EVar "connectUntilStarted") (EVar "dl")) (EVar "started")))))
+(DTypeSig false "connectUntilStarted" (TyFun (TyCon "Wait") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connectUntilStarted" (PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "connectUntilStarted" ((PVar "dl") (PCon "Ok" (PVar "fd"))) (EApp (EApp (EVar "connectUntil") (EVar "dl")) (EVar "fd")))
+(DTypeSig false "connectUntil" (TyFun (TyCon "Wait") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connectUntil" ((PVar "dl") (PVar "fd")) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "netConnectCheck") (EVar "fd"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EVar "connectUntilStep") (EVar "dl")) (EVar "fd")) (EVar "step")))))
+(DTypeSig false "connectUntilStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))))
+(DFunDef false "connectUntilStep" ((PVar "dl") (PVar "fd") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EApp (EVar "abandonConnect") (EVar "fd")) (ELit (LString "timed out"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EVar "connectUntil") (EVar "dl")) (EVar "fd"))))))))
+(DFunDef false "connectUntilStep" (PWild (PVar "fd") (PCon "Ok" (PCon "Some" PWild))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (EApp (EVar "Connection") (EVar "fd")))))
+(DFunDef false "connectUntilStep" (PWild (PVar "fd") (PCon "Err" (PVar "e"))) (EApp (EApp (EVar "abandonConnect") (EVar "fd")) (EVar "e")))
+(DTypeSig false "abandonConnect" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "abandonConnect" ((PVar "fd") (PVar "message")) (EApp (EApp (EVar "deferThen") (EApp (EVar "close") (EApp (EVar "Connection") (EVar "fd")))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "message"))))))
 (DTypeSig true "accept" (TyFun (TyCon "Listener") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
 (DFunDef false "accept" ((PVar "lis")) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "tryAccept") (EVar "lis"))))) (ELam ((PVar "step")) (EApp (EApp (EVar "acceptStep") (EVar "lis")) (EVar "step")))))
 (DTypeSig false "tryAccept" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Connection"))))))
@@ -331,6 +450,34 @@ handleThenClose handle conn =
 (DUse false (UseAlias ("net") "N"))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false))))
+(DTypeSig true "connect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connect" ((PVar "host") (PVar "port")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "startConnect") (EVar "host")) (EVar "port"))) (ELam ((PVar "started")) (EApp (EVar "connectStarted") (EVar "started")))))
+(DTypeSig false "startConnect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "startConnect" ((PVar "host") (PVar "port")) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "netConnectStart") (EVar "host")) (EVar "port")))))
+(DTypeSig false "connectStarted" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
+(DFunDef false "connectStarted" ((PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "connectStarted" ((PCon "Ok" (PVar "fd"))) (EApp (EVar "connectPending") (EVar "fd")))
+(DTypeSig false "connectPending" (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
+(DFunDef false "connectPending" ((PVar "fd")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "netConnectCheck") (EVar "fd"))))) (ELam ((PVar "step")) (EApp (EApp (EVar "connectStep") (EVar "fd")) (EVar "step")))))
+(DTypeSig false "connectStep" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connectStep" ((PVar "fd") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd"))))) (ELam (PWild) (EApp (EVar "connectPending") (EVar "fd")))))
+(DFunDef false "connectStep" ((PVar "fd") (PCon "Ok" (PCon "Some" PWild))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (EApp (EVar "Connection") (EVar "fd")))))
+(DFunDef false "connectStep" ((PVar "fd") (PCon "Err" (PVar "e"))) (EApp (EApp (EVar "abandonConnect") (EVar "fd")) (EVar "e")))
+(DTypeSig true "connectWithin" (TyFun (TyCon "Duration") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))))
+(DFunDef false "connectWithin" ((PVar "d") (PVar "host") (PVar "port")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EVar "connectFrom") (EVar "dl")) (EVar "host")) (EVar "port")))))
+(DTypeSig false "connectFrom" (TyFun (TyCon "Wait") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))))
+(DFunDef false "connectFrom" ((PVar "dl") (PVar "host") (PVar "port")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "startConnect") (EVar "host")) (EVar "port"))) (ELam ((PVar "started")) (EApp (EApp (EVar "connectUntilStarted") (EVar "dl")) (EVar "started")))))
+(DTypeSig false "connectUntilStarted" (TyFun (TyCon "Wait") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connectUntilStarted" (PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "connectUntilStarted" ((PVar "dl") (PCon "Ok" (PVar "fd"))) (EApp (EApp (EVar "connectUntil") (EVar "dl")) (EVar "fd")))
+(DTypeSig false "connectUntil" (TyFun (TyCon "Wait") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "connectUntil" ((PVar "dl") (PVar "fd")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "netConnectCheck") (EVar "fd"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EVar "connectUntilStep") (EVar "dl")) (EVar "fd")) (EVar "step")))))
+(DTypeSig false "connectUntilStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))))
+(DFunDef false "connectUntilStep" ((PVar "dl") (PVar "fd") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EApp (EVar "abandonConnect") (EVar "fd")) (ELit (LString "timed out"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EVar "connectUntil") (EVar "dl")) (EVar "fd"))))))))
+(DFunDef false "connectUntilStep" (PWild (PVar "fd") (PCon "Ok" (PCon "Some" PWild))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (EApp (EVar "Connection") (EVar "fd")))))
+(DFunDef false "connectUntilStep" (PWild (PVar "fd") (PCon "Err" (PVar "e"))) (EApp (EApp (EVar "abandonConnect") (EVar "fd")) (EVar "e")))
+(DTypeSig false "abandonConnect" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DFunDef false "abandonConnect" ((PVar "fd") (PVar "message")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "close") (EApp (EVar "Connection") (EVar "fd")))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "message"))))))
 (DTypeSig true "accept" (TyFun (TyCon "Listener") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
 (DFunDef false "accept" ((PVar "lis")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "tryAccept") (EVar "lis"))))) (ELam ((PVar "step")) (EApp (EApp (EVar "acceptStep") (EVar "lis")) (EVar "step")))))
 (DTypeSig false "tryAccept" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Connection"))))))

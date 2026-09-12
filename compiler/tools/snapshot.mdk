@@ -212,6 +212,7 @@ import support.util.{
   filterList,
 }
 import support.path.{chopExt, baseOf}
+import regex.{Regex, Match, Group, mustCompile, isFullMatch, find}
 import string.{
   split,
   replaceAll,
@@ -220,7 +221,6 @@ import string.{
   take,
   drop,
   toInt,
-  toFloat,
   toUpper,
 }
 
@@ -416,31 +416,11 @@ normDurations line = joinWith " " (map durWord (split " " line))
 durWord : String -> String
 durWord w = if isDuration w then "<T>" else w
 
+durationRe : Regex
+durationRe = mustCompile "^[0-9]+(\\.[0-9]+)?(ms|s)$"
+
 isDuration : String -> Bool
-isDuration w =
-  let body = durBody w
-  if body == "" then False else isNumeric body
-
--- strip a trailing "ms" or "s"; "" means "not a duration-shaped word".
-durBody : String -> String
-durBody w
-  | endsWithStr "ms" w = take (stringLength w - 2) w
-  | endsWithStr "s" w = take (stringLength w - 1) w
-  | otherwise = ""
-
-endsWithStr : String -> String -> Bool
-endsWithStr suf s =
-  let n = stringLength s
-  let m = stringLength suf
-  if m > n then False else drop (n - m) s == suf
-
--- digits, or digits with a decimal point — reuse the parsers rather than classify chars.
-isNumeric : String -> Bool
-isNumeric s = match toInt s
-  Some _ => True
-  None => match toFloat s
-    Some _ => True
-    None => False
+isDuration w = isFullMatch durationRe w
 
 -- ── stage rendering ──────────────────────────────────────────────────────────
 
@@ -1080,19 +1060,61 @@ parseStream out = streamGo (splitNl out) "" [] []
 --
 -- `SECD ` is checked BEFORE `SEC ` reads its name, and neither collides with the `D`
 -- content prefix (both start `S`), so a content line may still say anything at all.
+--
+-- One anchored alternation with a capture per branch, rather than one shared
+-- `?` for the space: `BEGIN`/`END`/`SECD`/`SEC` each consume exactly one
+-- literal space before their payload, but `D` consumes none — a content line
+-- is `D` plus the original line verbatim, which can itself start with a
+-- space. Folding that into one optional `" ?"` would eat a real leading
+-- space off a `D`-tagged line whose content happens to start with one.
+streamLineRe : Regex
+streamLineRe = mustCompile "^(?:BEGIN (.*)|END (.*)|SECD (.*)|SEC (.*)|D(.*))$"
+
+data StreamTag =
+  | STBegin String
+  | STEnd
+  | STSecD String
+  | STSec String
+  | STData String
+  | STOther
+
+-- Shared by `streamGo`, `streamTailGo` and `lastBegunGo` — three readers of
+-- the same five-way line dispatch, now one classifier instead of three.
+classifyStreamLine : String -> StreamTag
+classifyStreamLine l = match find streamLineRe l
+  None => STOther
+  Some m => classifyGroups m.groups
+
+classifyGroups : List (Option Group) -> StreamTag
+classifyGroups [g1, g2, g3, g4, g5] = classifyGroups5 g1 g2 g3 g4 g5
+classifyGroups _ = STOther
+
+classifyGroups5 : Option Group ->
+  Option Group ->
+  Option Group ->
+  Option Group ->
+  Option Group ->
+  StreamTag
+classifyGroups5 (Some g) _ _ _ _ = STBegin g.text
+classifyGroups5 _ (Some _) _ _ _ = STEnd
+classifyGroups5 _ _ (Some g) _ _ = STSecD g.text
+classifyGroups5 _ _ _ (Some g) _ = STSec g.text
+classifyGroups5 _ _ _ _ (Some g) = STData g.text
+classifyGroups5 _ _ _ _ _ = STOther
+
 streamGo : List String ->
   String ->
   Sections ->
   List (String, Sections) ->
   List (String, List RunSec)
 streamGo [] _ _ acc = map settleSecs (reverseL acc)
-streamGo (l :: rest) cur secs acc
-  | startsWith "BEGIN " l = streamGo rest (drop 6 l) [] acc
-  | startsWith "END " l = streamGo rest "" [] (flushCur cur secs acc)
-  | startsWith "SECD " l = streamGo rest cur ((drop 5 l, True, []) :: secs) acc
-  | startsWith "SEC " l = streamGo rest cur ((drop 4 l, False, []) :: secs) acc
-  | startsWith "D" l = streamGo rest cur (pushLine (drop 1 l) secs) acc
-  | otherwise = streamGo rest cur secs acc
+streamGo (l :: rest) cur secs acc = match classifyStreamLine l
+  STBegin p => streamGo rest p [] acc
+  STEnd => streamGo rest "" [] (flushCur cur secs acc)
+  STSecD n => streamGo rest cur ((n, True, []) :: secs) acc
+  STSec n => streamGo rest cur ((n, False, []) :: secs) acc
+  STData d => streamGo rest cur (pushLine d secs) acc
+  STOther => streamGo rest cur secs acc
 
 -- The sections of the fixture that was in flight when the worker died (last BEGIN with
 -- no END) — everything it managed to flush before the crash.
@@ -1102,13 +1124,13 @@ streamTail out = streamTailGo (splitNl out) "" []
 streamTailGo : List String -> String -> Sections -> List RunSec
 streamTailGo [] "" _ = []
 streamTailGo [] _ secs = closeSecs secs
-streamTailGo (l :: rest) cur secs
-  | startsWith "BEGIN " l = streamTailGo rest (drop 6 l) []
-  | startsWith "END " l = streamTailGo rest "" []
-  | startsWith "SECD " l = streamTailGo rest cur ((drop 5 l, True, []) :: secs)
-  | startsWith "SEC " l = streamTailGo rest cur ((drop 4 l, False, []) :: secs)
-  | startsWith "D" l = streamTailGo rest cur (pushLine (drop 1 l) secs)
-  | otherwise = streamTailGo rest cur secs
+streamTailGo (l :: rest) cur secs = match classifyStreamLine l
+  STBegin p => streamTailGo rest p []
+  STEnd => streamTailGo rest "" []
+  STSecD n => streamTailGo rest cur ((n, True, []) :: secs)
+  STSec n => streamTailGo rest cur ((n, False, []) :: secs)
+  STData d => streamTailGo rest cur (pushLine d secs)
+  STOther => streamTailGo rest cur secs
 
 -- open sections, newest first; each one's lines newest first.
 type Sections = List (String, Bool, List String)
@@ -1142,10 +1164,10 @@ lastBegun out = lastBegunGo (splitNl out) None
 
 lastBegunGo : List String -> Option String -> Option String
 lastBegunGo [] cur = cur
-lastBegunGo (l :: rest) cur
-  | startsWith "BEGIN " l = lastBegunGo rest (Some (drop 6 l))
-  | startsWith "END " l = lastBegunGo rest None
-  | otherwise = lastBegunGo rest cur
+lastBegunGo (l :: rest) cur = match classifyStreamLine l
+  STBegin p => lastBegunGo rest (Some p)
+  STEnd => lastBegunGo rest None
+  _ => lastBegunGo rest cur
 
 -- ── snapshot file: assemble / parse / compare ────────────────────────────────
 

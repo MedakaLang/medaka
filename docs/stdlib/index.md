@@ -607,6 +607,8 @@ TCP connections and name resolution.
 
 ## [`net_async`](net_async.md)
 
+- [`connect`](net_async.md#connect)
+- [`connectWithin`](net_async.md#connectwithin)
 - [`accept`](net_async.md#accept)
 - [`recv`](net_async.md#recv)
 - [`recvWithin`](net_async.md#recvwithin)
@@ -651,6 +653,31 @@ Manipulation of `/`-separated paths as text.
 PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2), the password-hashing key derivation function.
 
 - [`pbkdf2HmacSha256`](pbkdf2.md#pbkdf2hmacsha256)
+
+## [`regex`](regex.md)
+
+Regular expressions, matched in linear time.
+
+- [`Regex`](regex.md#regex)
+- [`RegexError`](regex.md#regexerror)
+- [`Group`](regex.md#group)
+- [`Match`](regex.md#match)
+- [`compile`](regex.md#compile)
+- [`mustCompile`](regex.md#mustcompile)
+- [`source`](regex.md#source)
+- [`escape`](regex.md#escape)
+- [`isMatch`](regex.md#ismatch)
+- [`isFullMatch`](regex.md#isfullmatch)
+- [`find`](regex.md#find)
+- [`findFrom`](regex.md#findfrom)
+- [`fullMatch`](regex.md#fullmatch)
+- [`isFullMatchBytes`](regex.md#isfullmatchbytes)
+- [`findBytes`](regex.md#findbytes)
+- [`findAll`](regex.md#findall)
+- [`replace`](regex.md#replace)
+- [`replaceAll`](regex.md#replaceall)
+- [`replaceAllWith`](regex.md#replaceallwith)
+- [`split`](regex.md#split)
 
 ## [`runtime`](runtime.md)
 
@@ -700,6 +727,8 @@ The host primitives.
 - [`ioPoll`](runtime.md#iopoll)
 - [`netSetNonblock`](runtime.md#netsetnonblock)
 - [`netTryAccept`](runtime.md#nettryaccept)
+- [`netConnectStart`](runtime.md#netconnectstart)
+- [`netConnectCheck`](runtime.md#netconnectcheck)
 - [`netTryRecv`](runtime.md#nettryrecv)
 - [`netTrySend`](runtime.md#nettrysend)
 - [`netTrySendFrom`](runtime.md#nettrysendfrom)

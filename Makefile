@@ -182,6 +182,19 @@ test: medaka
 	## appear across a run of draws, not a fixed alternation) would be a
 	## fixture that never executes.
 	./medaka test compiler/tools/prop_runner_test.mdk
+	## S-regex-engine: stdlib/regex.mdk's own doctests and props (the syntax
+	## table, the leftmost-first examples, the escape/split/findAll properties,
+	## and the two linear-time step-count sentinels that fail loudly if the
+	## Pike VM's sparse-set dedup or its priority cut is ever lost). Outside
+	## every entry's import closure ([W-MODULE-BLIND]) and not in
+	## test/diff_compiler_test.sh's explicit file list, so without this line
+	## nothing would run them.
+	./medaka test stdlib/regex.mdk
+	## …and the conformance table beside it, whose expected spans, captures,
+	## replacements and split pieces come from the published Go regexp and RE2
+	## test tables rather than from this engine. It is not enrolled as a gate,
+	## so this line is the only thing that runs it.
+	./medaka test test/regex_conformance_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

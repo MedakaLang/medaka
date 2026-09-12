@@ -1,0 +1,3 @@
+warning: [rule-dead-code] private top-level 'badRe' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'badRe' has no type signature. Add a `badRe : …` declaration
+warning: [rule-regex-literal] regex pattern "(unclosed" fails to compile: pattern is missing a closing ) (position 9)

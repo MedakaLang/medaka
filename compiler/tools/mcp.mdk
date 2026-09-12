@@ -98,8 +98,8 @@ import tools.prop_runner.{
   propResultPassed,
   propResultDetail,
 }
-import support.char.{isIdentChar}
 import support.util.{joinWith}
+import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
 
@@ -532,25 +532,17 @@ lineTextEnd arr len i
   | arrayGetUnsafe i arr == '\n' = i
   | otherwise = lineTextEnd arr len (i + 1)
 
--- Every identifier token on `text` (support.char.isIdentChar runs), as
--- (name, 0-based column) pairs in left-to-right order.
+-- Every identifier token on `text` (the WIDE class `support.char.isIdentChar`
+-- runs — alnum, `_`, `'`), as (name, 0-based column) pairs in left-to-right
+-- order.
+identTokenRe : Regex
+identTokenRe = mustCompile "[A-Za-z0-9_']+"
+
 identifiersInLine : String -> List (String, Int)
-identifiersInLine text =
-  identsGo (stringToChars text) text (stringLength text) 0
+identifiersInLine text = map identPair (findAll identTokenRe text)
 
-identsGo : Array Char -> String -> Int -> Int -> List (String, Int)
-identsGo arr text len i
-  | i >= len = []
-  | isIdentChar (arrayGetUnsafe i arr) =
-    let e = identsRunEnd arr len (i + 1)
-    (stringSlice i e text, i) :: identsGo arr text len e
-  | otherwise = identsGo arr text len (i + 1)
-
-identsRunEnd : Array Char -> Int -> Int -> Int
-identsRunEnd arr len i
-  | i >= len = len
-  | isIdentChar (arrayGetUnsafe i arr) = identsRunEnd arr len (i + 1)
-  | otherwise = i
+identPair : Match -> (String, Int)
+identPair m = (m.text, m.start)
 
 -- Columns where `symbol` appears as a WHOLE identifier token on `text`
 -- (exact match, not substring — "x" does not match "xs").

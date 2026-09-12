@@ -12,7 +12,7 @@
 #   * the native self-host CLI      (./medaka check)
 #
 # and against the OCaml-free native single-file host (test/bin/check_main, the
-# same host diff_compiler_check.sh uses) cross-checked to the FROZEN-NATIVE
+# same host the diff_compiler_check sweep uses) cross-checked to the FROZEN-NATIVE
 # === TYPES === golden baked into test/diff_fixtures/effect_param.golden.
 #
 # OCaml-free (LIB-REMOVAL-DESIGN §6 Stage A): the OCaml reference-CLI leg is
@@ -77,7 +77,7 @@ fi
 #    parameterized-effect rows netGet/fetch — are pinned by the `# TYPES_USER`
 #    snapshot. So assert every committed user scheme line appears verbatim in the
 #    host's TYPES output (subset membership via grep -Fxv — order-independent, no
-#    prelude re-pin; the same clean-leg check diff_compiler_check.sh uses).
+#    prelude re-pin; the same clean-leg rule the diff_compiler_check sweep uses).
 SNAP="$ROOT/test/snapshots/diff_fixtures_types/effect_param.md"
 [ -f "$SNAP" ] || { echo "missing snapshot $SNAP"; exit 2; }
 "$HOST" "$RT" "$CORE" "$FIX" 2>/dev/null | strip_unit > "$WORK/self"

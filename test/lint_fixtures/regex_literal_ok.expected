@@ -1,0 +1,2 @@
+warning: [rule-dead-code] private top-level 'goodRe' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'goodRe' has no type signature. Add a `goodRe : …` declaration

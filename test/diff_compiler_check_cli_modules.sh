@@ -6,9 +6,9 @@
 # loader + elaborateModules path → the same hadTypeErrors verdict).
 #
 # It complements (does NOT duplicate):
-#   • diff_compiler_check.sh         — single-file check_main host; no-import
+#   • diff_compiler_check (clean leg)  — single-file check_main host; no-import
 #     byte-identity + UnknownModule for genuinely-missing imports (unchanged).
-#   • diff_compiler_check_modules.sh — native multi typecheck vs the OCaml MULTI
+#   • diff_compiler_check (module leg) — native multi typecheck vs the committed MULTI
 #     oracle goldens (the import-aware path check now shares with run/build).
 #   • diff_native_cli.sh check/*     — the CLI's no-import goldens (byte-identical).
 #

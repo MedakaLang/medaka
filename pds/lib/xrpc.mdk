@@ -125,7 +125,15 @@ procedureEndpoint : String ->
 procedureEndpoint nsid policy auth =
   makeEndpoint nsid (ProcedureEndpoint policy) auth
 
--- | Register a known subscription route. Phase 2 reports it as unimplemented.
+{- | Register an event-stream subscription route.
+
+   A subscription is not served through `routeRequest`'s request/response
+   chain at all: it is reached over a WebSocket upgrade, which leaves the
+   HTTP lifecycle permanently, and the socket shell diverts it before a
+   `RouteResult` is ever asked for (`lib.server_core`'s `classifyUpgrade`,
+   `pds/shell/subscribe.mdk`). What reaches `routeEndpoint` here is therefore
+   a request that named a subscription route WITHOUT upgrading, and the
+   answer it owes is `426 Upgrade Required`. -}
 export
 subscriptionEndpoint : String -> AuthPolicy -> Result String Endpoint
 subscriptionEndpoint nsid auth = makeEndpoint nsid SubscriptionEndpoint auth
@@ -276,8 +284,8 @@ methodNotAllowed = failure 405 "Method Not Allowed" "MethodNotAllowed"
 unsupportedMedia : String -> RouteResult
 unsupportedMedia = failure 415 "Unsupported Media Type" "UnsupportedMediaType"
 
-notImplemented : String -> RouteResult
-notImplemented = failure 501 "Not Implemented" "NotImplemented"
+upgradeRequired : String -> RouteResult
+upgradeRequired = failure 426 "Upgrade Required" "UpgradeRequired"
 
 hasPrefix : Array Int -> Array Int -> Int -> Bool
 hasPrefix input prefix i =
@@ -519,7 +527,7 @@ routeEndpoint (Endpoint nsid SubscriptionEndpoint _) request _ =
   if requestMethod request /= "GET" then
     methodNotAllowed "XRPC subscription endpoints require GET"
   else
-    notImplemented "XRPC subscription is not implemented: \{nsid}"
+    upgradeRequired "XRPC subscription requires a WebSocket upgrade: \{nsid}"
 
 {- | Both well-knowns are plain GETs with no request body and no query
    parameters; they are graded exactly as a query endpoint is, minus the
@@ -533,6 +541,41 @@ routeWellKnown wellKnown request =
     invalidRequest "atproto well-known paths do not accept request body framing"
   else
     RouteCall PublicRoute (WellKnownCall wellKnown)
+
+{- | The subscription route this request targets, if it targets a registered
+   one at all: its admitted NSID, its query parameters, and the auth policy
+   it was registered under.
+
+   This exists because a subscription leaves the request/response chain
+   BEFORE `routeRequest` is consulted, so its caller
+   (`lib.server_core`'s `classifyUpgrade`) needs the registry's answer without
+   a `RouteResult` — there is no `XrpcCall` a stream could be. It duplicates
+   no admission: the path classification, the NSID syntax check and the
+   registry lookup are the same three `routeRequest` itself performs, so a
+   route this answers `Some` for is a route `routeRequest` would have found.
+
+   `None` covers every request that is not one — a different endpoint kind, an
+   unknown NSID, a non-XRPC path, an unparseable target — and every one of
+   those stays the business of `routeRequest`, which answers it exactly as it
+   did before. A non-GET is `None` here too, so the 405 it is owed comes from
+   the one arm that already produced it. -}
+export
+subscriptionRoute : Registry ->
+  Request ->
+  Option (String, List QueryParam, AuthPolicy)
+subscriptionRoute (Registry endpoints) request =
+  if requestMethod request /= "GET" then
+    None
+  else match parseTargetQuery request
+    Err _ => None
+    Ok (path, params) => match xrpcPath path
+      XrpcPath nsid => match validateNsid nsid
+        Err _ => None
+        Ok () => match findEndpoint nsid endpoints
+          Some (Endpoint found SubscriptionEndpoint auth) =>
+            Some (found, params, auth)
+          _ => None
+      _ => None
 
 -- | Route one fully framed request through the immutable structural registry.
 export

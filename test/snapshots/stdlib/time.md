@@ -1,5 +1,5 @@
 # META
-source_lines=437
+source_lines=441
 stages=DESUGAR,MARK
 # SOURCE
 {- | Durations, a UTC calendar, and the clock.
@@ -26,6 +26,7 @@ stages=DESUGAR,MARK
 
 import math.{floorDiv}
 import string.{sliceClamped, toInt}
+import regex.{Regex, mustCompile, find as reFind}
 
 -- # Durations
 
@@ -268,37 +269,40 @@ isoFields (Some y) (Some mo) (Some d) (Some h) (Some mi) (Some sec) =
     None
 isoFields _ _ _ _ _ _ = None
 
+isoRe : Regex
+isoRe = mustCompile "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"
+
 {- | The date and time written in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`, or
    `None`.
 
    Exactly the form `formatIso` produces is accepted, and nothing else: no
-   other time zone, no missing zero padding, no lowercase `t`.
+   other time zone, no missing zero padding, no lowercase `t` or `z`, and no
+   extra trailing characters.
 
    > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
    Some 0
    > parseIso "2024-13-05T07:08:09Z"
+   None
+   > parseIso "2024-03-05T07:08:09z"
+   None
+   > parseIso "2024-03-05T07:08:09Z1"
    None -}
 export
 parseIso : String -> Option DateTime
-parseIso s =
-  if stringLength s == 20
-    && sliceClamped 4 5 s == "-"
-    && sliceClamped 7 8 s == "-"
-    && sliceClamped 10 11 s == "T"
-    && sliceClamped 13 14 s == ":"
-    && sliceClamped 16 17 s == ":"
-    && sliceClamped 19 20 s
-      == "Z" then match (isoFields
-    (toInt (sliceClamped 0 4 s))
-    (toInt (sliceClamped 5 7 s))
-    (toInt (sliceClamped 8 10 s))
-    (toInt (sliceClamped 11 13 s))
-    (toInt (sliceClamped 14 16 s))
-    (toInt (sliceClamped 17 19 s)))
-    Some dt => if formatIso dt == s then Some dt else None
-    None => None
-  else
-    None
+parseIso s = match reFind isoRe s
+  None => None
+  Some m => match m.groups
+    (Some gy) :: (Some gmo) :: (Some gd) :: (Some gh) :: (Some gmi) :: (Some gs) :: [] =>
+      let y = toInt gy.text
+      let mo = toInt gmo.text
+      let d = toInt gd.text
+      let h = toInt gh.text
+      let mi = toInt gmi.text
+      let sec = toInt gs.text
+      match isoFields y mo d h mi sec
+        Some dt => if formatIso dt == s then Some dt else None
+        None => None
+    _ => None
 
 -- > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
 -- True
@@ -442,6 +446,7 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 # DESUGAR
 (DUse false (UseGroup ("math") ((mem "floorDiv" false))))
 (DUse false (UseGroup ("string") ((mem "sliceClamped" false) (mem "toInt" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind"))))
 (DData Public "Duration" () ((variant "Duration" (ConPos (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "Duration")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Ord" ((TyCon "Duration")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
@@ -491,8 +496,10 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DTypeSig false "isoFields" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "DateTime")))))))))
 (DFunDef false "isoFields" ((PCon "Some" (PVar "y")) (PCon "Some" (PVar "mo")) (PCon "Some" (PVar "d")) (PCon "Some" (PVar "h")) (PCon "Some" (PVar "mi")) (PCon "Some" (PVar "sec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "y") (ELit (LInt 0))) (EBinOp ">=" (EVar "mo") (ELit (LInt 1)))) (EBinOp "<=" (EVar "mo") (ELit (LInt 12)))) (EBinOp ">=" (EVar "d") (ELit (LInt 1)))) (EBinOp "<=" (EVar "d") (ELit (LInt 31)))) (EBinOp "<=" (EVar "h") (ELit (LInt 23)))) (EBinOp "<=" (EVar "mi") (ELit (LInt 59)))) (EBinOp "<=" (EVar "sec") (ELit (LInt 59)))) (EApp (EVar "Some") (ERecordCreate "DateTime" ((fa "year" (EVar "y")) (fa "month" (EVar "mo")) (fa "day" (EVar "d")) (fa "hour" (EVar "h")) (fa "minute" (EVar "mi")) (fa "second" (EVar "sec"))))) (EVar "None")))
 (DFunDef false "isoFields" (PWild PWild PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig false "isoRe" (TyCon "Regex"))
+(DFunDef false "isoRe" () (EApp (EVar "mustCompile") (ELit (LString "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"))))
 (DTypeSig true "parseIso" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "DateTime"))))
-(DFunDef false "parseIso" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 20))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 4))) (ELit (LInt 5))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 7))) (ELit (LInt 8))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 10))) (ELit (LInt 11))) (EVar "s")) (ELit (LString "T")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 13))) (ELit (LInt 14))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 16))) (ELit (LInt 17))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 19))) (ELit (LInt 20))) (EVar "s")) (ELit (LString "Z")))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (ELit (LInt 4))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 5))) (ELit (LInt 7))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 8))) (ELit (LInt 10))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 11))) (ELit (LInt 13))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 14))) (ELit (LInt 16))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 17))) (ELit (LInt 19))) (EVar "s")))) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))) (EVar "None")))
+(DFunDef false "parseIso" ((PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "isoRe")) (EVar "s")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "gy")) (PCons (PCon "Some" (PVar "gmo")) (PCons (PCon "Some" (PVar "gd")) (PCons (PCon "Some" (PVar "gh")) (PCons (PCon "Some" (PVar "gmi")) (PCons (PCon "Some" (PVar "gs")) (PList))))))) () (EBlock (DoLet false false (PVar "y") (EApp (EVar "toInt") (EFieldAccess (EVar "gy") "text"))) (DoLet false false (PVar "mo") (EApp (EVar "toInt") (EFieldAccess (EVar "gmo") "text"))) (DoLet false false (PVar "d") (EApp (EVar "toInt") (EFieldAccess (EVar "gd") "text"))) (DoLet false false (PVar "h") (EApp (EVar "toInt") (EFieldAccess (EVar "gh") "text"))) (DoLet false false (PVar "mi") (EApp (EVar "toInt") (EFieldAccess (EVar "gmi") "text"))) (DoLet false false (PVar "sec") (EApp (EVar "toInt") (EFieldAccess (EVar "gs") "text"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EVar "y")) (EVar "mo")) (EVar "d")) (EVar "h")) (EVar "mi")) (EVar "sec")) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))) (arm PWild () (EVar "None"))))))
 (DImpl true "Display" ((TyCon "Duration")) () ((im "display" ((PCon "Duration" (PVar "ms"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString "ms"))))))
 (DImpl true "Display" ((TyCon "DateTime")) () ((im "display" ((PVar "dt")) (EApp (EVar "formatIso") (EVar "dt")))))
 (DImpl true "Semigroup" ((TyCon "Duration")) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "addDuration") (EVar "a")) (EVar "b")))))
@@ -523,6 +530,7 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 # MARK
 (DUse false (UseGroup ("math") ((mem "floorDiv" false))))
 (DUse false (UseGroup ("string") ((mem "sliceClamped" false) (mem "toInt" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind"))))
 (DData Public "Duration" () ((variant "Duration" (ConPos (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "Duration")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Ord" ((TyCon "Duration")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
@@ -572,8 +580,10 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DTypeSig false "isoFields" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "DateTime")))))))))
 (DFunDef false "isoFields" ((PCon "Some" (PVar "y")) (PCon "Some" (PVar "mo")) (PCon "Some" (PVar "d")) (PCon "Some" (PVar "h")) (PCon "Some" (PVar "mi")) (PCon "Some" (PVar "sec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "y") (ELit (LInt 0))) (EBinOp ">=" (EVar "mo") (ELit (LInt 1)))) (EBinOp "<=" (EVar "mo") (ELit (LInt 12)))) (EBinOp ">=" (EVar "d") (ELit (LInt 1)))) (EBinOp "<=" (EVar "d") (ELit (LInt 31)))) (EBinOp "<=" (EVar "h") (ELit (LInt 23)))) (EBinOp "<=" (EVar "mi") (ELit (LInt 59)))) (EBinOp "<=" (EVar "sec") (ELit (LInt 59)))) (EApp (EVar "Some") (ERecordCreate "DateTime" ((fa "year" (EVar "y")) (fa "month" (EVar "mo")) (fa "day" (EVar "d")) (fa "hour" (EVar "h")) (fa "minute" (EVar "mi")) (fa "second" (EVar "sec"))))) (EVar "None")))
 (DFunDef false "isoFields" (PWild PWild PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig false "isoRe" (TyCon "Regex"))
+(DFunDef false "isoRe" () (EApp (EVar "mustCompile") (ELit (LString "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"))))
 (DTypeSig true "parseIso" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "DateTime"))))
-(DFunDef false "parseIso" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 20))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 4))) (ELit (LInt 5))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 7))) (ELit (LInt 8))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 10))) (ELit (LInt 11))) (EVar "s")) (ELit (LString "T")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 13))) (ELit (LInt 14))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 16))) (ELit (LInt 17))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 19))) (ELit (LInt 20))) (EVar "s")) (ELit (LString "Z")))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (ELit (LInt 4))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 5))) (ELit (LInt 7))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 8))) (ELit (LInt 10))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 11))) (ELit (LInt 13))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 14))) (ELit (LInt 16))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 17))) (ELit (LInt 19))) (EVar "s")))) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))) (EVar "None")))
+(DFunDef false "parseIso" ((PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "isoRe")) (EVar "s")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "gy")) (PCons (PCon "Some" (PVar "gmo")) (PCons (PCon "Some" (PVar "gd")) (PCons (PCon "Some" (PVar "gh")) (PCons (PCon "Some" (PVar "gmi")) (PCons (PCon "Some" (PVar "gs")) (PList))))))) () (EBlock (DoLet false false (PVar "y") (EApp (EVar "toInt") (EFieldAccess (EVar "gy") "text"))) (DoLet false false (PVar "mo") (EApp (EVar "toInt") (EFieldAccess (EVar "gmo") "text"))) (DoLet false false (PVar "d") (EApp (EVar "toInt") (EFieldAccess (EVar "gd") "text"))) (DoLet false false (PVar "h") (EApp (EVar "toInt") (EFieldAccess (EVar "gh") "text"))) (DoLet false false (PVar "mi") (EApp (EVar "toInt") (EFieldAccess (EVar "gmi") "text"))) (DoLet false false (PVar "sec") (EApp (EVar "toInt") (EFieldAccess (EVar "gs") "text"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EVar "y")) (EVar "mo")) (EVar "d")) (EVar "h")) (EVar "mi")) (EVar "sec")) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))) (arm PWild () (EVar "None"))))))
 (DImpl true "Display" ((TyCon "Duration")) () ((im "display" ((PCon "Duration" (PVar "ms"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString "ms"))))))
 (DImpl true "Display" ((TyCon "DateTime")) () ((im "display" ((PVar "dt")) (EApp (EVar "formatIso") (EVar "dt")))))
 (DImpl true "Semigroup" ((TyCon "Duration")) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "addDuration") (EVar "a")) (EVar "b")))))

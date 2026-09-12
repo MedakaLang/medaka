@@ -1,5 +1,5 @@
 # META
-source_lines=1449
+source_lines=1471
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -216,6 +216,7 @@ import support.util.{
   filterList,
 }
 import support.path.{chopExt, baseOf}
+import regex.{Regex, Match, Group, mustCompile, isFullMatch, find}
 import string.{
   split,
   replaceAll,
@@ -224,7 +225,6 @@ import string.{
   take,
   drop,
   toInt,
-  toFloat,
   toUpper,
 }
 
@@ -420,31 +420,11 @@ normDurations line = joinWith " " (map durWord (split " " line))
 durWord : String -> String
 durWord w = if isDuration w then "<T>" else w
 
+durationRe : Regex
+durationRe = mustCompile "^[0-9]+(\\.[0-9]+)?(ms|s)$"
+
 isDuration : String -> Bool
-isDuration w =
-  let body = durBody w
-  if body == "" then False else isNumeric body
-
--- strip a trailing "ms" or "s"; "" means "not a duration-shaped word".
-durBody : String -> String
-durBody w
-  | endsWithStr "ms" w = take (stringLength w - 2) w
-  | endsWithStr "s" w = take (stringLength w - 1) w
-  | otherwise = ""
-
-endsWithStr : String -> String -> Bool
-endsWithStr suf s =
-  let n = stringLength s
-  let m = stringLength suf
-  if m > n then False else drop (n - m) s == suf
-
--- digits, or digits with a decimal point — reuse the parsers rather than classify chars.
-isNumeric : String -> Bool
-isNumeric s = match toInt s
-  Some _ => True
-  None => match toFloat s
-    Some _ => True
-    None => False
+isDuration w = isFullMatch durationRe w
 
 -- ── stage rendering ──────────────────────────────────────────────────────────
 
@@ -1084,19 +1064,61 @@ parseStream out = streamGo (splitNl out) "" [] []
 --
 -- `SECD ` is checked BEFORE `SEC ` reads its name, and neither collides with the `D`
 -- content prefix (both start `S`), so a content line may still say anything at all.
+--
+-- One anchored alternation with a capture per branch, rather than one shared
+-- `?` for the space: `BEGIN`/`END`/`SECD`/`SEC` each consume exactly one
+-- literal space before their payload, but `D` consumes none — a content line
+-- is `D` plus the original line verbatim, which can itself start with a
+-- space. Folding that into one optional `" ?"` would eat a real leading
+-- space off a `D`-tagged line whose content happens to start with one.
+streamLineRe : Regex
+streamLineRe = mustCompile "^(?:BEGIN (.*)|END (.*)|SECD (.*)|SEC (.*)|D(.*))$"
+
+data StreamTag =
+  | STBegin String
+  | STEnd
+  | STSecD String
+  | STSec String
+  | STData String
+  | STOther
+
+-- Shared by `streamGo`, `streamTailGo` and `lastBegunGo` — three readers of
+-- the same five-way line dispatch, now one classifier instead of three.
+classifyStreamLine : String -> StreamTag
+classifyStreamLine l = match find streamLineRe l
+  None => STOther
+  Some m => classifyGroups m.groups
+
+classifyGroups : List (Option Group) -> StreamTag
+classifyGroups [g1, g2, g3, g4, g5] = classifyGroups5 g1 g2 g3 g4 g5
+classifyGroups _ = STOther
+
+classifyGroups5 : Option Group ->
+  Option Group ->
+  Option Group ->
+  Option Group ->
+  Option Group ->
+  StreamTag
+classifyGroups5 (Some g) _ _ _ _ = STBegin g.text
+classifyGroups5 _ (Some _) _ _ _ = STEnd
+classifyGroups5 _ _ (Some g) _ _ = STSecD g.text
+classifyGroups5 _ _ _ (Some g) _ = STSec g.text
+classifyGroups5 _ _ _ _ (Some g) = STData g.text
+classifyGroups5 _ _ _ _ _ = STOther
+
 streamGo : List String ->
   String ->
   Sections ->
   List (String, Sections) ->
   List (String, List RunSec)
 streamGo [] _ _ acc = map settleSecs (reverseL acc)
-streamGo (l :: rest) cur secs acc
-  | startsWith "BEGIN " l = streamGo rest (drop 6 l) [] acc
-  | startsWith "END " l = streamGo rest "" [] (flushCur cur secs acc)
-  | startsWith "SECD " l = streamGo rest cur ((drop 5 l, True, []) :: secs) acc
-  | startsWith "SEC " l = streamGo rest cur ((drop 4 l, False, []) :: secs) acc
-  | startsWith "D" l = streamGo rest cur (pushLine (drop 1 l) secs) acc
-  | otherwise = streamGo rest cur secs acc
+streamGo (l :: rest) cur secs acc = match classifyStreamLine l
+  STBegin p => streamGo rest p [] acc
+  STEnd => streamGo rest "" [] (flushCur cur secs acc)
+  STSecD n => streamGo rest cur ((n, True, []) :: secs) acc
+  STSec n => streamGo rest cur ((n, False, []) :: secs) acc
+  STData d => streamGo rest cur (pushLine d secs) acc
+  STOther => streamGo rest cur secs acc
 
 -- The sections of the fixture that was in flight when the worker died (last BEGIN with
 -- no END) — everything it managed to flush before the crash.
@@ -1106,13 +1128,13 @@ streamTail out = streamTailGo (splitNl out) "" []
 streamTailGo : List String -> String -> Sections -> List RunSec
 streamTailGo [] "" _ = []
 streamTailGo [] _ secs = closeSecs secs
-streamTailGo (l :: rest) cur secs
-  | startsWith "BEGIN " l = streamTailGo rest (drop 6 l) []
-  | startsWith "END " l = streamTailGo rest "" []
-  | startsWith "SECD " l = streamTailGo rest cur ((drop 5 l, True, []) :: secs)
-  | startsWith "SEC " l = streamTailGo rest cur ((drop 4 l, False, []) :: secs)
-  | startsWith "D" l = streamTailGo rest cur (pushLine (drop 1 l) secs)
-  | otherwise = streamTailGo rest cur secs
+streamTailGo (l :: rest) cur secs = match classifyStreamLine l
+  STBegin p => streamTailGo rest p []
+  STEnd => streamTailGo rest "" []
+  STSecD n => streamTailGo rest cur ((n, True, []) :: secs)
+  STSec n => streamTailGo rest cur ((n, False, []) :: secs)
+  STData d => streamTailGo rest cur (pushLine d secs)
+  STOther => streamTailGo rest cur secs
 
 -- open sections, newest first; each one's lines newest first.
 type Sections = List (String, Bool, List String)
@@ -1146,10 +1168,10 @@ lastBegun out = lastBegunGo (splitNl out) None
 
 lastBegunGo : List String -> Option String -> Option String
 lastBegunGo [] cur = cur
-lastBegunGo (l :: rest) cur
-  | startsWith "BEGIN " l = lastBegunGo rest (Some (drop 6 l))
-  | startsWith "END " l = lastBegunGo rest None
-  | otherwise = lastBegunGo rest cur
+lastBegunGo (l :: rest) cur = match classifyStreamLine l
+  STBegin p => lastBegunGo rest (Some p)
+  STEnd => lastBegunGo rest None
+  _ => lastBegunGo rest cur
 
 -- ── snapshot file: assemble / parse / compare ────────────────────────────────
 
@@ -1469,7 +1491,8 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgramRecord" false "wasmRecord") (mem "makeWasmEmitInputFull" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "replaceAll" false) (mem "trim" false) (mem "trimRight" false) (mem "take" false) (mem "drop" false) (mem "toInt" false) (mem "toFloat" false) (mem "toUpper" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "Group" false) (mem "mustCompile" false) (mem "isFullMatch" false) (mem "find" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "replaceAll" false) (mem "trim" false) (mem "trimRight" false) (mem "take" false) (mem "drop" false) (mem "toInt" false) (mem "toUpper" false))))
 (DTypeSig true "snapSections" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "snapSections" () (EListLit (ELit (LString "META")) (ELit (LString "SOURCE")) (ELit (LString "TOKENS")) (ELit (LString "COMMENTS")) (ELit (LString "POSITIONS")) (ELit (LString "PARSE")) (ELit (LString "PRINTER")) (ELit (LString "DESUGAR")) (ELit (LString "MARK")) (ELit (LString "TYPES")) (ELit (LString "TYPES_USER")) (ELit (LString "CORE_IR")) (ELit (LString "LLVM")) (ELit (LString "WASM")) (ELit (LString "EVAL")) (ELit (LString "CRASH"))))
 (DTypeSig true "isHeaderLine" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1519,14 +1542,10 @@ mapUnit f (x :: rest) =
 (DFunDef false "normDurations" ((PVar "line")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "durWord")) (EApp (EApp (EVar "split") (ELit (LString " "))) (EVar "line")))))
 (DTypeSig false "durWord" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "durWord" ((PVar "w")) (EIf (EApp (EVar "isDuration") (EVar "w")) (ELit (LString "<T>")) (EVar "w")))
+(DTypeSig false "durationRe" (TyCon "Regex"))
+(DFunDef false "durationRe" () (EApp (EVar "mustCompile") (ELit (LString "^[0-9]+(\\.[0-9]+)?(ms|s)$"))))
 (DTypeSig false "isDuration" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDuration" ((PVar "w")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "durBody") (EVar "w"))) (DoExpr (EIf (EBinOp "==" (EVar "body") (ELit (LString ""))) (EVar "False") (EApp (EVar "isNumeric") (EVar "body"))))))
-(DTypeSig false "durBody" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "durBody" ((PVar "w")) (EIf (EApp (EApp (EVar "endsWithStr") (ELit (LString "ms"))) (EVar "w")) (EApp (EApp (EVar "take") (EBinOp "-" (EApp (EVar "stringLength") (EVar "w")) (ELit (LInt 2)))) (EVar "w")) (EIf (EApp (EApp (EVar "endsWithStr") (ELit (LString "s"))) (EVar "w")) (EApp (EApp (EVar "take") (EBinOp "-" (EApp (EVar "stringLength") (EVar "w")) (ELit (LInt 1)))) (EVar "w")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "endsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWithStr" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "m") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EIf (EBinOp ">" (EVar "m") (EVar "n")) (EVar "False") (EBinOp "==" (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (EVar "m"))) (EVar "s")) (EVar "suf"))))))
-(DTypeSig false "isNumeric" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isNumeric" ((PVar "s")) (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EMatch (EApp (EVar "toFloat") (EVar "s")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "isDuration" ((PVar "w")) (EApp (EApp (EVar "isFullMatch") (EVar "durationRe")) (EVar "w")))
 (DTypeSig false "tokensOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "tokensOf" ((PVar "src")) (EApp (EVar "blockOf") (EApp (EApp (EVar "map") (EVar "tokenToString")) (EApp (EVar "tokenize") (EVar "src")))))
 (DTypeSig false "commentsOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -1645,15 +1664,30 @@ mapUnit f (x :: rest) =
 (DFunDef false "afterFirst" ((PVar "victim") (PCons (PVar "x") (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "victim")) (EVar "rest") (EApp (EApp (EVar "afterFirst") (EVar "victim")) (EVar "rest"))))
 (DTypeSig false "parseStream" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "RunSec"))))))
 (DFunDef false "parseStream" ((PVar "out")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EApp (EVar "splitNl") (EVar "out"))) (ELit (LString ""))) (EListLit)) (EListLit)))
+(DTypeSig false "streamLineRe" (TyCon "Regex"))
+(DFunDef false "streamLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^(?:BEGIN (.*)|END (.*)|SECD (.*)|SEC (.*)|D(.*))$"))))
+(DData Private "StreamTag" () ((variant "STBegin" (ConPos (TyCon "String"))) (variant "STEnd" (ConPos)) (variant "STSecD" (ConPos (TyCon "String"))) (variant "STSec" (ConPos (TyCon "String"))) (variant "STData" (ConPos (TyCon "String"))) (variant "STOther" (ConPos))) ())
+(DTypeSig false "classifyStreamLine" (TyFun (TyCon "String") (TyCon "StreamTag")))
+(DFunDef false "classifyStreamLine" ((PVar "l")) (EMatch (EApp (EApp (EVar "find") (EVar "streamLineRe")) (EVar "l")) (arm (PCon "None") () (EVar "STOther")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "classifyGroups") (EFieldAccess (EVar "m") "groups")))))
+(DTypeSig false "classifyGroups" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Group"))) (TyCon "StreamTag")))
+(DFunDef false "classifyGroups" ((PList (PVar "g1") (PVar "g2") (PVar "g3") (PVar "g4") (PVar "g5"))) (EApp (EApp (EApp (EApp (EApp (EVar "classifyGroups5") (EVar "g1")) (EVar "g2")) (EVar "g3")) (EVar "g4")) (EVar "g5")))
+(DFunDef false "classifyGroups" (PWild) (EVar "STOther"))
+(DTypeSig false "classifyGroups5" (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyCon "StreamTag")))))))
+(DFunDef false "classifyGroups5" ((PCon "Some" (PVar "g")) PWild PWild PWild PWild) (EApp (EVar "STBegin") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild (PCon "Some" PWild) PWild PWild PWild) (EVar "STEnd"))
+(DFunDef false "classifyGroups5" (PWild PWild (PCon "Some" (PVar "g")) PWild PWild) (EApp (EVar "STSecD") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild PWild PWild (PCon "Some" (PVar "g")) PWild) (EApp (EVar "STSec") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild PWild PWild PWild (PCon "Some" (PVar "g"))) (EApp (EVar "STData") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild PWild PWild PWild PWild) (EVar "STOther"))
 (DTypeSig false "streamGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Sections") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Sections"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "RunSec")))))))))
 (DFunDef false "streamGo" ((PList) PWild PWild (PVar "acc")) (EApp (EApp (EVar "map") (EVar "settleSecs")) (EApp (EVar "reverseL") (EVar "acc"))))
-(DFunDef false "streamGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs") (PVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "BEGIN "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EApp (EApp (EVar "drop") (ELit (LInt 6))) (EVar "l"))) (EListLit)) (EVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "END "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (ELit (LString ""))) (EListLit)) (EApp (EApp (EApp (EVar "flushCur") (EVar "cur")) (EVar "secs")) (EVar "acc"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SECD "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 5))) (EVar "l")) (EVar "True") (EListLit)) (EVar "secs"))) (EVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SEC "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "l")) (EVar "False") (EListLit)) (EVar "secs"))) (EVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "D"))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EVar "l"))) (EVar "secs"))) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EVar "secs")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "streamGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs") (PVar "acc")) (EMatch (EApp (EVar "classifyStreamLine") (EVar "l")) (arm (PCon "STBegin" (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "p")) (EListLit)) (EVar "acc"))) (arm (PCon "STEnd") () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (ELit (LString ""))) (EListLit)) (EApp (EApp (EApp (EVar "flushCur") (EVar "cur")) (EVar "secs")) (EVar "acc")))) (arm (PCon "STSecD" (PVar "n")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "True") (EListLit)) (EVar "secs"))) (EVar "acc"))) (arm (PCon "STSec" (PVar "n")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "False") (EListLit)) (EVar "secs"))) (EVar "acc"))) (arm (PCon "STData" (PVar "d")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EVar "d")) (EVar "secs"))) (EVar "acc"))) (arm (PCon "STOther") () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EVar "secs")) (EVar "acc")))))
 (DTypeSig false "streamTail" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RunSec"))))
 (DFunDef false "streamTail" ((PVar "out")) (EApp (EApp (EApp (EVar "streamTailGo") (EApp (EVar "splitNl") (EVar "out"))) (ELit (LString ""))) (EListLit)))
 (DTypeSig false "streamTailGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Sections") (TyApp (TyCon "List") (TyCon "RunSec"))))))
 (DFunDef false "streamTailGo" ((PList) (PLit (LString "")) PWild) (EListLit))
 (DFunDef false "streamTailGo" ((PList) PWild (PVar "secs")) (EApp (EVar "closeSecs") (EVar "secs")))
-(DFunDef false "streamTailGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "BEGIN "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EApp (EApp (EVar "drop") (ELit (LInt 6))) (EVar "l"))) (EListLit)) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "END "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (ELit (LString ""))) (EListLit)) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SECD "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 5))) (EVar "l")) (EVar "True") (EListLit)) (EVar "secs"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SEC "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "l")) (EVar "False") (EListLit)) (EVar "secs"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "D"))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EVar "l"))) (EVar "secs"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EVar "secs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "streamTailGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs")) (EMatch (EApp (EVar "classifyStreamLine") (EVar "l")) (arm (PCon "STBegin" (PVar "p")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "p")) (EListLit))) (arm (PCon "STEnd") () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (ELit (LString ""))) (EListLit))) (arm (PCon "STSecD" (PVar "n")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "True") (EListLit)) (EVar "secs")))) (arm (PCon "STSec" (PVar "n")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "False") (EListLit)) (EVar "secs")))) (arm (PCon "STData" (PVar "d")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EVar "d")) (EVar "secs")))) (arm (PCon "STOther") () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EVar "secs")))))
 (DTypeAlias false "Sections" () (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
 (DTypeSig false "pushLine" (TyFun (TyCon "String") (TyFun (TyCon "Sections") (TyCon "Sections"))))
 (DFunDef false "pushLine" (PWild (PList)) (EListLit))
@@ -1673,7 +1707,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "lastBegun" ((PVar "out")) (EApp (EApp (EVar "lastBegunGo") (EApp (EVar "splitNl") (EVar "out"))) (EVar "None")))
 (DTypeSig false "lastBegunGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lastBegunGo" ((PList) (PVar "cur")) (EVar "cur"))
-(DFunDef false "lastBegunGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "BEGIN "))) (EVar "l")) (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "drop") (ELit (LInt 6))) (EVar "l")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "END "))) (EVar "l")) (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "cur")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lastBegunGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur")) (EMatch (EApp (EVar "classifyStreamLine") (EVar "l")) (arm (PCon "STBegin" (PVar "p")) () (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EApp (EVar "Some") (EVar "p")))) (arm (PCon "STEnd") () (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "None"))) (arm PWild () (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "cur")))))
 (DTypeSig false "snapPathOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "snapPathOf" (PWild (PCon "None") (PVar "f")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "chopExt") (EVar "f")))) (ELit (LString ".md"))))
 (DFunDef false "snapPathOf" (PWild (PCon "Some" (PVar "dir")) (PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "f"))))) (ELit (LString ".md"))))
@@ -1781,7 +1815,8 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgramRecord" false "wasmRecord") (mem "makeWasmEmitInputFull" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "replaceAll" false) (mem "trim" false) (mem "trimRight" false) (mem "take" false) (mem "drop" false) (mem "toInt" false) (mem "toFloat" false) (mem "toUpper" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "Group" false) (mem "mustCompile" false) (mem "isFullMatch" false) (mem "find" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "replaceAll" false) (mem "trim" false) (mem "trimRight" false) (mem "take" false) (mem "drop" false) (mem "toInt" false) (mem "toUpper" false))))
 (DTypeSig true "snapSections" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "snapSections" () (EListLit (ELit (LString "META")) (ELit (LString "SOURCE")) (ELit (LString "TOKENS")) (ELit (LString "COMMENTS")) (ELit (LString "POSITIONS")) (ELit (LString "PARSE")) (ELit (LString "PRINTER")) (ELit (LString "DESUGAR")) (ELit (LString "MARK")) (ELit (LString "TYPES")) (ELit (LString "TYPES_USER")) (ELit (LString "CORE_IR")) (ELit (LString "LLVM")) (ELit (LString "WASM")) (ELit (LString "EVAL")) (ELit (LString "CRASH"))))
 (DTypeSig true "isHeaderLine" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1831,14 +1866,10 @@ mapUnit f (x :: rest) =
 (DFunDef false "normDurations" ((PVar "line")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "durWord")) (EApp (EApp (EVar "split") (ELit (LString " "))) (EVar "line")))))
 (DTypeSig false "durWord" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "durWord" ((PVar "w")) (EIf (EApp (EVar "isDuration") (EVar "w")) (ELit (LString "<T>")) (EVar "w")))
+(DTypeSig false "durationRe" (TyCon "Regex"))
+(DFunDef false "durationRe" () (EApp (EVar "mustCompile") (ELit (LString "^[0-9]+(\\.[0-9]+)?(ms|s)$"))))
 (DTypeSig false "isDuration" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDuration" ((PVar "w")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "durBody") (EVar "w"))) (DoExpr (EIf (EBinOp "==" (EVar "body") (ELit (LString ""))) (EVar "False") (EApp (EVar "isNumeric") (EVar "body"))))))
-(DTypeSig false "durBody" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "durBody" ((PVar "w")) (EIf (EApp (EApp (EVar "endsWithStr") (ELit (LString "ms"))) (EVar "w")) (EApp (EApp (EVar "take") (EBinOp "-" (EApp (EVar "stringLength") (EVar "w")) (ELit (LInt 2)))) (EVar "w")) (EIf (EApp (EApp (EVar "endsWithStr") (ELit (LString "s"))) (EVar "w")) (EApp (EApp (EVar "take") (EBinOp "-" (EApp (EVar "stringLength") (EVar "w")) (ELit (LInt 1)))) (EVar "w")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "endsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWithStr" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "m") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EIf (EBinOp ">" (EVar "m") (EVar "n")) (EVar "False") (EBinOp "==" (EApp (EApp (EVar "drop") (EBinOp "-" (EVar "n") (EVar "m"))) (EVar "s")) (EVar "suf"))))))
-(DTypeSig false "isNumeric" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isNumeric" ((PVar "s")) (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EMatch (EApp (EVar "toFloat") (EVar "s")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "isDuration" ((PVar "w")) (EApp (EApp (EVar "isFullMatch") (EVar "durationRe")) (EVar "w")))
 (DTypeSig false "tokensOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "tokensOf" ((PVar "src")) (EApp (EVar "blockOf") (EApp (EApp (EMethodRef "map") (EVar "tokenToString")) (EApp (EVar "tokenize") (EVar "src")))))
 (DTypeSig false "commentsOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -1957,15 +1988,30 @@ mapUnit f (x :: rest) =
 (DFunDef false "afterFirst" ((PVar "victim") (PCons (PVar "x") (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "victim")) (EVar "rest") (EApp (EApp (EVar "afterFirst") (EVar "victim")) (EVar "rest"))))
 (DTypeSig false "parseStream" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "RunSec"))))))
 (DFunDef false "parseStream" ((PVar "out")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EApp (EVar "splitNl") (EVar "out"))) (ELit (LString ""))) (EListLit)) (EListLit)))
+(DTypeSig false "streamLineRe" (TyCon "Regex"))
+(DFunDef false "streamLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^(?:BEGIN (.*)|END (.*)|SECD (.*)|SEC (.*)|D(.*))$"))))
+(DData Private "StreamTag" () ((variant "STBegin" (ConPos (TyCon "String"))) (variant "STEnd" (ConPos)) (variant "STSecD" (ConPos (TyCon "String"))) (variant "STSec" (ConPos (TyCon "String"))) (variant "STData" (ConPos (TyCon "String"))) (variant "STOther" (ConPos))) ())
+(DTypeSig false "classifyStreamLine" (TyFun (TyCon "String") (TyCon "StreamTag")))
+(DFunDef false "classifyStreamLine" ((PVar "l")) (EMatch (EApp (EApp (EDictApp "find") (EVar "streamLineRe")) (EVar "l")) (arm (PCon "None") () (EVar "STOther")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "classifyGroups") (EFieldAccess (EVar "m") "groups")))))
+(DTypeSig false "classifyGroups" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Group"))) (TyCon "StreamTag")))
+(DFunDef false "classifyGroups" ((PList (PVar "g1") (PVar "g2") (PVar "g3") (PVar "g4") (PVar "g5"))) (EApp (EApp (EApp (EApp (EApp (EVar "classifyGroups5") (EVar "g1")) (EVar "g2")) (EVar "g3")) (EVar "g4")) (EVar "g5")))
+(DFunDef false "classifyGroups" (PWild) (EVar "STOther"))
+(DTypeSig false "classifyGroups5" (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyFun (TyApp (TyCon "Option") (TyCon "Group")) (TyCon "StreamTag")))))))
+(DFunDef false "classifyGroups5" ((PCon "Some" (PVar "g")) PWild PWild PWild PWild) (EApp (EVar "STBegin") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild (PCon "Some" PWild) PWild PWild PWild) (EVar "STEnd"))
+(DFunDef false "classifyGroups5" (PWild PWild (PCon "Some" (PVar "g")) PWild PWild) (EApp (EVar "STSecD") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild PWild PWild (PCon "Some" (PVar "g")) PWild) (EApp (EVar "STSec") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild PWild PWild PWild (PCon "Some" (PVar "g"))) (EApp (EVar "STData") (EFieldAccess (EVar "g") "text")))
+(DFunDef false "classifyGroups5" (PWild PWild PWild PWild PWild) (EVar "STOther"))
 (DTypeSig false "streamGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Sections") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Sections"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "RunSec")))))))))
 (DFunDef false "streamGo" ((PList) PWild PWild (PVar "acc")) (EApp (EApp (EMethodRef "map") (EVar "settleSecs")) (EApp (EVar "reverseL") (EVar "acc"))))
-(DFunDef false "streamGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs") (PVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "BEGIN "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EApp (EApp (EVar "drop") (ELit (LInt 6))) (EVar "l"))) (EListLit)) (EVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "END "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (ELit (LString ""))) (EListLit)) (EApp (EApp (EApp (EVar "flushCur") (EVar "cur")) (EVar "secs")) (EVar "acc"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SECD "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 5))) (EVar "l")) (EVar "True") (EListLit)) (EVar "secs"))) (EVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SEC "))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "l")) (EVar "False") (EListLit)) (EVar "secs"))) (EVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "D"))) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EVar "l"))) (EVar "secs"))) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EVar "secs")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "streamGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs") (PVar "acc")) (EMatch (EApp (EVar "classifyStreamLine") (EVar "l")) (arm (PCon "STBegin" (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "p")) (EListLit)) (EVar "acc"))) (arm (PCon "STEnd") () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (ELit (LString ""))) (EListLit)) (EApp (EApp (EApp (EVar "flushCur") (EVar "cur")) (EVar "secs")) (EVar "acc")))) (arm (PCon "STSecD" (PVar "n")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "True") (EListLit)) (EVar "secs"))) (EVar "acc"))) (arm (PCon "STSec" (PVar "n")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "False") (EListLit)) (EVar "secs"))) (EVar "acc"))) (arm (PCon "STData" (PVar "d")) () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EVar "d")) (EVar "secs"))) (EVar "acc"))) (arm (PCon "STOther") () (EApp (EApp (EApp (EApp (EVar "streamGo") (EVar "rest")) (EVar "cur")) (EVar "secs")) (EVar "acc")))))
 (DTypeSig false "streamTail" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RunSec"))))
 (DFunDef false "streamTail" ((PVar "out")) (EApp (EApp (EApp (EVar "streamTailGo") (EApp (EVar "splitNl") (EVar "out"))) (ELit (LString ""))) (EListLit)))
 (DTypeSig false "streamTailGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Sections") (TyApp (TyCon "List") (TyCon "RunSec"))))))
 (DFunDef false "streamTailGo" ((PList) (PLit (LString "")) PWild) (EListLit))
 (DFunDef false "streamTailGo" ((PList) PWild (PVar "secs")) (EApp (EVar "closeSecs") (EVar "secs")))
-(DFunDef false "streamTailGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "BEGIN "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EApp (EApp (EVar "drop") (ELit (LInt 6))) (EVar "l"))) (EListLit)) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "END "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (ELit (LString ""))) (EListLit)) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SECD "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 5))) (EVar "l")) (EVar "True") (EListLit)) (EVar "secs"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "SEC "))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "l")) (EVar "False") (EListLit)) (EVar "secs"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "D"))) (EVar "l")) (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EVar "l"))) (EVar "secs"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EVar "secs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "streamTailGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur") (PVar "secs")) (EMatch (EApp (EVar "classifyStreamLine") (EVar "l")) (arm (PCon "STBegin" (PVar "p")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "p")) (EListLit))) (arm (PCon "STEnd") () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (ELit (LString ""))) (EListLit))) (arm (PCon "STSecD" (PVar "n")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "True") (EListLit)) (EVar "secs")))) (arm (PCon "STSec" (PVar "n")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EBinOp "::" (ETuple (EVar "n") (EVar "False") (EListLit)) (EVar "secs")))) (arm (PCon "STData" (PVar "d")) () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EApp (EApp (EVar "pushLine") (EVar "d")) (EVar "secs")))) (arm (PCon "STOther") () (EApp (EApp (EApp (EVar "streamTailGo") (EVar "rest")) (EVar "cur")) (EVar "secs")))))
 (DTypeAlias false "Sections" () (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
 (DTypeSig false "pushLine" (TyFun (TyCon "String") (TyFun (TyCon "Sections") (TyCon "Sections"))))
 (DFunDef false "pushLine" (PWild (PList)) (EListLit))
@@ -1985,7 +2031,7 @@ mapUnit f (x :: rest) =
 (DFunDef false "lastBegun" ((PVar "out")) (EApp (EApp (EVar "lastBegunGo") (EApp (EVar "splitNl") (EVar "out"))) (EVar "None")))
 (DTypeSig false "lastBegunGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lastBegunGo" ((PList) (PVar "cur")) (EVar "cur"))
-(DFunDef false "lastBegunGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "BEGIN "))) (EVar "l")) (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "drop") (ELit (LInt 6))) (EVar "l")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "END "))) (EVar "l")) (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "cur")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lastBegunGo" ((PCons (PVar "l") (PVar "rest")) (PVar "cur")) (EMatch (EApp (EVar "classifyStreamLine") (EVar "l")) (arm (PCon "STBegin" (PVar "p")) () (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EApp (EVar "Some") (EVar "p")))) (arm (PCon "STEnd") () (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "None"))) (arm PWild () (EApp (EApp (EVar "lastBegunGo") (EVar "rest")) (EVar "cur")))))
 (DTypeSig false "snapPathOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "snapPathOf" (PWild (PCon "None") (PVar "f")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "chopExt") (EVar "f")))) (ELit (LString ".md"))))
 (DFunDef false "snapPathOf" (PWild (PCon "Some" (PVar "dir")) (PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "f"))))) (ELit (LString ".md"))))

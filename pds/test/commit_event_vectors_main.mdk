@@ -1,0 +1,499 @@
+{- | The `com.atproto.sync.subscribeRepos` `#commit` firehose driver.
+
+   Replays `pds/test/vectors/commit_event_corpus.txt` — a seven-commit
+   transcript the pinned official `@atproto/repo` produced — through
+   `lib.repo` and then `lib.sync_event`, and grades the emitted event FRAME
+   against the corpus byte for byte.
+
+   Four properties the transcript is shaped to separate, none of which a
+   single-write, single-node transcript can see:
+
+   - `ops[].prev` is absent on a create and present on an update or a delete,
+     and its value is read from the repository BEFORE the write. The corpus
+     carries the reference's own answer for every op row, so a lookup against
+     the post-write state fails here rather than encoding a plausible CID.
+   - `prevData` is the PRIOR commit's data root, not this commit's. Every step
+     is checked against the preceding commit's own data root.
+   - `blocks` carries MST nodes this write did not change — the covering-proof
+     nodes that convince a reader the rest of the tree is untouched. The
+     transcript climbs to three MST layers so that set is strictly larger than
+     the changed one.
+   - the frame is two concatenated DAG-CBOR objects, header then body, with
+     canonically ordered map keys.
+
+   The corpus pins the event twice. `EVENT` is the frame with the CAR blocks
+   in the reference's own insertion order; `EVENTSORTED` is the same event
+   with them sorted by CID, which is the order `lib.sync_event` emits. Both
+   are compared byte for byte — the first by handing our encoder the
+   reference's CAR bytes, the second by handing it our own — so neither the
+   block order nor any other field is graded against itself. -}
+
+import hex.{decode, encode}
+import io.{readLines}
+import list.{reverse, zip}
+import string.{split, startsWith, toInt}
+import lib.car.{carBlocks, carDecode, carRoots}
+import lib.cid.{Cid, cidEqual, cidFromString, cidToString}
+import lib.dagcbor.{dagCborDecode}
+import lib.mst.{Mst, mstNodeBlocks}
+import lib.repo.{
+  Repo,
+  RepoWrite(..),
+  repoApplyWrites,
+  repoCommitCid,
+  repoCommitDataCid,
+  repoCommitSignedBytes,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoMutationCommit,
+  repoMutationState,
+  repoRecordCid,
+  repoTree,
+}
+import lib.sync_event.{
+  SyncCommitEvent(..),
+  SyncRepoOp(..),
+  syncCommitBlocks,
+  syncCommitCar,
+  syncCommitFrame,
+}
+import lib.tid.{Tid, tidParse}
+
+data Op = Op {
+  action : String,
+  path : Array Int,
+  recordBytes : Option (Array Int),
+  recordCid : Option Cid,
+  prevCid : Option Cid,
+}
+
+data Step = Step {
+  seq : Int,
+  rev : Tid,
+  time : String,
+  ops : List Op,
+  commitCid : Cid,
+  dataCid : Cid,
+  since : Tid,
+  prevData : Cid,
+  blockCids : List String,
+  carHex : String,
+  eventHex : String,
+  eventSortedHex : String,
+}
+
+-- One step's grade, as six independent booleans plus the untouched-node count.
+data Grade = Grade {
+  prevRows : Int,
+  prevRowsOk : Int,
+  identity : Bool,
+  blocks : Bool,
+  referenceCar : Bool,
+  frame : Bool,
+  sorted : Bool,
+  prevData : Bool,
+  untouched : Int,
+}
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "commit_event: malformed hex: \{message}"
+
+mustCid : String -> Cid
+mustCid text = match cidFromString text
+  Ok cid => cid
+  Err message => panic "commit_event: malformed CID: \{message}"
+
+mustTid : String -> Tid
+mustTid text = match tidParse text
+  Ok tid => tid
+  Err message => panic "commit_event: malformed TID: \{message}"
+
+mustBlocks : Result String (List (Cid, Array Int)) -> List (Cid, Array Int)
+mustBlocks (Ok blocks) = blocks
+mustBlocks (Err message) =
+  panic "commit_event: block assembly failed: \{message}"
+
+mustCar : Result String (Array Int) -> Array Int
+mustCar (Ok bytes) = bytes
+mustCar (Err message) = panic "commit_event: CAR encoding failed: \{message}"
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "commit_event: malformed integer: \{text}"
+
+optionalHex : String -> Option (Array Int)
+optionalHex "-" = None
+optionalHex text = Some (mustHex text)
+
+optionalCid : String -> Option Cid
+optionalCid "-" = None
+optionalCid text = Some (mustCid text)
+
+sameOptionCid : Option Cid -> Option Cid -> Bool
+sameOptionCid None None = True
+sameOptionCid (Some left) (Some right) = cidEqual left right
+sameOptionCid _ _ = False
+
+-- The DID and the signing key the transcript was generated with.
+metaOf : List String -> (String, Array Int)
+metaOf [] = panic "commit_event: corpus has no META row"
+metaOf (line :: rest) = match split "\t" line
+  ["META", did, secretHex] => (did, mustHex secretHex)
+  _ => metaOf rest
+
+-- The revision, commit CID and data root of the transcript's initial commit.
+initOf : List String -> (Tid, Cid, Cid)
+initOf [] = panic "commit_event: corpus has no INIT row"
+initOf (line :: rest) = match split "\t" line
+  ["INIT", rev, commitCid, dataCid] =>
+    (mustTid rev, mustCid commitCid, mustCid dataCid)
+  _ => initOf rest
+
+{- | A step under construction. The corpus is line-oriented and step-scoped:
+   `STEP` opens one and `ENDSTEP` closes it. Operation rows accumulate
+   reversed and are flipped at the close, so the order a client sent them in
+   is the order replayed. -}
+data Partial = Partial {
+  seq : Int,
+  rev : Tid,
+  time : String,
+  ops : List Op,
+  expect : Option (Cid, Cid, Tid, Cid),
+  blockCids : List String,
+  carHex : String,
+  eventHex : String,
+  eventSortedHex : String,
+}
+
+openStep : String -> String -> String -> Partial
+openStep seq rev time = Partial {
+  seq = mustInt seq,
+  rev = mustTid rev,
+  time = time,
+  ops = [],
+  expect = None,
+  blockCids = [],
+  carHex = "",
+  eventHex = "",
+  eventSortedHex = "",
+}
+
+closeStep : Partial -> Step
+closeStep partial = match partial.expect
+  None =>
+    panic "commit_event: step \{intToString partial.seq} has no EXPECT row"
+  Some (commitCid, dataCid, since, prevData) => Step {
+    seq = partial.seq,
+    rev = partial.rev,
+    time = partial.time,
+    ops = reverse partial.ops,
+    commitCid = commitCid,
+    dataCid = dataCid,
+    since = since,
+    prevData = prevData,
+    blockCids = partial.blockCids,
+    carHex = partial.carHex,
+    eventHex = partial.eventHex,
+    eventSortedHex = partial.eventSortedHex,
+  }
+
+parseSteps : List String -> Option Partial -> List Step -> List Step
+parseSteps [] None steps = reverse steps
+parseSteps [] (Some _) _ = panic "commit_event: corpus ended mid-step"
+parseSteps (line :: rest) current steps =
+  if line == "" || startsWith "#" line then
+    parseSteps rest current steps
+  else match (split "\t" line, current)
+    (["STEP", seq, rev, time], None) =>
+      parseSteps rest (Some (openStep seq rev time)) steps
+    (["OP", action, pathHex, recordHex, recordCid, prevCid], Some partial) =>
+      let op = Op {
+        action = action,
+        path = mustHex pathHex,
+        recordBytes = optionalHex recordHex,
+        recordCid = optionalCid recordCid,
+        prevCid = optionalCid prevCid,
+      }
+      let next = { partial | ops = op :: partial.ops }
+      parseSteps rest (Some next) steps
+    (["EXPECT", commitCid, dataCid, since, prevData], Some partial) =>
+      let expect = Some (
+        mustCid commitCid,
+        mustCid dataCid,
+        mustTid since,
+        mustCid prevData,
+      )
+      let next = { partial | expect = expect }
+      parseSteps rest (Some next) steps
+    (["BLOCKS", cids], Some partial) =>
+      let next = { partial | blockCids = split "," cids }
+      parseSteps rest (Some next) steps
+    (["CAR", carHex], Some partial) =>
+      let next = { partial | carHex = carHex }
+      parseSteps rest (Some next) steps
+    (["EVENT", eventHex], Some partial) =>
+      let next = { partial | eventHex = eventHex }
+      parseSteps rest (Some next) steps
+    (["EVENTSORTED", eventHex], Some partial) =>
+      let next = { partial | eventSortedHex = eventHex }
+      parseSteps rest (Some next) steps
+    (["ENDSTEP"], Some partial) =>
+      parseSteps rest None (closeStep partial :: steps)
+    (["META", _, _], _) => parseSteps rest current steps
+    (["INIT", _, _, _], _) => parseSteps rest current steps
+    (["END"], _) => parseSteps rest current steps
+    _ => panic "commit_event: unrecognized or misplaced corpus row: \{line}"
+
+writeOf : Op -> RepoWrite
+writeOf op = match (op.action, op.recordBytes)
+  ("delete", _) => RepoWriteDelete op.path
+  (_, None) => panic "commit_event: \{op.action} row carries no record bytes"
+  (action, Some bytes) => match dagCborDecode bytes
+    Err message => panic "commit_event: undecodable record: \{message}"
+    Ok record =>
+      if action == "create" then
+        RepoWriteCreate op.path record
+      else
+        RepoWriteUpdate op.path record
+
+{- | The op's shape, built from what the repository said BEFORE the write —
+   not from the corpus row — so a wrong `prev` lookup reaches the frame
+   comparison instead of being papered over by the answer key. -}
+syncOpOf : Op -> Option Cid -> SyncRepoOp
+syncOpOf op observed = match (op.action, op.recordCid, observed)
+  ("create", Some cid, _) => SyncOpCreate op.path cid
+  ("update", Some cid, Some prev) => SyncOpUpdate op.path cid prev
+  ("delete", _, Some prev) => SyncOpDelete op.path prev
+  _ =>
+    panic "commit_event: \{op.action} row is missing the CIDs its shape needs"
+
+addedRecordsOf : List Op -> List (Cid, Array Int)
+addedRecordsOf [] = []
+addedRecordsOf (op :: rest) = match (op.recordCid, op.recordBytes)
+  (Some cid, Some bytes) => (cid, bytes) :: addedRecordsOf rest
+  _ => addedRecordsOf rest
+
+cidKeys : List (Cid, Array Int) -> List String
+cidKeys blocks = map ((cid, _) => cidToString cid) blocks
+
+{- | How many blocks this event ships that are MST nodes present in BOTH the
+   pre-write and the post-write tree — nodes the write did not change. A
+   `blocks` rule built from a tree diff alone scores zero here. -}
+untouchedNodes : List (Cid, Array Int) -> Mst -> Mst -> Int
+untouchedNodes blocks before after =
+  let beforeKeys = cidKeys (mstNodeBlocks before)
+  let afterKeys = cidKeys (mstNodeBlocks after)
+  length
+    (filter (key => elem key beforeKeys && elem key afterKeys) (cidKeys blocks))
+
+sameBlockBytes : List (Cid, Array Int) -> List (Cid, Array Int) -> Bool
+sameBlockBytes expected actual =
+  length expected == length actual
+    && all
+      ((cid, bytes) =>
+        any
+          ((other, otherBytes) => cidEqual cid other && bytes == otherBytes)
+          actual)
+      expected
+
+{- | The reference-ordered CAR, decoded: its sole root and its whole block set
+   are graded against ours, independently of the frame comparisons. -}
+gradeReferenceCar : Step -> List (Cid, Array Int) -> Bool
+gradeReferenceCar step blocks = match carDecode (mustHex step.carHex)
+  Err _ => False
+  Ok car => match carRoots car
+    [root] =>
+      cidEqual root step.commitCid && sameBlockBytes blocks (carBlocks car)
+    _ => False
+
+eventWith : String -> Step -> List SyncRepoOp -> Array Int -> SyncCommitEvent
+eventWith did step ops car = SyncCommitEvent {
+  seq = step.seq,
+  time = step.time,
+  repoDid = did,
+  commitCid = step.commitCid,
+  rev = step.rev,
+  since = Some step.since,
+  prevData = Some step.prevData,
+  blocksCar = car,
+  ops = ops,
+}
+
+frameHex : SyncCommitEvent -> String
+frameHex event = match syncCommitFrame event
+  Err message => panic "commit_event: frame encoding failed: \{message}"
+  Ok bytes => encode bytes
+
+-- Each op's previous record CID, read from the repository before the write.
+observedPrevs : List Op -> Repo -> List (Option Cid)
+observedPrevs [] _ = []
+observedPrevs (op :: rest) repo = match repoRecordCid op.path repo
+  Err message => panic "commit_event: prior-record lookup failed: \{message}"
+  Ok observed => observed :: observedPrevs rest repo
+
+countMatches : List Op -> List (Option Cid) -> Int
+countMatches [] [] = 0
+countMatches (op :: ops) (observed :: rest) =
+  (if sameOptionCid op.prevCid observed then 1 else 0) + countMatches ops rest
+countMatches _ _ = panic "commit_event: op/observation length mismatch"
+
+gradeStep : String -> Step -> Cid -> Repo -> <IO> (Grade, Repo)
+gradeStep did step priorData repo =
+  let before = repoTree repo
+  let observed = observedPrevs step.ops repo
+  let prevOk = countMatches step.ops observed
+  match repoApplyWrites (map writeOf step.ops) step.rev repo
+    Err message =>
+      panic "commit_event: step \{intToString step.seq} failed: \{message}"
+    Ok mutation =>
+      let next = repoMutationState mutation
+      let commit = repoMutationCommit mutation
+      let after = repoTree next
+      let identity =
+        cidEqual (repoCommitCid commit) step.commitCid
+          && cidEqual (repoCommitDataCid commit) step.dataCid
+      let blocks =
+        mustBlocks
+          (syncCommitBlocks
+            before
+            after
+            (map (op => op.path) step.ops)
+            (addedRecordsOf step.ops)
+            (repoCommitCid commit)
+            (repoCommitSignedBytes commit))
+      let ourCar = mustCar (syncCommitCar (repoCommitCid commit) blocks)
+      let ops = map ((op, seen) => syncOpOf op seen) (zip step.ops observed)
+      let grade = Grade {
+        prevRows = length step.ops,
+        prevRowsOk = prevOk,
+        identity = identity,
+        blocks = cidKeys blocks == step.blockCids,
+        referenceCar = gradeReferenceCar step blocks,
+        frame =
+          frameHex (eventWith did step ops (mustHex step.carHex))
+            == step.eventHex,
+        sorted =
+          frameHex (eventWith did step ops ourCar) == step.eventSortedHex,
+        prevData = cidEqual step.prevData priorData,
+        untouched = untouchedNodes blocks before after,
+      }
+      let () =
+        println
+          "STEP \{intToString step.seq} ops=\{intToString grade.prevRows} prev=\{intToString grade.prevRowsOk}/\{intToString grade.prevRows} identity=\{gradeWord grade.identity} blocks=\{gradeWord grade.blocks} refcar=\{gradeWord grade.referenceCar} frame=\{gradeWord grade.frame} sorted=\{gradeWord grade.sorted} prevData=\{gradeWord grade.prevData} untouched=\{intToString grade.untouched}"
+      (grade, next)
+
+gradeWord : Bool -> String
+gradeWord True = "PASS"
+gradeWord False = "FAIL"
+
+runSteps : String -> List Step -> Cid -> Repo -> List Grade -> <IO> List Grade
+runSteps _ [] _ _ grades = reverse grades
+runSteps did (step :: rest) priorData repo grades =
+  let (grade, next) = gradeStep did step priorData repo
+  runSteps
+    did
+    rest
+    (repoCommitDataCid (repoLatestCommit next))
+    next
+    (grade :: grades)
+
+gradePrevRows : Grade -> Int
+gradePrevRows grade = grade.prevRows
+
+gradePrevOk : Grade -> Int
+gradePrevOk grade = grade.prevRowsOk
+
+gradeIdentity : Grade -> Bool
+gradeIdentity grade = grade.identity
+
+gradeBlocks : Grade -> Bool
+gradeBlocks grade = grade.blocks
+
+gradeReferenceCarOk : Grade -> Bool
+gradeReferenceCarOk grade = grade.referenceCar
+
+gradeFrame : Grade -> Bool
+gradeFrame grade = grade.frame
+
+gradeSorted : Grade -> Bool
+gradeSorted grade = grade.sorted
+
+gradePrevData : Grade -> Bool
+gradePrevData grade = grade.prevData
+
+-- A step with no untouched node would not discriminate a covering proof from
+-- a tree diff, so the count is graded as a presence, not summed.
+gradeUntouched : Grade -> Bool
+gradeUntouched grade = grade.untouched > 0
+
+gradeClean : Grade -> Bool
+gradeClean grade =
+  grade.prevRowsOk == grade.prevRows
+    && grade.identity
+    && grade.blocks
+    && grade.referenceCar
+    && grade.frame
+    && grade.sorted
+    && grade.prevData
+
+sumBy : (Grade -> Int) -> List Grade -> Int
+sumBy pick grades = sum (map pick grades)
+
+flag : (Grade -> Bool) -> Grade -> Int
+flag pick grade = if pick grade then 1 else 0
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message => panic "commit_event: cannot read corpus: \{message}"
+    Ok lines =>
+      let (did, secret) = metaOf lines
+      let (initRev, initCommit, _) = initOf lines
+      let steps = parseSteps lines None []
+      match repoInitFromKeyBytes did secret initRev
+        Err message => panic "commit_event: repository init failed: \{message}"
+        Ok repo =>
+          let () =
+            if cidEqual (repoCommitCid (repoLatestCommit repo)) initCommit then
+              ()
+            else
+              panic "commit_event: initial commit CID disagrees with the corpus"
+          let grades =
+            runSteps
+              did
+              steps
+              (repoCommitDataCid (repoLatestCommit repo))
+              repo
+              []
+          let count = length grades
+          let rows = sumBy gradePrevRows grades
+          let () =
+            println
+              "prev-lookups: \{intToString (sumBy gradePrevOk grades)}/\{intToString rows} op rows matched the reference previous record CID"
+          let () =
+            println
+              "commit-identity: \{intToString (sumBy (flag gradeIdentity) grades)}/\{intToString count} steps matched the pinned commit and data CIDs"
+          let () =
+            println
+              "blocks: \{intToString (sumBy (flag gradeBlocks) grades)}/\{intToString count} steps matched the reference relevant-block set"
+          let () =
+            println
+              "reference-car: \{intToString (sumBy (flag gradeReferenceCarOk) grades)}/\{intToString count} steps matched the official-ordered CAR root and blocks"
+          let () =
+            println
+              "frames: \{intToString (sumBy (flag gradeFrame) grades)}/\{intToString count} steps byte-identical to the official-ordered event"
+          let () =
+            println
+              "frames-sorted: \{intToString (sumBy (flag gradeSorted) grades)}/\{intToString count} steps byte-identical to the canonical-ordered event"
+          let () =
+            println
+              "prevData: \{intToString (sumBy (flag gradePrevData) grades)}/\{intToString count} steps named the prior commit's data root"
+          let () =
+            println
+              "untouched-nodes: \{intToString (sumBy (flag gradeUntouched) grades)}/\{intToString count} steps shipped an MST node the write did not change"
+          let clean = all gradeClean grades
+          println (if clean then "TOTAL: PASS" else "TOTAL: FAIL")
+  _ => panic "usage: commit_event_vectors_main <corpus>"

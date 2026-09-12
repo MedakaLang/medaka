@@ -54,6 +54,9 @@ import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
 import json.{Json, JString, jObject, jArray}
 import string.{toLower}
+import regex.{
+  Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll
+}
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
 -- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "") /
@@ -160,11 +163,14 @@ ppTyDoc t = ppTyP 0 t
 --   "--"            -> ""
 --   "-- foo"        -> "foo"   (3-char `-- ` prefix)
 --   "--foo"         -> "foo"   (len>2, drop first 2)
+dashSpaceRe : Regex
+dashSpaceRe = mustCompile "^-- "
+
 commentBody : String -> String
 commentBody t =
   if t == "--" then
     ""
-  else if dlen t >= 3 && dsub 0 3 t == "-- " then
+  else if isMatch dashSpaceRe t then
     dsub 3 (dlen t) t
   else if dlen t > 2 then
     dsub 2 (dlen t) t
@@ -897,17 +903,11 @@ stripPipePrefix line =
 markerEligibleAfter : String -> Bool
 markerEligibleAfter line = line == "" || isDecorativeLine line
 
-isDecorativeLine : String -> Bool
-isDecorativeLine line =
-  let cs = stringToChars line
-  if arrayLength cs == 0 then False else isDecorativeChar (arrayGetUnsafe 0 cs)
+decorativeLineRe : Regex
+decorativeLineRe = mustCompile "^[^a-zA-Z0-9 ]"
 
-isDecorativeChar : Char -> Bool
-isDecorativeChar c =
-  not (c >= 'a' && c <= 'z')
-    && not (c >= 'A' && c <= 'Z')
-    && not (c >= '0' && c <= '9')
-    && c /= ' '
+isDecorativeLine : String -> Bool
+isDecorativeLine line = isMatch decorativeLineRe line
 
 -- A run of extracted doc-prose lines is either plain prose or a doctest
 -- example block (starts at a `> ` line, extends through following non-blank
@@ -1395,45 +1395,18 @@ anyMentions tyName (s :: rest) =
 -- Does `hay` contain `needle` as a whole identifier token?  Word-bounded on
 -- both sides, so a module named `array` does not "mention" `Array` merely by
 -- rendering `ArrayBuilder`.
+-- The boundary class is the wide Medaka identifier class (alnum + `_` + `'`,
+-- matching `support.char.isAlnum`) — NOT the engine's built-in `\b`, which is
+-- ASCII `[A-Za-z0-9_]` only and would narrow this to miss a needle abutting an
+-- apostrophe (e.g. `x'`). Built by hand as a CONSUMING class around the
+-- escaped needle rather than lookaround, per the design's own rewrite for
+-- what a lookbehind/lookahead would otherwise do.
 mentionsToken : String -> String -> Bool
 mentionsToken needle hay =
-  let ns = stringToChars needle
-  let hs = stringToChars hay
-  mentionsTokenGo ns hs 0 (arrayLength ns) (arrayLength hs)
-
-mentionsTokenGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-mentionsTokenGo ns hs i n h =
-  if n == 0 || i + n > h then
-    False
-  else if charsMatchAt ns hs i n
-    && not (isIdentCharAt hs (i - 1) h)
-    && not (isIdentCharAt hs (i + n) h) then
-    True
-  else
-    mentionsTokenGo ns hs (i + 1) n h
-
-charsMatchAt : Array Char -> Array Char -> Int -> Int -> Bool
-charsMatchAt ns hs i n = charsMatchAtGo ns hs i 0 n
-
-charsMatchAtGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-charsMatchAtGo ns hs i j n =
-  if j >= n then
-    True
-  else if arrayGetUnsafe (i + j) hs == arrayGetUnsafe j ns then
-    charsMatchAtGo ns hs i (j + 1) n
-  else
-    False
-
-isIdentCharAt : Array Char -> Int -> Int -> Bool
-isIdentCharAt hs i h =
-  if i < 0 || i >= h then False else isIdentChar (arrayGetUnsafe i hs)
-
-isIdentChar : Char -> Bool
-isIdentChar c =
-  c >= 'a' && c <= 'z'
-    || c >= 'A' && c <= 'Z'
-    || c >= '0' && c <= '9'
-    || c == '_'
+  isMatch
+    (mustCompile
+      ("(?:^|[^A-Za-z0-9_'])" ++ escape needle ++ "(?:$|[^A-Za-z0-9_'])"))
+    hay
 
 lookupStrDoc : String -> List (String, String) -> Option String
 lookupStrDoc _ [] = None
@@ -1499,34 +1472,18 @@ isNoneDoc _ = False
 -- exactness, only on the entry's OWN header and the index's link agreeing,
 -- which `slugifyAnchor` guarantees by construction (both read from the same
 -- function).
+-- A maximal run of non-slug chars becomes one `-`; a pre-existing `-` is a
+-- slug char, so it is never absorbed into an adjacent converted run on
+-- either side (`a- b` -> `a--b`, `.-a` -> `--a`). The pre-migration walk
+-- treated a `-` that FOLLOWED a run differently (`.-a` -> `-a`, one dash);
+-- no doc-entry name exercises that distinction, so this is a deliberate,
+-- symmetric replacement rather than a byte-for-byte port.
+nonSlugRunRe : Regex
+nonSlugRunRe = mustCompile "[^a-z0-9_-]+"
+
 slugifyAnchor : String -> String
 slugifyAnchor name =
-  let lowered = toLower name
-  let chars = stringToChars lowered
-  let n = arrayLength chars
-  stringTrimDashes (slugCharsGo chars 0 n)
-
--- Walk char-by-char (`arrayGetUnsafe`/`arrayLength` — both globals, no
--- `array` module import needed), mapping a non slug-char to `-` and
--- collapsing adjacent `-` as we go (so we never materialize the
--- un-collapsed string).
-slugCharsGo : Array Char -> Int -> Int -> String
-slugCharsGo chars i n =
-  if i >= n then
-    ""
-  else
-    let c = arrayGetUnsafe i chars
-    let rest = slugCharsGo chars (i + 1) n
-    if isSlugChar c then
-      charToStr c ++ rest
-    else if dlen rest > 0 && dsub 0 1 rest == "-" then
-      rest
-    else
-      "-" ++ rest
-
-isSlugChar : Char -> Bool
-isSlugChar c =
-  c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+  stringTrimDashes (replaceAll nonSlugRunRe "-" (toLower name))
 
 stringTrimDashes : String -> String
 stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)
@@ -1588,36 +1545,36 @@ renderIndexLink moduleName (DocEntry name _ _ _ _) =
 -- The first sentence of a prose block: up to and including the first `.`
 -- that ends a word, or the first line when there is none.  Newlines inside
 -- the sentence become spaces, since the source wraps at a fixed width.
+periodRe : Regex
+periodRe = mustCompile "\\."
+
+newlineRe : Regex
+newlineRe = mustCompile "\\n"
+
 firstSentence : String -> String
 firstSentence prose =
-  let cs = stringToChars prose
-  let n = arrayLength cs
-  let cut = sentenceEnd cs 0 n
+  let cut = firstSentenceCut prose
   joinWith " " (splitNl (stringTrim (dsub 0 cut prose)))
 
-sentenceEnd : Array Char -> Int -> Int -> Int
-sentenceEnd cs i n =
-  if i >= n then
-    firstLineEnd cs 0 n
-  else
-    let c = arrayGetUnsafe i cs
-    if c == '.'
-      && (i + 1 >= n || isSentenceGap (arrayGetUnsafe (i + 1) cs)) then
-      i + 1
-    else
-      sentenceEnd cs (i + 1) n
+-- The end of the first `.` that is itself followed by end-of-string or a
+-- sentence gap (a space or a newline), matched then tail-tested rather than
+-- via lookahead; falling back to the first newline, or the whole string.
+firstSentenceCut : String -> Int
+firstSentenceCut prose = match sentenceEndAt prose (findAll periodRe prose)
+  Some cut => cut
+  None => match find newlineRe prose
+    Some m => m.start
+    None => dlen prose
 
-isSentenceGap : Char -> Bool
-isSentenceGap c = c == ' ' || c == '\n'
-
-firstLineEnd : Array Char -> Int -> Int -> Int
-firstLineEnd cs i n =
-  if i >= n then
-    n
-  else if arrayGetUnsafe i cs == '\n' then
-    i
+sentenceEndAt : String -> List Match -> Option Int
+sentenceEndAt _ [] = None
+sentenceEndAt prose (m :: rest) =
+  if m.end >= dlen prose
+    || dsub m.end (m.end + 1) prose == " "
+    || dsub m.end (m.end + 1) prose == "\n" then
+    Some m.end
   else
-    firstLineEnd cs (i + 1) n
+    sentenceEndAt prose rest
 
 -- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
 -- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the

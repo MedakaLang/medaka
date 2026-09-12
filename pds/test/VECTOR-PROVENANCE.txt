@@ -461,6 +461,17 @@ consumer:      P1-B-MST (#2136 deterministic atproto Merkle Search Tree)
 notes:         11 cases cover empty, 0/2/4/6 leading-zero-bit layer boundaries, per-node shared-prefix compression, forward/reverse insertion permutations, replacement, deletion, and delete-to-empty. Schema and edge behavior were confirmed first-hand on 2026-08-28 against https://atproto.com/specs/repository (fields l/e and p/k/v/t; lexical order; mandatory prefix compression; SHA-256 depth; empty root) and the pinned reference source. The official CC0 interop fixtures at bluesky-social/atproto-interop-tests commit 056e5741bb330757205d6b16db5266fffcae937b independently corroborated key-height and common-prefix rules; expected root/node bytes come only from @atproto/repo, never Medaka.
 
 [vector]
+file:          pds/test/vectors/mst_covering_proof_corpus.txt
+local-sha256:  13e3afdee41ed500af0d814b22e6561ee60ca7c2272d4daaf45db08ef113bebf
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_mst_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/repo@0.10.12, and runs gen_mst_corpus.mjs, which writes this file as its second output. Each case builds a tree with MST.create/add, records the root and the complete node count from getUnstoredBlocks, and then records MST.getCoveringProof for each probe key (unioned, for the multi-key rows) as a sorted CID list. The generator refuses to emit a proof naming a CID that is not one of that tree's own nodes.
+retrieved:     2026-09-11
+consumer:      P1-B-MST-PROOF (#2891 relay-readable covering proofs)
+notes:         3 cases climb from a one-node tree to a three-layer, seven-node tree; 17 proof rows cover every present key, absent keys below/between/above the stored range, and one multi-key union of the shape a batched commit uses. 13 of the 17 name strictly fewer blocks than the whole tree, which is what separates a covering proof from the full node set. The two that tie on the one-node tree do so because a one-node tree has no narrower answer, and the multi-key union on the three-layer tree reaches every node by covering three widely separated keys. Expected CID sets come only from @atproto/repo's MST.getCoveringProof, never Medaka. This file is NOT part of pds/tools/check_pds_phase1_image.sh's byte-comparison: the pinned official PDS image carries @atproto/repo 0.10.10, a different version from the 0.10.12 pinned here.
+
+[vector]
 file:          pds/test/vectors/car_reference_corpus.txt
 local-sha256:  ae2d6e68122ce3ddf0dea8f85b633534fe10ce95e3f88f24e457b8061d8d35e9
 kind:          reference-impl
@@ -493,6 +504,29 @@ extraction:    pds/tools/gen_repo_corpus.sh, second output file. The same pinned
 retrieved:     2026-09-04
 consumer:      P1-E-BATCH (#2605 applyWrites batch and blobs)
 notes:         The answer key for com.atproto.repo.applyWrites. It is a SEPARATE file rather than rows appended to repo_reference_corpus.txt because pds/test/repo_vectors_main.mdk and pds/test/record_handlers_main.mdk both match that corpus by exact positional row shape. The batch is generated as four tree edits and one signature, which is the property under test: a batch of N operations must land as one signed commit at one revision, so an answer key built by replaying N single-write commits would grade the wrong thing. No live PDS service or account was used.
+
+[vector]
+file:          pds/test/vectors/com_atproto_sync_subscribeRepos.json
+local-sha256:  bfc3e22bfeae701736fbbbd68a56f0b4b8b66ef4e0e10f1c281b2de61c3328ae
+kind:          published-artifact
+source:        atproto lexicon com.atproto.sync.subscribeRepos, lexicons/com/atproto/sync/subscribeRepos.json at bluesky-social/atproto commit 1f2604f0546754aef1cf93b7ac3855cf31751b1c (the peeled commit of the annotated tag @atproto/api@0.20.44; tag object 85484cf1072bb050734f021b93b0c42415eaf4d1)
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/1f2604f0546754aef1cf93b7ac3855cf31751b1c/lexicons/com/atproto/sync/subscribeRepos.json
+source-sha256: bfc3e22bfeae701736fbbbd68a56f0b4b8b66ef4e0e10f1c281b2de61c3328ae
+extraction:    fetched verbatim, byte for byte; nothing was reformatted, so local-sha256 and source-sha256 are the same digest by construction.
+retrieved:     2026-09-11
+consumer:      P1-F-COMMIT-LEXICON (#2891 relay-readable commit events)
+notes:         The SCHEMA half of the #commit answer key, pinned so the field set is an attributed external claim rather than a paraphrase. pds/tools/gen_repo_corpus.mjs reads it and refuses to emit a corpus whose assembled event omits a required key, invents an undeclared one, or writes null into a field the schema does not declare nullable — which is what catches a field-name typo that would otherwise encode cleanly and be graded against itself. Two shapes it fixes and this project would otherwise have guessed: `since` is required AND nullable, so it is always present; `repoOp.prev` is optional, so it is ABSENT ENTIRELY on a create rather than null. This is the sync-stream schema, not the repository commit object, and the two disagree about what `rev` and `data` mean.
+
+[vector]
+file:          pds/test/vectors/commit_event_corpus.txt
+local-sha256:  605ee0caac2f63cb9674ed88145bb054b9bd1e64ebe4372b4a7ed8a4128423a1
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_repo_corpus.sh, third output file. Same pinned npm graph, key and DID as repo_reference_corpus.txt. Each step drives MST.add/update/delete, DataDiff.of, MST.getCoveringProof over the POST-write tree, signCommit and blocksToCarFile from the pinned @atproto/repo, and @atproto/lex-cbor for every encoding; re-running must reproduce this file byte-for-byte.
+retrieved:     2026-09-11
+consumer:      P1-F-COMMIT-EVENT (#2891 relay-readable commit events)
+notes:         Seven signed commits over a tree that climbs to three MST layers: four creates, an update, a delete and a three-operation batch, so create/update/delete each appear and `ops` is plural at least once. G5 CAVEAT, stated rather than hidden: no package on the pinned graph ASSEMBLES a #commit event — @atproto/pds is the only one that does and it needs @atproto/repo ^0.10.14 plus a database and a web server — so the assembly (which fields, from where) is hand-derived against com_atproto_sync_subscribeRepos.json and the published sequencer source (@atproto/pds 0.5.34 dist/sequencer/events.js formatSeqCommit, dist/actor-store/repo/transactor.js formatCommit), while every VALUE assembled comes from the pinned official packages. Each step pins the event TWICE: EVENT carries the CAR blocks in @atproto/repo's own BlockMap insertion order, EVENTSORTED the same event with them sorted by CID. The lexicon and the sync spec constrain only the CAR roots list, not block order, so the sorted order is this project's choice and is labelled as such; the driver grades both rows byte-for-byte, the first by feeding our encoder the reference's own CAR bytes. BLOCKS additionally pins the block set as CIDs. Three of the seven steps ship an MST node the write did not change, which is what separates a covering proof from a tree diff. No live PDS service or account was used.
 
 [vector]
 file:          pds/test/vectors/interop_aturi_valid.txt
@@ -684,3 +718,49 @@ source-url:    https://registry.npmjs.org/@atproto/lex-data/-/lex-data-0.1.7.tgz
 extraction:    pds/tools/gen_blob_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/lex-data@0.1.7 and @atproto/lex-json@0.1.6, and runs gen_blob_corpus.mjs. The generator content-addresses three representative payloads (empty, a short text blob, and an image-shaped-MIME payload — none of them real image bytes, since this corpus exercises content addressing and the blob ref shape, not image format sniffing) with @atproto/lex-data's raw-codec cidForRawBytes, assembles the official TypedBlobRef shape ($type/ref/mimeType/size), and renders it with @atproto/lex-json's lexStringify. Each row self-verifies that lex-data's own isTypedBlobRef accepts the round-tripped JSON before it is emitted.
 retrieved:     2026-09-04
 consumer:      S-blob-core (#2605 model half, blob CID and blob ref shape)
+
+[vector]
+file:          pds/test/vectors/rfc3174_sha1.txt
+local-sha256:  f568ea6c72d0a8402530a302e34c11e448e6a221b29d355c6956eedb9a232ef5
+kind:          published-artifact
+source:        RFC 3174, "US Secure Hash Algorithm 1 (SHA1)", §7.3 "Test Driver" — testarray / repeatcount / resultarray
+source-url:    https://www.rfc-editor.org/rfc/rfc3174.txt
+source-sha256: aa0ca4ef21609e64897980488c5555109266c29cd814fe97680c916566d29332
+extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc3174.txt | sed -n '/^7.3/,/^8/p' — the four message/repeat/digest triples transcribed from the test driver's own literals into the record form of this file; the digest literals in pds/test/websocket_test.mdk were read back against it
+retrieved:     2026-09-11
+consumer:      S-ws-transport (#2608 subscribeRepos inbound surface, SHA-1 half)
+notes:         SHA-1 is used here only for RFC 6455 §4.2.2's handshake constant, never for content addressing or signing
+
+[vector]
+file:          pds/test/vectors/rfc6455_handshake_frames.txt
+local-sha256:  1cc9c877e7159ba965a8cd8746ed507d501813e9752d6c5940fe4a89aa57d039
+kind:          published-artifact
+source:        RFC 6455, "The WebSocket Protocol", §1.3 opening-handshake example and §5.7 "Examples" frame byte strings
+source-url:    https://www.rfc-editor.org/rfc/rfc6455.txt
+source-sha256: 765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b
+extraction:    curl -sS https://www.rfc-editor.org/rfc/rfc6455.txt | sed -n '/^5.7.  Examples/,/^5.8/p' for the frame examples, plus the Sec-WebSocket-Key / Sec-WebSocket-Accept pair from §1.3; both copied byte-verbatim into the record form of this file, and the literals in pds/test/websocket_test.mdk were read back against it
+retrieved:     2026-09-11
+consumer:      S-ws-transport (#2608 subscribeRepos inbound surface, frame codec half)
+notes:         §5.7's two extended-length examples state only the frame header; the RFC leaves their payload bytes unspecified, so the consumer grades the header and supplies its own payload
+
+[vector]
+file:          pds/test/vectors/pds_route_registration_corpus.txt
+local-sha256:  860d418cf4a4b4b5d7ded4091e97a22e91fc52e5c7a661a2cc7bca191b041782
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/tree/main/packages/pds/src/api
+extraction:    docker run --rm --entrypoint node -v "$PWD/pds/tools:/medaka-tools:ro" -v "$PWD/pds/test/vectors:/medaka-out" ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 /medaka-tools/extract_pds_proxy_answer_key.mjs /medaka-out 1700000000 — written procedure in pds/README.md, "Proxy answer key"; re-running must reproduce this file byte-for-byte
+retrieved:     2026-09-11
+consumer:      S-proxy-answer-key (#2912 appview-proxying answer key), read by #2608 (appview-proxying leg)
+notes:         the image's own dist/api/index.js is RUN against a recording stub server, twice, so the `if (!bskyAppView) return` registration gates are observed rather than read off; the service is never started and no XRPC call is made, so this stays within the official-pds impl row's image-library scope. An nsid absent from this file is not registered and reaches the catch-all proxyHandler — which is why an HTTP probe CANNOT establish disposition: the oracle answers a forwarded-but-unconfigured nsid and an nsid in no lexicon at all with the identical 400 InvalidRequest "No service configured for <nsid>" (MEASURED live, S-proxy-answer-key report).
+
+[vector]
+file:          pds/test/vectors/pds_service_auth_shape_corpus.txt
+local-sha256:  8d8e3beb5d7b1495c307506ab6e35e2516ac7352eb115f029981125a26f0ca85
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/xrpc-server/src/auth.ts
+extraction:    same single command as the pds_route_registration_corpus.txt row above; this file is its second output. The token is minted by the image's own @atproto/xrpc-server createServiceJwt — the function AppContext.serviceAuthJwt() calls — with iat pinned to 1700000000 on the command line
+retrieved:     2026-09-11
+consumer:      S-proxy-answer-key (#2912 appview-proxying answer key), read by #2608 (appview-proxying leg)
+notes:         jti is fresh random per mint and the signature is computed over it, so neither can be pinned; this corpus therefore records jti's length/charset and the signature's encoding and length rather than values, which is what makes it byte-reproducible. The claim VALUES for iss/aud/lxm are placeholders chosen by the extractor; what the corpus asserts about them is the SHAPE stated in their rows, derived from pipethrough.js's call sites (proxyHandler passes credentials.did/bare aud/parseReqNsid lxm).
