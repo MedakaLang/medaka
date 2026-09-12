@@ -6,10 +6,9 @@ import test.{expectAll, expectEqual}
 import frontend.ast.{Loc(..), Route(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import eval.eval.{Value(..), evalOne}
+import eval.eval.{Value(..), evalOneRootEnv}
+import ir.core_ir.{CBind(..), CClause(..), CExpr(..), CProgram(..), CStmt(..)}
 import ir.core_ir_lower.{lowerProgram}
-import ir.core_ir_sexp.{cprogramToSexp}
-import string as Str
 import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.repr.{Scheme(..), ppMono, ppScheme}
 import types.typecheck.{
@@ -1059,7 +1058,7 @@ blockRecEvalValue =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("block_rec_eval", program)
-  let bindings = evalOne [] ("block_rec_eval", elaborated)
+  let bindings = evalOneRootEnv [] ("block_rec_eval", elaborated)
   match lookupAssoc "main" bindings
     Some (VFloat value) => value
     _ => 0.0
@@ -1092,23 +1091,68 @@ test "block recursive arithmetic retains the outer predicate and route" =
       assumptions,
   ]
 
-blockRecCoreSexp : String
-blockRecCoreSexp =
+data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
+
+emptyLocalCoreFacts : LocalCoreFacts
+emptyLocalCoreFacts = LocalCoreFacts False [] [] 0
+
+mergeLocalCoreFacts : LocalCoreFacts -> LocalCoreFacts -> LocalCoreFacts
+mergeLocalCoreFacts (LocalCoreFacts shapeA addA fromIntA primA) (LocalCoreFacts shapeB addB fromIntB primB) =
+  LocalCoreFacts
+    (shapeA || shapeB)
+    (addA ++ addB)
+    (fromIntA ++ fromIntB)
+    (primA + primB)
+
+localCoreExprFacts : CExpr -> LocalCoreFacts
+localCoreExprFacts (CApp f x) =
+  mergeLocalCoreFacts (localCoreExprFacts f) (localCoreExprFacts x)
+localCoreExprFacts (CLam _ body) = localCoreExprFacts body
+localCoreExprFacts (CLet _ _ rhs body) =
+  mergeLocalCoreFacts (localCoreExprFacts rhs) (localCoreExprFacts body)
+localCoreExprFacts (CBinPrim op lhs rhs _) =
+  let nested =
+    mergeLocalCoreFacts (localCoreExprFacts lhs) (localCoreExprFacts rhs)
+  let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) = nested
+  LocalCoreFacts
+    shape
+    addRoutes
+    fromIntRoutes
+    (primCount + (if op == "+" then 1 else 0))
+localCoreExprFacts (CMethod "add" (RDict binder) _ _) =
+  LocalCoreFacts False [binder] [] 0
+localCoreExprFacts (CMethod "fromInt" (RDict binder) _ _) =
+  LocalCoreFacts False [] [binder] 0
+localCoreExprFacts _ = emptyLocalCoreFacts
+
+blockRecValueFacts : CBind -> LocalCoreFacts
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
+  let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
+    localCoreExprFacts localBody
+  LocalCoreFacts True addRoutes fromIntRoutes primCount
+blockRecValueFacts _ = emptyLocalCoreFacts
+
+blockRecCoreFacts : LocalCoreFacts
+blockRecCoreFacts =
   let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("block_rec_core", program)
-  cprogramToSexp (lowerProgram elaborated)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  fold
+    (facts bind => mergeLocalCoreFacts facts (blockRecValueFacts bind))
+    emptyLocalCoreFacts
+    binds
 
-test "block recursive Core keeps dictionary methods inside the captured closure" = expectAll
-  [
-    expectEqual True (Str.contains "(CSLet true" blockRecCoreSexp),
-    expectEqual True (Str.contains "(CLam" blockRecCoreSexp),
-    expectEqual True (Str.contains "(CMethod \"add\" (RDict" blockRecCoreSexp),
-    expectEqual
-      True
-      (Str.contains "(CMethod \"fromInt\" (RDict" blockRecCoreSexp),
-    expectEqual False (Str.contains "(CBinPrim \"+\"" blockRecCoreSexp),
+test "block recursive Core keeps dictionary methods inside the captured closure" =
+  let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
+    blockRecCoreFacts
+  expectAll [
+    expectEqual True shape,
+    expectEqual 1 (listLen addRoutes),
+    expectEqual addRoutes fromIntRoutes,
+    expectEqual False (contains "" addRoutes),
+    expectEqual 0 primCount,
   ]
 
 localNumOwnSource : String
