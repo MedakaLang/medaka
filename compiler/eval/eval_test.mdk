@@ -10,7 +10,6 @@ import frontend.ast.{
   ImplMethod(..),
   Decl(..),
   Loc(..),
-  tyConUnresolved,
 }
 import types.route_key.{implRouteKeyWord}
 import eval.eval.{buildMethodReqCounts}
@@ -19,7 +18,14 @@ testLoc : Loc
 testLoc = Loc "" 1 0 1 0
 
 boxTy : Ty
-boxTy = TyApp (tyConUnresolved "Box" None) (TyVar "a")
+boxTy =
+  TyApp
+    TyCon {
+      tyConName = "Box",
+      tyConLoc = None,
+      tyConOrigin = OriginModule "fixture",
+    }
+    (TyVar "a")
 
 methodWithDicts : String -> Int -> ImplMethod
 methodWithDicts name count =

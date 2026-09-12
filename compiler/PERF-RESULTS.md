@@ -1344,3 +1344,28 @@ freshly instantiated summaries are needed before enabling the semantic migration
 within the current budget. Shared mutable snapshots are not an acceptable shortcut:
 #2902 reproduces false type errors on the pristine baseline and current source.
 The scope-store extraction can proceed independently.
+
+### Numeric return predicate migration
+
+Baseline `800069b269` versus the implementation in `32822517d` (measured before
+comment-only cleanup), using the existing M2 same-process LSP N0–N3 instrument,
+fixed 1 GiB heaps, and identical request streams. Cold is N1−N0, first warm is
+N2−N1, and second warm is N3−N2. Cachegrind counts instructions; the allocation
+instrument reads Boehm's total allocated bytes. All requests produced the expected
+publish counts and empty diagnostics, with strict source freshness enabled.
+Allocation repetitions were byte-identical.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,017,353 | 307,174,481 | 48,589,888 | 48,925,488 |
+| playground | first warm | 24,815,820 | 24,710,304 | 4,562,400 | 4,546,048 |
+| playground | second warm | 24,835,797 | 24,714,813 | 4,570,656 | 4,558,368 |
+| import-list | cold | 538,174,769 | 537,750,419 | 93,138,800 | 93,098,816 |
+| import-list | first warm | 38,112,225 | 37,913,127 | 6,870,640 | 6,842,096 |
+| import-list | second warm | 38,168,358 | 37,922,133 | 6,898,384 | 6,865,744 |
+
+The largest positive changes are +0.708% instructions and +0.691% allocated
+bytes, within the existing 25% soft budget. All three legacy caches remain
+enabled. This measures the numeric predicate, impl-body identity lookup, and
+eval prerequisite transport changes together; it does not establish safe
+finalized caching or retained-live-heap bounds.
