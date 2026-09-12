@@ -1,5 +1,5 @@
 # META
-source_lines=475
+source_lines=489
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -28,6 +28,7 @@ import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 import json.{Json, JString}
+import regex.{Regex, mustCompile, isMatch, find}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -160,23 +161,36 @@ clText (_, t) = t
 clLine : (Int, String) -> Int
 clLine (l, _) = l
 
+-- Compiled once: the two comment-lexeme prefixes doctest input/expected lines
+-- key on. The slice offset that follows each prefix check is the MATCH'S OWN
+-- end position, not a re-typed literal 5 / 3.
+inputLineRe : Regex
+inputLineRe = mustCompile "^-- > "
+
+expectedLineRe : Regex
+expectedLineRe = mustCompile "^-- "
+
 isInputLine : (Int, String) -> Bool
-isInputLine c = startsWith "-- > " (clText c)
+isInputLine c = isMatch inputLineRe (clText c)
 
 inputBody : (Int, String) -> String
 inputBody c =
   let t = clText c
-  substr3 5 (slen t) t
+  match find inputLineRe t
+    Some m => substr3 m.end (slen t) t
+    None => ""
 
 isExpectedLine : (Int, String) -> Bool
 isExpectedLine c =
   let t = clText c
-  startsWith "-- " t && not (isInputLine c)
+  isMatch expectedLineRe t && not (isInputLine c)
 
 expectedBody : (Int, String) -> String
 expectedBody c =
   let t = clText c
-  substr3 3 (slen t) t
+  match find expectedLineRe t
+    Some m => substr3 m.end (slen t) t
+    None => ""
 
 isBlankComment : (Int, String) -> Bool
 isBlankComment c = clText c == "--"
@@ -484,6 +498,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
@@ -520,14 +535,18 @@ isUse _ = False
 (DFunDef false "clText" ((PTuple PWild (PVar "t"))) (EVar "t"))
 (DTypeSig false "clLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Int")))
 (DFunDef false "clLine" ((PTuple (PVar "l") PWild)) (EVar "l"))
+(DTypeSig false "inputLineRe" (TyCon "Regex"))
+(DFunDef false "inputLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^-- > "))))
+(DTypeSig false "expectedLineRe" (TyCon "Regex"))
+(DFunDef false "expectedLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^-- "))))
 (DTypeSig false "isInputLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isInputLine" ((PVar "c")) (EApp (EApp (EVar "startsWith") (ELit (LString "-- > "))) (EApp (EVar "clText") (EVar "c"))))
+(DFunDef false "isInputLine" ((PVar "c")) (EApp (EApp (EVar "isMatch") (EVar "inputLineRe")) (EApp (EVar "clText") (EVar "c"))))
 (DTypeSig false "inputBody" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "String")))
-(DFunDef false "inputBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 5))) (EApp (EVar "slen") (EVar "t"))) (EVar "t")))))
+(DFunDef false "inputBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EMatch (EApp (EApp (EVar "find") (EVar "inputLineRe")) (EVar "t")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EVar "substr3") (EFieldAccess (EVar "m") "end")) (EApp (EVar "slen") (EVar "t"))) (EVar "t"))) (arm (PCon "None") () (ELit (LString "")))))))
 (DTypeSig false "isExpectedLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isExpectedLine" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "-- "))) (EVar "t")) (EApp (EVar "not") (EApp (EVar "isInputLine") (EVar "c")))))))
+(DFunDef false "isExpectedLine" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "isMatch") (EVar "expectedLineRe")) (EVar "t")) (EApp (EVar "not") (EApp (EVar "isInputLine") (EVar "c")))))))
 (DTypeSig false "expectedBody" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "String")))
-(DFunDef false "expectedBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 3))) (EApp (EVar "slen") (EVar "t"))) (EVar "t")))))
+(DFunDef false "expectedBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EMatch (EApp (EApp (EVar "find") (EVar "expectedLineRe")) (EVar "t")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EVar "substr3") (EFieldAccess (EVar "m") "end")) (EApp (EVar "slen") (EVar "t"))) (EVar "t"))) (arm (PCon "None") () (ELit (LString "")))))))
 (DTypeSig false "isBlankComment" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "isBlankComment" ((PVar "c")) (EBinOp "==" (EApp (EVar "clText") (EVar "c")) (ELit (LString "--"))))
 (DTypeSig false "isBlockComment" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
@@ -631,6 +650,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
@@ -667,14 +687,18 @@ isUse _ = False
 (DFunDef false "clText" ((PTuple PWild (PVar "t"))) (EVar "t"))
 (DTypeSig false "clLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Int")))
 (DFunDef false "clLine" ((PTuple (PVar "l") PWild)) (EVar "l"))
+(DTypeSig false "inputLineRe" (TyCon "Regex"))
+(DFunDef false "inputLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^-- > "))))
+(DTypeSig false "expectedLineRe" (TyCon "Regex"))
+(DFunDef false "expectedLineRe" () (EApp (EVar "mustCompile") (ELit (LString "^-- "))))
 (DTypeSig false "isInputLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isInputLine" ((PVar "c")) (EApp (EApp (EVar "startsWith") (ELit (LString "-- > "))) (EApp (EVar "clText") (EVar "c"))))
+(DFunDef false "isInputLine" ((PVar "c")) (EApp (EApp (EVar "isMatch") (EVar "inputLineRe")) (EApp (EVar "clText") (EVar "c"))))
 (DTypeSig false "inputBody" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "String")))
-(DFunDef false "inputBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 5))) (EApp (EVar "slen") (EVar "t"))) (EVar "t")))))
+(DFunDef false "inputBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EMatch (EApp (EApp (EDictApp "find") (EVar "inputLineRe")) (EVar "t")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EVar "substr3") (EFieldAccess (EVar "m") "end")) (EApp (EVar "slen") (EVar "t"))) (EVar "t"))) (arm (PCon "None") () (ELit (LString "")))))))
 (DTypeSig false "isExpectedLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isExpectedLine" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "-- "))) (EVar "t")) (EApp (EVar "not") (EApp (EVar "isInputLine") (EVar "c")))))))
+(DFunDef false "isExpectedLine" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "isMatch") (EVar "expectedLineRe")) (EVar "t")) (EApp (EVar "not") (EApp (EVar "isInputLine") (EVar "c")))))))
 (DTypeSig false "expectedBody" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "String")))
-(DFunDef false "expectedBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 3))) (EApp (EVar "slen") (EVar "t"))) (EVar "t")))))
+(DFunDef false "expectedBody" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoExpr (EMatch (EApp (EApp (EDictApp "find") (EVar "expectedLineRe")) (EVar "t")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EVar "substr3") (EFieldAccess (EVar "m") "end")) (EApp (EVar "slen") (EVar "t"))) (EVar "t"))) (arm (PCon "None") () (ELit (LString "")))))))
 (DTypeSig false "isBlankComment" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "isBlankComment" ((PVar "c")) (EBinOp "==" (EApp (EVar "clText") (EVar "c")) (ELit (LString "--"))))
 (DTypeSig false "isBlockComment" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Bool")))

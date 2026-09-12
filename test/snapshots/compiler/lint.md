@@ -1,5 +1,5 @@
 # META
-source_lines=6558
+source_lines=6661
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -100,11 +100,23 @@ import hash_map.{
   size,
   findWithDefault,
 }
-import list.{take, drop}
-import string.{drop as strDrop, isAlpha, isDigit, toLower, words}
+import list.{take, drop, last}
+import string.{drop as strDrop, toLower, words}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
+import regex.{
+  Regex,
+  RegexError(..),
+  Match,
+  compile,
+  mustCompile,
+  isMatch,
+  find as reFind,
+  findAll as reFindAll,
+  replaceAll,
+  escape,
+}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
 import frontend.lexer.{
@@ -244,6 +256,9 @@ ruleNameClauseMap = "rule-clause-map"
 
 ruleNameDirectiveReason : String
 ruleNameDirectiveReason = "rule-directive-reason"
+
+ruleNameRegexLiteral : String
+ruleNameRegexLiteral = "rule-regex-literal"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -535,6 +550,17 @@ directiveReasonRule = Rule {
   fix = None,
 }
 
+regexLiteralRule : Rule
+regexLiteralRule = Rule {
+  name = ruleNameRegexLiteral,
+  descr =
+    "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleRegexLiteral,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -565,6 +591,7 @@ allRules = [
   clauseMapRule,
   duplicateBodySameFileRule,
   directiveReasonRule,
+  regexLiteralRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -1268,28 +1295,39 @@ parseDirective c =
   else
     None
 
+lintDisableNextLineRe : Regex
+lintDisableNextLineRe = keywordRe "lint-disable-next-line"
+
+lintDisableLineRe : Regex
+lintDisableLineRe = keywordRe "lint-disable-line"
+
+lintDisableFileRe : Regex
+lintDisableFileRe = keywordRe "lint-disable-file"
+
+-- `kw` at the start of `s`, followed by end-of-string or whitespace (so
+-- `lint-disable-lineXYZ` does NOT match `lint-disable-line`), with the
+-- remainder captured in group 1.
+keywordRe : String -> Regex
+keywordRe kw = mustCompile ("^" ++ escape kw ++ "($|[ \\t].*)$")
+
 parseDirectiveBody : Int -> String -> Option Directive
-parseDirectiveBody line s = match matchKeyword "lint-disable-next-line" s
+parseDirectiveBody line s = match matchKeyword lintDisableNextLineRe s
   Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
-  None => match matchKeyword "lint-disable-line" s
+  None => match matchKeyword lintDisableLineRe s
     Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
     None =>
       map
         (names => Directive DScopeFile (parseRuleNames names))
-        (matchKeyword "lint-disable-file" s)
+        (matchKeyword lintDisableFileRe s)
 
--- If `s` starts with keyword `kw` AND the keyword is followed by end-of-string
--- or whitespace (so `lint-disable-lineXYZ` does NOT match), return the trimmed
--- remainder (the rule-name list); else None.
-matchKeyword : String -> String -> Option String
-matchKeyword kw s
-  | startsWith kw s =
-    let rest = stringSlice (stringLength kw) (stringLength s) s
-    if rest == "" || startsWith " " rest || startsWith "\t" rest then
-      Some (trimWs rest)
-    else
-      None
-  | otherwise = None
+-- If `s` matches `re` (`keywordRe`'s keyword-plus-boundary shape), return the
+-- trimmed remainder (the rule-name list) captured in group 1; else None.
+matchKeyword : Regex -> String -> Option String
+matchKeyword re s = match reFind re s
+  Some m => match m.groups
+    (Some g) :: _ => Some (trimWs g.text)
+    _ => None
+  None => None
 
 -- Split a rule-name list on commas and/or spaces, dropping empty fragments.
 parseRuleNames : String -> List String
@@ -1534,29 +1572,19 @@ replaceAt n x (y :: rest) = y :: replaceAt (n - 1) x rest
 -- whole-word (identifier-token) occurrence of `name` in `s`.  Boundaries are any
 -- non-identifier char (isAlnum covers alnum/_/').  Over-matches into string
 -- literals etc. — that only makes the fix gate MORE conservative, never less.
+--
+-- The boundary is a hand-built CONSUMING class around the escaped name
+-- (`(?:^|[^A-Za-z0-9_'])…(?:$|[^A-Za-z0-9_'])`) rather than the engine's
+-- built-in `\b`, which is ASCII `[A-Za-z0-9_]` only and would narrow a name
+-- ending in `'`. `isMatch` tries every start position independently (it is
+-- not a left-to-right non-overlapping scan), so this is safe for a plain
+-- existence check even though the class is consuming.
 wholeWordIn : String -> String -> Bool
-wholeWordIn name s =
-  let cs = stringToChars s
-  let nlen = stringLength name
-  wholeWordGo name nlen s cs (arrayLength cs) 0
+wholeWordIn name s = isMatch (mustCompile (wholeWordPattern name)) s
 
-wholeWordGo : String -> Int -> String -> Array Char -> Int -> Int -> Bool
-wholeWordGo name nlen s cs n i
-  | i + nlen > n = False
-  | boundaryAt cs i
-    && boundaryAt cs (i + nlen)
-    && stringSlice i (i + nlen) s == name = True
-  | otherwise = wholeWordGo name nlen s cs n (i + 1)
-
--- position j is a boundary iff at least one neighbour across the candidate edge
--- is NOT an identifier char (or off the ends of the string).
-boundaryAt : Array Char -> Int -> Bool
-boundaryAt cs j
-  | j == 0 = True
-  | j >= arrayLength cs = True
-  | otherwise =
-    not (isAlnum (arrayGetUnsafe (j - 1) cs))
-      || not (isAlnum (arrayGetUnsafe j cs))
+wholeWordPattern : String -> String
+wholeWordPattern name =
+  "(?:^|[^A-Za-z0-9_'])" ++ escape name ++ "(?:$|[^A-Za-z0-9_'])"
 
 -- ── rule: destructure-in-param ────────────────────────────────────────────────
 -- The single-arm sibling of `rule-match-on-param`.  A `DFunDef _ name pats body`
@@ -5157,27 +5185,51 @@ promissoryLine (l :: rest) i
   | isPromissoryText (stringToLower (stripQuoted l)) = Some (i, l)
   | otherwise = promissoryLine rest (i + 1)
 
+nothingReadsRe : Regex
+nothingReadsRe = mustCompile (escape "nothing reads")
+
+yetRe : Regex
+yetRe = mustCompile (escape "yet")
+
+promissoryPhraseRe : Regex
+promissoryPhraseRe =
+  mustCompile
+    (joinWith
+      "|"
+      (map escape [
+        "no reader yet",
+        "no readers yet",
+        "no consumer yet",
+        "no consumers yet",
+        "do not add a reader",
+        "don't add a reader",
+      ]))
+
 isPromissoryText : String -> Bool
 isPromissoryText t =
-  let has = needle => isSome (stringIndexOf needle t)
-  has "nothing reads" && has "yet"
-    || has "no reader yet"
-    || has "no readers yet"
-    || has "no consumer yet"
-    || has "no consumers yet"
-    || has "do not add a reader"
-    || has "don't add a reader"
+  isMatch nothingReadsRe t && isMatch yetRe t || isMatch promissoryPhraseRe t
+
+quoteCharRe : Regex
+quoteCharRe = mustCompile "\""
+
+pairedQuoteRe : Regex
+pairedQuoteRe = mustCompile "\"[^\"]*\""
 
 -- Drop every double-quoted span (an unterminated quote runs to end of line).
+-- Pairing is sequential from the start (1st+2nd quote, 3rd+4th, …), so an odd
+-- total count means the LAST quote is the unpaired one; truncate there first
+-- (matching the original recursion's per-line "runs to end of line" base
+-- case), then replace every remaining paired span with a single space.
 stripQuoted : String -> String
-stripQuoted s = match stringIndexOf "\"" s
-  None => s
-  Some i =>
-    let after = stringSlice (i + 1) (stringLength s) s
-    match stringIndexOf "\"" after
-      None => stringSlice 0 i s
-      Some j =>
-        "\{stringSlice 0 i s} \{stripQuoted (stringSlice (j + 1) (stringLength after) after)}"
+stripQuoted s =
+  let quotes = reFindAll quoteCharRe s
+  let truncated =
+    if listLen quotes % 2 == 1 then match last quotes
+      Some m => stringSlice 0 m.start s
+      None => s
+    else
+      s
+  replaceAll pairedQuoteRe " " truncated
 
 -- The subject of a claim, per the header's order.
 claimSubject : Array String -> (Int, String, CommentBlock) -> Option String
@@ -5235,15 +5287,13 @@ dropPrefixWord w s
     trimWs (stringSlice (stringLength w) (stringLength s) s)
   | otherwise = s
 
-leadingIdent : String -> String
-leadingIdent s =
-  let cs = stringToChars s
-  stringSlice 0 (subjectIdentEnd cs (arrayLength cs) 0) s
+leadingIdentRe : Regex
+leadingIdentRe = mustCompile "^[A-Za-z0-9_']+"
 
-subjectIdentEnd : Array Char -> Int -> Int -> Int
-subjectIdentEnd cs n i
-  | i < n && isIdentChar (arrayGetUnsafe i cs) = subjectIdentEnd cs n (i + 1)
-  | otherwise = i
+leadingIdent : String -> String
+leadingIdent s = match reFind leadingIdentRe s
+  Some m => m.text
+  None => ""
 
 isIdentChar : Char -> Bool
 isIdentChar ch = isAlnum ch || ch == '_' || ch == '\''
@@ -5326,27 +5376,24 @@ identBoundaryAt cs i =
   i >= arrayLength cs || not (isIdentChar (arrayGetUnsafe i cs))
 
 -- Whole-word occurrence of `w` in `line` that is not an assignment target.
+-- `reFindAll` locates every raw occurrence of `w`; the boundary and
+-- assignment-target checks stay plain code and are applied to each match's
+-- OWN position afterward (match, then test the tail), rather than folded
+-- into the pattern — a consuming boundary class baked into the pattern would
+-- make two occurrences of `w` separated by exactly one boundary char (e.g.
+-- `a[a]`) invisible to a left-to-right non-overlapping scan, since the first
+-- match would consume the shared boundary character the second needs.
 wordReadIn : String -> String -> Bool
 wordReadIn w line =
   let cs = stringToChars line
-  let ws = stringToChars w
-  wordReadScan cs (arrayLength cs) ws (arrayLength ws) 0
+  let n = arrayLength cs
+  anyList (m => wordReadOk cs n m) (reFindAll (mustCompile (escape w)) line)
 
-wordReadScan : Array Char -> Int -> Array Char -> Int -> Int -> Bool
-wordReadScan cs n ws m i
-  | i + m > n = False
-  | charsMatchAt cs ws m i 0
-    && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) cs)))
-    && identBoundaryAt cs (i + m)
-    && not (assignFollows cs n (i + m)) = True
-  | otherwise = wordReadScan cs n ws m (i + 1)
-
-charsMatchAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
-charsMatchAt cs ws m i j
-  | j >= m = True
-  | arrayGetUnsafe (i + j) cs == arrayGetUnsafe j ws =
-    charsMatchAt cs ws m i (j + 1)
-  | otherwise = False
+wordReadOk : Array Char -> Int -> Match -> Bool
+wordReadOk cs n m =
+  (m.start == 0 || not (isIdentChar (arrayGetUnsafe (m.start - 1) cs)))
+    && identBoundaryAt cs m.end
+    && not (assignFollows cs n m.end)
 
 assignFollows : Array Char -> Int -> Int -> Bool
 assignFollows cs n i
@@ -6507,24 +6554,17 @@ isNonReasonToken raw =
 -- reason -- checked char-by-char rather than against a quoted "rule-..."
 -- literal, which would falsely register this heuristic as an unenrolled
 -- rule name under `diff_compiler_lint_baseline.sh`'s assertion 1b.
+ruleNameTokenRe : Regex
+ruleNameTokenRe = mustCompile "^rule-"
+
 isRuleNameToken : String -> Bool
-isRuleNameToken low =
-  startsWith "rule" low
-    && stringLength low > 4
-    && arrayGetUnsafe 4 (stringToChars low) == '-'
+isRuleNameToken low = isMatch ruleNameTokenRe low
+
+issueRefTokenRe : Regex
+issueRefTokenRe = mustCompile "^#[0-9]+$"
 
 isIssueRefToken : String -> Bool
-isIssueRefToken low = startsWith "#" low && isNonEmptyDigits (strDrop 1 low)
-
-isNonEmptyDigits : String -> Bool
-isNonEmptyDigits s =
-  stringLength s > 0 && allDigitsGo (stringToChars s) 0 (stringLength s)
-
-allDigitsGo : Array Char -> Int -> Int -> Bool
-allDigitsGo chars i n
-  | i >= n = True
-  | isDigit (arrayGetUnsafe i chars) = allDigitsGo chars (i + 1) n
-  | otherwise = False
+isIssueRefToken low = isMatch issueRefTokenRe low
 
 stripTrailingPunct : String -> String
 stripTrailingPunct s =
@@ -6540,17 +6580,11 @@ isTrailingPunctChar : Char -> Bool
 isTrailingPunctChar ch =
   ch == ':' || ch == '.' || ch == ',' || ch == ';' || ch == '!' || ch == '?'
 
-hasSubstantiveWord : String -> Bool
-hasSubstantiveWord s =
-  hasSubstantiveWordGo (stringToChars s) 0 (stringLength s) 0
+substantiveWordRe : Regex
+substantiveWordRe = mustCompile "[A-Za-z]{4}"
 
-hasSubstantiveWordGo : Array Char -> Int -> Int -> Int -> Bool
-hasSubstantiveWordGo chars i n run
-  | run >= 4 = True
-  | i >= n = False
-  | isAlpha (arrayGetUnsafe i chars) =
-    hasSubstantiveWordGo chars (i + 1) n (run + 1)
-  | otherwise = hasSubstantiveWordGo chars (i + 1) n 0
+hasSubstantiveWord : String -> Bool
+hasSubstantiveWord s = isMatch substantiveWordRe s
 
 directiveReasonFinding : Comment -> Finding
 directiveReasonFinding c = Finding {
@@ -6560,17 +6594,87 @@ directiveReasonFinding c = Finding {
   severity = SevWarning,
   loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
 }
+
+-- ── rule: regex-literal ────────────────────────────────────────────────────────
+-- A string literal passed directly to `compile`/`mustCompile` (bare, or
+-- module-qualified `regex.compile`/`regex.mustCompile`) is run through
+-- `regex.compile` AT LINT TIME; a bad pattern becomes one located finding
+-- instead of a `mustCompile` panic the FIRST time the line runs.
+regexLiteralCallNames : List String
+regexLiteralCallNames =
+  ["compile", "mustCompile", "regex.compile", "regex.mustCompile"]
+
+ruleRegexLiteral : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleRegexLiteral _ _ _ pos prog =
+  exprRuleFindings noExcl regexLiteralOf regexLiteralFinding pos prog
+
+-- The parser ELoc-wraps every expr, callee and argument included, so both
+-- must be peeled (`stripELoc`) before the shape match.
+regexLiteralOf : Expr -> Option Expr
+regexLiteralOf e = regexLiteralOfSpine e (stripELoc e)
+
+regexLiteralOfSpine : Expr -> Expr -> Option Expr
+regexLiteralOfSpine e (EApp callee arg) =
+  regexLiteralOfArg e (stripELoc callee) (stripELoc arg)
+regexLiteralOfSpine _ _ = None
+
+regexLiteralOfArg : Expr -> Expr -> Expr -> Option Expr
+regexLiteralOfArg e callee (ELit (LString pat))
+  | contains (exprToString callee) regexLiteralCallNames && isRegexErr pat =
+    Some e
+  | otherwise = None
+regexLiteralOfArg _ _ _ = None
+
+isRegexErr : String -> Bool
+isRegexErr pat = match compile pat
+  Err _ => True
+  Ok _ => False
+
+regexLiteralFinding : Option Loc -> Expr -> Finding
+regexLiteralFinding loc e = regexLiteralFindingSpine loc (stripELoc e)
+
+regexLiteralFindingSpine : Option Loc -> Expr -> Finding
+regexLiteralFindingSpine loc (EApp _ arg) =
+  regexLiteralFindingArg loc (stripELoc arg)
+-- `regexLiteralOf` only ever hits an `EApp _ (ELit (LString _))`.
+regexLiteralFindingSpine loc _ = regexLiteralErrFinding loc ""
+
+regexLiteralFindingArg : Option Loc -> Expr -> Finding
+regexLiteralFindingArg loc (ELit (LString pat)) = regexLiteralErrFinding loc pat
+regexLiteralFindingArg loc _ = regexLiteralErrFinding loc ""
+
+regexLiteralErrFinding : Option Loc -> String -> Finding
+regexLiteralErrFinding loc pat = match compile pat
+  Err (RegexError { message, position }) => Finding {
+    rule = ruleNameRegexLiteral,
+    message =
+      "regex pattern \"\{pat}\" fails to compile: \{message} (position \{intToString position})",
+    severity = SevWarning,
+    loc = loc,
+  }
+  Ok _ => Finding {
+    rule = ruleNameRegexLiteral,
+    message = "regex pattern \"\{pat}\" fails to compile",
+    severity = SevWarning,
+    loc = loc,
+  }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
-(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "isAlpha" false) (mem "isDigit" false) (mem "toLower" false) (mem "words" false))))
+(DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "last" false))))
+(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "modIdOf" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "RegexError" true) (mem "Match" false) (mem "compile" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorType" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
@@ -6631,6 +6735,8 @@ directiveReasonFinding c = Finding {
 (DFunDef false "ruleNameClauseMap" () (ELit (LString "rule-clause-map")))
 (DTypeSig false "ruleNameDirectiveReason" (TyCon "String"))
 (DFunDef false "ruleNameDirectiveReason" () (ELit (LString "rule-directive-reason")))
+(DTypeSig false "ruleNameRegexLiteral" (TyCon "String"))
+(DFunDef false "ruleNameRegexLiteral" () (ELit (LString "rule-regex-literal")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -6683,8 +6789,10 @@ directiveReasonFinding c = Finding {
 (DFunDef false "clauseMapRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameClauseMap")) (fa "descr" (ELit (LString "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleClauseMap")) (fa "fix" (EVar "None")))))
 (DTypeSig false "directiveReasonRule" (TyCon "Rule"))
 (DFunDef false "directiveReasonRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "descr" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDirectiveReason")) (fa "fix" (EVar "None")))))
+(DTypeSig false "regexLiteralRule" (TyCon "Rule"))
+(DFunDef false "regexLiteralRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "descr" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRegexLiteral")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule") (EVar "regexLiteralRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -6845,10 +6953,18 @@ directiveReasonFinding c = Finding {
 (DFunDef false "dirToList" ((PCon "Some" (PVar "d"))) (EListLit (EVar "d")))
 (DTypeSig false "parseDirective" (TyFun (TyCon "Comment") (TyApp (TyCon "Option") (TyCon "Directive"))))
 (DFunDef false "parseDirective" ((PVar "c")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "trimWs") (EApp (EVar "commentText") (EVar "c")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "body")) (EApp (EApp (EVar "parseDirectiveBody") (EApp (EVar "commentLine") (EVar "c"))) (EApp (EVar "trimWs") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "body"))) (EVar "body")))) (EVar "None")))))
+(DTypeSig false "lintDisableNextLineRe" (TyCon "Regex"))
+(DFunDef false "lintDisableNextLineRe" () (EApp (EVar "keywordRe") (ELit (LString "lint-disable-next-line"))))
+(DTypeSig false "lintDisableLineRe" (TyCon "Regex"))
+(DFunDef false "lintDisableLineRe" () (EApp (EVar "keywordRe") (ELit (LString "lint-disable-line"))))
+(DTypeSig false "lintDisableFileRe" (TyCon "Regex"))
+(DFunDef false "lintDisableFileRe" () (EApp (EVar "keywordRe") (ELit (LString "lint-disable-file"))))
+(DTypeSig false "keywordRe" (TyFun (TyCon "String") (TyCon "Regex")))
+(DFunDef false "keywordRe" ((PVar "kw")) (EApp (EVar "mustCompile") (EBinOp "++" (EBinOp "++" (ELit (LString "^")) (EApp (EVar "escape") (EVar "kw"))) (ELit (LString "($|[ \\t].*)$")))))
 (DTypeSig false "parseDirectiveBody" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Directive")))))
-(DFunDef false "parseDirectiveBody" ((PVar "line") (PVar "s")) (EMatch (EApp (EApp (EVar "matchKeyword") (ELit (LString "lint-disable-next-line"))) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "matchKeyword") (ELit (LString "lint-disable-line"))) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EVar "line"))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "names")) (EApp (EApp (EVar "Directive") (EVar "DScopeFile")) (EApp (EVar "parseRuleNames") (EVar "names"))))) (EApp (EApp (EVar "matchKeyword") (ELit (LString "lint-disable-file"))) (EVar "s"))))))))
-(DTypeSig false "matchKeyword" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "matchKeyword" ((PVar "kw") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "kw")) (EVar "s")) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "kw"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "rest") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString " "))) (EVar "rest"))) (EApp (EApp (EVar "startsWith") (ELit (LString "\t"))) (EVar "rest"))) (EApp (EVar "Some") (EApp (EVar "trimWs") (EVar "rest"))) (EVar "None")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "parseDirectiveBody" ((PVar "line") (PVar "s")) (EMatch (EApp (EApp (EVar "matchKeyword") (EVar "lintDisableNextLineRe")) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "matchKeyword") (EVar "lintDisableLineRe")) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EVar "line"))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "names")) (EApp (EApp (EVar "Directive") (EVar "DScopeFile")) (EApp (EVar "parseRuleNames") (EVar "names"))))) (EApp (EApp (EVar "matchKeyword") (EVar "lintDisableFileRe")) (EVar "s"))))))))
+(DTypeSig false "matchKeyword" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "matchKeyword" ((PVar "re") (PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "re")) (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "g")) PWild) () (EApp (EVar "Some") (EApp (EVar "trimWs") (EFieldAccess (EVar "g") "text")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "parseRuleNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "parseRuleNames" ((PVar "s")) (EApp (EApp (EVar "filterList") (EVar "nonEmptyStr")) (EApp (EApp (EVar "flatMap") (EApp (EVar "splitOnChar") (ELit (LChar " ")))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar ","))) (EVar "s")))))
 (DTypeSig false "nonEmptyStr" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -6932,11 +7048,9 @@ directiveReasonFinding c = Finding {
 (DFunDef false "replaceAt" ((PLit (LInt 0)) (PVar "x") (PCons PWild (PVar "rest"))) (EBinOp "::" (EVar "x") (EVar "rest")))
 (DFunDef false "replaceAt" ((PVar "n") (PVar "x") (PCons (PVar "y") (PVar "rest"))) (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "replaceAt") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x")) (EVar "rest"))))
 (DTypeSig false "wholeWordIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "wholeWordIn" ((PVar "name") (PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "nlen") (EApp (EVar "stringLength") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "wholeWordGo") (EVar "name")) (EVar "nlen")) (EVar "s")) (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
-(DTypeSig false "wholeWordGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))))
-(DFunDef false "wholeWordGo" ((PVar "name") (PVar "nlen") (PVar "s") (PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "nlen")) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "boundaryAt") (EVar "cs")) (EVar "i")) (EApp (EApp (EVar "boundaryAt") (EVar "cs")) (EBinOp "+" (EVar "i") (EVar "nlen")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EVar "nlen"))) (EVar "s")) (EVar "name"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "wholeWordGo") (EVar "name")) (EVar "nlen")) (EVar "s")) (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "boundaryAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "boundaryAt" ((PVar "cs") (PVar "j")) (EIf (EBinOp "==" (EVar "j") (ELit (LInt 0))) (EVar "True") (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "True") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "j") (ELit (LInt 1)))) (EVar "cs")))) (EApp (EVar "not") (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "wholeWordIn" ((PVar "name") (PVar "s")) (EApp (EApp (EVar "isMatch") (EApp (EVar "mustCompile") (EApp (EVar "wholeWordPattern") (EVar "name")))) (EVar "s")))
+(DTypeSig false "wholeWordPattern" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "wholeWordPattern" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "(?:^|[^A-Za-z0-9_'])")) (EApp (EVar "escape") (EVar "name"))) (ELit (LString "(?:$|[^A-Za-z0-9_'])"))))
 (DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDestructureInParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "destructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
@@ -8158,10 +8272,20 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "promissoryLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "promissoryLine" ((PList) PWild) (EVar "None"))
 (DFunDef false "promissoryLine" ((PCons (PVar "l") (PVar "rest")) (PVar "i")) (EIf (EApp (EVar "isPromissoryText") (EApp (EVar "stringToLower") (EApp (EVar "stripQuoted") (EVar "l")))) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "promissoryLine") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "nothingReadsRe" (TyCon "Regex"))
+(DFunDef false "nothingReadsRe" () (EApp (EVar "mustCompile") (EApp (EVar "escape") (ELit (LString "nothing reads")))))
+(DTypeSig false "yetRe" (TyCon "Regex"))
+(DFunDef false "yetRe" () (EApp (EVar "mustCompile") (EApp (EVar "escape") (ELit (LString "yet")))))
+(DTypeSig false "promissoryPhraseRe" (TyCon "Regex"))
+(DFunDef false "promissoryPhraseRe" () (EApp (EVar "mustCompile") (EApp (EApp (EVar "joinWith") (ELit (LString "|"))) (EApp (EApp (EVar "map") (EVar "escape")) (EListLit (ELit (LString "no reader yet")) (ELit (LString "no readers yet")) (ELit (LString "no consumer yet")) (ELit (LString "no consumers yet")) (ELit (LString "do not add a reader")) (ELit (LString "don't add a reader")))))))
 (DTypeSig false "isPromissoryText" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isPromissoryText" ((PVar "t")) (EBlock (DoLet false false (PVar "has") (ELam ((PVar "needle")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "t"))))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EApp (EVar "has") (ELit (LString "nothing reads"))) (EApp (EVar "has") (ELit (LString "yet")))) (EApp (EVar "has") (ELit (LString "no reader yet")))) (EApp (EVar "has") (ELit (LString "no readers yet")))) (EApp (EVar "has") (ELit (LString "no consumer yet")))) (EApp (EVar "has") (ELit (LString "no consumers yet")))) (EApp (EVar "has") (ELit (LString "do not add a reader")))) (EApp (EVar "has") (ELit (LString "don't add a reader")))))))
+(DFunDef false "isPromissoryText" ((PVar "t")) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EVar "isMatch") (EVar "nothingReadsRe")) (EVar "t")) (EApp (EApp (EVar "isMatch") (EVar "yetRe")) (EVar "t"))) (EApp (EApp (EVar "isMatch") (EVar "promissoryPhraseRe")) (EVar "t"))))
+(DTypeSig false "quoteCharRe" (TyCon "Regex"))
+(DFunDef false "quoteCharRe" () (EApp (EVar "mustCompile") (ELit (LString "\""))))
+(DTypeSig false "pairedQuoteRe" (TyCon "Regex"))
+(DFunDef false "pairedQuoteRe" () (EApp (EVar "mustCompile") (ELit (LString "\"[^\"]*\""))))
 (DTypeSig false "stripQuoted" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stripQuoted" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "after")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (arm (PCon "Some" (PVar "j")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "stripQuoted") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "after"))) (EVar "after"))))) (ELit (LString ""))))))))))
+(DFunDef false "stripQuoted" ((PVar "s")) (EBlock (DoLet false false (PVar "quotes") (EApp (EApp (EVar "reFindAll") (EVar "quoteCharRe")) (EVar "s"))) (DoLet false false (PVar "truncated") (EIf (EBinOp "==" (EBinOp "%" (EApp (EVar "listLen") (EVar "quotes")) (ELit (LInt 2))) (ELit (LInt 1))) (EMatch (EApp (EVar "last") (EVar "quotes")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EFieldAccess (EVar "m") "start")) (EVar "s"))) (arm (PCon "None") () (EVar "s"))) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "replaceAll") (EVar "pairedQuoteRe")) (ELit (LString " "))) (EVar "truncated")))))
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "claimSubject" ((PVar "codeLines") (PTuple (PVar "line") (PVar "text") (PCon "CommentBlock" PWild (PVar "last") (PVar "trailing") PWild))) (EMatch (EApp (EVar "backtickedAfterReads") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EIf (EVar "trailing") (EApp (EVar "declaredNameOf") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))))))
 (DTypeSig false "backtickedAfterReads" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -8172,10 +8296,10 @@ directiveReasonFinding c = Finding {
 (DFunDef false "declaredNameOf" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trimWs") (EVar "c"))) (DoLet false false (PVar "t1") (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "public"))) (EVar "t"))) (DoLet false false (PVar "t2") (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "export"))) (EVar "t1"))) (DoLet false false (PVar "t3") (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "data"))) (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "type"))) (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "interface"))) (EVar "t2"))))) (DoLet false false (PVar "w") (EApp (EVar "leadingIdent") (EVar "t3"))) (DoExpr (EIf (EBinOp "==" (EVar "w") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "w"))))))
 (DTypeSig false "dropPrefixWord" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dropPrefixWord" ((PVar "w") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EBinOp "++" (EVar "w") (ELit (LString " ")))) (EVar "s")) (EApp (EVar "trimWs") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "w"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "leadingIdentRe" (TyCon "Regex"))
+(DFunDef false "leadingIdentRe" () (EApp (EVar "mustCompile") (ELit (LString "^[A-Za-z0-9_']+"))))
 (DTypeSig false "leadingIdent" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "leadingIdent" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "subjectIdentEnd") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0)))) (EVar "s")))))
-(DTypeSig false "subjectIdentEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "subjectIdentEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EApp (EApp (EVar "subjectIdentEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingIdent" ((PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "leadingIdentRe")) (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EFieldAccess (EVar "m") "text")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "ch")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlnum") (EVar "ch")) (EBinOp "==" (EVar "ch") (ELit (LChar "_")))) (EBinOp "==" (EVar "ch") (ELit (LChar "'")))))
 (DTypeSig false "promissoryFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -8201,11 +8325,9 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "identBoundaryAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "identBoundaryAt" ((PVar "cs") (PVar "i")) (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))
 (DTypeSig false "wordReadIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "wordReadIn" ((PVar "w") (PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "ws") (EApp (EVar "stringToChars") (EVar "w"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "wordReadScan") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "ws")) (EApp (EVar "arrayLength") (EVar "ws"))) (ELit (LInt 0))))))
-(DTypeSig false "wordReadScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "wordReadScan" ((PVar "cs") (PVar "n") (PVar "ws") (PVar "m") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "m")) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "cs")) (EVar "ws")) (EVar "m")) (EVar "i")) (ELit (LInt 0))) (EBinOp "||" (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EBinOp "+" (EVar "i") (EVar "m")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (EVar "m"))))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "wordReadScan") (EVar "cs")) (EVar "n")) (EVar "ws")) (EVar "m")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "charsMatchAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "charsMatchAt" ((PVar "cs") (PVar "ws") (PVar "m") (PVar "i") (PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EVar "m")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "cs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "ws"))) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "cs")) (EVar "ws")) (EVar "m")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "wordReadIn" ((PVar "w") (PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "wordReadOk") (EVar "cs")) (EVar "n")) (EVar "m")))) (EApp (EApp (EVar "reFindAll") (EApp (EVar "mustCompile") (EApp (EVar "escape") (EVar "w")))) (EVar "line"))))))
+(DTypeSig false "wordReadOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyCon "Bool")))))
+(DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -8479,35 +8601,60 @@ directiveReasonFinding c = Finding {
 (DFunDef false "isReasonWord" ((PVar "raw")) (EIf (EApp (EVar "isNonReasonToken") (EVar "raw")) (EVar "False") (EApp (EVar "hasSubstantiveWord") (EVar "raw"))))
 (DTypeSig false "isNonReasonToken" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isNonReasonToken" ((PVar "raw")) (EBlock (DoLet false false (PVar "low") (EApp (EVar "toLower") (EApp (EVar "stripTrailingPunct") (EVar "raw")))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "low")) (EListLit (ELit (LString "todo")) (ELit (LString "fixme")) (ELit (LString "xxx")) (ELit (LString "see")) (ELit (LString "issue")) (ELit (LString "cf")) (ELit (LString "ref")))) (EApp (EVar "isIssueRefToken") (EVar "low"))) (EApp (EVar "isRuleNameToken") (EVar "low"))))))
+(DTypeSig false "ruleNameTokenRe" (TyCon "Regex"))
+(DFunDef false "ruleNameTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "^rule-"))))
 (DTypeSig false "isRuleNameToken" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isRuleNameToken" ((PVar "low")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "rule"))) (EVar "low")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "low")) (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 4))) (EApp (EVar "stringToChars") (EVar "low"))) (ELit (LChar "-")))))
+(DFunDef false "isRuleNameToken" ((PVar "low")) (EApp (EApp (EVar "isMatch") (EVar "ruleNameTokenRe")) (EVar "low")))
+(DTypeSig false "issueRefTokenRe" (TyCon "Regex"))
+(DFunDef false "issueRefTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "^#[0-9]+$"))))
 (DTypeSig false "isIssueRefToken" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isIssueRefToken" ((PVar "low")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EVar "low")) (EApp (EVar "isNonEmptyDigits") (EApp (EApp (EVar "strDrop") (ELit (LInt 1))) (EVar "low")))))
-(DTypeSig false "isNonEmptyDigits" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isNonEmptyDigits" ((PVar "s")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "allDigitsGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s")))))
-(DTypeSig false "allDigitsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allDigitsGo" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EApp (EApp (EApp (EVar "allDigitsGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "isIssueRefToken" ((PVar "low")) (EApp (EApp (EVar "isMatch") (EVar "issueRefTokenRe")) (EVar "low")))
 (DTypeSig false "stripTrailingPunct" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingPunct" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "s") (EIf (EApp (EVar "isTrailingPunctChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "stringToChars") (EVar "s")))) (EApp (EVar "stripTrailingPunct") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))) (EVar "s"))))))
 (DTypeSig false "isTrailingPunctChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isTrailingPunctChar" ((PVar "ch")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "ch") (ELit (LChar ":"))) (EBinOp "==" (EVar "ch") (ELit (LChar ".")))) (EBinOp "==" (EVar "ch") (ELit (LChar ",")))) (EBinOp "==" (EVar "ch") (ELit (LChar ";")))) (EBinOp "==" (EVar "ch") (ELit (LChar "!")))) (EBinOp "==" (EVar "ch") (ELit (LChar "?")))))
+(DTypeSig false "substantiveWordRe" (TyCon "Regex"))
+(DFunDef false "substantiveWordRe" () (EApp (EVar "mustCompile") (ELit (LString "[A-Za-z]{4}"))))
 (DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))))
-(DTypeSig false "hasSubstantiveWordGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "hasSubstantiveWordGo" ((PVar "chars") (PVar "i") (PVar "n") (PVar "run")) (EIf (EBinOp ">=" (EVar "run") (ELit (LInt 4))) (EVar "True") (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EApp (EVar "isAlpha") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EVar "run") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EVar "isMatch") (EVar "substantiveWordRe")) (EVar "s")))
 (DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
 (DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))))))
+(DTypeSig false "regexLiteralCallNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "regexLiteralCallNames" () (EListLit (ELit (LString "compile")) (ELit (LString "mustCompile")) (ELit (LString "regex.compile")) (ELit (LString "regex.mustCompile"))))
+(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleRegexLiteral" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "regexLiteralOf")) (EVar "regexLiteralFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "regexLiteralOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "regexLiteralOf" ((PVar "e")) (EApp (EApp (EVar "regexLiteralOfSpine") (EVar "e")) (EApp (EVar "stripELoc") (EVar "e"))))
+(DTypeSig false "regexLiteralOfSpine" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "regexLiteralOfSpine" ((PVar "e") (PCon "EApp" (PVar "callee") (PVar "arg"))) (EApp (EApp (EApp (EVar "regexLiteralOfArg") (EVar "e")) (EApp (EVar "stripELoc") (EVar "callee"))) (EApp (EVar "stripELoc") (EVar "arg"))))
+(DFunDef false "regexLiteralOfSpine" (PWild PWild) (EVar "None"))
+(DTypeSig false "regexLiteralOfArg" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
+(DFunDef false "regexLiteralOfArg" ((PVar "e") (PVar "callee") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EApp (EVar "exprToString") (EVar "callee"))) (EVar "regexLiteralCallNames")) (EApp (EVar "isRegexErr") (EVar "pat"))) (EApp (EVar "Some") (EVar "e")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "regexLiteralOfArg" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "isRegexErr" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isRegexErr" ((PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" PWild) () (EVar "True")) (arm (PCon "Ok" PWild) () (EVar "False"))))
+(DTypeSig false "regexLiteralFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "regexLiteralFinding" ((PVar "loc") (PVar "e")) (EApp (EApp (EVar "regexLiteralFindingSpine") (EVar "loc")) (EApp (EVar "stripELoc") (EVar "e"))))
+(DTypeSig false "regexLiteralFindingSpine" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "regexLiteralFindingSpine" ((PVar "loc") (PCon "EApp" PWild (PVar "arg"))) (EApp (EApp (EVar "regexLiteralFindingArg") (EVar "loc")) (EApp (EVar "stripELoc") (EVar "arg"))))
+(DFunDef false "regexLiteralFindingSpine" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
+(DTypeSig false "regexLiteralFindingArg" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "regexLiteralFindingArg" ((PVar "loc") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (EVar "pat")))
+(DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
+(DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
+(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
-(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "isAlpha" false) (mem "isDigit" false) (mem "toLower" false) (mem "words" false))))
+(DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false) (mem "last" false))))
+(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "modIdOf" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "RegexError" true) (mem "Match" false) (mem "compile" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorType" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
@@ -8568,6 +8715,8 @@ directiveReasonFinding c = Finding {
 (DFunDef false "ruleNameClauseMap" () (ELit (LString "rule-clause-map")))
 (DTypeSig false "ruleNameDirectiveReason" (TyCon "String"))
 (DFunDef false "ruleNameDirectiveReason" () (ELit (LString "rule-directive-reason")))
+(DTypeSig false "ruleNameRegexLiteral" (TyCon "String"))
+(DFunDef false "ruleNameRegexLiteral" () (ELit (LString "rule-regex-literal")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -8620,8 +8769,10 @@ directiveReasonFinding c = Finding {
 (DFunDef false "clauseMapRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameClauseMap")) (fa "descr" (ELit (LString "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleClauseMap")) (fa "fix" (EVar "None")))))
 (DTypeSig false "directiveReasonRule" (TyCon "Rule"))
 (DFunDef false "directiveReasonRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "descr" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDirectiveReason")) (fa "fix" (EVar "None")))))
+(DTypeSig false "regexLiteralRule" (TyCon "Rule"))
+(DFunDef false "regexLiteralRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "descr" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRegexLiteral")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule") (EVar "regexLiteralRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -8782,10 +8933,18 @@ directiveReasonFinding c = Finding {
 (DFunDef false "dirToList" ((PCon "Some" (PVar "d"))) (EListLit (EVar "d")))
 (DTypeSig false "parseDirective" (TyFun (TyCon "Comment") (TyApp (TyCon "Option") (TyCon "Directive"))))
 (DFunDef false "parseDirective" ((PVar "c")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "trimWs") (EApp (EVar "commentText") (EVar "c")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "body")) (EApp (EApp (EVar "parseDirectiveBody") (EApp (EVar "commentLine") (EVar "c"))) (EApp (EVar "trimWs") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "body"))) (EVar "body")))) (EVar "None")))))
+(DTypeSig false "lintDisableNextLineRe" (TyCon "Regex"))
+(DFunDef false "lintDisableNextLineRe" () (EApp (EVar "keywordRe") (ELit (LString "lint-disable-next-line"))))
+(DTypeSig false "lintDisableLineRe" (TyCon "Regex"))
+(DFunDef false "lintDisableLineRe" () (EApp (EVar "keywordRe") (ELit (LString "lint-disable-line"))))
+(DTypeSig false "lintDisableFileRe" (TyCon "Regex"))
+(DFunDef false "lintDisableFileRe" () (EApp (EVar "keywordRe") (ELit (LString "lint-disable-file"))))
+(DTypeSig false "keywordRe" (TyFun (TyCon "String") (TyCon "Regex")))
+(DFunDef false "keywordRe" ((PVar "kw")) (EApp (EVar "mustCompile") (EBinOp "++" (EBinOp "++" (ELit (LString "^")) (EApp (EVar "escape") (EVar "kw"))) (ELit (LString "($|[ \\t].*)$")))))
 (DTypeSig false "parseDirectiveBody" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Directive")))))
-(DFunDef false "parseDirectiveBody" ((PVar "line") (PVar "s")) (EMatch (EApp (EApp (EVar "matchKeyword") (ELit (LString "lint-disable-next-line"))) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "matchKeyword") (ELit (LString "lint-disable-line"))) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EVar "line"))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "names")) (EApp (EApp (EVar "Directive") (EVar "DScopeFile")) (EApp (EVar "parseRuleNames") (EVar "names"))))) (EApp (EApp (EVar "matchKeyword") (ELit (LString "lint-disable-file"))) (EVar "s"))))))))
-(DTypeSig false "matchKeyword" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "matchKeyword" ((PVar "kw") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "kw")) (EVar "s")) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "kw"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "rest") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString " "))) (EVar "rest"))) (EApp (EApp (EVar "startsWith") (ELit (LString "\t"))) (EVar "rest"))) (EApp (EVar "Some") (EApp (EVar "trimWs") (EVar "rest"))) (EVar "None")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "parseDirectiveBody" ((PVar "line") (PVar "s")) (EMatch (EApp (EApp (EVar "matchKeyword") (EVar "lintDisableNextLineRe")) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EBinOp "+" (EVar "line") (ELit (LInt 1))))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "matchKeyword") (EVar "lintDisableLineRe")) (EVar "s")) (arm (PCon "Some" (PVar "names")) () (EApp (EVar "Some") (EApp (EApp (EVar "Directive") (EApp (EVar "DScopeLine") (EVar "line"))) (EApp (EVar "parseRuleNames") (EVar "names"))))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "names")) (EApp (EApp (EVar "Directive") (EVar "DScopeFile")) (EApp (EVar "parseRuleNames") (EVar "names"))))) (EApp (EApp (EVar "matchKeyword") (EVar "lintDisableFileRe")) (EVar "s"))))))))
+(DTypeSig false "matchKeyword" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "matchKeyword" ((PVar "re") (PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "re")) (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "g")) PWild) () (EApp (EVar "Some") (EApp (EVar "trimWs") (EFieldAccess (EVar "g") "text")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "parseRuleNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "parseRuleNames" ((PVar "s")) (EApp (EApp (EVar "filterList") (EVar "nonEmptyStr")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "splitOnChar") (ELit (LChar " ")))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar ","))) (EVar "s")))))
 (DTypeSig false "nonEmptyStr" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -8869,11 +9028,9 @@ directiveReasonFinding c = Finding {
 (DFunDef false "replaceAt" ((PLit (LInt 0)) (PVar "x") (PCons PWild (PVar "rest"))) (EBinOp "::" (EVar "x") (EVar "rest")))
 (DFunDef false "replaceAt" ((PVar "n") (PVar "x") (PCons (PVar "y") (PVar "rest"))) (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "replaceAt") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x")) (EVar "rest"))))
 (DTypeSig false "wholeWordIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "wholeWordIn" ((PVar "name") (PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "nlen") (EApp (EVar "stringLength") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "wholeWordGo") (EVar "name")) (EVar "nlen")) (EVar "s")) (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
-(DTypeSig false "wholeWordGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))))
-(DFunDef false "wholeWordGo" ((PVar "name") (PVar "nlen") (PVar "s") (PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "nlen")) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "boundaryAt") (EVar "cs")) (EVar "i")) (EApp (EApp (EVar "boundaryAt") (EVar "cs")) (EBinOp "+" (EVar "i") (EVar "nlen")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EVar "nlen"))) (EVar "s")) (EVar "name"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "wholeWordGo") (EVar "name")) (EVar "nlen")) (EVar "s")) (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "boundaryAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "boundaryAt" ((PVar "cs") (PVar "j")) (EIf (EBinOp "==" (EVar "j") (ELit (LInt 0))) (EVar "True") (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "True") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "j") (ELit (LInt 1)))) (EVar "cs")))) (EApp (EVar "not") (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "wholeWordIn" ((PVar "name") (PVar "s")) (EApp (EApp (EVar "isMatch") (EApp (EVar "mustCompile") (EApp (EVar "wholeWordPattern") (EVar "name")))) (EVar "s")))
+(DTypeSig false "wholeWordPattern" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "wholeWordPattern" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "(?:^|[^A-Za-z0-9_'])")) (EApp (EVar "escape") (EVar "name"))) (ELit (LString "(?:$|[^A-Za-z0-9_'])"))))
 (DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDestructureInParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "destructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
@@ -10095,10 +10252,20 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "promissoryLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "promissoryLine" ((PList) PWild) (EVar "None"))
 (DFunDef false "promissoryLine" ((PCons (PVar "l") (PVar "rest")) (PVar "i")) (EIf (EApp (EVar "isPromissoryText") (EApp (EVar "stringToLower") (EApp (EVar "stripQuoted") (EVar "l")))) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "promissoryLine") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "nothingReadsRe" (TyCon "Regex"))
+(DFunDef false "nothingReadsRe" () (EApp (EVar "mustCompile") (EApp (EVar "escape") (ELit (LString "nothing reads")))))
+(DTypeSig false "yetRe" (TyCon "Regex"))
+(DFunDef false "yetRe" () (EApp (EVar "mustCompile") (EApp (EVar "escape") (ELit (LString "yet")))))
+(DTypeSig false "promissoryPhraseRe" (TyCon "Regex"))
+(DFunDef false "promissoryPhraseRe" () (EApp (EVar "mustCompile") (EApp (EApp (EVar "joinWith") (ELit (LString "|"))) (EApp (EApp (EMethodRef "map") (EVar "escape")) (EListLit (ELit (LString "no reader yet")) (ELit (LString "no readers yet")) (ELit (LString "no consumer yet")) (ELit (LString "no consumers yet")) (ELit (LString "do not add a reader")) (ELit (LString "don't add a reader")))))))
 (DTypeSig false "isPromissoryText" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isPromissoryText" ((PVar "t")) (EBlock (DoLet false false (PVar "has") (ELam ((PVar "needle")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "t"))))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EApp (EVar "has") (ELit (LString "nothing reads"))) (EApp (EVar "has") (ELit (LString "yet")))) (EApp (EVar "has") (ELit (LString "no reader yet")))) (EApp (EVar "has") (ELit (LString "no readers yet")))) (EApp (EVar "has") (ELit (LString "no consumer yet")))) (EApp (EVar "has") (ELit (LString "no consumers yet")))) (EApp (EVar "has") (ELit (LString "do not add a reader")))) (EApp (EVar "has") (ELit (LString "don't add a reader")))))))
+(DFunDef false "isPromissoryText" ((PVar "t")) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EVar "isMatch") (EVar "nothingReadsRe")) (EVar "t")) (EApp (EApp (EVar "isMatch") (EVar "yetRe")) (EVar "t"))) (EApp (EApp (EVar "isMatch") (EVar "promissoryPhraseRe")) (EVar "t"))))
+(DTypeSig false "quoteCharRe" (TyCon "Regex"))
+(DFunDef false "quoteCharRe" () (EApp (EVar "mustCompile") (ELit (LString "\""))))
+(DTypeSig false "pairedQuoteRe" (TyCon "Regex"))
+(DFunDef false "pairedQuoteRe" () (EApp (EVar "mustCompile") (ELit (LString "\"[^\"]*\""))))
 (DTypeSig false "stripQuoted" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stripQuoted" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\""))) (EVar "after")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (arm (PCon "Some" (PVar "j")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "stripQuoted") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "after"))) (EVar "after"))))) (ELit (LString ""))))))))))
+(DFunDef false "stripQuoted" ((PVar "s")) (EBlock (DoLet false false (PVar "quotes") (EApp (EApp (EVar "reFindAll") (EVar "quoteCharRe")) (EVar "s"))) (DoLet false false (PVar "truncated") (EIf (EBinOp "==" (EBinOp "%" (EApp (EVar "listLen") (EVar "quotes")) (ELit (LInt 2))) (ELit (LInt 1))) (EMatch (EApp (EVar "last") (EVar "quotes")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EFieldAccess (EVar "m") "start")) (EVar "s"))) (arm (PCon "None") () (EVar "s"))) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "replaceAll") (EVar "pairedQuoteRe")) (ELit (LString " "))) (EVar "truncated")))))
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "claimSubject" ((PVar "codeLines") (PTuple (PVar "line") (PVar "text") (PCon "CommentBlock" PWild (PVar "last") (PVar "trailing") PWild))) (EMatch (EApp (EVar "backtickedAfterReads") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EIf (EVar "trailing") (EApp (EVar "declaredNameOf") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))))))
 (DTypeSig false "backtickedAfterReads" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -10109,10 +10276,10 @@ directiveReasonFinding c = Finding {
 (DFunDef false "declaredNameOf" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trimWs") (EVar "c"))) (DoLet false false (PVar "t1") (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "public"))) (EVar "t"))) (DoLet false false (PVar "t2") (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "export"))) (EVar "t1"))) (DoLet false false (PVar "t3") (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "data"))) (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "type"))) (EApp (EApp (EVar "dropPrefixWord") (ELit (LString "interface"))) (EVar "t2"))))) (DoLet false false (PVar "w") (EApp (EVar "leadingIdent") (EVar "t3"))) (DoExpr (EIf (EBinOp "==" (EVar "w") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "w"))))))
 (DTypeSig false "dropPrefixWord" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dropPrefixWord" ((PVar "w") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EBinOp "++" (EVar "w") (ELit (LString " ")))) (EVar "s")) (EApp (EVar "trimWs") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "w"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "leadingIdentRe" (TyCon "Regex"))
+(DFunDef false "leadingIdentRe" () (EApp (EVar "mustCompile") (ELit (LString "^[A-Za-z0-9_']+"))))
 (DTypeSig false "leadingIdent" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "leadingIdent" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "subjectIdentEnd") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0)))) (EVar "s")))))
-(DTypeSig false "subjectIdentEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "subjectIdentEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EApp (EApp (EVar "subjectIdentEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingIdent" ((PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "leadingIdentRe")) (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EFieldAccess (EVar "m") "text")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "ch")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlnum") (EVar "ch")) (EBinOp "==" (EVar "ch") (ELit (LChar "_")))) (EBinOp "==" (EVar "ch") (ELit (LChar "'")))))
 (DTypeSig false "promissoryFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -10138,11 +10305,9 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "identBoundaryAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "identBoundaryAt" ((PVar "cs") (PVar "i")) (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))
 (DTypeSig false "wordReadIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "wordReadIn" ((PVar "w") (PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "ws") (EApp (EVar "stringToChars") (EVar "w"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "wordReadScan") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "ws")) (EApp (EVar "arrayLength") (EVar "ws"))) (ELit (LInt 0))))))
-(DTypeSig false "wordReadScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "wordReadScan" ((PVar "cs") (PVar "n") (PVar "ws") (PVar "m") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "m")) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "cs")) (EVar "ws")) (EVar "m")) (EVar "i")) (ELit (LInt 0))) (EBinOp "||" (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "cs")))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EBinOp "+" (EVar "i") (EVar "m")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (EVar "m"))))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "wordReadScan") (EVar "cs")) (EVar "n")) (EVar "ws")) (EVar "m")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "charsMatchAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "charsMatchAt" ((PVar "cs") (PVar "ws") (PVar "m") (PVar "i") (PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EVar "m")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "cs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "ws"))) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "cs")) (EVar "ws")) (EVar "m")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "wordReadIn" ((PVar "w") (PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "wordReadOk") (EVar "cs")) (EVar "n")) (EVar "m")))) (EApp (EApp (EVar "reFindAll") (EApp (EVar "mustCompile") (EApp (EVar "escape") (EVar "w")))) (EVar "line"))))))
+(DTypeSig false "wordReadOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyCon "Bool")))))
+(DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -10416,21 +10581,45 @@ directiveReasonFinding c = Finding {
 (DFunDef false "isReasonWord" ((PVar "raw")) (EIf (EApp (EVar "isNonReasonToken") (EVar "raw")) (EVar "False") (EApp (EVar "hasSubstantiveWord") (EVar "raw"))))
 (DTypeSig false "isNonReasonToken" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isNonReasonToken" ((PVar "raw")) (EBlock (DoLet false false (PVar "low") (EApp (EVar "toLower") (EApp (EVar "stripTrailingPunct") (EVar "raw")))) (DoExpr (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "low")) (EListLit (ELit (LString "todo")) (ELit (LString "fixme")) (ELit (LString "xxx")) (ELit (LString "see")) (ELit (LString "issue")) (ELit (LString "cf")) (ELit (LString "ref")))) (EApp (EVar "isIssueRefToken") (EVar "low"))) (EApp (EVar "isRuleNameToken") (EVar "low"))))))
+(DTypeSig false "ruleNameTokenRe" (TyCon "Regex"))
+(DFunDef false "ruleNameTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "^rule-"))))
 (DTypeSig false "isRuleNameToken" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isRuleNameToken" ((PVar "low")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "rule"))) (EVar "low")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "low")) (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 4))) (EApp (EVar "stringToChars") (EVar "low"))) (ELit (LChar "-")))))
+(DFunDef false "isRuleNameToken" ((PVar "low")) (EApp (EApp (EVar "isMatch") (EVar "ruleNameTokenRe")) (EVar "low")))
+(DTypeSig false "issueRefTokenRe" (TyCon "Regex"))
+(DFunDef false "issueRefTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "^#[0-9]+$"))))
 (DTypeSig false "isIssueRefToken" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isIssueRefToken" ((PVar "low")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EVar "low")) (EApp (EVar "isNonEmptyDigits") (EApp (EApp (EVar "strDrop") (ELit (LInt 1))) (EVar "low")))))
-(DTypeSig false "isNonEmptyDigits" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isNonEmptyDigits" ((PVar "s")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "allDigitsGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s")))))
-(DTypeSig false "allDigitsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allDigitsGo" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EApp (EApp (EApp (EVar "allDigitsGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "isIssueRefToken" ((PVar "low")) (EApp (EApp (EVar "isMatch") (EVar "issueRefTokenRe")) (EVar "low")))
 (DTypeSig false "stripTrailingPunct" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingPunct" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "s") (EIf (EApp (EVar "isTrailingPunctChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "stringToChars") (EVar "s")))) (EApp (EVar "stripTrailingPunct") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))) (EVar "s"))))))
 (DTypeSig false "isTrailingPunctChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isTrailingPunctChar" ((PVar "ch")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "ch") (ELit (LChar ":"))) (EBinOp "==" (EVar "ch") (ELit (LChar ".")))) (EBinOp "==" (EVar "ch") (ELit (LChar ",")))) (EBinOp "==" (EVar "ch") (ELit (LChar ";")))) (EBinOp "==" (EVar "ch") (ELit (LChar "!")))) (EBinOp "==" (EVar "ch") (ELit (LChar "?")))))
+(DTypeSig false "substantiveWordRe" (TyCon "Regex"))
+(DFunDef false "substantiveWordRe" () (EApp (EVar "mustCompile") (ELit (LString "[A-Za-z]{4}"))))
 (DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))))
-(DTypeSig false "hasSubstantiveWordGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "hasSubstantiveWordGo" ((PVar "chars") (PVar "i") (PVar "n") (PVar "run")) (EIf (EBinOp ">=" (EVar "run") (ELit (LInt 4))) (EVar "True") (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EApp (EVar "isAlpha") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EVar "run") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "hasSubstantiveWordGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EVar "isMatch") (EVar "substantiveWordRe")) (EVar "s")))
 (DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
 (DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))))))
+(DTypeSig false "regexLiteralCallNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "regexLiteralCallNames" () (EListLit (ELit (LString "compile")) (ELit (LString "mustCompile")) (ELit (LString "regex.compile")) (ELit (LString "regex.mustCompile"))))
+(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleRegexLiteral" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "regexLiteralOf")) (EVar "regexLiteralFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "regexLiteralOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "regexLiteralOf" ((PVar "e")) (EApp (EApp (EVar "regexLiteralOfSpine") (EVar "e")) (EApp (EVar "stripELoc") (EVar "e"))))
+(DTypeSig false "regexLiteralOfSpine" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "regexLiteralOfSpine" ((PVar "e") (PCon "EApp" (PVar "callee") (PVar "arg"))) (EApp (EApp (EApp (EVar "regexLiteralOfArg") (EVar "e")) (EApp (EVar "stripELoc") (EVar "callee"))) (EApp (EVar "stripELoc") (EVar "arg"))))
+(DFunDef false "regexLiteralOfSpine" (PWild PWild) (EVar "None"))
+(DTypeSig false "regexLiteralOfArg" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
+(DFunDef false "regexLiteralOfArg" ((PVar "e") (PVar "callee") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EApp (EVar "exprToString") (EVar "callee"))) (EVar "regexLiteralCallNames")) (EApp (EVar "isRegexErr") (EVar "pat"))) (EApp (EVar "Some") (EVar "e")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "regexLiteralOfArg" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "isRegexErr" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isRegexErr" ((PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" PWild) () (EVar "True")) (arm (PCon "Ok" PWild) () (EVar "False"))))
+(DTypeSig false "regexLiteralFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "regexLiteralFinding" ((PVar "loc") (PVar "e")) (EApp (EApp (EVar "regexLiteralFindingSpine") (EVar "loc")) (EApp (EVar "stripELoc") (EVar "e"))))
+(DTypeSig false "regexLiteralFindingSpine" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "regexLiteralFindingSpine" ((PVar "loc") (PCon "EApp" PWild (PVar "arg"))) (EApp (EApp (EVar "regexLiteralFindingArg") (EVar "loc")) (EApp (EVar "stripELoc") (EVar "arg"))))
+(DFunDef false "regexLiteralFindingSpine" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
+(DTypeSig false "regexLiteralFindingArg" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "regexLiteralFindingArg" ((PVar "loc") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (EVar "pat")))
+(DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
+(DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
+(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))))
