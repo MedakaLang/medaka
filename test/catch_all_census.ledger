@@ -56,7 +56,6 @@ isSyntacticLambda	Expr	1/41
 lamUnderLoc	Expr	2/41
 markTailDecl	Decl	1/14
 methodConstraintNamesOfDecl	Decl	2/14
-numLitFromIntParamsDecl	Decl	2/14
 overlayScanOne	Decl	1/14
 plainAppHead	Expr	1/41
 prePassDeclScoped	Decl	5/14

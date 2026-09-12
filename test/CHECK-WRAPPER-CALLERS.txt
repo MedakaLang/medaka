@@ -21,4 +21,4 @@ compiler/tools/check_policy.mdk : checkOneSchemeFull
 compiler/tools/lsp.mdk : checkOneSchemeFullK
 compiler/tools/repl.mdk : checkOneDiags,checkOneScheme
 compiler/tools/snapshot.mdk : checkOneToLinesWithRuntime
-compiler/types/typecheck_test.mdk : checkOneDiags,checkProgramDiags
+compiler/types/typecheck_test.mdk : checkOneDiags,checkOneSchemeFullK,checkProgramDiags
