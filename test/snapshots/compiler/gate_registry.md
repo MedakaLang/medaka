@@ -1,5 +1,5 @@
 # META
-source_lines=590
+source_lines=599
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_registry.mdk — the gate registry that `medaka gate` (`gate_cmd.mdk`)
@@ -326,10 +326,13 @@ parseShards src = match parse src
 --
 -- Translated to a `regex` pattern rather than hand-matched: `*` becomes `.*`,
 -- `?` becomes `.`, and every other character is escaped and matched via
--- `isFullMatch`. Where the old backtracking matcher ("try consuming 0, 1,
--- 2, … characters") could take exponential time on an adversarial pattern
--- like `*a*a*a*a*b`, the Pike-VM `regex` engine matches the same patterns in
--- linear time — the accept/reject answer is unchanged, only the time bound.
+-- `isFullMatch`. The leading `(?s)` makes `.` match a newline too, since the
+-- old character-by-character matcher treated every character alike — without
+-- it `.`/`.*` would silently stop matching a name containing `\n`. Where the
+-- old backtracking matcher ("try consuming 0, 1, 2, … characters") could take
+-- exponential time on an adversarial pattern like `*a*a*a*a*b`, the Pike-VM
+-- `regex` engine matches the same patterns in linear time — the accept/reject
+-- answer is unchanged, only the time bound.
 
 -- Every character of `pat` translated to its regex-source equivalent.
 globToRegexSrc : Array Char -> Int -> List String
@@ -373,12 +376,18 @@ globToRegexSrc pat i
    rejects, and returns fast rather than eventually:
 
    > globMatch "*a*a*a*a*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-   False -}
+   False
+
+   `*` crosses a newline too — a name is an opaque string, not a line:
+
+   > globMatch "*" "a\nb"
+   True -}
 export
 globMatch : String -> String -> Bool
 globMatch pat s =
   isFullMatch
-    (mustCompile (stringConcat (globToRegexSrc (stringToChars pat) 0)))
+    (mustCompile
+      (stringConcat (["(?s)"] ++ globToRegexSrc (stringToChars pat) 0)))
     s
 
 -- ── Selectors ───────────────────────────────────────────────────────────────
@@ -635,7 +644,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "globToRegexSrc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "globToRegexSrc" ((PVar "pat") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "pat"))) (EListLit) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pat")) (ELit (LChar "*"))) (EBinOp "::" (ELit (LString ".*")) (EApp (EApp (EVar "globToRegexSrc") (EVar "pat")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pat")) (ELit (LChar "?"))) (EBinOp "::" (ELit (LString ".")) (EApp (EApp (EVar "globToRegexSrc") (EVar "pat")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "escape") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pat")))) (EApp (EApp (EVar "globToRegexSrc") (EVar "pat")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig true "globMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "globMatch" ((PVar "pat") (PVar "s")) (EApp (EApp (EVar "isFullMatch") (EApp (EVar "mustCompile") (EApp (EVar "stringConcat") (EApp (EApp (EVar "globToRegexSrc") (EApp (EVar "stringToChars") (EVar "pat"))) (ELit (LInt 0)))))) (EVar "s")))
+(DFunDef false "globMatch" ((PVar "pat") (PVar "s")) (EApp (EApp (EVar "isFullMatch") (EApp (EVar "mustCompile") (EApp (EVar "stringConcat") (EBinOp "++" (EListLit (ELit (LString "(?s)"))) (EApp (EApp (EVar "globToRegexSrc") (EApp (EVar "stringToChars") (EVar "pat"))) (ELit (LInt 0))))))) (EVar "s")))
 (DData Public "Selector" () ((variant "SelName" (ConPos (TyCon "String"))) (variant "SelArea" (ConPos (TyCon "String"))) (variant "SelProject" (ConPos (TyCon "String"))) (variant "SelTier" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "Selector")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SelName" (PVar "__a0")) (PCon "SelName" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SelArea" (PVar "__a0")) (PCon "SelArea" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SelProject" (PVar "__a0")) (PCon "SelProject" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SelTier" (PVar "__a0")) (PCon "SelTier" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "Selector")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SelName" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelName ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "SelArea" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelArea ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "SelProject" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelProject ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "SelTier" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelTier ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
@@ -732,7 +741,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "globToRegexSrc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "globToRegexSrc" ((PVar "pat") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "pat"))) (EListLit) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pat")) (ELit (LChar "*"))) (EBinOp "::" (ELit (LString ".*")) (EApp (EApp (EVar "globToRegexSrc") (EVar "pat")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pat")) (ELit (LChar "?"))) (EBinOp "::" (ELit (LString ".")) (EApp (EApp (EVar "globToRegexSrc") (EVar "pat")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "escape") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pat")))) (EApp (EApp (EVar "globToRegexSrc") (EVar "pat")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig true "globMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "globMatch" ((PVar "pat") (PVar "s")) (EApp (EApp (EVar "isFullMatch") (EApp (EVar "mustCompile") (EApp (EVar "stringConcat") (EApp (EApp (EVar "globToRegexSrc") (EApp (EVar "stringToChars") (EVar "pat"))) (ELit (LInt 0)))))) (EVar "s")))
+(DFunDef false "globMatch" ((PVar "pat") (PVar "s")) (EApp (EApp (EVar "isFullMatch") (EApp (EVar "mustCompile") (EApp (EVar "stringConcat") (EBinOp "++" (EListLit (ELit (LString "(?s)"))) (EApp (EApp (EVar "globToRegexSrc") (EApp (EVar "stringToChars") (EVar "pat"))) (ELit (LInt 0))))))) (EVar "s")))
 (DData Public "Selector" () ((variant "SelName" (ConPos (TyCon "String"))) (variant "SelArea" (ConPos (TyCon "String"))) (variant "SelProject" (ConPos (TyCon "String"))) (variant "SelTier" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "Selector")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SelName" (PVar "__a0")) (PCon "SelName" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SelArea" (PVar "__a0")) (PCon "SelArea" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SelProject" (PVar "__a0")) (PCon "SelProject" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SelTier" (PVar "__a0")) (PCon "SelTier" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "Selector")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SelName" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelName ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "SelArea" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelArea ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "SelProject" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelProject ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "SelTier" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SelTier ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))

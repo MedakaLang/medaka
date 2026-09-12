@@ -322,10 +322,13 @@ parseShards src = match parse src
 --
 -- Translated to a `regex` pattern rather than hand-matched: `*` becomes `.*`,
 -- `?` becomes `.`, and every other character is escaped and matched via
--- `isFullMatch`. Where the old backtracking matcher ("try consuming 0, 1,
--- 2, … characters") could take exponential time on an adversarial pattern
--- like `*a*a*a*a*b`, the Pike-VM `regex` engine matches the same patterns in
--- linear time — the accept/reject answer is unchanged, only the time bound.
+-- `isFullMatch`. The leading `(?s)` makes `.` match a newline too, since the
+-- old character-by-character matcher treated every character alike — without
+-- it `.`/`.*` would silently stop matching a name containing `\n`. Where the
+-- old backtracking matcher ("try consuming 0, 1, 2, … characters") could take
+-- exponential time on an adversarial pattern like `*a*a*a*a*b`, the Pike-VM
+-- `regex` engine matches the same patterns in linear time — the accept/reject
+-- answer is unchanged, only the time bound.
 
 -- Every character of `pat` translated to its regex-source equivalent.
 globToRegexSrc : Array Char -> Int -> List String
@@ -369,12 +372,18 @@ globToRegexSrc pat i
    rejects, and returns fast rather than eventually:
 
    > globMatch "*a*a*a*a*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-   False -}
+   False
+
+   `*` crosses a newline too — a name is an opaque string, not a line:
+
+   > globMatch "*" "a\nb"
+   True -}
 export
 globMatch : String -> String -> Bool
 globMatch pat s =
   isFullMatch
-    (mustCompile (stringConcat (globToRegexSrc (stringToChars pat) 0)))
+    (mustCompile
+      (stringConcat (["(?s)"] ++ globToRegexSrc (stringToChars pat) 0)))
     s
 
 -- ── Selectors ───────────────────────────────────────────────────────────────

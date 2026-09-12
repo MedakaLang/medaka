@@ -15,6 +15,11 @@ Positions are codepoint offsets, as in `string.indexOf`. `.` matches any
 codepoint but `\n`, and `\d`, `\w`, `\s`, `\b` and `(?i)` folding are
 ASCII only, matching `string.isDigit` and `string.toUpper`.
 
+A subject may also be a UTF-8 byte buffer rather than a `String`:
+`isFullMatchBytes` and `findBytes` match over a window of an `Array Int`
+with each byte a code 0..255, which is what a protocol grammar whose limits
+are stated in bytes wants.
+
 `compile` reports a bad pattern as an `Err`, and `mustCompile` panics,
 which suits a pattern written as a literal. A top-level binding is
 evaluated once, so `wordRe = mustCompile "\\w+"` compiles one time
@@ -263,6 +268,60 @@ The match covering the whole subject, or `None`.
 > map (m => m.text) (fullMatch (mustCompile "a|ab") "ab")
 Some "ab"
 > fullMatch (mustCompile "a") "ab"
+None
+```
+
+## Byte subjects
+
+### `isFullMatchBytes`
+
+```
+isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+```
+
+Whether the pattern matches the whole of `bytes[start..end)`, each byte
+taken as a code 0..255.
+
+The validator shape for a byte buffer, and the reason a protocol grammar
+wants this door: a bound written into the pattern counts BYTES, which is
+what a DNS label, a DID or an RFC 7230 token means by its limits, and the
+window grades a slice of a larger buffer without copying it. `start` and
+`end` are clamped to the buffer, and `^`, `$` and `\b` mean the ends of the
+window.
+
+A pattern reaching this door should name only ASCII: `[a-z]` matches the
+byte 97, and a non-ASCII codepoint arrives as its two or more UTF-8 bytes,
+each of them outside every ASCII class. `toUtf8 "abc"` is `[|97, 98, 99|]`.
+
+```medaka
+> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
+True
+> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
+True
+> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
+False
+```
+
+### `findBytes`
+
+```
+findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+```
+
+The leftmost match in `bytes[start..end)`, or `None`.
+
+The peer of `find` over a byte buffer. `start`, `end` and the reported
+offsets are byte offsets into the whole buffer, and the match's text and
+each group's text are the matched bytes decoded as UTF-8, so a span that
+cuts a codepoint decodes the way `fromUtf8` decodes any malformed input.
+Keeping byte patterns ASCII is what keeps that from arising.
+
+```medaka
+> map (m => m.text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+Some "12"
+> map (m => m.start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+Some 1
+> findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
 None
 ```
 

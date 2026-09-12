@@ -1473,8 +1473,11 @@ isNoneDoc _ = False
 -- which `slugifyAnchor` guarantees by construction (both read from the same
 -- function).
 -- A maximal run of non-slug chars becomes one `-`; a pre-existing `-` is a
--- slug char, so it is left alone rather than merged with a run next to it
--- (`a- b` -> `a--b`, matching the original char-by-char walk exactly).
+-- slug char, so it is never absorbed into an adjacent converted run on
+-- either side (`a- b` -> `a--b`, `.-a` -> `--a`). The pre-migration walk
+-- treated a `-` that FOLLOWED a run differently (`.-a` -> `-a`, one dash);
+-- no doc-entry name exercises that distinction, so this is a deliberate,
+-- symmetric replacement rather than a byte-for-byte port.
 nonSlugRunRe : Regex
 nonSlugRunRe = mustCompile "[^a-z0-9_-]+"
 

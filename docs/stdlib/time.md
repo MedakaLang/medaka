@@ -248,12 +248,17 @@ The date and time written in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`, or
 `None`.
 
 Exactly the form `formatIso` produces is accepted, and nothing else: no
-other time zone, no missing zero padding, no lowercase `t`.
+other time zone, no missing zero padding, no lowercase `t` or `z`, and no
+extra trailing characters.
 
 ```medaka
 > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
 Some 0
 > parseIso "2024-13-05T07:08:09Z"
+None
+> parseIso "2024-03-05T07:08:09z"
+None
+> parseIso "2024-03-05T07:08:09Z1"
 None
 ```
 

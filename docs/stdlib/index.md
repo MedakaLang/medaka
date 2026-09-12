@@ -669,6 +669,8 @@ Regular expressions, matched in linear time.
 - [`find`](regex.md#find)
 - [`findFrom`](regex.md#findfrom)
 - [`fullMatch`](regex.md#fullmatch)
+- [`isFullMatchBytes`](regex.md#isfullmatchbytes)
+- [`findBytes`](regex.md#findbytes)
 - [`findAll`](regex.md#findall)
 - [`replace`](regex.md#replace)
 - [`replaceAll`](regex.md#replaceall)
