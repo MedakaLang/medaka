@@ -218,7 +218,6 @@ lookupMethod : EvalEnv (Value a) -> String -> Value a
 lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
 lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
-lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
 mapResultOk : (a -> b) -> Result String a -> Result String b
@@ -237,7 +236,9 @@ mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
 methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
 methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
-methodReqCountRef : Ref (List ((String, String), Int))
+methodReqCountIndex : List ((String, String), Int) -> Map String (Map String Int)
+methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String Int) -> Map String (Map String Int)
+methodReqCountRef : Ref (Map String (Map String Int))
 methodsOfIface : String -> List String
 methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
 mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))

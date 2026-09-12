@@ -1347,8 +1347,8 @@ The scope-store extraction can proceed independently.
 
 ### Numeric return predicate migration
 
-Baseline `800069b269` versus the implementation in `32822517d` (measured before
-comment-only cleanup), using the existing M2 same-process LSP N0–N3 instrument,
+Baseline `800069b269` versus the implementation in `b10d8be2b`, using the
+existing M2 same-process LSP N0–N3 instrument,
 fixed 1 GiB heaps, and identical request streams. Cold is N1−N0, first warm is
 N2−N1, and second warm is N3−N2. Cachegrind counts instructions; the allocation
 instrument reads Boehm's total allocated bytes. All requests produced the expected
@@ -1357,15 +1357,54 @@ Allocation repetitions were byte-identical.
 
 | Workload | Request | Instructions before | After | Allocation before | After |
 |---|---|---:|---:|---:|---:|
-| playground | cold | 305,017,353 | 307,174,481 | 48,589,888 | 48,925,488 |
-| playground | first warm | 24,815,820 | 24,710,304 | 4,562,400 | 4,546,048 |
-| playground | second warm | 24,835,797 | 24,714,813 | 4,570,656 | 4,558,368 |
-| import-list | cold | 538,174,769 | 537,750,419 | 93,138,800 | 93,098,816 |
-| import-list | first warm | 38,112,225 | 37,913,127 | 6,870,640 | 6,842,096 |
-| import-list | second warm | 38,168,358 | 37,922,133 | 6,898,384 | 6,865,744 |
+| playground | cold | 305,017,353 | 307,186,712 | 48,589,888 | 48,925,488 |
+| playground | first warm | 24,815,820 | 24,704,290 | 4,562,400 | 4,546,048 |
+| playground | second warm | 24,835,797 | 24,715,537 | 4,570,656 | 4,558,368 |
+| import-list | cold | 538,174,769 | 537,748,485 | 93,138,800 | 93,098,816 |
+| import-list | first warm | 38,112,225 | 37,922,641 | 6,870,640 | 6,842,096 |
+| import-list | second warm | 38,168,358 | 37,926,903 | 6,898,384 | 6,865,744 |
 
-The largest positive changes are +0.708% instructions and +0.691% allocated
+The largest positive changes are +0.7112% instructions and +0.6907% allocated
 bytes, within the existing 25% soft budget. All three legacy caches remain
-enabled. This measures the numeric predicate, impl-body identity lookup, and
-eval prerequisite transport changes together; it does not establish safe
-finalized caching or retained-live-heap bounds.
+enabled. These LSP requests exercise checking, including numeric predicates and
+impl-body identity lookup. They do not execute eval method dispatch or establish
+safe finalized caching or retained-live-heap bounds.
+
+#### Eval dispatch countercheck
+
+An independent review measured the execution path omitted by the LSP workloads.
+The initial numeric candidate (`3f26df43b`) added canonical route aliases to a
+table still scanned on every method call, increasing the marginal cost by
+25.79%. `b10d8be2b` indexes that table once during dispatch setup, preserving
+first-match order and the distinction between an absent method and zero
+prerequisite parameters.
+
+Cachegrind instruction counts below use a fixed 1 GiB heap, fresh binaries and
+identical source files on each arm. The floor sets the loop count to zero; the
+workload sets it to 10,000. Both output values were checked.
+
+```medaka
+interface Step a where
+  step : a -> a
+
+impl Step Int where
+  step x = x + 1
+
+loop : Int -> Int -> Int
+loop n x =
+  if n <= 0 then x else loop (n - 1) (step x)
+
+main = println (loop 10000 0)
+```
+
+| Instructions | Baseline `800069b269` | Unindexed `3f26df43b` | Indexed `b10d8be2b` |
+|---|---:|---:|---:|
+| Zero-iteration floor | 590,870,196 | 587,384,476 | 590,150,277 |
+| 10,000 iterations | 2,021,688,327 | 2,387,237,318 | 1,688,801,707 |
+| Workload minus floor | 1,430,818,131 | 1,799,852,842 | 1,098,651,430 |
+
+The indexed workload is 23.21% below baseline and 38.96% below the unindexed
+candidate; its floor is 0.12% below baseline. These are execution instructions,
+not allocation or retained-heap measurements. The
+[review finding and repair](https://github.com/MedakaLang/medaka/issues/2549#issuecomment-5642598262)
+explain why the LSP budget alone was insufficient for this change.
