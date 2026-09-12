@@ -32,15 +32,18 @@ import types.typecheck.{
   tcCode,
   tcMsg,
 }
-import support.util.{joinNl, listLen}
+import support.util.{contains, joinNl, listLen}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
   ntvInterface : String,
   ntvArguments : List String,
   ntvOwner : String,
+  ntvOrigin : (Int, Int, Int, Int),
   ntvSelected : String,
+  ntvSelectedIdentity : String,
   ntvRoute : String,
+  ntvGiven : Bool,
   ntvForwarded : Bool,
   ntvPrerequisites : List String,
 }
@@ -65,6 +68,15 @@ numericTraceView entry =
   let selected = match entry.nptSelectedInterface
     Some identity => identity.irName
     None => ""
+  let selectedIdentity = match entry.nptSelectedInterface
+    Some identity => match identity.irOrigin
+      OriginModule name => "\{name}::\{identity.irName}"
+      _ => "<non-module>::\{identity.irName}"
+    None => ""
+  let originSpan = match entry.nptOrigin
+    Some (Loc _ startLine startCol endLine endCol) =>
+      (startLine, startCol, endLine, endCol)
+    None => (0, 0, 0, 0)
   let route = match entry.nptRoute
     Some answer => numericRouteView answer
     None => ""
@@ -73,8 +85,14 @@ numericTraceView entry =
     ntvInterface = "\{origin}::\{iface.irName}",
     ntvArguments = map ppMono predicate.predicateArguments,
     ntvOwner = snd (scopeTraceContext entry.nptScope),
+    ntvOrigin = originSpan,
     ntvSelected = selected,
+    ntvSelectedIdentity = selectedIdentity,
     ntvRoute = route,
+    ntvGiven = match entry.nptRoute
+      Some (RDict _) => True
+      Some (RDictFwd _) => True
+      _ => False,
     ntvForwarded = match entry.nptRoute
       Some (RDictFwd _) => True
       _ => False,
@@ -363,6 +381,354 @@ test "finalized scheme queries drain numeric predicates on cold and keyed calls"
     expectEqual (snd keyed) (snd repeated),
     expectEqual repeated afterFailure,
   ]
+
+arithmeticPreludeSource : String
+arithmeticPreludeSource = joinNl [
+  "interface Num a where",
+  "  add : a -> a -> a",
+  "  sub : a -> a -> a",
+  "  mul : a -> a -> a",
+  "  div : a -> a -> a",
+  "  negate : a -> a",
+  "  abs : a -> a",
+  "  signum : a -> a",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  add x _ = x",
+  "  sub x _ = x",
+  "  mul x _ = x",
+  "  div x _ = x",
+  "  negate x = x",
+  "  abs x = x",
+  "  signum x = x",
+  "  fromInt n = n",
+  "impl Num Float where",
+  "  add x _ = x",
+  "  sub x _ = x",
+  "  mul x _ = x",
+  "  div x _ = x",
+  "  negate x = x",
+  "  abs x = x",
+  "  signum x = x",
+  "  fromInt _ = 0.0",
+]
+
+arithmeticFunctionsSource : String
+arithmeticFunctionsSource = joinNl [
+  "signedAdd : Num a => a -> a -> a",
+  "signedAdd x y = x + y",
+  "signedSub : Num a => a -> a -> a",
+  "signedSub x y = x - y",
+  "signedMul : Num a => a -> a -> a",
+  "signedMul x y = x * y",
+  "signedDiv : Num a => a -> a -> a",
+  "signedDiv x y = x / y",
+  "inferredAdd x y = x + y",
+  "inferredSub x y = x - y",
+  "inferredMul x y = x * y",
+  "inferredDiv x y = x / y",
+]
+
+isArithmeticFunction : String -> Bool
+isArithmeticFunction name = contains name [
+  "signedAdd",
+  "signedSub",
+  "signedMul",
+  "signedDiv",
+  "inferredAdd",
+  "inferredSub",
+  "inferredMul",
+  "inferredDiv",
+]
+
+arithmeticSchemeObserved : Option (Int, Int) ->
+  String ->
+  (List (String, Int, String), List (String, String, Int))
+arithmeticSchemeObserved key source =
+  beginAssumptionTrace ()
+  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+    (parse arithmeticPreludeSource)) (
+    "arithmetic_scheme",
+    desugar (parseLocated source),
+  )
+  let values =
+    map
+      (entry => (
+        fst entry,
+        schemeVariableCount (snd entry),
+        ppScheme (snd entry),
+      ))
+      (filter (entry => isArithmeticFunction (fst entry)) schemes)
+  let assumptions =
+    map
+      (entry =>
+        let (EvidenceBinderId binderScope slot) = entry.atBinder
+        (
+          snd (scopeTraceContext entry.atGoalScope),
+          snd (scopeTraceContext binderScope),
+          slot,
+        ))
+      (finishAssumptionTrace ())
+  (values, assumptions)
+
+arithmeticErrorCodes : String -> List String
+arithmeticErrorCodes source =
+  let (errors, _) = checkOneDiags [] (desugar (parse arithmeticPreludeSource)) (
+    "arithmetic_errors",
+    desugar (parseLocated source),
+  )
+  map tcCode errors
+
+test "declared and inferred arithmetic retain one Num slot at finalized queries" =
+  let cold = arithmeticSchemeObserved None arithmeticFunctionsSource
+  let keyed =
+    arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
+  let repeated =
+    arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
+  let failed = arithmeticErrorCodes "bad : Int\nbad = \"wrong\"\n"
+  let afterFailure =
+    arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
+  expectAll [
+    expectEqual
+      [
+        ("signedAdd", 1, "a -> a -> a"),
+        ("signedSub", 1, "a -> a -> a"),
+        ("signedMul", 1, "a -> a -> a"),
+        ("signedDiv", 1, "a -> a -> a"),
+        ("inferredAdd", 1, "a -> a -> a"),
+        ("inferredSub", 1, "a -> a -> a"),
+        ("inferredMul", 1, "a -> a -> a"),
+        ("inferredDiv", 1, "a -> a -> a"),
+      ]
+      (fst cold),
+    expectEqual cold keyed,
+    expectEqual keyed repeated,
+    expectEqual repeated afterFailure,
+    expectEqual True (listLen failed > 0),
+    expectEqual
+      [
+        ("binding:signedDiv", "binding:signedDiv", 0),
+        ("binding:signedMul", "binding:signedMul", 0),
+        ("binding:signedSub", "binding:signedSub", 0),
+        ("binding:signedAdd", "binding:signedAdd", 0),
+      ]
+      (snd cold),
+  ]
+
+arithmeticTraceObserved : String ->
+  (List String, List NumericTraceView, List (String, String, Int))
+arithmeticTraceObserved source =
+  beginNumericPredicateTrace ()
+  beginAssumptionTrace ()
+  let (errors, _) = checkOneDiags [] (desugar (parse arithmeticPreludeSource)) (
+    "arithmetic_trace",
+    desugar (parseLocated source),
+  )
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let assumptions =
+    map
+      (entry =>
+        let (EvidenceBinderId binderScope slot) = entry.atBinder
+        (
+          snd (scopeTraceContext entry.atGoalScope),
+          snd (scopeTraceContext binderScope),
+          slot,
+        ))
+      (finishAssumptionTrace ())
+  (map tcMsg errors, trace, assumptions)
+
+test "operator events correlate by whole span scope and exact prelude Num predicate" =
+  let (errors, trace, assumptions) =
+    arithmeticTraceObserved "value : Num a => a -> a\nvalue x = x + 0\n"
+  let operator = filter (view => view.ntvOrigin == (2, 10, 2, 15)) trace
+  let literal = filter (view => view.ntvOrigin == (2, 14, 2, 15)) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [NPTProduced, NPTChecked, NPTArithmetic]
+      (numericStages operator),
+    expectEqual [NPTProduced, NPTChecked, NPTReturn] (numericStages literal),
+    expectEqual
+      [
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+      ]
+      (map
+        (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
+        operator),
+    expectEqual
+      [("", True, [])]
+      (map
+        (view => (
+          view.ntvSelectedIdentity,
+          view.ntvGiven,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTArithmetic) operator)),
+    expectEqual
+      [
+        ("binding:value", "binding:value", 0),
+        ("binding:value", "binding:value", 0),
+      ]
+      assumptions,
+  ]
+
+arithmeticImportedObserved : Bool -> (Int, List NumericTraceView)
+arithmeticImportedObserved reverseOrder =
+  let shape = ("arithmetic_shape", "public export data Box a = Box a")
+  let numeric = (
+    "arithmetic_numeric",
+    joinNl [
+      "import arithmetic_shape.{Box(..)}",
+      "impl Num (Box a) requires Num a where",
+      "  add x _ = x",
+      "  sub x _ = x",
+      "  mul x _ = x",
+      "  div x _ = x",
+      "  negate x = x",
+      "  abs x = x",
+      "  signum x = x",
+      "  fromInt n = Box (fromInt n)",
+    ],
+  )
+  let forge = (
+    "arithmetic_forge",
+    joinNl [
+      "import arithmetic_shape.{Box}",
+      "export interface Forge a where",
+      "  add : a -> a -> a",
+      "  sub : a -> a -> a",
+      "  mul : a -> a -> a",
+      "  div : a -> a -> a",
+      "impl Forge (Box a) where",
+      "  add x _ = x",
+      "  sub x _ = x",
+      "  mul x _ = x",
+      "  div x _ = x",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      [
+        "import arithmetic_forge.{Forge, add, sub, mul, div}",
+        "import arithmetic_numeric",
+      ]
+    else
+      [
+        "import arithmetic_numeric",
+        "import arithmetic_forge.{Forge, add, sub, mul, div}",
+      ]
+  let entry = (
+    "arithmetic_entry",
+    joinNl
+      (["import arithmetic_shape.{Box(..)}"]
+        ++ imports
+        ++ [
+          "left : Box Int",
+          "left = Box 12",
+          "right : Box Int",
+          "right = Box 3",
+          "addValue : Box Int",
+          "addValue = left + right",
+          "subValue : Box Int",
+          "subValue = left - right",
+          "mulValue : Box Int",
+          "mulValue = left * right",
+          "divValue : Box Int",
+          "divValue = left / right",
+        ]),
+  )
+  let sources =
+    if reverseOrder then
+      [shape, forge, numeric, entry]
+    else
+      [shape, numeric, forge, entry]
+  beginNumericPredicateTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parse arithmeticPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let arithmetic =
+    filter
+      (view =>
+        view.ntvStage == NPTArithmetic
+          && contains view.ntvOwner [
+            "binding:addValue",
+            "binding:subValue",
+            "binding:mulValue",
+            "binding:divValue",
+          ])
+      trace
+  (modErrorCount results, arithmetic)
+
+test "arithmetic collision imports select the exact Num row and prerequisites" =
+  let forward = arithmeticImportedObserved False
+  let backward = arithmeticImportedObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [
+        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
+        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
+        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
+        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
+      ]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvSelectedIdentity,
+          view.ntvRoute,
+          view.ntvPrerequisites,
+        ))
+        (snd forward)),
+  ]
+
+test "primitive arithmetic retains the Int and Float scalar routes" =
+  let (errors, trace, _) =
+    arithmeticTraceObserved
+      (joinNl [
+        "intValue : Int",
+        "intValue = 12 + 3",
+        "floatValue : Float",
+        "floatValue = 7.5 / 2.0",
+      ])
+  let arithmetic = filter (view => view.ntvStage == NPTArithmetic) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [
+        ("binding:floatValue", ["Float"], "scalar:Float", "", []),
+        ("binding:intValue", ["Int"], "none", "", []),
+      ]
+      (map
+        (view => (
+          view.ntvOwner,
+          view.ntvArguments,
+          view.ntvRoute,
+          view.ntvSelectedIdentity,
+          view.ntvPrerequisites,
+        ))
+        arithmetic),
+  ]
+
+test "arithmetic keeps missing Num and explicit result mismatches loud" = expectAll
+  [
+    expectEqual
+      ["T-MISSING-CONSTRAINT"]
+      (arithmeticErrorCodes "bad : a -> a -> a\nbad x y = x + y\n"),
+    expectEqual
+      ["T-NO-IMPL"]
+      (arithmeticErrorCodes
+        "bad : Num a => a -> a -> (a, Bool)\nbad x y = (x + y, x)\n"),
+  ]
+
 declaredNumHelperSource : String
 declaredNumHelperSource = "value : Num a => Int -> a\nvalue n = fromInt n\n"
 
