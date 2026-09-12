@@ -2,31 +2,366 @@
 -- Every scope id is projected while its request graph is still live.  Tests
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
-import test.{expectEqual}
-import frontend.ast.{Loc(..), TyConOrigin(..)}
+import test.{expectAll, expectEqual}
+import frontend.ast.{Loc(..), Route(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
+import types.repr.{ppMono, ppScheme}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
   DefaultBodyRNoneKind(..),
   DefaultBodyRNoneTraceEntry(..),
   ModDiags,
+  NumericPredicateTraceEntry(..),
+  NumericPredicateTraceStage(..),
   beginAssumptionTrace,
   beginDefaultBodyRNoneTrace,
+  beginNumericPredicateTrace,
   checkModulesDiagsChain,
   checkOneDiags,
+  checkOneSchemeFullK,
   checkProgramDiags,
   elaborateDict,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
+  finishNumericPredicateTrace,
   scopeFrameStats,
   scopeTraceContext,
   tcMsg,
 }
 import support.util.{joinNl, listLen}
 
+data NumericTraceView = NumericTraceView {
+  ntvStage : NumericPredicateTraceStage,
+  ntvInterface : String,
+  ntvArguments : List String,
+  ntvOwner : String,
+  ntvSelected : String,
+  ntvRoute : String,
+  ntvForwarded : Bool,
+  ntvPrerequisites : List String,
+}
+  deriving (Eq, Debug)
+
+numericRouteView : Route -> String
+numericRouteView RNone = "none"
+numericRouteView (RKey key prerequisites) =
+  "\{key}[\{joinNl (map numericRouteView prerequisites)}]"
+numericRouteView (RDict name) = "dict:" ++ name
+numericRouteView (RDictFwd name) = "given:" ++ name
+numericRouteView (RLocal name _) = "local:" ++ name
+numericRouteView (RScalar name) = "scalar:" ++ name
+
+numericTraceView : NumericPredicateTraceEntry -> NumericTraceView
+numericTraceView entry =
+  let predicate = entry.nptPredicate
+  let iface = predicate.predicateInterface
+  let origin = match iface.irOrigin
+    OriginModule name => name
+    _ => "<non-module>"
+  let selected = match entry.nptSelectedInterface
+    Some identity => identity.irName
+    None => ""
+  let route = match entry.nptRoute
+    Some answer => numericRouteView answer
+    None => ""
+  NumericTraceView {
+    ntvStage = entry.nptStage,
+    ntvInterface = "\{origin}::\{iface.irName}",
+    ntvArguments = map ppMono predicate.predicateArguments,
+    ntvOwner = snd (scopeTraceContext entry.nptScope),
+    ntvSelected = selected,
+    ntvRoute = route,
+    ntvForwarded = match entry.nptRoute
+      Some (RDictFwd _) => True
+      _ => False,
+    ntvPrerequisites = map numericRouteView entry.nptPrerequisites,
+  }
+
+numericPreludeSource : String
+numericPreludeSource = joinNl [
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  fromInt n = n",
+]
+
+numericValueSource : Bool -> String
+numericValueSource collision = numericBodySource collision "N n"
+
+numericBodySource : Bool -> String -> String
+numericBodySource collision body =
+  joinNl
+    (["data N = N Int"]
+      ++ (if collision then
+        [
+          "interface Forge a where",
+          "  fromInt : Int -> a",
+          "impl Forge N where",
+          "  fromInt n = N n",
+        ]
+      else
+        [])
+      ++ [
+        "impl Num N where",
+        "  fromInt n = " ++ body,
+        "value : N",
+        "value = 1",
+      ])
+
+numericCheckObserved : String -> (List String, List NumericTraceView)
+numericCheckObserved source =
+  beginNumericPredicateTrace ()
+  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+    "numeric_predicate",
+    desugar (parseLocated source),
+  )
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  (map tcMsg errors, trace)
+
+numericStages : List NumericTraceView -> List NumericPredicateTraceStage
+numericStages views = map (view => view.ntvStage) views
+
+test "a fromInt collision cannot hide an invalid Num constructor argument" =
+  let collision = numericCheckObserved (numericBodySource True "N \"wrong\"")
+  let control = numericCheckObserved (numericBodySource False "N \"wrong\"")
+  expectEqual
+    (["Type mismatch: Int vs String"], ["Type mismatch: Int vs String"])
+    (fst collision, fst control)
+
+test "a fromInt collision cannot hide an invalid Num method result" =
+  let collision = numericCheckObserved (numericBodySource True "\"wrong\"")
+  let control = numericCheckObserved (numericBodySource False "\"wrong\"")
+  expectEqual
+    (["Type mismatch: N vs String"], ["Type mismatch: N vs String"])
+    (fst collision, fst control)
+
+numericNestedBodySource : String
+numericNestedBodySource = joinNl [
+  "data Box a = Box a",
+  "interface Forge a where",
+  "  fromInt : Int -> a",
+  "impl Num (Box a) requires Num a where",
+  "  fromInt _ = Box 1",
+  "value : Box Int",
+  "value = 1",
+]
+
+test "a nested numeric literal may use the declared impl prerequisite" =
+  let (errors, _) = numericCheckObserved numericNestedBodySource
+  expectEqual [] errors
+
+test "numeric return keeps the Num predicate through production checking and stamping" =
+  let (errors, trace) = numericCheckObserved (numericValueSource True)
+  expectAll [
+    expectEqual [] errors,
+    expectEqual [NPTProduced, NPTChecked, NPTReturn] (numericStages trace),
+    expectEqual
+      [
+        ("core::Num", ["N"], "binding:value"),
+        ("core::Num", ["N"], "binding:value"),
+        ("core::Num", ["N"], "binding:value"),
+      ]
+      (map
+        (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
+        trace),
+    expectEqual
+      [("Num", "core::Num|N|[]", [])]
+      (map
+        (view => (view.ntvSelected, view.ntvRoute, view.ntvPrerequisites))
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+test "numeric return without a method collision preserves the short route ABI" =
+  let (errors, trace) = numericCheckObserved (numericValueSource False)
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      ["N[]"]
+      (map
+        (view => view.ntvRoute)
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+test "a Forge instance cannot discharge the numeric Num obligation" =
+  let source = joinNl [
+    "data N = N Int",
+    "interface Forge a where",
+    "  fromInt : Int -> a",
+    "impl Forge N where",
+    "  fromInt n = N n",
+    "value : N",
+    "value = 1",
+  ]
+  let (errors, trace) = numericCheckObserved source
+  expectAll [
+    expectEqual True (listLen errors > 0),
+    expectEqual
+      True
+      (any
+        (view =>
+          view.ntvStage == NPTChecked && view.ntvInterface == "core::Num")
+        trace),
+  ]
+
+test "numeric return forwards the in-scope Num dictionary" =
+  let source = joinNl [
+    "interface Forge a where",
+    "  fromInt : Int -> a",
+    "value : Num a => Unit -> a",
+    "value _ = 1",
+  ]
+  let (errors, trace) = numericCheckObserved source
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [("core::Num", "", True, [])]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvSelected,
+          view.ntvForwarded,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+test "numeric return selects prerequisites from the Num instance row" =
+  let source = joinNl [
+    "data Box a = Box Int",
+    "interface Forge a where",
+    "  fromInt : Int -> a",
+    "impl Forge (Box a) where",
+    "  fromInt n = Box n",
+    "impl Num (Box a) requires Num a where",
+    "  fromInt n = Box n",
+    "value : Box Int",
+    "value = 1",
+  ]
+  let (errors, trace) = numericCheckObserved source
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [("core::Num", ["Box Int"], "Num", ["Int[]"])]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvArguments,
+          view.ntvSelected,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+numericSchemeObserved : Option (Int, Int) ->
+  String ->
+  (List String, List NumericTraceView)
+numericSchemeObserved key source =
+  beginNumericPredicateTrace ()
+  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+    (parse numericPreludeSource)) (
+    "numeric_scheme",
+    desugar (parseLocated source),
+  )
+  let values =
+    map
+      (entry => ppScheme (snd entry))
+      (filter (entry => fst entry == "value") schemes)
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  (values, trace)
+
+numericImportedObserved : Bool -> (Int, List NumericTraceView)
+numericImportedObserved reverseOrder =
+  let shape = ("numeric_shape", "public export data N = N Int")
+  let numeric = (
+    "numeric_impl",
+    joinNl [
+      "import numeric_shape.{N(..)}",
+      "impl Num N where",
+      "  fromInt n = N n",
+    ],
+  )
+  let forge = (
+    "numeric_forge",
+    joinNl [
+      "import numeric_shape.{N(..)}",
+      "export interface Forge a where",
+      "  fromInt : Int -> a",
+      "impl Forge N where",
+      "  fromInt n = N n",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      ["import numeric_forge.{Forge, fromInt}", "import numeric_impl"]
+    else
+      ["import numeric_impl", "import numeric_forge.{Forge, fromInt}"]
+  let entry = (
+    "numeric_entry",
+    joinNl
+      (["import numeric_shape.{N}"] ++ imports ++ ["value : N", "value = 1"]),
+  )
+  let sources =
+    if reverseOrder then
+      [shape, forge, numeric, entry]
+    else
+      [shape, numeric, forge, entry]
+  beginNumericPredicateTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parse numericPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  (modErrorCount results, trace)
+
+test "numeric predicates survive module and import order permutations" =
+  let forward = numericImportedObserved False
+  let backward = numericImportedObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [NPTProduced, NPTChecked, NPTReturn]
+      (numericStages (snd forward)),
+    expectEqual
+      [("core::Num", "Num", "core::Num|N|[]")]
+      (map
+        (view => (view.ntvInterface, view.ntvSelected, view.ntvRoute))
+        (filter (view => view.ntvStage == NPTReturn) (snd forward))),
+  ]
+
+test "finalized scheme queries drain numeric predicates on cold and keyed calls" =
+  let source = numericValueSource True
+  let cold = numericSchemeObserved None source
+  let keyed = numericSchemeObserved (Some (977, 983)) source
+  let repeated = numericSchemeObserved (Some (977, 983)) source
+  let (failedErrors, _) =
+    numericCheckObserved "value : Int\nvalue = \"wrong\"\n"
+  let afterFailure = numericSchemeObserved (Some (977, 983)) source
+  expectAll [
+    expectEqual True (listLen failedErrors > 0),
+    expectEqual (["N"], ["N"], ["N"]) (fst cold, fst keyed, fst repeated),
+    expectEqual
+      [
+        [NPTProduced, NPTChecked, NPTReturn],
+        [NPTProduced, NPTChecked, NPTReturn],
+        [NPTProduced, NPTChecked, NPTReturn],
+      ]
+      [
+        numericStages (snd cold),
+        numericStages (snd keyed),
+        numericStages (snd repeated),
+      ],
+    expectEqual (snd cold) (snd keyed),
+    expectEqual (snd keyed) (snd repeated),
+    expectEqual repeated afterFailure,
+  ]
 data TraceView = TraceView {
   tvKind : AssumptionTraceKind,
   tvGoalModule : String,
@@ -366,10 +701,10 @@ flatMessages source =
   let (errors, _) = checkProgramDiags [] [] (desugar (parse source))
   map tcMsg errors
 
-test "legacy attributed-direct Num diagnostics keep their order-sensitive cross-pair" =
+test "attributed-direct Num declarations reject mismatches without cross-pairing rows" =
   expectEqual
     (
-      ["Type mismatch: String vs Int", "Type mismatch: Int literal vs Int"],
+      ["Type mismatch: String vs Int"],
       ["Type mismatch: String vs Int"],
     )
     (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)

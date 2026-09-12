@@ -1,5 +1,5 @@
 # META
-source_lines=4881
+source_lines=4879
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -69,6 +69,7 @@ import support.util.{
   mapOption,
   joinDot,
   dedup,
+  startsWith,
 }
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
@@ -339,9 +340,8 @@ export
 ctorFieldOrdersRef : Ref (List (String, List String))
 ctorFieldOrdersRef = Ref []
 
--- ARGSTAMP-UNIFY / genuine #21: per (impl-method-name, head-tag) the number of
--- LEADING element-dict params the impl method consumes = (elaborated impl pattern
--- count) - (declared method arity from the interface).  An arg-position RDict site
+-- ARGSTAMP-UNIFY / genuine #21: per (impl-method-name, route-word) the number of
+-- LEADING dict params the elaborated impl method consumes.  An arg-position RDict site
 -- forwards the dispatch dict's nested reqs, but the dict can be OVER-provisioned
 -- (the structural dict route + the requires-only impl table can attribute an
 -- element req to a List-tagged dict even when THIS method's List impl has no
@@ -513,36 +513,34 @@ methodsOfIfaceIn iface (((_, i, m), _) :: rest)
 
 export
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
-buildMethodReqCounts prog =
-  let arities = flatMap methodDeclArities prog
-  flatMap (implMethodReqCounts arities) prog
+buildMethodReqCounts prog = flatMap implMethodReqCounts prog
 
--- declared arity of each interface method = number of value args in its signature.
-methodDeclArities : Decl -> List (String, Int)
-methodDeclArities (DAttrib _ d) = methodDeclArities d
-methodDeclArities (DInterface { methods, ... }) = map ifaceMethodArity methods
-methodDeclArities _ = []
+-- Each defined impl method is addressable by both route words carried on its
+-- VTypedImpl: the short head tag and the canonical interface/type key.  A collision
+-- selects by the latter, so both aliases must report the same leading-dictionary ABI.
+implMethodReqCounts : Decl -> List ((String, String), Int)
+implMethodReqCounts (DAttrib _ d) = implMethodReqCounts d
+implMethodReqCounts (DImpl { iface, tys, methods, implOrigin, ... }) =
+  let tag = optionOr noneHeadTag (headTyconHead tys)
+  let key = implRouteKeyWord implOrigin iface tys None
+  flatMap (implMethodReqCountEntries tag key) methods
+implMethodReqCounts _ = []
 
-ifaceMethodArity : IfaceMethod -> (String, Int)
-ifaceMethodArity (IfaceMethod mname mty _ _) = (mname, listLen (argsOfTy mty))
-
--- one ((method, tag), reqCount) per impl method; reqCount = impl pats - declared arity.
-implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
-implMethodReqCounts arities (DAttrib _ d) = implMethodReqCounts arities d
-implMethodReqCounts arities (DImpl { tys = typeArgs, methods, ... }) =
-  match headTyconHead typeArgs
-    Some tag => flatMap (implMethodReqCountEntry arities tag) methods
-    None => []
-implMethodReqCounts _ _ = []
-
-implMethodReqCountEntry : List (String, Int) ->
+implMethodReqCountEntries : String ->
   String ->
   ImplMethod ->
   List ((String, String), Int)
-implMethodReqCountEntry arities tag (ImplMethod mname pats _) =
-  let declArity = optionOr (listLen pats) (lookupAssoc mname arities)
-  let reqCount = subClampZero (listLen pats) declArity
-  [((mname, tag), reqCount)]
+implMethodReqCountEntries tag key (ImplMethod mname pats _) =
+  let count = leadingImplDictPats pats
+  [((mname, tag), count), ((mname, key), count)]
+
+-- Count the ABI already written into the dict-passed definition.  Deriving this
+-- from a bare method-name signature is ambiguous when unrelated interfaces reuse a
+-- method name, the same collision that makes the canonical alias live.
+leadingImplDictPats : List Pat -> Int
+leadingImplDictPats ((PVar x _) :: rest) =
+  if startsWith "$dict" x then 1 + leadingImplDictPats rest else 0
+leadingImplDictPats _ = 0
 
 subClampZero : Int -> Int -> Int
 subClampZero a b = if a - b < 0 then 0 else a - b
@@ -4886,7 +4884,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
@@ -5001,19 +4999,16 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "methodsOfIfaceIn" (PWild (PList)) (EListLit))
 (DFunDef false "methodsOfIfaceIn" ((PVar "iface") (PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EVar "m") (EApp (EApp (EVar "methodsOfIfaceIn") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "methodsOfIfaceIn") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
-(DFunDef false "buildMethodReqCounts" ((PVar "prog")) (EBlock (DoLet false false (PVar "arities") (EApp (EApp (EVar "flatMap") (EVar "methodDeclArities")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "implMethodReqCounts") (EVar "arities"))) (EVar "prog")))))
-(DTypeSig false "methodDeclArities" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "methodDeclArities" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "methodDeclArities") (EVar "d")))
-(DFunDef false "methodDeclArities" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "ifaceMethodArity")) (EVar "methods")))
-(DFunDef false "methodDeclArities" (PWild) (EListLit))
-(DTypeSig false "ifaceMethodArity" (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ifaceMethodArity" ((PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (EVar "mname") (EApp (EVar "listLen") (EApp (EVar "argsOfTy") (EVar "mty")))))
-(DTypeSig false "implMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "implMethodReqCounts" ((PVar "arities") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implMethodReqCounts") (EVar "arities")) (EVar "d")))
-(DFunDef false "implMethodReqCounts" ((PVar "arities") (PRec "DImpl" ((rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EMatch (EApp (EVar "headTyconHead") (EVar "typeArgs")) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "implMethodReqCountEntry") (EVar "arities")) (EVar "tag"))) (EVar "methods"))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "implMethodReqCounts" (PWild PWild) (EListLit))
-(DTypeSig false "implMethodReqCountEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
-(DFunDef false "implMethodReqCountEntry" ((PVar "arities") (PVar "tag") (PCon "ImplMethod" (PVar "mname") (PVar "pats") PWild)) (EBlock (DoLet false false (PVar "declArity") (EApp (EApp (EVar "optionOr") (EApp (EVar "listLen") (EVar "pats"))) (EApp (EApp (EVar "lookupAssoc") (EVar "mname")) (EVar "arities")))) (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "subClampZero") (EApp (EVar "listLen") (EVar "pats"))) (EVar "declArity"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EVar "tag")) (EVar "reqCount"))))))
+(DFunDef false "buildMethodReqCounts" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "implMethodReqCounts")) (EVar "prog")))
+(DTypeSig false "implMethodReqCounts" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
+(DFunDef false "implMethodReqCounts" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "implMethodReqCounts") (EVar "d")))
+(DFunDef false "implMethodReqCounts" ((PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "methods" None) (rf "implOrigin" None)) true)) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "tys")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "implOrigin")) (EVar "iface")) (EVar "tys")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "implMethodReqCountEntries") (EVar "tag")) (EVar "key"))) (EVar "methods")))))
+(DFunDef false "implMethodReqCounts" (PWild) (EListLit))
+(DTypeSig false "implMethodReqCountEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
+(DFunDef false "implMethodReqCountEntries" ((PVar "tag") (PVar "key") (PCon "ImplMethod" (PVar "mname") (PVar "pats") PWild)) (EBlock (DoLet false false (PVar "count") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EVar "tag")) (EVar "count")) (ETuple (ETuple (EVar "mname") (EVar "key")) (EVar "count"))))))
+(DTypeSig false "leadingImplDictPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
+(DFunDef false "leadingImplDictPats" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingImplDictPats") (EVar "rest"))) (ELit (LInt 0))))
+(DFunDef false "leadingImplDictPats" (PWild) (ELit (LInt 0)))
 (DTypeSig false "subClampZero" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "subClampZero" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EBinOp "-" (EVar "a") (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0)) (EBinOp "-" (EVar "a") (EVar "b"))))
 (DTypeSig false "takeN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -6414,7 +6409,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
@@ -6529,19 +6524,16 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "methodsOfIfaceIn" (PWild (PList)) (EListLit))
 (DFunDef false "methodsOfIfaceIn" ((PVar "iface") (PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EVar "m") (EApp (EApp (EVar "methodsOfIfaceIn") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "methodsOfIfaceIn") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
-(DFunDef false "buildMethodReqCounts" ((PVar "prog")) (EBlock (DoLet false false (PVar "arities") (EApp (EApp (EDictApp "flatMap") (EVar "methodDeclArities")) (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implMethodReqCounts") (EVar "arities"))) (EVar "prog")))))
-(DTypeSig false "methodDeclArities" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "methodDeclArities" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "methodDeclArities") (EVar "d")))
-(DFunDef false "methodDeclArities" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodArity")) (EVar "methods")))
-(DFunDef false "methodDeclArities" (PWild) (EListLit))
-(DTypeSig false "ifaceMethodArity" (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ifaceMethodArity" ((PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (EVar "mname") (EApp (EVar "listLen") (EApp (EVar "argsOfTy") (EVar "mty")))))
-(DTypeSig false "implMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "implMethodReqCounts" ((PVar "arities") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implMethodReqCounts") (EVar "arities")) (EVar "d")))
-(DFunDef false "implMethodReqCounts" ((PVar "arities") (PRec "DImpl" ((rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EMatch (EApp (EVar "headTyconHead") (EVar "typeArgs")) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "implMethodReqCountEntry") (EVar "arities")) (EVar "tag"))) (EVar "methods"))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "implMethodReqCounts" (PWild PWild) (EListLit))
-(DTypeSig false "implMethodReqCountEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
-(DFunDef false "implMethodReqCountEntry" ((PVar "arities") (PVar "tag") (PCon "ImplMethod" (PVar "mname") (PVar "pats") PWild)) (EBlock (DoLet false false (PVar "declArity") (EApp (EApp (EVar "optionOr") (EApp (EVar "listLen") (EVar "pats"))) (EApp (EApp (EVar "lookupAssoc") (EVar "mname")) (EVar "arities")))) (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "subClampZero") (EApp (EVar "listLen") (EVar "pats"))) (EVar "declArity"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EVar "tag")) (EVar "reqCount"))))))
+(DFunDef false "buildMethodReqCounts" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "implMethodReqCounts")) (EVar "prog")))
+(DTypeSig false "implMethodReqCounts" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
+(DFunDef false "implMethodReqCounts" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "implMethodReqCounts") (EVar "d")))
+(DFunDef false "implMethodReqCounts" ((PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "methods" None) (rf "implOrigin" None)) true)) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "tys")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "implOrigin")) (EVar "iface")) (EVar "tys")) (EVar "None"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "implMethodReqCountEntries") (EVar "tag")) (EVar "key"))) (EVar "methods")))))
+(DFunDef false "implMethodReqCounts" (PWild) (EListLit))
+(DTypeSig false "implMethodReqCountEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
+(DFunDef false "implMethodReqCountEntries" ((PVar "tag") (PVar "key") (PCon "ImplMethod" (PVar "mname") (PVar "pats") PWild)) (EBlock (DoLet false false (PVar "count") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EVar "tag")) (EDictApp "count")) (ETuple (ETuple (EVar "mname") (EVar "key")) (EDictApp "count"))))))
+(DTypeSig false "leadingImplDictPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
+(DFunDef false "leadingImplDictPats" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingImplDictPats") (EVar "rest"))) (ELit (LInt 0))))
+(DFunDef false "leadingImplDictPats" (PWild) (ELit (LInt 0)))
 (DTypeSig false "subClampZero" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "subClampZero" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EBinOp "-" (EVar "a") (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0)) (EBinOp "-" (EVar "a") (EVar "b"))))
 (DTypeSig false "takeN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))

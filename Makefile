@@ -114,6 +114,7 @@ test: medaka
 	##     typecheck_compiler_source.sh, but neither RUNS doctests, and `DataEnv`'s
 	##     deFieldOwnerIdents identity-collision case lives in one.
 	./medaka test compiler/types
+	./medaka test compiler/eval/eval_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on

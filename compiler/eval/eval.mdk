@@ -65,6 +65,7 @@ import support.util.{
   mapOption,
   joinDot,
   dedup,
+  startsWith,
 }
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
@@ -335,9 +336,8 @@ export
 ctorFieldOrdersRef : Ref (List (String, List String))
 ctorFieldOrdersRef = Ref []
 
--- ARGSTAMP-UNIFY / genuine #21: per (impl-method-name, head-tag) the number of
--- LEADING element-dict params the impl method consumes = (elaborated impl pattern
--- count) - (declared method arity from the interface).  An arg-position RDict site
+-- ARGSTAMP-UNIFY / genuine #21: per (impl-method-name, route-word) the number of
+-- LEADING dict params the elaborated impl method consumes.  An arg-position RDict site
 -- forwards the dispatch dict's nested reqs, but the dict can be OVER-provisioned
 -- (the structural dict route + the requires-only impl table can attribute an
 -- element req to a List-tagged dict even when THIS method's List impl has no
@@ -509,36 +509,34 @@ methodsOfIfaceIn iface (((_, i, m), _) :: rest)
 
 export
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
-buildMethodReqCounts prog =
-  let arities = flatMap methodDeclArities prog
-  flatMap (implMethodReqCounts arities) prog
+buildMethodReqCounts prog = flatMap implMethodReqCounts prog
 
--- declared arity of each interface method = number of value args in its signature.
-methodDeclArities : Decl -> List (String, Int)
-methodDeclArities (DAttrib _ d) = methodDeclArities d
-methodDeclArities (DInterface { methods, ... }) = map ifaceMethodArity methods
-methodDeclArities _ = []
+-- Each defined impl method is addressable by both route words carried on its
+-- VTypedImpl: the short head tag and the canonical interface/type key.  A collision
+-- selects by the latter, so both aliases must report the same leading-dictionary ABI.
+implMethodReqCounts : Decl -> List ((String, String), Int)
+implMethodReqCounts (DAttrib _ d) = implMethodReqCounts d
+implMethodReqCounts (DImpl { iface, tys, methods, implOrigin, ... }) =
+  let tag = optionOr noneHeadTag (headTyconHead tys)
+  let key = implRouteKeyWord implOrigin iface tys None
+  flatMap (implMethodReqCountEntries tag key) methods
+implMethodReqCounts _ = []
 
-ifaceMethodArity : IfaceMethod -> (String, Int)
-ifaceMethodArity (IfaceMethod mname mty _ _) = (mname, listLen (argsOfTy mty))
-
--- one ((method, tag), reqCount) per impl method; reqCount = impl pats - declared arity.
-implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
-implMethodReqCounts arities (DAttrib _ d) = implMethodReqCounts arities d
-implMethodReqCounts arities (DImpl { tys = typeArgs, methods, ... }) =
-  match headTyconHead typeArgs
-    Some tag => flatMap (implMethodReqCountEntry arities tag) methods
-    None => []
-implMethodReqCounts _ _ = []
-
-implMethodReqCountEntry : List (String, Int) ->
+implMethodReqCountEntries : String ->
   String ->
   ImplMethod ->
   List ((String, String), Int)
-implMethodReqCountEntry arities tag (ImplMethod mname pats _) =
-  let declArity = optionOr (listLen pats) (lookupAssoc mname arities)
-  let reqCount = subClampZero (listLen pats) declArity
-  [((mname, tag), reqCount)]
+implMethodReqCountEntries tag key (ImplMethod mname pats _) =
+  let count = leadingImplDictPats pats
+  [((mname, tag), count), ((mname, key), count)]
+
+-- Count the ABI already written into the dict-passed definition.  Deriving this
+-- from a bare method-name signature is ambiguous when unrelated interfaces reuse a
+-- method name, the same collision that makes the canonical alias live.
+leadingImplDictPats : List Pat -> Int
+leadingImplDictPats ((PVar x _) :: rest) =
+  if startsWith "$dict" x then 1 + leadingImplDictPats rest else 0
+leadingImplDictPats _ = 0
 
 subClampZero : Int -> Int -> Int
 subClampZero a b = if a - b < 0 then 0 else a - b

@@ -1134,6 +1134,7 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # (`activeDictPreds`, `implReqPredicateSlots`) are retired below: they were the SAME pair
 # in opposite orders, i.e. the split authority this ratchet exists to forbid.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
+eval_src="$ROOT/compiler/eval/eval.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
@@ -1232,15 +1233,16 @@ fi
 method_row_required='data MethodSchemeRow = MethodSchemeRow {
   msrIface : IfaceRef,
   msrName : String,
+  msrTyparams : List String,
+  msrType : Ty,
   msrScheme : Scheme,
   msrMethodSlots : List MethodPredicateSlot,
-data LegacyNumLiteralAnchor = LegacyNumLiteralAnchor {
-  numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor),
+  numLitFromIntAnchorRef : Ref (Option MethodSchemeRow),
 ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
 methodSchemeRows : List (String, List Kind) ->
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
-seedNumLitFromIntAnchor : List MethodSchemeRow -> List Decl -> Unit
+seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 pickSchemesByDecl : List String ->
 admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
   List MethodSchemeRow ->
@@ -1277,6 +1279,11 @@ numLitFromIntSchemeRef
 numLitFromIntParamsRef
 seedNumLitFromIntScheme
 seedNumLitFromIntParams
+LegacyNumLiteralAnchor
+numLitFromIntParamsOf
+numLitFromIntParamsDecl
+pickIfaceMethodParams
+pickNumLitScheme
 registerMethodConstraints :'
 
 printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
@@ -1285,6 +1292,116 @@ printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
     exit 1
   fi
 done || exit 1
+
+# Numeric literals retain their fixed Num predicate from the method-row producer
+# through checking and return stamping.  Each former OblProjection reader states
+# explicitly whether the unary numeric population participates.
+numeric_predicate_required='import types.solver_contract.{ClassPredicate(..)}
+  | SKNumReturn ClassPredicate Mono
+  | OpNumLit Mono
+  | EKNumReturn ClassPredicate Mono Bool (Option Loc)
+  match ieSelectRowByIface env predicate.predicateInterface goals
+      let route = RKey (methodRouteKeyForRow name env row) []
+      let routes = implDictRoutesForRow encl useScope m goals row
+    _ => tagRef := numericReturnRoute route routes
+      let split = binopRouteSplit route
+recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
+public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {
+beginNumericPredicateTrace : Unit -> Unit
+finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry'
+
+printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: numeric return predicate migration is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+# Check each projection consumer in its own function.  A global occurrence count
+# cannot prove that one arm was not duplicated while another reader silently lost it.
+require_numeric_projection_arm() {
+  reader_start="$1"
+  reader_end="$2"
+  reader_arm="$3"
+  reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src")"
+  if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
+    echo "FAIL: numeric projection reader $reader_start is missing: $reader_arm"
+    exit 1
+  fi
+}
+
+require_numeric_projection_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
+require_numeric_projection_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
+require_numeric_projection_arm numObligIds defaultAmbiguousNum 'OpNumLit occ => monoUnboundIds occ'
+require_numeric_projection_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
+require_numeric_projection_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
+require_numeric_projection_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
+require_numeric_projection_arm noteNumericObligationChecked checkOneCallObligation 'OpNumLit _ =>'
+require_numeric_projection_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
+require_numeric_projection_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
+require_numeric_projection_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
+require_numeric_projection_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
+
+# Impl bodies read their method declaration and graded scope from one identity-keyed
+# ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
+ce_method_required='inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
+inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List Decl -> Unit
+match ceMethodTyAt iface mname cur ce
+ceMethodTyAt : IfaceRef ->
+  match ceLookupAt key cur ce
+    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)'
+printf '%s\n' "$ce_method_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: impl-body ClassEnv lookup is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+ce_method_retired='useFastIfaceMethodTy
+ifaceMethodTyResolved
+ifaceMethodTy : List Decl ->
+methodTyOf :'
+printf '%s\n' "$ce_method_retired" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$predicate_slot_src"; then
+    echo "FAIL: retired impl-body method lookup remains: $retired"
+    exit 1
+  fi
+done || exit 1
+
+# Eval sizes an elaborated impl definition from its leading dictionary patterns and
+# registers both route words.  Interface declaration arity was a second, colliding
+# authority and must not return.
+eval_req_count_required='buildMethodReqCounts prog = flatMap implMethodReqCounts prog
+DImpl { iface, tys, methods, implOrigin, ... }
+let key = implRouteKeyWord implOrigin iface tys None
+[((mname, tag), count), ((mname, key), count)]
+leadingImplDictPats : List Pat -> Int'
+printf '%s\n' "$eval_req_count_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$eval_src"; then
+    echo "FAIL: eval method requires-count authority is missing: $required"
+    exit 1
+  fi
+done || exit 1
+
+eval_req_count_retired='methodDeclArities
+ifaceMethodArity
+implMethodReqCountEntry arities'
+printf '%s\n' "$eval_req_count_retired" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$eval_src"; then
+    echo "FAIL: retired eval method requires-count authority remains: $retired"
+    exit 1
+  fi
+done || exit 1
+
+numeric_infer_block=$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$predicate_slot_src")
+if printf '%s\n' "$numeric_infer_block" | grep -Fq 'recordMethodDicts "fromInt"'; then
+  echo "FAIL: numeric literal method slots still use the spelling-keyed registry"
+  exit 1
+fi
+if printf '%s\n' "$numeric_infer_block" | grep -Fq 'recordSite "fromInt"'; then
+  echo "FAIL: numeric literal return routing still uses the spelling-derived site payload"
+  exit 1
+fi
 
 predicate_slot_old_consumers='setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
 registerActiveDictVars : String -> Int -> List Int -> Unit

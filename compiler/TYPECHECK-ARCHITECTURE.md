@@ -30,7 +30,7 @@ and [#2586](https://github.com/MedakaLang/medaka/issues/2586).
 |---|---|
 | [repr.mdk](types/repr.mdk) | Type representation, normalization, row algebra and rendering; reads no typechecker state. |
 | [evidence.mdk](types/evidence.mdk) | Nominal scope, binder, goal and request-instance identities, plus request-owned evidence data. |
-| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. These contracts do not yet replace production solving. |
+| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. Numeric return sites consume its complete class predicate; the shared outcome and qualified-scheme contracts do not yet replace production solving. |
 | [scopes.mdk](types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
 | [typecheck.mdk](types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
 
@@ -49,6 +49,23 @@ preserves enclosing or caller-determined variables. Whole-graph defaulting and
 finalized scheme queries remain tracked by
 [#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
 [performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
+
+Numeric return sites carry the prelude's Num predicate from occurrence inference
+to obligation checking and route construction. The route and prerequisite
+dictionaries come from the same selected instance row. Ordinary method-return
+sites retain the legacy spelling-based path; this numeric prerequisite does not
+complete the shared solver or return-family migration. The finalized scheme query
+`checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
+live inference cells. Cache replacement and immutable publication remain with
+[#2549](https://github.com/MedakaLang/medaka/issues/2549).
+
+Implementation-body inference obtains the declared method type and graded scope
+from the identity-indexed `ClassEnv` at the module's visibility ordinal. A different
+interface with the same method spelling cannot suppress body checking. After
+dictionary passing, eval registers prerequisite counts under both short and
+canonical implementation routes, using the actual leading dictionary parameters
+as the LLVM and Wasm consumers do. Missing entries retain the legacy default-method
+fallback; this route compatibility does not replace default evidence construction.
 
 ## 0. How this was derived, and how to re-derive it
 

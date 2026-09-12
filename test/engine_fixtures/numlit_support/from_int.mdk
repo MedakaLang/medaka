@@ -1,0 +1,5 @@
+-- This module's fromInt denotes the prelude Num method. The caller must pass
+-- the selected instance's prerequisite dictionary for lift to execute.
+export
+lift : Num a => Int -> a
+lift n = fromInt n

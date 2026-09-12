@@ -168,7 +168,6 @@ ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
 ifaceDispatchRef : Ref (List ((String, String, String), List Int))
 ifaceIdsAtTagE : String -> List String
 ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
-ifaceMethodArity : IfaceMethod -> (String, Int)
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
 ifaceOfMethod : String -> String
@@ -179,8 +178,8 @@ implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
-implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
-implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
+implMethodReqCountEntries : String -> String -> ImplMethod -> List ((String, String), Int)
+implMethodReqCounts : Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
@@ -202,6 +201,7 @@ joinSp : List String -> String
 keepCand : String -> Value a -> Bool
 keepOrAll : List (Value a) -> List (Value a) -> List (Value a)
 lastOfList : List String -> String
+leadingImplDictPats : List Pat -> Int
 letBindCell : LetBind -> (String, Ref (Value a))
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 listNthAt : List (Value a) -> Int -> Int -> Value a
@@ -237,7 +237,6 @@ mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
 methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
 methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
-methodDeclArities : Decl -> List (String, Int)
 methodReqCountRef : Ref (List ((String, String), Int))
 methodsOfIface : String -> List String
 methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String

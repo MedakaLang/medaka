@@ -1,0 +1,68 @@
+-- Sibling tests for the evaluator's method-dispatch tables.
+
+import test.{expectAll, expectEqual}
+import frontend.ast.{
+  Lit(..),
+  Pat(..),
+  Expr(..),
+  Ty(..),
+  TyConOrigin(..),
+  ImplMethod(..),
+  Decl(..),
+  Loc(..),
+  tyConUnresolved,
+}
+import types.route_key.{implRouteKeyWord}
+import eval.eval.{buildMethodReqCounts}
+
+testLoc : Loc
+testLoc = Loc "" 1 0 1 0
+
+boxTy : Ty
+boxTy = TyApp (tyConUnresolved "Box" None) (TyVar "a")
+
+methodWithDicts : String -> Int -> ImplMethod
+methodWithDicts name count =
+  ImplMethod name (dictPats count ++ [PVar "n" testLoc]) (ELit LUnit)
+
+dictPats : Int -> List Pat
+dictPats count
+  | count <= 0 = []
+  | otherwise =
+    PVar ("$dict_fromInt_" ++ intToString (count - 1)) testLoc
+      :: dictPats (count - 1)
+
+implDecl : String -> TyConOrigin -> Int -> Decl
+implDecl iface origin count = DImpl {
+  pub = False,
+  iface = iface,
+  tys = [boxTy],
+  reqs = [],
+  methods = [methodWithDicts "fromInt" count],
+  implOrigin = origin,
+}
+
+lookupCount : (String, String) -> List ((String, String), Int) -> Option Int
+lookupCount _ [] = None
+lookupCount wanted ((key, count) :: rest)
+  | wanted == key = Some count
+  | otherwise = lookupCount wanted rest
+
+test "method requires counts recognize bare and canonical route words" =
+  let numOrigin = OriginModule "core"
+  let forgeOrigin = OriginModule "fixture"
+  let counts = buildMethodReqCounts [
+    implDecl "Num" numOrigin 1,
+    implDecl "Forge" forgeOrigin 2,
+  ]
+  let numKey = implRouteKeyWord numOrigin "Num" [boxTy] None
+  let forgeKey = implRouteKeyWord forgeOrigin "Forge" [boxTy] None
+  expectAll
+    [
+      -- The short route keeps declaration-order behavior.
+      expectEqual (Some 1) (lookupCount ("fromInt", "Box") counts),
+      -- Canonical collision routes recover the selected definition's own ABI.
+      expectEqual (Some 1) (lookupCount ("fromInt", numKey) counts),
+      expectEqual (Some 2) (lookupCount ("fromInt", forgeKey) counts),
+      expectEqual None (lookupCount ("missing", numKey) counts),
+    ]
