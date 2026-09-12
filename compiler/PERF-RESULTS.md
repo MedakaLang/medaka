@@ -1435,3 +1435,29 @@ allocation increases stay below 0.19%. Against the original session baseline
 remain enabled. These measurements cover checking through the LSP; they do not
 establish retained-live-heap bounds or safe finalized caching, and do not replace
 the separate evaluator and backend validation.
+
+#### Wasm dictionary alias size
+
+The modules arm of `test/wasm/diff_wasm_emitted_size.sh` exposed duplicated
+dispatch bodies after canonical dictionary aliases were admitted. An alias arm
+repeated the implementation call and its argument instructions; nested argument
+dispatches amplified that duplication. The repair in `4a3d2598d` keeps one body
+per implementation and accepts its primary and canonical words in one condition.
+The existing Core pre-scan indexes materialized dictionary keys, so an unused
+canonical alias adds no comparison. Static principal method keys are excluded,
+while their nested prerequisite dictionaries are included.
+
+The same 44 module fixtures were emitted, assembled and validated using each
+revision's own freshly built modules emitter. These are output-size measurements,
+not compiler timing or allocation measurements.
+
+| Revision | Wasm bytes | WAT bytes | Functions | Valid fixtures |
+|---|---:|---:|---:|---:|
+| Current main `42a672d04` | 2,228,572 | 42,875,045 | 2,936 | 44 |
+| Duplicated alias arms `186394ec8` | 3,397,754 | 119,943,232 | 2,942 | 44 |
+| Shared bodies and used-key index `4a3d2598d` | 2,232,700 | 42,893,356 | 2,942 | 44 |
+
+The repaired output fits the existing 2,450,000-byte ceiling without changing it.
+The 15 numeric literal/arithmetic engine fixtures also retain identical pinned
+results across eval, native and Wasm. The index is fresh for each emission; it
+does not introduce a cache across programs.
