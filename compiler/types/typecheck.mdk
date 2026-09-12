@@ -36689,17 +36689,14 @@ maybeInferConstraint sigs callObls addedObls m scope sch
   | omHasKey m driverState.value.sigNameSetRef.value = ()
   | otherwise =
     let boundIds = schemeIds sch
-    -- S-inferred-vector-supply (#1869): the SAME predicate list, read TWICE for two
-    -- different questions — which slots exist (ids, unchanged) and what argument vector
-    -- each slot's predicate carries.  `residualInferredPreds` is evaluated ONCE and both
-    -- questions read its result, so the §3 residual reduction still runs exactly once per
-    -- group (see `residualBoundPreds`).
+    -- Predicate vectors determine both slot existence and slot arguments. A recursive
+    -- sibling can share a direct predicate without having its own occurrence trace.
+    -- Residual reduction runs once, and both projections consume the same result.
     let preds = flatMap oblPredOf addedObls ++ flatMap callPredOf callObls
     let residualPreds = residualInferredPreds boundIds preds
     let vecs = directInferredPreds boundIds preds ++ residualPreds
     let ids =
-      dedupI
-        (inferredConstraintIds m boundIds ++ map inferredPredLead residualPreds)
+      dedupI (inferredConstraintIds m boundIds ++ map inferredPredLead vecs)
     registerInferredFor m scope ids vecs
 
 -- #11 soundness (ALWAYS-ON): for each generalized member, record the deferred impl
@@ -38170,28 +38167,12 @@ residualPredOne fuel (iface, args) = residualPredsOf (fuel - 1) iface args
 residualReduceFuel : Int
 residualReduceFuel = 32
 
--- the residual predicates a group's recorded deltas leave over [boundIds] — the ids
--- half of what `vecOblOfPred` just deferred into the scheme, for the DICT-ABSTRACTION
--- channel (`registerInferredFor`).  Reads the same two deltas through the same two
--- projections, so the two channels cannot see different predicates.
--- ⚠️ ONE ID PER RESIDUAL PREDICATE — its RECEIVER (`leadInferredPred`), not every id in the
--- vector.  `registerInferredFor` opens one dict SLOT per id it is handed
--- (`registerActiveDictVars m 0 ids`), and the DIRECT channel next to it contributes one
--- id per predicate by construction: `methodSiteFns` stores the site's single dispatch
--- mono, so an inferred `Conv a b` from `g x y = conv x y` opens exactly ONE slot holding
--- the whole `Conv` dictionary.  Flat-mapping `voIds` here opened one slot PER ARGUMENT
--- instead — the residual channel disagreeing with the direct channel about what a dict
--- slot IS — which at n >= 2 gave the binding two dict parameters, left the conditional
--- impl's `requires` with no slot keyed on the receiver var to route to, and emitted a
--- NULL element dict.  MEASURED before/after on built binaries.  This is deliberately
--- NOT the "a dict slot is a predicate" change (#1318 / #607 item 3): it makes the
--- residual channel match the cardinality the direct channel already has, it does not
--- change that cardinality.
--- S-inferred-vector-supply (#1869): it now yields the (iface, LEAD id, ARGUMENT VECTOR)
--- triple rather than the lead id alone.  `map inferredPredLead` over the result is
--- byte-identically the id list this used to return — the cardinality note above is
--- untouched, ONE id per residual predicate — and the vector half is what
--- `registerInferredFor` records so an inferred slot stops degrading to the scalar goal.
+-- the residual predicates a group's recorded deltas leave over [boundIds], for the
+-- DICT-ABSTRACTION channel (`registerInferredFor`). Reads the same two deltas through
+-- the same two projections, so the scheme and evidence channels cannot see different
+-- predicates. Each triple carries one COMPLETE predicate: its exact interface, its
+-- lead id and its full argument vector. The producer below deduplicates and opens one
+-- slot per such predicate; the lead is ordering/indexing information, not slot identity.
 residualInferredPreds : List Int ->
   List (IfaceRef, List Mono, Option Loc) ->
   List (IfaceRef, Int, List Mono)
@@ -38206,8 +38187,8 @@ residualInferredPredOf boundIds (iface, ds, loc) =
 
 -- the DIRECT arm's twin: a predicate every one of whose arguments is already a bound
 -- tyvar IS its own residual (`residualVecObls` returns [] for it by design), so its own
--- monos are the vector, and its lead id is the slot `inferredConstraintIds` opens from
--- the very same site through `methodSiteFns`/`dictAppFns`.
+-- monos supply the vector and its lead opens the slot. A recursive sibling can
+-- inherit this predicate without a methodSiteFns/dictAppFns entry of its own.
 directInferredPreds : List Int ->
   List (IfaceRef, List Mono, Option Loc) ->
   List (IfaceRef, Int, List Mono)
@@ -38230,21 +38211,6 @@ leadInferredPred (iface, ids, args) = match ids
 
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
 inferredPredLead (_, id, _) = id
-
--- the argument vector to record for the dict slot [id] of an inferred binding, whose
--- interface is [ifref]: the first deferred predicate that opened THIS slot.  Matching the
--- interface too is load-bearing — `registerInferredFor` opens ONE slot per id, so two
--- predicates on different interfaces (`Ix a b`, `Jx a c`) can share a lead id, and the
--- wrong one's vector would substitute to a wrong-but-concrete goal, which
--- is strictly worse than supplying no vector at all.
--- [] when nothing matches — the slot then keeps the scalar per-tyvar goal
--- (`substArgVec`'s empty arm) that EVERY inferred slot had before this slice, which is
--- the "leave it uncovered" arm, not an invented vector.
-inferredVecFor : IfaceRef -> Int -> List (IfaceRef, Int, List Mono) -> List Mono
-inferredVecFor _ _ [] = []
-inferredVecFor ifref id ((pIface, pId, args) :: rest)
-  | ifref.irName /= "" && ifref.irName == pIface.irName && id == pId = args
-  | otherwise = inferredVecFor ifref id rest
 
 -- the tyvar ids of [monos], in order, iff EVERY mono is a TVar bound by this scheme;
 -- None otherwise (a partial vector is a different predicate — never over-reject).
@@ -38549,7 +38515,8 @@ missingConstraintMsg name iface varName =
   "Could not deduce '\{iface} \{varName}' from the signature of '\{name}'. Its body requires it; add '\{iface} \{varName} =>' to the declared type"
 
 -- the member's own quantified tyvar ids that a body method site / propagated
--- constrained-call sits at (deduped, slot order = discovery order)
+-- constrained-call sits at. This is the legacy trace/fallback supply; complete
+-- predicates add their own leads before slot construction.
 inferredConstraintIds : String -> List Int -> List Int
 inferredConstraintIds m boundIds =
   dedupI
@@ -38570,58 +38537,151 @@ boundTvarId boundIds mono = match normalize mono
   TVar cell => if containsI (tyvarId cell) boundIds then [tyvarId cell] else []
   _ => []
 
--- S-inferred-vector-supply (#1869): [vecs] carries the deferred predicates this
--- binding's slots were opened from, WITH their whole argument vectors, so an inferred
--- constrained binding records a real `funConstraintArgsRef` row instead of the hardcoded
--- `None` that made every inferred call site degrade to the scalar per-tyvar goal —
--- `useIx p q = ix p q` answering by DECLARATION ORDER while its signatured twin answered
--- by DICT-SEMANTICS §3.  The vectors are looked up per slot, keyed on (interface, lead
--- id), and a slot that matches nothing keeps `[]`, i.e. exactly its historical goal.
+-- [vecs] carries every complete deferred predicate this binding recovered. Predicate
+-- identity is the existing `cslotVecKey` (interface/lead plus the full argument vector),
+-- so two predicates may share a lead and still open distinct slots. Trace-only ids with
+-- no recovered predicate keep the historical scalar/PSArgsUnknown fallback.
 registerInferredFor : String ->
   ScopeId ->
   List Int ->
   List (IfaceRef, Int, List Mono) ->
   Unit
-registerInferredFor _ _ [] _ = ()
 registerInferredFor m scope ids vecs =
-  -- #994 (B-3-a): one `CSlot` per id, so the iface list is a `map` over the very list
-  -- that is stored and cannot differ from it in length or order.  ⚠️ This moves
-  -- `ifaceForInferredId`'s evaluation BEFORE the `funConstraintsRef` write (it used to
-  -- sit in the second `setRef`'s argument, i.e. after it); that is sound only because it
-  -- reads `implObls` / `schemeObligationsRef` / the dictionary-application goals and
-  -- NEITHER fn-constraint table — checked, since a recovery that consulted them would change answers here.
   let slots = inferredPredicateSlots m ids vecs
-  let _ = setFunConstraintEntry m slots
-  let _ = registerActiveDictVars scope 0 slots
-  -- #1909, the INFERRED twin of `registerMember`'s call: this writer is likewise ids-only
-  -- (`registerActiveDictVars` above), so an inferred binding whose deferred predicate is
-  -- STRUCTURED (`nest x = tagOf (Wrap x)`) had the same unreachable-`entailAssum` gap as
-  -- the declared one, and OD6(a) (declared and inferred must agree) fails without it.
-  -- The subject comes from the vector `inferredVecFor` already recovers per slot since
-  -- #1869; a slot that recovered nothing carries `[]` and registers nothing, exactly as
-  -- it did before.  See `registerSlotPredGivens` for why this adds no selector call.
-  let _ = registerSlotPredGivens scope 0 slots
-  perRun.value.promotedRef := m :: perRun.value.promotedRef.value
+  if isEmptyL slots then
+    ()
+  else
+    let _ = setFunConstraintEntry m slots
+    let _ = registerActiveDictVars scope 0 slots
+    -- #1909, the inferred twin of `registerMember`: complete predicate slots also
+    -- register their structured givens. PSArgsUnknown fallbacks register nothing.
+    let _ = registerSlotPredGivens scope 0 slots
+    perRun.value.promotedRef := m :: perRun.value.promotedRef.value
 
 inferredPredicateSlots : String ->
   List Int ->
   List (IfaceRef, Int, List Mono) ->
   List PredicateSlot
-inferredPredicateSlots _ [] _ = []
-inferredPredicateSlots m (id :: rest) vecs =
-  let iface = ifaceForInferredId m id
-  let args = inferredVecFor iface id vecs
-  let bound =
-    if isEmptyL args then [id] else dedupI (id :: flatMap monoTyvarIds args)
-  PredicateSlot {
-      psIface = iface,
-      psArgs = if isEmptyL args then PSArgsUnknown else PSArgsKnown args,
-      psBoundIds = bound,
-    }
-    :: inferredPredicateSlots
-      m
-      (filterList (x => not (containsI x bound)) rest)
-      vecs
+inferredPredicateSlots m ids vecs =
+  let pairs = dedupSlotVecs (flatMap inferredPredicatePair vecs)
+  let slots = map (predicateSlotFromExpanded omEmpty) pairs
+  let buckets = inferredSlotBuckets (reverseL slots) omEmpty
+  let covered = inferredSlotCoveredIds slots omEmpty
+  inferredPredicateSlotsGo m ids buckets covered []
+
+-- An empty interface never carried a known vector before this repair: preserve that
+-- compatibility by leaving it to the trace-only PSArgsUnknown fallback.
+inferredPredicatePair : (IfaceRef, Int, List Mono) -> List (CSlot, List Mono)
+inferredPredicatePair (iface, id, args)
+  | iface.irName == "" = []
+  | otherwise = [(CSlot { csIface = iface, csId = id }, args)]
+
+-- Build by cons over a reversed slot list so every lead bucket retains predicate order.
+inferredSlotBuckets : List PredicateSlot ->
+  OrdMap (List PredicateSlot) ->
+  OrdMap (List PredicateSlot)
+inferredSlotBuckets [] acc = acc
+inferredSlotBuckets (slot :: rest) acc = match slot.psBoundIds
+  [] => inferredSlotBuckets rest acc
+  lead :: _ =>
+    let key = intToString lead
+    let bucket = optionOr [] (omLookup key acc)
+    inferredSlotBuckets rest (omInsert key (slot :: bucket) acc)
+
+inferredSlotCoveredIds : List PredicateSlot -> OrdMap Unit -> OrdMap Unit
+inferredSlotCoveredIds [] acc = acc
+inferredSlotCoveredIds (slot :: rest) acc =
+  inferredSlotCoveredIds
+    rest
+    (omFromNames (map intToString slot.psBoundIds) acc)
+
+-- [acc] is reversed. Each bucket is reversed onto it once, so total work is linear
+-- in produced slots rather than repeatedly filtering the remaining id list.
+inferredPredicateSlotsGo : String ->
+  List Int ->
+  OrdMap (List PredicateSlot) ->
+  OrdMap Unit ->
+  List PredicateSlot ->
+  List PredicateSlot
+inferredPredicateSlotsGo _ [] _ _ acc = reverseL acc
+inferredPredicateSlotsGo m (id :: rest) buckets covered acc =
+  match omLookup (intToString id) buckets
+    Some bucket =>
+      inferredPredicateSlotsGo
+        m
+        rest
+        buckets
+        covered
+        (prependPredicateSlots bucket acc)
+    None if omHasKey (intToString id) covered =>
+      inferredPredicateSlotsGo m rest buckets covered acc
+    None =>
+      let slot = PredicateSlot {
+        psIface = ifaceForInferredId m id,
+        psArgs = PSArgsUnknown,
+        psBoundIds = [id],
+      }
+      inferredPredicateSlotsGo m rest buckets covered (slot :: acc)
+
+prependPredicateSlots : List PredicateSlot ->
+  List PredicateSlot ->
+  List PredicateSlot
+prependPredicateSlots [] acc = acc
+prependPredicateSlots (slot :: rest) acc =
+  prependPredicateSlots rest (slot :: acc)
+
+-- Private producer probe: same-lead predicates stay distinct, an exact duplicate
+-- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
+-- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
+-- > inferredPredicateSlotsProbe ()
+-- [("Tweak", ["a", "Int"], ["a"]), ("Tweak", ["a", "Bool"], ["a"]), ("Ix", ["a", "b"], ["a", "b"]), ("Num", ["b"], ["b"]), ("", ["?"], ["c"])]
+inferredPredicateSlotsProbe : Unit -> List (String, List String, List String)
+inferredPredicateSlotsProbe _ =
+  let a = freshVar ()
+  let b = freshVar ()
+  let c = freshVar ()
+  let aid = firstOrZero (monoTyvarIds a)
+  let bid = firstOrZero (monoTyvarIds b)
+  let cid = firstOrZero (monoTyvarIds c)
+  let tweak = ifaceRefBare "Tweak"
+  let slots =
+    inferredPredicateSlots
+      "__inferred_predicate_slot_probe__"
+      [aid, bid, cid]
+      [
+        (tweak, aid, [a, tconBuiltin "Int"]),
+        (tweak, aid, [a, tconBuiltin "Bool"]),
+        (tweak, aid, [a, tconBuiltin "Int"]),
+        (ifaceRefBare "Ix", aid, [a, b]),
+        (ifaceRefBare "Num", bid, [b]),
+      ]
+  map (inferredPredicateSlotProbeRow aid bid cid) slots
+
+inferredPredicateSlotProbeRow : Int ->
+  Int ->
+  Int ->
+  PredicateSlot ->
+  (String, List String, List String)
+inferredPredicateSlotProbeRow aid bid cid slot = (
+  slot.psIface.irName,
+  match slot.psArgs
+    PSArgsUnknown => ["?"]
+    PSArgsKnown args => map (inferredPredicateSlotMonoTag aid bid cid) args,
+  map (inferredPredicateSlotIdTag aid bid cid) slot.psBoundIds,
+)
+
+inferredPredicateSlotMonoTag : Int -> Int -> Int -> Mono -> String
+inferredPredicateSlotMonoTag aid bid cid mono = match normalize mono
+  TVar cell => inferredPredicateSlotIdTag aid bid cid (tyvarId cell)
+  TCon name _ => name
+  _ => "_"
+
+inferredPredicateSlotIdTag : Int -> Int -> Int -> Int -> String
+inferredPredicateSlotIdTag aid bid cid id
+  | id == aid = "a"
+  | id == bid = "b"
+  | id == cid = "c"
+  | otherwise = "_"
 
 -- N5 (inherited, slice 1): entry ABSENCE means "no argument vector was recorded for this
 -- callee at all", and every reader turns it into `(slot, [])` — the historical scalar
