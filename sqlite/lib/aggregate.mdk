@@ -33,7 +33,7 @@
 -- gets you joins, ORDER BY and LIMIT on an aggregate query, which this surface
 -- cannot express.
 --
--- Behaviour preserved by the shim (all still verified by test/aggregate_oracle.sh):
+-- Behaviour preserved by the shim (all still verified by sqlite/test/oracle_test.mdk):
 --   * Output-row layout: group-by key cells (in `groupBy` order) FIRST, then the
 --     aggregate value cells (in `aggs` order).  A caller's `RowType` decodes that
 --     flat layout.  The shim gets this for free by setting the `Select`'s

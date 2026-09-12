@@ -64,7 +64,7 @@
 -- row too large for one page USED to make every mutation on it fail — even one
 -- matching no rows.  The write path now emits overflow pages (`lib.overflow` /
 -- `lib.dbwriter`), so multi-KB TEXT/BLOB rows round-trip through a mutation
--- unharmed; `sqlite/test/overflow_oracle.sh` and `sqlite/test/dml_oracle.sh`
+-- unharmed; `sqlite/test/overflow_oracle.sh` and `sqlite/test/dml_oracle_test.mdk`
 -- gate it.
 
 import lib.sqlite.{
@@ -200,7 +200,7 @@ requireSome msg None = Err msg
 --   row-level statement is a new `f`, not a new storage engine.
 --
 --   (No doctest: it needs a live database file.  Gated end-to-end against the
---   real `sqlite3` CLI by `sqlite/test/dml_oracle.sh`.)
+--   real `sqlite3` CLI by `sqlite/test/dml_oracle_test.mdk`.)
 export
 rewriteTable : String ->
   String ->
@@ -513,7 +513,7 @@ findAssign ((i, cell) :: rest) idx orig =
 --   Returns `Ok n`, the number of rows inserted.
 --
 --   (No doctest: it needs a live database file.  Gated end-to-end against the
---   real `sqlite3` CLI by `sqlite/test/dml_oracle.sh`.)
+--   real `sqlite3` CLI by `sqlite/test/dml_oracle_test.mdk`.)
 export
 insert : String ->
   String ->
@@ -703,7 +703,7 @@ dupKeyName ct (Some i) = ipkName ct i
 --   as written.
 --
 --   (No doctest: it needs a live database file.  Gated end-to-end against the
---   real `sqlite3` CLI by `sqlite/test/dml_oracle.sh`.)
+--   real `sqlite3` CLI by `sqlite/test/dml_oracle_test.mdk`.)
 export
 createTableIn : String ->
   CreateTable ->

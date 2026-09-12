@@ -4,7 +4,7 @@
 -- `lib.select.query`/`queryDistinct` with a non-empty `withColumns` list, so the
 -- executor projects each raw row → a computed cell row BEFORE decode.  Prints one
 -- line per typed row, prefixed by a label, for diffing against `sqlite3` in
--- sqlite/test/projection_oracle.sh.
+-- sqlite/test/oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/projection_demo.mdk -o /tmp/pdemo && /tmp/pdemo <db>
 

@@ -4,7 +4,7 @@
 --
 -- Every expected value was harvested from the freshly-built binary and is
 -- cross-checked against the real sqlite3 CLI by `sqlite/test/sql_oracle.sh`,
--- `sqlite/test/aggregate_oracle.sh`, and the join/distinct oracles.
+-- `sqlite/test/oracle_test.mdk`, and the join/distinct oracles.
 -- Run with: `medaka test sqlite/test/query_test.mdk` from the sqlite project root.
 
 import test.{expectEqual, expectAll}

@@ -747,14 +747,16 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   what it says. When relocating a paragraph out of source rather than
   deleting it outright, the pointer left behind MUST name the destination as
   a **repo-relative path** (e.g. `compiler/STAGE2-DESIGN.md` §4), never a
-  bare prose description — this is currently unverified by any gate
-  (`test/check_doc_links.sh` builds its corpus from `git ls-files '*.md'`,
-  markdown only, so a pointer left in an `.mdk` source comment is never
-  scanned; `test/check_agent_doc_symbols.sh` likewise treats `.md` files as
-  the citing corpus and `.mdk`/`.c` source only as the resolution target, not
-  as a source of citations to check) — a stale relocation pointer is caught
-  only by a human, enforced by review, not by a gate. An unreachable
-  relocation is a deletion with extra steps.
+  bare prose description — this is currently unverified by any gate for a
+  RELOCATED paragraph specifically: `test/check_doc_links.sh`'s citing
+  corpus is `git ls-files '*.md' '*.sh' '*.mdk' '*.txt'` (so a pointer left
+  in an `.mdk` source comment IS scanned, and a truly dead path there does
+  red the gate), but `test/check_agent_doc_symbols.sh` treats `.md` files as
+  the citing corpus and `.mdk`/`.c` source only as the resolution target,
+  not as a source of citations to check — so a pointer that names a real
+  file but the WRONG one (e.g. a superseded regenerator, a retired sibling)
+  is caught by neither gate. A stale-but-live-path relocation pointer is
+  caught only by a human, enforced by review, not by a gate.
   `make comment-census` (`test/comment_register_census.sh`, #2281) derives a
   current on-demand report of these registers; it is not a gate.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you

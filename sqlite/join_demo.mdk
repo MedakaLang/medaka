@@ -3,7 +3,7 @@
 -- Reads a real sqlite3-created DB and runs several `query db (Select{...}) rt`
 -- calls that use `innerJoin`.  Prints one line per typed (wide) row, prefixed
 -- by a per-query label, for diffing against `sqlite3` in
--- sqlite/test/join_oracle.sh.
+-- sqlite/test/oracle_test.mdk.
 --
 -- Combined-row column order = `from` columns, then each join table's columns in
 -- `joins` order.  These demos ORDER BY qualified columns for determinism.

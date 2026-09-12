@@ -393,7 +393,7 @@ REJECTS=(
   #  * an IN (SELECT …) subquery in an UPDATE/DELETE WHERE is refused, not executed
   #    (only SELECT materializes subqueries).  This SELECT-only demo catches it at
   #    the statement parser; the mutate-path message + byte-unchanged DB is asserted
-  #    directly in test/dml_oracle.sh:
+  #    directly in sqlite/test/dml_oracle_test.mdk:
   "UPDATE users SET age = 1 WHERE id IN (SELECT uid FROM orders)"
   # unsupported expression syntax: the ESCAPE clause, GLOB/MATCH/REGEXP,
   # COLLATE, JSON arrows, an unknown scalar function, malformed CASE/IN

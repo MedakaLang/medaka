@@ -1,0 +1,960 @@
+{- | The DML-path differential oracles for the Medaka SQLite library, as one
+   native runner, migrated from five `sqlite/test/{delete,delete_negative,
+   update,update_expr,dml}_oracle.sh` scripts under #2592 / #2593.
+
+   Unlike the READ group (`sqlite/test/oracle_test.mdk`), these five scripts
+   are not uniform in how they derive an expected value:
+
+     * `delete`/`update` compare against a committed golden PLUS several
+       hand-pinned literal strings the scripts' author derived from the seed
+       data once, by hand (`"deleted 2 rows"`, `"1|1|alice|25"`) — not a live
+       sqlite3 query. Both legs are kept below: a literal-expectation test and
+       a separate golden-diff test, mirroring the READ runner's oracle/golden
+       split.
+     * `delete_negative` adds a bit-for-bit "the file was not written to"
+       check, which is a byte comparison, not a line comparison — no live
+       query expresses it.
+     * `update_expr` has NO committed golden: it seeds one database, mutates a
+       COPY through the Medaka probe and the ORIGINAL through the sqlite3 CLI
+       with the textually-equivalent statements, then diffs table state
+       through sqlite3. sqlite3 is the arbiter here, consulted at run time.
+     * `dml_oracle.sh` (373 lines, six sections: DML CORPUS, AUTHORED DB,
+       OVERFLOW, CLI SELECT, REJECTIONS, PARSE PROBE) has neither a golden nor
+       pinned literals — every section runs the SAME SQL text through both the
+       sqlite3 CLI and a native Medaka CLI binary and diffs the two resulting
+       files back through sqlite3 (values, `typeof()`, and hex() of blobs).
+       Sections 1-3 share that exact shape (seed-or-not, run a corpus through
+       both engines, diff the databases) and are combined into ONE test;
+       sections 4-6 test a materially different property each (CLI rendering,
+       clean-refusal-with-no-write, and the parser alone) and stay separate.
+       That is four `dml_oracle` tests below, not six — a deliberate MERGE of
+       the first three sections, not a smaller property count.
+
+   `python3` is gone: the two multi-KB OVERFLOW values are built with
+   `list.replicate` + `string.join` instead of shelling out to generate them.
+
+   Run: `medaka gate run sqlite/test/dml_oracle`. -}
+
+-- The spawn primitives below (`spawnRaw`/`spawnOut`/`rowScratch`/`seedDb`/
+-- `spawnEnv`/`emitterBin`) are byte-for-byte the same as
+-- `writer_oracle_test.mdk`'s copies — deliberately, not an oversight:
+-- `medaka gate verify`'s native-grading clause reads only the source text of
+-- the module a gate's `run =` names, so moving these into a module the two
+-- files share would make the check see nothing to grade in either file and
+-- pass having verified neither.
+import io.{getEnvOr, runVerb}
+import list.{replicate}
+import string.{contains, join, startsWith, trim, unwords}
+import test.{Expectation(..), expectAll, expectEqual, expectTextContainsAll}
+import test.oracle_support.{expectLines, flatLines, labelFail, outLines}
+import test_process.{
+  boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
+}
+
+-- # Spawning
+--
+-- Kept in THIS file, not `oracle_support`, for the same reason
+-- `oracle_test.mdk` keeps its own copy: `medaka gate verify`'s native-grading
+-- clause reads only the source text of the module a gate's `run =` names, so
+-- a spawn routed through a shared helper module would be invisible to it —
+-- the check would find nothing to flag and pass having verified nothing.
+--
+-- `spawnOut` and `spawnRaw` are NOT the same function as `oracle_test.mdk`'s
+-- `spawnOut`: this file also needs a TOLERANT form (`spawnRaw`) for the
+-- `dml_oracle` sections, which legitimately expect either engine to REFUSE a
+-- statement — a non-zero exit there is data, not a spawn failure. Splitting
+-- the strict form on top of the tolerant one is a different decomposition
+-- from `oracle_test.mdk`'s single four-clause function, not a copy of it.
+buildTimeoutSeconds : Int
+buildTimeoutSeconds = 600
+
+queryTimeoutSeconds : Int
+queryTimeoutSeconds = 120
+
+emitterBin : <IO> String
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
+emitterBin =
+  let root = medakaRoot
+  getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
+
+spawnEnv : <IO> List String
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
+spawnEnv =
+  let rootVar = "MEDAKA_ROOT=\{medakaRoot}"
+  let emitterVar = "MEDAKA_EMITTER=\{emitterBin}"
+  [rootVar, emitterVar]
+
+{- | `cmd` run with `args` under a `secs` ceiling: the raw `(exit, stdout,
+   stderr)`, except a missing `cmd` (exit 127 through `env`) or a spawn that
+   never started, which are both reported as `Err` — there is no row in this
+   file where "the binary was not on PATH" should be read as "it printed
+   nothing and exited 0". -}
+spawnRaw : Int ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
+spawnRaw secs cmd args =
+  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
+    Err e =>
+      Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
+    Ok (127, _, err) =>
+      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
+    Ok triple => Ok triple
+
+{- | `spawnRaw`, demanding a clean exit: the row's stdout on 0, a named
+   failure otherwise. What every build/seed/build-and-run step in this file
+   goes through — a row where the tool itself failed is not the same
+   condition as a row whose SQL was refused. -}
+spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
+spawnOut secs cmd args = match spawnRaw secs cmd args
+  Err e => Err e
+  Ok (0, out, _) => Ok out
+  Ok (code, out, err) =>
+    Err
+      "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- # Small process-backed primitives every row below is built from.
+
+rowScratch : String -> <Exec "_"> Result String String
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
+rowScratch name = match scratchDir
+  Err e => Err "\{name}: \{e}"
+  Ok dir => Ok "\{dir}/\{name}"
+
+buildBin : List String -> String -> String -> <Exec "_", IO> Result String Unit
+buildBin flags entry bin =
+  map
+    (_ => ())
+    (spawnOut
+      buildTimeoutSeconds
+      medakaBin
+      (["build"] ++ flags ++ [underRoot entry, "-o", bin]))
+
+seedDb : String -> String -> <Exec "_", IO> Result String Unit
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
+seedDb db sql = map (_ => ()) (spawnOut queryTimeoutSeconds "sqlite3" [db, sql])
+
+copyFile : String -> String -> <Exec "_", IO> Result String Unit
+copyFile src dst = map (_ => ()) (spawnOut queryTimeoutSeconds "cp" [src, dst])
+
+sqlite3Args : String -> List String -> <Exec "_", IO> Result String String
+sqlite3Args db args =
+  let full = db :: args
+  spawnOut queryTimeoutSeconds "sqlite3" full
+
+sqlite3Query : String -> String -> <Exec "_", IO> Result String String
+sqlite3Query db sql = sqlite3Args db [sql]
+
+byteUnchanged : Bool -> Expectation
+byteUnchanged True = Pass "bit-for-bit unchanged" "bit-for-bit unchanged"
+byteUnchanged False =
+  Fail
+    "the database file was modified despite the Err"
+    "bit-for-bit unchanged"
+    "modified"
+
+-- # delete
+--
+-- `sqlite/test/delete_oracle.sh`: two `delete_demo` calls on one seeded db,
+-- checked against HAND-DERIVED literal strings (not a live sqlite3 query —
+-- the original script never asked sqlite3 what it expected, a human decided
+-- once), plus the committed golden.
+
+deleteSeedSql : String
+deleteSeedSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER); INSERT INTO users(id,name,age) VALUES (1,'alice',25),(5,'bob',30),(9,'carol',55); CREATE TABLE kv(k TEXT, v INTEGER); INSERT INTO kv(rowid,k,v) VALUES (1,'a',10),(3,'b',30),(4,'c',40);"
+
+data DeleteRun = DeleteRun {
+  integrityCheck : String,
+  usersDeleted : String,
+  kvDeleted : String,
+  usersAfter : List String,
+  kvAfter : List String,
+  readerUsers : List String,
+  readerKv : List String,
+}
+
+deleteReport : DeleteRun -> List String
+deleteReport r = flatLines [
+  ["# integrity_check"],
+  [r.integrityCheck],
+  ["# delete users result"],
+  [r.usersDeleted],
+  ["# delete kv result"],
+  [r.kvDeleted],
+  ["# users after (rowid,id,name,age)"],
+  r.usersAfter,
+  ["# kv after (rowid,k,v)"],
+  r.kvAfter,
+  ["# reader: users"],
+  r.readerUsers,
+  ["# reader: kv"],
+  r.readerKv,
+]
+
+-- The literals `delete_oracle.sh`'s Gates 1-6 pinned by hand.
+deleteExpectedLines : List String
+deleteExpectedLines = [
+  "# integrity_check",
+  "ok",
+  "# delete users result",
+  "deleted 2 rows",
+  "# delete kv result",
+  "deleted 2 rows",
+  "# users after (rowid,id,name,age)",
+  "1|1|alice|25",
+  "# kv after (rowid,k,v)",
+  "1|a|10",
+  "# reader: users",
+  "1|alice|25",
+  "# reader: kv",
+  "a|10",
+]
+
+deleteResult : <Exec "_", IO> Result String DeleteRun
+deleteResult = match rowScratch "dml-delete"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let deleter = "\{prefix}-deleter"
+    let reader = "\{prefix}-reader"
+    let out = runDelete db deleter reader
+    let _ = runVerb "rm" ["-rf", db, deleter, reader]
+    out
+
+runDelete : String -> String -> String -> <Exec "_", IO> Result String DeleteRun
+runDelete db deleter reader = do
+  _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
+  _ <- buildBin [] "sqlite/main.mdk" reader
+  _ <- seedDb db deleteSeedSql
+  usersOut <- spawnOut queryTimeoutSeconds deleter [
+    db, "users", "age", "ge", "30"
+  ]
+  kvOut <- spawnOut queryTimeoutSeconds deleter [db, "kv", "v", "gt", "25"]
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  usersAfter <- sqlite3Query
+    db
+    "SELECT rowid,id,name,age FROM users ORDER BY rowid;"
+  kvAfter <- sqlite3Query db "SELECT rowid,k,v FROM kv ORDER BY rowid;"
+  readerUsers <- spawnOut queryTimeoutSeconds reader [db, "users"]
+  readerKv <- spawnOut queryTimeoutSeconds reader [db, "kv"]
+  Ok DeleteRun {
+    integrityCheck = trim ic,
+    usersDeleted = trim usersOut,
+    kvDeleted = trim kvOut,
+    usersAfter = outLines usersAfter,
+    kvAfter = outLines kvAfter,
+    readerUsers = outLines readerUsers,
+    readerKv = outLines readerKv,
+  }
+
+test "delete: literal gates match the hand-derived expected values" =
+  match deleteResult
+    Err e => Fail e (join "\n" deleteExpectedLines) "the row did not run"
+    Ok r => expectLines deleteExpectedLines (deleteReport r)
+
+test "delete: report matches sqlite/test/delete.golden" = match deleteResult
+  Err e => Fail e "the committed golden" "the row did not run"
+  Ok r => match readFile (underRoot "sqlite/test/delete.golden")
+    Err e =>
+      Fail
+        "could not read sqlite/test/delete.golden: \{e}"
+        "sqlite/test/delete.golden"
+        "unreadable"
+    Ok text => expectLines (outLines text) (deleteReport r)
+
+-- # delete_negative
+--
+-- `sqlite/test/delete_negative_oracle.sh`: a database WITH a secondary index
+-- must refuse the mutation and leave the file byte-for-byte untouched — a
+-- property no line-wise diff expresses, so it is a raw-byte comparison via
+-- the prelude's `readFileBytes`, read once before and once after.
+
+negativeSeedSql : String
+negativeSeedSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER); CREATE INDEX idx_age ON users(age); INSERT INTO users(id,name,age) VALUES (1,'alice',25),(2,'bob',30);"
+
+data NegativeRun = NegativeRun {
+  deleteOut : String,
+  bytesUnchanged : Bool,
+  integrityCheck : String,
+  rowsAfter : List String,
+}
+
+negativeReport : NegativeRun -> List String
+negativeReport r = flatLines [
+  ["# delete result"],
+  [r.deleteOut],
+  ["# db unchanged (0 = identical)"],
+  [if r.bytesUnchanged then "0" else "1"],
+  ["# sqlite3 still readable (integrity_check)"],
+  [r.integrityCheck],
+  ["# rows still present"],
+  r.rowsAfter,
+]
+
+negativeResult : <Exec "_", FileRead "_", IO> Result String NegativeRun
+negativeResult = match rowScratch "dml-delete-negative"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let deleter = "\{prefix}-deleter"
+    let out = runNegative db deleter
+    let _ = runVerb "rm" ["-rf", db, deleter]
+    out
+
+runNegative : String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String NegativeRun
+runNegative db deleter = do
+  _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
+  _ <- seedDb db negativeSeedSql
+  before <- readFileBytes db
+  delOut <- spawnOut queryTimeoutSeconds deleter [db, "users", "age", "gt", "0"]
+  after <- readFileBytes db
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  rows <- sqlite3Query db "SELECT rowid,id,name,age FROM users ORDER BY rowid;"
+  Ok NegativeRun {
+    deleteOut = trim delOut,
+    bytesUnchanged = before == after,
+    integrityCheck = trim ic,
+    rowsAfter = outLines rows,
+  }
+
+test "delete_negative: refused with the clean Err, and the database is untouched" =
+  match negativeResult
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok r => expectAll [
+      expectEqual
+        "Error: cannot mutate: database has indexes (would be silently dropped)"
+        r.deleteOut,
+      byteUnchanged r.bytesUnchanged,
+      expectEqual "ok" r.integrityCheck,
+    ]
+
+test "delete_negative: report matches sqlite/test/delete_negative.golden" =
+  match negativeResult
+    Err e => Fail e "the committed golden" "the row did not run"
+    Ok r => match readFile (underRoot "sqlite/test/delete_negative.golden")
+      Err e =>
+        Fail
+          "could not read sqlite/test/delete_negative.golden: \{e}"
+          "sqlite/test/delete_negative.golden"
+          "unreadable"
+      Ok text => expectLines (outLines text) (negativeReport r)
+
+-- # update
+--
+-- `sqlite/test/update_oracle.sh`: the same hand-derived-literal-plus-golden
+-- shape as `delete`, with an added negative case (SET on the IPK column).
+
+updateSeedSql : String
+updateSeedSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER); INSERT INTO users(id,name,age) VALUES (1,'alice',25),(5,'bob',30),(9,'carol',55); CREATE TABLE kv(k TEXT, v INTEGER); INSERT INTO kv(rowid,k,v) VALUES (1,'a',10),(3,'b',30),(4,'c',40);"
+
+updateIpkSeedSql : String
+updateIpkSeedSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER); INSERT INTO users(id,name,age) VALUES (1,'alice',25),(2,'bob',30);"
+
+data UpdateRun = UpdateRun {
+  integrityCheck : String,
+  usersUpdated : String,
+  kvUpdated : String,
+  usersAfter : List String,
+  kvAfter : List String,
+  ipkOut : String,
+  ipkUnchanged : Bool,
+}
+
+updateReport : UpdateRun -> List String
+updateReport r = flatLines [
+  ["# integrity_check users/kv db"],
+  [r.integrityCheck],
+  ["# update users result"],
+  [r.usersUpdated],
+  ["# update kv result"],
+  [r.kvUpdated],
+  ["# users after (rowid,id,name,age)"],
+  r.usersAfter,
+  ["# kv after (rowid,k,v)"],
+  r.kvAfter,
+  ["# negative: SET IPK column result"],
+  [r.ipkOut],
+  ["# negative: db unchanged (0 = identical)"],
+  [if r.ipkUnchanged then "0" else "1"],
+]
+
+updateExpectedLines : List String
+updateExpectedLines = [
+  "# integrity_check users/kv db",
+  "ok",
+  "# update users result",
+  "updated 2 rows",
+  "# update kv result",
+  "updated 2 rows",
+  "# users after (rowid,id,name,age)",
+  "1|1|alice|25",
+  "5|5|bob|99",
+  "9|9|carol|99",
+  "# kv after (rowid,k,v)",
+  "1|a|10",
+  "3|b|0",
+  "4|c|0",
+  "# negative: SET IPK column result",
+  "Error: cannot UPDATE the INTEGER PRIMARY KEY column",
+  "# negative: db unchanged (0 = identical)",
+  "0",
+]
+
+updateResult : <Exec "_", FileRead "_", IO> Result String UpdateRun
+updateResult = match rowScratch "dml-update"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let dbIpk = "\{prefix}-ipk.db"
+    let updater = "\{prefix}-updater"
+    let out = runUpdate db dbIpk updater
+    let _ = runVerb "rm" ["-rf", db, dbIpk, updater]
+    out
+
+runUpdate : String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String UpdateRun
+runUpdate db dbIpk updater = do
+  let usersArgs = [db, "users", "age", "int", "99", "age", "ge", "30"]
+  let kvArgs = [db, "kv", "v", "int", "0", "v", "gt", "25"]
+  let ipkArgs = [dbIpk, "users", "id", "int", "999", "age", "ge", "0"]
+  _ <- buildBin [] "sqlite/update_demo.mdk" updater
+  _ <- seedDb db updateSeedSql
+  usersOut <- spawnOut queryTimeoutSeconds updater usersArgs
+  kvOut <- spawnOut queryTimeoutSeconds updater kvArgs
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  usersAfter <- sqlite3Query
+    db
+    "SELECT rowid,id,name,age FROM users ORDER BY rowid;"
+  kvAfter <- sqlite3Query db "SELECT rowid,k,v FROM kv ORDER BY rowid;"
+  _ <- seedDb dbIpk updateIpkSeedSql
+  before <- readFileBytes dbIpk
+  ipkOut <- spawnOut queryTimeoutSeconds updater ipkArgs
+  after <- readFileBytes dbIpk
+  Ok UpdateRun {
+    integrityCheck = trim ic,
+    usersUpdated = trim usersOut,
+    kvUpdated = trim kvOut,
+    usersAfter = outLines usersAfter,
+    kvAfter = outLines kvAfter,
+    ipkOut = trim ipkOut,
+    ipkUnchanged = before == after,
+  }
+
+test "update: literal gates match the hand-derived expected values" =
+  match updateResult
+    Err e => Fail e (join "\n" updateExpectedLines) "the row did not run"
+    Ok r => expectLines updateExpectedLines (updateReport r)
+
+test "update: report matches sqlite/test/update.golden" = match updateResult
+  Err e => Fail e "the committed golden" "the row did not run"
+  Ok r => match readFile (underRoot "sqlite/test/update.golden")
+    Err e =>
+      Fail
+        "could not read sqlite/test/update.golden: \{e}"
+        "sqlite/test/update.golden"
+        "unreadable"
+    Ok text => expectLines (outLines text) (updateReport r)
+
+-- # update_expr
+--
+-- `sqlite/test/update_expr_oracle.sh`: NO golden — sqlite3 is asked, at run
+-- time, for the equivalent statements' effect on a COPY of the same seed, and
+-- the two resulting table states are diffed. The contract's own §4.1 table
+-- calls this row "golden"; it is not (finding, this slice's report).
+
+updateExprSeedSql : String
+updateExprSeedSql =
+  "CREATE TABLE t1(id INTEGER PRIMARY KEY, total INTEGER); INSERT INTO t1 VALUES(1,100),(2,50),(3,5); CREATE TABLE t2(id INTEGER PRIMARY KEY, x INTEGER); INSERT INTO t2 VALUES(1,3),(2,7); CREATE TABLE t3(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, c INTEGER); INSERT INTO t3 VALUES(1,2,3,0),(2,10,20,0); CREATE TABLE t4(id INTEGER PRIMARY KEY, n INTEGER); INSERT INTO t4 VALUES(1,7),(2,-7); CREATE TABLE t5(id INTEGER PRIMARY KEY, n INTEGER, d INTEGER); INSERT INTO t5 VALUES(1,10,0); CREATE TABLE t6(id INTEGER PRIMARY KEY, n INTEGER); INSERT INTO t6 VALUES(1,7),(2,-7); CREATE TABLE t7(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER); INSERT INTO t7 VALUES(1,100,200); CREATE TABLE t8(id INTEGER PRIMARY KEY, p REAL); INSERT INTO t8 VALUES(1,2.5),(2,4.0);"
+
+updateExprSqliteStmts : String
+updateExprSqliteStmts =
+  "UPDATE t1 SET total = total + 10 WHERE total >= 50; UPDATE t2 SET x = x * 2 WHERE id >= 0; UPDATE t3 SET c = a + b WHERE id >= 0; UPDATE t4 SET n = n / 2 WHERE id >= 0; UPDATE t5 SET n = n / d WHERE id >= 0; UPDATE t6 SET n = n % 3 WHERE id >= 0; UPDATE t7 SET a = b, b = a WHERE id >= 0; UPDATE t8 SET p = p * 1.5 WHERE id >= 0;"
+
+updateExprCounts : List String
+updateExprCounts = [
+  "t1 total+=10 WHERE total>=50: updated 2 rows",
+  "t2 x*=2: updated 2 rows",
+  "t3 c=a+b: updated 2 rows",
+  "t4 n=n/2: updated 2 rows",
+  "t5 n=n/d (div by zero): updated 1 rows",
+  "t6 n=n%3: updated 2 rows",
+  "t7 swap a,b: updated 1 rows",
+  "t8 p*=1.5 (float): updated 2 rows",
+]
+
+updateExprTables : List String
+updateExprTables = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"]
+
+data UpdateExprRun = UpdateExprRun {
+  integrityCheck : String,
+  probeOut : String,
+  tableDiffs : List Expectation,
+}
+
+updateExprResult : <Exec "_", FileRead "_", IO> Result String UpdateExprRun
+updateExprResult = match rowScratch "dml-update-expr"
+  Err e => Err e
+  Ok prefix =>
+    let dbm = "\{prefix}-m.db"
+    let dbs = "\{prefix}-s.db"
+    let probe = "\{prefix}-probe"
+    let out = runUpdateExpr dbm dbs probe
+    let _ = runVerb "rm" ["-rf", dbm, dbs, probe]
+    out
+
+runUpdateExpr : String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String UpdateExprRun
+runUpdateExpr dbm dbs probe = do
+  _ <- buildBin ["--allow-internal"] "sqlite/update_expr_demo.mdk" probe
+  _ <- seedDb dbm updateExprSeedSql
+  _ <- copyFile dbm dbs
+  probeOut <- spawnOut queryTimeoutSeconds probe [dbm]
+  _ <- seedDb dbs updateExprSqliteStmts
+  ic <- sqlite3Query dbm "PRAGMA integrity_check;"
+  diffs <- traverse (tableDiff dbm dbs) updateExprTables
+  Ok UpdateExprRun {
+    integrityCheck = trim ic,
+    probeOut = probeOut,
+    tableDiffs = diffs,
+  }
+
+tableDiff : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String Expectation
+tableDiff dbm dbs t = do
+  let args =
+    [".mode list", ".nullvalue NULL", "SELECT * FROM \{t} ORDER BY id;"]
+  mm <- sqlite3Args dbm args
+  ss <- sqlite3Args dbs args
+  Ok (labelFail t (expectLines (outLines ss) (outLines mm)))
+
+test "update_expr: arithmetic UPDATE matches the sqlite3 CLI on every table" =
+  match updateExprResult
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok r =>
+      expectAll
+        ([
+            expectEqual "ok" r.integrityCheck,
+            expectTextContainsAll updateExprCounts r.probeOut,
+          ]
+          ++ r.tableDiffs)
+
+-- # dml
+--
+-- `sqlite/test/dml_oracle.sh`'s six sections. See the module header for why
+-- sections 1-3 share one test and 4-6 stay separate.
+
+isErrPrefixed : String -> Bool
+isErrPrefixed s = startsWith "error:" s || startsWith "Error:" s
+
+{- | `sql` run through BOTH engines against `mdb`/`sdb`: neither is expected
+   to refuse anything in a DML/DDL corpus, so a refusal from either side is
+   REPORTED, not fatal — a later statement may depend on an earlier one
+   having landed, exactly as `dml_oracle.sh`'s `both()` kept going. -}
+bothFailures : String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String (List String)
+bothFailures cli mdb sdb sql = do
+  (_, mout, merr) <- spawnRaw queryTimeoutSeconds cli [mdb, sql]
+  (scode, sout, serr) <- spawnRaw queryTimeoutSeconds "sqlite3" [sdb, sql]
+  let mCombined = trim (mout ++ merr)
+  let sCombined = trim (sout ++ serr)
+  Ok
+    ((if isErrPrefixed mCombined then
+        ["Medaka refused a supported statement: \{sql}\n    \{mCombined}"]
+      else
+        [])
+      ++ (if scode /= 0 then
+        ["sqlite3 refused the corpus statement: \{sql}\n    \{sCombined}"]
+      else
+        []))
+
+runCorpus : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String (List String)
+runCorpus cli mdb sdb sqls =
+  map flatLines (traverse (bothFailures cli mdb sdb) sqls)
+
+noFailures : String -> List String -> Expectation
+noFailures _ [] = Pass "no refusals" "no refusals"
+noFailures label fs =
+  Fail "\{label}: \{join "; " fs}" "no refusals" (join "; " fs)
+
+dumpOneTable : String -> String -> <Exec "_", IO> Result String (List String)
+dumpOneTable db tbl = do
+  let colsSql =
+    "SELECT group_concat('typeof(\"' || name || '\"), hex(\"' || name || '\")', ', ') FROM pragma_table_info('\{tbl}');"
+  colsRaw <- sqlite3Query db colsSql
+  rows <- sqlite3Query
+    db
+    "SELECT rowid, \{trim colsRaw} FROM \"\{tbl}\" ORDER BY rowid;"
+  Ok (["# table \{tbl}"] ++ outLines rows)
+
+dumpDb : String -> <Exec "_", IO> Result String (List String)
+dumpDb db = do
+  let tblSql =
+    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+  schemaRaw <- sqlite3Query
+    db
+    "SELECT type, name FROM sqlite_master ORDER BY name;"
+  tblRaw <- sqlite3Query db tblSql
+  rest <- map flatLines (traverse (dumpOneTable db) (outLines tblRaw))
+  Ok (outLines schemaRaw ++ rest)
+
+-- Both databases read back through sqlite3, never through the Medaka CLI:
+-- comparing through the ENGINE the corpus is meant to agree with is the
+-- point — a Medaka-vs-Medaka diff would only prove self-consistency.
+compareDbs : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String Expectation
+compareDbs label mdb sdb = do
+  icRaw <- sqlite3Query mdb "PRAGMA integrity_check;"
+  let ic = trim icRaw
+  if ic /= "ok" then
+    Ok (Fail "\{label}: PRAGMA integrity_check = \{ic}" "ok" ic)
+  else do
+    md <- dumpDb mdb
+    sd <- dumpDb sdb
+    Ok (labelFail label (expectLines sd md))
+
+runCorpusSection : String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String Expectation
+runCorpusSection cli label mdb sdb sqls = do
+  failures <- runCorpus cli mdb sdb sqls
+  cmp <- compareDbs label mdb sdb
+  Ok (expectAll [noFailures label failures, cmp])
+
+-- ── section 1: DML CORPUS (both dbs start empty) ─────────────────────────
+dmlCorpus : List String
+dmlCorpus = [
+  "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, score REAL)",
+  "CREATE TABLE kv (k TEXT, b BLOB, note VARCHAR(20))",
+  "CREATE TABLE bare (a, n INTEGER)",
+  "CREATE TABLE aff (id INTEGER PRIMARY KEY, i INTEGER, r REAL, t TEXT, b BLOB)",
+  "INSERT INTO users VALUES (1, 'ada', 30, 9.5)",
+  "INSERT INTO users VALUES (2, 'bob', NULL, NULL)",
+  "INSERT INTO users VALUES (10, 'cyd', 24, 1.0), (11, 'dee', 40, 2.5), (12, 'eve', -3, -0.25)",
+  "INSERT INTO users (name, age) VALUES ('fay', 19)",
+  "INSERT INTO users (age, name) VALUES (55, 'gus')",
+  "INSERT INTO users (id, name) VALUES (NULL, 'hal')",
+  "INSERT INTO users VALUES (3, 'ivy', 66, 0.0)",
+  "INSERT INTO users (id, name, age) VALUES (2 * 10 + 1, 'jan', 7 - 2)",
+  "INSERT INTO aff VALUES (1, '5', '2.5', 1, '7')",
+  "INSERT INTO aff VALUES (2, '1.5', 3, 2.5, X'41')",
+  "INSERT INTO aff VALUES (3, 'abc', 'zz', NULL, 9)",
+  "INSERT INTO aff VALUES (4, 2.0, '1e3', '3', NULL)",
+  "INSERT INTO aff (id, i, r, t) VALUES (5, '  7 ', '.5', 1.5)",
+  "INSERT INTO aff (id, i) VALUES (6, '0012')",
+  "INSERT INTO kv VALUES ('a', X'004142FF', 'plain')",
+  "INSERT INTO kv VALUES ('it''s', NULL, '')",
+  "INSERT INTO kv (k) VALUES ('only-k')",
+  "INSERT INTO bare VALUES ('x', 1), ('y', 2)",
+  "INSERT INTO bare (n) VALUES (3)",
+  "UPDATE users SET age = age + 1 WHERE id > 10",
+  "UPDATE users SET score = score * 2, name = 'DEE' WHERE id = 11",
+  "UPDATE users SET score = NULL WHERE age IS NULL",
+  "UPDATE bare SET n = n * 10",
+  "UPDATE users SET age = '77' WHERE id = 1",
+  "UPDATE aff SET t = 42, r = 8 WHERE id = 6",
+  "UPDATE kv SET b = X'4243' WHERE k = 'only-k'",
+  "DELETE FROM users WHERE age IS NULL",
+  "DELETE FROM users WHERE NOT score > 0.0",
+  "DELETE FROM kv WHERE k = 'nosuch'",
+]
+
+-- ── section 2: AUTHORED DB (sqlite3-seeded, Medaka-mutated) ──────────────
+dmlAuthoredSeedSql : String
+dmlAuthoredSeedSql =
+  "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, city TEXT); CREATE TABLE orders (oid INTEGER PRIMARY KEY, uid INTEGER, amt INTEGER); INSERT INTO users VALUES (1,'ada','pdx'),(2,'bob','nyc'),(3,'cyd',NULL); INSERT INTO orders VALUES (1,1,100),(2,2,200),(3,1,50);"
+
+dmlAuthored : List String
+dmlAuthored = [
+  "INSERT INTO users VALUES (4, 'dee', 'sea')",
+  "INSERT INTO orders (uid, amt) VALUES (4, 999)",
+  "UPDATE orders SET amt = amt * 2 WHERE uid = 1",
+  "DELETE FROM users WHERE city IS NULL",
+  "CREATE TABLE tags (t TEXT NOT NULL)",
+  "INSERT INTO tags VALUES ('new')",
+]
+
+-- ── section 3: OVERFLOW (multi-KB values through the DML path) ──────────
+overflowLengths : String -> <Exec "_", IO> Result String Expectation
+overflowLengths db = do
+  raw <- sqlite3Query db "SELECT length(body) FROM docs ORDER BY rowid;"
+  Ok (labelFail "overflow" (expectLines ["9000", "5000"] (outLines raw)))
+
+-- ── section 4: CLI SELECT (byte-identical to the sqlite3 CLI) ────────────
+dmlSelects : List String
+dmlSelects = [
+  "SELECT * FROM users ORDER BY id",
+  "SELECT id, name, age, score FROM users ORDER BY id",
+  "SELECT name FROM users WHERE age > 20 ORDER BY name",
+  "SELECT name, age FROM users WHERE score IS NULL ORDER BY id",
+  "SELECT count(*), sum(age), min(age), max(age) FROM users",
+  "SELECT age, count(*) FROM users GROUP BY age HAVING count(*) >= 1 ORDER BY age",
+  "SELECT DISTINCT age FROM users ORDER BY age",
+  "SELECT id, age * 2, score + 0.5 FROM users ORDER BY id LIMIT 3",
+  "SELECT id, name FROM users ORDER BY id DESC LIMIT 2 OFFSET 1",
+  "select k, note from kv order by k",
+  "SELECT * FROM bare ORDER BY n",
+  "SELECT a, n FROM bare WHERE n IS NOT NULL ORDER BY n",
+  "SELECT users.name, users.age FROM users INNER JOIN bare ON users.age = bare.n ORDER BY users.id",
+  "SELECT id, i, r, t FROM aff ORDER BY id",
+  "SELECT id FROM aff WHERE i = 5",
+]
+
+cliSelectOne : String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String Expectation
+cliSelectOne cli mdb sdb q = do
+  (_, mout, merr) <- spawnRaw queryTimeoutSeconds cli [mdb, q]
+  (_, sout, serr) <- spawnRaw queryTimeoutSeconds "sqlite3" [sdb, q]
+  Ok
+    (labelFail
+      q
+      (expectLines (outLines (sout ++ serr)) (outLines (mout ++ merr))))
+
+cliSelectExpectation : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String Expectation
+cliSelectExpectation cli mdb sdb = do
+  diffs <- traverse (cliSelectOne cli mdb sdb) dmlSelects
+  Ok (expectAll diffs)
+
+-- ── section 5: REJECTIONS (clean error, no write) ────────────────────────
+dmlRejectSeedSql : String
+dmlRejectSeedSql =
+  "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL, n INTEGER); INSERT INTO t VALUES (1,'a',10),(2,'b',20);"
+
+dmlRejects : List String
+dmlRejects = [
+  "INSERT INTO t VALUES (1, 'dup', 1)",
+  "INSERT INTO t (id, name) VALUES (2, 'dup')",
+  "INSERT INTO t (n) VALUES (5)",
+  "INSERT INTO t VALUES (3, NULL, 1)",
+  "INSERT INTO t (id, name) VALUES ('abc', 'x')",
+  "UPDATE t SET name = NULL WHERE id = 1",
+  "UPDATE t SET id = 9 WHERE id = 1",
+  "INSERT INTO t VALUES (3, 'c')",
+  "INSERT INTO t VALUES (3, 'c', 1, 2)",
+  "INSERT INTO t (id, name) VALUES (3)",
+  "INSERT INTO t (nosuch) VALUES (1)",
+  "INSERT INTO t (id, id) VALUES (3, 4)",
+  "INSERT INTO nosuch VALUES (1)",
+  "UPDATE t SET nosuch = 1",
+  "UPDATE nosuch SET n = 1",
+  "DELETE FROM nosuch",
+  "DELETE FROM t WHERE nosuch = 1",
+  "INSERT INTO t VALUES (3, name, 1)",
+  "CREATE TABLE t (a INTEGER)",
+  "DROP TABLE t",
+  "ALTER TABLE t ADD COLUMN x INTEGER",
+  "CREATE INDEX i ON t(name)",
+  "CREATE TABLE u (a INTEGER) WITHOUT ROWID",
+  "CREATE TABLE u (k TEXT PRIMARY KEY)",
+  "CREATE TABLE u (a INTEGER DEFAULT 1)",
+  "CREATE TABLE u (a INTEGER, UNIQUE(a))",
+  "INSERT INTO t SELECT * FROM t",
+  "INSERT OR REPLACE INTO t VALUES (1, 'x', 1)",
+  "UPDATE t SET n = 1 LIMIT 1",
+  "DELETE FROM t ORDER BY id",
+  "TRUNCATE t",
+  "SELEC * FROM t",
+  "UPDATE t SET n = 0 WHERE id IN (SELECT id FROM t)",
+  "DELETE FROM t WHERE id NOT IN (SELECT id FROM t)",
+]
+
+checkReject : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String (List String)
+checkReject cli db sql = do
+  (code, out, err) <- spawnRaw queryTimeoutSeconds cli [db, sql]
+  let combined = trim (out ++ err)
+  Ok (if startsWith "error:" combined then
+    if code == 0 then
+      []
+    else
+      ["exit \{intToString code} (not a clean error) for: \{sql}"]
+  else
+    ["NOT REJECTED: \{sql} (got: \{combined})"])
+
+runRejections : String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String Expectation
+runRejections cli db = do
+  before <- readFileBytes db
+  failLists <- traverse (checkReject cli db) dmlRejects
+  after <- readFileBytes db
+  ic <- sqlite3Query db "PRAGMA integrity_check;"
+  Ok
+    (expectAll [
+      noFailures "reject" (flatLines failLists),
+      byteUnchanged (before == after),
+      expectEqual "ok" (trim ic),
+    ])
+
+dmlLowercaseIpkSeedSql : String
+dmlLowercaseIpkSeedSql =
+  "CREATE TABLE t (id integer primary key, v TEXT); INSERT INTO t VALUES (1,'a');"
+
+dmlIndexedSeedSql : String
+dmlIndexedSeedSql =
+  "CREATE TABLE t (a INTEGER, b TEXT); CREATE INDEX ib ON t(b); INSERT INTO t VALUES (1,'x');"
+
+-- A database sqlite3 wrote with a construct the reader cannot round-trip
+-- (a lowercase `integer primary key`, a secondary index) must be REFUSED, not
+-- silently rewritten without it.
+checkSchemaRefusal : String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String Expectation
+checkSchemaRefusal label cli db insertSql = do
+  (code, out, err) <- spawnRaw queryTimeoutSeconds cli [db, insertSql]
+  let combined = trim (out ++ err)
+  Ok (if startsWith "error:" combined && code == 0 then
+    Pass "a clean error" "a clean error"
+  else
+    Fail
+      "\{label}: expected a clean refusal but got: \{combined} (exit \{intToString code})"
+      "a clean error"
+      combined)
+
+-- ── section 6: PARSE PROBE (native binary, no database) ──────────────────
+parseProbeExpectation : String -> <Exec "_", IO> Result String Expectation
+parseProbeExpectation probe = do
+  out <- spawnOut queryTimeoutSeconds probe []
+  Ok (if contains "TOTAL: PASS" out then
+    Pass "TOTAL: PASS" "TOTAL: PASS"
+  else
+    Fail (trim out) "TOTAL: PASS" (trim out))
+
+-- ── assembling the six sections into four Expectations ────────────────────
+data DmlOutcome = DmlOutcome {
+  corpusAuthoredOverflow : Expectation,
+  cliSelect : Expectation,
+  rejections : Expectation,
+  parseProbe : Expectation,
+}
+
+dmlOutcome : <Exec "_", FileRead "_", IO> Result String DmlOutcome
+dmlOutcome = match rowScratch "dml"
+  Err e => Err e
+  Ok prefix => runDmlOutcome prefix
+
+runDmlOutcome : String -> <Exec "_", FileRead "_", IO> Result String DmlOutcome
+runDmlOutcome prefix = do
+  let cli = "\{prefix}-cli"
+  let probe = "\{prefix}-probe"
+  let m1 = "\{prefix}-m1.db"
+  let s1 = "\{prefix}-s1.db"
+  let m2 = "\{prefix}-m2.db"
+  let s2 = "\{prefix}-s2.db"
+  let m3 = "\{prefix}-m3.db"
+  let s3 = "\{prefix}-s3.db"
+  let m5 = "\{prefix}-m5.db"
+  let m6 = "\{prefix}-m6.db"
+  let m7 = "\{prefix}-m7.db"
+  let big = join "" (replicate 5000 "x")
+  let big2 = join "" (replicate 9000 "y")
+  let dmlOverflow = [
+    "CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT NOT NULL, n INTEGER)",
+    "INSERT INTO docs VALUES (1, '\{big}', 1)",
+    "INSERT INTO docs VALUES (2, 'small', 2)",
+    "UPDATE docs SET body = '\{big2}' WHERE id = 2",
+    "INSERT INTO docs (body) VALUES ('\{big}')",
+    "DELETE FROM docs WHERE id = 1",
+  ]
+  _ <- buildBin [] "sqlite/main.mdk" cli
+  _ <- buildBin [] "sqlite/dml_probe.mdk" probe
+  e1 <- runCorpusSection cli "dml corpus" m1 s1 dmlCorpus
+  _ <- seedDb m2 dmlAuthoredSeedSql
+  _ <- seedDb s2 dmlAuthoredSeedSql
+  e2 <- runCorpusSection
+    cli
+    "sqlite3-authored db, Medaka-mutated"
+    m2
+    s2
+    dmlAuthored
+  e3 <- runCorpusSection
+    cli
+    "multi-KB overflow rows through DML"
+    m3
+    s3
+    dmlOverflow
+  e3b <- overflowLengths m3
+  eSelect <- cliSelectExpectation cli m1 s1
+  _ <- seedDb m5 dmlRejectSeedSql
+  eReject <- runRejections cli m5
+  _ <- seedDb m6 dmlLowercaseIpkSeedSql
+  eM6 <- checkSchemaRefusal
+    "lowercase IPK schema"
+    cli
+    m6
+    "INSERT INTO t VALUES (2, 'b')"
+  _ <- seedDb m7 dmlIndexedSeedSql
+  eM7 <- checkSchemaRefusal
+    "secondary-indexed schema"
+    cli
+    m7
+    "INSERT INTO t VALUES (2, 'y')"
+  eProbe <- parseProbeExpectation probe
+  let _ = runVerb "rm" ["-rf", cli, probe, m1, s1, m2, s2, m3, s3, m5, m6, m7]
+  Ok DmlOutcome {
+    corpusAuthoredOverflow = expectAll [e1, e2, e3, e3b],
+    cliSelect = eSelect,
+    rejections = expectAll [eReject, eM6, eM7],
+    parseProbe = eProbe,
+  }
+
+test "dml: DML corpus, authored-db mutation, and multi-KB overflow rows all agree with sqlite3" =
+  match dmlOutcome
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok o => o.corpusAuthoredOverflow
+
+test "dml: CLI SELECT output is byte-identical to the sqlite3 CLI" =
+  match dmlOutcome
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok o => o.cliSelect
+
+test "dml: every unsupported construct and constraint violation is a clean error with no write" =
+  match dmlOutcome
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok o => o.rejections
+
+test "dml: parse probe (native binary) renders and rejects the DML/DDL grammar corpus" =
+  match dmlOutcome
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok o => o.parseProbe

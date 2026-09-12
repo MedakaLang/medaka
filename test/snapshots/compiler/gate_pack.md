@@ -1,5 +1,5 @@
 # META
-source_lines=2345
+source_lines=2342
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_pack.mdk — the gate SCHEDULER: `medaka gate balance`'s bin packing and
@@ -2253,12 +2253,9 @@ budgetOrphanLines commitMessage (n :: ns) =
   stringConcat [
       n, ack,
       " — a cost baseline row for a gate the registry no longer declares",
-      " — remedy: delete the row from test/gate_cost_baseline.json BY HAND.",
-      " That file is GENERATED and this is the one edit its banner does not",
-      " cover: test/gate_cost_ingest.sh only ADDS samples — it never reads",
-      " the registry and has no prune mode, so re-running it carries the",
-      " orphan forward rather than dropping it (#2770 tracks giving it one;",
-      " until that lands, the hand edit is the only discharge that works).",
+      " — remedy: `sh test/gate_cost_ingest.sh --baseline test/gate_cost_baseline.json",
+      " --registry test/gates.toml` (#2770) drops every orphaned row and prints",
+      " what it dropped; re-run `medaka gate balance` and `make gen-ci` after.",
       " To accept the stale row on",
       " purpose, paste:\n    Gate-Budget-Override: ", tok, "\n"
     ]
@@ -2739,7 +2736,7 @@ budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
 (DFunDef false "budgetOrphanTokens" ((PCons (PVar "n") (PVar "ns"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "orphan:")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))) (EApp (EVar "budgetOrphanTokens") (EVar "ns"))))
 (DTypeSig false "budgetOrphanLines" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "budgetOrphanLines" (PWild (PList)) (EListLit))
-(DFunDef false "budgetOrphanLines" ((PVar "commitMessage") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "tok") (EBinOp "++" (EBinOp "++" (ELit (LString "orphan:")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "ack") (EIf (EApp (EApp (EVar "budgetAcked") (EVar "commitMessage")) (EVar "tok")) (ELit (LString " [ACKNOWLEDGED]")) (ELit (LString "")))) (DoExpr (EBinOp "::" (EApp (EVar "stringConcat") (EListLit (EVar "n") (EVar "ack") (ELit (LString " — a cost baseline row for a gate the registry no longer declares")) (ELit (LString " — remedy: delete the row from test/gate_cost_baseline.json BY HAND.")) (ELit (LString " That file is GENERATED and this is the one edit its banner does not")) (ELit (LString " cover: test/gate_cost_ingest.sh only ADDS samples — it never reads")) (ELit (LString " the registry and has no prune mode, so re-running it carries the")) (ELit (LString " orphan forward rather than dropping it (#2770 tracks giving it one;")) (ELit (LString " until that lands, the hand edit is the only discharge that works).")) (ELit (LString " To accept the stale row on")) (ELit (LString " purpose, paste:\n    Gate-Budget-Override: ")) (EVar "tok") (ELit (LString "\n")))) (EApp (EApp (EVar "budgetOrphanLines") (EVar "commitMessage")) (EVar "ns"))))))
+(DFunDef false "budgetOrphanLines" ((PVar "commitMessage") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "tok") (EBinOp "++" (EBinOp "++" (ELit (LString "orphan:")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "ack") (EIf (EApp (EApp (EVar "budgetAcked") (EVar "commitMessage")) (EVar "tok")) (ELit (LString " [ACKNOWLEDGED]")) (ELit (LString "")))) (DoExpr (EBinOp "::" (EApp (EVar "stringConcat") (EListLit (EVar "n") (EVar "ack") (ELit (LString " — a cost baseline row for a gate the registry no longer declares")) (ELit (LString " — remedy: `sh test/gate_cost_ingest.sh --baseline test/gate_cost_baseline.json")) (ELit (LString " --registry test/gates.toml` (#2770) drops every orphaned row and prints")) (ELit (LString " what it dropped; re-run `medaka gate balance` and `make gen-ci` after.")) (ELit (LString " To accept the stale row on")) (ELit (LString " purpose, paste:\n    Gate-Budget-Override: ")) (EVar "tok") (ELit (LString "\n")))) (EApp (EApp (EVar "budgetOrphanLines") (EVar "commitMessage")) (EVar "ns"))))))
 (DTypeSig false "budgetIndent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "budgetIndent" ((PList)) (EListLit))
 (DFunDef false "budgetIndent" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ""))) (EApp (EVar "budgetIndent") (EVar "xs"))))
@@ -3142,7 +3139,7 @@ budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
 (DFunDef false "budgetOrphanTokens" ((PCons (PVar "n") (PVar "ns"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "orphan:")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))) (EApp (EVar "budgetOrphanTokens") (EVar "ns"))))
 (DTypeSig false "budgetOrphanLines" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "budgetOrphanLines" (PWild (PList)) (EListLit))
-(DFunDef false "budgetOrphanLines" ((PVar "commitMessage") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "tok") (EBinOp "++" (EBinOp "++" (ELit (LString "orphan:")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "ack") (EIf (EApp (EApp (EVar "budgetAcked") (EVar "commitMessage")) (EVar "tok")) (ELit (LString " [ACKNOWLEDGED]")) (ELit (LString "")))) (DoExpr (EBinOp "::" (EApp (EVar "stringConcat") (EListLit (EVar "n") (EVar "ack") (ELit (LString " — a cost baseline row for a gate the registry no longer declares")) (ELit (LString " — remedy: delete the row from test/gate_cost_baseline.json BY HAND.")) (ELit (LString " That file is GENERATED and this is the one edit its banner does not")) (ELit (LString " cover: test/gate_cost_ingest.sh only ADDS samples — it never reads")) (ELit (LString " the registry and has no prune mode, so re-running it carries the")) (ELit (LString " orphan forward rather than dropping it (#2770 tracks giving it one;")) (ELit (LString " until that lands, the hand edit is the only discharge that works).")) (ELit (LString " To accept the stale row on")) (ELit (LString " purpose, paste:\n    Gate-Budget-Override: ")) (EVar "tok") (ELit (LString "\n")))) (EApp (EApp (EVar "budgetOrphanLines") (EVar "commitMessage")) (EVar "ns"))))))
+(DFunDef false "budgetOrphanLines" ((PVar "commitMessage") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "tok") (EBinOp "++" (EBinOp "++" (ELit (LString "orphan:")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "ack") (EIf (EApp (EApp (EVar "budgetAcked") (EVar "commitMessage")) (EVar "tok")) (ELit (LString " [ACKNOWLEDGED]")) (ELit (LString "")))) (DoExpr (EBinOp "::" (EApp (EVar "stringConcat") (EListLit (EVar "n") (EVar "ack") (ELit (LString " — a cost baseline row for a gate the registry no longer declares")) (ELit (LString " — remedy: `sh test/gate_cost_ingest.sh --baseline test/gate_cost_baseline.json")) (ELit (LString " --registry test/gates.toml` (#2770) drops every orphaned row and prints")) (ELit (LString " what it dropped; re-run `medaka gate balance` and `make gen-ci` after.")) (ELit (LString " To accept the stale row on")) (ELit (LString " purpose, paste:\n    Gate-Budget-Override: ")) (EVar "tok") (ELit (LString "\n")))) (EApp (EApp (EVar "budgetOrphanLines") (EVar "commitMessage")) (EVar "ns"))))))
 (DTypeSig false "budgetIndent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "budgetIndent" ((PList)) (EListLit))
 (DFunDef false "budgetIndent" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ""))) (EApp (EVar "budgetIndent") (EVar "xs"))))
