@@ -306,7 +306,7 @@ path in `emitDefaultRKeyRef`; what is missing is wiring it into the RDict chain.
 gap is wider than the method-less impl #948 turned on — the derived-Ord ADT inheriting
 `max`/`min` is exactly what `emitDispatchChainDefaulted` exists for on the LLVM side.
 
-### 3.8 Four repaired rows promoted on 2026-09-12
+### 3.8 Four promoted rows on 2026-09-12
 
 Four independently derived values are now pinned after their ledger rows promoted:
 
