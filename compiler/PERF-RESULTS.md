@@ -1344,3 +1344,153 @@ freshly instantiated summaries are needed before enabling the semantic migration
 within the current budget. Shared mutable snapshots are not an acceptable shortcut:
 #2902 reproduces false type errors on the pristine baseline and current source.
 The scope-store extraction can proceed independently.
+
+### Numeric return predicate migration
+
+Baseline `800069b269` versus the implementation in `b10d8be2b`, using the
+existing M2 same-process LSP N0–N3 instrument,
+fixed 1 GiB heaps, and identical request streams. Cold is N1−N0, first warm is
+N2−N1, and second warm is N3−N2. Cachegrind counts instructions; the allocation
+instrument reads Boehm's total allocated bytes. All requests produced the expected
+publish counts and empty diagnostics, with strict source freshness enabled.
+Allocation repetitions were byte-identical.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,017,353 | 307,186,712 | 48,589,888 | 48,925,488 |
+| playground | first warm | 24,815,820 | 24,704,290 | 4,562,400 | 4,546,048 |
+| playground | second warm | 24,835,797 | 24,715,537 | 4,570,656 | 4,558,368 |
+| import-list | cold | 538,174,769 | 537,748,485 | 93,138,800 | 93,098,816 |
+| import-list | first warm | 38,112,225 | 37,922,641 | 6,870,640 | 6,842,096 |
+| import-list | second warm | 38,168,358 | 37,926,903 | 6,898,384 | 6,865,744 |
+
+The largest positive changes are +0.7112% instructions and +0.6907% allocated
+bytes, within the existing 25% soft budget. All three legacy caches remain
+enabled. These LSP requests exercise checking, including numeric predicates and
+impl-body identity lookup. They do not execute eval method dispatch or establish
+safe finalized caching or retained-live-heap bounds.
+
+#### Eval dispatch countercheck
+
+An independent review measured the execution path omitted by the LSP workloads.
+The initial numeric candidate (`3f26df43b`) added canonical route aliases to a
+table still scanned on every method call, increasing the marginal cost by
+25.79%. `b10d8be2b` indexes that table once during dispatch setup, preserving
+first-match order and the distinction between an absent method and zero
+prerequisite parameters.
+
+Cachegrind instruction counts below use a fixed 1 GiB heap, fresh binaries and
+identical source files on each arm. The floor sets the loop count to zero; the
+workload sets it to 10,000. Both output values were checked.
+
+```medaka
+interface Step a where
+  step : a -> a
+
+impl Step Int where
+  step x = x + 1
+
+loop : Int -> Int -> Int
+loop n x = if n <= 0 then x else loop (n - 1) (step x)
+
+main = println (loop 10000 0)
+```
+
+| Instructions | Baseline `800069b269` | Unindexed `3f26df43b` | Indexed `b10d8be2b` |
+|---|---:|---:|---:|
+| Zero-iteration floor | 590,870,196 | 587,384,476 | 590,150,277 |
+| 10,000 iterations | 2,021,688,327 | 2,387,237,318 | 1,688,801,707 |
+| Workload minus floor | 1,430,818,131 | 1,799,852,842 | 1,098,651,430 |
+
+The indexed workload is 23.21% below baseline and 38.96% below the unindexed
+candidate; its floor is 0.12% below baseline. These are execution instructions,
+not allocation or retained-heap measurements. The
+[review finding and repair](https://github.com/MedakaLang/medaka/issues/2549#issuecomment-5642598262)
+explain why the LSP budget alone was insufficient for this change.
+
+#### Arithmetic and local ownership
+
+The combined source at `68774edee` includes arithmetic predicates, local ownership,
+closure capture, exact prelude implementation ownership, and the dynamic-arity
+guard. It was measured against current main `42a672d04` after merging that revision;
+this separates the packet from concurrent upstream library and tooling changes.
+Both arms received two forced emitter rebuilds. The same M2 N0–N3 request streams,
+fixed 1 GiB heaps, strict freshness, and response checks described above were used.
+All eight streams produced the expected publications with empty diagnostics.
+Two allocation repetitions were byte-identical.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,233,369 | 313,866,491 | 48,621,680 | 49,477,472 |
+| playground | first warm | 24,989,585 | 25,132,747 | 4,582,960 | 4,591,280 |
+| playground | second warm | 24,992,346 | 25,162,969 | 4,607,264 | 4,603,296 |
+| import-list | cold | 538,444,939 | 545,947,586 | 93,186,688 | 93,699,584 |
+| import-list | first warm | 38,267,700 | 38,387,664 | 6,895,360 | 6,879,280 |
+| import-list | second warm | 38,295,429 | 38,420,366 | 6,914,640 | 6,902,544 |
+
+The largest increases are 2.83% in instructions and 1.76% in allocated bytes,
+within the 25% soft budget. Warm instruction increases stay below 0.69%; warm
+allocation increases stay below 0.19%. Against the original session baseline
+`800069b269`, the largest instruction increase is 2.91%. All three legacy caches
+remain enabled. These measurements cover checking through the LSP; they do not
+establish retained-live-heap bounds or safe finalized caching, and do not replace
+the separate evaluator and backend validation.
+
+#### Selected-arity consumer integration
+
+The combined source at `58b79b8ab` replaces the broad dynamic-arity guard with
+selected occurrence arity, implementation-side saturation, and selected default
+metadata. It includes the CI repairs and native dispatch-before-partial-application
+follow-up. Both this revision and baseline `42a672d04` received two forced emitter
+rebuilds. The same M2 N0–N3 streams, fixed 1 GiB heaps, strict freshness and response
+checks were used; all eight streams produced the expected publications with empty
+diagnostics. Two allocation repetitions were byte-identical.
+
+| Workload | Request | Instructions before | After | Allocation before | After |
+|---|---|---:|---:|---:|---:|
+| playground | cold | 305,233,369 | 315,375,616 | 48,621,680 | 49,740,384 |
+| playground | first warm | 24,989,585 | 25,140,253 | 4,582,960 | 4,591,264 |
+| playground | second warm | 24,992,346 | 25,145,453 | 4,607,264 | 4,603,312 |
+| import-list | cold | 538,444,939 | 547,460,112 | 93,186,688 | 93,966,576 |
+| import-list | first warm | 38,267,700 | 38,414,106 | 6,895,360 | 6,883,376 |
+| import-list | second warm | 38,295,429 | 38,429,110 | 6,914,640 | 6,906,640 |
+
+Maximum increases are 3.32% in instructions and 2.30% in allocated bytes, within
+the 25% soft budget. Warm increases remain below 0.62% and 0.19%, respectively.
+All three legacy caches remain enabled. These checking workloads do not establish
+retained-live-heap bounds or safe finalized caching, and do not replace executable
+backend and evaluator checks.
+
+#### Wasm dictionary alias size
+
+The modules arm of `test/wasm/diff_wasm_emitted_size.sh` exposed duplicated
+dispatch bodies after canonical dictionary aliases were admitted. An alias arm
+repeated the implementation call and its argument instructions; nested argument
+dispatches amplified that duplication. The repair measured at `4a3d2598d`
+(landed unchanged as `2f362bf91`) keeps one body
+per implementation and accepts its primary and canonical words in one condition.
+The existing Core pre-scan indexes materialized dictionary keys, so an unused
+canonical alias adds no comparison. Static principal method keys are excluded,
+while their nested prerequisite dictionaries are included.
+
+The same 44 module fixtures were emitted, assembled and validated using each
+revision's own freshly built modules emitter. These are output-size measurements,
+not compiler timing or allocation measurements.
+
+| Revision | Wasm bytes | WAT bytes | Functions | Valid fixtures |
+|---|---:|---:|---:|---:|
+| Current main `42a672d04` | 2,228,572 | 42,875,045 | 2,936 | 44 |
+| Duplicated alias arms `186394ec8` | 3,397,754 | 119,943,232 | 2,942 | 44 |
+| Shared bodies and used-key index `4a3d2598d` | 2,232,700 | 42,893,356 | 2,942 | 44 |
+
+The repaired output fits the existing 2,450,000-byte ceiling without changing it.
+The 15 numeric literal/arithmetic engine fixtures also retain identical pinned
+results across eval, native and Wasm. The index is fresh for each emission; it
+does not introduce a cache across programs.
+
+The expanded corpus at `9787d6b24` adds two executable self-tail and foreign-key
+regressions. All 46 module fixtures emit, assemble, validate and run; the size
+gate reports 2,330,014 bytes and 3,071 functions, within the unchanged ceiling.
+Its other arms also remain complete: 157 plain fixtures (366,491 bytes) and nine
+typed fixtures (17,459 bytes). The typed producer supplies declaration metadata
+to the selected-arity consumer, preserving all nine executable cases.

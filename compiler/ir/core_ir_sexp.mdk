@@ -157,8 +157,9 @@ cexprSexp m (CListSlice a lo hi incl) = node "CListSlice" [
   boolStr incl,
 ]
 cexprSexp m (CBlock stmts) = node "CBlock" (map (cstmtSexp m) stmts)
-cexprSexp m (CMethod name route implRoutes methRoutes) = node "CMethod" [
+cexprSexp m (CMethod name arity route implRoutes methRoutes) = node "CMethod" [
   escStr name,
+  intToString arity,
   routeSexp m route,
   slist (map (routeSexp m) implRoutes),
   slist (map (routeSexp m) methRoutes),

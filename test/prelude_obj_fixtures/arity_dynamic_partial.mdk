@@ -1,0 +1,12 @@
+interface Forge a where
+  negate : a -> a -> a
+
+impl Forge Int where
+  negate x y = x + y
+
+forge : Forge a => a -> a -> a
+forge x =
+  let f = negate x
+  f
+
+main = println (forge 40 2)

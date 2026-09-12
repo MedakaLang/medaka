@@ -1,0 +1,31 @@
+counter : Ref Int
+counter = Ref 0
+
+interface Forge a where
+  forgeOp : a -> a -> a
+
+impl Forge Int where
+  forgeOp x =
+    counter := counter.value + 1
+    y => x + y
+
+forge : Forge a => a -> a -> a
+forge x = forgeOp x
+
+forgeBare : Forge a => a -> a -> a
+forgeBare = forgeOp
+
+main =
+  let f = forge 40
+  println counter.value
+  println (f 2)
+  let h = forge
+  println counter.value
+  let g = h 50
+  println counter.value
+  println (g 3)
+  let h0 = forgeBare
+  println counter.value
+  let f0 = h0 60
+  println counter.value
+  println (f0 4)

@@ -380,7 +380,7 @@ bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 -- through the ordinary reach fold if the callee itself dispatches.
 eagerHasMethod : CExpr -> Bool
 eagerHasMethod (CLam _ _) = False
-eagerHasMethod (CMethod _ _ _ _) = True
+eagerHasMethod (CMethod _ _ _ _ _) = True
 eagerHasMethod (CDict _ _) = False
 eagerHasMethod (CVar _ _) = False
 eagerHasMethod (CLit _) = False

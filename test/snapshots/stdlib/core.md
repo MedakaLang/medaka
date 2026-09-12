@@ -1,5 +1,5 @@
 # META
-source_lines=2014
+source_lines=2028
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -726,8 +726,14 @@ print x = putStr (display x)
 {- | Numeric types.
 
    The arithmetic operators are built in for `Int` and `Float`; on any other
-   type, `+`, `-`, `*`, and `/` dispatch to `add`, `sub`, `mul`, and `div`.
-   `div` truncates for `Int` and is true division for `Float`. -}
+   type, `+`, `-`, `*`, `/`, and `%` dispatch to `add`, `sub`, `mul`, `div`,
+   and `rem`. `div` truncates for `Int` and is true division for `Float`.
+   `rem` keeps the dividend's sign for a nonzero result.
+
+   > rem (-7) 3
+   -1
+   > rem 5.5 2.0
+   1.5 -}
 export interface Num a requires Eq a where
   add : a -> a -> a
   sub : a -> a -> a
@@ -737,6 +743,7 @@ export interface Num a requires Eq a where
   abs : a -> a
   signum : a -> a
   fromInt : Int -> a
+  rem : a -> a -> a
 
 export impl Num Int where
   add a b = a + b
@@ -747,6 +754,7 @@ export impl Num Int where
   abs a = if a < 0 then 0 - a else a
   signum a = if a > 0 then 1 else if a < 0 then 0 - 1 else 0
   fromInt x = x
+  rem a b = a % b
 
 export impl Num Float where
   add a b = a + b
@@ -757,6 +765,12 @@ export impl Num Float where
   abs a = if a < 0.0 then 0.0 - a else a
   signum a = if a > 0.0 then 1.0 else if a < 0.0 then 0.0 - 1.0 else 0.0
   fromInt x = intToFloat x
+  rem a b = a % b
+
+-- > (-7) % 3
+-- -1
+-- > 5.5 % 2.0
+-- 1.5
 
 {- | Whether `n` is divisible by two. Negative numbers included.
 
@@ -2152,9 +2166,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "println" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EVar "display") (EVar "x"))))
 (DTypeSig true "print" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "print" ((PVar "x")) (EApp (EVar "putStr") (EApp (EVar "display") (EVar "x"))))
-(DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None)))
-(DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x"))))
-(DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x")))))
+(DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None) (imethod "rem" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None)))
+(DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x")) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
+(DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x"))) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
 (DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -2533,9 +2547,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "println" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EMethodRef "display") (EVar "x"))))
 (DTypeSig true "print" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "print" ((PVar "x")) (EApp (EVar "putStr") (EApp (EMethodRef "display") (EVar "x"))))
-(DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None)))
-(DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x"))))
-(DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x")))))
+(DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None) (imethod "rem" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None)))
+(DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x")) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
+(DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x"))) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
 (DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))

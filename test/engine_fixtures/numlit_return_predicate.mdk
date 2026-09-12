@@ -1,0 +1,29 @@
+-- A literal names Num even when another interface supplies fromInt at the same
+-- result head. Num adds 1000; the explicitly named Forge method adds 2000.
+-- DICT §5 and §8 I7 therefore give 1001, 2001, then the unrelated Int value 3.
+data Ding = Ding Int deriving (Eq)
+
+interface Forge a where
+  fromInt : Int -> a
+
+impl Forge Ding where
+  fromInt n = Ding (n + 2000)
+
+impl Num Ding where
+  add (Ding a) (Ding b) = Ding (a + b)
+  sub (Ding a) (Ding b) = Ding (a - b)
+  mul (Ding a) (Ding b) = Ding (a * b)
+  div (Ding a) (Ding b) = Ding (a / b)
+  negate (Ding a) = Ding (0 - a)
+  abs (Ding a) = Ding a
+  signum (Ding _) = Ding 1
+  fromInt n = Ding (n + 1000)
+  rem (Ding a) (Ding b) = Ding (a % b)
+
+unDing : Ding -> Int
+unDing (Ding n) = n
+
+main =
+  println (unDing 1)
+  println (unDing (fromInt 1))
+  println (1 + 2)

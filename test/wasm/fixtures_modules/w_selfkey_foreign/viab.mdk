@@ -1,0 +1,7 @@
+import common.{T}
+import ib as B
+import bimpl
+
+export
+viaB : T -> Int
+viaB x = B.walk x 4

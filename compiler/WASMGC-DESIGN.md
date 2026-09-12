@@ -112,9 +112,9 @@ Verified by reading `compiler/ir/core_ir.mdk`. The IR is backend-agnostic and
 **dict-passing dispatch is fully EXPLICIT as data** — the emitter consumes
 pre-computed routing, it never computes routing. Confirmed nodes:
 
-- `CMethod String Route (List Route) (List Route)` — return-position method
-  dispatch; carries `Route` (the typechecker's `RKey`/`RDict` resolution) as
-  immutable values.
+- `CMethod String Int Route (List Route) (List Route)` — method dispatch;
+  carries the selected declaration's pre-use arrow arity and `Route` (the
+  typechecker's `RKey`/`RDict` resolution) as immutable values.
 - `CDict String (List Route)` — constrained-function dict params, routes explicit.
 - `CDecision CExpr (List CArm) CTree` — match pre-compiled to a Maranget decision
   tree (`CTSwitch`/`CTLeaf`/`CTGuard`/`CTDrop`/`CTFail`) keyed on `CHead`

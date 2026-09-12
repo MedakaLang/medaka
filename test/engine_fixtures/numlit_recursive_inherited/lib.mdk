@@ -1,0 +1,9 @@
+-- The missing signatures are the #2768 trigger: the recursive group inherits
+-- and publishes the promoted non-member's Num predicate.
+-- lint-disable-file rule-missing-signature
+
+export r1 n = if n == 0 then l0 n else r2 (n - 1)
+
+r2 n = r1 n + l0 n
+
+l0 x = x + x

@@ -1,0 +1,7 @@
+import common.{T}
+import ia as A
+import aimpl
+
+export
+viaA : T -> Int
+viaA x = A.walk x 3 0

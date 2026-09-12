@@ -1,0 +1,26 @@
+export interface Tweak a b where
+  tweak : b -> a -> a
+
+export impl Tweak Float Int where
+  tweak _ x = x + 10.0
+
+export impl Tweak Float Bool where
+  tweak _ x = x + 100.0
+
+export
+value : (Num a, Tweak a Int, Tweak a Bool) => Int -> a
+value n = if n == 0 then fromInt 0 else tweak True (tweak 1 (relay (n - 1)))
+
+export relay n = value n
+
+export interface Ix a b where
+  ix : a -> b -> a
+
+export impl Ix Int Float where
+  ix x _ = x + 10
+
+export
+nonleadValue : (Ix a b, Num b) => b -> a -> a
+nonleadValue n x = ix x (n + fromInt 0)
+
+export nonleadRelay n x = nonleadValue n x

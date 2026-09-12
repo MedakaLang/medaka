@@ -1,0 +1,32 @@
+counter : Ref Int
+counter = Ref 0
+
+interface Act a where
+  act : a -> Unit -> Unit
+
+data Dog = Dog
+
+impl Act Dog where
+  act _ =
+    counter := counter.value + 1
+    _ => ()
+
+observeDirect : Act a => a -> Int
+observeDirect x =
+  let thunk = act x
+  let seen = counter.value
+  let _ = thunk ()
+  seen
+
+observeValue : Act a => a -> Int
+observeValue x =
+  let f = act
+  let thunk = f x
+  let seen = counter.value
+  let _ = thunk ()
+  seen
+
+main =
+  println (observeDirect Dog)
+  counter := 0
+  println (observeValue Dog)

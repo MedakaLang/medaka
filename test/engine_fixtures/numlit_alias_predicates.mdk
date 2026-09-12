@@ -1,0 +1,35 @@
+-- Module-alias calls preserve every argument of their source predicate slots.
+-- The direct and re-exported relays are inferred; `value` is declared. A
+-- same-named one-predicate decoy makes source selection observable, while the
+-- `Ix a b` case keeps an independently constrained nonlead argument.
+
+import numlit_alias_predicates.decoy as Decoy
+import numlit_alias_predicates.forwarder as Forwarded
+import numlit_alias_predicates.support as Support
+import numlit_alias_predicates.support.{relay}
+
+declared : Float
+declared = Support.value 2
+
+inferred : Float
+inferred = Support.relay 2
+
+reexported : Float
+reexported = Forwarded.relay 2
+
+selective : Float
+selective = relay 2
+
+singlePredicate : Float
+singlePredicate = Decoy.relay 3
+
+nonlead : Int
+nonlead = Support.nonleadRelay 2.0 5
+
+main =
+  println (declared == 220.0)
+  println (inferred == 220.0)
+  println (reexported == 220.0)
+  println (selective == 220.0)
+  println (singlePredicate == 3.0)
+  println (nonlead == 15)

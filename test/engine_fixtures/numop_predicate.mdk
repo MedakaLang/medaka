@@ -1,0 +1,79 @@
+-- Generic arithmetic is prelude Num evidence. Each signed and inferred helper
+-- must dispatch +, -, *, and / through the caller's dictionary; Box then
+-- forwards the same prerequisite dictionary to arithmetic on its payload.
+-- lint-disable-file rule-missing-signature
+
+import numop_predicate.box.{Box(..)}
+import numop_predicate.num.{numReady}
+import numop_predicate.foreign.{add, rem}
+
+signedAdd : Num a => a -> a -> a
+signedAdd x y = x + y
+
+signedSub : Num a => a -> a -> a
+signedSub x y = x - y
+
+signedMul : Num a => a -> a -> a
+signedMul x y = x * y
+
+signedDiv : Num a => a -> a -> a
+signedDiv x y = x / y
+
+signedRem : Num a => a -> a -> a
+signedRem x y = x % y
+
+inferredAdd x y = x + y
+
+inferredSub x y = x - y
+
+inferredMul x y = x * y
+
+inferredDiv x y = x / y
+
+inferredRem x y = x % y
+
+addOne : Num a => a -> a
+addOne x = x + 1
+
+localRem : Num a => a -> a -> a
+localRem x y =
+  let local = _ => x % y
+  local ()
+
+main =
+  println (signedAdd (Box 12) (Box 3) == Box 1203)
+  println (signedSub (Box 12) (Box 3) == Box 1197)
+  println (signedMul (Box 12) (Box 3) == Box 12003)
+  println (signedDiv (Box 12) (Box 3) == Box 120003)
+  println (signedRem (Box 13) (Box 5) == Box 100003)
+  println (signedAdd (Box 1.5) (Box 2.25) == Box 152.25)
+  println (inferredAdd (Box 12) (Box 3) == Box 1203)
+  println (inferredSub (Box 12) (Box 3) == Box 1197)
+  println (inferredMul (Box 12) (Box 3) == Box 12003)
+  println (inferredDiv (Box 12) (Box 3) == Box 120003)
+  println (inferredRem (Box 13) (Box 5) == Box 100003)
+  println (localRem (Box 13) (Box 5) == Box 100003)
+  println (Box 13 % Box 5 == Box 100003)
+  println (addOne (Box 41) == Box 4101)
+  println (signedAdd (12 : Int) 3 == 15)
+  println (signedSub (12 : Int) 3 == 9)
+  println (signedMul (12 : Int) 3 == 36)
+  println (signedDiv (12 : Int) 3 == 4)
+  println (signedAdd (12.0 : Float) 3.0 == 15.0)
+  println (signedSub (12.0 : Float) 3.0 == 9.0)
+  println (signedMul (12.0 : Float) 3.0 == 36.0)
+  println (signedDiv (7.5 : Float) 2.0 == 3.75)
+  println (signedRem (-7 : Int) 3 == -1)
+  println (signedRem (5.5 : Float) 2.0 == 1.5)
+  println (inferredAdd (12 : Int) 3 == 15)
+  println (inferredDiv (7.5 : Float) 2.0 == 3.75)
+  println ((12 : Int) + 3 == 15)
+  println ((12 : Int) - 3 == 9)
+  println ((12 : Int) * 3 == 36)
+  println ((12 : Int) / 3 == 4)
+  println ((12.0 : Float) + 3.0 == 15.0)
+  println ((12.0 : Float) - 3.0 == 9.0)
+  println ((12.0 : Float) * 3.0 == 36.0)
+  println ((7.5 : Float) / 2.0 == 3.75)
+  println ((-7 : Int) % 3 == -1)
+  println ((5.5 : Float) % 2.0 == 1.5)

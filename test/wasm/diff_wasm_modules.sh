@@ -120,6 +120,37 @@ RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
         msg="$(printf '%s\nRETCALL-ASSERT FAIL %s: plain-call=%s return_call=%s (expected 0 / >=1)' "$msg" "$name" "$plain" "$rc")"; st=1
       fi
     fi
+    # A dispatched implementation may use `return_call` only for its own exact
+    # callable key. The simple fixture pins one self edge; the multi-module
+    # fixture keeps same-spelled IA/IB implementations live and proves IA never
+    # tail-calls IB just because both methods are named `walk`.
+    if [ "$st" = 0 ] && [ "$name" = "w_selftail_dict.mdk" ]; then
+      walkbody="$(awk '/func \$mdk_impl_Counter_walk /{f=1} f&&/^  \(func /&&!/mdk_impl_Counter_walk /{f=0} f' "$wat")"
+      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$mdk_impl_Counter_walk')"
+      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $mdk_impl_Counter_walk')"
+      if [ "$rc" -eq 1 ] && [ "$plain" -eq 0 ]; then
+        msg="$msg
+SELFKEY-ASSERT ok   $name: exactly 1 self return_call, 0 plain self call"
+      else
+        msg="$(printf '%s\nSELFKEY-ASSERT FAIL %s: plain-self-call=%s self-return-call=%s (expected 0 / 1)' "$msg" "$name" "$plain" "$rc")"; st=1
+      fi
+    fi
+    if [ "$st" = 0 ] && [ "$name" = "w_selfkey_foreign" ]; then
+      ia_lines="$(grep -E '^  \(func \$mdk_impl_[^ ]*_3a__3a_IA_7c_[^ ]*__walk ' "$wat")"
+      ib_lines="$(grep -E '^  \(func \$mdk_impl_[^ ]*_3a__3a_IB_7c_[^ ]*__walk ' "$wat")"
+      ia_defs="$(printf '%s\n' "$ia_lines" | grep -c '^  (func ')"
+      ib_defs="$(printf '%s\n' "$ib_lines" | grep -c '^  (func ')"
+      ia_sym="$(printf '%s\n' "$ia_lines" | head -1 | sed -E 's/^  \(func (\$[^ ]+).*/\1/')"
+      ib_sym="$(printf '%s\n' "$ib_lines" | head -1 | sed -E 's/^  \(func (\$[^ ]+).*/\1/')"
+      iabody="$(awk -v needle="  (func $ia_sym " 'index($0, needle)==1 {f=1} f&&/^  \(func /&&index($0, needle)!=1 {f=0} f' "$wat")"
+      foreign_rc="$(printf '%s' "$iabody" | grep -cF "return_call $ib_sym")"
+      if [ "$ia_defs" -eq 1 ] && [ "$ib_defs" -eq 1 ] && [ "$foreign_rc" -eq 0 ]; then
+        msg="$msg
+SELFKEY-ASSERT ok   $name: both qualified impls live; IA has 0 return_call to IB"
+      else
+        msg="$(printf '%s\nSELFKEY-ASSERT FAIL %s: IA-defs=%s IB-defs=%s IA-to-IB-return=%s (expected 1 / 1 / 0)' "$msg" "$name" "$ia_defs" "$ib_defs" "$foreign_rc")"; st=1
+      fi
+    fi
     # S-wasm-rebuild-hoist re-pin (#2255 item 1 / #2256, 4b91ef988): a capture-free
     # lifted let-group member's `$clos` must be read from the hoisted `constLgClosure`
     # global, never re-rebuilt on a tail-recursive re-entry. A reverted hoist re-emits

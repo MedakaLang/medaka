@@ -89,7 +89,7 @@ TYPED_FUNCS_CEIL=110
 # every ceiling above still improves (fewer bytes/funcs/ratio look like a win
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
-MODULES_OK_EXACT=44
+MODULES_OK_EXACT=46
 PLAIN_OK_EXACT=157
 TYPED_OK_EXACT=9
 

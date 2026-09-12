@@ -1,0 +1,10 @@
+interface Forge a where
+  add : a -> a -> a -> a
+
+impl Forge Int where
+  add x y z = x + y + z
+
+forge : Forge a => a -> a -> a -> a
+forge x y z = add x y z
+
+main = println (forge 1 2 3)

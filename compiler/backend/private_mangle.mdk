@@ -252,8 +252,9 @@ mangleEvEntry maps (EvEntry (EvId m i) v) = match omLookup m maps
 mangleEvVal : OrdMap String -> EvVal -> EvVal
 mangleEvVal rm (EvOne r) = EvOne (mangleRoute rm r)
 mangleEvVal rm (EvMany rs) = EvMany (map (mangleRoute rm) rs)
-mangleEvVal rm (EvMethod r reqs mds) =
+mangleEvVal rm (EvMethod arity r reqs mds) =
   EvMethod
+    arity
     (mangleRoute rm r)
     (map (mangleRoute rm) reqs)
     (map (mangleRoute rm) mds)

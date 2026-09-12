@@ -279,22 +279,26 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193460240
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk_force_$memo_Int_zero()
-  store i64 %t6, ptr %t2
+  %t5 = icmp eq i64 %t1, 249871230526469896
+  %t6 = or i1 %t4, %t5
+  br i1 %t6, label %dispyes7, label %dispnext7
+dispyes7:
+  %t8 = call i64 @mdk_force_$memo_Int_zero()
+  store i64 %t8, ptr %t2
   br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, 6384077407
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = call i64 @mdk_force_$memo_Flag_zero()
-  store i64 %t9, ptr %t2
+dispnext7:
+  %t9 = icmp eq i64 %t1, 6384077407
+  %t10 = icmp eq i64 %t1, -977621429484920137
+  %t11 = or i1 %t9, %t10
+  br i1 %t11, label %dispyes12, label %dispnext12
+dispyes12:
+  %t13 = call i64 @mdk_force_$memo_Flag_zero()
+  store i64 %t13, ptr %t2
   br label %dispend3
-dispnext8:
+dispnext12:
   call void @mdk_dispatch_no_impl()
   unreachable
 dispend3:
-  %t10 = load i64, ptr %t2
-  ret i64 %t10
+  %t14 = load i64, ptr %t2
+  ret i64 %t14
 }

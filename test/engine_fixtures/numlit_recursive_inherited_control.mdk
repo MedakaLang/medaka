@@ -1,0 +1,5 @@
+-- #2768 control. Explicit Int signatures make the sibling recursive group
+-- monomorphic while preserving its recursion and promoted-callee shape.
+import numlit_recursive_inherited.control_lib.{r1}
+
+main = println (r1 (3 : Int))

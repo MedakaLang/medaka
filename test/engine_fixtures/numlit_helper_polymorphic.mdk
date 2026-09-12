@@ -1,0 +1,29 @@
+-- A declared numeric result is chosen independently at each call. The pair
+-- requires two dictionaries, and the returned function keeps its caller's type.
+
+import numlit_helper.forwarder as Helper
+
+pair : (Num a, Num b) => Int -> (a, b)
+pair n = (fromInt n, fromInt n)
+
+returned : Num a => Int -> Unit -> a
+returned n = _ => fromInt n
+
+integer : Int
+integer = Helper.lift 7
+
+floating : Float
+floating = Helper.lift 9
+
+mixed : (Int, Float)
+mixed = pair 4
+
+fromReturned : Float
+fromReturned = returned 11 ()
+
+main =
+  let (left, right) = mixed
+  println integer
+  println (floating == 9.0)
+  println (left == 4 && right == 4.0)
+  println (fromReturned == 11.0)

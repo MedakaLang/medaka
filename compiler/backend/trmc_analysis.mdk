@@ -105,7 +105,7 @@ freeVars b (CStringSlice a lo hi _) =
 freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CMethod _ route implRoutes methRoutes) =
+freeVars b (CMethod _ _ route implRoutes methRoutes) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
 freeVars b (CDict _ routes) = routeDictNames b routes
 freeVars _ _ = []
@@ -159,9 +159,18 @@ freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
 export
 freeVarsBinds : List String -> List CBind -> List String
 freeVarsBinds _ [] = []
-freeVarsBinds b ((CBind _ [CClause [] rhs]) :: rest) =
-  freeVars b rhs ++ freeVarsBinds b rest
-freeVarsBinds b (_ :: rest) = freeVarsBinds b rest
+freeVarsBinds b ((CBind _ clauses) :: rest) =
+  freeVarsClauses b clauses ++ freeVarsBinds b rest
+
+-- A CLetGroup's names are already present in [b]. Each clause adds its own
+-- parameter bindings independently: they are local to that clause, while an
+-- outer value or dictionary mentioned by any clause is free in the group.
+-- An enclosing lambda must capture these names even when the group body does
+-- not refer to them directly.
+freeVarsClauses : List String -> List CClause -> List String
+freeVarsClauses _ [] = []
+freeVarsClauses b ((CClause pats body) :: rest) =
+  freeVars (patVarNames pats ++ b) body ++ freeVarsClauses b rest
 
 export
 bindNames : List CBind -> List String
@@ -412,7 +421,7 @@ export
 isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
-isSelfHead (SelfByMethod method tag) (CMethod m route _ _) =
+isSelfHead (SelfByMethod method tag) (CMethod m _ route _ _) =
   m == method && routeIsKey tag route
 isSelfHead _ _ = False
 
@@ -453,7 +462,7 @@ selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
-mentionsSelfMethod method tag (CMethod m route _ _) =
+mentionsSelfMethod method tag (CMethod m _ route _ _) =
   m == method && routeIsKey tag route
 mentionsSelfMethod method tag (CApp f a) =
   mentionsSelfMethod method tag f || mentionsSelfMethod method tag a

@@ -1,0 +1,5 @@
+import common.{T}
+import ib.{IB}
+
+export impl IB T where
+  walk _ n = n + 100

@@ -350,9 +350,10 @@ toCExpr (SList ((SAtom "CListIndex") :: [a, i])) =
 toCExpr (SList ((SAtom "CListSlice") :: [a, lo, hi, incl])) =
   CListSlice (toCExpr a) (toCExpr lo) (toCExpr hi) (toBool incl)
 toCExpr (SList ((SAtom "CBlock") :: stmts)) = CBlock (map toCStmt stmts)
-toCExpr (SList ((SAtom "CMethod") :: [name, route, SList implRoutes, SList methRoutes])) =
+toCExpr (SList ((SAtom "CMethod") :: [name, arity, route, SList implRoutes, SList methRoutes])) =
   CMethod
     (toStr name)
+    (toInt arity)
     (toRoute route)
     (map toRoute implRoutes)
     (map toRoute methRoutes)

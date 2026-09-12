@@ -1,0 +1,9 @@
+import ia.{IA}
+import iz.{IZ}
+import mixed.{Cat(..), Dog(..)}
+import zmodel.{Z(..)}
+import viaa.{viaA}
+
+main =
+  println (viaA Cat)
+  println (viaA Dog)

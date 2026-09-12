@@ -102,7 +102,7 @@ typedInput runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   makeWasmEmitInputFull
-    []
+    (methodIfaceTable combined)
     (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
     (ctorFieldTypeNames combined)
     False
@@ -1196,7 +1196,7 @@ implSelfProgram tag base depth =
   let n = CVar "n" (ALocal 0 1)
   let recurse =
     CApp
-      (CApp (CMethod "walk" (RKey tag []) [] []) self)
+      (CApp (CMethod "walk" 2 (RKey tag []) [] []) self)
       (CBinPrim "-" n (CLit (LInt 1)) "Int")
   let body =
     CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
@@ -1333,7 +1333,7 @@ defaultStateInputU =
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag =
-  CApp (CMethod "synthDefault" (RKey tag []) [] []) (CLit LUnit)
+  CApp (CMethod "synthDefault" 1 (RKey tag []) [] []) (CLit LUnit)
 
 defaultStateProgram : String -> Int -> CProgram
 defaultStateProgram tag bodyConstant =

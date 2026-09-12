@@ -30,7 +30,7 @@ and [#2586](https://github.com/MedakaLang/medaka/issues/2586).
 |---|---|
 | [repr.mdk](types/repr.mdk) | Type representation, normalization, row algebra and rendering; reads no typechecker state. |
 | [evidence.mdk](types/evidence.mdk) | Nominal scope, binder, goal and request-instance identities, plus request-owned evidence data. |
-| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. These contracts do not yet replace production solving. |
+| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. Numeric return and arithmetic sites consume its complete class predicate; the shared outcome and qualified-scheme contracts do not yet replace production solving. |
 | [scopes.mdk](types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
 | [typecheck.mdk](types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
 
@@ -45,10 +45,94 @@ were and remain RNone inside such an owner. It is an observation of the existing
 compatibility path, not semantic evidence, and is excluded from memo replay.
 
 Numeric defaulting in closed test/property bodies uses body-owned variables and
-preserves enclosing or caller-determined variables. Whole-graph defaulting and
-finalized scheme queries remain tracked by
+preserves enclosing or caller-determined variables. At a top-level SCC, both
+numeric defaulting passes preserve the normalized live variables of declared
+signatures. In a recursive group, protection requires every member to be a
+syntactic value that can generalize the root; one membership index serves both
+defaulting passes. This preserves the correspondence between the
+published scheme and its registered dictionary slots; inferred result-only
+numeric variables still default before generalization. The five local binding
+boundaries default only normalized unbound roots owned by the just-exited level;
+outer and deeper roots survive that boundary. Implementation-body defaulting and
+the SCC fallback retain their existing policies. Expected-result propagation,
+whole-graph defaulting, and finalized scheme queries remain tracked by
 [#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
 [performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
+
+Numeric return sites carry the prelude's Num predicate from occurrence inference
+to obligation checking and route construction. The route and prerequisite
+dictionaries come from the same selected instance row. Arithmetic `+`, `-`, `*`,
+`/`, and `%` likewise carry the exact Num predicate in one scoped operator route goal per
+site. Inferred schemes retain their residual obligation predicates. An active
+given supplies the dictionary; a concrete custom instance supplies both the method
+route and prerequisites from one selected row. Arithmetic and numeric literals
+resolved through these routes lower to method calls whose dictionaries use the
+existing closure capture ABI. Independently generalized local numeric functions
+still need local dictionary abstraction ([#1082](https://github.com/MedakaLang/medaka/issues/1082));
+capturing an existing outer dictionary does not provide that abstraction.
+Concrete Int and Float retain primitive routes. Arithmetic without the
+prelude retains its scalar-only route path. The opt-in numeric predicate
+trace observes production, checking, and arithmetic or return stamping.
+
+Constrained calls and nested instance prerequisites select one instance row for
+both the dictionary word and prerequisite routes. A shared method at the receiver
+head can require a canonical dictionary word for every method of the interface.
+Native and Wasm dispatch accept that canonical instance key alongside legacy
+words. The collision test uses the selected row's implemented methods; inherited
+default-only collisions remain part of the unfinished default-evidence work.
+
+The native precompiled-prelude path identifies an implementation by method and
+canonical instance key. Its ownership index also records the symbol chosen when
+the prelude was compiled alone, so declarations and call sites retain that symbol
+when a program introduces a colliding implementation.
+
+Each method occurrence now freezes the selected interface declaration's or
+standalone's pre-use arrow arity before application unification. Dynamic dictionary
+dispatch uses that scalar to separate same-spelled interface candidates and keys a
+partial dispatcher independently of the number of supplied arguments. Once a tag
+selects an implementation, its definition-side callable arity remains authoritative;
+the occurrence scalar does not replace `methodArityOfEntry` or `groupArity`.
+
+This scalar is a bounded dispatch discriminator rather than full source identity or
+source-parameter syntax. The type representation already erases parentheses that can
+distinguish a method returning a function from a multi-argument declaration. Static
+exact-key calls continue to use the selected implementation's definition-side arity,
+and full identity through method values and applications remains unfinished work.
+Native dynamic wrappers retain their source clause arity so dictionary dispatch selects
+an implementation before constructing any residual partial application. Wasm still
+eta-wraps dynamic method values at the declaration arity and lacks per-arm partial and
+over-application; that dynamic value and under-application path remains an emitter
+limitation.
+Native interface-default symbols include the selected declaration arity, so
+different-arity same-spelled defaults can coexist at one receiver tag. Wasm mirrors
+the selected-entry restamping and symbol choice for static routes. The tree evaluator's
+and Core evaluator's default selection still ignore the occurrence scalar, so nested
+same-spelled defaults remain order-sensitive there. Wasm dynamic-dictionary defaults
+(#1020) retain their pre-existing limitation. Same-arity defaults still need full
+interface identity and remain subject to the existing first-match limitation.
+
+Ordinary method-return sites retain the legacy spelling-based path; this work does not
+complete the shared solver or return-family migration. The finalized scheme query
+`checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
+live inference cells. Cache replacement and immutable publication remain with
+[#2549](https://github.com/MedakaLang/medaka/issues/2549).
+
+Inferred dictionary slots retain complete predicate vectors and their `IfaceRef`
+payloads. Distinct predicates can share a lead variable, and a variable appearing
+as another predicate's argument can still lead its own slot. Complete vectors use
+the existing deduplication key, which still compares interface spelling rather
+than origin; completing nominal identity remains open. Trace-only IDs retain the
+legacy unknown-argument fallback. Recursive groups that need constraint-only quantifiers
+or evidence on a non-generalized member remain outside this adapter's support;
+their prior defaulting behavior is retained pending group-qualified publication.
+
+Implementation-body inference obtains the declared method type and graded scope
+from the identity-indexed `ClassEnv` at the module's visibility ordinal. A different
+interface with the same method spelling cannot suppress body checking. After
+dictionary passing, eval registers prerequisite counts under both short and
+canonical implementation routes, using the actual leading dictionary parameters
+as the LLVM and Wasm consumers do. Missing entries retain the legacy default-method
+fallback; this route compatibility does not replace default evidence construction.
 
 ## 0. How this was derived, and how to re-derive it
 
@@ -498,9 +582,11 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
 Method declaration rows now pair identity, scheme and method predicate slots in
 one allocation. Flat retains its second row construction for `methodNames` and
 the first-write slot registry; Module constructs visible rows from `implDecls`
-for admitted lookup and Num seeding. Those rows remain setup-local. The numeric
-scheme and optional legacy declaration parameters share `LegacyNumLiteralAnchor`;
-this is preparation for qualified schemes, not a shared solving judgment.
+for admitted lookup and Num seeding. Numeric seeding retains the selected
+`MethodSchemeRow`, which owns the scheme, raw method type, interface parameters,
+identity and method predicate slots. Each numeric occurrence derives its
+`ClassPredicate` from that row's instantiation for checking and return stamping.
+This does not yet provide a shared solving judgment for other return sites.
 
 This sequence runs ONCE per module on the Module arm: marking happens inside it, per
 binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's

@@ -1,5 +1,5 @@
 # META
-source_lines=2014
+source_lines=2028
 stages=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -726,8 +726,14 @@ print x = putStr (display x)
 {- | Numeric types.
 
    The arithmetic operators are built in for `Int` and `Float`; on any other
-   type, `+`, `-`, `*`, and `/` dispatch to `add`, `sub`, `mul`, and `div`.
-   `div` truncates for `Int` and is true division for `Float`. -}
+   type, `+`, `-`, `*`, `/`, and `%` dispatch to `add`, `sub`, `mul`, `div`,
+   and `rem`. `div` truncates for `Int` and is true division for `Float`.
+   `rem` keeps the dividend's sign for a nonzero result.
+
+   > rem (-7) 3
+   -1
+   > rem 5.5 2.0
+   1.5 -}
 export interface Num a requires Eq a where
   add : a -> a -> a
   sub : a -> a -> a
@@ -737,6 +743,7 @@ export interface Num a requires Eq a where
   abs : a -> a
   signum : a -> a
   fromInt : Int -> a
+  rem : a -> a -> a
 
 export impl Num Int where
   add a b = a + b
@@ -747,6 +754,7 @@ export impl Num Int where
   abs a = if a < 0 then 0 - a else a
   signum a = if a > 0 then 1 else if a < 0 then 0 - 1 else 0
   fromInt x = x
+  rem a b = a % b
 
 export impl Num Float where
   add a b = a + b
@@ -757,6 +765,12 @@ export impl Num Float where
   abs a = if a < 0.0 then 0.0 - a else a
   signum a = if a > 0.0 then 1.0 else if a < 0.0 then 0.0 - 1.0 else 0.0
   fromInt x = intToFloat x
+  rem a b = a % b
+
+-- > (-7) % 3
+-- -1
+-- > 5.5 % 2.0
+-- 1.5
 
 {- | Whether `n` is divisible by two. Negative numbers included.
 
@@ -2038,6 +2052,7 @@ negate : a -> a
 abs : a -> a
 signum : a -> a
 fromInt : Int -> a
+rem : a -> a -> a
 minBound : a
 maxBound : a
 map : (a -> b) -> c a -> c b
