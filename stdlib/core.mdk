@@ -722,8 +722,8 @@ print x = putStr (display x)
 {- | Numeric types.
 
    The arithmetic operators are built in for `Int` and `Float`; on any other
-   type, `+`, `-`, `*`, and `/` dispatch to `add`, `sub`, `mul`, and `div`.
-   `div` truncates for `Int` and is true division for `Float`. -}
+   type, `+`, `-`, `*`, `/`, and `%` dispatch to `add`, `sub`, `mul`, `div`,
+   and `rem`. `div` truncates for `Int` and is true division for `Float`. -}
 export interface Num a requires Eq a where
   add : a -> a -> a
   sub : a -> a -> a
@@ -733,6 +733,7 @@ export interface Num a requires Eq a where
   abs : a -> a
   signum : a -> a
   fromInt : Int -> a
+  rem : a -> a -> a
 
 export impl Num Int where
   add a b = a + b
@@ -743,6 +744,7 @@ export impl Num Int where
   abs a = if a < 0 then 0 - a else a
   signum a = if a > 0 then 1 else if a < 0 then 0 - 1 else 0
   fromInt x = x
+  rem a b = a % b
 
 export impl Num Float where
   add a b = a + b
@@ -753,6 +755,12 @@ export impl Num Float where
   abs a = if a < 0.0 then 0.0 - a else a
   signum a = if a > 0.0 then 1.0 else if a < 0.0 then 0.0 - 1.0 else 0.0
   fromInt x = intToFloat x
+  rem a b = a % b
+
+-- > (-7) % 3
+-- -1
+-- > 5.5 % 2.0
+-- 1.5
 
 {- | Whether `n` is divisible by two. Negative numbers included.
 

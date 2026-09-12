@@ -14628,9 +14628,8 @@ inferRecordUpdateWith env rname base fields ri =
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
   snd sr
 
--- operators infer by SHAPE (the typeclass constraint they carry — Num/Eq/… — is
--- tracked at the value level but never rendered in a scheme, so it's irrelevant
--- to the === TYPES === output; numeric literals are Int, not polymorphic)
+-- Operator predicates use language-fixed prelude interfaces, independent of
+-- term-level method lookup. Their residuals can appear in inferred schemes.
 inferBinopE : TcEnv -> String -> Expr -> Expr -> Ref Route -> Mono
 inferBinopE env op l r dref =
   let lt = infer env l
@@ -14680,21 +14679,16 @@ recordBinopSite op dref m = match binopMethod op
         (freshEvId ()))
   None => ()
 
--- The four Num-dispatched arithmetic operators produce exactly one predicate-aware
--- ROUTE goal and destination when the prelude Num declaration is present (the
--- separate UObligation remains the checker evidence).  `%` and no-prelude arithmetic
--- retain the scalar deferred stamp, while non-arithmetic operators use the legacy
--- comparison/append recorder.
-isArithBinop : String -> Bool
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-isArithBinop op = contains op ["+", "-", "*", "/", "%"]
-
+-- Arithmetic produces one predicate-aware route goal and destination when the
+-- prelude Num declaration is present; UObligation remains the checker channel.
+-- Without the prelude, the same method arm retains the scalar deferred stamp.
+-- Non-arithmetic operators use the legacy comparison/append recorder.
 arithDispatchMethod : String -> Option String
 arithDispatchMethod "+" = Some "add"
 arithDispatchMethod "-" = Some "sub"
 arithDispatchMethod "*" = Some "mul"
 arithDispatchMethod "/" = Some "div"
+arithDispatchMethod "%" = Some "rem"
 arithDispatchMethod _ = None
 
 recordBinopGoals : String -> Ref Route -> Mono -> Unit
@@ -14734,11 +14728,7 @@ recordBinopGoals op dref m = match arithDispatchMethod op
           perRun.value.methodSiteFns.value
     else
       pushArithGoal dref m (freshEvId ())
-  None =>
-    if isArithBinop op then
-      pushArithGoal dref m (freshEvId ())
-    else
-      recordBinopSite op dref m
+  None => recordBinopSite op dref m
 
 -- Roadmap #18a: `++` is the surface operator for `Semigroup`'s `append`, so it
 -- joins the comparison operators on the recordBinopSite/resolveBinopSites seam —
@@ -28820,24 +28810,17 @@ dictPass names prog =
     (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
     (mapProg rewriteBinopExpr prog)
 
--- Phase 151 / Gap G: rewrite each *stamped* comparison/equality EBinOp into its
--- Eq/Ord method application via EMethodAt (the same dispatch node `eq`/`lt` calls
--- become), so eval routes to the user/derived impl.  Only nodes resolveBinopSites
--- stamped (ground non-primitive operand) carry a non-RNone route; primitives /
--- arithmetic stay the literal EBinOp the eval builtin handles (no recursion).
--- Native Gap C: a parametric impl (tuple `Eq (a,b)`) has element `requires` dicts
--- the body reads; resolveBinopSite stamped them into the RKey route's reqs, which
--- binopMethodApp now forwards as the EMethodAt impl-dict routes (the 3rd ref).  A
--- non-parametric concrete impl stamps empty reqs → the plain direct call.
---   <→lt  >→gt  <=→lte  >=→gte  ==→eq  /=→not (eq a b)
+-- Routed operators become method applications, including generic arithmetic.
+-- Packed instance prerequisites move into EMethodAt's implementation-dictionary
+-- routes. RNone and scalar routes preserve primitive operations, so primitive
+-- Num method bodies do not recursively call their own dictionary methods.
 rewriteBinopExpr : Expr -> Expr
 rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   RNone => EBinOp op l r routeRef
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
   -- is the scalar-type tag typecheck stamped on a monomorphic binop
-  -- (resolveArithSite's "Float" on arithmetic, stampOpRouteVal's "Int" on
-  -- comparison).  The EBinOp's own route ref does NOT survive the
-  -- dict-pass→lower boundary (only NODE values do — verified: an op-string change in
+  -- ("Float" on arithmetic, "Int" on comparison). The EBinOp's own route ref does
+  -- not survive the dict-pass→lower boundary (only NODE values do — verified: an op-string change in
   -- this arm reaches lower but a setRef on routeRef does not), so we carry the scalar
   -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
