@@ -5934,7 +5934,8 @@ instRefSeq (InstRef _ _ s) = s
 --
 -- Fields, in order: the declaring module's ordinal (A-3.1's `demOrd` — the scope);
 -- the instance identity; the interface identity; the full head; the context; and
--- the method table, which is PAYLOAD ONLY (§9.3) and never a key component.
+-- the explicit/synthesized impl method table.  The table is not a selection key;
+-- after exact row selection it also supplies the method route-word collision set.
 --
 -- ⚠️ NO `Loc`, and that is a second DEPARTURE from the §9.4 data shape with a
 -- derived reason rather than an omission: `Decl` carries no source location at all
@@ -6065,7 +6066,7 @@ buildImplEnvGo (m :: rest) ia =
 -- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively.
 -- ⚠️ This sentence used to end "nothing reads `bodyImplEnvRef` yet", which is FALSE from
 -- B-2.1-b2 on: three SELECTION legs read it (`concreteReqMatchByIface`,
--- `selectReqImpl`/`keyForSiteByIface`, `implDictRoutesForFull`/`argImplDictRoutesForEncl`),
+-- `selectReqImpl`/`predicateRouteKeyForRow`, `implDictRoutesForFull`/`argImplDictRoutesForEncl`),
 -- and B-2.1-g added the METHOD-keyed route word (`keyForSite`) plus all three shadow
 -- existence reads (`ieImplExistsForHead`).  Derive the set, do not trust a list:
 -- `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
@@ -6173,14 +6174,10 @@ ieSameOrdRun o (r :: rest) acc
 -- divergence between these two walks is no longer a silent second table, it is the
 -- obligation universe being wrong, which the differential gates grade directly.
 --
--- ⚠️ OWED, and it is an inconsistency in the paragraph above rather than a
--- separate point: the reason given for keeping the two functions apart is "do not
--- allocate a method-name list per impl on every compile" — and this function then
--- allocates exactly that list, per impl, per compile, into `ieMethods`, which
--- **nothing reads today**.  It is there because §2 K specifies the method table as
--- `IE` content and A-3.5's impl-completeness relocation is its named consumer.  If
--- A-3.5 slips, drop the field rather than carrying a per-compile allocation for a
--- reader that never arrives.
+-- The method-name list is also the post-selection route-word collision witness:
+-- predicateRouteKeyForRow asks whether any method this exact row implements is
+-- shared by another row at the same head.  It deliberately does not add inherited
+-- cross-module defaults, whose RDict routing is a separate backend contract.
 implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclFacts prog = flatMap implDeclFact prog
 
@@ -14721,11 +14718,7 @@ recordBinopGoals op dref m = match arithDispatchMethod op
             !currentLoc
             scope
             (freshEvId ()))
-      perRun.value.methodSiteFns :=
-        consSiteFn
-          perRun.value.currentFn.value
-          m
-          perRun.value.methodSiteFns.value
+      ()
     else
       pushArithGoal dref m (freshEvId ())
   None => recordBinopSite op dref m
@@ -25946,7 +25939,7 @@ setLocalPinDisabled off = driverState.value.localPinDisabledRef := off
 -- could not materialise one from it (the direct-call form is byte-identical, and the
 -- dict-forwarding form is rejected identically by the base and patched binaries).
 -- Do not "fix" it on the strength of this note — reproduce first, or leave it.
--- `keyForSiteByIface` is NOT exposed: it is iface-keyed, and at most one headless
+-- `predicateRouteKeyForRow` is NOT exposed: it is iface-keyed, and at most one headless
 -- impl per interface survives coherence.
 implMethodNameTc : ImplMethod -> String
 implMethodNameTc (ImplMethod n _ _) = n
@@ -25988,7 +25981,7 @@ implMethodNameTc (ImplMethod n _ _) = n
 -- types declared in two modules no longer share a bucket.
 --
 -- ⚠️ THE ROUTE WORD IS STILL A BARE NAME AND MUST STAY ONE.  `keyForSite` /
--- `keyForSiteByIface` hand this field's `headKeyNameOr noneHeadTag` projection
+-- `predicateRouteKeyForRow` hand this field's `headKeyNameOr noneHeadTag` projection
 -- to the dict cell, and `core_ir_lower.declRouteKey` derives the impl's own
 -- word the same way — the two must agree word for word or the dict skew is
 -- live on the RDict path.  Re-keying the TABLE and renaming the emitted SYMBOL
@@ -26049,7 +26042,7 @@ headlessBucketKey = regKeyNTab []
 -- `make check-self` and passes all 163 assertions of
 -- `test/diff_compiler_dict_semantics.sh`).  The LIVE route words — the ones that
 -- reach a dict cell and an emitted symbol — are minted at `keyForSite` /
--- `keyForSiteByIface` from the winning ROW's own `irOrigin`, so they carry the
+-- `predicateRouteKeyForRow` from the winning ROW's own `irOrigin`, so they carry the
 -- interface's identity and this one does not.  Do not "unify" them without first
 -- giving that field a reader.
 implKeyTc : String -> List Ty -> String
@@ -26124,7 +26117,7 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- the route stop LYING about the selected instance, and `Some tag` does that.)
 -- 🚨 ARCH B-2.1-g: THE METHOD-KEYED ROUTE WORD IS NOW GRAPH-GLOBAL, and its
 -- `KeyBuckets` parameter is GONE rather than ignored (an ignored table parameter
--- reads as "still consulted" at every call site — `keyForSiteByIface`'s precedent).
+-- reads as "still consulted" at every call site — `predicateRouteKeyForRow`'s precedent).
 -- This is entry point 2's word half: selection through `ieSelectRowByMethod` and the
 -- collision retest through `ieHeadCollidesByMethod`, both over
 -- `perRun.bodyImplEnvRef` — the SAME substrate, so the word and the impl the checker
@@ -26703,10 +26696,10 @@ tyStructEqList _ _ = False
 -- the prefix and passed none.  A `keyForSite`-shaped fix is not enough and the
 -- must-fail pin cannot see the difference (it grades `check`).
 --   1. CHECKER — `concreteReqMatchByIface` (evidence for the obligation channel).
---   2. ROUTER  — `selectReqImpl` AND `keyForSiteByIface` **with its collision
---      retest**: `entailInst`'s `EKNestedTop` arm computes the same selection
---      twice (route word + `requires`) on the same iface and goal vector, so
---      moving one without the other is a §6 C2 break by construction.
+--   2. ROUTER  — `entailInst`'s `EKNestedTop` arm selects one row and hands it to
+--      `predicateRouteKeyForRow` plus `argImplRequiresRoutesForRow`, so route word
+--      and `requires` cannot drift to different winners (§6 C2).  `selectReqImpl`
+--      remains only on the legacy undetermined top route.
 --   3. METHOD-keyed — the element dicts at `implDictRoutesForFull` /
 --      `argImplDictRoutesForEncl`, which used `matchedEntry` over the prefix
 --      `stampKeyTable`.  ⚠️ At b2, `matchedEntry` / `matchingEntries` /
@@ -27016,65 +27009,41 @@ ieRowHeadTriple (Some (ImplRow _ _ _ (tys@(headTy :: _)) reqs _)) =
   Some (headTy, tys, reqs)
 ieRowHeadTriple (Some _) = None
 
--- the canonical impl key to stamp at an iface-keyed site (EKNestedTop primary route),
--- mirroring keyForSite: UPGRADE the bare head tag to the winning impl's full canonical
--- key ONLY when two+ impls of [iface] share the head tycon (so bare-head dispatch is
--- ambiguous).  No collision (the common, non-overlapping case) → the bare tag,
--- byte-identical.
--- #1128 (F-3b): the `else` arm returns the winner's own head tag rather than None,
--- for the reason spelled out in full on `keyForSite` — a `noneHeadTag` winner is
--- exactly the case where "the caller's fallback already equals the winner's head" is
--- false, and answering None there discards the correctly-selected candidate.
---
--- ARCH B-2.1-b2: repointed, not deleted (AM-1 still holds for the `keyForSite*`
--- family).  The `KeyBuckets` parameter is GONE rather than ignored — an ignored
--- table parameter reads as "still consulted" at every call site.  The winner's key
--- is minted here from the row's own `IfaceRef`.  ⚠️ B-2.2-b1: it is NO LONGER the
--- same word `keyEntryOf`/`keyEntryOfRow` write into a `KeyEntry`'s (unread) `key`
--- field — this one carries the interface IDENTITY, that one is bare.  The word this
--- must stay byte-equal to is the DEFINITION side's (`core_ir_lower`/`eval`), and it
--- does because both now call `route_key.implRouteKeyWord` with the same origin.
---
--- 🚨 THE COLLISION RETEST MOVED WITH THE SELECTOR, AND THAT NARROWS A REAL SKEW
--- RATHER THAN WIDENING ONE.  `core_ir_lower.ifaceDeclHeadUnique` — the emitter's
--- side of the same verdict, which must agree WORD FOR WORD with what this stamps
--- into the caller's dict cell — counts over `ifaceImplHeadTable`, installed by
--- `lowerImpls` from `lowerProgramEmit allDecls`, i.e. the WHOLE program.  It was
--- already graph-global while this side was a topological prefix; the two now count
--- the same population.  ⚠️ Not identical arithmetic: that side counts DISTINCT
--- canonical keys and this one counts rows, which is the pre-existing difference
--- `ifaceDeclHeadUnique`'s own comment records — unchanged by this bite.
---
--- 🚨 B-4b-i: `iface` is an `IfaceRef`, and THE TWO READS BELOW ARE ANSWERING
--- DIFFERENT QUESTIONS AT DIFFERENT KEYINGS — that asymmetry is deliberate and it is
--- the thing a supply bite must not flatten.  `ieSelectRowByIface` is SELECTION (§3
--- min⊑), an acceptance question, and it is identity-capable via `sameTyConHead`.
--- `ieHeadCollidesByIface` is "is the ROUTE WORD about to be stamped ambiguous at run
--- time", which `ieCountHeadByIface`'s own derivation shows is inherently
--- SPELLING-scoped: three engines re-derive the same uniqueness test from a bare
--- `String` tag, so answering it with identities is wrong at ANY supply level.  It is
--- therefore spelling-keyed on the interface half too.
---
--- Today both reads are spelling in effect (every caller supplies an absent origin),
--- so they cannot disagree.  The moment a bite supplies REAL identity, they can:
--- selection could pick a row the collision count no longer counts, flipping this
--- function between the canonical key and the bare head word.  That is a dict-cell
--- byte change that `core_ir_lower.ifaceDeclHeadUnique` does not follow — the exact
--- skew this file records as exit 0 plus a segfault.  Whoever supplies identity owns
--- that decision explicitly; it is NOT a free consequence of the widening.
-keyForSiteByIface : IfaceRef -> List Mono -> Option String
-keyForSiteByIface iface goals =
-  let env = perRun.value.bodyImplEnvRef.value
-  match ieSelectRowByIface env iface goals
-    Some (ImplRow _ _ ir tys _ _) =>
-      if ieHeadCollidesByIface env iface (univReceiverTag tys) then
-        -- B-2.2-b1: identity-bearing, exactly as `keyForSite`'s collision arm —
-        -- see the derivation there.
-        Some (implRouteKeyWord ir.irOrigin ir.irName tys None)
-      else
-        -- A-2.2b: the ROUTE WORD, bare on purpose — see `keyForSite`.
-        Some (headKeyNameOr noneHeadTag (univReceiverTag tys))
-    None => None
+-- The route word for an already-selected predicate row.  Same-interface head
+-- overlap keeps the established canonical-key rule.  A second condition is needed
+-- because the resulting dictionary is consumed by METHOD-keyed dispatch: if any
+-- explicit/synthesized method on this row also occurs on another row at the same
+-- head, a bare head word could select that foreign interface's method.  One dict
+-- word serves every method, so one colliding method canonicalizes the whole row.
+predicateRouteKeyForRow : ImplEnv -> ImplRow -> String
+predicateRouteKeyForRow env (row@(ImplRow _ _ iface tys _ _)) =
+  if ieHeadCollidesByIface env iface (univReceiverTag tys)
+    || ieRowMethodHeadCollides env row then
+    implRouteKeyWord iface.irOrigin iface.irName tys None
+  else
+    headKeyNameOr noneHeadTag (univReceiverTag tys)
+
+-- Scan one indexed head bucket, skipping the selected InstRef.  Method names are
+-- ABI spellings here; aliases are normalized before membership.  The selected-row
+-- set is an OrdMap so the row scan does not use a List as a set.
+ieRowMethodHeadCollides : ImplEnv -> ImplRow -> Bool
+ieRowMethodHeadCollides env (ImplRow _ selected _ tys _ methods) =
+  ieOtherRowSharesMethod
+    (ieHeadRows (univReceiverTag tys) env)
+    (instRefSeq selected)
+    (omFromNames (map originMethodName methods) omEmpty)
+
+ieOtherRowSharesMethod : List ImplRow -> Int -> OrdMap Unit -> Bool
+ieOtherRowSharesMethod [] _ _ = False
+ieOtherRowSharesMethod ((ImplRow _ inst _ _ _ methods) :: rest) selected names
+  | instRefSeq inst == selected = ieOtherRowSharesMethod rest selected names
+  | rowHasMethodIn methods names = True
+  | otherwise = ieOtherRowSharesMethod rest selected names
+
+rowHasMethodIn : List String -> OrdMap Unit -> Bool
+rowHasMethodIn [] _ = False
+rowHasMethodIn (method :: rest) names =
+  omHasKey (originMethodName method) names || rowHasMethodIn rest names
 
 -- 🚨 ENTRY POINT 3 of 3 — do two+ distinct impls of [iface] share head tycon
 -- [tag]?  The `IE` peer of `headCollidesByIface`.
@@ -27101,7 +27070,7 @@ ieHeadCollidesByIface env iface hd = ieCountHeadByIface env iface hd > 1
 --
 -- Why it MATTERS even though no gate moved: `ieHeadCollidesByIface` /
 -- `ieHeadCollidesByMethod` going False where they were True makes `keyForSite` /
--- `keyForSiteByIface` stamp the BARE HEAD WORD instead of the winner's canonical key,
+-- `predicateRouteKeyForRow` stamp the BARE HEAD WORD instead of the winner's canonical key,
 -- while `core_ir_lower.declRouteKey` derives the impl's own word from a spelling-based
 -- uniqueness test.  That is a dict-word skew — by `keyForSite`'s own #1128 note,
 -- "invisible on the direct-call path … and live on the RDict path".
@@ -27156,7 +27125,7 @@ ieHeadCollidesByIface env iface hd = ieCountHeadByIface env iface hd > 1
 -- 🚨 B-4b-i: the `IfaceRef` param is threaded for UNIFORMITY WITH THE FAMILY, and its
 -- ORIGIN IS DELIBERATELY UNREAD.  The comparison below stays `ir.irName ==
 -- iface.irName` — a bare SPELLING test, NOT `sameTyConHead` — for exactly the reason
--- derived above about the head half: this scan's consumer (`keyForSiteByIface`'s
+-- derived above about the head half: this scan's consumer (`predicateRouteKeyForRow`'s
 -- collision gate) is a byte-for-byte agreement with a bare-`String` route-word
 -- namespace that three engines re-derive independently.  A supply bite that makes
 -- this identity-aware changes which WORD gets stamped without moving the emitter's
@@ -28098,71 +28067,20 @@ entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
 -- per-tyvar dict slots, and hence emitted dict arity, exactly as they were.  #607
 -- punch-list item 3 (dict slot = predicate, which really would move arity) stays open.
 entailInst _ m encl useScope tag (EKNestedTop iface _ prevSize spent rest) =
-  -- 🚨 B-4b-ii LEFT THIS BARE ON PURPOSE, AND THE REASON IS THE SOURCE, NOT THE
-  -- PLUMBING.  Widening `EKNestedTop`'s field is mechanical; the question is whether
-  -- anything upstream HAS an origin worth supplying, and on this leg it does not.
-  -- `EKNestedTop` is constructed at exactly one site (`routeOfD`), whose `iface`
-  -- reaches it from `routesOfMonosTop`/`routesOfMonosTopV` — whose `List String` is
-  -- minted by `shadowStandaloneDictSlots` and `pushDictApp` as `map (s =>
-  -- s.csIface.irName) expanded`, a projection those two functions' own comments
-  -- declare deliberate ("the ROUTE half stays a SPELLING … route words, not
-  -- identities").  Un-projecting it is the route-word design question (#1507 /
-  -- `dispHeadTab`), not an identity-supply omission, so inventing an origin here
-  -- would be supplying one from a source this bite cannot justify.
-  --
-  -- ⚠️ AND THE CONSUMER WOULD NOT SURVIVE IT UNEXAMINED.  This value reaches BOTH
-  -- `keyForSiteByIface` (below) and `argImplRequiresRoutes` (the same `iface`, one
-  -- line down — §6 C2 forbids repointing those separately, which is exactly why they
-  -- share the variable).  `keyForSiteByIface` gates the stamped word on
-  -- `ieHeadCollidesByIface`, whose count stays SPELLING-keyed by ruling, so a
-  -- selection that moved without the count moving flips the word between the
-  -- canonical key and the bare head tag — a dict-cell byte change
-  -- `core_ir_lower.ifaceDeclHeadUnique` does not follow.  Whoever supplies identity
-  -- here owns that decision explicitly.
-  --
-  -- 🚨 THIS PARAGRAPH USED TO CLAIM LEAVING IT BARE WAS "MEASURED SAFE FOR WHAT B-4b-ii
-  -- DID MOVE".  THAT IS FALSE, AND THE FALSIFYING PROGRAM IS ONE EDIT AWAY FROM THE
-  -- FIXTURE THE CLAIM CITED.  What is actually true is narrower, and the boundary is the
-  -- METHOD NAMES:
-  --
-  --   * DISJOINT method names (`bar` vs `foo`) — safe, and measured:
-  --     `test/dict_fixtures/b4bii-xmod-req-route-leg-still-spelling` routes correctly on
-  --     all three engines and in the executed binary.  The METHOD-keyed selector
-  --     disambiguates the two same-spelled classes for free, because each class's method
-  --     name occurs in exactly one of them.  The cited fixture had that property, which
-  --     is precisely why it could not falsify the claim it was cited for.
-  --   * COLLIDING method names (`m` vs `m`) — NOT safe.  That disambiguation vanishes and
-  --     the built binary prints the OTHER class's value at exit 0.
-  --
-  -- 🚨 BUT THE CAUSE IS NOT THIS SEAM, AND A DRAFT OF THIS COMMENT SAID IT WAS.  It read:
-  -- "the route leg's spelling scan reaches the OTHER module's row", and cited a pin of
-  -- its own.  DISCRIMINATING EXPERIMENT, measured 2026-08-16 on both arms: take that
-  -- program and change ONLY the two interfaces' NAMES so they no longer collide
-  -- (`SameA`/`SameZ`), keeping the shared method name — the base binary then ACCEPTS (no
-  -- false reject, the spellings differ) and BOTH arms still print the wrong value.  So
-  -- the wrong dispatch is driven ENTIRELY by the shared METHOD name — `matchingEntries`
-  -- selecting candidates by method-name membership rather than by interface (#1182) —
-  -- and the interface-spelling collision this seam is about contributes NOTHING to it.
-  -- The draft pin was deleted on that evidence and the fact ported into #1182's own
-  -- fixture (`test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides`).
-  --
-  -- ⚠️ WHAT IS STILL TRUE, AND IS THIS BITE'S TO OWN: that defect is PRE-EXISTING (with
-  -- an `Eq`-bearing payload both arms accept, both print the same wrong value, and the
-  -- emitted IR is BYTE-IDENTICAL), and B-4b-ii removes a FALSE REJECT that was
-  -- accidentally SHIELDING it on the same-spelled variant — so the observable there moves
-  -- loud → silent.  Under `AGENTS.md`'s ladder that is a severity INCREASE, which is why
-  -- it is recorded rather than left for the next reader to rediscover.
-  --
-  -- The lesson for the next bite at this seam: a wrong answer downstream of an
-  -- interface-spelling collision is NOT evidence that the interface-spelling seam caused
-  -- it.  Vary the collision away and re-measure before attributing.
-  let routeKey = optionOr tag (keyForSiteByIface iface (m :: rest))
-  (
-    RKey
-      routeKey
-      (argImplRequiresRoutes iface encl useScope m rest prevSize spent),
-    [],
-  )
+  -- Select the row once and hand that same value to both the route-word and
+  -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
+  -- the same impl whose context it discharges.  If selection cannot recover a row,
+  -- preserve the historical bare-head route with no prerequisites.
+  let goals = m :: rest
+  let env = perRun.value.bodyImplEnvRef.value
+  match ieSelectRowByIface env iface goals
+    Some row => (
+      RKey
+        (predicateRouteKeyForRow env row)
+        (argImplRequiresRoutesForRow encl useScope m goals prevSize spent row),
+      [],
+    )
+    None => (RKey tag [], [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
@@ -28531,13 +28449,6 @@ argImplRequiresRoutes iface encl useScope m rest prevSize spent =
   if spentNow >= requiresNonShrinkingFuel then
     []
   else match selectReqImpl iface goals
-    -- B-4b-ii: still bare, and NOT independently — this `iface` is the SAME value
-    -- `entailInst`'s `EKNestedTop` arm hands `keyForSiteByIface` one line above its
-    -- call to this function, which is how §6 C2 ("the impl dispatched to and the impl
-    -- whose context is discharged must be the same impl") is held by construction
-    -- rather than by care.  The reason it carries no origin is written there; moving
-    -- one of these two without the other is the thing C2 forbids.
-
     Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
       Some subst =>
         -- THIS level's goal size becomes the child's [prevSize] — that is the whole
@@ -28558,14 +28469,35 @@ argImplRequiresRoutes iface encl useScope m rest prevSize spent =
 -- consistent with this selection.
 -- ARCH B-2.1-b2 (LEG 2a, the ROUTER's `requires` half): reads the graph-global `IE`
 -- instead of the prefix `KeyBuckets`, which #2548 later deleted outright along with
--- its last reader.  Its `EKNestedTop` caller computes the SAME selection a second
--- time for the route WORD (`keyForSiteByIface`), which moved in the same bite: §6 C2
--- requires the impl dispatched to and the impl whose context is discharged to be the
--- same impl, so these two cannot be repointed separately.
+-- its last reader.  EKNestedTop now uses argImplRequiresRoutesForRow below so its
+-- route word and context share one selected row; this selector remains for the
+-- legacy undetermined top route.
 selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
 selectReqImpl iface goals =
   ieRowHeadTriple
     (ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface goals)
+
+-- The selected-row form used by EKNestedTop.  It preserves the same structural
+-- shrinking fuel and head substitution as argImplRequiresRoutes, but cannot drift
+-- onto a second row because the caller supplies the already-selected winner.
+argImplRequiresRoutesForRow : String ->
+  ScopeId ->
+  Mono ->
+  List Mono ->
+  Int ->
+  Int ->
+  ImplRow ->
+  List Route
+argImplRequiresRoutesForRow encl useScope m goals prevSize spent row =
+  let size = monoSizes goals
+  let spentNow = if prevSize > 0 && size < prevSize then spent else spent + 1
+  if spentNow >= requiresNonShrinkingFuel then
+    []
+  else match ieRowHeadTriple (Some row)
+    Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
+      Some subst => argImplReqRoutes encl useScope subst reqs size spentNow
+      None => []
+    None => []
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
 -- The argument-position analogue of implDictRoutesFor.  Same impl-table match +
@@ -31305,7 +31237,7 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 -- for exactly the reason this ledger gives).
 --
 -- WHY, and why supply is beside the point: those two feed
--- `ieHeadCollidesByMethod`/`ieHeadCollidesByIface` → `keyForSite`/`keyForSiteByIface`, which
+-- `ieHeadCollidesByMethod`/`ieHeadCollidesByIface` → `keyForSite`/`predicateRouteKeyForRow`, which
 -- stamp a ROUTE WORD.  Route words are bare names by construction, and three
 -- engines re-derive the same uniqueness test from a bare `String` tag
 -- (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
