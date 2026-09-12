@@ -159,7 +159,7 @@ opener, so a pattern cannot spell an escaped brace without `\\{`.
 Data-last throughout (`stdlib/README.md` § API conventions rule 3: the
 regex is the verb's configuration, the subject string is the data).
 
-```medaka
+```medaka-nocheck: the proposed regex API as type signatures and abstract data declarations for a module that does not exist yet, not a standalone program
 export data Regex                       -- abstract; compiled program + source + flags
 export data RegexError = RegexError { message : String, position : Int }
 export data Group = Group { start : Int, end : Int, text : String }
